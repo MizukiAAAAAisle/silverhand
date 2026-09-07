@@ -58,12 +58,12 @@ describe('HumanProfileCard mounts no write surface', () => {
     expect(html).not.toMatch(/aria-label="Edit display name"/);
   });
 
-  it('self viewer gets no editable affordances either — only a route to the editor', () => {
+  it('self viewer gets no editable affordances or editor navigation', () => {
     const html = render(makeUser({ id: 'u-self', display_name: 'Self' }), 'u-self');
     expect(html).not.toContain('type="file"');
     expect(html).not.toMatch(/aria-label="(Change|Add) avatar"/);
     expect(html).not.toMatch(/aria-label="Edit display name"/);
-    expect(html).toContain('Edit in Settings');
+    expect(html).not.toContain('Edit in Settings');
   });
 
   it('does not offer the route on another human’s profile', () => {
@@ -78,9 +78,7 @@ describe('HumanProfileCard source — no /api/me ownership', () => {
     fileURLToPath(new URL('./HumanProfileCard.tsx', import.meta.url)),
     'utf8',
   );
-  const CODE = SRC
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 
   it('imports none of the profile mutation hooks or the avatar picker', () => {
     // A second write surface is what this card must never grow back
