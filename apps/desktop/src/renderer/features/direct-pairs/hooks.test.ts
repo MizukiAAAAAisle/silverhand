@@ -570,14 +570,16 @@ describe('decideDraftHandoff — when the draft pane may leave for the real pair
 describe('the draft pane is per-agent, and defers to the pure handoff rule', () => {
   const paneSource = read('./DirectPairDraftPane.tsx');
   const appSource = read('../../App.tsx');
-  const contentSource = read('../conversation-shell/conversation-content.tsx');
+  const contentSource =
+    read('../conversation-shell/primary-pane-content.tsx') +
+    read('../conversation-shell/build-conversation-panes.ts');
   const controllerSource = read('../conversation-shell/use-conversation-read-model.ts');
   const signalsSource = read('../app-shell/application-signals.ts');
 
   it('remounts on agent identity — a draft written to A can never be sent to B', () => {
     // @Cindy's finding 1: without the key, `/chat/d/new/A → /new/B` re-uses the
     // instance and carries `draft` plus the mutation state across agents.
-    expect(contentSource).toContain('key={directDraftAgentId}');
+    expect(contentSource).toContain('key={model.props.agentId}');
   });
 
   it('takes the handoff decision from the seam, not from its own conditions', () => {
@@ -591,7 +593,9 @@ describe('the draft pane is per-agent, and defers to the pure handoff rule', () 
 describe('the live-discovery subscription is mounted once, by the session', () => {
   const hooksSource = read('./hooks.ts');
   const appSource = read('../../App.tsx');
-  const contentSource = read('../conversation-shell/conversation-content.tsx');
+  const contentSource =
+    read('../conversation-shell/primary-pane-content.tsx') +
+    read('../conversation-shell/build-conversation-panes.ts');
   const controllerSource = read('../conversation-shell/use-conversation-read-model.ts');
   const signalsSource = read('../app-shell/application-signals.ts');
   const shellSource = read('../app-shell/effects.ts');
@@ -670,7 +674,7 @@ describe('the live-discovery subscription is mounted once, by the session', () =
     // (that is how `absent` got flattened), and the flag it derives has to be
     // handed to the pane rather than dropped.
     expect(controllerSource).toContain('directPairPaneProps(');
-    expect(contentSource).toContain('notFound={directPairNotFound}');
+    expect(contentSource).toContain('notFound: read.directPairNotFound');
     expect(read('../../components/layout/ChannelView.tsx')).toContain('props.notFound');
   });
 });

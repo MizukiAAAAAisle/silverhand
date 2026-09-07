@@ -550,10 +550,11 @@ describe('the pane gates its roster reads on the capability (the wiring half)', 
     // panel has to sit between the provider's tags, since a provider that merely
     // appears in the file is the bug all over again.
     const appSource =
-      read('../conversation-shell/conversation-content.tsx') +
+      read('../conversation-shell/secondary-pane-content.tsx') +
+      read('../conversation-shell/build-conversation-panes.ts') +
       read('../conversation-shell/use-conversation-read-model.ts');
     const open = appSource.indexOf(
-      '<ConversationPaneCapabilitiesProvider value={primaryPaneCapabilities}>',
+      '<ConversationPaneCapabilitiesProvider value={model.capabilities}>',
     );
     const close = appSource.indexOf('</ConversationPaneCapabilitiesProvider>', open);
     expect(open).toBeGreaterThan(-1);
@@ -567,9 +568,10 @@ describe('the pane gates its roster reads on the capability (the wiring half)', 
     // object passed to `ChannelView` as `conversation` — so the two panes read one
     // source of truth for the placement.
     const appSource =
-      read('../conversation-shell/conversation-content.tsx') +
+      read('../conversation-shell/secondary-pane-content.tsx') +
+      read('../conversation-shell/build-conversation-panes.ts') +
       read('../conversation-shell/use-conversation-read-model.ts');
     expect(appSource).toContain('inheritedPaneCapabilities(primaryPaneDescriptor)');
-    expect(appSource).toContain('conversation={primaryPaneDescriptor}');
+    expect(appSource).toContain('conversation: read.primaryPaneDescriptor');
   });
 });
