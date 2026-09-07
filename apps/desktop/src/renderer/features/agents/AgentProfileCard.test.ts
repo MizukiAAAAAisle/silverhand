@@ -1,11 +1,13 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { AgentProfileCard } from './AgentProfileCard';
 import { setCurrentUserId } from '@/lib/current-user';
+
+vi.mock('@/features/profile/ProfileMessageActivity', () => ({ ProfileMessageActivity: () => null }));
 
 setCurrentUserId('u-creator', 'creator');
 
