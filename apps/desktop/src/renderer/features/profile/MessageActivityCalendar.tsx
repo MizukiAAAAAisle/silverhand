@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   messageActivityCalendar,
@@ -17,6 +17,16 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
   const cells = useMemo(() => messageActivityCalendar(year, days, today), [year, days, today]);
 
   const [focusedDate, setFocusedDate] = useState<string | null>(null);
+
+  const scrollContainer = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const container = scrollContainer.current;
+
+    if (container) {
+      container.scrollLeft = year === 'recent' ? container.scrollWidth : 0;
+    }
+  }, [year, today]);
 
   const buttons = useRef(new Map<string, HTMLButtonElement>());
 
@@ -43,7 +53,7 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
 
   return (
     <div data-message-activity data-activity-columns={columns}>
-      <div className="message-activity-calendar">
+      <div ref={scrollContainer} className="message-activity-calendar">
         <div
           className="message-activity-plot"
           style={{ '--activity-columns': columns } as CSSProperties}

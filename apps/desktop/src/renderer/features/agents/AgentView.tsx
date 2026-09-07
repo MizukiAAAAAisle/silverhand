@@ -1,25 +1,14 @@
+import './agent-page.css';
+import { AgentPageLayout } from './AgentPageLayout';
 import {
   visibleAgentSideSections,
   resolveAgentSideSection,
   type AgentSideSection,
 } from './side-section-access';
 import { useEffect, useState } from 'react';
-import {
-  Activity,
-  CalendarClock,
-  FolderTree,
-  Lock,
-  MessageSquare,
-  User,
-} from 'lucide-react';
-import type {
-  AgentDto,
-  AgentRuntimeParticipation,
-  AgentRuntimeStateDto,
-} from '@silverhand/shared';
+import { Activity, CalendarClock, FolderTree, Lock, User } from 'lucide-react';
+import type { AgentDto, AgentRuntimeParticipation, AgentRuntimeStateDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
 import { SidePanelHeader } from '@/components/layout/SidePanelHeader';
 import { AgentHeader } from './AgentHeader';
 import { AgentProfileCard } from './AgentProfileCard';
@@ -30,17 +19,9 @@ import { AgentActivityPane } from './AgentActivityPane';
 import { AgentActivityTimeline, AgentStreamActivityTimeline } from './AgentActivityTimeline';
 import { AgentChatsPane } from './AgentChatsPane';
 import { AGENT_PANE_INSET } from './agent-pane-layout';
-import { AgentSidebar, type AgentSection } from './AgentSidebar';
-import {
-  useAgent,
-  useAgentRuntimeState,
-} from './hooks';
-import {
-  canAuditAgentChats,
-  canManageAgentSchedules,
-  canViewAgentFiles,
-} from './permissions';
-import { useAgentAvatarObjectUrl } from './avatar-hooks';
+import { AgentSidebar, AgentSectionTabs, type AgentSection } from './AgentSidebar';
+import { useAgent, useAgentRuntimeState } from './hooks';
+import { canAuditAgentChats, canManageAgentSchedules, canViewAgentFiles } from './permissions';
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from '@/features/me/hooks';
 import { paneChrome } from '@/components/layout/pane-chrome';
 
@@ -87,10 +68,7 @@ interface AgentViewProps {
    *  #task:2039: reaching the agent through the side panel must not be the one
    *  way that loses the DM entry). Navigation only — nothing is created here. */
   onMessageAgent?: (agentId: string) => void;
-  /** `full` (default) = the members-section page with the vertical section
-   *  rail + hero header. `side` = the compact right-pane panel docked beside
-   *  a channel (#task:1189): horizontal tabs, no hero chrome, Activity locked
-   *  to the docked channel. Same data/content components, two layout shells. */
+  /** Both modes share presentation; side content is bound to the docked channel. */
   variant?: AgentViewVariant;
   /** side only: the conversation the panel is docked beside. The Activity
    *  tab locks to this channel (no roster picker) — that's the dual-screen
@@ -125,25 +103,30 @@ export function AgentView({
   const [section, setSection] = useState<AgentSection>(() => readSection());
   const agentForPermissions = agentQuery.data;
   const viewerForPermissions =
-    viewerQuery.data && !isBackendUnreachable(viewerQuery.data) && !isUpdateRequired(viewerQuery.data)
+    viewerQuery.data &&
+    !isBackendUnreachable(viewerQuery.data) &&
+    !isUpdateRequired(viewerQuery.data)
       ? viewerQuery.data
       : undefined;
   const scheduleAccessKnown = Boolean(agentForPermissions && viewerForPermissions);
-  const canManageSchedules = agentForPermissions && viewerForPermissions
-    ? canManageAgentSchedules(viewerForPermissions, agentForPermissions)
-    : false;
+  const canManageSchedules =
+    agentForPermissions && viewerForPermissions
+      ? canManageAgentSchedules(viewerForPermissions, agentForPermissions)
+      : false;
   // Agent workspace files (L1 home + L2 workspace memory) are owner-private —
   // mirror the backend owner gate so non-owners get a neutral private state and
   // we never fire the doomed tree/file requests (#task:1220 / #task:1219).
   const fileAccessKnown = Boolean(agentForPermissions && viewerForPermissions);
-  const canViewFiles = agentForPermissions && viewerForPermissions
-    ? canViewAgentFiles(viewerForPermissions, agentForPermissions)
-    : false;
+  const canViewFiles =
+    agentForPermissions && viewerForPermissions
+      ? canViewAgentFiles(viewerForPermissions, agentForPermissions)
+      : false;
   // The Chats audit section is owner-only and hidden entirely for non-owners.
   // Backend re-checks (404 → 403) on every request; this only gates the entry.
-  const canAuditChats = agentForPermissions && viewerForPermissions
-    ? canAuditAgentChats(viewerForPermissions, agentForPermissions)
-    : false;
+  const canAuditChats =
+    agentForPermissions && viewerForPermissions
+      ? canAuditAgentChats(viewerForPermissions, agentForPermissions)
+      : false;
   // A persisted `chats` selection must not strand a non-owner (or a viewer whose
   // ownership hasn't resolved yet) on a section the rail won't show. Clamp the
   // effective section back to Profile until owner access is known.
@@ -203,94 +186,87 @@ export function AgentView({
         contextConversationId={contextConversationId}
         contextWorkspaceId={contextWorkspaceId}
         onClose={onClose}
+        onDeleted={onDeleted}
         onMessageAgent={onMessageAgent}
       />
     );
   }
 
   return (
-    <main
-      data-profile-host="agent"
-      className="flex h-full flex-1 flex-col overflow-hidden bg-bg-base"
-      style={paneChrome}
-    >
-      <AgentHeader
-        agent={agent}
-        runtimeState={runtimeQuery.data}
-        onDeleted={onDeleted}
-        onMessageAgent={onMessageAgent}
-      />
-
-      <div className="flex min-h-0 flex-1">
+    <AgentPageLayout
+      host="agent"
+      header={
+        <AgentHeader
+          agent={agent}
+          runtimeState={runtimeQuery.data}
+          onDeleted={onDeleted}
+          onMessageAgent={onMessageAgent}
+        />
+      }
+      navigation={
         <AgentSidebar active={effectiveSection} onChange={setSection} canAudit={canAuditChats} />
-
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          {effectiveSection === 'workspace' ? (
-            // Workspace pane manages its own scrolling — file tree and
-            // preview each scroll internally. The outer column must NOT
-            // add a vertical scrollbar of its own (would defeat the
-            // two-internal-scroll design and chop the pane off below
-            // the fold). #task:812.
-            //
-            // Inset is the shared `AGENT_PANE_INSET` (12px, one authority for
-            // every section pane — #task:2116, shiki: 统一成 workspace nav 的
-            // padding). This pane is the reference the others were unified to.
-            <div className={cn('flex min-h-0 flex-1 flex-col', AGENT_PANE_INSET)}>
-              {canViewFiles ? (
-                <AgentWorkspacePane
-                  agentId={agent.id}
-                />
-              ) : (
-                <AgentWorkspaceFilesPermissionState loading={!fileAccessKnown} />
-              )}
+      }
+    >
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {effectiveSection === 'workspace' ? (
+          // Workspace pane manages its own scrolling — file tree and
+          // preview each scroll internally. The outer column must NOT
+          // add a vertical scrollbar of its own (would defeat the
+          // two-internal-scroll design and chop the pane off below
+          // the fold). #task:812.
+          //
+          // Inset is the shared `AGENT_PANE_INSET` (12px, one authority for
+          // every section pane — #task:2116, shiki: 统一成 workspace nav 的
+          // padding). This pane is the reference the others were unified to.
+          <div className={cn('flex min-h-0 flex-1 flex-col', AGENT_PANE_INSET)}>
+            {canViewFiles ? (
+              <AgentWorkspacePane agentId={agent.id} />
+            ) : (
+              <AgentWorkspaceFilesPermissionState loading={!fileAccessKnown} />
+            )}
+          </div>
+        ) : effectiveSection === 'activity' ? (
+          // Activity owns its scrolling for both the shared stream and conversation rail.
+          <AgentActivityPane
+            sessionScope={agent.session_scope}
+            agentId={agent.id}
+            state={runtimeQuery.data}
+            onOpenConversation={onOpenConversation}
+          />
+        ) : effectiveSection === 'chats' ? (
+          // The agent's conversations as one full-width list (#task:2040,
+          // shiki). It owns its own scroll and its own padded inset, like the
+          // panes above. Gated above: effectiveSection can only be 'chats'
+          // when canAuditChats is true — the LIST is owner-audit; whether a
+          // row can be walked into is a separate, viewer-scoped judgment the
+          // pane makes.
+          <AgentChatsPane agentId={agent.id} onOpenChat={onOpenChat} />
+        ) : (
+          // Reserve scrollbar width only for profile editing; MCP and
+          // schedules retain their full width.
+          <div
+            className={cn(
+              'flex-1 overflow-y-auto',
+              effectiveSection === 'profile' && '[scrollbar-gutter:stable]',
+            )}
+          >
+            <div className={AGENT_PANE_INSET}>
+              {effectiveSection === 'profile' ? <AgentProfileCard agent={agent} /> : null}
+              {effectiveSection === 'mcp' ? (
+                <AgentMcpPane agentId={agent.id} runtime={agent.runtime} />
+              ) : null}
+              {effectiveSection === 'schedules' ? (
+                canManageSchedules ? (
+                  <AgentSchedulesCard agentId={agent.id} />
+                ) : (
+                  <AgentSchedulesPermissionState loading={!scheduleAccessKnown} />
+                )
+              ) : null}
             </div>
-          ) : effectiveSection === 'activity' ? (
-            // Activity owns its scrolling for both the shared stream and conversation rail.
-            <AgentActivityPane
-              sessionScope={agent.session_scope}
-              agentId={agent.id}
-              state={runtimeQuery.data}
-              onOpenConversation={onOpenConversation}
-            />
-          ) : effectiveSection === 'chats' ? (
-            // The agent's conversations as one full-width list (#task:2040,
-            // shiki). It owns its own scroll and its own padded inset, like the
-            // panes above. Gated above: effectiveSection can only be 'chats'
-            // when canAuditChats is true — the LIST is owner-audit; whether a
-            // row can be walked into is a separate, viewer-scoped judgment the
-            // pane makes.
-            <AgentChatsPane agentId={agent.id} onOpenChat={onOpenChat} />
-          ) : (
-            // Reserve scrollbar width only for profile editing; MCP and
-            // schedules retain their full width.
-            <div
-              className={cn(
-                'flex-1 overflow-y-auto',
-                effectiveSection === 'profile' && '[scrollbar-gutter:stable]',
-              )}
-            >
-              <div className={AGENT_PANE_INSET}>
-                {effectiveSection === 'profile' ? (
-                  <AgentProfileCard agent={agent} />
-                ) : null}
-                {effectiveSection === 'mcp' ? (
-                  <AgentMcpPane agentId={agent.id} runtime={agent.runtime} />
-                ) : null}
-                {effectiveSection === 'schedules' ? (
-                  canManageSchedules ? (
-                    <AgentSchedulesCard agentId={agent.id} />
-                  ) : (
-                    <AgentSchedulesPermissionState
-                      loading={!scheduleAccessKnown}
-                    />
-                  )
-                ) : null}
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
-    </main>
+    </AgentPageLayout>
   );
 }
 
@@ -320,12 +296,7 @@ const SIDE_SECTIONS: ReadonlyArray<SideSectionItem> = [
 function readSideSection(): SideSectionItem['id'] {
   try {
     const raw = localStorage.getItem(SIDE_SECTION_STORAGE_KEY);
-    if (
-      raw === 'activity' ||
-      raw === 'workspace' ||
-      raw === 'profile' ||
-      raw === 'schedules'
-    ) {
+    if (raw === 'activity' || raw === 'workspace' || raw === 'profile' || raw === 'schedules') {
       return raw;
     }
   } catch {
@@ -354,10 +325,7 @@ interface AgentSideSectionFocusDetail {
  * before `openAgentPanel(agentId)` when a caller must land on a specific tab
  * (e.g. the Activity bubble → Activity), regardless of the last-used tab.
  */
-export function focusAgentSideSection(
-  agentId: string,
-  section: SideSectionItem['id'],
-): void {
+export function focusAgentSideSection(agentId: string, section: SideSectionItem['id']): void {
   try {
     localStorage.setItem(SIDE_SECTION_STORAGE_KEY, section);
   } catch {
@@ -370,57 +338,23 @@ export function focusAgentSideSection(
   );
 }
 
-/**
- * Bare panel chrome (header + close) used by the side variant's loading /
- * error states so they still read as a dockable panel, not a full page.
- */
 function SidePanelShell({
-  header,
-  actions,
   onClose,
   children,
 }: {
-  /** Identity content rendered at the START of the fixed-height header row
-   *  (avatar + name/description). Omitted for the loading / error states,
-   *  which show only the close affordance. */
-  header?: React.ReactNode;
-  /** Trailing controls, rendered to the LEFT of the close button in the shared
-   *  sticker cluster. Omitted for the loading / error states: they have no agent
-   *  to act on. */
-  actions?: React.ReactNode;
   onClose?: () => void;
   children: React.ReactNode;
 }): JSX.Element {
   return (
-    <section
-      data-profile-host="side"
-      className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-bg-chat"
-      style={paneChrome}
+    <AgentPageLayout
+      host="side"
+      header={<SidePanelHeader onClose={onClose}>{null}</SidePanelHeader>}
     >
-      {/* Header row is the shared `SidePanelHeader` (components/layout), so the
-          agent panel's height is locked to the channel header's `h-12` (48px)
-          structurally — the same row every side panel (thread / threads /
-          attachments) flows through. This is what closed the old 51px drift
-          (shiki 2026-07-21). Only the card `<section>` frame is panel-specific.
-          `header` (avatar + name/description) is omitted for the loading / error
-          states, which show only the close affordance. */}
-      <SidePanelHeader onClose={onClose} actions={actions}>
-        {header}
-      </SidePanelHeader>
-      <div className="flex min-h-0 flex-1 flex-col">{children}</div>
-    </section>
+      {children}
+    </AgentPageLayout>
   );
 }
 
-/**
- * Compact agent panel for the chat-section right pane. Same content components
- * as the full page (`AgentProfileCard` / `AgentSchedulesCard` / the Activity
- * timeline) — only the shell differs: a slim identity header (avatar, name,
- * description, × close), a horizontal tab bar (Activity / Profile / Workspace /
- * Schedules), and an Activity tab locked to the docked channel (no roster
- * picker). One content layer, two layout shells — so a future change to a
- * section lands in both at once.
- */
 function AgentSidePanel({
   agent,
   runtimeState,
@@ -429,6 +363,7 @@ function AgentSidePanel({
   contextConversationId,
   contextWorkspaceId,
   onClose,
+  onDeleted,
   onMessageAgent,
 }: {
   agent: AgentDto;
@@ -438,11 +373,10 @@ function AgentSidePanel({
   contextConversationId: string | null;
   contextWorkspaceId: string | null;
   onClose?: () => void;
+  onDeleted: () => void;
   onMessageAgent?: (agentId: string) => void;
 }): JSX.Element {
-  const [section, setSection] = useState<SideSectionItem['id']>(() =>
-    readSideSection(),
-  );
+  const [section, setSection] = useState<SideSectionItem['id']>(() => readSideSection());
 
   const visibleSections = visibleAgentSideSections(canViewFiles, canManageSchedules);
   const effectiveSection = resolveAgentSideSection(section, visibleSections);
@@ -461,18 +395,13 @@ function AgentSidePanel({
   useEffect(() => {
     const onFocus = (e: Event): void => {
       const detail = (e as CustomEvent<AgentSideSectionFocusDetail>).detail;
-      if (detail && detail.agentId === agent.id) setSection(detail.section);
+      if (detail && detail.agentId === agent.id) {
+        setSection(detail.section);
+      }
     };
     window.addEventListener(AGENT_SIDE_SECTION_FOCUS_EVENT, onFocus);
-    return () =>
-      window.removeEventListener(AGENT_SIDE_SECTION_FOCUS_EVENT, onFocus);
+    return () => window.removeEventListener(AGENT_SIDE_SECTION_FOCUS_EVENT, onFocus);
   }, [agent.id]);
-
-  const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
-
-  // Same product-domain gate as the full page's `Message` button: a DirectPair is
-  // the human line of an AGENT-scoped agent only. The door re-authorizes the send.
-  const canMessage = Boolean(onMessageAgent) && agent.session_scope === 'agent';
 
   // A=Activity-follows-channel membership gate (#task:1189, Cindy P2): the
   // per-(agent, conversation) activity endpoint is membership-gated, so blindly
@@ -484,108 +413,29 @@ function AgentSidePanel({
   const runtimeLoaded = runtimeState !== undefined;
   const inThisChannel =
     contextConversationId !== null &&
-    (runtimeState?.participations ?? []).some(
-      r => r.conversation_id === contextConversationId,
-    );
+    (runtimeState?.participations ?? []).some((r) => r.conversation_id === contextConversationId);
 
   return (
-    <SidePanelShell
-      onClose={onClose}
-      actions={
-        // The docked panel's DM entry (@shiki, #task:2039), immediately left of
-        // Close in the shared actions cluster. Same gate and same destination as
-        // the full page's `Message` button — icon-only because this row is a
-        // 48px sticker cluster, where a labelled button would be the only wide
-        // control among size-7 squares; the title carries the label.
-        canMessage && onMessageAgent ? (
-          <button
-            type="button"
-            data-sticker
-            data-sticker-size="md"
-            data-sticker-tone="neutral"
-            aria-label={`Message @${agent.name}`}
-            title={`Message @${agent.name}`}
-            onClick={() => onMessageAgent(agent.id)}
-            className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline"
-          >
-            <MessageSquare className="size-3.5" />
-          </button>
-        ) : null
-      }
+    <AgentPageLayout
+      host="side"
       header={
-        <>
-          <AgentAvatar
-            runtime={agent.runtime}
-            size={AVATAR_PX.md}
-            avatarObjectUrl={avatarObjectUrl}
-            alt={agent.display_name || agent.name}
-          />
-          <div className="min-w-0 flex-1 overflow-hidden">
-            {/* line 1: handle + description on one line. The handle stays intact
-                (`shrink-0`); the description takes the remaining width and
-                ellipsis-truncates on overflow (shiki). Two-line block height is
-                fixed regardless of description length. */}
-            <div className="flex items-baseline gap-1.5">
-              <span className="shrink-0 text-[length:var(--text-strong)] font-semibold leading-tight text-text-primary">
-                {agent.display_name || agent.name}
-              </span>
-              {agent.description ? (
-                <span
-                  className="min-w-0 flex-1 truncate text-xs font-normal leading-tight text-text-muted"
-                  title={agent.description}
-                >
-                  {agent.description}
-                </span>
-              ) : null}
-            </div>
-            {/* `capitalize` wraps the runtime ENUM only. A model id is a raw
-                string the driver has to receive back verbatim
-                (`claude-opus-5`), so a shared `capitalize` on this line
-                rendered it as `Claude-opus-5` — the same split AgentHeader's
-                meta row already uses (#task:2114). */}
-            <p className="truncate text-[length:var(--text-meta)] leading-tight text-text-muted">
-              <span className="capitalize">{agent.runtime}</span>
-              {agent.model ? ` · ${agent.model}` : ''}
-            </p>
-          </div>
-        </>
+        <AgentHeader
+          agent={agent}
+          runtimeState={runtimeState}
+          onDeleted={onDeleted}
+          onMessageAgent={onMessageAgent}
+          onClose={onClose}
+          compact
+        />
+      }
+      navigation={
+        <AgentSectionTabs
+          sections={SIDE_SECTIONS.filter((tab) => visibleSections.includes(tab.id))}
+          active={effectiveSection}
+          onChange={setSection}
+        />
       }
     >
-      {/* horizontal tab bar. Quiet selection (mirrors AgentSidebar's "not a
-          primary nav surface" stance): ink underline + bolder text only, no
-          fill — the forza6 ink-fill reversal is reserved for sidebar `#`
-          identity selection, a section tab doesn't borrow it. No
-          `transition-colors` on the active flip (it's a discrete committed
-          state, #task:1162); hover tint is the only animated affordance. */}
-      <nav
-        role="tablist"
-        aria-label="Agent panel sections"
-        className="flex shrink-0 items-center gap-1 border-b border-border-subtle px-2"
-      >
-        {SIDE_SECTIONS.filter(tab => visibleSections.includes(tab.id)).map(tab => {
-          const selected = tab.id === effectiveSection;
-          const Icon = tab.icon;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              onClick={() => setSection(tab.id)}
-              className={cn(
-                'flex items-center gap-1.5 border-b-2 px-2.5 py-2 text-xs -mb-px',
-                selected
-                  ? 'border-text-primary font-medium text-text-primary'
-                  : 'border-transparent text-text-muted hover:text-text-secondary',
-              )}
-            >
-              <Icon className="size-3.5" strokeWidth={selected ? 2.25 : 2} />
-              {tab.label}
-            </button>
-          );
-        })}
-      </nav>
-
       {/* content */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {effectiveSection === 'activity' ? (
@@ -643,20 +493,14 @@ function AgentSidePanel({
           </div>
         ) : null}
       </div>
-    </SidePanelShell>
+    </AgentPageLayout>
   );
 }
 
-function AgentSchedulesPermissionState({
-  loading,
-}: {
-  loading: boolean;
-}): JSX.Element {
+function AgentSchedulesPermissionState({ loading }: { loading: boolean }): JSX.Element {
   if (loading) {
     return (
-      <div className="py-10 text-center text-sm text-text-muted">
-        Loading schedule permissions…
-      </div>
+      <div className="py-10 text-center text-sm text-text-muted">Loading schedule permissions…</div>
     );
   }
 
@@ -673,16 +517,10 @@ function AgentSchedulesPermissionState({
   );
 }
 
-function AgentWorkspaceFilesPermissionState({
-  loading,
-}: {
-  loading: boolean;
-}): JSX.Element {
+function AgentWorkspaceFilesPermissionState({ loading }: { loading: boolean }): JSX.Element {
   if (loading) {
     return (
-      <div className="py-10 text-center text-sm text-text-muted">
-        Loading file permissions…
-      </div>
+      <div className="py-10 text-center text-sm text-text-muted">Loading file permissions…</div>
     );
   }
 

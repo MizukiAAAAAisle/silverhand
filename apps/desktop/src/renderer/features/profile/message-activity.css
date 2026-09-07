@@ -29,12 +29,22 @@
   min-width: calc(var(--profile-content-width) + 64px + 6px);
 }
 
-[data-profile-host='agent']:has([data-profile-layout]) {
-  min-width: calc(var(--profile-content-width) + 24px + 160px + 6px);
+[data-profile-host='agent']:has([data-profile-layout]),
+[data-profile-host='side']:has([data-profile-layout]) {
+  min-width: 0;
 }
 
-[data-profile-host='side']:has([data-profile-layout]) {
-  min-width: calc(var(--profile-content-width) + 32px + 6px);
+[data-profile-host='agent'] [data-profile-layout],
+[data-profile-host='side'] [data-profile-layout] {
+  width: 100%;
+  min-width: 0;
+  max-width: var(--profile-content-width);
+}
+
+.message-activity-calendar {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 4px 0 8px;
 }
 
 [data-message-activity] {
