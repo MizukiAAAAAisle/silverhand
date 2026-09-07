@@ -195,23 +195,7 @@ interface SectionProps {
   /** Initial expanded state for collapsible sections. Defaults to true.
    *  With `persistId` set this is only the first-run value. */
   defaultExpanded?: boolean;
-  /** When set, the collapse state persists across app restarts under
-   *  `silverhand:layout.sidebar-section.<persistId>`. Short and stable — it
-   *  is the storage identity of this section, so renaming it resets every
-   *  user's choice. Omit for session-only collapse. */
   persistId?: string;
-  /** What a COLLAPSED section renders in place of its body. At minimum the row for
-   *  the currently open conversation, when it lives in this section (`null`
-   *  otherwise): collapsing must never leave the sidebar with no selection while the
-   *  main pane is showing that conversation (shiki, 2026-08-08 — `app-layout.md` §3).
-   *  A collapsed section ALSO pokes out its awake branches' `loud` unread rows
-   *  (#task:1939), for the same reason the collapsed branch does — the header paints no
-   *  unread number, so the reveal is the only signal and it must survive one level up.
-   *  The caller (`WorkspaceGroup`) decides the exact set and attribution; this slot
-   *  just hosts it in the same `<ul>` as the body, so those rows sit where they always
-   *  sat. What it never keeps is an intermediate header whose only action is a collapse
-   *  that can no longer do anything. (Named for what it hosts — not just the selection —
-   *  since a collapsed group now reveals several awake branches, not one row.) */
   collapsedContent?: ReactNode;
   children: ReactNode;
 }
@@ -239,9 +223,6 @@ export function SidebarSection({
   const body = showBody ? children : collapsedContent;
 
   return (
-    // `group/sectionscope` spans the header AND the body: the right-side actions
-    // are revealed by pointing anywhere in the GROUP, not just at its header
-    // (shiki, 2026-08-08) — see `SidebarSectionHeader`.
     <section className="group/sectionscope px-1.5 pb-3">
       <SidebarSectionHeader
         label={label}
@@ -253,12 +234,6 @@ export function SidebarSection({
         expanded={expanded}
         onToggle={() => toggleExpanded()}
       />
-      {/* 4px row gap (#task:1951, shiki 「叶子的 space-y-0.5 也抬到 1」). Every row
-          stack in the sidebar — this body, a workspace's channel branch, and the
-          tool rows above the sections — carries the SAME gap, so the tree's
-          hierarchy keeps being told by indentation and the caret, never by
-          uneven breathing room. Raising one of the three alone would make a
-          leaf's neighbour distance depend on which island it lives in. */}
       {body ? <ul className="space-y-1">{body}</ul> : null}
     </section>
   );

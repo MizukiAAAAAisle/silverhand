@@ -13,7 +13,7 @@ export function ComputerDetailPage({
     <HostDetailView key={host.id} host={host} />
   ) : (
     <DirectoryPlaceholder>
-      {loading ? 'Loading computers…' : 'Select a computer to see its details'}
+      {loading ? 'Loading computers…' : 'Select a computer'}
     </DirectoryPlaceholder>
   );
 }

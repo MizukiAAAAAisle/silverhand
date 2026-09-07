@@ -13,7 +13,7 @@ export function AgentPageLayout({
   children: ReactNode;
 }): JSX.Element {
   return (
-    <section
+    <main
       data-profile-host={host}
       className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--bg-base)]"
       style={paneChrome}
@@ -21,6 +21,6 @@ export function AgentPageLayout({
       {header}
       {navigation}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
-    </section>
+    </main>
   );
 }

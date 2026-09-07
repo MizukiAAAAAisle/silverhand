@@ -1,5 +1,5 @@
-import { DirectorySidebar } from '@/components/layout/DirectoryShell';
 import type { JSX } from 'react';
+import { DirectorySidebar } from '@/components/layout/DirectoryShell';
 import { Monitor, Plus } from 'lucide-react';
 import type { HostDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
@@ -11,13 +11,9 @@ import { SidebarRow, SidebarSection } from '@/components/layout/sidebar-shared';
 export interface ComputerSidebarShellProps {
   hosts: HostDto[];
   localHostId: string | null;
-  /** True while the hosts query has not yet resolved. Drives the
-   *  empty-state copy. */
   isLoading: boolean;
   selectedHostId: string | null;
   onSelectHost: (id: string) => void;
-  /** Opens the Add-computer flow. Rendered as the `+` action on the
-   *  COMPUTERS header (shiki: header-right icon, not a full row). */
   onAddComputer?: () => void;
 }
 
@@ -117,11 +113,6 @@ function ComputerRow({
   const statusQuery = useHostStatusQuery(host.id, { enabled: !isRevoked });
   const view = statusQuery.data ? describeHostStatus(statusQuery.data) : null;
 
-  // Subtitle carries the AVAILABILITY word (Ready / Offline / …) for
-  // active computers, or the terminal lifecycle word for revoked ones —
-  // never the internal `kind` enum. The nbsp fallback holds the line box
-  // while the first status request is in flight so the row height is
-  // stable (matches SidebarRow's stacked reserve).
   const availabilityLabel = isRevoked ? computerCopy.lifecycleRevoked : (view?.label ?? null);
   const pip = isRevoked ? null : view ? TONE_TO_PIP[view.tone] : null;
 
@@ -143,8 +134,6 @@ function ComputerRow({
   );
 }
 
-/** Small HUD tag marking the app-provisioned default computer. Theme-
- *  neutral tokens; forza6 renders it as a 0-radius ink chip. */
 function AppManagedBadge(): JSX.Element {
   return (
     <span

@@ -28,13 +28,7 @@ import { SidebarRow, SidebarSection } from '@/components/layout/sidebar-shared';
 interface AgentSidebarShellProps {
   selectedAgentId?: string | null;
   onSelectAgent?: (id: string) => void;
-  /** Currently focused human-id in the right pane (`/members/u/:id`).
-   *  Used to highlight the corresponding HUMANS row. */
   selectedUserId?: string | null;
-  /** Click handler for HUMANS rows. Wired to `nav.toMembersUser(id)` in
-   *  AgentShell. When omitted the rows render but aren't clickable —
-   *  matches the pre-#314 behaviour for surfaces that just want the
-   *  list. */
   onSelectUser?: (id: string) => void;
 }
 
@@ -106,20 +100,13 @@ export function AgentSidebarShell({
     !isUpdateRequired(viewerQuery.data)
       ? viewerQuery.data
       : null;
-  // Multi-human audit 2026-06-03 #task:857 P0.6: HUMANS is the global
-  // people directory (per shiki D3: "允许的, 这样更加方便拉人协作"). The
-  // viewer is always first; other humans follow. Until /api/users
-  // hydrates we fall back to just the viewer so the section is never
-  // empty for a signed-in install.
+
   const { data: allUsers = [] } = useUsers();
-  // Other humans = directory minus viewer. Stable ordering: the server
-  // returns alphabetized-by-name; we preserve that.
+
   const otherHumans = viewer ? allUsers.filter((u) => u.id !== viewer.id) : allUsers;
   const otherAvatarUrls = useUserAvatarObjectUrls(otherHumans);
   const humansCount = (viewer ? 1 : 0) + otherHumans.length;
-  // Human online/offline pip — online → green `active`, offline/unknown →
-  // muted `idle`, reusing the AGENTS dot vocabulary. Cache kept live by
-  // usePresenceSync() in the app shell. See docs/human-presence-v1.md.
+
   const presenceById = usePresenceById();
 
   return (
@@ -141,7 +128,7 @@ export function AgentSidebarShell({
         }
       >
         {agents.length === 0 ? (
-          <li className="px-2 py-2 text-xs text-text-muted">No agents yet. Use + to create one.</li>
+          <li className="px-2 py-2 text-xs text-text-muted">No agents</li>
         ) : showGroups ? (
           agentGroups.map((group) => (
             <Fragment key={group.key}>
@@ -196,7 +183,7 @@ export function AgentSidebarShell({
           );
         })}
         {!viewer && otherHumans.length === 0 ? (
-          <li className="px-2 py-2 text-xs text-text-muted">No human registered yet.</li>
+          <li className="px-2 py-2 text-xs text-text-muted">No humans</li>
         ) : null}
       </SidebarSection>
 
@@ -205,17 +192,6 @@ export function AgentSidebarShell({
   );
 }
 
-/**
- * One AGENTS-rail row. Presence is the SAME composition the DM popover and the
- * agent-page hero use via `useAgentPresence` (#task:2049): the agent's
- * Availability (event-invalidated, "can it work for me now") is primary and the
- * only source of Offline, and the presence-clock deadline distinguishes Online
- * from Away. Reading a host active-set alone as presence was the shipped bug: an
- * agent whose runtime had exited after replying read Offline. Presence reads
- * Offline from availability only, so an idle agent reads Away; Away and Offline
- * both map to the muted `idle` dot (green is earned only by a live, available
- * agent), and an undefined availability draws no dot rather than a speculative one.
- */
 function AgentRow({
   agent,
   avatarObjectUrl,
@@ -228,11 +204,7 @@ function AgentRow({
   onSelect?: (id: string) => void;
 }): JSX.Element {
   const presence = useAgentPresence(agent.id);
-  // Route the global native through the ONE projection, then adapt its tone to
-  // SidebarRow's generic status enum (a domain-agnostic list primitive keeps its
-  // own dot vocabulary): online tone → the earned green `active` dot, away /
-  // offline → the muted `idle` dot, and an unsettled read draws none. The
-  // native→tone decision stays in `projectPresence`, not here (#task:2128).
+
   const display = presence === null ? null : projectPresence({ scope: 'global', presence });
   return (
     <SidebarRow
@@ -254,23 +226,6 @@ function AgentRow({
   );
 }
 
-/**
- * 16×16 frame for human rows. Both AGENTS and HUMANS rows pass this
- * size; AgentSidebarShell targets a 32px-tall row (icon 16 + py-1.5 / 12 +
- * border 4) for IM-sidebar density (#task:912 review round 5 — earlier
- * the rows had mismatched icons + ran 36-38.5px tall, which read as
- * "settings list" rather than "Slack sidebar").
- *
- * **Why literal px instead of `size-4`**: the desktop app pins
- * `html { font-size: 14px }` (global.css), so Tailwind's `size-4`
- * (`1rem`) would compute to 14px, not 16px. AgentAvatar uses an inline
- * `style={{ width: size, height: size }}` for the same reason — literal
- * pixels are theme- and root-font-size-independent. `UserAvatar` takes
- * the same px `size`, which is why this row can just use it (#task:1699;
- * the local copy this replaced had drifted onto `bg-bg-row-hover`, a
- * class `@theme` never generated, so the fallback square had no ground
- * at all).
- */
 function HumanRowIcon({
   avatarObjectUrl,
   alt,
