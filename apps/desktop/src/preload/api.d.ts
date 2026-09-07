@@ -30,10 +30,7 @@ export interface BackendInfo {
    * daemon and the exact outbound protocol accepted by the connected server. */
   outbound_protocol_compatibility:
     | {
-        status:
-          | 'compatible'
-          | 'app_update_required'
-          | 'server_update_required';
+        status: 'compatible' | 'app_update_required' | 'server_update_required';
         app_protocol_version: number;
         server_protocol_version: number;
       }
@@ -250,11 +247,7 @@ export type DesktopSaveServerUrlResult =
   | {
       ok: false;
       kind: 'reload_rejected';
-      reason:
-        | 'not_attached'
-        | 'config_unreadable'
-        | 'parse_failed'
-        | 'invalid_server_url';
+      reason: 'not_attached' | 'config_unreadable' | 'parse_failed' | 'invalid_server_url';
       message: string;
     }
   | { ok: false; kind: 'no_attachment_controller'; message: string };
@@ -322,7 +315,7 @@ export type DesktopProfileSaveWithTestResult =
       test: DesktopProbeServerInfoResult & { ok: true };
       profile: ServerConnectionProfileView;
       /**
-       * D4.a Commit 5c-2 — phase-2 outcome from `performProfilePhase2`
+       * D4.a Commit 5c-2 — phase-2 outcome from `applyServerProfile`
        * after the profile commit. Renderer keys copy off `kind`:
        *   - `fully_applied` — daemon's running config is at
        *     `profileVersion`; sub-arms `reloaded` / `unchanged` /
@@ -337,7 +330,7 @@ export type DesktopProfileSaveWithTestResult =
        *     surfaces a banner + Retry button via `partialApply:get`
        *     / `partialApply:retry`.
        */
-      phase2: DesktopProfilePhase2Outcome;
+      phase2: DesktopServerProfileApplyOutcome;
     }
   | {
       ok: false;
@@ -363,15 +356,15 @@ export type DesktopProfileSaveWithTestResult =
 
 /**
  * D4.a Commit 5c-2 — phase-2 outcome surfaced to the renderer.
- * Structural mirror of `ProfilePhase2Outcome` in
- * `main/profile-phase2.ts`. See `phase2` field on
+ * Structural mirror of `ServerProfileApplyOutcome` in
+ * `main/server-profile-apply.ts`. See `phase2` field on
  * {@link DesktopProfileSaveWithTestResult} for usage.
  *
  * `reloadRejectionReason` is the daemon's typed reason — passed
  * through verbatim so the renderer can branch on the exact same set
  * the daemon defines.
  */
-export type DesktopProfilePhase2Outcome =
+export type DesktopServerProfileApplyOutcome =
   | {
       kind: 'fully_applied';
       profileVersion: number;
@@ -459,7 +452,7 @@ export type DesktopPartialApplyState =
 export type DesktopPartialApplyRetryResult =
   | {
       ok: true;
-      outcome: DesktopProfilePhase2Outcome;
+      outcome: DesktopServerProfileApplyOutcome;
       state: DesktopPartialApplyState;
     }
   | { ok: false; reason: 'no_profile' }
@@ -521,9 +514,7 @@ declare global {
       setPinchZoom(enabled: boolean): void;
       rotateHostToken(input: { hostId: string }): Promise<DesktopHostMutationResult>;
       revokeHost(input: { hostId: string }): Promise<DesktopHostMutationResult>;
-      getHostProxyConfig(input: {
-        hostId: string;
-      }): Promise<DesktopHostProxyConfigResult>;
+      getHostProxyConfig(input: { hostId: string }): Promise<DesktopHostProxyConfigResult>;
       saveHostProxyConfig(input: {
         hostId: string;
         config: DesktopHostProxyConfig;
@@ -596,9 +587,7 @@ declare global {
         filename: string;
         bytes: Uint8Array;
       }): Promise<
-        | { ok: true; path: string }
-        | { ok: false; canceled: true }
-        | { ok: false; reason: string }
+        { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; reason: string }
       >;
       showSystemNotification(opts: {
         title: string;
@@ -628,17 +617,12 @@ declare global {
       /** Renderer's authoritative answer to one `onContextualClose` request.
        *  `outcome` mirrors `ContextualCloseOutcome` in the renderer's
        *  `features/app-shell/keyboard-shortcuts.ts` (the SSOT). */
-      respondContextualClose(
-        reqId: string,
-        outcome: 'closed-panel' | 'background-app',
-      ): void;
+      respondContextualClose(reqId: string, outcome: 'closed-panel' | 'background-app'): void;
       savePngExport(input: {
         pngBytes: Uint8Array;
         suggestedName: string;
       }): Promise<
-        | { ok: true; path: string }
-        | { ok: false; canceled: true }
-        | { ok: false; error: string }
+        { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; error: string }
       >;
       copyPngExport(input: {
         pngBytes: Uint8Array;

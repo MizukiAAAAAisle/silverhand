@@ -1,11 +1,5 @@
-import type {
-  DaemonHostConfig,
-  ServerConnectionProfile,
-} from '@silverhand/shared';
-import type {
-  HostOutboundReloadFailureReason,
-  HostOutboundReloadResult,
-} from '@silverhand/host';
+import type { DaemonHostConfig, ServerConnectionProfile } from '@silverhand/shared';
+import type { HostOutboundReloadFailureReason, HostOutboundReloadResult } from '@silverhand/host';
 import {
   startAttachWatchdog,
   type AttachWatchdogDeps,
@@ -59,7 +53,7 @@ import type { ReadProfileResult } from './server-connection-profile.js';
  * (which re-reads daemon-config) or 5c-3 boot reconciliation is the
  * convergence route. Cindy 5c-2 review P1.
  */
-export type ProfilePhase2Outcome =
+export type ServerProfileApplyOutcome =
   | {
       kind: 'fully_applied';
       profileVersion: number;
@@ -89,13 +83,13 @@ export type ProfilePhase2Outcome =
       detail: string;
     };
 
-export interface PerformProfilePhase2Input {
+export interface ApplyServerProfileInput {
   /** The profile that was just committed (post-`writeServerConnectionProfile`).
    *  The version field MUST be the freshly-committed generation. */
   profile: ServerConnectionProfile;
 }
 
-export interface PerformProfilePhase2Deps {
+export interface ApplyServerProfileDeps {
   /** Local desktop/package policy bit for non-loopback http:// remote
    *  URLs. Not profile state; phase-2 stamps it into daemon-config so
    *  the daemon validates reload/attach with the same local opt-in that
@@ -137,10 +131,10 @@ export interface PerformProfilePhase2Deps {
   watchdogTimeoutMs?: number;
 }
 
-export async function performProfilePhase2(
-  input: PerformProfilePhase2Input,
-  deps: PerformProfilePhase2Deps,
-): Promise<ProfilePhase2Outcome> {
+export async function applyServerProfile(
+  input: ApplyServerProfileInput,
+  deps: ApplyServerProfileDeps,
+): Promise<ServerProfileApplyOutcome> {
   const now = deps.now ?? (() => Date.now());
   const startedAt = now();
   const profileVersion = input.profile.version;
@@ -203,9 +197,7 @@ export async function performProfilePhase2(
     host_id: hostId,
     host_token: hostToken,
     profile_version: profileVersion,
-    ...(deps.allowInsecureRemote === true
-      ? { allow_insecure_remote: true }
-      : {}),
+    ...(deps.allowInsecureRemote === true ? { allow_insecure_remote: true } : {}),
   };
   try {
     deps.writeDaemonHostConfig(newConfig);
@@ -287,8 +279,7 @@ export async function performProfilePhase2(
   };
   const startWatchdog = deps.startWatchdog ?? startAttachWatchdog;
   const watchdog = startWatchdog(window, {
-    getAttachment: id =>
-      deps.getAttachment ? deps.getAttachment(id) : null,
+    getAttachment: (id) => (deps.getAttachment ? deps.getAttachment(id) : null),
     pollIntervalMs: deps.watchdogPollIntervalMs,
     timeoutMs: deps.watchdogTimeoutMs,
     now,
@@ -388,7 +379,7 @@ export type PartialApplyState =
  * reconciliation (5c-3) compute the same state from the same input.
  */
 export function derivePartialApplyState(
-  outcome: ProfilePhase2Outcome,
+  outcome: ServerProfileApplyOutcome,
   attemptedAt: number,
 ): PartialApplyState {
   if (outcome.kind === 'partial_apply_pending') {
@@ -443,7 +434,7 @@ export function derivePartialApplyState(
  *
  * Pure-ish: side effects flow through deps. The caller assembles
  * deps from the live process (`readServerConnectionProfile`,
- * `readDaemonHostConfig`, `runProfilePhase2`); tests substitute
+ * `readDaemonHostConfig`, `runServerProfileApply`); tests substitute
  * fixtures so reconciliation is exercised without disk / IPC.
  */
 export interface ReconcilePartialApplyDeps {
@@ -456,10 +447,10 @@ export interface ReconcilePartialApplyDeps {
    *  fail-closed semantics in `local-host-claim.ts`). */
   readDaemonHostConfig: () => DaemonHostConfig | null;
   /** Run phase-2 against a profile. Production binding wraps
-   *  `performProfilePhase2` with current main deps. Decoupled here
+   *  `applyServerProfile` with current main deps. Decoupled here
    *  so reconciliation tests can substitute deterministic outcomes
    *  without spinning up a fake `HostClient`. */
-  runPhase2: (profile: ServerConnectionProfile) => Promise<ProfilePhase2Outcome>;
+  applyProfile: (profile: ServerConnectionProfile) => Promise<ServerProfileApplyOutcome>;
   /** Test clock; defaults to `Date.now`. */
   now?: () => number;
 }
@@ -493,10 +484,7 @@ export async function reconcilePartialApplyAtBoot(
   // (legacy D3.x config without 5b's additive field) does NOT match
   // any profile.version (which is `>= 1`), so falls through to
   // phase-2 re-derivation.
-  if (
-    daemonConfig !== null &&
-    daemonConfig.profile_version === profile.version
-  ) {
+  if (daemonConfig !== null && daemonConfig.profile_version === profile.version) {
     return { kind: 'fully_applied' };
   }
   // Cindy 5c-3 gate 2: any drift (config absent / version mismatch
@@ -510,6 +498,6 @@ export async function reconcilePartialApplyAtBoot(
   // Cindy 5c-3 gate 3: phase-2 failure surfaces as
   // `partial_apply_pending` via `derivePartialApplyState`; the Retry
   // button stays available and the next boot will re-run reconcile.
-  const outcome = await deps.runPhase2(profile);
+  const outcome = await deps.applyProfile(profile);
   return derivePartialApplyState(outcome, now());
 }

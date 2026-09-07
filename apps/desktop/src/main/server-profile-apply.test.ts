@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HostWsAttachment } from '@silverhand/backend';
-import type {
-  DaemonHostConfig,
-  ServerConnectionProfile,
-} from '@silverhand/shared';
+import type { DaemonHostConfig, ServerConnectionProfile } from '@silverhand/shared';
 import type { HostOutboundReloadResult } from '@silverhand/host';
 import type {
   AttachWatchdogDeps,
@@ -11,14 +8,14 @@ import type {
   ExpectedAttachWindow,
 } from './outbound-attach.js';
 import {
-  performProfilePhase2,
+  applyServerProfile,
   derivePartialApplyState,
   reconcilePartialApplyAtBoot,
   type PartialApplyState,
-  type PerformProfilePhase2Deps,
-  type ProfilePhase2Outcome,
+  type ApplyServerProfileDeps,
+  type ServerProfileApplyOutcome,
   type ReconcilePartialApplyDeps,
-} from './profile-phase2.js';
+} from './server-profile-apply.js';
 import type { ReadProfileResult } from './server-connection-profile.js';
 
 interface FakeState {
@@ -74,7 +71,7 @@ interface FakeOptions {
 }
 
 function makeDeps(opts: FakeOptions = {}): {
-  deps: PerformProfilePhase2Deps;
+  deps: ApplyServerProfileDeps;
   state: FakeState;
 } {
   const state: FakeState = {
@@ -82,17 +79,16 @@ function makeDeps(opts: FakeOptions = {}): {
     reloadCalls: 0,
     watchdogCalls: [],
   };
-  const reloadResult: HostOutboundReloadResult =
-    opts.reloadResult ?? {
-      reloaded: true,
-      action: 'reloaded',
-      config_path: '/fake/daemon-config.json',
-      host_id: 'host-1',
-    };
+  const reloadResult: HostOutboundReloadResult = opts.reloadResult ?? {
+    reloaded: true,
+    action: 'reloaded',
+    config_path: '/fake/daemon-config.json',
+    host_id: 'host-1',
+  };
   const hasController = opts.hasController ?? true;
-  const deps: PerformProfilePhase2Deps = {
+  const deps: ApplyServerProfileDeps = {
     allowInsecureRemote: opts.allowInsecureRemote,
-    writeDaemonHostConfig: config => {
+    writeDaemonHostConfig: (config) => {
       if (opts.writeThrows) throw opts.writeThrows;
       state.writeCalls.push(config);
     },
@@ -101,21 +97,19 @@ function makeDeps(opts: FakeOptions = {}): {
       if (opts.reloadThrows) throw opts.reloadThrows;
       return reloadResult;
     },
-    getAttachment: hasController ? _id => opts.attachment ?? null : null,
+    getAttachment: hasController ? (_id) => opts.attachment ?? null : null,
     currentLocalHostId: () => (opts.hostId === undefined ? 'host-1' : opts.hostId),
     currentHostToken: () => (opts.hostToken === undefined ? 'tok-1' : opts.hostToken),
     startWatchdog: (window, watchdogDeps) => {
       state.watchdogCalls.push({ window, deps: watchdogDeps });
-      const outcome: AttachWatchdogOutcome =
-        opts.watchdogOutcome ??
-        {
-          ok: true,
-          attachment: makeAttachment({
-            connectionId: 'conn-new',
-            attachedAt: 1_700_000_011_000,
-          }),
-          elapsedMs: 30,
-        };
+      const outcome: AttachWatchdogOutcome = opts.watchdogOutcome ?? {
+        ok: true,
+        attachment: makeAttachment({
+          connectionId: 'conn-new',
+          attachedAt: 1_700_000_011_000,
+        }),
+        elapsedMs: 30,
+      };
       return {
         promise: Promise.resolve(outcome),
         abort: () => {},
@@ -126,10 +120,10 @@ function makeDeps(opts: FakeOptions = {}): {
   return { deps, state };
 }
 
-describe('performProfilePhase2 — no_op_no_host_claim short-circuit', () => {
+describe('applyServerProfile — no_op_no_host_claim short-circuit', () => {
   it('returns no_op_no_host_claim when hostId is null (Setup Wizard pre-auth)', async () => {
     const { deps, state } = makeDeps({ hostId: null });
-    const out = await performProfilePhase2({ profile: makeProfile() }, deps);
+    const out = await applyServerProfile({ profile: makeProfile() }, deps);
     expect(out).toEqual({ kind: 'no_op_no_host_claim', profileVersion: 3 });
     // Pre-auth path MUST NOT touch daemon-config or fire IPC.
     expect(state.writeCalls).toEqual([]);
@@ -150,7 +144,7 @@ describe('performProfilePhase2 — no_op_no_host_claim short-circuit', () => {
     deps.currentHostToken = () => {
       throw new Error('currentHostToken must not be called when hostId is null');
     };
-    const out = await performProfilePhase2({ profile: makeProfile() }, deps);
+    const out = await applyServerProfile({ profile: makeProfile() }, deps);
     expect(out).toEqual({ kind: 'no_op_no_host_claim', profileVersion: 3 });
     expect(state.writeCalls).toEqual([]);
   });
@@ -166,7 +160,7 @@ describe('performProfilePhase2 — no_op_no_host_claim short-circuit', () => {
   // Retry + 5c-3 boot reconciliation can act on it.
   it('returns partial_apply_pending/host_token_missing when hostId is set but hostToken is null', async () => {
     const { deps, state } = makeDeps({ hostId: 'host-1', hostToken: null });
-    const out = await performProfilePhase2({ profile: makeProfile({ version: 7 }) }, deps);
+    const out = await applyServerProfile({ profile: makeProfile({ version: 7 }) }, deps);
     expect(out).toEqual({
       kind: 'partial_apply_pending',
       profileVersion: 7,
@@ -186,7 +180,7 @@ describe('performProfilePhase2 — no_op_no_host_claim short-circuit', () => {
   // Same `state.kind` for "fully_applied" + "no_op_no_host_claim" is
   // by design — both mean "nothing to reconcile".
   it('derivePartialApplyState collapses no_op_no_host_claim to fully_applied', () => {
-    const outcome: ProfilePhase2Outcome = {
+    const outcome: ServerProfileApplyOutcome = {
       kind: 'no_op_no_host_claim',
       profileVersion: 7,
     };
@@ -200,7 +194,7 @@ describe('performProfilePhase2 — no_op_no_host_claim short-circuit', () => {
   // grew a default-collapse arm in the future, this pins the
   // boundary.
   it('derivePartialApplyState carries through host_token_missing as partial_apply_pending', () => {
-    const outcome: ProfilePhase2Outcome = {
+    const outcome: ServerProfileApplyOutcome = {
       kind: 'partial_apply_pending',
       profileVersion: 4,
       reason: 'host_token_missing',
@@ -219,7 +213,7 @@ describe('performProfilePhase2 — no_op_no_host_claim short-circuit', () => {
   });
 });
 
-describe('performProfilePhase2 — fully_applied success arms', () => {
+describe('applyServerProfile — fully_applied success arms', () => {
   it('returns fully_applied/reloaded when daemon swapped + watchdog observed fresh attachment', async () => {
     const { deps, state } = makeDeps({
       attachment: makeAttachment({ connectionId: 'conn-old' }),
@@ -230,7 +224,7 @@ describe('performProfilePhase2 — fully_applied success arms', () => {
       },
       now: () => 1_700_000_010_000,
     });
-    const out = await performProfilePhase2({ profile: makeProfile({ version: 5 }) }, deps);
+    const out = await applyServerProfile({ profile: makeProfile({ version: 5 }) }, deps);
     expect(out).toEqual({
       kind: 'fully_applied',
       profileVersion: 5,
@@ -266,7 +260,7 @@ describe('performProfilePhase2 — fully_applied success arms', () => {
         host_id: 'host-1',
       },
     });
-    const out = await performProfilePhase2({ profile: makeProfile({ version: 9 }) }, deps);
+    const out = await applyServerProfile({ profile: makeProfile({ version: 9 }) }, deps);
     expect(out).toMatchObject({
       kind: 'fully_applied',
       profileVersion: 9,
@@ -281,7 +275,7 @@ describe('performProfilePhase2 — fully_applied success arms', () => {
       watchdogOutcome: { ok: false, reason: 'timeout', elapsedMs: 10_000 },
       now: () => 1_700_000_010_000,
     });
-    const out = await performProfilePhase2({ profile: makeProfile({ version: 4 }) }, deps);
+    const out = await applyServerProfile({ profile: makeProfile({ version: 4 }) }, deps);
     // §7.5: watchdog timeout is success-arm — config IS saved, the
     // user just may not be reachable yet.
     expect(out).toMatchObject({
@@ -294,10 +288,10 @@ describe('performProfilePhase2 — fully_applied success arms', () => {
   });
 });
 
-describe('performProfilePhase2 — partial_apply_pending failure arms', () => {
+describe('applyServerProfile — partial_apply_pending failure arms', () => {
   it('returns partial_apply_pending/config_write_failed when atomic write throws', async () => {
     const { deps, state } = makeDeps({ writeThrows: new Error('ENOSPC: disk full') });
-    const out = await performProfilePhase2({ profile: makeProfile({ version: 6 }) }, deps);
+    const out = await applyServerProfile({ profile: makeProfile({ version: 6 }) }, deps);
     expect(out).toEqual({
       kind: 'partial_apply_pending',
       profileVersion: 6,
@@ -311,7 +305,7 @@ describe('performProfilePhase2 — partial_apply_pending failure arms', () => {
 
   it('returns partial_apply_pending/reload_rejected/not_attached when IPC transport throws', async () => {
     const { deps } = makeDeps({ reloadThrows: new Error('socket closed') });
-    const out = await performProfilePhase2({ profile: makeProfile({ version: 8 }) }, deps);
+    const out = await applyServerProfile({ profile: makeProfile({ version: 8 }) }, deps);
     expect(out).toEqual({
       kind: 'partial_apply_pending',
       profileVersion: 8,
@@ -329,7 +323,7 @@ describe('performProfilePhase2 — partial_apply_pending failure arms', () => {
         message: 'config JSON malformed',
       },
     });
-    const out = await performProfilePhase2({ profile: makeProfile({ version: 11 }) }, deps);
+    const out = await applyServerProfile({ profile: makeProfile({ version: 11 }) }, deps);
     expect(out).toEqual({
       kind: 'partial_apply_pending',
       profileVersion: 11,
@@ -347,7 +341,7 @@ describe('performProfilePhase2 — partial_apply_pending failure arms', () => {
         message: 'daemon refused new server_url',
       },
     });
-    const out = await performProfilePhase2({ profile: makeProfile() }, deps);
+    const out = await applyServerProfile({ profile: makeProfile() }, deps);
     expect(out).toMatchObject({
       kind: 'partial_apply_pending',
       reason: 'reload_rejected',
@@ -357,7 +351,7 @@ describe('performProfilePhase2 — partial_apply_pending failure arms', () => {
 
   it('returns partial_apply_pending/no_attachment_controller when controller is null after reload swap', async () => {
     const { deps, state } = makeDeps({ hasController: false });
-    const out = await performProfilePhase2({ profile: makeProfile({ version: 2 }) }, deps);
+    const out = await applyServerProfile({ profile: makeProfile({ version: 2 }) }, deps);
     expect(out).toEqual({
       kind: 'partial_apply_pending',
       profileVersion: 2,
@@ -373,10 +367,10 @@ describe('performProfilePhase2 — partial_apply_pending failure arms', () => {
   });
 });
 
-describe('performProfilePhase2 — profile_version stamping', () => {
+describe('applyServerProfile — profile_version stamping', () => {
   it('writes profile.version onto every daemon-config (1 → 1)', async () => {
     const { deps, state } = makeDeps();
-    await performProfilePhase2({ profile: makeProfile({ version: 1 }) }, deps);
+    await applyServerProfile({ profile: makeProfile({ version: 1 }) }, deps);
     expect(state.writeCalls[0]?.profile_version).toBe(1);
   });
 
@@ -392,7 +386,7 @@ describe('performProfilePhase2 — profile_version stamping', () => {
         host_id: 'host-1',
       },
     });
-    await performProfilePhase2({ profile: makeProfile({ version: 2 }) }, deps);
+    await applyServerProfile({ profile: makeProfile({ version: 2 }) }, deps);
     expect(state.writeCalls[0]?.profile_version).toBe(2);
   });
 
@@ -401,7 +395,7 @@ describe('performProfilePhase2 — profile_version stamping', () => {
     // by design. This pin codifies the §7.5 contract: phase-2 sets
     // profile_version unconditionally to profile.version.
     const { deps, state } = makeDeps();
-    await performProfilePhase2({ profile: makeProfile({ version: 42 }) }, deps);
+    await applyServerProfile({ profile: makeProfile({ version: 42 }) }, deps);
     expect(state.writeCalls[0]).toEqual({
       server_url: 'http://127.0.0.1:4321',
       host_id: 'host-1',
@@ -412,7 +406,7 @@ describe('performProfilePhase2 — profile_version stamping', () => {
 
   it('stamps allow_insecure_remote when the local client policy opted in', async () => {
     const { deps, state } = makeDeps({ allowInsecureRemote: true });
-    await performProfilePhase2({ profile: makeProfile({ version: 43 }) }, deps);
+    await applyServerProfile({ profile: makeProfile({ version: 43 }) }, deps);
     expect(state.writeCalls[0]).toEqual({
       server_url: 'http://127.0.0.1:4321',
       host_id: 'host-1',
@@ -423,7 +417,7 @@ describe('performProfilePhase2 — profile_version stamping', () => {
   });
 });
 
-describe('performProfilePhase2 — order pinning (anchor cross-ref)', () => {
+describe('applyServerProfile — order pinning (anchor cross-ref)', () => {
   it('snapshot is captured BEFORE write (watchdog accepts attachments stamped during reload)', async () => {
     // The watchdog window's `expectAttachSince` MUST equal `now()` at
     // phase-2 entry, not after write. Concretely: a daemon that
@@ -434,14 +428,14 @@ describe('performProfilePhase2 — order pinning (anchor cross-ref)', () => {
       attachment: makeAttachment({ connectionId: 'conn-old' }),
       now: () => 1_700_000_010_000,
     });
-    await performProfilePhase2({ profile: makeProfile() }, deps);
+    await applyServerProfile({ profile: makeProfile() }, deps);
     expect(state.watchdogCalls[0]!.window.expectAttachSince).toBe(1_700_000_010_000);
     expect(state.watchdogCalls[0]!.window.previousConnectionId).toBe('conn-old');
   });
 
   it('config_write_failed never fires the reload IPC (write-before-IPC anchor)', async () => {
     const { deps, state } = makeDeps({ writeThrows: new Error('EROFS: read-only fs') });
-    await performProfilePhase2({ profile: makeProfile() }, deps);
+    await applyServerProfile({ profile: makeProfile() }, deps);
     expect(state.reloadCalls).toBe(0);
     expect(state.watchdogCalls).toEqual([]);
   });
@@ -449,7 +443,7 @@ describe('performProfilePhase2 — order pinning (anchor cross-ref)', () => {
 
 describe('derivePartialApplyState — pure state-derivation helper', () => {
   it('collapses fully_applied (any reloadKind) to { kind: fully_applied }', () => {
-    const outcomes: ProfilePhase2Outcome[] = [
+    const outcomes: ServerProfileApplyOutcome[] = [
       { kind: 'fully_applied', profileVersion: 1, reloadKind: 'reloaded', elapsedMs: 12 },
       { kind: 'fully_applied', profileVersion: 1, reloadKind: 'unchanged', elapsedMs: 0 },
       {
@@ -467,7 +461,7 @@ describe('derivePartialApplyState — pure state-derivation helper', () => {
   });
 
   it('carries through partial_apply_pending fields verbatim with fresh lastAttemptAt', () => {
-    const outcome: ProfilePhase2Outcome = {
+    const outcome: ServerProfileApplyOutcome = {
       kind: 'partial_apply_pending',
       profileVersion: 9,
       reason: 'reload_rejected',
@@ -486,7 +480,7 @@ describe('derivePartialApplyState — pure state-derivation helper', () => {
   });
 
   it('lastAttemptAt updates per-attempt (not preserved across calls)', () => {
-    const outcome: ProfilePhase2Outcome = {
+    const outcome: ServerProfileApplyOutcome = {
       kind: 'partial_apply_pending',
       profileVersion: 1,
       reason: 'config_write_failed',
@@ -525,7 +519,7 @@ interface ReconcileFakeState {
 interface ReconcileFakeOptions {
   read: ReadProfileResult;
   daemonConfig: DaemonHostConfig | null;
-  phase2Outcome?: ProfilePhase2Outcome;
+  phase2Outcome?: ServerProfileApplyOutcome;
   /** Defaults to fixed clock at 1_700_000_500_000. */
   now?: () => number;
 }
@@ -535,18 +529,16 @@ function makeReconcileDeps(opts: ReconcileFakeOptions): {
   state: ReconcileFakeState;
 } {
   const state: ReconcileFakeState = { phase2Calls: [] };
-  const phase2Outcome: ProfilePhase2Outcome =
-    opts.phase2Outcome ??
-    {
-      kind: 'fully_applied',
-      profileVersion: 0,
-      reloadKind: 'reloaded',
-      elapsedMs: 0,
-    };
+  const phase2Outcome: ServerProfileApplyOutcome = opts.phase2Outcome ?? {
+    kind: 'fully_applied',
+    profileVersion: 0,
+    reloadKind: 'reloaded',
+    elapsedMs: 0,
+  };
   const deps: ReconcilePartialApplyDeps = {
     readProfile: () => opts.read,
     readDaemonHostConfig: () => opts.daemonConfig,
-    runPhase2: async profile => {
+    applyProfile: async (profile) => {
       state.phase2Calls.push(profile);
       return phase2Outcome;
     },

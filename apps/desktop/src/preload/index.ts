@@ -9,10 +9,7 @@ import type {
   TlsErrorCode,
   UserDto,
 } from '@silverhand/shared';
-import {
-  desktopBuildConfig,
-  type DesktopBuildConfig,
-} from '../build-flags.js';
+import { desktopBuildConfig, type DesktopBuildConfig } from '../build-flags.js';
 import type { LocalHostWsAttachment } from '../backend-info-contract.js';
 
 export type { LocalHostWsAttachment };
@@ -24,10 +21,7 @@ export interface BackendInfo {
    * daemon and the exact outbound protocol accepted by the connected server. */
   outbound_protocol_compatibility:
     | {
-        status:
-          | 'compatible'
-          | 'app_update_required'
-          | 'server_update_required';
+        status: 'compatible' | 'app_update_required' | 'server_update_required';
         app_protocol_version: number;
         server_protocol_version: number;
       }
@@ -158,11 +152,7 @@ export type DesktopSaveServerUrlResult =
   | {
       ok: false;
       kind: 'reload_rejected';
-      reason:
-        | 'not_attached'
-        | 'config_unreadable'
-        | 'parse_failed'
-        | 'invalid_server_url';
+      reason: 'not_attached' | 'config_unreadable' | 'parse_failed' | 'invalid_server_url';
       message: string;
     }
   | { ok: false; kind: 'no_attachment_controller'; message: string };
@@ -201,7 +191,7 @@ export type DesktopProfileSaveWithTestResult =
       ok: true;
       test: DesktopProbeServerInfoResult & { ok: true };
       profile: ServerConnectionProfileView;
-      phase2: DesktopProfilePhase2Outcome;
+      phase2: DesktopServerProfileApplyOutcome;
     }
   | {
       ok: false;
@@ -222,7 +212,7 @@ export type DesktopProfileSaveWithTestResult =
       detail?: string;
     };
 
-export type DesktopProfilePhase2Outcome =
+export type DesktopServerProfileApplyOutcome =
   | {
       kind: 'fully_applied';
       profileVersion: number;
@@ -280,7 +270,7 @@ export type DesktopPartialApplyState =
 export type DesktopPartialApplyRetryResult =
   | {
       ok: true;
-      outcome: DesktopProfilePhase2Outcome;
+      outcome: DesktopServerProfileApplyOutcome;
       state: DesktopPartialApplyState;
     }
   | { ok: false; reason: 'no_profile' }
@@ -365,8 +355,7 @@ function setPreviewPinchZoom(enabled: boolean): void {
 }
 
 const api = {
-  getDesktopBuildConfig: async (): Promise<DesktopBuildConfig> =>
-    desktopBuildConfig(),
+  getDesktopBuildConfig: async (): Promise<DesktopBuildConfig> => desktopBuildConfig(),
   getBackendInfo: (): Promise<BackendInfo | null> => ipcRenderer.invoke('backend:info'),
   getAuthState: (): Promise<DesktopAuthState> => ipcRenderer.invoke('auth:getState'),
   signup: (input: AuthSignupInput): Promise<DesktopAuthResult> =>
@@ -384,15 +373,12 @@ const api = {
     ipcRenderer.invoke('hosts:rotate', input),
   revokeHost: (input: { hostId: string }): Promise<DesktopHostMutationResult> =>
     ipcRenderer.invoke('hosts:revoke', input),
-  getHostProxyConfig: (input: {
-    hostId: string;
-  }): Promise<DesktopHostProxyConfigResult> =>
+  getHostProxyConfig: (input: { hostId: string }): Promise<DesktopHostProxyConfigResult> =>
     ipcRenderer.invoke('hosts:proxyConfig:get', input),
   saveHostProxyConfig: (input: {
     hostId: string;
     config: DesktopHostProxyConfig;
-  }): Promise<DesktopHostProxyConfigResult> =>
-    ipcRenderer.invoke('hosts:proxyConfig:set', input),
+  }): Promise<DesktopHostProxyConfigResult> => ipcRenderer.invoke('hosts:proxyConfig:set', input),
   saveServerUrl: (input: { serverUrl: string }): Promise<DesktopSaveServerUrlResult> =>
     ipcRenderer.invoke('settings:saveServerUrl', input),
   getServerConnectionProfile: (): Promise<ServerConnectionProfileView | null> =>
@@ -431,9 +417,7 @@ const api = {
     filename: string;
     bytes: Uint8Array;
   }): Promise<
-    | { ok: true; path: string }
-    | { ok: false; canceled: true }
-    | { ok: false; reason: string }
+    { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; reason: string }
   > => ipcRenderer.invoke('attachment:save', input),
   /** Subscribe to shutdown progress steps emitted by the main process
    *  just before and during graceful shutdown. Drives the in-app overlay
@@ -469,10 +453,7 @@ const api = {
     ipcRenderer.on('shortcut:contextual-close', listener);
     return () => ipcRenderer.off('shortcut:contextual-close', listener);
   },
-  respondContextualClose: (
-    reqId: string,
-    outcome: 'closed-panel' | 'background-app',
-  ): void => {
+  respondContextualClose: (reqId: string, outcome: 'closed-panel' | 'background-app'): void => {
     ipcRenderer.send('shortcut:contextual-close-result', reqId, outcome);
   },
   showSystemNotification: (opts: {
@@ -483,8 +464,7 @@ const api = {
      *  can route the click to the right navigation target. Fire-and-
      *  forget if omitted (the notification is just informational). */
     notificationId?: string;
-  }): Promise<void> =>
-    ipcRenderer.invoke('notification:show', opts),
+  }): Promise<void> => ipcRenderer.invoke('notification:show', opts),
   /** Subscribe to native-notification click events. Main fires this
    *  when the user clicks an OS-level Silverhand notification, after
    *  focusing the window. The id matches what the renderer originally
@@ -503,8 +483,7 @@ const api = {
    *  Unknown / already-closed ids are ignored by main. */
   dismissSystemNotifications: (notificationIds: string[]): Promise<void> =>
     ipcRenderer.invoke('notification:dismiss', notificationIds),
-  setBadgeCount: (count: number): Promise<void> =>
-    ipcRenderer.invoke('badge:setCount', count),
+  setBadgeCount: (count: number): Promise<void> => ipcRenderer.invoke('badge:setCount', count),
   /** Save a PNG snapshot to disk via the native save dialog. The
    *  renderer hands over raw bytes; main owns the dialog + writeFile.
    *  See `export:savePng` in main. */
@@ -512,9 +491,7 @@ const api = {
     pngBytes: Uint8Array;
     suggestedName: string;
   }): Promise<
-    | { ok: true; path: string }
-    | { ok: false; canceled: true }
-    | { ok: false; error: string }
+    { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; error: string }
   > => ipcRenderer.invoke('export:savePng', input),
   /** Copy PNG snapshot bytes to the OS clipboard. Main constructs a
    *  NativeImage so Electron handles pasteboard format negotiation —

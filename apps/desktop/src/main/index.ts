@@ -1,5 +1,12 @@
 import { desktopDaemonLauncher } from './daemon-launcher';
-import { app, BrowserWindow, Menu, session as electronSession, shell, type MenuItemConstructorOptions } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  session as electronSession,
+  shell,
+  type MenuItemConstructorOptions,
+} from 'electron';
 import { execFileSync, spawn as spawnChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -43,14 +50,15 @@ import {
   type CategorizedLoggers,
   type FileLogger,
 } from '@silverhand/shared/node-file-logger';
-import {
-  startDesktopEmbeddedBackend,
-} from './embedded-launcher.js';
+import { startDesktopEmbeddedBackend } from './embedded-launcher.js';
 import type {
   EmbeddedRustBackendHandle,
   EmbeddedRustBackendTerminalReason,
 } from './embedded-rust-backend.js';
-import { persistEmbeddedBackend, invalidateEmbeddedRuntime } from './embedded-backend-publication.js';
+import {
+  persistEmbeddedBackend,
+  invalidateEmbeddedRuntime,
+} from './embedded-backend-publication.js';
 import { EmbeddedBackendOwner } from './embedded-backend-owner.js';
 const embeddedBackendOwner = new EmbeddedBackendOwner();
 import {
@@ -102,22 +110,20 @@ import {
   writeDaemonHostConfig,
   type LocalHostClaimStatus,
 } from './local-host-claim.js';
-import {
-  type ExpectedAttachWindow,
-} from './outbound-attach.js';
+import { type ExpectedAttachWindow } from './outbound-attach.js';
 import {
   performOutboundReload,
   bindAttachmentAccessor,
   type OutboundReloadOutcome,
 } from './outbound-reload.js';
 import {
-  performProfilePhase2,
+  applyServerProfile,
   derivePartialApplyState,
   reconcilePartialApplyAtBoot,
   type PartialApplyState,
-  type PerformProfilePhase2Deps,
-  type ProfilePhase2Outcome,
-} from './profile-phase2.js';
+  type ApplyServerProfileDeps,
+  type ServerProfileApplyOutcome,
+} from './server-profile-apply.js';
 import { gracefullyDetachOutbound } from './outbound-detach.js';
 import {
   clearServerConnectionProfile,
@@ -130,9 +136,7 @@ import {
   loadPersistedDesktopSessionToken,
   persistDesktopSessionToken,
 } from './desktop-session-storage.js';
-import {
-  extractViewerUserFromProxyResponse,
-} from './profile-session-sync.js';
+import { extractViewerUserFromProxyResponse } from './profile-session-sync.js';
 import {
   decideBackendBootMode,
   evaluateProfileCommitGuard,
@@ -141,21 +145,12 @@ import {
   ProfileUnusableError,
   RemoteOnlyServerProfileRequiredError,
 } from './backend-boot-mode.js';
-import {
-  buildRemoteBackendHandle,
-  type RemoteBackendHandle,
-} from './remote-backend-handle.js';
-import {
-  probeServerInfo,
-  type ProbeServerInfoResult,
-} from './server-connection-test.js';
+import { buildRemoteBackendHandle, type RemoteBackendHandle } from './remote-backend-handle.js';
+import { probeServerInfo, type ProbeServerInfoResult } from './server-connection-test.js';
 import { fetchServerInfoWithRetry } from './fetch-server-info.js';
 import { registerEventWsDiagnosticIpcHandler } from './ipc/event-ws-diagnostics.js';
 import { registerSelectionExportIpcHandlers } from './ipc/selection-export.js';
-import {
-  ContextualCloseCoordinator,
-  type CloseTarget,
-} from './contextual-close.js';
+import { ContextualCloseCoordinator, type CloseTarget } from './contextual-close.js';
 import {
   classifyOutboundProtocolCompatibility,
   type OutboundProtocolCompatibility,
@@ -165,25 +160,17 @@ import {
   fetchBackendWithNetworkPolicy,
 } from './renderer-backend-network.js';
 
-function backendFetch(
-  input: string | URL,
-  init?: RequestInit,
-): Promise<Response> {
+function backendFetch(input: string | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   headers.set(DESKTOP_API_EPOCH_HEADER, String(DESKTOP_SERVER_API_EPOCH));
   // Observability input: fail-open telemetry; null just omits the header.
   if (!headers.has(CLIENT_INFO_HEADER)) {
-    const value = desktopClientInfoHeaderValue(
-      desktopAppPaths().installationId,
-      logger,
-    );
+    const value = desktopClientInfoHeaderValue(desktopAppPaths().installationId, logger);
     if (value) headers.set(CLIENT_INFO_HEADER, value);
   }
   return fetchBackendWithNetworkPolicy(fetch, input, { ...init, headers });
 }
-import {
-  registerSurfaceIpcHandlers,
-} from './ipc/surface-ipc.js';
+import { registerSurfaceIpcHandlers } from './ipc/surface-ipc.js';
 
 const nodeSystemCaActivation = enableNodeSystemCa();
 
@@ -258,10 +245,7 @@ let partialApplyState: PartialApplyState = { kind: 'fully_applied' };
 const HEADLESS = process.env.SILVERHAND_HEADLESS === '1';
 
 function desktopAllowsInsecureRemote(): boolean {
-  return (
-    DESKTOP_ALLOW_INSECURE_REMOTE ||
-    readAllowInsecureRemoteFlag(process.env)
-  );
+  return DESKTOP_ALLOW_INSECURE_REMOTE || readAllowInsecureRemoteFlag(process.env);
 }
 
 interface RemoteDebuggingConfig {
@@ -392,7 +376,7 @@ function appendExistingPathEntries(
 ): { path: string; added: string[] } {
   const parts = rawPath.split(delimiter).filter(Boolean);
   const seen = new Set(parts);
-  const added = candidates.filter(candidate => {
+  const added = candidates.filter((candidate) => {
     if (seen.has(candidate)) return false;
     if (!existsSync(candidate)) return false;
     seen.add(candidate);
@@ -521,9 +505,7 @@ function requireEmbeddedBackend(reason: string): EmbeddedRustBackendHandle {
     throw new Error(`backend not ready (caller: ${reason})`);
   }
   if (backend.kind !== 'embedded') {
-    throw new Error(
-      `embedded backend required but desktop is in remote mode (caller: ${reason})`,
-    );
+    throw new Error(`embedded backend required but desktop is in remote mode (caller: ${reason})`);
   }
   return backend.running;
 }
@@ -547,11 +529,9 @@ function backendOrigin(): string {
 async function syncEventWsSessionCookie(token: string | null): Promise<void> {
   if (!backend) return;
   const url = eventWsCookieUrl();
-  await electronSession.defaultSession.cookies
-    .remove(url, EVENT_WS_SESSION_COOKIE)
-    .catch(err => {
-      logger?.warn({ err }, 'failed to clear event websocket session cookie');
-    });
+  await electronSession.defaultSession.cookies.remove(url, EVENT_WS_SESSION_COOKIE).catch((err) => {
+    logger?.warn({ err }, 'failed to clear event websocket session cookie');
+  });
   if (!token) return;
   await electronSession.defaultSession.cookies
     .set({
@@ -563,7 +543,7 @@ async function syncEventWsSessionCookie(token: string | null): Promise<void> {
       secure: new URL(requireBackendUrl()).protocol === 'https:',
       path: apiPaths.eventWebSocket,
     })
-    .catch(err => {
+    .catch((err) => {
       logger?.warn({ err }, 'failed to set event websocket session cookie');
     });
 }
@@ -586,23 +566,21 @@ function installBackendEventWsOriginOverride(): void {
         delete details.requestHeaders.cookie;
         details.requestHeaders.Origin = expectedOrigin;
         if (userSessionToken) {
-          details.requestHeaders.Cookie =
-            `${EVENT_WS_SESSION_COOKIE}=${encodeURIComponent(userSessionToken)}`;
+          details.requestHeaders.Cookie = `${EVENT_WS_SESSION_COOKIE}=${encodeURIComponent(userSessionToken)}`;
         } else {
           delete details.requestHeaders.Cookie;
         }
         if (clientInfoHeader) {
           details.requestHeaders[CLIENT_INFO_HEADER] = clientInfoHeader;
         }
-        details.requestHeaders[DESKTOP_API_EPOCH_HEADER] =
-          String(DESKTOP_SERVER_API_EPOCH);
+        details.requestHeaders[DESKTOP_API_EPOCH_HEADER] = String(DESKTOP_SERVER_API_EPOCH);
       }
       callback({ requestHeaders: details.requestHeaders });
     },
   );
   electronSession.defaultSession.webRequest.onErrorOccurred(
     { urls: [`${expectedUrl.protocol}//${expectedUrl.host}${apiPaths.eventWebSocket}`] },
-    details => {
+    (details) => {
       logger?.warn(
         {
           category: 'event_ws.network',
@@ -622,7 +600,10 @@ function clearPersistedUserSession(): void {
 }
 
 function loadPersistedUserSessionToken(): string | null {
-  return loadPersistedDesktopSessionToken({ sessionPath: desktopAppPaths().desktop.session, logger });
+  return loadPersistedDesktopSessionToken({
+    sessionPath: desktopAppPaths().desktop.session,
+    logger,
+  });
 }
 
 function persistUserSessionToken(token: string): void {
@@ -712,7 +693,7 @@ async function fetchRemoteCompatibilitySnapshot(): Promise<RemoteCompatibilitySn
   try {
     const info = await fetchServerInfoWithRetry({
       url: backendUrl(apiPaths.serverInfo),
-      fetcher: input => backendFetch(input),
+      fetcher: (input) => backendFetch(input),
       // BackendInfo is a periodic capability probe, not a boot gate. One
       // attempt keeps it cheap; a transient failure becomes `unknown` and the
       // next poll/focus refetch retries without blocking the renderer.
@@ -737,9 +718,7 @@ async function fetchRemoteCompatibilitySnapshot(): Promise<RemoteCompatibilitySn
   }
 }
 
-async function validateUserSessionToken(
-  token: string,
-): Promise<SessionValidationResult> {
+async function validateUserSessionToken(token: string): Promise<SessionValidationResult> {
   let res: Response;
   try {
     res = await backendFetch(backendUrl(apiPaths.me), {
@@ -835,10 +814,7 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
     runtimeUpgradeMonitor.reset();
   }
 
-  if (
-    (!userSessionToken || !userSessionUser) &&
-    loadPersistedUserSessionToken()
-  ) {
+  if ((!userSessionToken || !userSessionUser) && loadPersistedUserSessionToken()) {
     await runHydrate();
   }
   if (userSessionToken && userSessionUser) {
@@ -854,8 +830,7 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
     return {
       status: 'backend_unreachable',
       server_url: url,
-      message:
-        'session validation pending — /api/me did not return a verdict',
+      message: 'session validation pending — /api/me did not return a verdict',
     };
   }
   return { status: 'unauthenticated', signup_enabled: info.signup_enabled };
@@ -992,9 +967,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
 
     const hostToken =
       parsed.data.host_token ??
-      (existingConfig?.host_id === parsed.data.host_id
-        ? existingConfig.host_token
-        : null);
+      (existingConfig?.host_id === parsed.data.host_id ? existingConfig.host_token : null);
     if (!hostToken) {
       throw new Error('local host claim response omitted host_token without reusable config');
     }
@@ -1006,8 +979,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
       profilePath: paths.desktop.serverProfile,
       logger: logger ?? undefined,
     });
-    const profileVersion =
-      profileRead.ok ? profileRead.profile.version : undefined;
+    const profileVersion = profileRead.ok ? profileRead.profile.version : undefined;
     const allowInsecureRemote = desktopAllowsInsecureRemote();
 
     writeDaemonHostConfig(paths.desktop.computerBinding, {
@@ -1045,7 +1017,7 @@ async function logoutUserSession(): Promise<{ ok: true }> {
     await backendFetch(backendUrl(authPaths.logout), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
-    }).catch(err => {
+    }).catch((err) => {
       logger?.warn({ err }, 'desktop auth logout revoke failed');
     });
   }
@@ -1081,8 +1053,7 @@ function snapshotLocalHostInfo(): {
   local_host_server_url: string | null;
 } {
   return {
-    local_host_id:
-      localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
+    local_host_id: localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
     local_host_status: localHostClaim.status,
     local_host_ws_attachment: describeLocalHostWsAttachment({
       hasLocalRegistryObserver: hasLocalRegistryObserver(),
@@ -1162,9 +1133,7 @@ async function triggerLocalHostOutboundAttach(input: {
  *  host. Only allowed for `hostId === daemon-config.host_id` (the
  *  source-of-truth for what identity this desktop is currently using).
  *  Mid-flight token bytes never cross the renderer IPC boundary. */
-async function rotateHostToken(
-  hostId: string,
-): Promise<DesktopHostMutationResult> {
+async function rotateHostToken(hostId: string): Promise<DesktopHostMutationResult> {
   const token = userSessionToken;
   if (!token || !backend) {
     return { ok: false, code: 'unauthorized' };
@@ -1179,8 +1148,7 @@ async function rotateHostToken(
     return {
       ok: false,
       code: 'not_current_host',
-      message:
-        'rotate is only supported for the host this desktop is currently bound to',
+      message: 'rotate is only supported for the host this desktop is currently bound to',
     };
   }
 
@@ -1243,9 +1211,7 @@ async function rotateHostToken(
  *  `localHostClaim` so subsequent `BackendInfo` reads reflect the
  *  new state. Other owned hosts only update the server; local state
  *  is unchanged. */
-async function revokeHost(
-  hostId: string,
-): Promise<DesktopHostMutationResult> {
+async function revokeHost(hostId: string): Promise<DesktopHostMutationResult> {
   const token = userSessionToken;
   if (!token || !backend) {
     return { ok: false, code: 'unauthorized' };
@@ -1290,7 +1256,10 @@ async function revokeHost(
   // `BackendInfo` IPC so the renderer can prompt the user to log in
   // again (which provisions a fresh active host row under the new
   // active-only partial-unique index).
-  const reconcile = applyRevokeSideEffects({ daemonConfigPath: desktopAppPaths().desktop.computerBinding, hostId });
+  const reconcile = applyRevokeSideEffects({
+    daemonConfigPath: desktopAppPaths().desktop.computerBinding,
+    hostId,
+  });
   if (reconcile === 'cleared') {
     localHostClaim = { status: 'revoked', hostId };
   }
@@ -1301,16 +1270,12 @@ async function revokeHost(
   };
 }
 
-function normalizeDesktopHostProxyConfig(
-  input: unknown,
-): DesktopHostProxyConfig | null {
+function normalizeDesktopHostProxyConfig(input: unknown): DesktopHostProxyConfig | null {
   const parsed = HostProxyConfigSchema.safeParse(input);
   return parsed.success ? parsed.data : null;
 }
 
-async function getHostProxyConfig(
-  hostId: string,
-): Promise<DesktopHostProxyConfigResult> {
+async function getHostProxyConfig(hostId: string): Promise<DesktopHostProxyConfigResult> {
   const token = userSessionToken;
   if (!token || !backend) {
     return { ok: false, code: 'unauthorized' };
@@ -1409,10 +1374,9 @@ function hostProxyConfigErrorResult(
   status: number,
   statusText: string,
 ): DesktopHostProxyConfigResult {
-  const error = body && typeof body === 'object' ? body as Record<string, unknown> : {};
+  const error = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
   const code = typeof error.error_code === 'string' ? error.error_code : null;
-  const message =
-    typeof error.error === 'string' ? error.error : `${status} ${statusText}`;
+  const message = typeof error.error === 'string' ? error.error : `${status} ${statusText}`;
   switch (code) {
     case 'host_not_found':
       return { ok: false, code: 'host_not_found', message };
@@ -1433,9 +1397,7 @@ function networkErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-async function saveServerUrlFromSettings(
-  rawServerUrl: string,
-): Promise<OutboundReloadOutcome> {
+async function saveServerUrlFromSettings(rawServerUrl: string): Promise<OutboundReloadOutcome> {
   const client = hostClient;
   if (!client || !backend) {
     // Pre-backend / post-shutdown — the orchestrator would itself
@@ -1460,7 +1422,7 @@ async function saveServerUrlFromSettings(
     {
       classifyServerUrl,
       allowInsecureRemote,
-      writeDaemonHostConfig: config => writeDaemonHostConfig(daemonConfigPath, config),
+      writeDaemonHostConfig: (config) => writeDaemonHostConfig(daemonConfigPath, config),
       hostOutboundReload: () => client.hostOutboundReload(),
       getAttachment: bindAttachmentAccessor(controller),
       remoteMode: !hasLocalRegistryObserver(),
@@ -1549,9 +1511,7 @@ async function marshalBackendResponse(
   return { ...base, bodyText: await res.text() };
 }
 
-async function proxyBackendRequest(
-  input: BackendProxyRequest,
-): Promise<BackendProxyResponse> {
+async function proxyBackendRequest(input: BackendProxyRequest): Promise<BackendProxyResponse> {
   assertApiProxyPath(input.path);
   if (!userSessionToken) {
     return {
@@ -1588,16 +1548,11 @@ async function proxyBackendRequest(
   }
   const response = await marshalBackendResponse(res, input.responseType ?? 'text');
   runtimeUpgradeMonitor.onRestResponse(response.status, response.bodyText);
-  reseatCachedUserSessionFromProxy(
-    { path: input.path, method: input.method },
-    response,
-  );
+  reseatCachedUserSessionFromProxy({ path: input.path, method: input.method }, response);
   return response;
 }
 
-async function proxyBackendUpload(
-  input: BackendUploadRequest,
-): Promise<BackendProxyResponse> {
+async function proxyBackendUpload(input: BackendUploadRequest): Promise<BackendProxyResponse> {
   assertApiProxyPath(input.path);
   if (!userSessionToken) {
     return {
@@ -1640,10 +1595,7 @@ async function proxyBackendUpload(
   }
   const response = await marshalBackendResponse(res, 'text');
   runtimeUpgradeMonitor.onRestResponse(response.status, response.bodyText);
-  reseatCachedUserSessionFromProxy(
-    { path: input.path, method: 'POST' },
-    response,
-  );
+  reseatCachedUserSessionFromProxy({ path: input.path, method: 'POST' }, response);
   return response;
 }
 
@@ -1709,10 +1661,7 @@ async function bootstrap(): Promise<void> {
       );
     }
     if (DESKTOP_REMOTE_ONLY && forceEmbedded) {
-      logger.warn(
-        {},
-        'SILVERHAND_FORCE_EMBEDDED=1 ignored because this package is remote-only',
-      );
+      logger.warn({}, 'SILVERHAND_FORCE_EMBEDDED=1 ignored because this package is remote-only');
     }
     const bootDecision = decideBackendBootMode({
       profileView: effectiveBootProfile.profileView,
@@ -1806,9 +1755,7 @@ async function bootstrap(): Promise<void> {
       readyTimeoutMs: 30_000,
       proxyConfigPath: null,
       controlPlaneServerUrlPath:
-        startupPlan.mode === 'embedded'
-          ? paths.controlPlaneServerUrlPath
-          : null,
+        startupPlan.mode === 'embedded' ? paths.controlPlaneServerUrlPath : null,
       localOutboundSocketPath: null,
       alsoStderr: !app.isPackaged,
     });
@@ -1835,7 +1782,7 @@ async function bootstrap(): Promise<void> {
           `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    daemon.onExit(info => {
+    daemon.onExit((info) => {
       logger?.error(
         { kind: info.kind, reason: info.reason, code: info.code },
         'silverhand-daemon exited fatally',
@@ -1844,7 +1791,7 @@ async function bootstrap(): Promise<void> {
     });
 
     const reattachedGenerations = new Set<string>();
-    daemon.onDaemonGenerationChanged(info => {
+    daemon.onDaemonGenerationChanged((info) => {
       if (reattachedGenerations.has(info.instanceId)) {
         logger?.debug?.(
           { instanceId: info.instanceId, attempt: info.attempt },
@@ -1913,7 +1860,7 @@ async function bootstrap(): Promise<void> {
           configPath: desktopAppPaths().desktop.computerBinding,
           attachWindow,
         });
-      })().catch(err => {
+      })().catch((err) => {
         logger?.error(
           { err, instanceId: info.instanceId },
           'D3.b daemon generation re-attach unexpectedly threw',
@@ -1926,57 +1873,66 @@ async function bootstrap(): Promise<void> {
       RemoteBackendHandle
     >(startupPlan, {
       loadOrCreateServerConfig: () => loadOrCreateServerConfig(),
-      startEmbeddedAndPersistConfig: config => embeddedBackendOwner.start(async () => {
-        const appPaths = desktopAppPaths();
-        const bootstrapTokenPath = embeddedBootstrapPath();
-        const serverConfig = config as Awaited<
-          ReturnType<typeof loadOrCreateServerConfig>
-        >;
-        const daemonNpmSpec = process.env.SILVERHAND_DAEMON_NPM_SPEC?.trim();
-        const rendererOrigin = process.env.ELECTRON_RENDERER_URL
-          ? new URL(process.env.ELECTRON_RENDERER_URL).origin
-          : null;
-        const handle = await startDesktopEmbeddedBackend(
-          { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() },
-          {
-            databasePath: appPaths.embeddedServer.database,
-            signal: embeddedBackendOwner.signal,
-            blobsRoot: appPaths.embeddedServer.blobs,
-            logDir: appPaths.logs,
-            bootstrapTokenPath,
-            listen: { hostname: '127.0.0.1', port: 0 },
-            // The Rust backend self-derives its finalized bound loopback origin into the
-            // event-WS allowlist (TS parity); the launcher supplies the renderer dev
-            // origin (when present) so a dev renderer's WS upgrade is allowed too.
-            allowedOrigins: rendererOrigin
-              ? [rendererOrigin]
-              : ['http://127.0.0.1:0'],
-            ...(daemonNpmSpec ? { daemonNpmSpec } : {}),
-            disableSignup: false,
-            apiEpoch: {
-              clientEpoch: DESKTOP_SERVER_API_EPOCH,
-              minimumServerEpoch: MINIMUM_SERVER_API_EPOCH,
+      startEmbeddedAndPersistConfig: (config) =>
+        embeddedBackendOwner.start(async () => {
+          const appPaths = desktopAppPaths();
+          const bootstrapTokenPath = embeddedBootstrapPath();
+          const serverConfig = config as Awaited<ReturnType<typeof loadOrCreateServerConfig>>;
+          const daemonNpmSpec = process.env.SILVERHAND_DAEMON_NPM_SPEC?.trim();
+          const rendererOrigin = process.env.ELECTRON_RENDERER_URL
+            ? new URL(process.env.ELECTRON_RENDERER_URL).origin
+            : null;
+          const handle = await startDesktopEmbeddedBackend(
+            {
+              isPackaged: app.isPackaged,
+              resourcesPath: process.resourcesPath,
+              appPath: app.getAppPath(),
             },
-          },
-          logger ?? undefined,
-        ).catch(async error => {
-          await invalidateEmbeddedServerUrl(serverConfig);
-          throw error;
-        });
+            {
+              databasePath: appPaths.embeddedServer.database,
+              signal: embeddedBackendOwner.signal,
+              blobsRoot: appPaths.embeddedServer.blobs,
+              logDir: appPaths.logs,
+              bootstrapTokenPath,
+              listen: { hostname: '127.0.0.1', port: 0 },
+              // The Rust backend self-derives its finalized bound loopback origin into the
+              // event-WS allowlist (TS parity); the launcher supplies the renderer dev
+              // origin (when present) so a dev renderer's WS upgrade is allowed too.
+              allowedOrigins: rendererOrigin ? [rendererOrigin] : ['http://127.0.0.1:0'],
+              ...(daemonNpmSpec ? { daemonNpmSpec } : {}),
+              disableSignup: false,
+              apiEpoch: {
+                clientEpoch: DESKTOP_SERVER_API_EPOCH,
+                minimumServerEpoch: MINIMUM_SERVER_API_EPOCH,
+              },
+            },
+            logger ?? undefined,
+          ).catch(async (error) => {
+            await invalidateEmbeddedServerUrl(serverConfig);
+            throw error;
+          });
 
-        await persistEmbeddedBackend(handle, {
-          config: () => writeServerConfig({ ...serverConfig, url: handle.url }),
-          controlUrl: () => writeFileSync(paths.controlPlaneServerUrlPath, `${handle.url}\n`, { mode: 0o600 }),
-          invalidate: async () => {
-            try { await fsRm(paths.controlPlaneServerUrlPath, { force: true }); }
-            finally { await invalidateEmbeddedServerUrl(serverConfig); }
-          },
-        }, embeddedBackendOwner.signal);
+          await persistEmbeddedBackend(
+            handle,
+            {
+              config: () => writeServerConfig({ ...serverConfig, url: handle.url }),
+              controlUrl: () =>
+                writeFileSync(paths.controlPlaneServerUrlPath, `${handle.url}\n`, { mode: 0o600 }),
+              invalidate: async () => {
+                try {
+                  await fsRm(paths.controlPlaneServerUrlPath, { force: true });
+                } finally {
+                  await invalidateEmbeddedServerUrl(serverConfig);
+                }
+              },
+            },
+            embeddedBackendOwner.signal,
+          );
 
-        return handle;
-      }),
-      buildRemoteHandle: input => buildRemoteBackendHandle(input),
-      refuse: refusePlan => {
+          return handle;
+        }),
+      buildRemoteHandle: (input) => buildRemoteBackendHandle(input),
+      refuse: (refusePlan) => {
         // Throws — typed as `(plan) => never` so the union narrows
         // for the caller. Logged on the way out so a pre-bootstrap
         // crash trace carries the same diagnosis as the embedded
@@ -1996,13 +1952,16 @@ async function bootstrap(): Promise<void> {
       },
     });
     if (embeddedBackendOwner.isStopping) {
-      if (startedBackend.kind === 'embedded') await embeddedBackendOwner.close(startedBackend.running);
+      if (startedBackend.kind === 'embedded')
+        await embeddedBackendOwner.close(startedBackend.running);
       throw new Error('backend startup cancelled before main publication');
     }
     backend = startedBackend;
     if (backend.kind === 'embedded') {
       const handle = backend.running;
-      handle.onTerminal(reason => { void handlePostPublishEmbeddedFatal(handle, reason); });
+      handle.onTerminal((reason) => {
+        void handlePostPublishEmbeddedFatal(handle, reason);
+      });
       if (!backend) throw new Error('embedded backend terminated during publication');
     }
     installBackendEventWsOriginOverride();
@@ -2029,9 +1988,8 @@ async function runBootReconciliation(): Promise<void> {
           profilePath: desktopAppPaths().desktop.serverProfile,
           logger: logger ?? undefined,
         }),
-      readDaemonHostConfig: () =>
-        readDaemonHostConfig(desktopAppPaths().desktop.computerBinding),
-      runPhase2: profile => runProfilePhase2(profile),
+      readDaemonHostConfig: () => readDaemonHostConfig(desktopAppPaths().desktop.computerBinding),
+      applyProfile: (profile) => runServerProfileApply(profile),
     });
     partialApplyState = state;
     if (state.kind === 'partial_apply_pending') {
@@ -2049,10 +2007,7 @@ async function runBootReconciliation(): Promise<void> {
         'boot reconciliation: unusable_profile — renderer should offer reset affordance',
       );
     } else {
-      logger?.info(
-        { kind: state.kind },
-        'boot reconciliation: ok',
-      );
+      logger?.info({ kind: state.kind }, 'boot reconciliation: ok');
     }
   } catch (err) {
     // Reconciliation failed unexpectedly. Leave `partialApplyState`
@@ -2080,8 +2035,7 @@ function createWindow(): void {
     // Win/Linux keep the native frame for now — self-drawn min/max/close
     // is deferred (see docs/app-layout.md §0).
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : undefined,
-    trafficLightPosition:
-      process.platform === 'darwin' ? { x: 12, y: 11 } : undefined,
+    trafficLightPosition: process.platform === 'darwin' ? { x: 12, y: 11 } : undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -2092,14 +2046,14 @@ function createWindow(): void {
   mainWindow = win;
 
   // Mouse-wheel page zoom does not use the application menu.
-  win.webContents.on('zoom-changed', event => event.preventDefault());
+  win.webContents.on('zoom-changed', (event) => event.preventDefault());
 
   win.on('ready-to-show', () => win.show());
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null;
   });
 
-  win.webContents.setWindowOpenHandler(details => {
+  win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url);
     return { action: 'deny' };
   });
@@ -2265,10 +2219,8 @@ const contextualClose = new ContextualCloseCoordinator(
 function closeTargetFor(window: BrowserWindow): CloseTarget {
   return {
     webContentsId: window.webContents.id,
-    isDestroyed: () =>
-      window.isDestroyed() || window.webContents.isDestroyed(),
-    sendRequest: (reqId) =>
-      window.webContents.send('shortcut:contextual-close', reqId),
+    isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
+    sendRequest: (reqId) => window.webContents.send('shortcut:contextual-close', reqId),
   };
 }
 
@@ -2278,13 +2230,10 @@ function handleContextualClose(triggeringWindow: BrowserWindow): void {
   contextualClose.begin(closeTargetFor(triggeringWindow));
 }
 
-guardedIpc.on(
-  'shortcut:contextual-close-result',
-  (event, reqId: unknown, outcome: unknown) => {
-    if (typeof reqId !== 'string') return;
-    contextualClose.resolve(event.sender.id, reqId, outcome);
-  },
-);
+guardedIpc.on('shortcut:contextual-close-result', (event, reqId: unknown, outcome: unknown) => {
+  if (typeof reqId !== 'string') return;
+  contextualClose.resolve(event.sender.id, reqId, outcome);
+});
 
 registerEventWsDiagnosticIpcHandler({ getLogger: () => logger, ipc: guardedIpc });
 
@@ -2347,19 +2296,15 @@ guardedIpc.handle('hosts:proxyConfig:get', (_event, input: { hostId: string }) =
   getHostProxyConfig(input?.hostId ?? ''),
 );
 
-guardedIpc.handle(
-  'hosts:proxyConfig:set',
-  (_event, input: { hostId: string; config: unknown }) =>
-    saveHostProxyConfig({
-      hostId: input?.hostId ?? '',
-      config: input?.config,
-    }),
+guardedIpc.handle('hosts:proxyConfig:set', (_event, input: { hostId: string; config: unknown }) =>
+  saveHostProxyConfig({
+    hostId: input?.hostId ?? '',
+    config: input?.config,
+  }),
 );
 
-guardedIpc.handle(
-  'settings:saveServerUrl',
-  (_event, input: { serverUrl: string }) =>
-    saveServerUrlFromSettings(input?.serverUrl ?? ''),
+guardedIpc.handle('settings:saveServerUrl', (_event, input: { serverUrl: string }) =>
+  saveServerUrlFromSettings(input?.serverUrl ?? ''),
 );
 
 /**
@@ -2372,7 +2317,7 @@ export type ProfileSaveWithTestResult =
       ok: true;
       test: ProbeServerInfoResult & { ok: true };
       profile: ServerConnectionProfileView;
-      phase2: ProfilePhase2Outcome;
+      phase2: ServerProfileApplyOutcome;
     }
   | {
       ok: false;
@@ -2396,7 +2341,7 @@ export type ProfileSaveWithTestResult =
 export type PartialApplyRetryResult =
   | {
       ok: true;
-      outcome: ProfilePhase2Outcome;
+      outcome: ServerProfileApplyOutcome;
       state: PartialApplyState;
     }
   | {
@@ -2409,7 +2354,7 @@ export type PartialApplyRetryResult =
       detail: string;
     };
 
-function buildProfilePhase2Deps(): PerformProfilePhase2Deps | null {
+function buildServerProfileApplyDeps(): ApplyServerProfileDeps | null {
   const client = hostClient;
   if (!client || !backend) return null;
 
@@ -2418,19 +2363,18 @@ function buildProfilePhase2Deps(): PerformProfilePhase2Deps | null {
 
   return {
     allowInsecureRemote: desktopAllowsInsecureRemote(),
-    writeDaemonHostConfig: config => writeDaemonHostConfig(daemonConfigPath, config),
+    writeDaemonHostConfig: (config) => writeDaemonHostConfig(daemonConfigPath, config),
     hostOutboundReload: () => client.hostOutboundReload(),
     getAttachment: bindAttachmentAccessor(controller),
-    currentLocalHostId: () =>
-      localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
+    currentLocalHostId: () => (localHostClaim.status === 'claimed' ? localHostClaim.hostId : null),
     currentHostToken: () => readDaemonHostConfig(daemonConfigPath)?.host_token ?? null,
   };
 }
 
-async function runProfilePhase2(
+async function runServerProfileApply(
   profile: ServerConnectionProfile,
-): Promise<ProfilePhase2Outcome> {
-  const deps = buildProfilePhase2Deps();
+): Promise<ServerProfileApplyOutcome> {
+  const deps = buildServerProfileApplyDeps();
   if (!deps) {
     // Backend / host client not ready (pre-bootstrap or mid-shutdown).
     // Return `partial_apply_pending` rather than throwing so the IPC
@@ -2446,7 +2390,7 @@ async function runProfilePhase2(
       detail: 'backend or host client not ready',
     };
   }
-  return performProfilePhase2({ profile }, deps);
+  return applyServerProfile({ profile }, deps);
 }
 
 function applyProfileToActiveRemoteBackend(input: {
@@ -2484,10 +2428,7 @@ async function handleProfileSaveWithTest(
   const allowInsecureRemote = desktopAllowsInsecureRemote();
   const test = await probeServerInfo({ serverUrl, allowInsecureRemote });
   if (!test.ok) {
-    logger?.warn(
-      { kind: test.kind, serverUrl },
-      'profile:saveWithTest test phase failed',
-    );
+    logger?.warn({ kind: test.kind, serverUrl }, 'profile:saveWithTest test phase failed');
     return { ok: false, phase: 'test', test };
   }
 
@@ -2532,33 +2473,33 @@ async function handleProfileSaveWithTest(
     'profile:saveWithTest committed',
   );
 
-  const phase2 = await runProfilePhase2(writeResult.profile);
+  const applyOutcome = await runServerProfileApply(writeResult.profile);
   applyProfileToActiveRemoteBackend({
     profile: writeResult.profile,
     testKind: test.kind,
   });
-  partialApplyState = derivePartialApplyState(phase2, Date.now());
-  if (phase2.kind === 'partial_apply_pending') {
+  partialApplyState = derivePartialApplyState(applyOutcome, Date.now());
+  if (applyOutcome.kind === 'partial_apply_pending') {
     logger?.warn(
       {
-        profileVersion: phase2.profileVersion,
-        reason: phase2.reason,
-        reloadRejectionReason: phase2.reloadRejectionReason,
+        profileVersion: applyOutcome.profileVersion,
+        reason: applyOutcome.reason,
+        reloadRejectionReason: applyOutcome.reloadRejectionReason,
       },
       'profile:saveWithTest partial_apply_pending',
     );
-  } else if (phase2.kind === 'fully_applied') {
+  } else if (applyOutcome.kind === 'fully_applied') {
     logger?.info(
       {
-        profileVersion: phase2.profileVersion,
-        reloadKind: phase2.reloadKind,
-        elapsedMs: phase2.elapsedMs,
+        profileVersion: applyOutcome.profileVersion,
+        reloadKind: applyOutcome.reloadKind,
+        elapsedMs: applyOutcome.elapsedMs,
       },
       'profile:saveWithTest fully_applied',
     );
   } else {
     logger?.info(
-      { profileVersion: phase2.profileVersion },
+      { profileVersion: applyOutcome.profileVersion },
       'profile:saveWithTest no_op_no_host_claim (pre-auth)',
     );
   }
@@ -2566,7 +2507,7 @@ async function handleProfileSaveWithTest(
     ok: true,
     test,
     profile: redactServerConnectionProfile(writeResult.profile),
-    phase2,
+    phase2: applyOutcome,
   };
 }
 
@@ -2598,7 +2539,7 @@ async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
     };
     return { ok: false, reason: 'profile_unreadable', detail };
   }
-  const outcome = await runProfilePhase2(read.profile);
+  const outcome = await runServerProfileApply(read.profile);
   partialApplyState = derivePartialApplyState(outcome, Date.now());
   if (outcome.kind === 'partial_apply_pending') {
     logger?.warn(
@@ -2618,18 +2559,15 @@ async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
   return { ok: true, outcome, state: partialApplyState };
 }
 
-guardedIpc.handle(
-  'profile:get',
-  (): ServerConnectionProfileView | null =>
-    readServerConnectionProfileViewOrNull({
-      profilePath: desktopAppPaths().desktop.serverProfile,
-      logger: logger ?? undefined,
-    }),
+guardedIpc.handle('profile:get', (): ServerConnectionProfileView | null =>
+  readServerConnectionProfileViewOrNull({
+    profilePath: desktopAppPaths().desktop.serverProfile,
+    logger: logger ?? undefined,
+  }),
 );
 
-guardedIpc.handle(
-  'profile:saveWithTest',
-  (_event, input: { serverUrl: string }) => handleProfileSaveWithTest(input),
+guardedIpc.handle('profile:saveWithTest', (_event, input: { serverUrl: string }) =>
+  handleProfileSaveWithTest(input),
 );
 
 guardedIpc.handle('profile:clear', () => {
@@ -2643,14 +2581,10 @@ guardedIpc.handle('profile:clear', () => {
   return result;
 });
 
-guardedIpc.handle(
-  'partialApply:get',
-  (): PartialApplyState => partialApplyState,
-);
+guardedIpc.handle('partialApply:get', (): PartialApplyState => partialApplyState);
 
-guardedIpc.handle(
-  'partialApply:retry',
-  (): Promise<PartialApplyRetryResult> => handlePartialApplyRetry(),
+guardedIpc.handle('partialApply:retry', (): Promise<PartialApplyRetryResult> =>
+  handlePartialApplyRetry(),
 );
 
 registerSurfaceIpcHandlers(guardedIpc);
@@ -2662,44 +2596,47 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
 
-app.whenReady().then(async () => {
-  if (!app.hasSingleInstanceLock()) return;
-  await bootstrap();
-  if (HEADLESS) {
-    // One-line machine-readable handshake on stdout. Test scripts pipe
-    // and JSON.parse this. Human-readable extras go to stderr below.
-    const embedded = requireEmbeddedBackend('HEADLESS handshake (SILVERHAND_HEADLESS=1)');
+app
+  .whenReady()
+  .then(async () => {
+    if (!app.hasSingleInstanceLock()) return;
+    await bootstrap();
+    if (HEADLESS) {
+      // One-line machine-readable handshake on stdout. Test scripts pipe
+      // and JSON.parse this. Human-readable extras go to stderr below.
+      const embedded = requireEmbeddedBackend('HEADLESS handshake (SILVERHAND_HEADLESS=1)');
 
-    process.stdout.write(
-      JSON.stringify({
-        url: embedded.url,
-        port: embedded.port,
-        bootstrap_token_path: embeddedBootstrapPath(),
-        silverhand_dir: silverhandDir(),
-      }) + '\n',
+      process.stdout.write(
+        JSON.stringify({
+          url: embedded.url,
+          port: embedded.port,
+          bootstrap_token_path: embeddedBootstrapPath(),
+          silverhand_dir: silverhandDir(),
+        }) + '\n',
+      );
+      console.error('[main] headless backend ready — Ctrl-C to stop');
+      return;
+    }
+    const rendererNetwork = await configureRendererBackendNetwork({
+      session: electronSession.defaultSession,
+      backendUrl: requireBackendUrl(),
+    });
+    rendererBackendResolvedProxy = rendererNetwork.resolvedProxy;
+    logger?.info(
+      {
+        backend_origin: rendererNetwork.backendOrigin,
+        resolved_proxy: rendererNetwork.resolvedProxy,
+      },
+      'renderer backend network configured',
     );
-    console.error('[main] headless backend ready — Ctrl-C to stop');
-    return;
-  }
-  const rendererNetwork = await configureRendererBackendNetwork({
-    session: electronSession.defaultSession,
-    backendUrl: requireBackendUrl(),
-  });
-  rendererBackendResolvedProxy = rendererNetwork.resolvedProxy;
-  logger?.info(
-    {
-      backend_origin: rendererNetwork.backendOrigin,
-      resolved_proxy: rendererNetwork.resolvedProxy,
-    },
-    'renderer backend network configured',
-  );
-  Menu.setApplicationMenu(buildAppMenu());
-  createWindow();
+    Menu.setApplicationMenu(buildAppMenu());
+    createWindow();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-}).catch(reportStartupFailure);
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  })
+  .catch(reportStartupFailure);
 
 /**
  * The single startup failure exit. `bootstrap()` and the window bring-up
@@ -2736,16 +2673,29 @@ async function handlePostPublishEmbeddedFatal(
   handle: EmbeddedRustBackendHandle,
   reason: EmbeddedRustBackendTerminalReason,
 ): Promise<void> {
-  await embeddedBackendOwner.own(() => invalidateEmbeddedRuntime(reason, {
-    isCurrent: () => !isShuttingDown && backend?.kind === 'embedded' && backend.running === handle,
-    invalidate: () => { backend = null; },
-    clearUrls: async () => {
-      try { rmSync(daemonPaths().controlPlaneServerUrlPath, { force: true }); }
-      finally { await invalidateEmbeddedServerUrl(); }
-    },
-    close: () => embeddedBackendOwner.close(handle),
-    report: terminal => reportStartupFailure(new Error(`embedded backend terminated at runtime (${terminal.kind})`)),
-  })).catch(err => logger?.error({ err }, 'embedded backend runtime cleanup failed'));
+  await embeddedBackendOwner
+    .own(() =>
+      invalidateEmbeddedRuntime(reason, {
+        isCurrent: () =>
+          !isShuttingDown && backend?.kind === 'embedded' && backend.running === handle,
+        invalidate: () => {
+          backend = null;
+        },
+        clearUrls: async () => {
+          try {
+            rmSync(daemonPaths().controlPlaneServerUrlPath, { force: true });
+          } finally {
+            await invalidateEmbeddedServerUrl();
+          }
+        },
+        close: () => embeddedBackendOwner.close(handle),
+        report: (terminal) =>
+          reportStartupFailure(
+            new Error(`embedded backend terminated at runtime (${terminal.kind})`),
+          ),
+      }),
+    )
+    .catch((err) => logger?.error({ err }, 'embedded backend runtime cleanup failed'));
 }
 
 app.on('window-all-closed', () => {
@@ -2786,8 +2736,7 @@ async function shutdown(): Promise<void> {
     // modes use the authenticated host WebSocket; main has no registry observer.
     // The daemon RPC has its own bounded shutdown budget.
     if (hostClient) {
-      const claimedHostId =
-        localHostClaim.status === 'claimed' ? localHostClaim.hostId : null;
+      const claimedHostId = localHostClaim.status === 'claimed' ? localHostClaim.hostId : null;
 
       const getAttachment = undefined;
       const detachOutcome = await gracefullyDetachOutbound({
@@ -2801,9 +2750,7 @@ async function shutdown(): Promise<void> {
           rpc_ok: detachOutcome.rpc.ok,
           rpc_action: detachOutcome.rpc.ok ? detachOutcome.rpc.action : null,
           rpc_error: !detachOutcome.rpc.ok ? detachOutcome.rpc.error : null,
-          rpc_error_code: !detachOutcome.rpc.ok
-            ? detachOutcome.rpc.code ?? null
-            : null,
+          rpc_error_code: !detachOutcome.rpc.ok ? (detachOutcome.rpc.code ?? null) : null,
           registry_cleared: detachOutcome.registryCleared,
           registry_error: detachOutcome.registryError ?? null,
           elapsed_ms: detachOutcome.elapsedMs,
@@ -2828,8 +2775,9 @@ async function shutdown(): Promise<void> {
       pushProgress('Stopping agents…');
       // Embedded owns a child process; remote has no local backend to reclaim.
       if (backend.kind === 'embedded') {
-        try { await embeddedBackendOwner.close(backend.running); }
-        finally {
+        try {
+          await embeddedBackendOwner.close(backend.running);
+        } finally {
           rmSync(daemonPaths().controlPlaneServerUrlPath, { force: true });
           await invalidateEmbeddedServerUrl();
         }
@@ -2878,7 +2826,7 @@ async function shutdown(): Promise<void> {
   }
 }
 
-app.on('before-quit', event => {
+app.on('before-quit', (event) => {
   // Async work in `before-quit` is silently dropped by Electron unless
   // we preventDefault and re-quit ourselves: the handler's returned
   // Promise is NOT awaited by the quit sequence, so without this guard
