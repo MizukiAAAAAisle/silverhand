@@ -18,7 +18,12 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
 
   return (
     <div ref={profileRef} data-profile-layout className="mx-auto flex flex-col gap-6">
-      <section aria-label="Human profile" data-compact={compactHero} className="agent-profile-hero">
+      <section
+        aria-label="Human profile"
+        data-compact={compactHero}
+        className="agent-profile-hero"
+        style={{ alignItems: 'center' }}
+      >
         <UserAvatar
           size={compactHero ? AVATAR_PX.profileCompact : AVATAR_PX.profile}
           avatarObjectUrl={avatarObjectUrl}
