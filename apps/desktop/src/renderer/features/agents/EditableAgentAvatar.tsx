@@ -4,7 +4,7 @@ import { validateAvatarFile, type RuntimeKind } from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AvatarPickerButton } from '@/components/AvatarPickerButton';
-import { useUploadAgentAvatar, useClearAgentAvatar } from './hooks';
+import { useUploadAgentAvatar } from './hooks';
 
 interface EditableAgentAvatarProps {
   agentId: string;
@@ -18,12 +18,7 @@ interface EditableAgentAvatarProps {
    *  `useAgentAvatarObjectUrl` (single hook). `null` means no avatar
    *  yet, render the runtime tint. */
   avatarObjectUrl: string | null;
-  /** Whether the agent has a server-side avatar today; drives the
-   *  visibility of the "Remove" link and the picker label (`Edit` vs
-   *  `Add`; verbose ariaLabel is built separately). The parent passes
-   *  `agent.avatar_url != null` — separate from `avatarObjectUrl`
-   *  because the latter goes through a fetch and may be `null` even
-   *  while the agent has an avatar (race during refresh). */
+  /** Selects the Add/Edit label. */
   hasAvatar: boolean;
 }
 
@@ -38,9 +33,6 @@ interface EditableAgentAvatarProps {
  * `SettingsPage > Profile`. Verbose screen-reader text lives on the
  * picker's `ariaLabel` because the visible label is forced short to
  * fit inside the 56px frame's clip.
- *
- * Removal is a small text link rendered below the avatar — kept outside
- * the click target so a misaim can't silently re-open the picker.
  *
  * Error surfacing follows Cindy's PR-3 review tightening: we cover the
  * PR-2 service codes (`avatar_too_large` / `avatar_unsupported_type` /
@@ -58,7 +50,6 @@ export function EditableAgentAvatar({
   hasAvatar,
 }: EditableAgentAvatarProps): JSX.Element {
   const upload = useUploadAgentAvatar(agentId);
-  const clear = useClearAgentAvatar(agentId);
   const [error, setError] = useState<string | null>(null);
 
   // Clear the local error when the agent id changes — switching agents
@@ -82,48 +73,25 @@ export function EditableAgentAvatar({
     }
   };
 
-  const onRemove = async (): Promise<void> => {
-    setError(null);
-    try {
-      await clear.mutateAsync();
-    } catch (err) {
-      setError(formatAvatarMutationError(err));
-    }
-  };
-
-  const pending = upload.isPending || clear.isPending;
+  const pending = upload.isPending;
   // Visible label MUST be short — the strip sits inside the avatar's
   // 56px frame clip. ariaLabel carries the verbose screen-reader
   // text. Cindy review #task:314: "Change photo" overflowed and was
   // cut horizontally even at 56px once uppercase tracking was applied.
   const pickerLabel = hasAvatar ? 'Edit' : 'Add';
-  const pickerAriaLabel = hasAvatar
-    ? `Change avatar for @${alt}`
-    : `Add avatar for @${alt}`;
+  const pickerAriaLabel = hasAvatar ? `Change avatar for @${alt}` : `Add avatar for @${alt}`;
 
   return (
-    // Vertical stack so the Remove link sits *below* the avatar instead
-    // of stealing horizontal space next to it. `items-center` centers
-    // both children on the avatar's vertical axis — keeps Remove
-    // visually anchored to the square above it instead of drifting to
-    // the left edge under a narrow letter like "R". `gap-1.5` is tight
-    // on purpose so Remove reads as an annotation of the avatar above
-    // it, not as an unrelated row. Matches the doc comment above.
     <div className="flex flex-col items-center gap-1.5">
       <div className="relative">
         <AvatarPickerButton
           size={size}
           label={pickerLabel}
-          onPick={file => void onPick(file)}
+          onPick={(file) => void onPick(file)}
           disabled={pending}
           ariaLabel={pickerAriaLabel}
         >
-          <AgentAvatar
-            runtime={runtime}
-            size={size}
-            avatarObjectUrl={avatarObjectUrl}
-            alt={alt}
-          />
+          <AgentAvatar runtime={runtime} size={size} avatarObjectUrl={avatarObjectUrl} alt={alt} />
         </AvatarPickerButton>
         {pending ? (
           <span
@@ -134,16 +102,6 @@ export function EditableAgentAvatar({
           </span>
         ) : null}
       </div>
-      {hasAvatar ? (
-        <button
-          type="button"
-          onClick={() => void onRemove()}
-          disabled={pending}
-          className="text-[length:var(--text-meta)] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
-        >
-          Remove
-        </button>
-      ) : null}
       {error ? (
         <p
           role="alert"

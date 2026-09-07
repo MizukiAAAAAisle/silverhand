@@ -1,15 +1,12 @@
 import { ProfileMessageActivity } from '@/features/profile/ProfileMessageActivity';
-import { useState, type JSX } from 'react';
-import { Lock } from 'lucide-react';
+import { useLayoutEffect, useRef, useState, type JSX } from 'react';
+import './agent-profile-hero.css';
 import dayjs from 'dayjs';
 import type { AgentDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { cn } from '@/lib/cn';
-import {
-  MetadataList,
-  ProfileSection,
-} from '@/features/common/ProfileSummarySections';
+import { MetadataList, ProfileSection } from '@/features/common/ProfileSummarySections';
 import { useUpdateAgent } from './hooks';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { canEditAgentProfile } from './permissions';
@@ -26,31 +23,7 @@ interface AgentProfileCardProps {
   agent: AgentDto;
 }
 
-/**
- * Agent profile card. Every editable section shares one enter-edit
- * pattern: a `titleAdornment` pencil (via `EditPencilButton`) sitting
- * inline right after the section title, always visible with muted →
- * regular color on hover (no background pill, no hover-to-reveal). The
- * pencil disappears while the section is in edit mode; Save/Cancel
- * buttons live in the section body.
- *
- *   Identity              → avatar + display_name (Identity-header pencil)
- *                           + locked handle
- *   Description           → free-form text (Description-header pencil)
- *   Runtime configuration → runtime + model + reasoning + fast mode as
- *                           one coupled tuple (Runtime-header pencil)
- *   Metadata              → computer + created/updated + agent id
- *
- * Every edit requires an explicit commit action; focus loss never
- * persists (#task:1472, differs from `features/hosts/InlineRename`
- * which commits on blur). Runtime configuration is one coupled unit
- * rather than per-field edits because the four fields are semantically
- * tied to a single driver choice (shiki 2026-07-12: "整个 runtime
- * config 给一个 edit icon").
- */
-export function AgentProfileCard({
-  agent,
-}: AgentProfileCardProps): JSX.Element {
+export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element {
   const { data: viewer } = useViewerUser();
   // D4.a Commit 5d-fixup (Cindy P1-2): the BackendUnreachable arm never
   // reaches the registered shell — but if it ever does, map to `undefined`
@@ -64,102 +37,120 @@ export function AgentProfileCard({
   // owner-scoped, so a non-owner viewer's lookup would miss and collapse to
   // "Unknown computer". `host_label` is null only when the host is truly gone.
   const computerName = agent.host_label ?? UNKNOWN_COMPUTER_LABEL;
+  const profileRef = useRef<HTMLDivElement>(null);
+  const [compactHero, setCompactHero] = useState(true);
+  const avatarSize = compactHero ? AVATAR_PX.profileCompact : AVATAR_PX.profile;
+
+  useLayoutEffect(() => {
+    const element = profileRef.current;
+
+    if (!element) {
+      return;
+    }
+
+    const updateWidth = () => setCompactHero(element.getBoundingClientRect().width <= 520);
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, []);
+
   const [nameEditing, setNameEditing] = useState(false);
   const [descriptionEditing, setDescriptionEditing] = useState(false);
   const [runtimeEditing, setRuntimeEditing] = useState(false);
 
   return (
-    <div data-profile-layout className="mx-auto flex flex-col gap-6">
+    <div ref={profileRef} data-profile-layout className="mx-auto flex flex-col gap-6">
       {!canEdit ? <ReadOnlyNotice /> : null}
 
-      <ProfileSection
-        title="Identity"
-        titleAdornment={
-          canEdit ? (
-            <EditPencilButton
-              onClick={() => setNameEditing(true)}
-              ariaLabel="Edit display name"
-              hidden={nameEditing}
-            />
-          ) : null
-        }
-      >
-        <div className="flex items-start gap-4">
-          {canEdit ? (
-            <EditableAgentAvatar
-              agentId={agent.id}
-              size={AVATAR_PX['3xl']}
-              runtime={agent.runtime}
-              alt={agent.display_name || agent.name}
-              avatarObjectUrl={avatarObjectUrl}
-              hasAvatar={agent.avatar_url != null}
-            />
-          ) : (
-            <AgentAvatar
-              runtime={agent.runtime}
-              size={AVATAR_PX['3xl']}
-              avatarObjectUrl={avatarObjectUrl}
-              alt={agent.display_name || agent.name}
-            />
-          )}
-          <div className="min-w-0 flex-1">
-            {canEdit ? (
-              <InlineText
-                value={agent.display_name}
-                ariaLabel="Display name"
-                editing={nameEditing}
-                onExitEdit={() => setNameEditing(false)}
-                validate={rejectDisplayName}
-                className="font-serif text-lg font-semibold leading-tight"
-                onCommit={async next => {
-                  await update.mutateAsync({ display_name: next });
-                }}
-              />
-            ) : (
-              <div className="font-serif text-lg font-semibold leading-tight text-text-primary">
-                {agent.display_name || agent.name}
-              </div>
-            )}
-            <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted">
-              <span className="font-mono">@{agent.name}</span>
-              <Lock className="size-3" />
-              <span>handle is locked</span>
-            </div>
-          </div>
-        </div>
-      </ProfileSection>
-
-      <ProfileSection
-        title="Description"
-        titleAdornment={
-          canEdit ? (
-            <EditPencilButton
-              onClick={() => setDescriptionEditing(true)}
-              ariaLabel="Edit description"
-              hidden={descriptionEditing}
-            />
-          ) : null
-        }
-      >
+      <section aria-label="Agent profile" data-compact={compactHero} className="agent-profile-hero">
         {canEdit ? (
-          <InlineTextarea
-            value={agent.description}
-            placeholder="Add a description — what is this agent for?"
-            ariaLabel="Description"
-            editing={descriptionEditing}
-            onExitEdit={() => setDescriptionEditing(false)}
-            onCommit={async next => {
-              await update.mutateAsync({ description: next });
-            }}
+          <EditableAgentAvatar
+            agentId={agent.id}
+            size={avatarSize}
+            runtime={agent.runtime}
+            alt={agent.display_name || agent.name}
+            avatarObjectUrl={avatarObjectUrl}
+            hasAvatar={agent.avatar_url != null}
           />
         ) : (
-          <ReadOnlyValue
-            value={agent.description}
-            placeholder="No description."
-            multiline
+          <AgentAvatar
+            runtime={agent.runtime}
+            size={avatarSize}
+            avatarObjectUrl={avatarObjectUrl}
+            alt={agent.display_name || agent.name}
           />
         )}
-      </ProfileSection>
+        <div className="agent-profile-hero-fields min-w-0 flex-1">
+          <div>
+            <div className="flex items-start gap-1">
+              <div className={cn('min-w-0', nameEditing && 'flex-1')}>
+                {canEdit ? (
+                  <InlineText
+                    value={agent.display_name}
+                    ariaLabel="Display name"
+                    editing={nameEditing}
+                    onExitEdit={() => setNameEditing(false)}
+                    validate={rejectDisplayName}
+                    className="agent-profile-hero-name font-serif font-semibold"
+                    onCommit={async (next) => {
+                      await update.mutateAsync({ display_name: next });
+                    }}
+                  />
+                ) : (
+                  <div className="break-words agent-profile-hero-name font-serif font-semibold text-text-primary">
+                    {agent.display_name || agent.name}
+                  </div>
+                )}
+              </div>
+              {canEdit ? (
+                <EditPencilButton
+                  onClick={() => setNameEditing(true)}
+                  ariaLabel="Edit display name"
+                  hidden={nameEditing}
+                />
+              ) : null}
+            </div>
+            <div
+              className="mt-1 truncate font-mono text-xs text-text-muted"
+              title={`@${agent.name}`}
+            >
+              @{agent.name}
+            </div>
+          </div>
+          <div className={cn('flex gap-1', descriptionEditing ? 'items-start' : 'items-center')}>
+            <div
+              className={cn(
+                'agent-profile-hero-description min-w-0 break-words',
+                descriptionEditing && 'flex-1',
+              )}
+            >
+              {canEdit ? (
+                <InlineTextarea
+                  value={agent.description}
+                  placeholder="Add description"
+                  ariaLabel="Description"
+                  editing={descriptionEditing}
+                  onExitEdit={() => setDescriptionEditing(false)}
+                  onCommit={async (next) => {
+                    await update.mutateAsync({ description: next });
+                  }}
+                />
+              ) : (
+                <ReadOnlyValue value={agent.description} placeholder="No description." multiline />
+              )}
+            </div>
+            {canEdit ? (
+              <EditPencilButton
+                onClick={() => setDescriptionEditing(true)}
+                ariaLabel="Edit description"
+                hidden={descriptionEditing}
+              />
+            ) : null}
+          </div>
+        </div>
+      </section>
 
       <ProfileMessageActivity subject={{ kind: 'agent', id: agent.id }} />
 
@@ -188,10 +179,7 @@ export function AgentProfileCard({
             { label: 'Computer', value: computerName },
             {
               label: 'Session model',
-              value:
-                agent.session_scope === 'agent'
-                  ? 'Across conversations'
-                  : 'Per conversation',
+              value: agent.session_scope === 'agent' ? 'Across conversations' : 'Per conversation',
             },
             {
               label: 'Created',
@@ -217,11 +205,7 @@ export function AgentProfileCard({
 
 function ReadOnlyNotice(): JSX.Element {
   return (
-    <p
-      role="note"
-      className="text-xs text-text-muted"
-      data-testid="agent-profile-readonly-notice"
-    >
+    <p role="note" className="text-xs text-text-muted" data-testid="agent-profile-readonly-notice">
       Only the creator can edit this agent's profile.
     </p>
   );

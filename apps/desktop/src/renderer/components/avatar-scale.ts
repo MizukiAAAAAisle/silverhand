@@ -34,6 +34,8 @@ export const AVATAR_PX = {
   xl: 36,
   '2xl': 48,
   '3xl': 56,
+  profileCompact: 72,
+  profile: 80,
 } as const;
 
 export type AvatarSize = keyof typeof AVATAR_PX;
