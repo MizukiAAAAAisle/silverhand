@@ -13,6 +13,7 @@ import type {
   AttentionBadgeRollupDto,
   SavedMessageDto,
 } from '@silverhand/shared';
+import type { ConversationPanesModel } from './pane-render-models';
 
 export interface ConversationShellSignals {
   attentionBadges: AttentionBadgeRollupDto | undefined;
@@ -92,5 +93,3 @@ export interface ConversationShellModel {
   panes: ConversationPanesModel;
   app: ConversationAppModel;
 }
-
-import type { ConversationPanesModel } from './pane-render-models';
