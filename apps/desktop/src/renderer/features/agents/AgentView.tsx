@@ -1,3 +1,8 @@
+import {
+  visibleAgentSideSections,
+  resolveAgentSideSection,
+  type AgentSideSection,
+} from './side-section-access';
 import { useEffect, useState } from 'react';
 import {
   Activity,
@@ -194,9 +199,7 @@ export function AgentView({
         agent={agent}
         runtimeState={runtimeQuery.data}
         canManageSchedules={canManageSchedules}
-        scheduleAccessKnown={scheduleAccessKnown}
         canViewFiles={canViewFiles}
-        fileAccessKnown={fileAccessKnown}
         contextConversationId={contextConversationId}
         contextWorkspaceId={contextWorkspaceId}
         onClose={onClose}
@@ -296,7 +299,7 @@ export function AgentView({
 const SIDE_SECTION_STORAGE_KEY = 'silverhand:layout.agent-side-section';
 
 interface SideSectionItem {
-  id: 'activity' | 'workspace' | 'profile' | 'schedules';
+  id: AgentSideSection;
   label: string;
   icon: typeof Activity;
 }
@@ -422,9 +425,7 @@ function AgentSidePanel({
   agent,
   runtimeState,
   canManageSchedules,
-  scheduleAccessKnown,
   canViewFiles,
-  fileAccessKnown,
   contextConversationId,
   contextWorkspaceId,
   onClose,
@@ -433,9 +434,7 @@ function AgentSidePanel({
   agent: AgentDto;
   runtimeState: AgentRuntimeStateDto | undefined;
   canManageSchedules: boolean;
-  scheduleAccessKnown: boolean;
   canViewFiles: boolean;
-  fileAccessKnown: boolean;
   contextConversationId: string | null;
   contextWorkspaceId: string | null;
   onClose?: () => void;
@@ -444,6 +443,10 @@ function AgentSidePanel({
   const [section, setSection] = useState<SideSectionItem['id']>(() =>
     readSideSection(),
   );
+
+  const visibleSections = visibleAgentSideSections(canViewFiles, canManageSchedules);
+  const effectiveSection = resolveAgentSideSection(section, visibleSections);
+
   useEffect(() => {
     try {
       localStorage.setItem(SIDE_SECTION_STORAGE_KEY, section);
@@ -559,8 +562,8 @@ function AgentSidePanel({
         aria-label="Agent panel sections"
         className="flex shrink-0 items-center gap-1 border-b border-border-subtle px-2"
       >
-        {SIDE_SECTIONS.map(tab => {
-          const selected = tab.id === section;
+        {SIDE_SECTIONS.filter(tab => visibleSections.includes(tab.id)).map(tab => {
+          const selected = tab.id === effectiveSection;
           const Icon = tab.icon;
           return (
             <button
@@ -585,7 +588,7 @@ function AgentSidePanel({
 
       {/* content */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {section === 'activity' ? (
+        {effectiveSection === 'activity' ? (
           agent.session_scope === 'agent' ? (
             <AgentStreamActivityTimeline key={agent.id} agentId={agent.id} />
           ) : !contextConversationId ? (
@@ -607,14 +610,12 @@ function AgentSidePanel({
               />
             </div>
           )
-        ) : section === 'workspace' ? (
+        ) : effectiveSection === 'workspace' ? (
           // Current workspace's L2 memory in compact form (#task:1191). The
           // container manages its own scroll, so no padded wrapper. A
           // DM/agent-home context resolves to the agent home dir on the backend
           // (expected overlap) — no frontend branch, and nothing in the UI
           // claims which files appear (it may include system_prompt.md in a DM).
-          // Owner-private: non-owners get the neutral state, no requests fire
-          // (#task:1220).
           canViewFiles ? (
             <div className="flex min-h-0 flex-1 flex-col">
               <AgentWorkspaceContainer
@@ -631,12 +632,8 @@ function AgentSidePanel({
                 layout="compact"
               />
             </div>
-          ) : (
-            <div className="flex-1 overflow-y-auto px-4 py-4">
-              <AgentWorkspaceFilesPermissionState loading={!fileAccessKnown} />
-            </div>
-          )
-        ) : section === 'profile' ? (
+          ) : null
+        ) : effectiveSection === 'profile' ? (
           <div className="flex-1 overflow-y-auto px-4 py-4 [scrollbar-gutter:stable]">
             <AgentProfileCard agent={agent} />
           </div>
@@ -644,11 +641,7 @@ function AgentSidePanel({
           <div className="flex-1 overflow-y-auto px-4 py-4">
             <AgentSchedulesCard agentId={agent.id} />
           </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto px-4 py-4">
-            <AgentSchedulesPermissionState loading={!scheduleAccessKnown} />
-          </div>
-        )}
+        ) : null}
       </div>
     </SidePanelShell>
   );
