@@ -45,12 +45,12 @@ function sliceFunctionBody(source: string, declaration: string): string {
 
 describe('attention badge membership closure: every viewer workspace scope stays subscribed', () => {
   it('App mounts the foreign-workspace sync for ALL workspaces, unfiltered', () => {
-    const app = read('../../App.tsx');
+    const app = read('../conversation-shell/use-conversation-shell.ts');
     // The id set is every workspace from the authoritative list — a `.filter(`
     // here would silently shrink the badge's live coverage.
     expect(app).toContain('const visibleWorkspaceIds = useMemo(');
     expect(app).toMatch(
-      /const visibleWorkspaceIds = useMemo\(\s*\(\) => workspaces\.map\(workspace => workspace\.id\),/,
+      /const visibleWorkspaceIds = useMemo\(\s*\(\) => workspaces\.map\(\(workspace\) => workspace\.id\),/,
     );
     expect(app).toContain('workspaceIds: visibleWorkspaceIds,');
   });

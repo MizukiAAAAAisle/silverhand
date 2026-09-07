@@ -25,14 +25,14 @@ import { fileURLToPath } from 'node:url';
 
 describe('handleJumpToMessage: fail-closed does zero side effects; inline find still primes', () => {
   const source = readFileSync(
-    fileURLToPath(new URL('./App.tsx', import.meta.url)),
+    fileURLToPath(new URL('./features/conversation-shell/use-conversation-shell.ts', import.meta.url)),
     'utf8',
   );
 
   const HANDLER = 'const handleJumpToMessage = (params: MessageJumpTarget)';
   const PRIME = 'requestJump(params);';
-  const FAIL_CLOSED = "if (jumpNav === 'fail-closed') return false;";
-  const INLINE_FIND_RETURN = 'if (isInlineFind) return false;';
+  const FAIL_CLOSED = "if (jumpNav === 'fail-closed') {\n      return false;\n    }";
+  const INLINE_FIND_RETURN = 'if (isInlineFind) {\n      return false;\n    }';
 
   it('has exactly one prime call and one fail-closed guard to reason about', () => {
     expect(source.split(PRIME)).toHaveLength(2);

@@ -52,7 +52,7 @@ describe('workspace settings target', () => {
   });
 
   it('binds writes and form lifecycle to the same target, including same-name workspaces', () => {
-    const app = readFileSync(new URL('../../App.tsx', import.meta.url), 'utf8');
+    const app = readFileSync(new URL('../chat-shell/chat-shell.tsx', import.meta.url), 'utf8');
     const dialog = readFileSync(new URL('./WorkspaceSettingsDialog.tsx', import.meta.url), 'utf8');
     const members = readFileSync(new URL('./ManageMembersPopover.tsx', import.meta.url), 'utf8');
     const mount = app.slice(app.indexOf('<WorkspaceSettingsDialog'), app.indexOf('/>', app.indexOf('<WorkspaceSettingsDialog')));

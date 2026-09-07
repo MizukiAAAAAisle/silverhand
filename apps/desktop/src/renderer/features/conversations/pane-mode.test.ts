@@ -556,7 +556,7 @@ describe('the pane gates its roster reads on the capability (the wiring half)', 
     // missing provider could surface. Containment is asserted, not adjacency: the
     // panel has to sit between the provider's tags, since a provider that merely
     // appears in the file is the bug all over again.
-    const appSource = read('../../App.tsx');
+    const appSource = read('../conversation-shell/conversation-content.tsx') + read('../conversation-shell/use-conversation-shell.ts');
     const open = appSource.indexOf(
       '<ConversationPaneCapabilitiesProvider value={primaryPaneCapabilities}>',
     );
@@ -571,7 +571,7 @@ describe('the pane gates its roster reads on the capability (the wiring half)', 
     // boolean. The capability is projected from `primaryPaneDescriptor` — the same
     // object passed to `ChannelView` as `conversation` — so the two panes read one
     // source of truth for the placement.
-    const appSource = read('../../App.tsx');
+    const appSource = read('../conversation-shell/conversation-content.tsx') + read('../conversation-shell/use-conversation-shell.ts');
     expect(appSource).toContain('inheritedPaneCapabilities(primaryPaneDescriptor)');
     expect(appSource).toContain('conversation={primaryPaneDescriptor}');
   });

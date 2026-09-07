@@ -573,11 +573,14 @@ describe('decideDraftHandoff — when the draft pane may leave for the real pair
 describe('the draft pane is per-agent, and defers to the pure handoff rule', () => {
   const paneSource = read('./DirectPairDraftPane.tsx');
   const appSource = read('../../App.tsx');
+  const contentSource = read('../conversation-shell/conversation-content.tsx');
+  const controllerSource = read('../conversation-shell/use-conversation-shell.ts');
+  const signalsSource = read('../app-shell/application-signals.ts');
 
   it('remounts on agent identity — a draft written to A can never be sent to B', () => {
     // @Cindy's finding 1: without the key, `/chat/d/new/A → /new/B` re-uses the
     // instance and carries `draft` plus the mutation state across agents.
-    expect(appSource).toContain('key={directDraftAgentId}');
+    expect(contentSource).toContain('key={directDraftAgentId}');
   });
 
   it('takes the handoff decision from the seam, not from its own conditions', () => {
@@ -591,6 +594,9 @@ describe('the draft pane is per-agent, and defers to the pure handoff rule', () 
 describe('the live-discovery subscription is mounted once, by the session', () => {
   const hooksSource = read('./hooks.ts');
   const appSource = read('../../App.tsx');
+  const contentSource = read('../conversation-shell/conversation-content.tsx');
+  const controllerSource = read('../conversation-shell/use-conversation-shell.ts');
+  const signalsSource = read('../app-shell/application-signals.ts');
   const shellSource = read('../app-shell/effects.ts');
   const panelSource = read(
     '../../components/layout/DirectMessagesPanel.tsx',
@@ -635,10 +641,12 @@ describe('the live-discovery subscription is mounted once, by the session', () =
     // returns it only after the loading, unreachable, epoch and registration
     // gates have each returned first.
     const shellComponent = topLevelFunction(appSource, 'RegisteredAppShell');
-    expect(shellComponent.split('useAppShellGlobalSync()').length - 1).toBe(1);
+    expect(shellComponent.split('useApplicationSignals()').length - 1).toBe(1);
+    expect(topLevelFunction(signalsSource, 'useApplicationSignals').split('useAppShellGlobalSync()').length - 1).toBe(1);
     // And nowhere else in App — a second call would double every invalidation,
     // and a call in a pre-auth branch would subscribe with no viewer.
-    expect(appSource.split('useAppShellGlobalSync()').length - 1).toBe(1);
+    expect(appSource.split('useApplicationSignals()').length - 1).toBe(1);
+    expect(signalsSource.split('useAppShellGlobalSync()').length - 1).toBe(1);
     // The shell has to actually be mounted for any of this to run.
     expect(appSource.split('<RegisteredAppShell').length - 1).toBe(1);
   });
@@ -669,8 +677,8 @@ describe('the live-discovery subscription is mounted once, by the session', () =
     // The consumer direction for B8: the shell must not re-derive the states
     // (that is how `absent` got flattened), and the flag it derives has to be
     // handed to the pane rather than dropped.
-    expect(appSource).toContain('directPairPaneProps(');
-    expect(appSource).toContain('notFound={directPairNotFound}');
+    expect(controllerSource).toContain('directPairPaneProps(');
+    expect(contentSource).toContain('notFound={directPairNotFound}');
     expect(read('../../components/layout/ChannelView.tsx')).toContain(
       'props.notFound',
     );

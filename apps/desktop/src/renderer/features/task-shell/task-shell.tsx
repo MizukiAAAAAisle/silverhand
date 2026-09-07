@@ -4,26 +4,12 @@ import { TaskIcon } from '@/components/tasks/TaskIcon';
 import { useUpdateTaskStatus } from '@/features/tasks/hooks';
 import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
 import { useTaskFilterOptions } from '@/features/tasks/useTaskFilterOptions';
-import {
-  activeTaskCount,
-  boardCountLabel,
-  totalTaskCount,
-} from '@/features/tasks/boardAuthority';
-import {
-  useBoardColumns,
-  useBoardCounts,
-  useBoardFacets,
-} from '@/features/tasks/useBoard';
+import { activeTaskCount, boardCountLabel, totalTaskCount } from '@/features/tasks/boardAuthority';
+import { useBoardColumns, useBoardCounts, useBoardFacets } from '@/features/tasks/useBoard';
 import { useColumnWindow } from '@/features/tasks/useColumnWindow';
-import {
-  DEFAULT_TASK_FILTERS,
-  type TaskFilters,
-} from '@/features/tasks/taskFilters';
+import { DEFAULT_TASK_FILTERS, type TaskFilters } from '@/features/tasks/taskFilters';
 import { TaskBoardColumns } from '@/components/tasks/TaskBoardColumns';
-import {
-  TaskFilterBar,
-  FILTER_ROW_TRIGGER_BOX,
-} from '@/components/tasks/TaskFilterBar';
+import { TaskFilterBar, FILTER_ROW_TRIGGER_BOX } from '@/components/tasks/TaskFilterBar';
 import {
   CreateTaskDialog,
   useCreateTaskSubmit,
@@ -31,7 +17,7 @@ import {
 } from '@/components/tasks/CreateTaskDialog';
 import { Button } from '@/components/ui/button';
 import { primaryAction } from '@/features/common/PrimaryAction';
-import { paneChrome } from './pane-chrome';
+import { paneChrome } from '@/components/layout/pane-chrome';
 
 /**
  * NavRail "Tasks" section — global aggregate view across every channel
@@ -51,24 +37,18 @@ import { paneChrome } from './pane-chrome';
  * on every section switch — exactly the urgent-pass freeze `React.memo` +
  * App's ref-stable handler exist to prevent (#task:1168).
  */
-export interface TasksSectionProps {
+export interface TaskShellProps {
   onOpenTask: (taskId: string) => void;
 }
 
-export const TasksSection = memo(function TasksSection({
-  onOpenTask,
-}: TasksSectionProps): JSX.Element {
+export const TaskShell = memo(function TaskShell({ onOpenTask }: TaskShellProps): JSX.Element {
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const [createOpen, setCreateOpen] = useState(false);
   const updateStatus = useUpdateTaskStatus();
   // Per-column render bound, local to THIS surface (#task:1885). Every write that
   // changes what the columns hold goes through `applyFilters` below, which resets
   // the window in the same commit.
-  const {
-    columnWindow,
-    grow: growColumn,
-    reset: resetColumnWindow,
-  } = useColumnWindow();
+  const { columnWindow, grow: growColumn, reset: resetColumnWindow } = useColumnWindow();
   const applyFilters = useCallback(
     (next: TaskFilters) => {
       setFilters(next);
@@ -102,7 +82,7 @@ export const TasksSection = memo(function TasksSection({
   const people = useBoardFacets(filters);
 
   const selectedChannelName = filters.channelId
-    ? channelOptions.find(o => o.id === filters.channelId)?.label
+    ? channelOptions.find((o) => o.id === filters.channelId)?.label
     : null;
 
   // A task must name a channel; seed the create picker from the current channel
@@ -113,7 +93,7 @@ export const TasksSection = memo(function TasksSection({
   // — it never guesses a DM as the target (contract §5); a DM task is created only
   // from that direct line's own Tasks tab.
   const createTarget = useMemo<CreateTaskTarget>(() => {
-    const defaultChannelId = channelOptions.some(o => o.id === filters.channelId)
+    const defaultChannelId = channelOptions.some((o) => o.id === filters.channelId)
       ? filters.channelId
       : null;
     return { kind: 'pick', channelOptions, defaultChannelId };
@@ -126,13 +106,13 @@ export const TasksSection = memo(function TasksSection({
       style={{ ...paneChrome, overflow: 'hidden' }}
     >
       {/* Header padding: `pl-[6px]` matches the forza6 tasks-hero
-        * sticker's 6px vertical clearance (22+1+1=24px sticker in 36px
-        * titlebar → (36-24)/2 = 6px top/bottom), so left ≈ vertical
-        * = symmetric breathing room around the hero stamp. Other
-        * themes show a plain 16px Task icon here; 6px left is tight
-        * but not broken — the icon leads the header content tight to
-        * the left edge by intent (shiki #task:917 v6.7.3, "在不同的
-        * 地方用不同的外层样式来控制"). */}
+       * sticker's 6px vertical clearance (22+1+1=24px sticker in 36px
+       * titlebar → (36-24)/2 = 6px top/bottom), so left ≈ vertical
+       * = symmetric breathing room around the hero stamp. Other
+       * themes show a plain 16px Task icon here; 6px left is tight
+       * but not broken — the icon leads the header content tight to
+       * the left edge by intent (shiki #task:917 v6.7.3, "在不同的
+       * 地方用不同的外层样式来控制"). */}
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle pl-[6px] pr-4">
         <TaskIcon
           data-tasks-hero
@@ -144,9 +124,7 @@ export const TasksSection = memo(function TasksSection({
         <span className="font-serif text-sm font-semibold text-text-primary">
           {selectedChannelName ? `Tasks in #${selectedChannelName}` : 'All Tasks'}
         </span>
-        <span className="text-xs text-text-muted">
-          · {boardCountLabel(totalTaskCount(counts))}
-        </span>
+        <span className="text-xs text-text-muted">· {boardCountLabel(totalTaskCount(counts))}</span>
         <span className="ml-auto text-[length:var(--text-badge)] text-text-muted">
           {boardCountLabel(activeTaskCount(counts))} active
         </span>
@@ -163,9 +141,9 @@ export const TasksSection = memo(function TasksSection({
           people={people}
         />
         {/* Create entrance sits right AFTER the filter (shiki): the toolbar's one
-          * primary action, so it earns the filled + poster treatment among the
-          * muted filter chips. `FILTER_ROW_TRIGGER_BOX` matches its height to the
-          * neighbouring filter chips in every theme (shiki). */}
+         * primary action, so it earns the filled + poster treatment among the
+         * muted filter chips. `FILTER_ROW_TRIGGER_BOX` matches its height to the
+         * neighbouring filter chips in every theme (shiki). */}
         <Button
           type="button"
           onClick={() => setCreateOpen(true)}
@@ -177,7 +155,7 @@ export const TasksSection = memo(function TasksSection({
       </div>
 
       {/* Five-column kanban — the shared board body (`TaskBoardColumns`); this
-        * section supplies the shell + the main-pane fill vocabulary. */}
+       * section supplies the shell + the main-pane fill vocabulary. */}
       <TaskBoardColumns
         columns={columns}
         counts={counts}
