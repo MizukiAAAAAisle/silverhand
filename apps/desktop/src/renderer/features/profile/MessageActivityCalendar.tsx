@@ -1,10 +1,10 @@
-import { useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { messageActivityCalendar, messageActivityLevel, type MessageActivityDay } from './message-activity-calendar';
 import './message-activity.css';
 
 interface Props {
-  year: number;
+  year: number | 'recent';
   days: readonly MessageActivityDay[];
   today: string;
   timezone: string;
@@ -14,11 +14,13 @@ export function MessageActivityCalendar({ year, days, today, timezone }: Props):
   const cells = useMemo(() => messageActivityCalendar(year, days, today), [year, days, today]);
   const [focusedDate, setFocusedDate] = useState<string | null>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
+  const scroll = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (scroll.current) scroll.current.scrollLeft = scroll.current.scrollWidth; }, [year, today]);
   const firstVisible = cells.find(cell => cell.visible)?.date;
   const activeDate = cells.some(cell => cell.date === focusedDate && cell.visible) ? focusedDate : firstVisible;
   const columns = cells.length / 7;
   const monthLabels = cells.flatMap((cell, index) =>
-    cell.date.startsWith(`${year}-`) && cell.date.endsWith('-01')
+    cell.visible && cell.date.endsWith('-01')
       ? [{ column: Math.floor(index / 7) + 1, date: cell.date }]
       : [],
   );
@@ -27,10 +29,10 @@ export function MessageActivityCalendar({ year, days, today, timezone }: Props):
 
   return (
     <div data-message-activity>
-      <div className="message-activity-scroll">
+      <div ref={scroll} className="message-activity-scroll">
         <div className="message-activity-plot" style={{ '--activity-columns': columns } as CSSProperties}>
           <div className="message-activity-months" aria-hidden>
-            {monthLabels.map(month => <span key={month.date} style={{ gridColumn: `${month.column} / span 2` }}>{monthFormat.format(new Date(`${month.date}T00:00:00Z`))}</span>)}
+            {monthLabels.map(month => <span key={month.date} style={{ gridColumn: `${month.column} / span 1` }}>{monthFormat.format(new Date(`${month.date}T00:00:00Z`))}</span>)}
           </div>
           <div className="message-activity-matrix">
             <div className="message-activity-weekdays" aria-hidden><span /><span>Mon</span><span /><span>Wed</span><span /><span>Fri</span><span /></div>

@@ -1,8 +1,14 @@
 import { useEffect, useState } from 'react';
+import { useQueries } from '@tanstack/react-query';
+import * as Select from '@radix-ui/react-select';
+import { ChevronDown } from 'lucide-react';
+import { FilterSelectItem, FILTER_SELECT_TRIGGER_CLASS, FILTER_SELECT_CONTENT_CLASS } from '@/components/ui/filter-select';
+import { cn } from '@/lib/cn';
+import { messageActivityRange, messageActivityYears } from './message-activity-calendar';
 import { ProfileSection } from '@/features/common/ProfileSummarySections';
 import { getCurrentUserId } from '@/lib/current-user';
 import { MessageActivityCalendar } from './MessageActivityCalendar';
-import { shanghaiDate, useProfileMessageCounts, type ProfileMessageSubject } from './message-counts';
+import { shanghaiDate, profileMessageCountsOptions, type ProfileMessageSubject } from './message-counts';
 
 export function ProfileMessageActivity({ subject }: { subject: ProfileMessageSubject }): JSX.Element {
   return <MessageActivitySection key={`${getCurrentUserId()}:${subject.kind}:${subject.id}`} subject={subject} />;
@@ -11,35 +17,45 @@ export function ProfileMessageActivity({ subject }: { subject: ProfileMessageSub
 function MessageActivitySection({ subject }: { subject: ProfileMessageSubject }): JSX.Element {
   const today = shanghaiDate();
   const currentYear = Number(today.slice(0, 4));
-  const [year, setYear] = useState(currentYear);
-  const query = useProfileMessageCounts(subject, year);
+  const [year, setYear] = useState<number | 'recent'>('recent');
+  const range = messageActivityRange(year, today);
+  const queries = useQueries({ queries: messageActivityYears(range).map(value => profileMessageCountsOptions(getCurrentUserId(), subject, value)) });
+  const data = queries.every(query => query.data) ? queries.flatMap(query => query.data?.days ?? []).filter(day => day.date >= range.start && day.date <= range.end) : undefined;
+  const isError = queries.some(query => query.isError);
+  const isFetching = queries.some(query => query.isFetching);
+  const yearOptions = queries.flatMap(query => query.data?.available_years ?? []).join(',');
   const [availableYears, setAvailableYears] = useState<number[]>([]);
   useEffect(() => {
-    if (query.data) setAvailableYears(query.data.available_years);
-  }, [query.data]);
-  const years = [...new Set([year, currentYear, ...availableYears])].sort((a, b) => b - a);
-  const total = query.data?.days.reduce((sum, day) => sum + day.count, 0) ?? 0;
+    if (yearOptions) setAvailableYears(yearOptions.split(',').map(Number));
+  }, [yearOptions]);
+  const years = [...new Set([...(year === 'recent' ? [] : [year]), currentYear, ...availableYears])].sort((a, b) => b - a);
+  const total = data?.reduce((sum, day) => sum + day.count, 0) ?? 0;
 
   return (
     <ProfileSection title="Message activity" headerSlot={
-      <select
-        aria-label="Message activity year"
-        value={year}
-        onChange={event => setYear(Number(event.target.value))}
-        className="rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2 py-1 text-xs text-text-primary focus-outline"
-      >
-        {years.map(value => <option key={value} value={value}>{value}</option>)}
-      </select>
+      <Select.Root value={String(year)} onValueChange={value => setYear(value === 'recent' ? 'recent' : Number(value))}>
+        <Select.Trigger aria-label="Message activity period" className={cn(FILTER_SELECT_TRIGGER_CLASS, 'w-auto')}>
+          <Select.Value /><Select.Icon><ChevronDown className="size-3.5 text-text-muted" /></Select.Icon>
+        </Select.Trigger>
+        <Select.Portal>
+          <Select.Content position="popper" sideOffset={4} data-dropdown-frame className={FILTER_SELECT_CONTENT_CLASS}>
+            <Select.Viewport className="p-1">
+              <FilterSelectItem value="recent">Last year</FilterSelectItem>
+              {years.map(value => <FilterSelectItem key={value} value={String(value)}>{value}</FilterSelectItem>)}
+            </Select.Viewport>
+          </Select.Content>
+        </Select.Portal>
+      </Select.Root>
     }>
-      {query.isError ? (
+      {isError ? (
         <div className="flex min-h-40 items-center justify-center gap-3 text-xs text-text-muted" role="status">
           <span>Message activity unavailable.</span>
-          <button type="button" className="text-text-primary underline underline-offset-2 focus-outline" onClick={() => void query.refetch()} disabled={query.isFetching}>Retry</button>
+          <button type="button" className="text-text-primary underline underline-offset-2 focus-outline" onClick={() => void Promise.all(queries.map(query => query.refetch()))} disabled={isFetching}>Retry</button>
         </div>
-      ) : query.data ? (
+      ) : data ? (
         <div>
-          <p className="mb-5 text-xs text-text-muted">{total.toLocaleString()} {total === 1 ? 'message' : 'messages'} in {year}</p>
-          <MessageActivityCalendar year={year} days={query.data.days} today={today} timezone={query.data.time_zone} />
+          <p className="mb-5 text-xs text-text-muted">{total.toLocaleString()} {total === 1 ? 'message' : 'messages'} {year === 'recent' ? 'in the last year' : `in ${year}`}</p>
+          <MessageActivityCalendar year={year} days={data} today={today} timezone="Asia/Shanghai" />
         </div>
       ) : (
         <div className="flex min-h-40 flex-col justify-center gap-4" role="status" aria-label="Loading message activity">
