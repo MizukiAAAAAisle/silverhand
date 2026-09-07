@@ -1,3 +1,4 @@
+import { sideAgentWorkspaceSource } from './workspace-source';
 import './agent-page.css';
 import { AgentPageLayout } from './AgentPageLayout';
 import {
@@ -378,6 +379,9 @@ function AgentSidePanel({
 }): JSX.Element {
   const [section, setSection] = useState<SideSectionItem['id']>(() => readSideSection());
 
+  const workspaceSource = sideAgentWorkspaceSource(agent.session_scope, contextWorkspaceId);
+  const workspaceKey = workspaceSource.kind === 'home' ? 'home' : workspaceSource.workspaceId;
+
   const visibleSections = visibleAgentSideSections(canViewFiles, canManageSchedules);
   const effectiveSection = resolveAgentSideSection(section, visibleSections);
 
@@ -461,24 +465,15 @@ function AgentSidePanel({
             </div>
           )
         ) : effectiveSection === 'workspace' ? (
-          // Current workspace's L2 memory in compact form (#task:1191). The
-          // container manages its own scroll, so no padded wrapper. A
-          // DM/agent-home context resolves to the agent home dir on the backend
-          // (expected overlap) — no frontend branch, and nothing in the UI
-          // claims which files appear (it may include system_prompt.md in a DM).
           canViewFiles ? (
             <div className="flex min-h-0 flex-1 flex-col">
               <AgentWorkspaceContainer
                 // Key by source so switching workspace remounts with fresh
                 // selection — a path picked under workspace A never transiently
                 // fetches under B (Cindy #task:1191 P1).
-                key={contextWorkspaceId ?? 'home'}
+                key={workspaceKey}
                 agentId={agent.id}
-                source={
-                  contextWorkspaceId
-                    ? { kind: 'workspace', workspaceId: contextWorkspaceId }
-                    : { kind: 'home' }
-                }
+                source={workspaceSource}
                 layout="compact"
               />
             </div>

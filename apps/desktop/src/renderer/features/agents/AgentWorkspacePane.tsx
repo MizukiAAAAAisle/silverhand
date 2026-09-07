@@ -1,14 +1,11 @@
+import { AGENT_HOME_SOURCE } from './workspace-source';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   AgentWorkspaceBrowser,
   useWorkspaceSelection,
   type AgentWorkspaceLayout,
 } from './AgentWorkspaceBrowser';
-import {
-  useAgentWorkspaceFile,
-  useAgentWorkspaceTree,
-  type AgentWorkspaceSource,
-} from './hooks';
+import { useAgentWorkspaceFile, useAgentWorkspaceTree, type AgentWorkspaceSource } from './hooks';
 
 /**
  * The bridge between a data source and the source-blind `AgentWorkspaceBrowser`
@@ -16,8 +13,8 @@ import {
  * resolved results to the renderer. One container, parameterized by `source` +
  * `layout`, serves both views so they can't drift:
  *  - full members page → `source = home`, `layout = 'full'`;
- *  - chat side panel → `source = workspace(currentWorkspaceId)`, `layout =
- *    'compact'`.
+ *  - chat side panel → agent scope uses home; conversation scope uses the
+ *    docked workspace, with compact layout.
  * Selection lives in the shared `useWorkspaceSelection` hook, so adding a
  * second view didn't duplicate the auto-select / drop-on-disappear effects.
  */
@@ -33,14 +30,12 @@ export function AgentWorkspaceContainer({
   const treeQuery = useAgentWorkspaceTree(agentId, source);
   // Two-column (full) always wants a file in its ever-present preview pane;
   // the compact drill-in must start at the file list (Cindy #task:1191 P1).
-  const { selectedPath, setSelectedPath } = useWorkspaceSelection(
-    treeQuery.data,
-    { autoSelectFirstFile: layout === 'full' },
-  );
+  const { selectedPath, setSelectedPath } = useWorkspaceSelection(treeQuery.data, {
+    autoSelectFirstFile: layout === 'full',
+  });
   const fileQuery = useAgentWorkspaceFile(agentId, source, selectedPath);
   const qc = useQueryClient();
-  const onRefresh = () =>
-    qc.invalidateQueries({ queryKey: ['agents', agentId, 'workspace'] });
+  const onRefresh = () => qc.invalidateQueries({ queryKey: ['agents', agentId, 'workspace'] });
 
   return (
     <AgentWorkspaceBrowser
@@ -74,14 +69,6 @@ interface AgentWorkspacePaneProps {
  * tree/file pair speaks one path namespace rooted at the dir; new files just
  * appear in the tree, no wire churn.
  */
-export function AgentWorkspacePane({
-  agentId,
-}: AgentWorkspacePaneProps): JSX.Element {
-  return (
-    <AgentWorkspaceContainer
-      agentId={agentId}
-      source={{ kind: 'home' }}
-      layout="full"
-    />
-  );
+export function AgentWorkspacePane({ agentId }: AgentWorkspacePaneProps): JSX.Element {
+  return <AgentWorkspaceContainer agentId={agentId} source={AGENT_HOME_SOURCE} layout="full" />;
 }
