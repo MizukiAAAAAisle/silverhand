@@ -29,23 +29,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 const mockApi = vi.mocked(api);
 
-// #task:2035 — the two judgments the DM live-discovery chain rests on, both pure:
-//
-//   1. WHICH viewer-scope frame re-reads the pair list. This is the whole
-//      acceptance case (an agent the viewer never created DMs them for the first
-//      time and the row must appear with no reload), and it is invisible to every
-//      other desktop test: the list is a plain query, so breaking the decision
-//      leaves the suite green while the feature silently degrades to
-//      "appears after you click something else".
-//   2. WHAT the pane may claim while that read is in flight. The trap is React
-//      Query's retained `data`: on invalidation the previous rows stay and
-//      `isFetching` goes true while `isPending` stays FALSE, so "answered once"
-//      is not "the current authority has answered".
-//
-// Desktop's test env is `node` (no jsdom/RTL) — like the sibling viewer-scope
-// fences, the wiring half is asserted on source structure rather than by
-// rendering hooks.
-
 function pair(conversationId: string): DirectPairListItem {
   return {
     conversation_id: conversationId,

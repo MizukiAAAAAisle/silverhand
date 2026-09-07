@@ -1,25 +1,3 @@
-/**
- * D4.a Commit 6 (4) + Cindy P1 fixup — snitch state-machine tests.
- *
- * What this pins:
- *
- *   - `isBackendUnreachableError`: ONLY `ApiError && kind=...`
- *     counts; not plain Error / null / string / fake duck-typed
- *     object / generic 404/500/401.
- *   - `decideNextVisible` (pure reducer): error+unreachable → true;
- *     error+other → null (no change); success → false; other
- *     statuses → null. **This is the function the hook calls
- *     inside its cache subscriber**, so test + hook share the
- *     same decision body — drift is impossible (Cindy P1 nit).
- *   - Live React Query cache subscription: route real
- *     cache events through the SHARED reducer (no duplicate
- *     test-only driver).
- *   - **Cindy P1 regression bait**: retry() → immediate
- *     backend_unreachable refetch MUST flip the banner back
- *     to visible. The prior `visibleRef.current` guard could
- *     swallow this; this test would have caught it.
- *   - retry() contract: invalidateQueries(no filter) + hide.
- */
 import { describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import { ApiError } from '@/lib/api';

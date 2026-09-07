@@ -1,39 +1,3 @@
-/**
- * The sidebar's DIRECT MESSAGES rows: the viewer's pairs, plus the line that is
- * being started but does not exist yet (#task:2039).
- *
- * WHY THIS IS A SEAM. Two facts about the same agent can be true at once — the
- * viewer has a pair with A, and the pre-mint draft pane for A is the open pane
- * holding unsent text (or the reason a first send failed after the pair was
- * minted). @Cindy's review caught the first cut dropping the draft row the moment
- * a pair appeared: the pane's own rule (`decideDraftHandoff`) correctly stayed,
- * while the sidebar showed the pair's row instead — unselected, and one click away
- * from navigating out of the draft and discarding both the text and the failure.
- *
- * THE RULE. While the draft route is open, that agent's line is ONE row and the
- * DRAFT owns it: selected (the draft pane is the open pane), and clicking it stays
- * on the draft. It becomes an ordinary pair row when — and only when — the draft
- * route is gone, which is exactly what `decideDraftHandoff` decides. So the three
- * cells the review named (dirty / pending / post-mint-error) need no restatement
- * here: they are the cells where that rule says `stay`, the route therefore
- * remains `/chat/d/new/:agentId`, and this function is still handed a draft.
- * ONE decider, and the sidebar reads its output instead of guessing again from the
- * pair's existence.
- *
- * A merged row still shows the PAIR's counterpart and unread count: the pair is
- * the authority on both (the agent may have written first — that is one way the
- * pair got there), and the draft only decides selection and where a click goes.
- * Its key is the pair's conversation id where one exists, so convergence swaps the
- * row's behavior without remounting it.
- *
- * DELETED COUNTERPARTS ARE HIDDEN HERE (@shiki, #task:2094). A pair whose principal
- * is gone should not sit in the sidebar DIRECT MESSAGES list by default — for an
- * agent AND a human counterpart alike. This is a SIDEBAR-ONLY rule: this function
- * is the sidebar's sole row builder ({@link DirectMessagesPanel} its only caller),
- * so saved/search — which read pairs through other paths — are untouched and still
- * surface a deleted line (rendered with its "(deleted account)" label by
- * `counterpart-presentation`). Hiding is decided by {@link directLinePairVisibleInSidebar}.
- */
 import type { DirectPairCounterpart, DirectPairListItem } from '@silverhand/shared';
 
 /** The open pre-mint line: route state, not a stored conversation. */

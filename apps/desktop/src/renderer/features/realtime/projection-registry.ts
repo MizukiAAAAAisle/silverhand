@@ -18,19 +18,6 @@ import {
 } from '@/features/channels/useChannelThreads';
 
 /**
- * S1 projection consumption (#task:1277, docs/projection-recovery-s1-v1.md §7).
- *
- * The renderer half of S1: a `message` frame carries an optional `projections`
- * sidecar of ABSOLUTE, viewer-invariant authoritative values (P1: the replied-to
- * root's reply count). Instead of the old invalidate→whole-window refetch, the
- * client idempotently MERGES the absolute value into the displayed projection.
- *
- * DISPOSITION — 4 states, NOT a boolean (§7 / Cindy gate #5). S1's whole
- * correctness rests on the authoritative-settle state machine (#1261): a merge is
- * one effect in the message frame's `Promise.allSettled` satisfaction join, and
- * flattening it to a bool would erase the "no target to write" ⊥ "needs a refetch
- * that hasn't committed" distinction that keeps the resume floor honest.
- *
  *  - `merged`              — a DISPLAYED projection was written synchronously with
  *                           the absolute value → settles now (an idempotent no-op
  *                           set of the same value still counts: the projection is
@@ -90,11 +77,6 @@ type ProjectionReader<K extends keyof MessageProjections> = (
   patch: NonNullable<MessageProjections[K]>,
 ) => ProjectionDisposition[];
 
-/** P1 reply_count reader. The replied-to root's authoritative reply count is
- *  displayed on up to two viewer-invariant surfaces — the open thread-root row
- *  and the mainline inline reply badge — so it merges into each independently.
- *  Membership-gated: a surface with no active reader / no loaded row contributes
- *  `cold-absent-vacuous`, never a bootstrap. */
 function readReplyCount(
   qc: QueryClient,
   channelId: string,
@@ -127,17 +109,6 @@ function readReplyCount(
   return out;
 }
 
-/** P2 threads_list_entry reader (#task:1278, doc §5/§6). The replied-to root's
- *  authoritative viewer-invariant threads-list row is displayed on ONE surface —
- *  the channel Threads list. Merge only when a reader is mounted; then:
- *   - the page holds the root → overwrite its invariant fields + re-sort by the
- *     documented keyset → `merged` (the zero-refetch win);
- *   - the page is loaded but the root is off-page → P2 v1 does NOT insert (the
- *     server owns page-1 membership) → `pending-fallback` (invalidate→refetch,
- *     join awaits commit);
- *   - reader mounted but page not loaded → `cold-absent-vacuous` (mount-fetch
- *     recovers).
- *  No mounted reader → no displayed surface → empty (vacuous). */
 function readThreadsListEntry(
   qc: QueryClient,
   channelId: string,
@@ -156,25 +127,11 @@ function readThreadsListEntry(
   }
 }
 
-/** The projection reader registry (§7). One reader per projection key; the
- *  `satisfies` completeness constraint forces every `MessageProjections` key to
- *  register a reader, so a future projection can't be added to the wire without a
- *  consumer (P2 `threads_list_entry` landed here BY this constraint turning the
- *  desktop typecheck red until its reader existed). */
 const PROJECTION_READERS = {
   thread_root_reply_count: readReplyCount,
   threads_list_entry: readThreadsListEntry,
 } satisfies { [K in keyof MessageProjections]-?: ProjectionReader<K> };
 
-/** Per-key association rule for the P1 `thread_root_reply_count` patch: valid only
- *  when it targets THIS frame's reply root — the frame IS a reply
- *  (`thread_root_id !== null`) AND `patch.root_id === msg.thread_root_id`. The wire
- *  self-reports `root_id` so the reader is self-sufficient, but that makes it a
- *  redundant, derivable claim; `msg.thread_root_id` is the client's AUTHORITATIVE
- *  association key. A root MISMATCH is a dirty sidecar — semantically "active but no
- *  patch" (Cindy #1277 blocker / doc §10 gate #6): the wrong root MUST NOT be merged
- *  and the frame's real root MUST keep its invalidate→refetch fallback, else a stale
- *  value strands the real update once the satisfaction floor advances. */
 function isReplyCountPatchValid(
   patch: ThreadRootReplyCountPatch | undefined,
   msg: MessageDto,
@@ -184,11 +141,6 @@ function isReplyCountPatchValid(
   );
 }
 
-/** Per-key association rule for the P2 `threads_list_entry` patch: valid only when
- *  it targets THIS frame's reply root — the frame IS a reply AND
- *  `entry.root_message_id === msg.thread_root_id`. Same anti-corruption rule as P1
- *  (Cindy #1278 gate): a mismatch is a dirty sidecar → dropped, so the wrong root's
- *  row is never repositioned and the real root keeps its invalidate fallback. */
 function isThreadsListEntryValid(
   patch: { entry: ThreadSummaryInvariant } | undefined,
   msg: MessageDto,
@@ -200,15 +152,6 @@ function isThreadsListEntryValid(
   );
 }
 
-/** SINGLE-POINT projection validation — the anti-corruption boundary (Cindy /
- *  Alice #1277). The ingestor is the only site holding both the message and its
- *  sidecar, so it validates each projection against its OWN association key here and
- *  returns a projections object containing ONLY the validated patches; a
- *  mismatched/self-inconsistent patch is DROPPED (its key becomes `undefined`).
- *  BOTH the ingestor's fallback-suppression decision AND the registry dispatch
- *  consume this one result, so the two can never disagree — you cannot suppress
- *  rootA's fallback while still merging rootB's dirty patch. Per-key: a future P2
- *  `threads_list_entry` validates against its own key the same way. */
 export function validateMessageProjections(
   projections: MessageProjections,
   msg: MessageDto,
@@ -229,12 +172,6 @@ export function validateMessageProjections(
   };
 }
 
-/** Dispatch a frame's VALIDATED projections through their readers, returning the
- *  flattened per-surface dispositions the ingestor converts to settle promises.
- *  Input MUST already be run through {@link validateMessageProjections} — this stays
- *  generic (no message context): a present key is a validated patch, so it is
- *  dispatched unconditionally; a dropped (mismatched) key is `undefined` and never
- *  reaches a reader. */
 export function ingestMessageProjections(
   qc: QueryClient,
   channelId: string,

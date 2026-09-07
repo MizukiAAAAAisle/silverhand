@@ -1,15 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-/**
- * Behavior of the settings-section store, not its markup: aiming Settings
- * at a section must survive unusable localStorage, because the Members
- * profile card's "Edit in Settings" does nothing else to carry the intent
- * (#task:1846).
- *
- * The module holds the section in a singleton, so every case loads a
- * fresh copy.
- */
-
 type StorageStub = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 function stubGlobalStorage(storage: StorageStub | null): void {

@@ -1,21 +1,6 @@
 import { useEffect, useId } from 'react';
 import { subscribeWsScope, type WsScopeSubscription } from '@/lib/ws-client';
 
-// #task:1260 P1 — Renderer Interest Registry (pass-through).
-//
-// A single renderer authority for "which WS scopes the renderer currently wants
-// live", so that WS subscription becomes a *structural* bandwidth optimization
-// rather than a per-view convention. Correctness (never miss a frame across view
-// churn) is ALREADY guaranteed by the transport cursor + resume-replay (#1251)
-// and the central ingestor owning apply+cursor off the view lifecycle (#1255);
-// this registry does not change that. Transport correctness is defined by
-// docs/event-ws-transport-v1.md; this module owns subscription lifetime only.
-//
-// P1 is pure pass-through: `retain`→0→1 subscribes once, last `release`→n→0
-// unsubscribes once (routing into the transport's existing last-unsubscribe
-// backlog-drop, `80aec14`). It reimplements NO floor / backlog / cache logic —
-// it only owns subscription lifetime. No reader is migrated in P1.
-
 export type InterestScope = Parameters<typeof subscribeWsScope>[0];
 export type HolderToken = string;
 
@@ -38,11 +23,6 @@ export interface InterestRegistry {
   /** Diagnostic view — scope → its current holder tokens (leak attribution). */
   snapshot(): ReadonlyMap<InterestScope, ReadonlySet<HolderToken>>;
 }
-
-// NOTE (Q2): viewer scope is NOT handled here in v1. When it is migrated later
-// it will need its own dedicated entry (not this generic string `retain`),
-// because its canonical `viewer:<id>` is unknown at retain time (resolved on the
-// `authenticated` frame) and it has an independent detach/re-attach lifetime.
 
 /**
  * Factory so tests get an isolated registry and can inject the subscribe

@@ -32,12 +32,9 @@ export { LAST_CHANNEL_KEY, clearPlaceMemory };
 
 export function App(): JSX.Element {
   const { appearance } = useAppearance();
-  // #task:1763 — subscribe to main's confirmed runtime epoch promotion so a
-  // running session gates without waiting for restart/focus refetch.
+
   useRuntimeEpochPromotion();
-  // Hydrate the viewer profile from the main-process auth session so
-  // `isCurrentUserId` resolves correctly. Returns either the resolved
-  // UserDto or the setup-required shape that mounts the auth wizard.
+
   const viewer = useViewerUser();
 
   // Three-way render: loading → registration gate → registered shell.
@@ -51,16 +48,11 @@ export function App(): JSX.Element {
   if (!viewer.data) {
     return (
       <div className="grid h-screen w-screen place-items-center bg-bg-base text-xs text-text-muted">
-        Loading…
+        Loading
       </div>
     );
   }
-  // D4.a Commit 5d-fixup (Cindy P1-2): backend-unreachable gate
-  // takes precedence over the registration gate. The
-  // user MUST repair the connection (or clear the saved profile)
-  // before any further auth state can be inferred — pretending the
-  // user is "unauthenticated, signup_enabled=false" would push them
-  // toward the wrong CTA.
+
   if (isBackendUnreachable(viewer.data)) {
     return (
       <BackendUnreachableGate
@@ -72,8 +64,7 @@ export function App(): JSX.Element {
       />
     );
   }
-  // #task:1761 — epoch hard gate: after unreachable (connectivity first),
-  // before registration (no business/auth flow through an incompatible pair).
+
   if (isUpdateRequired(viewer.data)) {
     return (
       <UpdateRequiredGate

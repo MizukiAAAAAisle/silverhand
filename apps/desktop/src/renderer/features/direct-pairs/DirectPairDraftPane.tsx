@@ -1,34 +1,4 @@
 import { getCurrentUserId } from '@/lib/current-user';
-/**
- * The direct line with an agent BEFORE it exists (#task:2039) — the primary pane
- * behind `/chat/d/new/:agentId`.
- *
- * shiki's ruling: the agent page's `Message` entry must land in the ORDINARY
- * chat interface, not a modal («应该是跟正常发消息的一样的界面»). For an agent the
- * viewer has already messaged there is nothing to build — the entry navigates to
- * that pair's own route. This pane is the other half: the same chat surface for a
- * line that has no conversation yet, so the interface the user meets is the same
- * one either way.
- *
- * Nothing is allocated to render it. Opening this pane, typing in it, and leaving
- * it persists ZERO state anywhere (@shiki, #task:2036: «只是打开对话框，并不真正形成
- * DM»): the pair is minted server-side by the FIRST SEND through the existing
- * initiation door (`POST /api/agents/:id/direct-messages`, get-or-create), and
- * only the ack's conversation id converges this route onto `/chat/d/:id`. The
- * renderer never pre-allocates a pair, never invents an optimistic conversation,
- * and never dedupes concurrent first sends itself — two of them meet at the
- * backend's get-or-create and land in the same pair.
- *
- * Why its own composer instead of the real {@link Composer}: everything that
- * composer adds over a textarea is addressed to a conversation that exists here —
- * attachment uploads POST to one, the roster/run-state reads are keyed by one,
- * and the `@` / `#` pickers are empty in a workspace-less line by construction
- * (#task:2035). So the pre-mint state borrows the composer's CHROME (the same
- * shell/textarea/send hooks, hence the same painting in every theme) and keeps
- * the send path to the one door that is allowed to mint. Attachments are simply
- * not offered until the line exists — there is no conversation to upload them to
- * — which is stated by the absent affordance rather than a sentence of copy.
- */
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { resizeTextarea } from '@/components/chat/Composer';
@@ -47,9 +17,6 @@ import {
 
 interface DirectPairDraftPaneProps {
   agentId: string;
-  /** The pair to open — either the one the first send just minted, or the one
-   *  that turned out to exist already. One callback for both because they are the
-   *  same navigation: this route is replaced by the pair's own. */
   onOpenPair: (conversationId: string) => void;
 }
 
@@ -164,12 +131,6 @@ export function DirectPairDraftPane({
       className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
       style={paneChrome}
     >
-      {/* Header is the pair header's markup, verbatim: the same height, the same
-          identity (the agent's own face — a pair wears its counterpart, not the
-          channel `#`, #task:2039), the same serif title. The convergence after
-          the first send must not move a pixel of chrome — only the messages
-          arrive, which is why the counterpart is synthesized from the agent the
-          route names instead of waiting for the pair's list row. */}
       <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <ConversationHeaderIdentity
           identity="counterpart"

@@ -88,14 +88,6 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
       className="flex h-full flex-1 flex-col bg-bg-base"
       style={{ ...paneChrome, overflow: 'hidden' }}
     >
-      {/* Header padding: `pl-[6px]` matches the forza6 tasks-hero
-       * sticker's 6px vertical clearance (22+1+1=24px sticker in 36px
-       * titlebar → (36-24)/2 = 6px top/bottom), so left ≈ vertical
-       * = symmetric breathing room around the hero stamp. Other
-       * themes show a plain 16px Task icon here; 6px left is tight
-       * but not broken — the icon leads the header content tight to
-       * the left edge by intent (shiki #task:917 v6.7.3, "在不同的
-       * 地方用不同的外层样式来控制"). */}
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle pl-[6px] pr-4">
         <TaskIcon
           data-tasks-hero
@@ -123,10 +115,6 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
           allChannelsLabel="ALL"
           people={people}
         />
-        {/* Create entrance sits right AFTER the filter (shiki): the toolbar's one
-         * primary action, so it earns the filled + poster treatment among the
-         * muted filter chips. `FILTER_ROW_TRIGGER_BOX` matches its height to the
-         * neighbouring filter chips in every theme (shiki). */}
         <Button
           type="button"
           onClick={() => setCreateOpen(true)}

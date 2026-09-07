@@ -13,67 +13,6 @@ import { primaryAction } from '@/features/common/PrimaryAction';
 import { readDisplayNameDraft } from '@/features/common/display-name';
 import { useUpdateProfile, useUploadAvatar, useViewerAvatarObjectUrl } from './hooks';
 
-/**
- * The viewer's own profile editor — the single writing surface for
- * `/api/me`.
- *
- * It lives in Settings > Account (shiki 2026-08-06:「现在这个交互不符合
- * 大部分的 IM 直觉,很多用户找不到。放到 account 中会更好」). It used to be
- * inlined in `HumanProfileCard` on the Members panel; that card is now
- * read-only for every user including the viewer, so the count of
- * long-lived `/api/me` ownership sites is unchanged — only the location
- * moved, to where people look for their own profile.
- *
- * Self-only by construction: the Account pane exists only for the
- * viewer, so there is no permission branch here. Cross-user editing is
- * refused server-side (`requireViewerUserId`), and the read-only view of
- * another human is `HumanProfileCard`'s job.
- *
- * ## Shape: identity summary, then a labelled form
- *
- * Top block is read-only identity (avatar, display name, `@handle`);
- * below the rule is the form, one labelled field per row. The summary
- * shows the PERSISTED name, not the draft — it is how the viewer appears
- * to everyone else, so it may not preview an unsaved edit.
- *
- * ## Saving: one action for the form, the avatar apart from it
- *
- * shiki 2026-08-06:「我希望 saved 是整体一个动作」+「avatar 是独立的没
- * 问题。其他的保持整体」. So:
- *   - Every writable text field is a local draft until `Save Profile`,
- *     which submits them together. Today that is `display_name` alone,
- *     but the button is the form's action, not the field's — a second
- *     writable column joins this submit rather than growing its own
- *     control. `InlineText`'s per-field pencil/Save is deliberately gone
- *     from this surface (it remains right for the agent profile cards,
- *     where each section is edited on its own).
- *   - Picking an image IS the avatar commit: the OS file dialog is
- *     already an explicit act, and staging bytes for a later Save would
- *     make the one Save straddle two endpoints (`PATCH /api/me` +
- *     `POST /api/me/avatar`) and therefore able to half-succeed. Keeping
- *     the avatar out of the form makes Save exactly one row update, so
- *     "all or nothing" holds by construction with no new endpoint
- *     (@Cindy / @Alice 2026-08-06). New writable fields keep that
- *     property only while they land on the `users` row.
- *
- * ## Not on this surface
- *   - `Email` / `VERIFIED` from shiki's reference layout: `UserDto`
- *     carries no email, and address verification does not exist as a
- *     flow — email is credential-plane state (`user_auth_identities`),
- *     deliberately excluded from the profile read model (@Alice
- *     2026-08-06; shiki:「email 先不做」).
- *   - Clearing the avatar. `DELETE /api/me/avatar` stays live in the
- *     backend (shiki:「保留 backend api,前端先去掉消费」) but has no
- *     entry point here: picking a new image is the whole avatar
- *     interaction, and a second control under a 56px square costs more
- *     attention than the action is worth (shiki:「把头像下面那个 remove
- *     去掉」).
- *   - The `@handle`, as a form row. It cannot be changed, so a permanent
- *     read-only field would spend a labelled row on a value the identity
- *     summary above already shows (shiki 2026-08-06:「UserName 不可改,
- *     先移除」). It comes back with the field's own edit story, if it ever
- *     gets one.
- */
 export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
   const update = useUpdateProfile();
   const upload = useUploadAvatar();
@@ -81,27 +20,15 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
   const nameFieldId = useId();
   const nameErrorId = useId();
 
-  // `null` = pristine, i.e. "whatever the server says". Not seeded from
-  // the dto, so a name changed on another device flows straight through
-  // while untouched, and no effect has to guess whether a draft is worth
-  // keeping (#task:1846).
   const [draftName, setDraftName] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const nameValue = draftName ?? user.display_name;
-  // The shared schema decides, and nothing else does: the field carries
-  // NO `maxLength`. The DOM attribute counts raw input, the schema counts
-  // the trimmed value, so a cap of 64 would cut a pasted `"  <64
-  // chars>  "` down to 62 and save that silently — a client-side rewrite,
-  // worse than the 400 it was meant to prevent (@Cindy 2026-08-06). Over
-  // length is reported like any other rejection, below.
+
   const nameDraft = readDisplayNameDraft(draftName, user.display_name);
   const canSave = nameDraft.kind === 'ready' && !update.isPending;
-  // Shown, not just disabled: the offending character is invisible in
-  // the field, so a dead button would leave the viewer with nothing to
-  // go on. Pristine / blank / unchanged stay silent — the field itself
-  // says those.
+
   const nameRejection = nameDraft.kind === 'rejected' ? nameDraft.message : null;
 
   const onPickAvatar = async (file: File): Promise<void> => {

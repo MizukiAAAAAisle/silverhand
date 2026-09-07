@@ -44,10 +44,6 @@ describe('nameFormatIssue', () => {
   });
 });
 
-// The rename seam (#task:1827). `WorkspaceSettingsDialog.handleRename` consumes
-// `nameFormatMessage` — these three assertions are what stop a second local
-// regex from coming back and refusing a name create already accepted. No DOM
-// test: the dialog contributes only the empty-field message and the mutation.
 describe('nameFormatMessage — workspace rename', () => {
   it('accepts a Chinese label with an internal space', () => {
     expect(nameFormatMessage('workspace', '设计 评审')).toBeNull();

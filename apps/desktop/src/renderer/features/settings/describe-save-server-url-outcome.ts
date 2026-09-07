@@ -1,23 +1,3 @@
-/**
- * D3.c Commit 4 — pure mapper from `DesktopSaveServerUrlResult` to
- * the visual surface the user sees after pressing Save.
- *
- * Why this lives in its own file (and as a pure function): the copy
- * keys MUST stay distinct per discriminator arm so the renderer
- * cannot collapse `reloaded` and `connectivity_unverified` into a
- * single "Connected" string — Cindy `#task:634` review note 1. By
- * extracting the mapping we get unit tests pinning every arm, so a
- * future "let's simplify the copy" refactor can't quietly merge
- * arms that carry different connectivity claims.
- *
- * The mapper does not know about JSX — callers render the returned
- * `{tone, title, description}` triple however they like (the pane
- * uses a status banner). `tone` drives the chrome (success
- * accent / warn yellow / error red); `title` is the headline copy;
- * `description` is the diagnostic detail (raw URL, elapsed ms,
- * underlying error). Description is intentionally allowed to be
- * empty when the title already says everything.
- */
 import type { DesktopSaveServerUrlResult } from '../../../preload/api';
 
 export interface SaveServerUrlBanner {
@@ -87,17 +67,6 @@ export function describeSaveServerUrlOutcome(
           dismissOnReady: true,
         };
       case 'reloaded_remote':
-        // `#task:1021` — REMOTE backend. The address is saved and the
-        // daemon spawned a fresh outbound client, but the in-process
-        // attachment registry is absent in remote mode (same root cause
-        // as the #task:1010 pill), so connectivity isn't observed from
-        // main. It IS shown live by the "This computer" indicator (which
-        // polls the remote backend's host-status `availability`). Point
-        // the user there — do NOT claim "connection check is not
-        // available in this mode" (it is, via that indicator). Copy is
-        // deliberately direction-free (no "above"/"below"): the banner
-        // and the indicator are different sections of ConnectionPane and
-        // their relative order can change (Cindy `#task:1021` review P2).
         return {
           tone: 'info',
           title: 'Saved. Reconnecting…',
@@ -174,20 +143,10 @@ function describeClassifyReason(
     case 'unsupported_scheme':
       return 'Server URL must start with http:// or https://.';
     case 'non_origin_url':
-      // D4.a Commit 2 fixup — origin-only invariant (no path / query /
-      // fragment). The classifier rejects so probe and persistence
-      // cannot drift apart.
       return 'Server URL must be an origin (scheme + host + port). Drop the path / query / fragment.';
     case 'insecure_remote_http_disallowed':
-      // D4.a Commit 1 — replaces D3's `non_loopback_host` copy. The
-      // user is most likely typing a LAN box or public domain over
-      // http; point them at the two valid options.
       return 'Server URL must use https:// for non-loopback addresses (or set SILVERHAND_ALLOW_INSECURE_REMOTE=1 for dev use).';
     case 'obfuscated_loopback_disallowed':
-      // D4.a Commit 1 review — disguised loopback form (raw host
-      // looks remote but URL parser resolves it to a loopback IP).
-      // Tell the user the gate caught the mismatch and what the two
-      // legitimate intents are.
       return 'Server URL looks like a disguised loopback address (e.g. 0x7f000001 / [0:0:0:0:0:0:0:1]). Use a literal loopback host (127.0.0.1, localhost, [::1]) if loopback was intended.';
     default: {
       const _exhaustive: never = reason;

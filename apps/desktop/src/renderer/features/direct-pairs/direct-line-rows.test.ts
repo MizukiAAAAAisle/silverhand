@@ -5,21 +5,6 @@ import type { DirectPairListItem } from '@silverhand/shared';
 import { decideDraftHandoff, type DraftHandoffFacts } from './hooks';
 import { mergeDirectLineRows, directLinePairVisibleInSidebar, type DirectLineDraft } from './direct-line-rows';
 
-// #task:2039, @Cindy's review finding 1 — the sidebar row and the draft pane are
-// the SAME line, and the first cut let them disagree: the pane's
-// `decideDraftHandoff` kept a dirty / pending / send-failed draft while the
-// section, seeing a pair for that agent, drew the pair's row instead — unselected,
-// and one click from discarding the unsent text and the failure.
-//
-// What this file owes is therefore not "the row looks right" (UI, untested by
-// rule) but the two properties that made the loss possible:
-//
-//   1. ONE ROW PER AGENT with an OWNER — while a draft is open it owns the line
-//      (selected, and opening it stays on the draft) even though a pair exists;
-//   2. NO SECOND DECIDER — the three cells the review named are pinned by
-//      COMPOSING the pane's rule with this merge, so the sidebar cannot drift from
-//      the pane the way it just did.
-
 const AGENT = 'a-target';
 
 function pair(conversationId: string, agentId: string): DirectPairListItem {

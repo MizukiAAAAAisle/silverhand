@@ -15,19 +15,6 @@ const presenceKey = ['presence'] as const;
 const STALE_MS = 30 * 1000;
 const GC_MS = 5 * 60 * 1000;
 
-/**
- * Snapshot of every user's presence (online/offline + last_seen_at).
- *
- * v1 is a **server-global** directory (shiki 2026-06-13: "全局暂时够了"):
- * the snapshot returns ALL users so it matches the global `app`-scope
- * broadcast. A viewer-scoped snapshot would silently miss `user_presence`
- * deltas for users absent from the seed — see
- * `docs/human-presence-v1.md` §3.4. The cache lives at `['presence']` so
- * every consumer (members list, profile card) shares one round trip.
- *
- * Pure cache reader. {@link usePresenceSync} keeps the cache live on
- * transitions; without it the snapshot only refreshes on `staleTime`.
- */
 export function usePresence() {
   return useQuery<PresenceResponse, Error, UserPresenceDto[]>({
     queryKey: presenceKey,

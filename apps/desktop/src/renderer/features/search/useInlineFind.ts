@@ -4,32 +4,11 @@ import type { SearchDto } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
 
-// In-conversation header find (#task:1335). A lightweight, scoped keyword
-// search distinct from the advanced `SearchPanel`: no filters, one stream of
-// one conversation, scoped result set up to the 500 cap (so prev/next spans
-// every RETURNED hit — not just the virtualized DOM window; on truncation the
-// oldest hits beyond the cap are excluded, and the counter shows "N / 500+").
-// It calls the SAME upgraded `GET /api/search` the advanced panel uses (Alice,
-// #task:1334) with the narrow inline shape:
-//   conversation_id + stream + order=recency_desc (+ thread_root_id for threads).
-// The backend's stream predicate is shared with the message-window read-model,
-// so every returned hit is materialisable in the panel that asked ("搜到必可见"
-// by construction).
-
-/** Inline find caps the result set at 500 (advanced search keeps 80). When the
- *  backend truncates to this, the counter shows "N / 500+" and prev/next spans
- *  the returned 500 only. */
 export const INLINE_FIND_LIMIT = 500;
 const DEBOUNCE_MS = 200;
 
 export type InlineFindStream = 'mainline' | 'thread';
 
-/** Build the query string for one inline find call. Exported for unit tests —
- *  the exact param shape is the backend contract (#task:1334 guardrails:
- *  stream≠all requires conversation_id; stream=thread requires thread_root_id).
- *  Order is `recency_desc` (newest hit first) so the find lands on the most
- *  recent match and prev/next walks toward older ones — the "查找最新" habit
- *  (shiki #task:1335); truncation to the 500 cap then keeps the RECENT hits. */
 export function buildInlineFindParams(input: {
   q: string;
   conversationId: string;
@@ -109,13 +88,6 @@ interface InlineFindData {
   truncated: boolean;
 }
 
-/** Map a search DTO's results to message ids in CHRONOLOGICAL order (oldest →
- *  newest). The inline call fetches `recency_desc` so truncation to the 500 cap
- *  keeps the NEWEST hits (shiki "查最新"); we then reverse to document order so
- *  the counter + prev/next read like a browser find — index 0 = oldest = "1/N",
- *  last = newest = "N/N", and the find lands on the last (newest). Non-message
- *  results are suppressed server-side (inline is conversation-scoped) but
- *  filtered defensively. Pure — unit-tested. */
 export function toChronologicalMatchIds(results: SearchDto['results']): string[] {
   const ids: string[] = [];
   for (const r of results) {
@@ -189,7 +161,6 @@ export interface InlineFindController {
   matchCount: number;
   truncated: boolean;
   isFetching: boolean;
-  /** 1-based position of the active match, or 0 when there's no active match. */
   activePosition: number;
   activeMessageId: string | null;
   next: () => void;
@@ -328,11 +299,6 @@ export function useInlineFindController(input: {
     close,
     query,
     setQuery,
-    // Marks follow the debounced (searched) term while typing, but clear the
-    // instant the input is emptied — gate on the raw query too. `enabled` gates
-    // it as well (via the shared predicate) so a membership downgrade clears the
-    // <mark>s the SAME render it clears matchIds / the active row — the whole
-    // availability gate (query source, active match, highlight) moves together.
     highlightQuery: inlineFindQueryEnabled(open, enabled, query) ? debounced.trim() : '',
     matchCount: matchIds.length,
     truncated,
@@ -345,7 +311,7 @@ export function useInlineFindController(input: {
 }
 
 /**
- * Wire ⌘F to open a pane's inline find (shiki #task:1335). Attaches a window
+ * Wire ⌘F to open a pane's inline find. Attaches a window
  * keydown listener while `enabled`, and — because a channel and a thread can be
  * on screen at once — only the pane the user is actually in responds:
  *   - handle if focus is inside this pane's `rootRef`;

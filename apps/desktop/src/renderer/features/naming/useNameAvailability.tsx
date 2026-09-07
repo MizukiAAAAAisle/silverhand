@@ -10,25 +10,6 @@ import {
 import { api } from '@/lib/api';
 import { cn } from '@/lib/cn';
 
-/**
- * Shared onBlur name-validation for the create-agent / create-workspace
- * dialogs (#task:1387). One hook, two consumers, with the entity kind selecting
- * its shared schema: participant addressing rules must not constrain workspace
- * labels, while each create path and availability probe must still agree.
- *
- * Two axes, kept separate on purpose (mirrors the backend split):
- *   - FORMAT is client-side and synchronous, via the SHARED
- *     {@link ParticipantNameSchema} or {@link WorkspaceNameSchema} (never a
- *     second regex).
- *   - UNIQUENESS is server-only, via the matching name-availability probe
- *     endpoint, which shares ONE predicate with the create path — so the form
- *     can never report `available` for a name create would reject.
- *
- * Advisory, not authoritative: create is the real backstop (it returns
- * `nameTaken` / a zod 400). So this gates the button on the DEFINITIVE bad
- * states only (`invalid` / `taken`); `checking` and a network `error` don't
- * block — a fast submit falls through to create, which enforces.
- */
 export type NameCheckKind = 'agent' | 'workspace';
 
 export type NameCheckStatus =
@@ -95,21 +76,6 @@ export function nameFormatIssue(
     : 'charset';
 }
 
-/**
- * FORMAT message for a trimmed name, or `null` when the format is acceptable.
- *
- * The RENAME seam (#task:1827). Rename is not a create form — it has no
- * availability probe and no armed/touched state — but its format rule must be
- * the same one, and so must the words: a workspace that create admits with a
- * Chinese label cannot be a workspace the rename field refuses. This exists so
- * rename consumes the shared schema through the shared copy instead of keeping
- * a second local regex (it kept `/^[a-zA-Z0-9_-]+$/` and the copy "Only
- * letters, digits, - and _ are allowed" — a rule create never had).
- *
- * Empty stays `null` here, matching {@link nameFormatIssue}: "say nothing about
- * an empty field" is a format verdict, and each consumer owns its own required
- * -field message.
- */
 export function nameFormatMessage(
   kind: NameCheckKind,
   name: string,
@@ -125,7 +91,6 @@ export function nameAvailabilityView(input: {
   touched: boolean;
   name: string; // trimmed
   formatIssue: FormatIssue | null;
-  /** Does the probe result reflect the CURRENT input? (debounce settled) */
   inSync: boolean;
   data: NameAvailabilityDto | null;
   isError: boolean;
@@ -259,25 +224,6 @@ function useSettledTrue(active: boolean, ms: number): boolean {
   return held;
 }
 
-/**
- * Inline field note under a Name input: the red message for the definitive bad
- * states, a muted "Checking…" for a probe that is actually slow, and nothing
- * otherwise (a calm resting field — no positive-confirmation clutter, and no
- * reserved empty line either).
- *
- * Mounts and unmounts freely, which is only safe because `DialogContent` is
- * TOP-ANCHORED (#task:1829). While the dialog was centred by transform its
- * height was its position, so this note joining the flow moved the whole modal
- * by half the delta — validating a good name did that twice in a row (idle →
- * checking → available) and read as the modal flickering. Reserving a permanent
- * line fixed the motion but left a visible empty row under every Name field
- * (shiki: 空着一行, 视觉上不是很完美), so the fix moved to the actual cause and
- * this line went back to costing nothing when there is nothing to say.
- *
- * The delay stays: growth is now downward-only, but a probe that settles in
- * ~100ms would still flash one word and push the footer 22px and back. "Checking…"
- * is for a user who has already started waiting.
- */
 export function NameAvailabilityHint({ check }: { check: NameCheckView }): JSX.Element | null {
   const slowProbe = useSettledTrue(
     check.status === 'checking',

@@ -2,69 +2,12 @@ import type { WsClientStatus } from '@/lib/ws-client';
 import type { BackendInfoSnapshot } from '@/features/hosts/hooks';
 import type { LocalHostWsAttachment } from '../../../preload/api';
 
-/**
- * Desktop→Server connection readiness — the derivation the
- * ConnectionPane consumes to decide (a) the persistent status pip,
- * and (b) whether a save-in-progress banner may be dismissed.
- *
- * The pane MUST NOT confuse local IPC freshness (a
- * `backendInfoQuery.dataUpdatedAt` bump) with real Desktop→Server
- * reachability — the local `backend:info` IPC always resolves regardless
- * of whether the (new) backend origin is reachable, so treating it as a
- * "ready" signal would silently dismiss the banner on a save-then-fail.
- *
- * The real signal differs by WHERE the attachment registry lives, which
- * `BackendInfo.local_host_ws_attachment` now states outright
- * (`#task:1630`) instead of leaving it to each consumer to remember:
- *   - **attachment not observable** (remote deployment): the renderer's
- *     event WS re-dials the new backend after save
- *     (`eventWsClient.disconnect() + .connect()`). A `connected` status
- *     observed AFTER save started is authoritative — no live WS, no
- *     reachability. The attach timestamp is unavailable here, not
- *     merely absent.
- *   - **attachment observable** (embedded deployment): the daemon's
- *     outbound WS re-attaches and `attached_at` moves forward when that
- *     lands; while the (new) backend is unreachable it stays at its old
- *     value or NULL. This IS a real lifecycle timestamp — not the IPC's
- *     own freshness clock. It is paired with `local_host_status` because
- *     a stale `attachedAt` on a terminal-state row
- *     (`revoked`/`error`/`failed`) is NOT proof of reachability, and a
- *     pre-claim `unclaimed` row has no attach to wait for.
- *   - **no snapshot at all** (query pending / `backend:info` answered
- *     `null` pre-bootstrap): neither of the above is knowable, so both
- *     projections answer with the absence — pip `unknown`, never ready.
- *     This third case is a query state, so it is represented by a NULL
- *     observation rather than by an arm of the domain type; inventing
- *     `{ observable: false }` for it silently hands authority to the
- *     renderer WS, which in embedded is a local socket that says
- *     `connected` immediately.
- *
- * Purely derivational so both signals + the falsifier are unit-testable
- * without React or WS wiring. Consumers (`ConnectionPane`) still owe
- * one thing this file cannot express: opting into
- * `useBackendInfoSnapshot({ pollWhileConnecting: true })` so that
- * `attached_at`/`localHostStatus` actually re-enter React Query cache
- * during the connecting window. Without the poll opt-in the values
- * this projection reads never change, and a correct pure function
- * settles on a stale answer forever. That debt exists only on the
- * observable arm: when the attachment is unobservable the projection
- * reads only `wsStatus`, and the hook deliberately refuses to poll
- * (`#task:1628` — `attached_at` never moves there, so the poll would run
- * forever and buy nothing).
- */
 export type DesktopServerMode = 'embedded' | 'remote';
 
 export type DesktopServerConnectionStatus =
   | 'connected'
   | 'connecting'
   | 'offline'
-  /**
-   * No `BackendInfo` observed yet (`#task:1630` forward fix). NOT a
-   * connection state — the absence of one. The pane renders no status
-   * word for it: "Connecting…" would be a claim about the daemon we
-   * have not made, and "Offline" a claim about the server we cannot
-   * make. See {@link DesktopServerObservation}.
-   */
   | 'unknown';
 
 /**
@@ -75,17 +18,6 @@ export type DesktopServerConnectionStatus =
  */
 export type LocalHostStatus = BackendInfoSnapshot['local_host_status'];
 
-/**
- * The two `BackendInfo` facts these projections read, as ONE value —
- * because they are one observation. Passing them separately let a
- * consumer pair a real `localHostStatus` with an invented attachment
- * (`?? { observable: false }`), which reads as "this deployment cannot
- * observe attachments" rather than "we have not looked yet", and is the
- * defect Cindy + Norman caught in `e82f8a23`.
- *
- * `null` is the only representation of "no snapshot yet" — a query
- * state, deliberately unrepresentable inside the domain arms.
- */
 export interface DesktopServerObservation {
   attachment: LocalHostWsAttachment;
   localHostStatus: LocalHostStatus;

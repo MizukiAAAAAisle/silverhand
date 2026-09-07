@@ -1,29 +1,5 @@
-/**
- * Which sub-page of Settings is visible.
- *
- * A module of its own (rather than local state inside `SettingsPage`)
- * because another surface now needs to *aim* at a section: the read-only
- * human profile card in Members routes the viewer to Settings > Account
- * (#task:1846), and `nav.toSettings()` carries no section — settings
- * deep-links have no URL slot, the pane picks its section up from here on
- * mount.
- *
- * The section is a module-level singleton with localStorage as
- * write-through backing, the same shape as `lib/place-memory`. Memory is
- * what the next mount reads; storage only carries the choice across a
- * restart and may be unavailable (disabled, partitioned, over quota), so
- * every access is best-effort. An aim that depended on the disk write
- * would turn a storage failure into a dead click.
- */
 export type SettingsSection = 'account' | 'appearance' | 'connection';
 
-/**
- * Nav order, and with it the section Settings opens on when nothing is
- * stored: Account first (shiki 2026-08-06:「Account 放第一个,Appearance
- * 放第二个」). The default follows the order deliberately — a first item
- * that is never the landing tab splits "top of the list" from "where you
- * land" for no gain. A returning viewer's stored section still wins.
- */
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   'account',
   'appearance',

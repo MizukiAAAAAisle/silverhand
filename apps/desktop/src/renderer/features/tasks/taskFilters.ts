@@ -1,25 +1,3 @@
-/**
- * Unified task-filter model shared by the global Tasks board
- * (TasksSection) and the per-conversation Tasks tab (ChannelTasksTab).
- *
- * Design (shiki + Cindy, #task:769 / #task:770): the kanban columns
- * express ONLY the status dimension (Todo / In progress / In review /
- * Done / Closed — `closed` is a terminal status, not a separate
- * visibility axis); every other narrowing — channel, assignee, creator —
- * lives in one TaskFilterBar.
- *
- * This module is now the filter MODEL only: the UI's vocabulary for a
- * narrowing, plus the pure transitions over it (equality, the
- * workspace→channel cascade). Applying a narrowing is the SERVER's job —
- * `boardQuery` maps this model onto the `/api/tasks/board/*` params, and the
- * board reads back a bounded window per column (#task:1884 / #task:1885). The
- * client-side `applyTaskFilters` / `collectAssignees` / `collectCreators` that
- * used to live here were retired with the fetch-all list they sliced
- * (#task:1892): filtering a full download cannot be bounded, and person
- * options aggregated from the rows in hand shrink to whatever page the viewer
- * happened to load.
- */
-
 import type { TaskBoardContainer as TaskBoardContainerAxis } from '@silverhand/shared';
 import {
   isAgentSpace,
@@ -127,40 +105,6 @@ export function applyWorkspaceCascade(
   };
 }
 
-/**
- * The container axis (#task:2041), closed as ONE pure model shared by the global
- * section and the per-conversation Tasks tab. `null` = All (the union of every container the viewer can see);
- * the three concrete values narrow to one KIND of container. Two pure faces, so
- * the whole "container × channel axis × selection" matrix is falsifiable without
- * a DOM:
- *   - `applyBoardScopeSelection` — the transition that sets the container AND its
- *     concrete coordinate together from one grouped-dropdown pick (shiki
- *     2026-08-17: the container kind and the object it narrows to are one choice,
- *     not a pick-kind-then-object two-step). The grouped dropdown lists the
- *     workspace / agent-space OBJECTS directly (never a direct line — DM is not a
- *     selectable global scope, contract §5), so the only within-board axis the
- *     container still reshapes is the channel picker;
- *   - `channelAxisScope` — whether that channel picker applies under a container,
- *     and over which channel population.
- *
- * The membership rule is single-sourced here: a people-owned workspace lives
- * under `workspace`, an agent space under `agent_space`; a channel's data-source
- * `group` mirrors that. The `direct_messages` container is
- * never picked from the scope dropdown — it exists only as the pinned baseline of
- * a direct line's own (locked) Tasks tab, where its coordinate is the pair
- * conversation (matched by the `channel_id` param) and no workspace is minted.
- */
-
-/**
- * The board container a workspace belongs to.
- *
- * The QUESTION is ownership (#task:2078) — the container kind this used to read
- * is retired. The ANSWER is untouched on purpose: `'agent_space'` here is a
- * member of the BOARD axis's own alphabet (`TaskBoardContainerSchema`, a wire
- * value that travels to `/api/tasks/board/*`), which merely shares a spelling
- * with the retired container kind. Two axes, one word: retiring the kind does
- * not retire this token, so nothing about the return value moves.
- */
 export function workspaceBoardContainer(
   workspace: WorkspaceOwnership,
 ): Extract<TaskBoardContainerAxis, 'workspace' | 'agent_space'> {
@@ -219,16 +163,6 @@ export function channelAxisScope<C extends { group: ChannelSourceGroup }>(
   };
 }
 
-/**
- * The board-scope selection — one grouped-dropdown pick that names both the
- * container KIND and the concrete object inside it, collapsing the old
- * pick-container-then-object two-step into a single choice (#task:2041, shiki
- * 2026-08-17). A workspace / agent-space pick carries its own container so the
- * two are set together. There is no `direct_pair` pick: a DM is never a selectable
- * scope in the global board (contract §5) — the "All" tab already covers DM tasks
- * in its union, and a specific direct line is narrowed to only from inside its own
- * (locked) Tasks tab, where the scope trigger is hidden entirely.
- */
 export type BoardScopeSelection =
   | { kind: 'all' }
   | {

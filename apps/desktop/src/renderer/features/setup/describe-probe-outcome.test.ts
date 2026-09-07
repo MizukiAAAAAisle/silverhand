@@ -1,14 +1,3 @@
-/**
- * D4.a Commit 2 — copy / tone pin tests for `describeProbeOutcome`.
- *
- * Per-arm pin: every discriminator arm of `DesktopProbeServerInfoResult`
- * MUST map to a `{ tone, title, description }` triple with a non-empty
- * title. The mapper file is exhaustive over the union, so a future
- * arm added without copy is caught by TypeScript; this test belt-and-
- * braces that the copy is actually populated and the tone discriminator
- * lines up with severity expectations (success/warn for OK, error for
- * fail).
- */
 import { describe, expect, it } from 'vitest';
 import { describeProbeOutcome } from './describe-probe-outcome';
 

@@ -1,29 +1,3 @@
-/**
- * Direct-pair bounded context — the renderer half of #task:2035. Mirrors
- * `@silverhand/shared` `api/conversation.ts` (`DirectPairListItem`) and the
- * backend's `read-model/direct-pairs.ts`: the viewer's DIRECT MESSAGES list, one
- * row per `direct_pair` the viewer is an endpoint of.
- *
- * A `direct_pair` is NOT a channel and deliberately does not ride the channel
- * hooks: it has no workspace coordinate, so `useChannelsForWorkspace` has no
- * container to key it under and `GET /api/channels/:id` is not its authority. That
- * is also why this list is its own query rather than another arm of
- * `['workspaces']` — the cache key must have exactly the coordinates the row has,
- * which here is the VIEWER and nothing else.
- *
- * EXISTING pairs only (@shiki's product ruling, do not reopen): an agent the
- * viewer has never messaged does not pre-appear. The entrance for opening a new
- * line is the agent's own page (#task:2036), so this list stays a list of open
- * lines rather than a directory.
- *
- * Live-sync contract: `direct_pairs_changed` is an INVALIDATION hint carrying only
- * `conversation_id`, and `GET /api/direct-pairs` stays the authority for
- * membership, order and unread. Nothing here patches a row from a frame — unlike
- * the favorites list, whose unread is patched from `unread_updated`, because that
- * frame is keyed by (viewer, WORKSPACE) and a pair has no workspace coordinate to
- * be keyed under. So the pair's unread has exactly ONE carrier, and it is this
- * invalidation.
- */
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
@@ -43,35 +17,6 @@ import {
  *  viewer-global (like Activity and favorites) and takes no other coordinate. */
 export const directPairsKey = ['direct-pairs'] as const;
 
-/**
- * The list's FRESHNESS policy, named because "who may re-read this key" is now a
- * load-bearing contract rather than a default (@Cindy, #task:2038 B2).
- *
- * `staleTime: Infinity` — elapsed time is not evidence about this set. The rows
- * change only when a pair is minted or its unread moves, and every such change
- * has a carrier already: `direct_pairs_changed` / `snapshot_required` on the
- * viewer scope ({@link useDirectPairsSync}, mounted ONCE post-auth and the SOLE
- * invalidation owner) plus the first-send mutation's own invalidate
- * ({@link useInitiateDirectMessage}). `invalidateQueries` ignores `staleTime`, so
- * that ladder keeps working untouched — what Infinity removes is the OTHER
- * trigger: React Query's default `staleTime: 0` makes every value stale on
- * arrival, and a stale query refetches when a NEW OBSERVER MOUNTS (and on window
- * focus / reconnect).
- *
- * That default was affordable while the observers were a handful of
- * session-level surfaces. #task:2038 made this list the identity authority for
- * `#conv:<id>`, so a message stream now mounts one observer PER CHIP: scrolling
- * a busy conversation would fire `/api/direct-pairs` per chip, deduped only for
- * chips whose mounts land while a request is already in flight. With this policy
- * the cost is one request per session (plus one per real change), and a chip's
- * resolution is free — which is what the chip's comment claims.
- *
- * The trade is explicit: if the socket never delivers and no mutation runs, the
- * list is never re-read while the app stays open. That is the same bet every
- * WS-owned read here makes, and it is the reason `snapshot_required` (a gap /
- * resume, i.e. exactly the case where a frame was missed) counts as an
- * invalidation — see {@link decideDirectPairsInvalidation}.
- */
 export const DIRECT_PAIRS_QUERY_POLICY = {
   staleMs: Infinity,
 } as const;
@@ -115,22 +60,6 @@ export function useDirectPairs(): readonly DirectPairListItem[] {
   return useDirectPairsList().data?.direct_pairs ?? [];
 }
 
-/**
- * The viewer's existing line with one agent, or `null` when they have never
- * messaged each other (#task:2039). Pure, so the "existing line vs. new draft"
- * decision behind every `Message` entry is one testable rule rather than a
- * `.find` re-typed per surface.
- *
- * Matched on the counterpart's kind + id, INCLUDING the `deleted` arm: that arm
- * still names the endpoint, and a pair whose agent is gone is still the line
- * these two have — routing a viewer into a fresh draft instead would offer to
- * start a line that cannot be started (the door answers 404) while hiding the one
- * that exists, with its history.
- *
- * `rows: undefined` (a cold list) reads as "no pair" on purpose: the caller's
- * fallback is the draft route, whose first send is get-or-create — so a stale
- * miss costs a converge-on-send, never a duplicate line.
- */
 export function findAgentDirectPair(
   pairs: readonly DirectPairListItem[],
   agentId: string,
@@ -165,28 +94,6 @@ export type DraftHandoffDecision =
   | { kind: 'stay' }
   | { kind: 'handoff'; conversationId: string };
 
-/**
- * Should the draft pane hand over to the pair's own route?
- *
- * A pair can appear underneath the draft at any moment — the agent may open the
- * line from its side, or our own first send may have MINTED the pair and then
- * failed to persist the message (a window #task:2036 accepts). Handing over
- * automatically in those moments discards whatever the pane is holding: the text
- * the user has typed but not sent, and the failure they have not read yet, both
- * of which live only in this pane's state (@Cindy, #task:2039 review).
- *
- * So only an UNTOUCHED, quiet pane may hand over. The four cells:
- *
- *  - empty — nothing typed, nothing in flight, nothing failed → `handoff`. The
- *    viewer loses nothing and lands on the line that now exists.
- *  - dirty — text is in the composer → `stay`. It is theirs to send; the send
- *    itself is get-or-create, so it converges on the very same pair.
- *  - pending — a send is in flight → `stay`. Its own success path navigates with
- *    the ack's conversation id; racing it here would move the pane out from
- *    under an unsettled mutation.
- *  - post-mint error — the send failed with a pair now existing → `stay`, so the
- *    reason stays on screen and the retry re-enters the same door.
- */
 export function decideDraftHandoff(
   facts: DraftHandoffFacts,
 ): DraftHandoffDecision {
@@ -338,19 +245,6 @@ export type DirectPairAssigneeView =
   | { status: 'error'; candidates: readonly DirectPairAssigneeCandidate[] }
   | { status: 'ready'; candidates: readonly DirectPairAssigneeCandidate[] };
 
-/**
- * Pure projection (pair pane × current assignee) → the DM assignee domain
- * (#task:2041, @Cindy). The active counterpart agent is ALWAYS a candidate,
- * INCLUDING when it is the task's current assignee — that case is carried by
- * `isCurrent` (selected / no-op), never by erasing the only agent a DM has, which
- * was the reported empty-dropdown regression. It yields NO candidate only when the
- * counterpart genuinely cannot hold the task: a `human` (the write path takes
- * `agent_id` only) or a `deleted` principal, or a settled-absent pair. A cold or
- * failed read is surfaced as `loading` / `error`, never folded into an empty
- * `ready` (the same `ready > resolving > error > absent` precedence
- * {@link projectDirectPairPane} enforces: a retained MATCHING row is already an
- * answer, so this reads it; only a retained MISSING row is left unproven).
- */
 export function projectDirectPairAssignee(
   pane: DirectPairPaneState,
   currentAgentId: string | null,

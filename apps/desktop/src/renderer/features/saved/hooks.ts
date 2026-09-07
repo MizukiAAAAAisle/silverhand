@@ -15,10 +15,11 @@ import {
 } from '@/lib/ws-client';
 import { useWorkspaces } from '@/features/workspaces/hooks';
 
-/** Prefix key of every Saved list variant. The per-variant key appends the
+/**
+ *  Prefix key of every Saved list variant. The per-variant key appends the
  *  filter object (`['saved', { workspaceId, since, userId, agentId }]`), so a
  *  channel-scoped cleanup must walk ALL loaded variants, not one canonical key
- *  (#task:1689). */
+ */
 export const savedKey = ['saved'] as const;
 const savedInvalidationTimers = new WeakMap<
   QueryClient,
@@ -35,30 +36,6 @@ function invalidateSavedDebounced(qc: QueryClient): void {
   savedInvalidationTimers.set(qc, timer);
 }
 
-/**
- * Drop every Saved row attributed to ONE channel, across EVERY loaded filter
- * variant (#task:1689). The Saved read is membership-filtered server-side, so a
- * refetch after the viewer loses a channel returns the list WITHOUT those rows —
- * this patch reproduces exactly that shape instead of refetching.
- *
- * The surgical patch is scoped to THIS path, and is not a general preference for
- * patching over refetching: the sibling `workspace_channels_changed` path below
- * deliberately DOES refetch, because a rename/archive changes an embedded
- * projection no local patch can recompute. So re-windowing the
- * `saved_at DESC LIMIT` set is a cost this path declines to pay for a result it
- * can reproduce exactly — not a cost the list never pays (@Paul, #task:2055).
- *
- * Attribution is `place.conversation_id`: it IS the row's conversation
- * coordinate, and equals `message.conversation_id` — both name the PARENT
- * channel. A saved thread reply is not a separate conversation (a thread is a
- * reply-cluster inside the same channel, identified by `message.thread_root_id`,
- * which is a message id — not a conversation coordinate), so `place.conversation_id`
- * answers "does this row belong to the lost channel" for channel and thread
- * saves alike (#task:2055 ④). A `direct_pair` row's `conversation_id` is the pair
- * itself and never matches a channel id, so it is left untouched.
- * PRESENT-ONLY / idempotent: an unloaded variant or a variant with no matching
- * row writes nothing.
- */
 export function removeChannelFromSaved(qc: QueryClient, channelId: string): void {
   for (const q of qc.getQueryCache().findAll({ queryKey: savedKey })) {
     const prev = qc.getQueryData<SavedMessageDto[]>(q.queryKey);
@@ -69,11 +46,6 @@ export function removeChannelFromSaved(qc: QueryClient, channelId: string): void
   }
 }
 
-/** Which channels of ONE workspace the Saved list still holds rows for
- *  (#task:1689). Read off the row's `place`, not the key (the unfiltered variant
- *  holds every workspace at once). Only the `workspace_channel` arm belongs to a
- *  workspace's channel set — a `direct_pair` row has no workspace and is skipped;
- *  its channel coordinate is `place.conversation_id` (#task:2055). */
 export function savedHeldChannelIds(
   qc: QueryClient,
   workspaceId: string,
@@ -94,18 +66,6 @@ export function savedHeldChannelIds(
   return [...ids];
 }
 
-/**
- * Whether a WS frame arriving on a subscribed `workspace:<id>` scope must
- * invalidate `['saved']`. A saved row's embedded `channel_name` (the
- * `workspace_channel` arm of `SavedPlace`) is a LIVE projection — the placement
- * contract §4-A and `SavedPlaceSchema` require this list to keep it fresh — so a
- * channel rename / archive / move, delivered as `workspace_channels_changed` on
- * the WORKSPACE scope (NOT the viewer scope, so the sibling `saved_changed`
- * effect below cannot see it), forces a refetch; a post-reconnect
- * `snapshot_required` on that scope may have swallowed one, so it counts too.
- * INVALIDATE-only: the frame carries no row payload and `['saved']` is refetched
- * whole, never written from the frame (mirrors the shipped `useBoard` card face).
- * `scopes` is the set of `workspace:<id>` the viewer belongs to. Pure. */
 export function savedWorkspaceFrameInvalidates(
   frame: ServerFrame,
   scopes: ReadonlySet<string>,
@@ -118,30 +78,6 @@ export function savedWorkspaceFrameInvalidates(
   );
 }
 
-/**
- * Returns the saved-message list. The API ships everything pre-joined
- * (channel/conversation/agent names + full message body).
- *
- * Filtering is SERVER-SIDE (mirror archived-channels, #task:1258): pass
- * `{ workspaceId, since, userId | agentId }` and the backend applies
- * `workspace_id` + `saved_at >= since` + the sender predicate as WHERE clauses
- * BEFORE the `ORDER BY saved_at DESC LIMIT` — so a filter narrows the FULL set,
- * never a client-side slice of the capped window (which would silently drop
- * older history). The filter params are part of the query key so each variant
- * caches independently; the `['saved']` prefix invalidation from save/unsave +
- * the WS `saved_changed` effect (viewer scope) + the
- * `workspace_channels_changed` effect (workspace scope, keeping embedded
- * `channel_name` live) cover every variant. Call with no args for the full list
- * (used by `useSavedMessageIds`).
- *
- * `userId` / `agentId` are MUTUALLY EXCLUSIVE (#task:2059): they are the two
- * scoped shapes of one single-select sender axis, so at most one is ever set —
- * "no sender filter" is both absent, which the server distinguishes from
- * "filtered to someone" structurally. The renderer never invents the pair
- * independently: `parseSenderFilter` in `components/ui/sender-filter-select.tsx`
- * is the one place the picker's `user:<id>` / `agent:<id>` value becomes these
- * params, shared with Search (#task:2062).
- */
 export interface SavedMessagesQuery {
   workspaceId?: string | null;
   since?: number | null;
@@ -168,12 +104,6 @@ export function useSavedMessages(params?: SavedMessagesQuery) {
     return () => { sub.unsubscribe(); unsub(); };
   }, [qc]);
 
-  // Keep each row's embedded `channel_name` live (SavedPlaceSchema §4-A): a
-  // channel rename / archive rides `workspace_channels_changed`, which is emitted
-  // on the WORKSPACE scope, not the viewer scope — so the viewer-scope effect
-  // above cannot see it. Mirror the shipped `useBoard` card face: subscribe every
-  // workspace the viewer belongs to and invalidate `['saved']` on a hit (the pure
-  // `savedWorkspaceFrameInvalidates` decides), never patch from the frame.
   const { data: workspaces = [] } = useWorkspaces();
   // Stable, order-independent key over the id set so the effect re-subscribes
   // only when membership actually changes, not on every equal-ids refetch.

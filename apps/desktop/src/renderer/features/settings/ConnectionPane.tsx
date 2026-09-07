@@ -1,35 +1,3 @@
-/**
- * Connection settings pane.
- *
- * Owns exactly one product idea: **Desktop → Server** — where this
- * app connects and whether the connection is up. Everything about
- * individual Computers (this-computer status, refresh credentials,
- * other devices inventory, revoke) lives on the **Computer Rail**
- * (`features/hosts/HostDetailView`), not here.
- *
- * The pane renders:
- *   - a persistent Desktop→Server status pip (`desktopServerConnectionStatus`)
- *     sourced from whichever authority actually exists here (renderer
- *     event WS when `local_host_ws_attachment` is unobservable, i.e.
- *     remote; the daemon attach timestamp when it is observable; and NO
- *     pill at all until a snapshot has been observed — see the
- *     `observation` binding below),
- *   - the address form (edit + Save). Which owner a save is sent to —
- *     the daemon's outbound config (embedded) or the app's server
- *     connection profile (remote) — is decided by `planServerUrlSave`
- *     from the observed `mode`, and no save exists at all until a
- *     snapshot says which deployment this is,
- *   - a save-result banner that ONLY dismisses on an observed
- *     Desktop→Server reachability proof — never on a local IPC bump
- *     (`isDesktopServerReadyAfterSave`), so a save-then-unreachable
- *     never quietly reads as success.
- *
- * IMPORTANT — token-handling invariant is preserved: the renderer NEVER sees
- * `host_token` (main reads it from disk itself). In embedded mode this pane
- * edits daemon-config directly; in remote mode it edits the persisted server
- * profile so the app backend handle, event WS, and daemon outbound config all
- * converge on the same origin.
- */
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Save, Server } from 'lucide-react';
@@ -152,26 +120,11 @@ function describeProfileSaveForConnection(
 
 export function ConnectionPane(): JSX.Element {
   const qc = useQueryClient();
-  // Opt into `pollWhileConnecting` so the attachment / `local_host_status`
-  // actually flip in cache during the embedded connecting window. The
-  // readiness derivation below is correct, but a static cache would let
-  // it settle on the pre-attach snapshot forever — banner stuck on
-  // "Reconnecting…", pip stuck on Connecting/Offline. The hook already
-  // stops polling on any terminal / attached state — and never starts in
-  // remote mode, where this pane reads `wsStatus` instead (`#task:1628`)
-  // — so this is cheap.
+
   const backendInfoQuery = useBackendInfoSnapshot({
     pollWhileConnecting: true,
   });
 
-  // `#task:1630` forward fix — "no snapshot yet" stays NULL, everywhere.
-  // It is a query state, and every fact below only means anything as
-  // part of one snapshot; defaulting them separately (`?? 'embedded'`,
-  // `?? { observable: false }`, `?? 'unclaimed'`) manufactured an
-  // observation that says "this deployment cannot observe attachments"
-  // (which hands the pip to the renderer WS — a LOCAL socket in
-  // embedded mode) and a mode that says "the daemon owns this address"
-  // (which points Save at a daemon reload on a remote install).
   const snapshot = backendInfoQuery.data ?? null;
 
   const observation: DesktopServerObservation | null = snapshot
@@ -222,15 +175,6 @@ export function ConnectionPane(): JSX.Element {
         ? snapshot.url
         : snapshot.local_host_server_url ?? snapshot.url;
 
-  // `#task:1640` — the field FOLLOWS the authority only while the user
-  // has not typed in it. Re-seeding on every `currentUrl` change wiped
-  // whatever was being typed, and `currentUrl` changes for reasons that
-  // have nothing to do with this field: the first snapshot landing (the
-  // unknown window `#task:1630` made explicit — `''` → real address),
-  // and any `pollWhileConnecting` refetch that carries a new
-  // `local_host_server_url` / `url`. Once edited the draft is the user's
-  // until the save lands (`onSuccess` clears the flag so the field
-  // re-follows the newly saved authority).
   const [draft, setDraft] = useState<string>('');
   const draftEditedRef = useRef(false);
   useEffect(() => {
@@ -281,10 +225,8 @@ export function ConnectionPane(): JSX.Element {
       setBanner(nextBanner);
       setSavedAt(nextBanner.dismissOnReady ? Date.now() : null);
       if (saveResult.result.ok) {
-        // The saved address IS the authority now, so let the field follow
-        // it again (`#task:1640`). A FAILED save keeps the edited flag —
-        // the user's text stays put so they can fix it.
         draftEditedRef.current = false;
+
         if (saveResult.source === 'profile') {
           // Remote-mode Settings edits must retarget the renderer transport too.
           // The profile pipeline updates main's active backend handle; forcing a
@@ -364,13 +306,6 @@ export function ConnectionPane(): JSX.Element {
 
   return (
     <section className="flex min-w-0 flex-1 flex-col gap-6 px-5 py-5">
-      {/* Same heading object as Appearance / Account, chip included (shiki
-          2026-08-06「Appearance h2 前面都给了 icon,connection / Account 也给,
-          同一个风格」), title only — the description line is gone with the rest
-          of them (shiki「h2 下的 description 去掉」). The routing sentence it
-          carried ("Computers are managed under the Computers panel") went with
-          it: the Computer Rail is a top-level destination of its own, and this
-          pane's only control is the address field, which needs no gloss. */}
       <SettingsHeading icon={<Server className="size-4" />} title="Connection" />
 
       <div className="flex flex-col gap-3">
@@ -390,14 +325,7 @@ export function ConnectionPane(): JSX.Element {
               banner.tone === 'error'
                 ? 'border-error bg-bg-inset text-error'
                 : banner.tone === 'success'
-                  ? // Success borrows the theme's own success hue, not `accent`:
-                    // in forza6 `--accent` is brand magenta and sits next to
-                    // `--error` crimson, so an accent-bordered success banner
-                    // read as a second error (#task:1833). `--success` is deep
-                    // lime there. Matches `STATUS_TONE_CLASS.connected` above.
-                    // Text stays neutral — error earns more loudness than a
-                    // transient confirmation does.
-                    'border-success bg-bg-inset text-text-primary'
+                  ? 'border-success bg-bg-inset text-text-primary'
                   : 'border-border-subtle bg-bg-inset text-text-secondary',
             )}
           >

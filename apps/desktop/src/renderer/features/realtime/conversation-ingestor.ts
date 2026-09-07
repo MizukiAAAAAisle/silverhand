@@ -92,28 +92,6 @@ type ReplaySafetySpec = {
   readonly summary: string;
 };
 
-/** Replay-safety contract for every cache effect this ingestor can produce
- *  (#task:1262, reclassified for #task:1263 (c)). A new event kind or cache write
- *  must first be categorized here:
- *  - `content-apply` is satisfied by a synchronous content write (an in-window
- *    append / chip·reaction patch / live-gap affordance) — idempotent on replay;
- *  - `cursor-inert` is satisfied by an AUTHORITATIVE invalidate settling: it holds
- *    only a message-DERIVED projection (a reply count, a followers/threads list),
- *    never message content, so it recovers by refetching its own source.
- *
- *  Under #1261 the message-stream floor advances on SATISFACTION — a per-frame
- *  `Promise.allSettled` over BOTH classes' effect promises, all-fulfilled — not on
- *  "content-apply only". So `cursor` now documents the recovery MECHANISM
- *  (content-commit vs authoritative-invalidate), not a runtime floor-gate: a
- *  cursor-inert effect DOES advance the floor, but only once its refetch COMMITS
- *  (initiated ≠ committed, §4.1). #1263 (c) moved the reply-count effects here:
- *  the old optimistic `+1` was non-idempotent and double-counted on replay, so a
- *  reply count is now recovered authoritatively like any other derived list.
- *
- *  This table is deliberately about cache EFFECTS, not wire kinds: one `message`
- *  frame can append an idempotent cluster row (content-apply), authoritatively
- *  recover a reply count (cursor-inert), and invalidate a derived list
- *  (cursor-inert). */
 export const REPLAY_SAFETY_CONTRACTS = {
   mainline_row_window: {
     cursor: 'content-apply',

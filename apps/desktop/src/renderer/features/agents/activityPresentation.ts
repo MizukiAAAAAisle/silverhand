@@ -3,19 +3,6 @@ import { decodeTargetForDisplay } from '@silverhand/shared';
 
 export type ActivityEvent = ConversationActivityEvent | AgentStreamActivityEvent;
 
-/**
- * Presentation helpers for the Activity timeline. Pure, framework-free, and
- * unit-tested — the React layer (`AgentActivityTimeline`) only renders what
- * these return.
- *
- * Scope contract (#task:1187, agreed with Cindy/Alice): this is a pure
- * PRESENTATION layer over the raw `conversation_events` rows. It never mutates
- * the event stream, never invents tool RESULT bodies (those stay marker-only —
- * the privacy decision from #task:1186), and the codex fragment coalescing here
- * is a DISPLAY fallback only — the durable retention/pagination fix lives in a
- * separate backend coalescer (Cindy).
- */
-
 // ── path abbreviation ──────────────────────────────────────────────────────
 
 /** Collapse an absolute home path to `~/…` so `Read /Users/x/work/a.ts`
@@ -173,17 +160,6 @@ function findSilverhandCommand(
   return null;
 }
 
-/**
- * The point task verbs that target a single task by number. After the
- * #task:1945 CLI migration these carry the number as a POSITIONAL operand
- * (`task claim 42`); older activity rows carry the now-retired `--task-number
- * 42` flag. Activity rows are immutable historical command text, so the reader
- * accepts BOTH forms permanently — this is history compatibility, not a
- * migration window. `list` is deliberately excluded: it keeps `--task-number`
- * as a filter (still matched by the flag form below), and a bare number there
- * would be a query arg, never an operand. `create` (`--source-message-id …
- * --claim`) never takes one either, so it must not be misread as `#<n>`.
- */
 const TASK_NUMBER_VERBS = new Set(['detail', 'status', 'claim', 'unclaim', 'edit']);
 
 /**
@@ -216,21 +192,6 @@ export function taskNumberFromCommand(
   return /^\d+$/.test(first) ? first : null;
 }
 
-/**
- * Recognise a `silverhand <noun> [verb] …` CLI invocation and present it as a
- * product-flavoured label rather than raw bash. The `silverhand` CLI is the
- * agent's primary way of acting, so these show up constantly — a clean
- * `Task claim` / `Message send` reads far better than the full command.
- *
- * Wrapped launchers (`/bin/zsh -lc "silverhand …"`) are unwrapped first; the
- * quote-aware scanner (`findSilverhandCommand`) then accepts `silverhand` only
- * at a real command position, never inside a quoted argument. Flags / heredoc
- * bodies are dropped from the title, EXCEPT a `task` action surfaces its task
- * number (`--task-number N` or the new positional `task <verb> N` — see
- * {@link taskNumberFromCommand}) / `--status` as light secondary metadata
- * (`#1187 → in_review`) — parsed only from the already-identified silverhand
- * command, never the wider shell text.
- */
 function presentSilverhandCli(command: string): ToolPresentation | null {
   const inner = unwrapShellLauncher(command);
   const found = findSilverhandCommand(inner);
@@ -238,28 +199,7 @@ function presentSilverhandCli(command: string): ToolPresentation | null {
   const { noun, verb: verbTok, args } = found;
   const cap = noun.charAt(0).toUpperCase() + noun.slice(1);
   let label = verbTok ? `${cap} ${verbTok.replace(/-/g, ' ')}` : cap;
-  // One product-flavoured override (#task:1187, #task:2149): a
-  // `task status --status <s>` writes a task's status → reads as "Task update".
-  // A `task status` with no `--status` is a help/read, not a mutation, and keeps
-  // the plain "Task status" label rather than posing as one — so the override is
-  // applied below, once `--status` is known.
-  //
-  // `message send` used to get a `Message send stale` label here when its args
-  // contained `--stale-resolution` / `--anyway`. That is DELETED (#task:2099):
-  // staleness is the backend's verdict on a delivery, and command syntax is only
-  // a proxy for it — one that missed every retry omitting the optional reason,
-  // reported a pre-emptive `--anyway` with nothing pending as a conflict, and
-  // saw nothing at all on runtimes whose tool-call capture carries no command
-  // (OpenCode persists `{cwd}` alone). A send's tool-call row is now always just
-  // `Message send`; the `message_stale` activity row is the only producer of the
-  // stale label. `message stale-receive` / `stale-resolve` keep their ordinary
-  // labels here — they are real CLI actions, not evidence a 409 happened.
 
-  // Task actions carry their target id + status change as secondary metadata.
-  // The number comes from the retired `--task-number` flag OR the new
-  // positional operand; `--message-id` promote/claim has none → don't
-  // fabricate one. Read only the identified command's `args`, never the wider
-  // shell text (a compound prefix must not leak a number/flag in).
   let arg: string | null = null;
   if (noun === 'task') {
     const num = taskNumberFromCommand(verbTok, args);
@@ -458,38 +398,6 @@ function sessionIdOf(e: ActivityEvent): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
-/**
- * Coalesce a sorted (ascending-by-id) event list into display items:
- *
- *  - maximal runs of consecutive same-kind `thinking` / `text` rows fold into
- *    one group (concatenated text) — codex emits one row PER token delta, so a
- *    reasoning block arrives as dozens of one-word rows; grouping restores
- *    block granularity. A run breaks on ANY non-fragment kind AND on a
- *    thinking↔text switch, so distinct passes never merge across a tool call.
- *    A whitespace-only `text` group is dropped (codex's empty end-of-turn
- *    assistant block, which used to render as a bare "(message)" placeholder).
- *  - a `tool_output` is NOT shown on its own (the marker-only body carries no
- *    information — #task:1186). When its `tool_call_id` matches a `tool_call`
- *    in the window the output is dropped and the call is flagged `completed`,
- *    carrying the output's `outcome` so the row paints an honest marker (green ✓
- *    only for a proven `success`; neutral otherwise — see the `outcome` field on
- *    ActivityDisplayItem); an orphan output (no matching call, e.g. its call
- *    paged out) degrades to one light `returned` line.
- *  - a `compaction_started` / `compaction_finished` pair folds the same way:
- *    the started row shows a loading marker until its finished pairs in (FIFO,
- *    no id on these rows), then flips to a done marker and the finished is
- *    dropped. An orphan finished is a standalone done row; an orphan started
- *    stays loading (never fabricated as complete).
- *  - a `turn_end` is dropped: a turn boundary is not a user-facing fact (it
- *    rendered as a noise-only "Turn ended" line).
- *  - repeated `session_init` rows for the SAME session_id collapse to the first
- *    (some runtimes re-announce the session every turn); an id-less init passes.
- *  - every other kind passes through as a singleton.
- *
- * Raw ids/rows are untouched (a group keys off its first id), so this composes
- * with `mergeActivityById` dedupe/backfill and with any persist-side coalescer
- * (a single already-merged block is just a length-1 run → unchanged).
- */
 export function coalesceActivity(
   events: ReadonlyArray<ActivityEvent>,
 ): ActivityDisplayItem[] {
@@ -510,13 +418,6 @@ export function coalesceActivity(
     }
   }
 
-  // Pass 1b: pair compaction_started ⇄ compaction_finished. These rows carry no
-  // correlation id, so we pair by order — each finished closes the EARLIEST
-  // still-open started (FIFO). Edges (Cindy #task:1187): a finished with no open
-  // started is an orphan → standalone done; a started with no later finished
-  // stays loading (never fabricate a completion). `compactionDoneStartIds` are
-  // the started rows that got a finished (render as done); `foldedFinishedIds`
-  // are the finished rows folded into their started (dropped from the list).
   const compactionDoneStartIds = new Set<number>();
   const foldedFinishedIds = new Set<number>();
   {

@@ -18,31 +18,9 @@ import { useUserAvatarObjectUrl } from '@/features/users/avatar-hooks';
 import { canEditUserProfile } from './permissions';
 
 interface HumanProfileCardProps {
-  /** The user to render. v1 always passes the viewer's own dto; v2
-   *  multi-human will pass arbitrary users. */
   user: UserDto;
 }
 
-/**
- * Human profile card — read-only for every user, including the viewer.
- *
- * Editing display name and avatar moved to Settings > Account (shiki
- * 2026-08-06:「现在这个交互不符合大部分的 IM 直觉,很多用户找不到。放到
- * account 中会更好」, #task:1846). This card therefore mounts NO write
- * surface at all: no picker, no inline input, no `/api/me` mutation
- * hooks. `/api/me` still has exactly one long-lived ownership site
- * (`ViewerProfileEditor`); it just lives where people look for their own
- * profile.
- *
- * What stays here is directory information — identity as others see it,
- * plus the created/updated/id metadata. On the viewer's own card the
- * Identity header carries a route to the editor instead of a pencil, so
- * arriving here with intent to edit is not a dead end.
- *
- * Cross-user editing was never possible: `PATCH /api/me` and the avatar
- * routes key off `requireViewerUserId(c)`. `canEditUserProfile` now gates
- * only the wayfinding affordance.
- */
 export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
   const { data: viewer } = useViewerUser();
   const viewerForPermissions =
