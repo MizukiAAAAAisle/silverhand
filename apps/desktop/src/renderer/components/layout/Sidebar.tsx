@@ -147,15 +147,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   }, [props.workspaces, props.agentsById]);
   const ownerAgentAvatarUrls = useAgentAvatarObjectUrls(ownerAvatarSources);
 
-  // The tree's selection, composed ONCE here, because the third field can only be
-  // answered above the sections: whether the open conversation has moved into
-  // STARRED (#task:1888) decides WHICH container renders its row, and therefore
-  // which collapsed container may keep it (`branchHoldsSelectedRow`). Reading it
-  // from the parent's own channel list would be circular — that list is the thing
-  // being decided about. A cache observer, not a second owner of the favorites
-  // freshness scope: `FavoritesGroup` below still owns it. It is tri-state, and
-  // stays tri-state all the way to the predicate: collapsing "the list hasn't
-  // answered" into "not starred" here would put the guess back (#task:1901).
   const selectedStar = useStarMembership(props.selectedChannelId);
   const selected: SelectedConversation = {
     channelId: props.selectedChannelId,
@@ -163,11 +154,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     starred: selectedStar,
   };
 
-  // Per-user rail ordering (#task:1146). The whole rail is ONE list; the drag
-  // state machine (synchronous drop override, settle guard) lives in the shared
-  // useListDragSort — the same hook the channel sidebar uses, so the CDP-tuned
-  // drop invariants can't drift between the two surfaces.
-  // `modeScopeOf: g => g` makes each section its own [recent|manual] scope.
   const { data: viewerSort } = useWorkspaceSortState();
   const setSortMode = useSetSortMode();
   const { orderedGroups, onReorder } = useListDragSort<
@@ -175,7 +161,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     WorkspaceItem
   >({
     listKey: 'workspaces',
-    // Keyed by the WIRE + DB tokens (see `RailGroup`), not the display words.
     groups: { agent_space: homeAgentSpaces, regular: homeRegular },
     viewerSort,
     getId: w => w.id,
@@ -213,25 +198,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
       style={{ ...paneChrome, overflow: 'hidden' }}
     >
       <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
-        {/* App-level tool entries (Search/Saved/Archived). Kept a SOFT group:
-          * tight inner gap + `mb-3` below (matching the inter-section `pb-3`)
-          * to separate them from the workspace nav by spacing alone — no hard
-          * divider, which read as odd above just three entries (#task:1159,
-          * shiki review).
-          *
-          * No `transition-colors`: these rows carry the SAME selected classes as
-          * channel/workspace rows, so selection must commit instantly here too —
-          * fading a discrete committed state is the flicker (#task:1162). Keeps
-          * all three sidebar row classes (rail / channel / tool) one row-language.
-          *
-          * Their glyphs sit on the OUTER column (`OUTER_GLYPH_INSET`,
-          * #task:1889) — the same x as a group header and as a container header
-          * row, which is what lets the three of them line up with the tree
-          * instead of floating in their own gutter. They share that column but NOT
-          * the group's weight: `font-bold` belongs to the section LABEL, and every
-          * ROW — these three included — takes `font-medium` (shiki, 2026-08-10).
-          * The 4px row gap is shared with the tree for the same reason
-          * (#task:1951). */}
         <div className="mb-3 space-y-1">
           <button
             type="button"
@@ -289,27 +255,11 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           </button>
         </div>
 
-        {/* STARRED = the global Favorites list (#task:1253/#task:1254), holding
-          * CONVERSATIONS since #task:1888. Self-contained (owns its read-model,
-          * tier batches, unstar); renders nothing when empty. EXCLUSIVE — a starred conversation lives HERE only, removed from
-          * its parent's channel list.
-          *
-          * Every rail section persists its collapse state across restarts
-          * (#task:1632) — the rail is nav chrome the user arranges once, so
-          * re-collapsing three sections on every launch is a chore. The
-          * `persistId` (storage identity — see `SidebarSection`) is passed at
-          * each section below; STARRED carries its own inside FavoritesGroup,
-          * which owns its whole section. */}
         <FavoritesGroup
           selectedChannelId={props.selectedChannelId}
           watchWorkspaceIds={watchWorkspaceIds}
           onSelectConversation={props.onSelectConversation}
         />
-        {/* Order: STARRED → WORKSPACES → DIRECT MESSAGES → AGENT SPACES (shiki,
-          * 2026-08-08 for the first three rungs). WORKSPACES is the deep half of
-          * the tree — every row can expand into channels — so it takes the
-          * position right under STARRED, and the two flat sections sit at the
-          * bottom where their length doesn't push the workspaces off-screen. */}
         <WorkspaceGroup
           label="WORKSPACES"
           icon={WORKSPACES_SECTION_GLYPH}
@@ -334,11 +284,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           }
           emptyHint={
             <>
-              No workspaces yet. Use{' '}
-              <kbd className="inline-flex size-4 items-center justify-center rounded-[var(--control-radius)] bg-bg-elevated align-text-bottom text-[length:var(--text-meta)] leading-none">
-                +
-              </kbd>{' '}
-              to create one.
+              No workspaces
             </>
           }
           agentsById={props.agentsById}
@@ -346,13 +292,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           sort={sortConfigFor('regular')}
           persistId="workspaces"
         />
-        {/* DIRECT MESSAGES = `direct_pair` conversations (#task:2035) — the
-          * viewer's person-to-person lines, which have NO container at all. It sits
-          * directly above AGENT SPACES because that is the neighbour it is most
-          * often confused with: an agent home is a WORKSPACE you share with an
-          * agent (channels, tasks, members), a direct pair is a single line between
-          * two principals. Self-contained; renders nothing when the viewer has no
-          * pairs. */}
         <DirectMessagesGroup
           selectedChannelId={props.selectedChannelId}
           onSelectDirectPair={props.onSelectDirectPair}
@@ -360,16 +299,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           onSelectDirectDraft={props.onSelectDirectDraft}
         />
         <WorkspaceGroup
-          // AGENT SPACES, not "DM" (#task:2035): these rows are agent-home
-          // WORKSPACES — each expands into channels — and the section directly
-          // above now holds the actual direct messages. Two different things had
-          // one name, and the name belonged to the other one.
-          //
-          // `persistId="dm"` stays: it is localStorage identity, and renaming it
-          // would silently reset every user's collapse choice for nothing (real
-          // DMs persist under `"direct-messages"`, so there is no collision to
-          // resolve) — #task:2035. The two sort arguments below are the WIRE +
-          // DB token, which #task:2045 Delta 4 did migrate (v86).
           label="AGENT SPACES"
           icon={AGENT_SPACES_SECTION_GLYPH}
           workspaces={orderedAgentSpaces}
@@ -377,17 +306,13 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           onSelectChannel={props.onSelectChannel}
           onCreateChannel={props.onCreateChannel}
           onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
-          emptyHint="Creating an agent opens its space"
+          emptyHint="No agents"
           agentsById={props.agentsById}
           ownerAgentAvatarUrls={ownerAgentAvatarUrls}
           headerAction={sortMenuFor('agent_space')}
           sort={sortConfigFor('agent_space')}
           persistId="dm"
         />
-        {/* No bottom ARCHIVED group since #task:1889: the top-level `Archived`
-          * entry above is the ONE archive index (#task:1890 gave it archived
-          * WORKSPACES and their restore), so a second, differently-shaped archive
-          * surface in the tree was the duplicate. */}
       </nav>
     </aside>
   );
