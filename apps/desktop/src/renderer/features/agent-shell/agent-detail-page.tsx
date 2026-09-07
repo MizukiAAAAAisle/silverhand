@@ -1,6 +1,6 @@
 import { AgentView } from '@/features/agents/AgentView';
 import { HumanView } from '@/features/me/HumanView';
-import { DirectoryPlaceholder } from '@/components/layout/directory_shell';
+import { DirectoryPlaceholder } from '@/components/layout/directory-shell';
 
 export interface AgentNavigation {
   onMessageAgent: (agentId: string) => void;

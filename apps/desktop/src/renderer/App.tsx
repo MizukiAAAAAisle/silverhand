@@ -1,5 +1,5 @@
-import { AgentShell } from '@/features/agent_shell/agent_shell';
-import { ComputerShell } from '@/features/computer_shell/computer_shell';
+import { AgentShell } from '@/features/agent-shell/agent-shell';
+import { ComputerShell } from '@/features/computer-shell/computer-shell';
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Power } from 'lucide-react';
 import { Toaster } from 'sonner';

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HostDto } from '@silverhand/shared';
-import { sortHostsForSidebar } from '@/features/computer_shell/computer_sidebar_shell';
+import { sortHostsForSidebar } from '@/features/computer-shell/computer-sidebar-shell';
 
 /**
  * #task:808 slice 4 — pure `sortHostsForSidebar` test. Pin the

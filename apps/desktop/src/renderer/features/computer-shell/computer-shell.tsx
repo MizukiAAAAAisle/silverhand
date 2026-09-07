@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useBackendInfoSnapshot, useHostsQuery } from '@/features/hosts/hooks';
 import { NewComputerDialog } from '@/features/hosts/NewComputerDialog';
-import { DirectoryShell, type DirectoryLifecycle } from '@/components/layout/directory_shell';
-import { ComputerSidebarShell } from './computer_sidebar_shell';
-import { ComputerDetailPage } from './computer_detail_page';
+import { DirectoryShell, type DirectoryLifecycle } from '@/components/layout/directory-shell';
+import { ComputerSidebarShell } from './computer-sidebar-shell';
+import { ComputerDetailPage } from './computer-detail-page';
 import { resolveComputerSelection } from './selection';
 
 export function ComputerShell({ mounted, visible }: DirectoryLifecycle): JSX.Element {
