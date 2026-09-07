@@ -113,18 +113,12 @@ describe('applyAppearanceOverrides', () => {
 });
 
 describe('theme markdown token cascade contract', () => {
-  const globalCss = readFileSync(
-    new URL('../styles/global.css', import.meta.url),
-    'utf8',
-  );
+  const globalCss = readFileSync(new URL('../styles/global.css', import.meta.url), 'utf8');
   const studioLightCss = readFileSync(
     new URL('../styles/themes/studio-light.css', import.meta.url),
     'utf8',
   );
-  const forza6Css = readFileSync(
-    new URL('../styles/themes/forza6.css', import.meta.url),
-    'utf8',
-  );
+  const forza6Css = readFileSync(new URL('../styles/themes/forza6.css', import.meta.url), 'utf8');
   const forza6ComponentsCss = readFileSync(
     new URL('../styles/themes/forza6-components.css', import.meta.url),
     'utf8',
@@ -133,10 +127,7 @@ describe('theme markdown token cascade contract', () => {
     new URL('../styles/themes/slack-dark.css', import.meta.url),
     'utf8',
   );
-  const irisCss = readFileSync(
-    new URL('../styles/themes/iris.css', import.meta.url),
-    'utf8',
-  );
+  const irisCss = readFileSync(new URL('../styles/themes/iris.css', import.meta.url), 'utf8');
 
   // Cascade STRUCTURE guards: the whole no-leak model rests on the default
   // theme owning `:root` and being imported before any override theme. If
@@ -144,8 +135,8 @@ describe('theme markdown token cascade contract', () => {
   // the default's festival-only values leak globally / get clobbered — a
   // cross-theme corruption TS can't catch. (Structural boundaries, not values.)
   it('imports the default :root theme before the themes that override it', () => {
-    const order = [...globalCss.matchAll(/@import "\.\/themes\/([^"]+)";/g)].map(
-      m => m[1],
+    const order = [...globalCss.matchAll(/@import ['"]\.\/themes\/([^'"]+)['"];/g)].map(
+      (m) => m[1],
     );
     const forzaIdx = order.indexOf('forza6.css');
     expect(forzaIdx).toBeGreaterThanOrEqual(0);
@@ -202,11 +193,7 @@ describe('theme markdown token cascade contract', () => {
     // A declaration is `--name:`; `var(--name)` usages end in `)`, not `:`, so
     // this matches definitions only.
     const declaredTokens = (css: string) =>
-      new Set(
-        [...stripComments(css).matchAll(/(--[a-z0-9-]+)\s*:/g)].map(
-          m => m[1]!,
-        ),
-      );
+      new Set([...stripComments(css).matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
 
     // Excluded from the per-theme contract:
     //  --forza6-*  private palette (namespaced; each theme owns its own palette)
@@ -220,9 +207,7 @@ describe('theme markdown token cascade contract', () => {
     //              as `text-text-muted` and never read the token, so it can't leak.
     const FORZA6_ONLY = new Set(['--app-corner-radius', '--task-num']);
     const isPromoted = (t: string) =>
-      !t.startsWith('--forza6-') &&
-      !t.startsWith('--color-') &&
-      !FORZA6_ONLY.has(t);
+      !t.startsWith('--forza6-') && !t.startsWith('--color-') && !FORZA6_ONLY.has(t);
 
     const required = [...declaredTokens(forza6Css)].filter(isPromoted);
     // Sanity: if the regex ever breaks, the set collapses and the test would
@@ -235,7 +220,7 @@ describe('theme markdown token cascade contract', () => {
       ['iris', irisCss],
     ] as const) {
       const declared = declaredTokens(css);
-      const missing = required.filter(t => !declared.has(t));
+      const missing = required.filter((t) => !declared.has(t));
       expect(missing, `${name} is missing promoted token(s)`).toEqual([]);
     }
   });

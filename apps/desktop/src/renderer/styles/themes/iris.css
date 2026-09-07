@@ -1,65 +1,110 @@
 /* ================================================================
-   Theme: Iris — Gradient Paper + One White Sheet + Deep Violet (#task:1965)
-   性格：**两层纸**。窗口本身是一张自上而下的两档渐变纸（黄绿 → 淡蓝灰），
-   工作区是一张内缩 8px 的圆角白纸浮在上面 —— sidebar 与 main 同在这一张纸里，
-   NavRail / titlebar / 四周水槽都不给自己的纸，直接站在渐变上。定位是"有天光的
-   亮色工作台"：整屏只有一块饱和色（紫），其余全是暖中性墨。
-
-   三条创始原则：
-   1. **两层纸，层级由"哪张纸"决定，不由明度阶梯决定**：渐变纸（chrome）→
-      白纸（内容）。白纸内部**没有 gap**，所以内部分区靠 1px hairline，
-      不靠"每块各自成卡"。这就是引入 `--pane-radius` / `--pane-shadow` 的原因
-      （见下面 Sheet 一节）。
-   2. **白纸上唯一的深浅维度是暖中性下行阶梯**：白 → `#FAF8F4`(message framed)
-      → `#F6F4F0`(elevated / chip) → `#F4F1EA`(inline code) → `#F1EEE8`(surface)。
-      白是顶端，所有强调只能**往下**走。渐变纸上的一切状态只能是**半透明墨洗**
-      （为白纸调的白/暖中性填充压到渐变上会读成一块补丁）。
-   3. **utility 不吃 accent**：hover / focus / 分隔线 / splitter / row-hover 一律
-      中性墨。唯一例外是 composer（brand-anchored 主舞台）的 focus 光。
+   Theme: Iris
    ================================================================ */
 
 [data-theme='iris'] {
+  /* Task references: prose and system activity retain distinct emphasis. */
+  --task-ref-font: initial;
+  --task-ref-weight: 500;
+  --task-ref-number-font: initial;
+  --task-ref-number-weight: initial;
+  --task-ref-number-tracking: initial;
+  --task-ref-color: var(--accent);
+  --task-ref-line-height: initial;
+  --task-ref-hover-decoration: underline;
+  --task-ref-marker: transparent;
+  --task-ref-marker-hover: transparent;
+  --task-ref-activity-marker: transparent;
+  --task-ref-activity-color: var(--text-secondary);
+  --task-ref-activity-hover-color: var(--text-on-accent);
+  --task-ref-activity-hover-bg: var(--accent);
+  --task-ref-activity-padding: 0.375rem;
+  --task-ref-activity-margin: -0.125rem;
+
+  /* App navigation chrome. */
+  --nav-rail-border-width: 0px;
+  --nav-rail-border-color: transparent;
+  --nav-rail-item-border-width: 2px;
+  --border-nav-rail-selected: transparent;
+  --border-nav-rail-hover: transparent;
+  --nav-rail-indicator-display: none;
+  --nav-rail-indicator-color: transparent;
+
+  /* Code syntax palette. */
+  --hljs-base: var(--text-island);
+  --hljs-keyword: #d73a49;
+  --hljs-string: #032f62;
+  --hljs-number: #005cc5;
+  --hljs-comment: #6a737d;
+  --hljs-meta: #6f42c1;
+  --hljs-addition: #22863a;
+  --hljs-deletion: #b31d28;
+  --hljs-selection-bg: #d5d5eb;
+  --hljs-selection-text: #1f1a12;
+
+  /* Reset optional painting slots so the default theme cannot leak into this theme. */
+  --bg-nav-rail-selected: var(--bg-selected);
+  --bg-neutral-action-hover: var(--bg-option-hover);
+  --bg-primary-action-hover: var(--bg-control-primary-hover);
+  --bg-sidebar-row-hover: var(--bg-row-hover);
+  --code-block-border-width: 1px;
+  --composer-border-color: initial;
+  --composer-border-width: initial;
+  --composer-shadow: initial;
+  --composer-shadow-focus: initial;
+  --composer-transition: initial;
+  --field-border-color: initial;
+  --field-disabled-border-color: initial;
+  --field-disabled-shadow: initial;
+  --field-shadow: initial;
+  --field-shadow-focus: initial;
+  --field-transition: initial;
+  --panel-border-width: 1px;
+  --range-cursor: initial;
+  --range-focus-color: initial;
+  --range-focus-offset: initial;
+  --range-height: initial;
+  --range-radius: initial;
+  --range-thumb-active-bg: initial;
+  --range-thumb-active-cursor: initial;
+  --range-thumb-bg: initial;
+  --range-thumb-border: initial;
+  --range-thumb-cursor: initial;
+  --range-thumb-shadow: initial;
+  --range-track-bg: initial;
+  --range-track-height: initial;
+  --text-nav-rail-selected: var(--text-on-selected);
+
   /* ── 底纸：渐变 ── */
-  --app-paper: linear-gradient(to bottom, #E6E6B6, #C4D0DA);
+  --app-paper: linear-gradient(to bottom, #e6e6b6, #c4d0da);
   --bg-app: transparent;
 
   /* ── 白纸 ── */
-  --bg-base: #FFFFFF;
+  --bg-base: #ffffff;
   /* Activity params recess: a faint neutral ink wash over the `--bg-base` pane
      (see forza6). `--bg-surface` here is a warm beige that read as too saturated
      for a quiet recess; a black alpha stays un-tinted on the white pane. */
   --activity-params-bg: oklab(0 0 0 / 0.05);
-  --bg-primary: #FFFFFF;
-  --bg-chat: #FFFFFF;
-  --bg-channels-sidebar: #FFFFFF;
-  --bg-floating: #FFFFFF;
+  --bg-primary: #ffffff;
+  --bg-chat: #ffffff;
+  --bg-channels-sidebar: #ffffff;
+  --bg-floating: #ffffff;
+  --bg-elevated: #f6f4f0;
+  --bg-surface: #f1eee8;
+  --bg-hover: #f5f2ec;
+  --bg-active: #efebe3;
 
-  /* 暖中性下行阶梯（原则 2）。色温与 `--shadow-base` (31,26,18) 同源，
-     整屏不出现冷灰。 */
-  --bg-elevated: #F6F4F0;
-  --bg-surface: #F1EEE8;
-  --bg-hover: #F5F2EC;
-  --bg-active: #EFEBE3;
-  /* message-row 的 framed（hover / saved / replying / 搜索命中）洗色。白是明度
-     阶梯的顶端，所以这一档只能**往下**走；取值卡在白与 inline code `#F4F1EA`
-     之间，三层等距。见文件末尾 `[data-message-row].border-accent`。 */
-  --iris-bg-message-framed: #FAF8F4;
-  /* Selectable-option hover preview（Proxy runtime 卡、task filter 行）——
-     与列表扫读的 `--bg-row-hover` 和已提交的 `--bg-row-selected` 是三件事。
-     走中性暖灰，不染紫（utility 不偷 accent 预算）。 */
+  --iris-bg-message-framed: #faf8f4;
   --bg-option-hover: var(--bg-hover);
-  /* NavRail active tile（`NavRail.tsx` 用 `bg-bg-selected`）。rail 站在渐变纸上
-     ⇒ 只能是墨洗，不能是白填充（原则 2 后半句）。7% 与上游 buzz 的
-     `--buzz-active-surface` 同档。 */
   --bg-selected: rgba(31, 26, 18, 0.07);
 
   /* ── 白纸的几何与抬起 ── */
   --frame-padding: 8px;
   --pane-gap: 0px;
   --card-radius: 12px;
-  --iris-shadow-sheet: 0 1px 2px rgba(var(--shadow-base), 0.06),
-    0 6px 20px rgba(var(--shadow-base), 0.07);
-  /* 纸**内部**小卡的抬起（task 卡、collection 卡 hover）——比纸本体轻两档。 */
+  --iris-shadow-sheet:
+    0 1px 2px rgba(var(--shadow-base), 0.06), 0 6px 20px rgba(var(--shadow-base), 0.07);
+
   --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
 
   /* ── Sheet：pane 级 chrome 归零（本主题独有的结构）── */
@@ -78,59 +123,37 @@
   --splitter-hover-bg: rgba(31, 26, 18, 0.16);
   --titlebar-border: transparent;
 
-  /* ── Brand / NavRail ──
-     品牌色就是 accent 本体（这一支紫本来就够文字对比度，不需要"可读版"替身）。
-     rail 在**渐变纸**上：静息是暖墨（不是浅字 —— 底是亮的），hover 提到 primary，
-     两态的底都是墨洗。 */
-  --brand-primary: #6D28C9;
-  --text-on-brand: #FFFFFF;
-  --text-nav-rail: #4E4739;
-  --text-nav-rail-hover: #1F1A12;
+  /* ── Brand / NavRail ── */
+  --brand-primary: #6d28c9;
+  --text-on-brand: #ffffff;
+  --text-nav-rail: #4e4739;
+  --text-nav-rail-hover: #1f1a12;
   --bg-nav-rail-hover: rgba(31, 26, 18, 0.06);
   --bg-nav-rail: transparent;
 
-  /* Sidebar row state —
-     hover = 5% 中性墨洗（utility）；selected = 12% 紫洗 + 墨字（identity）。
-     两态差一整档且差在"填充浓度"这一维，描边维度整族留空（见 Row-state border）。
-     `--sidebar-row-border-width` 留 1px 作水槽：三态都不位移。 */
+  /* Sidebar row state */
   --sidebar-row-border-width: 1px;
   --bg-row-selected: var(--accent-soft);
   --bg-row-hover: rgba(31, 26, 18, 0.05);
 
   /* ── Islands ── */
-  --bg-island: #F6F4F0;
-  --bg-island-deep: #F1EEE8;
-  /* Code / mermaid header strip: pure white above the warm-paper island body
-     (shiki #task:2130, choice A). */
-  --code-block-header-bg: #FFFFFF;
-  /* Diagram ground shared by the inline mermaid block and the fullscreen modal
-     (shiki #task:2130). A light theme renders mermaid's default palette on the
-     warm-paper code island. */
+  --bg-island: #f6f4f0;
+  --bg-island-deep: #f1eee8;
+  --code-block-header-bg: #ffffff;
   --mermaid-diagram-bg: var(--bg-island);
 
-  /* ── Text（暖墨阶梯，白底对比度标在后面）──
-     例外是 muted：白底是 iris 最亮的一面，只量它会放过 `--bg-hover` /
-     `--bg-elevated` 上的同一段文字（旧值 #7E756A 白底刚好 4.53:1，但在 hover
-     上只有 4.05:1、elevated 4.12:1，AA 不合格）。所以 muted 钉在**最暗**的承载面
-     上（design-new-theme §4.2，#task:1973）：hover 4.56:1、elevated 4.64:1。 */
-  --text-primary: #1F1A12; /* 17.3:1 */
-  --text-secondary: #5A5145; /* 7.8:1 */
-  --text-muted: #756D63; /* 4.56:1 on --bg-hover（最暗承载面）；白底 5.09:1 */
+  --text-primary: #1f1a12;
+  --text-secondary: #5a5145;
+  --text-muted: #756d63;
   --activity-meta: oklab(0 0 0 / 0.4);
-  --text-inverse: #FDFCFA;
-  --text-island: #1F1A12;
-  /* inline code 不吃 accent：它的身份来自等宽 + 暖洗底。一段技术消息里 code
-     span 能出现十几次，是全屏频次最高的标记之一，染紫等于全屏都在喊。 */
-  --text-inline-code: #4A4235; /* 9.9:1 on white, 9.0:1 on its own wash */
-  --bg-inline-code: #F4F1EA;
+  --text-inverse: #fdfcfa;
+  --text-island: #1f1a12;
+  --text-inline-code: #4a4235;
+
+  --bg-inline-code: #f4f1ea;
   --border-inline-code: none;
   --inline-code-radius: var(--chip-radius);
 
-  /* Task status badge — 5 状态 × {bg, text, border}。配方与 studio-light 同源
-     （薄底 + 饱和字 + 45% 边），语义也同源：todo 中性 < closed < done(绿) ≈
-     in_progress(琥珀) < in_review(紫实底，唯一"要人处理"的一档)。
-     in_review 的 1px **透明**边是高度不变式：badge 是 auto 高，`none` 会让它比
-     带边的兄弟矮 2px，同一行按状态跳高。 */
   --task-status-todo-bg: transparent;
   --task-status-todo-text: var(--text-muted);
   --task-status-todo-border: 1px solid var(--border);
@@ -147,29 +170,21 @@
   --task-status-closed-text: var(--text-muted);
   --task-status-closed-border: 1px solid var(--border-subtle);
 
-  /* Solid status signal colour (#task:1018) — 色相身份在 `-text` 上，所以
-     `-solid` 指回 `-text`；in_review 的 `-text` 是白（on-fill 前景），单独指回
-     `--accent` 本体，否则 dot 会白上画白。 */
   --task-status-todo-solid: var(--task-status-todo-text);
   --task-status-in-progress-solid: var(--task-status-in-progress-text);
   --task-status-in-review-solid: var(--accent);
   --task-status-done-solid: var(--task-status-done-text);
   --task-status-closed-solid: var(--task-status-closed-text);
 
-  /* ── Floating frame ──
-     菜单 / popover / hover-card：1px 极淡墨边 + 14px 圆角（比卡片再软一档，
-     浮层是这个主题里最圆的一族）。dialog 例外无边框，见文件末尾。 */
+  /* ── Floating frame ── */
   --floating-border: 1px solid var(--border);
   --floating-radius: 14px;
   --floating-item-radius: 8px;
 
-  /* ── Row-state border（整族留空）──
-     选中与 hover 的差异全部分摊在填充浓度上（见 Sidebar row state），描边维度
-     刻意不用：白纸上再画一圈墨框，行与行之间就没有呼吸了。 */
+  /* ── Row-state border（整族留空）── */
   --border-row-hover: transparent;
   --border-row-selected: transparent;
-  /* control 的 hover 边与 focus 边同为中性墨（原则 3）：hover→focus 是一次连续
-     动作，不能跨色族。 */
+
   --border-control-hover: rgba(31, 26, 18, 0.28);
 
   /* ── Chrome label utility ── */
@@ -177,10 +192,7 @@
   --chrome-label-tracking: 0.07em;
   --chrome-label-transform: uppercase;
 
-  /* ── Radii ──
-     整体比 studio-light 软一档（渐变 + 圆角白纸是同一种"柔"的语言）：
-     row 10 / control 8 / chip 6 / card 12 / floating 14。control 与 chip 写字面值
-     而不是 `var(--radius-*)`：control 对齐的是 Tailwind `rounded-md` 那一档。 */
+  /* ── Radii ── */
   --row-radius: 10px;
   --control-radius: 8px;
   --chip-radius: 6px;
@@ -190,7 +202,7 @@
   --select-item-radius: 6px;
   --tab-segment-radius: 6px;
   --control-border-width: 1px;
-  /* 必须显式定义（否则会从 default-theme block 漏 forza6 的 hard-cut 0 过来）。 */
+
   --profile-section-radius: var(--card-radius);
   --message-bubble-radius: var(--card-radius);
   --radius-sm: 6px;
@@ -208,61 +220,49 @@
      AA 了，但它是墨阶梯最淡的一档、不是"朝底色褪"的那支，仍不用它）。 */
   --thread-preview-text: oklab(0 0 0 / 0.6);
 
-  /* ── Primary control surface (CTA) ──
-     所有主操作（各 dialog 的确认键、Save、Composer 的 Send）。**这里吃 accent**：
-     主操作是 action 的原型，跟 accent 同源；in_review 虽然也是紫实底，但它是
-     内容流里的小 pill，不与 chrome 上的按钮在同一视觉栈里争。
-     白字 on `#6D28C9` = 7.5:1；hover 往**深**走（亮色主题的方向）。 */
-  --bg-control-primary: #6D28C9;
-  --bg-control-primary-hover: #5C1FAF;
-  --text-on-control-primary: #FFFFFF;
+  /* ── Primary control surface (CTA) ── */
+  --bg-control-primary: #6d28c9;
+  --bg-control-primary-hover: #5c1faf;
+  --text-on-control-primary: #ffffff;
 
-  /* ── Accent = Iris 紫（action / state 唯一入口）──
-     一个 token 覆盖三种承载：① 文字强调（mention / 链接 / in-prose `#task`）
-     ② 描边与小面积图形（unread、chat header 的 hero `#`）③ 实底（in_review、CTA）。
-     `--accent-soft` 12% 兼选中行洗色，`--accent-glow` 只给 composer focus。 */
-  --accent: #6D28C9;
+  /* ── Accent = Iris 紫（action / state 唯一入口）── */
+  --accent: #6d28c9;
   --accent-soft: rgba(109, 40, 201, 0.12);
-  --accent-hover: #5C1FAF;
-  --accent-glow: rgba(109, 40, 201, 0.20);
+  --accent-hover: #5c1faf;
+  --accent-glow: rgba(109, 40, 201, 0.2);
   --unread: var(--accent);
-  /* 查找高亮是**临时工具地色**（大块铺在正文下），留在荧光笔黄这个通用记忆点上，
-     深墨字；只在白纸内部出现，不与渐变纸相邻。 */
-  --search-hit-bg: #FFE9A3;
-  --search-hit-bg-active: #FFD75E;
-  --search-hit-text: #1F1A12;
 
-  /* ── Semantic ──
-     绿 = 正向终态（done）与系统 liveness；琥珀 = in progress（与 studio-light
-     同值 `#B46500`，跨主题同一段色环）；红 = destructive。三段都离紫 285° 有
-     60° 以上。 */
-  --success: #2F7043; /* 6.0:1 on white, 5.2:1 on its own soft wash */
-  --success-soft: rgba(47, 112, 67, 0.10);
-  --warning: #B46500;
-  --warning-soft: rgba(180, 101, 0, 0.10);
-  /* soft warning CALLOUT 面（delete-cascade 影响块）：干净的淡砂色，不是
-     `--warning-soft` 那种本色低透明度（铺大面积会脏）。 */
-  --warning-surface: #FDF3E2;
-  --error: #B3382C; /* 6.0:1 */
+  --search-hit-bg: #ffe9a3;
+  --search-hit-bg-active: #ffd75e;
+  --search-hit-text: #1f1a12;
+
+  /* ── Semantic ── */
+  --success: #2f7043;
+  --success-soft: rgba(47, 112, 67, 0.1);
+  --warning: #b46500;
+  --warning-soft: rgba(180, 101, 0, 0.1);
+  /* soft warning CALLOUT */
+  --warning-surface: #fdf3e2;
+  --error: #b3382c;
   --error-soft: rgba(179, 56, 44, 0.08);
 
   /* ── Borders ── */
   --border: rgba(31, 26, 18, 0.14);
   --border-subtle: rgba(31, 26, 18, 0.07);
-  --border-island: rgba(31, 26, 18, 0.10);
+  --border-island: rgba(31, 26, 18, 0.1);
   --border-focus: rgba(31, 26, 18, 0.34);
   --border-avatar: var(--border-subtle);
   --border-avatar-width: 1px;
 
   /* ── On-color foregrounds ── */
-  --text-on-accent: #FFFFFF;
-  --text-on-success: #FFFFFF;
-  --text-on-warning: #FFFFFF;
-  --text-on-error: #FFFFFF;
+  --text-on-accent: #ffffff;
+  --text-on-success: #ffffff;
+  --text-on-warning: #ffffff;
+  --text-on-error: #ffffff;
   --text-on-selected: var(--text-primary);
 
   /* ── Overlay ── */
-  --overlay-backdrop: rgba(31, 26, 18, 0.30);
+  --overlay-backdrop: rgba(31, 26, 18, 0.3);
 
   /* ── Shadows ── */
   --shadow-base: 31, 26, 18;
@@ -270,9 +270,7 @@
   --shadow-modal: 0 8px 28px -10px rgba(var(--shadow-base), 0.22);
   --shadow-button: none;
 
-  /* ── Fonts ──
-     全 sans。`--font-serif` 是跨主题 token（Tailwind `font-serif` utility 映到它、
-     全 app heading 用），本主题 sans-first ⇒ 设成 sans，别放真衬线。 */
+  /* ── Fonts ── */
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
   --font-serif: var(--font-sans);
   --font-display: var(--font-sans);
@@ -286,22 +284,14 @@
   /* ── Motion ── */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
 
-  /* ── Compat: forza6 引入的跨主题契约 token（每个主题都必须显式定义，
-     否则 forza6 → iris 切换会漏节日值过来）── */
   --accent-2: var(--accent);
   --text-on-accent-2: var(--text-on-accent);
-  --bg-structure-dark: #2A2519;
-  --text-on-structure: #FDFCFA;
-  --text-on-dark-pop: #C3A0F2;
+  --bg-structure-dark: #2a2519;
+  --text-on-structure: #fdfcfa;
+  --text-on-dark-pop: #c3a0f2;
 }
 
-/* ── 白纸：一张纸装下 sidebar + main ─────────────────────────────────
-   `[data-section-sheet]`（`App.tsx`）是 frame 里的一层包装：其余三个主题它是
-   完全透明、只带同样 gap 的直通层（逐像素无变化），iris 把它变成那张纸 ——
-   一个圆角、一个投影、`overflow: hidden` 裁掉内部 pane 的方角。
-   gap 归零**不在这条规则里**：那个声明是 inline 的，只能靠 `--pane-gap` token
-   （见上）；在这里写 `gap: 0` 赢不了 inline，是这次 review 的根因。
-   NavRail 留在包装**外面**，所以它仍站在渐变上。 */
+/* ── 白纸：一张纸装下 sidebar + main ── */
 [data-theme='iris'] [data-section-sheet] {
   background-color: var(--bg-base);
   border-radius: var(--card-radius);
@@ -331,13 +321,6 @@
   color: var(--text-on-structure);
   border-radius: var(--chip-radius);
   font-size: 11px;
-}
-
-[data-theme='iris'] nav[aria-label='App sections'] button[aria-current='page'] {
-  border-color: transparent;
-}
-[data-theme='iris'] nav[aria-label='App sections'] button:not([aria-current='page']):hover {
-  border-color: transparent;
 }
 
 [data-theme='iris'] [data-conversation-hash-icon] {

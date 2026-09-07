@@ -1,3 +1,4 @@
+import { RangeInput } from '@/components/ui/range-input';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { Download, X, ZoomIn, ZoomOut } from 'lucide-react';
@@ -60,8 +61,7 @@ const SHELL_CHROME = '7rem';
 const SHELL_MIN_WIDTH = 'min(40rem, 60vw)';
 const WELL_MIN_HEIGHT = 'min(15rem, 40vh)';
 
-const clamp = (v: number, min: number, max: number): number =>
-  Math.min(max, Math.max(min, v));
+const clamp = (v: number, min: number, max: number): number => Math.min(max, Math.max(min, v));
 
 /**
  * Image preview modal. A modal shell (elevation via `shadow-xl`) that wears
@@ -104,13 +104,7 @@ const clamp = (v: number, min: number, max: number): number =>
  * images on Electron/macOS. nativeImage decodes PNG/JPEG; an
  * undecodable format surfaces a toast rather than failing silently.
  */
-export function Lightbox({
-  open,
-  onOpenChange,
-  src,
-  alt,
-  onDownload,
-}: LightboxProps): JSX.Element {
+export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxProps): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
@@ -184,7 +178,7 @@ export function Lightbox({
         const r = shell.getBoundingClientRect();
         // First zoom step of a session wins; later steps must not re-measure a
         // box that scroll/overflow has since had a say in.
-        setFrozenBox(prev => prev ?? { w: Math.round(r.width), h: Math.round(r.height) });
+        setFrozenBox((prev) => prev ?? { w: Math.round(r.width), h: Math.round(r.height) });
       }
     } else {
       setFrozenBox(null);
@@ -292,7 +286,7 @@ export function Lightbox({
     if (busy) return;
     setBusy(true);
     try {
-      const blob = await fetch(src).then(r => r.blob());
+      const blob = await fetch(src).then((r) => r.blob());
       const bytes = new Uint8Array(await blob.arrayBuffer());
       const result = await window.silverhand.copyPngExport({ pngBytes: bytes });
       if (result.ok) {
@@ -436,21 +430,14 @@ export function Lightbox({
               >
                 <ZoomOut className="size-4" />
               </Button>
-              {/* Drag-to-zoom slider — reuses the Settings→Appearance font-size
-                  slider chrome (both the `.settings-font-size-slider` base class
-                  and the `data-settings-slider` forza6 hook) so the thumb/track
-                  read identically across themes. `step="any"` = continuous
-                  scaling; value/onChange are in percent to match the readout. */}
-              <input
-                type="range"
-                data-settings-slider
-                className="settings-font-size-slider w-28"
+              <RangeInput
+                className="w-28"
                 min={MIN_SCALE * 100}
                 max={MAX_SCALE * 100}
                 step="any"
                 value={scale * 100}
                 aria-label="Zoom level"
-                onChange={e => setZoom(Number(e.target.value) / 100)}
+                onChange={(e) => setZoom(Number(e.target.value) / 100)}
               />
               <Button
                 type="button"

@@ -1,3 +1,4 @@
+import { RangeInput } from '@/components/ui/range-input';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X, ZoomIn, ZoomOut } from 'lucide-react';
@@ -20,8 +21,7 @@ const MIN_SCALE = 1;
 const MAX_SCALE = 5;
 const STEP = 1.25;
 
-const clamp = (v: number, min: number, max: number): number =>
-  Math.min(max, Math.max(min, v));
+const clamp = (v: number, min: number, max: number): number => Math.min(max, Math.max(min, v));
 
 /**
  * Fullscreen Mermaid viewer. A read-only sibling of {@link Lightbox}
@@ -42,11 +42,7 @@ const clamp = (v: number, min: number, max: number): number =>
  * reader recognises, so a stable inspector frame reads better than one that
  * resizes per diagram.
  */
-export function MermaidLightbox({
-  open,
-  onOpenChange,
-  svg,
-}: MermaidLightboxProps): JSX.Element {
+export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProps): JSX.Element {
   const [scale, setScale] = useState(1);
   const [dragging, setDragging] = useState(false);
   const wellRef = useRef<HTMLDivElement | null>(null);
@@ -228,14 +224,6 @@ export function MermaidLightbox({
               dangerouslySetInnerHTML={{ __html: svg }}
             />
           </div>
-
-          {/* Footer = the image Lightbox's zoom triad, left-aligned. The controls
-              MUST stay inside a nested inline group: `.settings-font-size-slider`
-              sets `width:100%` (unlayered, so it beats Tailwind's `w-28`), and as
-              a direct flex child that width consumes the whole footer — a full-
-              width track that reads as a giant scrollbar. The wrapper is a
-              shrink-to-fit flex item, so the slider resolves to its `w-28`
-              intrinsic width, exactly as in the image Lightbox. */}
           <div
             data-modal-divider
             className="flex shrink-0 items-center gap-2 border-t-[length:var(--control-border-width)] border-border-subtle px-3 py-2 text-xs"
@@ -255,16 +243,14 @@ export function MermaidLightbox({
               </Button>
               {/* Same slider chrome as the image Lightbox / Settings font-size
                   slider so the thumb/track read identically across themes. */}
-              <input
-                type="range"
-                data-settings-slider
-                className="settings-font-size-slider w-28"
+              <RangeInput
+                className="w-28"
                 min={MIN_SCALE * 100}
                 max={MAX_SCALE * 100}
                 step="any"
                 value={scale * 100}
                 aria-label="Zoom level"
-                onChange={e => setZoom(Number(e.target.value) / 100)}
+                onChange={(e) => setZoom(Number(e.target.value) / 100)}
               />
               <Button
                 type="button"

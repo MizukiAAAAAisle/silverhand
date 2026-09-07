@@ -1,37 +1,9 @@
 /**
- * The app's ONE primary-CTA affordance — the single solid-filled button that
- * commits a dialog or a settings form (Create agent / Create workspace / Create
- * channel / New computer's Finish, every `Save` and `Save xxx`, Switch runtime,
- * the connect / retry gates).
- *
- * shiki 2026-07-26 (#task:1623, right after the avocado-green CTA landed): "注意
- * 如果你修改的时候,遇到这类 button 在 forza6 下没有 post sticker 以及 hover 效果的
- * 一起加上." The green fill alone is not the affordance — in forza6 a flat filled
- * rectangle next to ink-framed poster stickers reads as an unfinished control. So
- * every primary CTA now reaches the poster treatment (2px ink frame, 0 radius,
- * hard ink drop shadow that grows into a peel on hover) through ONE hook instead
- * of per-dialog re-derivation. Before this there were two divergent one-offs —
- * `[data-channel-settings-save]` and `[data-host-action='commit']` — and every
- * other CTA in the app had nothing.
- *
- * **Division of labour** (the same split as `destructiveAction()`): the consumer
- * contributes MOTION and layout, the theme paints IDENTITY on
- * `[data-primary-action]` (see `forza6-components.css`). That is why the hue is
- * NOT here: the fill comes from the Button `default` variant's
- * `--bg-control-primary` cluster, so a theme changes the CTA colour by retuning
- * three tokens and this recipe never mentions green.
- *
- * No frame is added at the consumer edge on purpose. `CONTROL_INK_BORDER`
- * resolves to `--border-focus`, which is ink only in forza6 (slack-dark maps it
- * to brand blue, studio-light to a 32%-alpha ink) — a frame that disagrees with
- * its own fill is the mistake to avoid. The CTA stays PRIMARY BY FILL everywhere;
- * forza6 adds the ink frame itself, where ink agrees with the ink drop shadow.
- *
- * The family has two members, keyed like the destructive one:
- * `data-primary-action="commit"` is the filled CTA, `"cancel"` is its neutral
- * framed peer (`primaryCancel()` below).
+ * Primary and Cancel share action motion. Themes paint their identity through
+ * the data hooks; consumers own layout. Primary fill remains separate from
+ * the neutral frame so each theme preserves the action hierarchy.
  */
-import { CONTROL_SURFACE_BUTTON } from './ControlInkBorder';
+import { CONTROL_HOVER_LIFT, CONTROL_SURFACE_BUTTON } from './ControlInkBorder';
 
 /**
  * Hover motion, animated. `translate` (not `transform`) is the property Tailwind
@@ -39,8 +11,7 @@ import { CONTROL_SURFACE_BUTTON } from './ControlInkBorder';
  * lift snaps; `box-shadow` is named here rather than in the theme rule so the
  * poster peel and the lift share one timing declaration.
  */
-const PRIMARY_ACTION_CLASS =
-  'transition-[color,background-color,border-color,box-shadow,translate] hover:-translate-y-px';
+const PRIMARY_ACTION_CLASS = `focus-outline ${CONTROL_HOVER_LIFT} hover:bg-[var(--bg-primary-action-hover,var(--bg-control-primary-hover))]`;
 
 /**
  * Spread onto the primary `Button` — `{...primaryAction()}`, or
@@ -58,9 +29,7 @@ export function primaryAction(className?: string): {
 } {
   return {
     'data-primary-action': 'commit',
-    className: className
-      ? `${PRIMARY_ACTION_CLASS} ${className}`
-      : PRIMARY_ACTION_CLASS,
+    className: className ? `${PRIMARY_ACTION_CLASS} ${className}` : PRIMARY_ACTION_CLASS,
   };
 }
 
@@ -87,8 +56,6 @@ export function primaryCancel(className?: string): {
 } {
   return {
     'data-primary-action': 'cancel',
-    className: className
-      ? `${CONTROL_SURFACE_BUTTON} ${className}`
-      : CONTROL_SURFACE_BUTTON,
+    className: className ? `${CONTROL_SURFACE_BUTTON} ${className}` : CONTROL_SURFACE_BUTTON,
   };
 }

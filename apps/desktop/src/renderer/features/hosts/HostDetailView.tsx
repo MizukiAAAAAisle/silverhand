@@ -71,14 +71,7 @@ import {
   Trash2,
   Unplug,
 } from 'lucide-react';
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type FormEvent,
-  type JSX,
-  type ReactNode,
-} from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type JSX, type ReactNode } from 'react';
 import type {
   AgentOnHostDto,
   HostAdmissionFailure,
@@ -133,16 +126,10 @@ import {
   type DeleteComputerFailure,
 } from './delete-computer-phase';
 import { computerActions } from './computer-actions';
-import {
-  destructiveAction,
-  destructiveCancel,
-} from '@/features/common/DestructiveAction';
+import { destructiveAction, destructiveCancel } from '@/features/common/DestructiveAction';
 import { primaryAction } from '@/features/common/PrimaryAction';
 import { neutralAction } from '@/features/common/ControlInkBorder';
-import {
-  HOST_ACTION_BUTTON_DANGER,
-  HOST_MODAL_BUTTON,
-} from './host-action-button';
+import { HOST_ACTION_BUTTON_DANGER } from './host-action-button';
 import {
   describeAdmissionFailure,
   describeHostStatus,
@@ -198,8 +185,7 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
   const statusQuery = useHostStatusQuery(host.id);
   const renameMutation = useUpdateHostMutation(host.id);
 
-  const refresh = () =>
-    qc.invalidateQueries({ queryKey: hostStatusKey(host.id) });
+  const refresh = () => qc.invalidateQueries({ queryKey: hostStatusKey(host.id) });
 
   const statusView = useMemo(
     () => (statusQuery.data ? describeHostStatus(statusQuery.data) : null),
@@ -207,17 +193,16 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
   );
 
   const trimmedLabel = host.display_label?.trim() ?? '';
-  const showStableName =
-    trimmedLabel.length > 0 && trimmedLabel !== host.name;
+  const showStableName = trimmedLabel.length > 0 && trimmedLabel !== host.name;
   const viewerState = viewer.data;
   const viewerId =
-    viewerState
-    && !isRegistrationRequired(viewerState)
-    && !isBackendUnreachable(viewerState) && !isUpdateRequired(viewerState)
+    viewerState &&
+    !isRegistrationRequired(viewerState) &&
+    !isBackendUnreachable(viewerState) &&
+    !isUpdateRequired(viewerState)
       ? viewerState.id
       : null;
-  const canEditHostLocalConfig =
-    viewerId !== null && host.creator_user_id === viewerId;
+  const canEditHostLocalConfig = viewerId !== null && host.creator_user_id === viewerId;
   const backendInfo = useBackendInfoSnapshot();
   const currentLocalHostId = backendInfo.data?.local_host_id ?? null;
   // The mutex among Connection / Delete / Refresh / Revoke is derived
@@ -243,7 +228,7 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
         statusLoading={statusQuery.isLoading && !statusQuery.data}
         refreshing={statusQuery.isFetching}
         onRefresh={() => void refresh()}
-        onRename={async next => {
+        onRename={async (next) => {
           await renameMutation.mutateAsync({ display_label: next });
         }}
         appManaged={host.provisioning_source === 'app_install'}
@@ -258,15 +243,13 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
           <div className="py-6">
             <Banner tone="error">
               Could not load this computer&rsquo;s status.
-              {statusQuery.error instanceof Error
-                ? ` (${statusQuery.error.message})`
-                : ''}
+              {statusQuery.error instanceof Error ? ` (${statusQuery.error.message})` : ''}
             </Banner>
           </div>
         ) : statusQuery.data ? (
           <>
-            {statusQuery.data.availability === 'disconnected'
-            && statusQuery.data.admission_failure ? (
+            {statusQuery.data.availability === 'disconnected' &&
+            statusQuery.data.admission_failure ? (
               <AdmissionFailureNotice
                 failure={statusQuery.data.admission_failure}
                 appManaged={host.provisioning_source === 'app_install'}
@@ -278,24 +261,13 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
               <OfflineSection status={statusQuery.data} />
             )}
             {actions.connection ? (
-              <ConnectionSection
-                host={host}
-                availability={statusQuery.data.availability}
-              />
+              <ConnectionSection host={host} availability={statusQuery.data.availability} />
             ) : null}
-            {actions.refresh ? (
-              <RefreshCredentialsSection host={host} />
-            ) : null}
+            {actions.refresh ? <RefreshCredentialsSection host={host} /> : null}
             {canEditHostLocalConfig ? (
-              <ProxySection
-                hostId={host.id}
-                availability={statusQuery.data.availability}
-              />
+              <ProxySection hostId={host.id} availability={statusQuery.data.availability} />
             ) : null}
-            <RegisteredAgentsSection
-              hostId={host.id}
-              agents={statusQuery.data.agents}
-            />
+            <RegisteredAgentsSection hostId={host.id} agents={statusQuery.data.agents} />
           </>
         ) : null}
         {/* Footer action group (#task:1619, shiki 2026-07-26). `Copy
@@ -428,9 +400,7 @@ function ConnectionSection({
           ) : null}
         </div>
 
-        {rotateError ? (
-          <p className="text-xs text-error">{computerCopy.rotateFailed}</p>
-        ) : null}
+        {rotateError ? <p className="text-xs text-error">{computerCopy.rotateFailed}</p> : null}
         {disconnectError ? (
           <p className="text-xs text-error">{computerCopy.disconnectFailed}</p>
         ) : null}
@@ -474,9 +444,7 @@ function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Element {
   return (
     <HostSection title={computerCopy.refreshCredentialsTitle}>
       <div className="flex flex-col gap-3">
-        <p className="text-sm text-text-muted">
-          {computerCopy.refreshCredentialsBody}
-        </p>
+        <p className="text-sm text-text-muted">{computerCopy.refreshCredentialsBody}</p>
         <div className="flex items-center gap-3">
           <Button
             size="sm"
@@ -566,7 +534,7 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
 
       <Dialog
         open={open}
-        onOpenChange={next => {
+        onOpenChange={(next) => {
           setOpen(next);
           if (!next) setFailed(false);
         }}
@@ -576,15 +544,13 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
             <DialogTitle>{computerCopy.revokeConfirmTitle}</DialogTitle>
             <DialogDescription asChild>
               <ul className="mt-1 flex list-disc flex-col gap-1 pl-4">
-                {computerCopy.revokeConfirmFacts.map(fact => (
+                {computerCopy.revokeConfirmFacts.map((fact) => (
                   <li key={fact}>{fact}</li>
                 ))}
               </ul>
             </DialogDescription>
           </DialogHeader>
-          {failed ? (
-            <p className="text-xs text-error">{computerCopy.revokeFailed}</p>
-          ) : null}
+          {failed ? <p className="text-xs text-error">{computerCopy.revokeFailed}</p> : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -606,9 +572,7 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
               ) : (
                 <ShieldOff className="size-3.5" />
               )}
-              {revoke.isPending
-                ? computerCopy.revoking
-                : computerCopy.revokeConfirm}
+              {revoke.isPending ? computerCopy.revoking : computerCopy.revokeConfirm}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -697,7 +661,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
 
       <Dialog
         open={open}
-        onOpenChange={next => {
+        onOpenChange={(next) => {
           // Reset transient state whenever the dialog fully closes so a
           // re-open always starts from a fresh read + clean confirm.
           setOpen(next);
@@ -709,17 +673,14 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
             <>
               <DialogHeader>
                 <DialogTitle>{computerCopy.deletePendingTitle}</DialogTitle>
-                <DialogDescription>
-                  {computerCopy.deletePendingBody}
-                </DialogDescription>
+                <DialogDescription>{computerCopy.deletePendingBody}</DialogDescription>
               </DialogHeader>
               <DialogFooter>
                 <Button
                   variant="outline"
                   onClick={() => setOpen(false)}
                   disabled={del.isPending}
-                  data-host-action="neutral"
-                  className={HOST_MODAL_BUTTON}
+                  {...neutralAction()}
                 >
                   {computerCopy.cancel}
                 </Button>
@@ -728,9 +689,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                   disabled={del.isPending}
                   {...primaryAction('gap-2')}
                 >
-                  {del.isPending ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : null}
+                  {del.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
                   {computerCopy.deleteRetry}
                 </Button>
               </DialogFooter>
@@ -739,17 +698,10 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
             <>
               <DialogHeader>
                 <DialogTitle>{computerCopy.deleteConfirmTitle}</DialogTitle>
-                <DialogDescription>
-                  {computerCopy.deleteImpactUnavailable}
-                </DialogDescription>
+                <DialogDescription>{computerCopy.deleteImpactUnavailable}</DialogDescription>
               </DialogHeader>
               <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => setOpen(false)}
-                  data-host-action="neutral"
-                  className={HOST_MODAL_BUTTON}
-                >
+                <Button variant="outline" onClick={() => setOpen(false)} {...neutralAction()}>
                   {computerCopy.cancel}
                 </Button>
                 <Button
@@ -757,9 +709,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                   disabled={resources.isFetching}
                   {...primaryAction('gap-2')}
                 >
-                  {resources.isFetching ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : null}
+                  {resources.isFetching ? <Loader2 className="size-3.5 animate-spin" /> : null}
                   {computerCopy.deleteRetry}
                 </Button>
               </DialogFooter>
@@ -772,9 +722,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                     replace the standard delete copy — it keeps it and adds the
                     blocks below, so the user reads the same base consequence
                     plus exactly what else goes. */}
-                <DialogDescription>
-                  {computerCopy.deleteConfirmBody}
-                </DialogDescription>
+                <DialogDescription>{computerCopy.deleteConfirmBody}</DialogDescription>
               </DialogHeader>
               {phase.kind === 'confirm' && phase.agents.length > 0 ? (
                 <CascadeImpact agents={phase.agents} />
@@ -806,9 +754,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                   ) : (
                     <Trash2 className="size-3.5" />
                   )}
-                  {del.isPending
-                    ? computerCopy.deleting
-                    : computerCopy.deleteConfirm}
+                  {del.isPending ? computerCopy.deleting : computerCopy.deleteConfirm}
                 </Button>
               </DialogFooter>
             </>
@@ -839,18 +785,14 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
  * Each row reuses `AgentAvatar` (runtime tint) so the identities read in the
  * same visual vocab as "Agents on this machine" above.
  */
-function CascadeImpact({
-  agents,
-}: {
-  agents: HostAgentResource[];
-}): JSX.Element {
+function CascadeImpact({ agents }: { agents: HostAgentResource[] }): JSX.Element {
   return (
     <div className="rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5">
       <p className="text-[length:var(--text-meta)] font-semibold uppercase tracking-wider text-warning">
         {computerCopy.deleteCascadeImpactTitle}
       </p>
       <ul className="mt-2 flex flex-col gap-1.5" aria-label="Agents to be removed">
-        {agents.map(agent => {
+        {agents.map((agent) => {
           const knownRuntime = RuntimeKindSchema.safeParse(agent.runtime);
           return (
             <li key={agent.id} className="flex items-center gap-2">
@@ -897,9 +839,7 @@ function ProxySection({
   const query = useHostProxyConfigQuery(hostId, { enabled: online });
   const saveMutation = useSaveHostProxyConfigMutation(hostId);
   const [proxyUrl, setProxyUrl] = useState('');
-  const [proxyRuntimes, setProxyRuntimes] = useState<Set<RuntimeKind>>(
-    () => new Set(),
-  );
+  const [proxyRuntimes, setProxyRuntimes] = useState<Set<RuntimeKind>>(() => new Set());
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -926,7 +866,7 @@ function ProxySection({
   const toggleRuntime = (kind: RuntimeKind, checked: boolean): void => {
     setSaved(false);
     setError(null);
-    setProxyRuntimes(prev => {
+    setProxyRuntimes((prev) => {
       const next = new Set(prev);
       if (checked) next.add(kind);
       else next.delete(kind);
@@ -935,7 +875,7 @@ function ProxySection({
   };
 
   const proxyEnabled = proxyUrl.trim().length > 0;
-  const allChecked = PROXY_RUNTIMES.every(kind => proxyRuntimes.has(kind));
+  const allChecked = PROXY_RUNTIMES.every((kind) => proxyRuntimes.has(kind));
 
   const handleSubmit = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
@@ -944,9 +884,7 @@ function ProxySection({
     // Stable canonical order driven by `PROXY_RUNTIMES` so the
     // persisted file doesn't churn just because the user clicked
     // checkboxes in a different sequence.
-    const orderedRuntimes = PROXY_RUNTIMES.filter(kind =>
-      proxyRuntimes.has(kind),
-    );
+    const orderedRuntimes = PROXY_RUNTIMES.filter((kind) => proxyRuntimes.has(kind));
     const config: HostProxyConfig = {
       proxy_url: proxyUrl.trim() ? proxyUrl.trim() : null,
       proxy_runtimes: orderedRuntimes,
@@ -1010,7 +948,7 @@ function ProxySection({
               data-host-proxy-url
               className="font-mono"
               value={proxyUrl}
-              onChange={event => {
+              onChange={(event) => {
                 setProxyUrl(event.target.value);
                 setSaved(false);
                 setError(null);
@@ -1030,22 +968,15 @@ function ProxySection({
                 onClick={() => {
                   setSaved(false);
                   setError(null);
-                  setProxyRuntimes(
-                    allChecked ? new Set() : new Set(PROXY_RUNTIMES),
-                  );
+                  setProxyRuntimes(allChecked ? new Set() : new Set(PROXY_RUNTIMES));
                 }}
               >
                 {allChecked ? 'Clear all' : 'Select all'}
               </button>
             </div>
 
-            <div
-              className={cn(
-                'grid gap-2 sm:grid-cols-2',
-                !proxyEnabled && 'opacity-55',
-              )}
-            >
-              {PROXY_RUNTIMES.map(kind => {
+            <div className={cn('grid gap-2 sm:grid-cols-2', !proxyEnabled && 'opacity-55')}>
+              {PROXY_RUNTIMES.map((kind) => {
                 const checked = proxyRuntimes.has(kind);
                 return (
                   <label
@@ -1064,9 +995,7 @@ function ProxySection({
                     data-checked={checked || undefined}
                     className={cn(
                       'flex min-w-0 items-center gap-3 rounded-[var(--control-radius)] border px-3 py-2 transition-colors',
-                      proxyEnabled
-                        ? 'cursor-pointer'
-                        : 'cursor-not-allowed',
+                      proxyEnabled ? 'cursor-pointer' : 'cursor-not-allowed',
                       checked
                         ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))]'
                         : 'border-border-subtle bg-bg-floating hover:bg-[var(--bg-option-hover)]',
@@ -1076,9 +1005,7 @@ function ProxySection({
                       type="checkbox"
                       className="sr-only"
                       checked={checked}
-                      onChange={event =>
-                        toggleRuntime(kind, event.target.checked)
-                      }
+                      onChange={(event) => toggleRuntime(kind, event.target.checked)}
                       disabled={!proxyEnabled}
                     />
                     <span
@@ -1106,9 +1033,7 @@ function ProxySection({
               })}
             </div>
             {!proxyEnabled ? (
-              <p className="text-xs text-text-muted">
-                Add a Proxy URL before selecting runtimes.
-              </p>
+              <p className="text-xs text-text-muted">Add a Proxy URL before selecting runtimes.</p>
             ) : null}
           </div>
 
@@ -1126,11 +1051,7 @@ function ProxySection({
                 </span>
               ) : null}
             </div>
-            <Button
-              type="submit"
-              disabled={saving || settingsLoading}
-              {...primaryAction('gap-2')}
-            >
+            <Button type="submit" disabled={saving || settingsLoading} {...primaryAction('gap-2')}>
               {saving ? (
                 <Loader2 className="size-3.5 animate-spin" />
               ) : (
@@ -1220,9 +1141,7 @@ function HostHero({
             aria-label="Refresh host status"
             title="Refresh"
           >
-            <RefreshCw
-              className={cn('size-[15px]', refreshing && 'animate-spin')}
-            />
+            <RefreshCw className={cn('size-[15px]', refreshing && 'animate-spin')} />
           </Button>
         </div>
         {/* Meta line: stable `host.name` (mono) ONLY when the user has
@@ -1287,13 +1206,7 @@ function HostBadge(): JSX.Element {
  * is in state X". The pill form structures it as the same kind of thing
  * IDLE / 1 RUNNING etc. are in the agent Hero.
  */
-function StatusChip({
-  label,
-  tone,
-}: {
-  label: string;
-  tone: HostStatusTone;
-}): JSX.Element {
+function StatusChip({ label, tone }: { label: string; tone: HostStatusTone }): JSX.Element {
   return (
     <span
       role="status"
@@ -1352,38 +1265,24 @@ function SystemSection({
         <SystemField label="OS">
           <span className="text-text-primary">{formatOsShort(snapshot.os)}</span>
           {snapshot.os_arch ? (
-            <span className="ml-1 text-text-muted">
-              ({snapshot.os_arch})
-            </span>
+            <span className="ml-1 text-text-muted">({snapshot.os_arch})</span>
           ) : null}
         </SystemField>
         <SystemField label="Daemon version">
-          <span className="font-mono text-text-primary">
-            {snapshot.daemon_version}
-          </span>
+          <span className="font-mono text-text-primary">{snapshot.daemon_version}</span>
         </SystemField>
         <SystemField label="Process id">
-          <span className="font-mono text-text-primary">
-            {snapshot.daemon_pid}
-          </span>
+          <span className="font-mono text-text-primary">{snapshot.daemon_pid}</span>
         </SystemField>
         <SystemField label="Uptime">
-          <span className="text-text-primary">
-            {formatUptime(snapshot.uptime_ms)}
-          </span>
+          <span className="text-text-primary">{formatUptime(snapshot.uptime_ms)}</span>
         </SystemField>
       </dl>
     </HostSection>
   );
 }
 
-function SystemField({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}): JSX.Element {
+function SystemField({ label, children }: { label: string; children: ReactNode }): JSX.Element {
   return (
     <div className="flex items-baseline gap-4">
       <dt className="w-36 shrink-0 text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-muted">
@@ -1430,10 +1329,7 @@ function AdmissionFailureNotice({
       role="status"
       className="mt-5 flex items-start gap-2.5 rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5"
     >
-      <AlertTriangle
-        className="mt-0.5 size-4 shrink-0 text-warning"
-        aria-hidden
-      />
+      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
       <p className="min-w-0 flex-1 text-sm text-text-primary">
         {describeAdmissionFailure(failure, { appManaged })}
       </p>
@@ -1455,8 +1351,7 @@ function OfflineSection({
   return (
     <HostSection title="System">
       <Banner tone={view.tone}>
-        <span className="font-medium">{view.label}.</span>{' '}
-        {view.detail}
+        <span className="font-medium">{view.label}.</span> {view.detail}
       </Banner>
     </HostSection>
   );
@@ -1486,7 +1381,7 @@ function RegisteredAgentsSection({
   // instead of the runtime tint fallback. Memoize the source list so
   // the batch hook's cache key stays stable across renders.
   const avatarSources = useMemo(
-    () => agents.map(a => ({ id: a.agent_id, avatar_url: a.avatar_url })),
+    () => agents.map((a) => ({ id: a.agent_id, avatar_url: a.avatar_url })),
     [agents],
   );
   const avatarUrls = useAgentAvatarObjectUrls(avatarSources);
@@ -1500,15 +1395,10 @@ function RegisteredAgentsSection({
       }
     >
       {agents.length === 0 ? (
-        <p className="text-sm text-text-muted">
-          No agents are registered on this computer yet.
-        </p>
+        <p className="text-sm text-text-muted">No agents are registered on this computer yet.</p>
       ) : (
-        <ul
-          className="flex flex-col gap-2"
-          aria-label="Agents on this machine"
-        >
-          {agents.map(agent => {
+        <ul className="flex flex-col gap-2" aria-label="Agents on this machine">
+          {agents.map((agent) => {
             const live = liveOnlineByHost.get(agent.agent_id);
             const online: 'online' | 'offline' =
               live === undefined ? agent.online : live ? 'online' : 'offline';
@@ -1662,11 +1552,7 @@ function AgentCard({
  * stay quiet on hover/sweep and the green dot does the at-a-glance
  * signaling (shiki dogfood `CEq57Kisu3w2d-Pl`: "色彩使用注意主题搭配").
  */
-function AgentStatusPip({
-  online,
-}: {
-  online: 'online' | 'offline';
-}): JSX.Element {
+function AgentStatusPip({ online }: { online: 'online' | 'offline' }): JSX.Element {
   return (
     <span
       role="status"
@@ -1697,19 +1583,10 @@ function SectionSkeleton({ label }: { label: string }): JSX.Element {
   );
 }
 
-function Banner({
-  tone,
-  children,
-}: {
-  tone: HostStatusTone;
-  children: ReactNode;
-}): JSX.Element {
+function Banner({ tone, children }: { tone: HostStatusTone; children: ReactNode }): JSX.Element {
   return (
     <div
-      className={cn(
-        'border bg-bg-floating px-3 py-2 text-sm',
-        TONE_BANNER_CLASS[tone],
-      )}
+      className={cn('border bg-bg-floating px-3 py-2 text-sm', TONE_BANNER_CLASS[tone])}
       role="status"
     >
       {children}

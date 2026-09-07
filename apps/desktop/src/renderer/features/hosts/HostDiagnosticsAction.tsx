@@ -11,13 +11,9 @@ import {
 } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/lib/api';
-import { HOST_ACTION_BUTTON } from './host-action-button';
+import { neutralAction } from '@/features/common/ControlInkBorder';
 import { computerCopy } from './computer-copy';
-import {
-  useBackendInfoSnapshot,
-  useHostStatusQuery,
-  type BackendInfoSnapshot,
-} from './hooks';
+import { useBackendInfoSnapshot, useHostStatusQuery, type BackendInfoSnapshot } from './hooks';
 
 /**
  * #task:1445 — the manual "Copy diagnostics" affordance for a computer.
@@ -79,12 +75,7 @@ export function HostDiagnosticsAction({ host }: { host: HostDto }): JSX.Element 
   };
 
   return (
-    <Button
-      variant="outline"
-      onClick={() => void handleCopy()}
-      data-host-action="neutral"
-      className={`gap-2 ${HOST_ACTION_BUTTON}`}
-    >
+    <Button variant="outline" onClick={() => void handleCopy()} {...neutralAction('gap-2 w-full')}>
       {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
       {copied ? computerCopy.copied : computerCopy.copyDiagnostics}
     </Button>
@@ -119,7 +110,7 @@ type DiagnosticsStatusInput = NonNullable<HostDiagnosticsInput['status']>;
 export function toStatusInput(data: HostStatusResponse): DiagnosticsStatusInput {
   // Agents: registration view, safe subset only (drop agent_id / display_name
   // / avatar_url; keep handle / runtime / online).
-  const agents = data.agents.map(agent => ({
+  const agents = data.agents.map((agent) => ({
     handle: agent.handle,
     runtime: agent.runtime,
     online: agent.online,
@@ -155,9 +146,7 @@ export function toStatusInput(data: HostStatusResponse): DiagnosticsStatusInput 
   };
 }
 
-function toAppInput(
-  info: BackendInfoSnapshot | undefined,
-): HostDiagnosticsInput['app'] {
+function toAppInput(info: BackendInfoSnapshot | undefined): HostDiagnosticsInput['app'] {
   if (!info) return null;
   return {
     server_url: info.url,
@@ -180,9 +169,7 @@ function toFetchStatus(query: {
  * has no field for a raw message, so this is the only error shape that can be
  * assigned.
  */
-export function toErrorKind(
-  error: unknown,
-): HostDiagnosticsFetchErrorKind | undefined {
+export function toErrorKind(error: unknown): HostDiagnosticsFetchErrorKind | undefined {
   if (!error) return undefined;
   if (error instanceof ApiError) {
     if (error.kind === 'backend_unreachable' || error.status === 0) {

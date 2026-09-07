@@ -1,20 +1,48 @@
 /* ================================================================
-   Theme: Forza Horizon 6 — Festival Racing
-   Cool teal frame + hot magenta brand + acid lime accent + black
-   structural layer + fluorescent yellow metadata. See
-   docs/design-new-theme.md.
-
-   Personality (matches design-new-theme §4.1):
-   - Temperature: cool teal base + warm fluorescent accents (controlled clash).
-   - Accent volume: loud. Constraint is COVERAGE area, not per-pixel saturation;
-     chat read area stays cool-neutral white so long-stay reading isn't punished.
-   - Border strategy: color-block (almost no 1px hairlines). Separation comes
-     from saturation differences and the 8px frame gap, not strokes.
-   Default theme — also serves as :root so first paint has tokens.
+   Theme: Forza Horizon 6
    ================================================================ */
 
 :root,
 [data-theme='forza6'] {
+  /* Task references: prose and system activity retain distinct emphasis. */
+  --task-ref-font: var(--appearance-prose-font, var(--font-sans));
+  --task-ref-weight: 400;
+  --task-ref-number-font: var(--font-display);
+  --task-ref-number-weight: 700;
+  --task-ref-number-tracking: 0.01em;
+  --task-ref-color: var(--forza6-ink);
+  --task-ref-line-height: 1.24;
+  --task-ref-hover-decoration: none;
+  --task-ref-marker: color-mix(in srgb, var(--forza6-task-gold) 66%, transparent);
+  --task-ref-marker-hover: var(--forza6-task-gold);
+  --task-ref-activity-marker: var(--forza6-task-gold);
+  --task-ref-activity-color: var(--text-muted);
+  --task-ref-activity-hover-color: var(--forza6-ink);
+  --task-ref-activity-hover-bg: transparent;
+  --task-ref-activity-padding: 0;
+  --task-ref-activity-margin: 0;
+
+  /* App navigation chrome. */
+  --nav-rail-border-width: var(--panel-border-width);
+  --nav-rail-border-color: var(--forza6-ink);
+  --nav-rail-item-border-width: 2px;
+  --border-nav-rail-selected: var(--forza6-ink);
+  --border-nav-rail-hover: var(--forza6-ink);
+  --nav-rail-indicator-display: block;
+  --nav-rail-indicator-color: var(--bg-structure-dark);
+
+  /* Code syntax palette. */
+  --hljs-base: var(--text-island);
+  --hljs-keyword: var(--forza6-lime);
+  --hljs-string: #ffd7e5;
+  --hljs-number: var(--forza6-cyan);
+  --hljs-comment: rgba(255, 255, 255, 0.45);
+  --hljs-meta: #9d97ff;
+  --hljs-addition: var(--forza6-lime);
+  --hljs-deletion: #ff6f8c;
+  --hljs-selection-bg: #3b36c9;
+  --hljs-selection-text: #ffffff;
+
   /* ════════════════════════════════════════════════════════════════
      L1 — RAW PALETTE (forza6 refactor #task:788, P1)
      The ONLY place a forza6 brand/festival hex literal is allowed to
@@ -25,39 +53,39 @@
      §12.5 — a scoped carrier bundle with no matching L2 semantic token
      (the sidebar `--forza6-carrier-*` re-derivation). To restyle a hue,
      edit it here once. See docs/design-new-theme.md §12.5 token model.
-     (The `--forza6-syntax-*` / `--forza6-indigo-*` families further down
+     (The `--hljs-*` / `--forza6-indigo-*` families further down
      are already theme-private raws for the code-island sub-system.)
      ════════════════════════════════════════════════════════════════ */
-  --forza6-pink: #FF2C7A;            /* brand hot magenta */
-  --forza6-pink-deep: #B3186A;       /* AA-on-light foreground magenta (--accent) */
-  --forza6-lime: #D4F523;            /* acid lime — selection / inline-code / keyword */
-  --forza6-lime-pale: #E6F68A;       /* pale-lime hover / selected-preview ground (P2) */
-  --forza6-lime-deep: #3F7A1B;       /* AA deep lime — success / done */
-  --forza6-cyan: #22B7E0;            /* electric cyan — accent-2 / in_progress / number */
-  --forza6-yellow: #FFEB00;
+  --forza6-pink: #ff2c7a; /* brand hot magenta */
+  --forza6-pink-deep: #b3186a; /* AA-on-light foreground magenta (--accent) */
+  --forza6-lime: #d4f523; /* acid lime — selection / inline-code / keyword */
+  --forza6-lime-pale: #e6f68a; /* pale-lime hover / selected-preview ground (P2) */
+  --forza6-lime-deep: #3f7a1b; /* AA deep lime — success / done */
+  --forza6-cyan: #22b7e0; /* electric cyan — accent-2 / in_progress / number */
+  --forza6-yellow: #ffeb00;
   --forza6-task-gold: #ffd440;
-  --forza6-orange: #FF7A1A;
-  --forza6-ink: #0A0A0A;             /* poster near-black — ink / poster border / structure */
-  --forza6-code-island: #07111F;     /* code-island ground */
+  --forza6-orange: #ff7a1a;
+  --forza6-ink: #0a0a0a; /* poster near-black — ink / poster border / structure */
+  --forza6-code-island: #07111f; /* code-island ground */
   --forza6-code-deep: color-mix(in srgb, var(--forza6-code-island) 70%, #000);
-  --forza6-poster-teal: #329E86;     /* chrome 主色 — saturated mid-teal poster ground */
-  --forza6-poster-teal-deep: #23545E;
-  --forza6-paper: #FAFBF6;           /* poster paper white — NavRail bg (v6.4) */
-  --forza6-carrier-channels: #F6F7F1;/* list-pane carrier — paper −4 */
+  --forza6-poster-teal: #329e86; /* chrome 主色 — saturated mid-teal poster ground */
+  --forza6-poster-teal-deep: #23545e;
+  --forza6-paper: #fafbf6; /* poster paper white — NavRail bg (v6.4) */
+  --forza6-carrier-channels: #f6f7f1; /* list-pane carrier — paper −4 */
   /* ── Backgrounds (cool-neutral ladder for chat read area) ── */
   /*--bg-base: #F7F8F6;*/
-  --bg-base: #FFFFFF;
+  --bg-base: #ffffff;
 
   --activity-params-bg: oklab(0 0 0 / 0.05);
-  --bg-primary: #ECEEEB;
-  --bg-elevated: #E5E8E4;
-  --bg-surface: #DDE0DC;
-  --bg-hover: #DAE0DA;
-  --bg-active: #C9D1C9;
+  --bg-primary: #eceeeb;
+  --bg-elevated: #e5e8e4;
+  --bg-surface: #dde0dc;
+  --bg-hover: #dae0da;
+  --bg-active: #c9d1c9;
   --bg-option-hover: var(--forza6-lime-pale);
   --bg-selected: var(--brand-primary);
-  --bg-floating: #FFFFFF;
-  --bg-chat: #FFFFFF;
+  --bg-floating: #ffffff;
+  --bg-chat: #ffffff;
   --bg-app: var(--forza6-poster-teal);
   --frame-padding: 4px;
   --pane-gap: 4px;
@@ -82,7 +110,11 @@
   --task-num: var(--brand-primary);
   --text-nav-rail: var(--forza6-ink);
   --text-nav-rail-hover: var(--forza6-ink);
-  --bg-nav-rail-hover: rgba(0, 0, 0, 0.06);
+  --bg-nav-rail-hover: var(--forza6-lime-pale);
+  --bg-nav-rail-selected: var(--forza6-lime);
+  --text-nav-rail-selected: var(--forza6-ink);
+  --bg-sidebar-row-hover: color-mix(in srgb, var(--forza6-lime) 28%, var(--forza6-paper));
+  --bg-neutral-action-hover: var(--bg-floating);
   --sidebar-row-border-width: 2px;
   --bg-row-selected: var(--forza6-lime);
   --bg-row-hover: color-mix(in oklab, var(--brand-primary) 22%, var(--bg-channels-sidebar));
@@ -97,24 +129,24 @@
      island a source snippet uses (shiki #task:2130). Consumed by the inline
      `.mermaid-block__viewport` and the fullscreen modal well; the code SOURCE
      view keeps the navy island. */
-  --mermaid-diagram-bg: #FFFFFF;
+  --mermaid-diagram-bg: #ffffff;
 
   /* ── Text (cool-neutral on light, light on dark island) ── */
-  --text-primary: #0F1F1D;
-  --text-secondary: #3B4946;
+  --text-primary: #0f1f1d;
+  --text-secondary: #3b4946;
   --text-muted: #566663;
   /* Agent Activity time + tool params: a dim tier below the tool name so the
      row reads name-first. Light themes use shiki's exact black alpha. */
   --activity-meta: oklab(0 0 0 / 0.4);
-  --text-inverse: #F7F8F6;
-  --text-island: #E8F1EF;
+  --text-inverse: #f7f8f6;
+  --text-island: #e8f1ef;
   --text-inline-code: var(--forza6-ink);
   --bg-inline-code: oklab(0 0 0 / 0.05);
   --border-inline-code: none;
   --inline-code-radius: 0;
 
-  --task-status-todo-bg: #5A6B67;
-  --task-status-todo-text: #F7F8F6;
+  --task-status-todo-bg: #5a6b67;
+  --task-status-todo-text: #f7f8f6;
   --task-status-todo-border: none;
   --task-status-in-progress-bg: var(--forza6-cyan);
   --task-status-in-progress-text: var(--forza6-ink);
@@ -123,7 +155,7 @@
   --task-status-in-review-text: var(--forza6-ink);
   --task-status-in-review-border: none;
   --task-status-done-bg: var(--forza6-lime-deep);
-  --task-status-done-text: #F7F8F6;
+  --task-status-done-text: #f7f8f6;
   --task-status-done-border: none;
   --task-status-todo-solid: var(--task-status-todo-bg);
   --task-status-in-progress-solid: var(--task-status-in-progress-bg);
@@ -161,71 +193,89 @@
 
   --message-bubble-radius: 0;
   --control-border-width: 2px;
+  --panel-border-width: 2px;
+  --code-block-border-width: 2px;
+  --code-block-header-bg: #ffffff;
+
+  --field-border-color: var(--forza6-ink);
+  --field-shadow: var(--forza6-poster-shadow);
+  --field-shadow-focus: var(--forza6-poster-shadow-xl);
+  --field-transition: box-shadow 150ms ease, border-color 150ms ease;
+  --field-disabled-border-color: var(--border);
+  --field-disabled-shadow: none;
+  --composer-border-width: var(--control-border-width);
+  --composer-border-color: var(--field-border-color);
+  --composer-shadow: var(--field-shadow);
+  --composer-shadow-focus: var(--field-shadow-focus);
+  --composer-transition: var(--field-transition);
+
+  --range-height: 18px;
+  --range-cursor: pointer;
+  --range-track-height: 4px;
+  --range-track-bg: var(--forza6-ink);
+  --range-radius: var(--control-radius);
+  --range-thumb-bg: var(--forza6-yellow);
+  --range-thumb-border: var(--forza6-ink);
+  --range-thumb-shadow: var(--forza6-poster-shadow-sm);
+  --range-thumb-active-bg: var(--forza6-pink);
+  --range-thumb-cursor: grab;
+  --range-thumb-active-cursor: grabbing;
+  --range-focus-color: var(--accent);
+  --range-focus-offset: 1px;
   --select-content-radius: 0;
   --select-item-radius: 0;
   --tab-segment-radius: 0;
-  --bg-control-primary: #9CBF5C;
-  --bg-control-primary-hover: #8CAC53;
+  --bg-control-primary: #9cbf5c;
+  --bg-control-primary-hover: #8cac53;
+  --bg-primary-action-hover: var(--bg-control-primary);
   --text-on-control-primary: var(--forza6-ink);
 
-  --forza6-syntax-base: #E8F1EF;
-  --forza6-syntax-keyword: var(--forza6-lime);
-  --forza6-syntax-string: #FFD7E5;
-  --forza6-syntax-number: var(--forza6-cyan);
-  --forza6-syntax-comment: rgba(255, 255, 255, 0.45);
-  --forza6-syntax-addition: var(--forza6-lime);
-  --forza6-syntax-deletion: #FF6F8C;
-
-  --forza6-indigo-slab: #2D2AB8;
-  --forza6-indigo-meta: #9D97FF;
-  --forza6-indigo-select: #3B36C9;
+  --forza6-indigo-slab: #2d2ab8;
 
   --task-status-closed-bg: var(--forza6-indigo-slab);
-  --task-status-closed-text: #FFFFFF;
+  --task-status-closed-text: #ffffff;
   --task-status-closed-border: none;
 
   --accent: var(--forza6-pink-deep);
   --accent-soft: rgba(179, 24, 106, 0.14);
-  --accent-hover: #8E0F50;
-  --accent-glow: rgba(179, 24, 106, 0.30);
+  --accent-hover: #8e0f50;
+  --accent-glow: rgba(179, 24, 106, 0.3);
 
   --unread: var(--accent);
 
-  --search-hit-bg: #FFF3A6;
-  --search-hit-bg-active: #FFDD5C;
+  --search-hit-bg: #fff3a6;
+  --search-hit-bg-active: #ffdd5c;
   --search-hit-text: var(--forza6-ink);
 
   --success: var(--forza6-lime-deep);
   --success-soft: rgba(63, 122, 27, 0.16);
 
-  --warning: #8A5A00;
+  --warning: #8a5a00;
   --warning-soft: rgba(138, 90, 0, 0.16);
-  --warning-surface: #FDF3C2;
+  --warning-surface: #fdf3c2;
 
-  --error: #C8003C;
+  --error: #c8003c;
   --error-soft: rgba(200, 0, 60, 0.16);
 
   --border: rgba(15, 31, 29, 0.14);
-  --border-subtle: rgba(15, 31, 29, 0.10);
-  --border-island: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(15, 31, 29, 0.1);
+  --border-island: var(--bg-island);
   --border-focus: var(--forza6-ink);
   --border-avatar: var(--forza6-ink);
   --border-avatar-width: 2px;
 
-  --text-on-accent: #FFFFFF;        /* deep magenta + white ≈ 6.45:1 AA */
-  --text-on-success: #FFFFFF;       /* deep lime + white ≈ 5.9:1 AA */
-  --text-on-warning: #FFFFFF;       /* deep amber + white ≈ 5.93:1 AA */
-  --text-on-error: #FFFFFF;         /* deep red + white ≈ 5.9:1 AA */
-  --text-on-selected: var(--forza6-ink);  /* selected = festive lime → near-black 14.8:1 AAA */
+  --text-on-accent: #ffffff; /* deep magenta + white ≈ 6.45:1 AA */
+  --text-on-success: #ffffff; /* deep lime + white ≈ 5.9:1 AA */
+  --text-on-warning: #ffffff; /* deep amber + white ≈ 5.93:1 AA */
+  --text-on-error: #ffffff; /* deep red + white ≈ 5.9:1 AA */
+  --text-on-selected: var(--forza6-ink); /* selected = festive lime → near-black 14.8:1 AAA */
 
   /* ── Overlay / shadow ── */
   --overlay-backdrop: rgba(8, 30, 27, 0.45);
   --shadow-base: 14, 24, 22;
   --shadow-popover:
-    0 10px 30px -8px rgba(var(--shadow-base), 0.28),
-    0 2px 6px -2px rgba(var(--shadow-base), 0.10);
-  --shadow-modal:
-    0 25px 50px -12px rgba(var(--shadow-base), 0.34);
+    0 10px 30px -8px rgba(var(--shadow-base), 0.28), 0 2px 6px -2px rgba(var(--shadow-base), 0.1);
+  --shadow-modal: 0 25px 50px -12px rgba(var(--shadow-base), 0.34);
   --shadow-button: 0 1px 2px 0 rgba(var(--shadow-base), 0.06);
 
   /* ── Radii — tighter than warm; Forza tiles read as hard-cut blocks ── */
@@ -234,8 +284,11 @@
   --radius-lg: 10px;
   --radius-xl: 14px;
 
-  --font-display: 'Rajdhani', 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
-  --font-sans: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  --font-display:
+    'Rajdhani', 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
+  --font-sans:
+    'Space Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue',
+    'PingFang SC', 'Hiragino Sans GB', sans-serif;
   --font-serif: var(--font-sans);
   --font-mono: 'Space Mono', ui-monospace, monospace;
 
@@ -270,7 +323,7 @@
        3px NavRail dock notch.
      NEVER use as decoration on chat-read surface. */
   --bg-structure-dark: var(--forza6-ink);
-  --text-on-structure: #FFFFFF;
+  --text-on-structure: #ffffff;
 
   /* `--text-on-dark-pop` — fluorescent yellow metadata.
      Roles (review-locked):

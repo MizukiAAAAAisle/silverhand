@@ -1,93 +1,140 @@
 /* ================================================================
-   Theme: Studio Light — Cool Neutral Chrome & Studio Blue Accent (#task:1656)
-   性格：冷中性 chrome + **纯白工作面** + 一个 accent 管 action/state +
-   一个独立的绿只管正向终态与 liveness。定位是"安静的亮色工作台"—— 长时间盯着
-   干活的那一档。
-
-   三条创始原则：
-   1. **明度阶梯做层级，颜色不参与结构**：托盘 `#DEE3EB` → 侧栏 `#F2F5F9` /
-      `#F7F9FC` → chat 纯 `#FFFFFF`，rail 深板岩 `#1B2030`。选中 = 从冷灰
-      托盘里浮起来的一张白纸。分隔一律 1px hairline，无纹理、无衬线。
-   2. **两个语义色各管一件事**：Studio Blue `#2F5AD0` = action/state（选中左条 /
-      rail active / unread / mention / in-prose `#task` / in_review / focus /
-      主操作）；绿 `#0A7256` = **正向终态**（`done`）**与系统 liveness**
-      （connected / VERIFIED / 还活着）。绿绝不进 action/state，否则「这是要我
-      做点什么，还是已经好了」读不清。
-      **修订（shiki 2026-08-08 #task:1906）**：这条原先写的是"绿 = agent 身份
-      （作者名）"，并据此让 `done` 退成中性墨。作者名那半从来没有落地——没有
-      任何主题在 `data-author-kind` 上上色——而中性的 `done` 在包里"看着和
-      todo / closed 一样"。所以绿的语义收敛成上面那句，`done` 吃绿。
-   3. **utility 不吃 accent**：hover / focus / 分隔线 / splitter 一律中性墨。
-      唯一例外是 composer（brand-anchored 主舞台）的 focus 光。
+   Theme: Studio Light
    ================================================================ */
 
 [data-theme='studio-light'] {
-  /* ── Backgrounds ──
-     明度阶梯（原则 1）：`--bg-app`(#DEE3EB 托盘) < 两个侧栏 <
-     `--bg-chat`(#FFFFFF)。冷中性一路，色温跟 `--shadow-base` (17,23,37) 同源，
-     整屏不出现暖灰。 */
-  --bg-base: #F2F5F9;
+  /* Task references: prose and system activity retain distinct emphasis. */
+  --task-ref-font: initial;
+  --task-ref-weight: 500;
+  --task-ref-number-font: initial;
+  --task-ref-number-weight: initial;
+  --task-ref-number-tracking: initial;
+  --task-ref-color: var(--accent);
+  --task-ref-line-height: initial;
+  --task-ref-hover-decoration: underline;
+  --task-ref-marker: transparent;
+  --task-ref-marker-hover: transparent;
+  --task-ref-activity-marker: transparent;
+  --task-ref-activity-color: var(--text-secondary);
+  --task-ref-activity-hover-color: var(--text-on-accent);
+  --task-ref-activity-hover-bg: var(--accent);
+  --task-ref-activity-padding: 0.375rem;
+  --task-ref-activity-margin: -0.125rem;
+
+  /* App navigation chrome. */
+  --nav-rail-border-width: 0px;
+  --nav-rail-border-color: transparent;
+  --nav-rail-item-border-width: 2px;
+  --border-nav-rail-selected: transparent;
+  --border-nav-rail-hover: transparent;
+  --nav-rail-indicator-display: none;
+  --nav-rail-indicator-color: transparent;
+
+  /* Code syntax palette. */
+  --hljs-base: var(--text-island);
+  --hljs-keyword: #d73a49;
+  --hljs-string: #032f62;
+  --hljs-number: #005cc5;
+  --hljs-comment: #6a737d;
+  --hljs-meta: #6f42c1;
+  --hljs-addition: #22863a;
+  --hljs-deletion: #b31d28;
+  --hljs-selection-bg: #c8def5;
+  --hljs-selection-text: #1b2233;
+
+  /* Reset optional painting slots so the default theme cannot leak into this theme. */
+  --bg-nav-rail-selected: var(--studio-light-brand-bar);
+  --bg-neutral-action-hover: var(--bg-option-hover);
+  --bg-primary-action-hover: var(--bg-control-primary-hover);
+  --bg-sidebar-row-hover: var(--bg-row-hover);
+  --code-block-border-width: 1px;
+  --composer-border-color: initial;
+  --composer-border-width: initial;
+  --composer-shadow: initial;
+  --composer-shadow-focus: initial;
+  --composer-transition: initial;
+  --field-border-color: initial;
+  --field-disabled-border-color: initial;
+  --field-disabled-shadow: initial;
+  --field-shadow: initial;
+  --field-shadow-focus: initial;
+  --field-transition: initial;
+  --panel-border-width: 1px;
+  --range-cursor: initial;
+  --range-focus-color: initial;
+  --range-focus-offset: initial;
+  --range-height: initial;
+  --range-radius: initial;
+  --range-thumb-active-bg: initial;
+  --range-thumb-active-cursor: initial;
+  --range-thumb-bg: initial;
+  --range-thumb-border: initial;
+  --range-thumb-cursor: initial;
+  --range-thumb-shadow: initial;
+  --range-track-bg: initial;
+  --range-track-height: initial;
+  --text-nav-rail-selected: var(--text-on-brand);
+
+  /* ── Backgrounds ── */
+  --bg-base: #f2f5f9;
   --activity-params-bg: oklab(0 0 0 / 0.05);
-  --bg-primary: #EDF1F7;
-  --bg-elevated: #E6EBF3;
-  --bg-surface: #DEE3EB;
-  --bg-hover: #E9EEF6;
-  --bg-active: #DEE3EB;
+  --bg-primary: #edf1f7;
+  --bg-elevated: #e6ebf3;
+  --bg-surface: #dee3eb;
+  --bg-hover: #e9eef6;
+  --bg-active: #dee3eb;
   --bg-option-hover: var(--bg-hover);
-  --bg-selected: #FFFFFF;
-  --bg-floating: #FFFFFF;
-  --bg-chat: #FFFFFF;
-  /* message-row 的 framed（hover / saved / replying / 搜索命中）洗色。白是
-     明度阶梯的顶端，所以这一档只能**往下**走；取值卡在白与 inline-code
-     `#ECF1F7` 之间，三层等距。见文件末尾 `[data-message-row].border-accent`。 */
-  --studio-light-bg-message-framed: #F5F8FC;
+  --bg-selected: #ffffff;
+  --bg-floating: #ffffff;
+  --bg-chat: #ffffff;
+  /* message-row 的 framed（hover / saved / replying / 搜索命中）洗色 */
+  --studio-light-bg-message-framed: #f5f8fc;
 
   /* ── Card-style frame ── */
-  --bg-app: #DEE3EB;
+  --bg-app: #dee3eb;
   --frame-padding: 8px;
 
   --pane-gap: 8px;
   --card-radius: 8px;
   --card-shadow: 0 1px 3px rgba(var(--shadow-base), 0.08);
   --splitter-bg: transparent;
-  /* Drag handle hover / active tint. */
+
   --splitter-hover-bg: rgba(17, 23, 37, 0.28);
   --titlebar-border: transparent;
 
-  /* ── Brand identity ── */
-  --brand-primary: #2F5AD0;
-  --studio-light-brand-bar: #2F5AD0;
-  --text-on-brand: #FFFFFF;
-  /* NavRail 是深板岩 chrome：静息字色是冷灰降一档，hover 提到近白。 */
-  --text-nav-rail: #98A1B5;
-  --text-nav-rail-hover: #F7F9FC;
+  --brand-primary: #2f5ad0;
+  --studio-light-brand-bar: #2f5ad0;
+  --text-on-brand: #ffffff;
+
+  --text-nav-rail: #98a1b5;
+  --text-nav-rail-hover: #f7f9fc;
   --bg-nav-rail-hover: rgba(247, 249, 252, 0.08);
 
   /* Sidebar row state — */
   --sidebar-row-border-width: 1px;
-  --bg-row-selected: #FFFFFF;
-  --bg-row-hover: #E9EEF6;
+  --bg-row-selected: #ffffff;
+  --bg-row-hover: #e9eef6;
 
   /* ── Nav rail / sidebar ── */
-  --bg-nav-rail: #1B2030;
-  --bg-channels-sidebar: #F2F5F9;
+  --bg-nav-rail: #1b2030;
+  --bg-channels-sidebar: #f2f5f9;
 
   /* ── Islands ── */
-  --bg-island: #E9EEF6;
-  --bg-island-deep: #DDE3EC;
-  --code-block-header-bg: #FFFFFF;
+  --bg-island: #e9eef6;
+  --bg-island-deep: #dde3ec;
+  --code-block-header-bg: #ffffff;
   --mermaid-diagram-bg: var(--bg-island);
 
   /* ── Text ── */
   --text-primary: #111725;
   --text-secondary: #495064;
-  --text-muted: #616A7F;
+  --text-muted: #616a7f;
   --activity-meta: oklab(0 0 0 / 0.4);
-  --text-inverse: #F7F9FC;
-  --text-island: #1B2233;
-  --text-inline-code: #39415A;
+  --text-inverse: #f7f9fc;
+  --text-island: #1b2233;
+  --text-inline-code: #39415a;
 
-  --bg-inline-code: #ECF1F7;
+  --bg-inline-code: #ecf1f7;
   --border-inline-code: none;
   --inline-code-radius: var(--radius-sm);
 
@@ -120,7 +167,7 @@
   --border-row-hover: color-mix(in oklab, var(--text-primary) 26%, transparent);
   --border-row-selected: color-mix(in oklab, var(--text-primary) 26%, transparent);
 
-  /* ── Control hover border (#task:912 review round 3) ── */
+  /* ── Control hover border ── */
   --border-control-hover: color-mix(in oklab, var(--text-primary) 26%, transparent);
 
   /* ── Chrome label utility  ── */
@@ -156,42 +203,42 @@
   --select-item-radius: 4px;
   --tab-segment-radius: 4px;
 
-  --bg-control-primary: #2F5AD0;
-  --bg-control-primary-hover: #2549B4;
-  --text-on-control-primary: #FFFFFF;
+  --bg-control-primary: #2f5ad0;
+  --bg-control-primary-hover: #2549b4;
+  --text-on-control-primary: #ffffff;
 
-  --accent: #2F5AD0;
-  --accent-soft: rgba(47, 90, 208, 0.10);
-  --accent-hover: #2549B4;
+  --accent: #2f5ad0;
+  --accent-soft: rgba(47, 90, 208, 0.1);
+  --accent-hover: #2549b4;
   --accent-glow: rgba(47, 90, 208, 0.28);
 
   --unread: var(--accent);
 
-  --search-hit-bg: #FFE9A3;
-  --search-hit-bg-active: #FFD75E;
+  --search-hit-bg: #ffe9a3;
+  --search-hit-bg-active: #ffd75e;
   --search-hit-text: #111725;
 
-  --success: #0A7256;
+  --success: #0a7256;
   --success-soft: rgba(10, 114, 86, 0.09);
-  --warning: #B46500;
-  --warning-soft: rgba(180, 101, 0, 0.10);
+  --warning: #b46500;
+  --warning-soft: rgba(180, 101, 0, 0.1);
 
-  --warning-surface: #FDF0DC;
-  --error: #C0362C;
+  --warning-surface: #fdf0dc;
+  --error: #c0362c;
   --error-soft: rgba(192, 54, 44, 0.08);
 
   --border: rgba(17, 23, 37, 0.11);
   --border-subtle: rgba(17, 23, 37, 0.07);
-  --border-island: rgba(17, 23, 37, 0.10);
+  --border-island: rgba(17, 23, 37, 0.1);
   --border-focus: rgba(17, 23, 37, 0.32);
   --border-avatar: var(--border-subtle);
   --border-avatar-width: 1px;
 
   /* ── On-color foregrounds ── */
-  --text-on-accent: #FFFFFF;
-  --text-on-success: #FFFFFF;
-  --text-on-warning: #FFFFFF;
-  --text-on-error: #FFFFFF;
+  --text-on-accent: #ffffff;
+  --text-on-success: #ffffff;
+  --text-on-warning: #ffffff;
+  --text-on-error: #ffffff;
   --text-on-selected: var(--text-primary);
 
   /* ── Overlay ── */
@@ -225,9 +272,9 @@
   --font-display: var(--font-sans);
   --accent-2: var(--accent);
   --text-on-accent-2: var(--text-on-accent);
-  --bg-structure-dark: #1B2030;
-  --text-on-structure: #F2F5F9;
-  --text-on-dark-pop: #9DB6F7;
+  --bg-structure-dark: #1b2030;
+  --text-on-structure: #f2f5f9;
+  --text-on-dark-pop: #9db6f7;
 }
 
 [data-theme='studio-light'] [data-workspace-icon] {
@@ -250,13 +297,10 @@
 [data-theme='studio-light'] [data-row-selected].sidebar-row-border.text-text-on-selected {
   position: relative;
   border-color: transparent;
-  box-shadow: 0 1px 2px rgba(var(--shadow-base), 0.10);
+  box-shadow: 0 1px 2px rgba(var(--shadow-base), 0.1);
 }
-[data-theme='studio-light']
-  aside[data-sidebar]
-  .sidebar-row-border.text-text-on-selected::before,
-[data-theme='studio-light']
-  [data-row-selected].sidebar-row-border.text-text-on-selected::before {
+[data-theme='studio-light'] aside[data-sidebar] .sidebar-row-border.text-text-on-selected::before,
+[data-theme='studio-light'] [data-row-selected].sidebar-row-border.text-text-on-selected::before {
   content: '';
   position: absolute;
   left: 0;
@@ -269,17 +313,10 @@
   pointer-events: none;
 }
 
-[data-theme='studio-light'] aside[data-sidebar] .sidebar-row-border:not(.text-text-on-selected):hover,
+[data-theme='studio-light']
+  aside[data-sidebar]
+  .sidebar-row-border:not(.text-text-on-selected):hover,
 [data-theme='studio-light'] .sidebar-row-border:not([data-row-selected]):hover {
-  border-color: transparent;
-}
-
-[data-theme='studio-light'] nav[aria-label='App sections'] button[aria-current='page'] {
-  background-color: var(--studio-light-brand-bar);
-  color: var(--text-on-brand);
-  border-color: transparent;
-}
-[data-theme='studio-light'] nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-color: transparent;
 }
 

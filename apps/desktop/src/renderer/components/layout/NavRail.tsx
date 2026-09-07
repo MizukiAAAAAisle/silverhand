@@ -1,12 +1,5 @@
 import { type JSX, type ReactNode } from 'react';
-import {
-  Activity,
-  MessagesSquare,
-  Monitor,
-  Settings,
-  Users,
-} from 'lucide-react';
-import { cn } from '@/lib/cn';
+import { Activity, MessagesSquare, Monitor, Settings, Users } from 'lucide-react';
 import { TaskIcon } from '@/components/tasks/TaskIcon';
 import { PANE_RADIUS, paneChrome } from './pane-chrome';
 
@@ -18,13 +11,7 @@ import { PANE_RADIUS, paneChrome } from './pane-chrome';
  * than the main rail, but it still participates in section selection
  * so the bottom button can highlight when its route is active.
  */
-export type AppSection =
-  | 'chat'
-  | 'activity'
-  | 'tasks'
-  | 'members'
-  | 'computers'
-  | 'settings';
+export type AppSection = 'chat' | 'activity' | 'tasks' | 'members' | 'computers' | 'settings';
 
 interface NavRailProps {
   current: AppSection;
@@ -79,7 +66,7 @@ export function deriveNavRailDots(input: {
   activityItemCount: number | undefined;
 }): { chat: boolean; activity: boolean } {
   return {
-    chat: Object.values(input.workspaceUnread ?? {}).some(count => count > 0),
+    chat: Object.values(input.workspaceUnread ?? {}).some((count) => count > 0),
     activity: (input.activityItemCount ?? 0) > 0,
   };
 }
@@ -89,7 +76,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
   return (
     <nav
       aria-label="App sections"
-      className="flex h-full w-[var(--nav-rail-width)] shrink-0 flex-col items-center gap-1 bg-[var(--bg-nav-rail)] py-2"
+      className="nav-rail flex h-full w-[var(--nav-rail-width)] shrink-0 flex-col items-center gap-1 bg-[var(--bg-nav-rail)] py-2"
       style={{
         ...paneChrome,
         overflow: 'hidden',
@@ -107,7 +94,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
         borderBottomLeftRadius: `var(--app-corner-radius, ${PANE_RADIUS})`,
       }}
     >
-      {ITEMS.map(item => {
+      {ITEMS.map((item) => {
         const selected = item.id === current;
         const hasDot = dots?.[item.id] === true;
         return (
@@ -118,15 +105,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
             aria-label={item.label}
             aria-current={selected ? 'page' : undefined}
             onClick={() => onChange(item.id)}
-            className={cn(
-              // Row-radius routed via `--row-radius` token (#task:912 review
-              // round 2). warm/forza6 = 0 (square poster/scan-line); slack-dark
-              // = 6px (Slack-style rounded nav button).
-              'relative flex size-9 items-center justify-center rounded-[var(--row-radius)] border-2 transition-colors',
-              selected
-                ? 'border-accent bg-bg-selected text-text-on-selected'
-                : 'border-transparent text-[var(--text-nav-rail,var(--text-secondary))] hover:border-accent hover:bg-[var(--bg-nav-rail-hover,rgba(255,255,255,0.7))] hover:text-[var(--text-nav-rail-hover,var(--text-primary))]',
-            )}
+            className="nav-rail__item flex size-9 items-center justify-center transition-colors"
           >
             {item.icon}
             {hasDot && (
@@ -150,13 +129,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
         aria-label="Settings"
         aria-current={settingsSelected ? 'page' : undefined}
         onClick={() => onChange('settings')}
-        className={cn(
-          // Same `--row-radius` token as nav buttons above (#task:912).
-          'mt-auto flex size-9 items-center justify-center rounded-[var(--row-radius)] border-2 transition-colors',
-          settingsSelected
-            ? 'border-accent bg-bg-selected text-text-on-selected'
-            : 'border-transparent text-[var(--text-nav-rail,var(--text-secondary))] hover:border-accent hover:bg-[var(--bg-nav-rail-hover,rgba(255,255,255,0.7))] hover:text-[var(--text-nav-rail-hover,var(--text-primary))]',
-        )}
+        className="nav-rail__item mt-auto flex size-9 items-center justify-center transition-colors"
       >
         <Settings className="size-4" />
       </button>

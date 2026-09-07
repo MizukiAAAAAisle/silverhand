@@ -3,8 +3,7 @@
  * onto any Button variant without touching fill, text, or hover fill —
  * the underlying variant keeps its action hierarchy.
  */
-export const CONTROL_INK_BORDER =
-  'border-[length:var(--control-border-width)] border-border-focus';
+export const CONTROL_INK_BORDER = 'border-[length:var(--control-border-width)] border-border-focus';
 
 /**
  * The transition tuple the control family's hover states need, WITHOUT the
@@ -14,7 +13,7 @@ export const CONTROL_INK_BORDER =
  * winner depends on Tailwind's emit order.
  */
 export const CONTROL_HOVER_TRANSITION =
-  'transition-[color,background-color,border-color,transform]';
+  'transition-[color,background-color,border-color,box-shadow,translate] duration-150 ease-[var(--ease,ease)]';
 
 /**
  * 1px hover lift motion + the transition tuple it needs. Colour
@@ -27,7 +26,7 @@ export const CONTROL_HOVER_LIFT = `${CONTROL_HOVER_TRANSITION} hover:-translate-
  *  still variants: the canonical control-hover tokens, never `--bg-row-hover`
  *  (forza6 paints that magenta). */
 const CONTROL_SURFACE_HOVER =
-  'hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)]';
+  'hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-neutral-action-hover,var(--bg-option-hover))]';
 
 /**
  * The neutral framed SURFACE of the poster-control family: token frame, the
@@ -40,12 +39,12 @@ const CONTROL_SURFACE_HOVER =
  * Consumers add layout (`w-full`, `gap-2`) and, when it is a Cancel, the
  * `destructiveCancel()` hook that lets a theme finish the sticker.
  */
-export const CONTROL_SURFACE_BUTTON = `${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} ${CONTROL_SURFACE_HOVER}`;
+export const CONTROL_SURFACE_BUTTON = `focus-outline ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} ${CONTROL_SURFACE_HOVER}`;
 
 /** {@link CONTROL_SURFACE_BUTTON} without the lift — same frame, same hover
  *  colours, no motion. For a confirm that sits INSIDE a list row, where a
  *  button that rises pulls the eye off the row it belongs to. */
-export const CONTROL_SURFACE_BUTTON_STILL = `${CONTROL_INK_BORDER} ${CONTROL_HOVER_TRANSITION} ${CONTROL_SURFACE_HOVER}`;
+export const CONTROL_SURFACE_BUTTON_STILL = `focus-outline ${CONTROL_INK_BORDER} ${CONTROL_HOVER_TRANSITION} ${CONTROL_SURFACE_HOVER}`;
 
 /**
  * The framed SEARCH FIELD of the member pickers: token geometry, an ink
@@ -85,13 +84,6 @@ export const SEARCH_FIELD_FRAME =
  * surface + motion, the theme paints the sticker on `[data-neutral-action]` (in
  * forza6, the ink shadow shared verbatim with the Cancel ranks). Layout stays
  * with the consumer.
- *
- * One older hook names the SAME rank for its own surface —
- * `[data-host-action='neutral']` (Computer page). It resolves pixel-identically;
- * this is the one to consume for anything new, and that alias is the last one to
- * fold in when the Computer page is next touched. The channel-settings modal's
- * `[data-channel-settings-action]` was the other one and is already folded in
- * (its Visibility / Archive / Leave rows call this function).
  */
 export function neutralAction(className?: string): {
   'data-neutral-action': 'true';
@@ -99,8 +91,6 @@ export function neutralAction(className?: string): {
 } {
   return {
     'data-neutral-action': 'true',
-    className: className
-      ? `${CONTROL_SURFACE_BUTTON} ${className}`
-      : CONTROL_SURFACE_BUTTON,
+    className: className ? `${CONTROL_SURFACE_BUTTON} ${className}` : CONTROL_SURFACE_BUTTON,
   };
 }

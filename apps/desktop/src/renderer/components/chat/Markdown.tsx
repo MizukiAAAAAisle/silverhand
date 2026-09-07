@@ -1,9 +1,17 @@
-import { type ComponentProps, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type ComponentProps,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { Check, Copy, Hash } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, Hash } from 'lucide-react';
 import { rehypeHighlightTerm } from './rehypeHighlightTerm';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import { ADDRESSABLE_ID_PATTERN } from '@silverhand/shared';
@@ -172,11 +180,9 @@ function MarkdownInner({
   // per consumer (`markdown-render-budget.ts`): a chat body is bounded by the
   // message cap, the workspace file preview is bounded by the daemon's read cap
   // and so opts out here rather than inheriting a chat limit.
-  const budget =
-    renderBudget === 'unbounded' ? null : MESSAGE_RENDER_BUDGET_BYTES;
+  const budget = renderBudget === 'unbounded' ? null : MESSAGE_RENDER_BUDGET_BYTES;
   const oversizedBytes = useMemo(
-    () =>
-      exceedsRenderBudget(content, budget) ? markdownByteLength(content) : null,
+    () => (exceedsRenderBudget(content, budget) ? markdownByteLength(content) : null),
     [content, budget],
   );
 
@@ -196,9 +202,7 @@ function MarkdownInner({
   // must track the query); when there's no term we return the stable
   // highlight-only array so ordinary rendering is byte-identical to before.
   const trimmedTerm = searchQuery?.trim() ?? '';
-  const rehypePlugins = useMemo<
-    NonNullable<ComponentProps<typeof ReactMarkdown>['rehypePlugins']>
-  >(
+  const rehypePlugins = useMemo<NonNullable<ComponentProps<typeof ReactMarkdown>['rehypePlugins']>>(
     () =>
       trimmedTerm
         ? [rehypeHighlight, [rehypeHighlightTerm, { term: trimmedTerm }]]
@@ -252,11 +256,7 @@ function MarkdownInner({
             // same spoof ruling C removed from the reference family. Inert text,
             // and above all never the plain-link arm, which would hand an
             // internal scheme to the OS opener.
-            if (
-              typeof href === 'string' &&
-              isInternalChipScheme(href) &&
-              !isPluginLink(node)
-            ) {
+            if (typeof href === 'string' && isInternalChipScheme(href) && !isPluginLink(node)) {
               return <span className="text-text-muted">{children}</span>;
             }
             // Export / screenshot path: every reachable href shape
@@ -292,10 +292,8 @@ function MarkdownInner({
                 const staticRef = classifyReferenceHref(href, node);
                 if (staticRef.arm === 'reference') {
                   const { kind, handle } = staticRef.reference;
-                  const refAgent =
-                    kind === 'agent' ? agentsByName?.get(handle) : undefined;
-                  const refHuman =
-                    kind === 'human' ? humansByName?.get(handle) : undefined;
+                  const refAgent = kind === 'agent' ? agentsByName?.get(handle) : undefined;
+                  const refHuman = kind === 'human' ? humansByName?.get(handle) : undefined;
                   return (
                     <StaticMentionRef
                       name={handle}
@@ -318,20 +316,12 @@ function MarkdownInner({
                 }
                 if (href.startsWith(CHANNEL_PREFIX)) {
                   const name = href.slice(CHANNEL_PREFIX.length);
-                  return (
-                    <StaticChannelRef
-                      name={name}
-                      channel={channelsByName?.get(name)}
-                    />
-                  );
+                  return <StaticChannelRef name={name} channel={channelsByName?.get(name)} />;
                 }
                 if (href.startsWith(CONVERSATION_PREFIX)) {
                   const id = href.slice(CONVERSATION_PREFIX.length);
                   return (
-                    <StaticConversationRef
-                      id={id}
-                      conversation={conversationRefsById?.get(id)}
-                    />
+                    <StaticConversationRef id={id} conversation={conversationRefsById?.get(id)} />
                   );
                 }
                 if (href.startsWith(TASK_PREFIX)) {
@@ -380,7 +370,7 @@ function MarkdownInner({
               //              has no avatar yet, render runtime icon.
               const mentionAvatarObjectUrl =
                 agentAvatarUrls && mentionAgent
-                  ? agentAvatarUrls.get(mentionAgent.id) ?? null
+                  ? (agentAvatarUrls.get(mentionAgent.id) ?? null)
                   : undefined;
               return (
                 <Mention
@@ -403,13 +393,11 @@ function MarkdownInner({
             const liveRef = classifyReferenceHref(href, node);
             if (liveRef.arm === 'reference') {
               const { kind, handle } = liveRef.reference;
-              const refAgent =
-                kind === 'agent' ? agentsByName?.get(handle) : undefined;
-              const refHuman =
-                kind === 'human' ? humansByName?.get(handle) : undefined;
+              const refAgent = kind === 'agent' ? agentsByName?.get(handle) : undefined;
+              const refHuman = kind === 'human' ? humansByName?.get(handle) : undefined;
               const refAvatarObjectUrl =
                 agentAvatarUrls && refAgent
-                  ? agentAvatarUrls.get(refAgent.id) ?? null
+                  ? (agentAvatarUrls.get(refAgent.id) ?? null)
                   : undefined;
               return (
                 <Mention
@@ -445,10 +433,7 @@ function MarkdownInner({
                 />
               );
             }
-            if (
-              typeof href === 'string' &&
-              href.startsWith(CONVERSATION_PREFIX)
-            ) {
+            if (typeof href === 'string' && href.startsWith(CONVERSATION_PREFIX)) {
               const id = href.slice(CONVERSATION_PREFIX.length);
               return (
                 <ConversationRef
@@ -458,10 +443,7 @@ function MarkdownInner({
                 />
               );
             }
-            if (
-              typeof href === 'string' &&
-              href.startsWith(TASK_PREFIX)
-            ) {
+            if (typeof href === 'string' && href.startsWith(TASK_PREFIX)) {
               // The tokenizer guarantees the slice is `[1-9]\d*` —
               // positive integer with no leading zero. parseInt + finite
               // check is defensive belt-and-suspenders for the case
@@ -473,11 +455,7 @@ function MarkdownInner({
               // which would shell out our internal scheme.
               const raw = href.slice(TASK_PREFIX.length);
               const taskNumber = Number.parseInt(raw, 10);
-              if (
-                /^[1-9]\d*$/.test(raw) &&
-                Number.isFinite(taskNumber) &&
-                taskNumber > 0
-              ) {
+              if (/^[1-9]\d*$/.test(raw) && Number.isFinite(taskNumber) && taskNumber > 0) {
                 return <TaskRef taskNumber={taskNumber} />;
               }
               // Pathological — render as plain text so we don't crash
@@ -485,10 +463,7 @@ function MarkdownInner({
               // to the OS handler.
               return <span>{children}</span>;
             }
-            if (
-              typeof href === 'string' &&
-              href.startsWith(BARE_TASK_PREFIX)
-            ) {
+            if (typeof href === 'string' && href.startsWith(BARE_TASK_PREFIX)) {
               // Bare `#<n>`: same resolve path as `#task:<n>`, but the
               // `bare` flag makes TaskRef demote to its literal text
               // (no chip) for the no-context / loading / missing states.
@@ -496,11 +471,7 @@ function MarkdownInner({
               // guarantees `[1-9]\d*`; parse defensively as above.
               const raw = href.slice(BARE_TASK_PREFIX.length);
               const taskNumber = Number.parseInt(raw, 10);
-              if (
-                /^[1-9]\d*$/.test(raw) &&
-                Number.isFinite(taskNumber) &&
-                taskNumber > 0
-              ) {
+              if (/^[1-9]\d*$/.test(raw) && Number.isFinite(taskNumber) && taskNumber > 0) {
                 return <TaskRef taskNumber={taskNumber} bare />;
               }
               return <span>{children}</span>;
@@ -509,7 +480,7 @@ function MarkdownInner({
               <a
                 {...rest}
                 href={href}
-                onClick={e => {
+                onClick={(e) => {
                   e.preventDefault();
                   if (href) void window.silverhand.openExternal(href);
                 }}
@@ -591,11 +562,7 @@ function mentionDisplayLabel(
   human: UserDto | undefined,
 ): string | null {
   return (
-    agent?.display_name?.trim() ||
-    agent?.name ||
-    human?.display_name?.trim() ||
-    human?.name ||
-    null
+    agent?.display_name?.trim() || agent?.name || human?.display_name?.trim() || human?.name || null
   );
 }
 
@@ -676,17 +643,11 @@ function StaticConversationRef({
   return (
     <span
       className="inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent"
-      aria-label={
-        conversation
-          ? `${faceLabel('channel')} · ${label}`
-          : `Conversation #conv:${id}`
-      }
+      aria-label={conversation ? `${faceLabel('channel')} · ${label}` : `Conversation #conv:${id}`}
       data-conversation-ref={id}
     >
       {icon}
-      <span className={conversation ? 'truncate' : 'truncate font-mono'}>
-        {label}
-      </span>
+      <span className={conversation ? 'truncate' : 'truncate font-mono'}>{label}</span>
     </span>
   );
 }
@@ -880,11 +841,11 @@ function markReferenceAutolink(node: MdastNode, source: string): void {
 // stray channel reference. A digit-first `#<n>` never collides with the
 // alpha-first channel branch.
 const REF_RE = new RegExp(
-  `(?:#conv:(${ADDRESSABLE_ID_PATTERN})(?![A-Za-z0-9_-])`
-  + `|#task:([1-9]\\d*)(?!\\w)`
-  + `|@([a-zA-Z][a-zA-Z0-9_-]*)`
-  + `|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*)`
-  + `|#((?:1[1-9]|[2-9]\\d|[1-9]\\d{2,}))(?!\\w))`,
+  `(?:#conv:(${ADDRESSABLE_ID_PATTERN})(?![A-Za-z0-9_-])` +
+    `|#task:([1-9]\\d*)(?!\\w)` +
+    `|@([a-zA-Z][a-zA-Z0-9_-]*)` +
+    `|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*)` +
+    `|#((?:1[1-9]|[2-9]\\d|[1-9]\\d{2,}))(?!\\w))`,
   'g',
 );
 
@@ -904,21 +865,18 @@ function pushSplit(text: string, out: MdastNode[], taskReferences: 'resolve' | '
     const refEnd = m.index + m[0].length;
     const conversationId = m[1];
     if (conversationId) {
-      out.push(
-        pluginLink(
-          `${CONVERSATION_PREFIX}${conversationId}`,
-          `#conv:${conversationId}`,
-        ),
-      );
+      out.push(pluginLink(`${CONVERSATION_PREFIX}${conversationId}`, `#conv:${conversationId}`));
       last = refEnd;
       lastRefEnd = refEnd;
       continue;
     }
     const taskNumber = m[2];
     if (taskNumber) {
-      out.push(taskReferences === 'raw'
-        ? { type: 'text', value: m[0] }
-        : pluginLink(`${TASK_PREFIX}${taskNumber}`, `#task:${taskNumber}`));
+      out.push(
+        taskReferences === 'raw'
+          ? { type: 'text', value: m[0] }
+          : pluginLink(`${TASK_PREFIX}${taskNumber}`, `#task:${taskNumber}`),
+      );
       last = refEnd;
       lastRefEnd = refEnd;
       continue;
@@ -976,13 +934,7 @@ const OVERSIZED_PREVIEW_CHARS = 4000;
 /** Bounded plain-text rendering for bodies over the render budget (legacy
  *  oversized rows). Never touches the markdown pipeline; full content stays
  *  retrievable via copy. */
-function OversizedContent({
-  content,
-  bytes,
-}: {
-  content: string;
-  bytes: number;
-}): JSX.Element {
+function OversizedContent({ content, bytes }: { content: string; bytes: number }): JSX.Element {
   const [copied, setCopied] = useState(false);
   const onCopy = useCallback(async () => {
     try {
@@ -1067,10 +1019,17 @@ function CodeBlock({ children }: { children: React.ReactNode }): JSX.Element {
       {overflowing || expanded ? (
         <button
           type="button"
-          onClick={() => setExpanded(v => !v)}
+          onClick={() => setExpanded((value) => !value)}
           className="code-block__expand"
+          aria-label={expanded ? 'Collapse code' : 'Expand code'}
+          aria-expanded={expanded}
+          title={expanded ? 'Collapse code' : 'Expand code'}
         >
-          {expanded ? 'Collapse' : 'Expand'}
+          {expanded ? (
+            <ChevronUp size={16} aria-hidden="true" />
+          ) : (
+            <ChevronDown size={16} aria-hidden="true" />
+          )}
         </button>
       ) : null}
     </div>

@@ -1,9 +1,5 @@
-import {
-  useEffect,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { RangeInput } from '@/components/ui/range-input';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   AlignLeft,
   AlignRight,
@@ -20,15 +16,9 @@ import {
 } from 'lucide-react';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import {
-  SidebarRow,
-  SidebarSection,
-} from '@/components/layout/sidebar-shared';
+import { SidebarRow, SidebarSection } from '@/components/layout/sidebar-shared';
 import { CONTROL_HOVER_LIFT } from '@/features/common/ControlInkBorder';
-import {
-  destructiveAction,
-  DESTRUCTIVE_TRIGGER,
-} from '@/features/common/DestructiveAction';
+import { destructiveAction, DESTRUCTIVE_TRIGGER } from '@/features/common/DestructiveAction';
 import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
 import {
@@ -53,11 +43,7 @@ import {
   THEME_IDS,
   type ThemeId,
 } from '@/settings/types';
-import {
-  CODE_FONT_PRESETS,
-  PROSE_FONT_PRESETS,
-  type FontPreset,
-} from '@/settings/font-presets';
+import { CODE_FONT_PRESETS, PROSE_FONT_PRESETS, type FontPreset } from '@/settings/font-presets';
 import {
   SETTINGS_SECTIONS,
   persistSettingsSection,
@@ -124,9 +110,7 @@ export function SettingsPage(): JSX.Element {
     resetMarkdownFontSize,
   } = useAppearance();
 
-  const [section, setSection] = useState<SettingsSection>(
-    readSettingsSection,
-  );
+  const [section, setSection] = useState<SettingsSection>(readSettingsSection);
   useEffect(() => {
     persistSettingsSection(section);
   }, [section]);
@@ -189,11 +173,8 @@ function SettingsRailNav({
 }): JSX.Element {
   return (
     <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
-      <SidebarSection
-        label="SETTINGS"
-        icon={<Settings className="size-3.5" />}
-      >
-        {SETTINGS_SECTIONS.map(id => {
+      <SidebarSection label="SETTINGS" icon={<Settings className="size-3.5" />}>
+        {SETTINGS_SECTIONS.map((id) => {
           const { label, icon } = SECTION_CHROME[id];
           const selected = id === section;
           return (
@@ -241,56 +222,56 @@ function AppearancePane({
           >
             <div className="grid gap-4">
               <div className="grid gap-3 sm:grid-cols-2">
-              {THEME_IDS.map(id => {
-                const meta = THEME_META[id];
-                const active = appearance.theme === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setTheme(id)}
-                    className={cn(
-                      'group relative flex min-h-[92px] flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left focus-outline',
-                      CONTROL_HOVER_LIFT,
-                      active ? 'border-accent' : 'border-border-subtle',
-                    )}
-                    style={{
-                      background: `linear-gradient(135deg, ${meta.bg}, ${meta.surface})`,
-                      ...(active ? null : { borderColor: meta.border }),
-                    }}
-                  >
-                    <div className="flex gap-1">
-                      {[meta.bg, meta.surface, meta.text, meta.accent].map(c => (
+                {THEME_IDS.map((id) => {
+                  const meta = THEME_META[id];
+                  const active = appearance.theme === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setTheme(id)}
+                      className={cn(
+                        'group relative flex min-h-[92px] flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left focus-outline',
+                        CONTROL_HOVER_LIFT,
+                        active ? 'border-accent' : 'border-border-subtle',
+                      )}
+                      style={{
+                        background: `linear-gradient(135deg, ${meta.bg}, ${meta.surface})`,
+                        ...(active ? null : { borderColor: meta.border }),
+                      }}
+                    >
+                      <div className="flex gap-1">
+                        {[meta.bg, meta.surface, meta.text, meta.accent].map((c) => (
+                          <span
+                            key={c}
+                            className="size-4 rounded-full border border-black/10"
+                            style={{ background: c }}
+                          />
+                        ))}
+                      </div>
+                      <div className="mt-4 flex w-full items-center justify-between gap-2">
                         <span
-                          key={c}
-                          className="size-4 rounded-full border border-black/10"
-                          style={{ background: c }}
-                        />
-                      ))}
-                    </div>
-                    <div className="mt-4 flex w-full items-center justify-between gap-2">
-                      <span
-                        className="min-w-0 truncate text-xs font-semibold"
-                        style={{ color: meta.text }}
-                      >
-                        {meta.label}
-                      </span>
-                      {active ? (
-                        <span
-                          className="flex size-5 shrink-0 items-center justify-center rounded-full"
-                          style={{
-                            background: meta.accent,
-                            color: meta.bg,
-                          }}
-                          aria-label="Current theme"
+                          className="min-w-0 truncate text-xs font-semibold"
+                          style={{ color: meta.text }}
                         >
-                          <Check className="size-3" />
+                          {meta.label}
                         </span>
-                      ) : null}
-                    </div>
-                  </button>
-                );
-              })}
+                        {active ? (
+                          <span
+                            className="flex size-5 shrink-0 items-center justify-center rounded-full"
+                            style={{
+                              background: meta.accent,
+                              color: meta.bg,
+                            }}
+                            aria-label="Current theme"
+                          >
+                            <Check className="size-3" />
+                          </span>
+                        ) : null}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
               <MessageAlignmentControl />
             </div>
@@ -304,7 +285,7 @@ function AppearancePane({
             <div className="grid gap-4">
               <SharedFontSizeControl
                 value={appearance.fontSize}
-                onChange={value => setMarkdownFontSize(value)}
+                onChange={(value) => setMarkdownFontSize(value)}
                 onReset={() => resetMarkdownFontSize()}
               />
               <MarkdownFontControl
@@ -314,9 +295,7 @@ function AppearancePane({
                 fontSize={appearance.fontSize}
                 presets={PROSE_FONT_PRESETS}
                 sample="正文预览 / Markdown body text"
-                onFontChange={value =>
-                  setMarkdownFont('prose', value || undefined)
-                }
+                onFontChange={(value) => setMarkdownFont('prose', value || undefined)}
                 onReset={() => resetMarkdownText('prose')}
               />
               <MarkdownFontControl
@@ -326,9 +305,7 @@ function AppearancePane({
                 fontSize={appearance.fontSize}
                 presets={CODE_FONT_PRESETS}
                 sample="const size = 12"
-                onFontChange={value =>
-                  setMarkdownFont('code', value || undefined)
-                }
+                onFontChange={(value) => setMarkdownFont('code', value || undefined)}
                 onReset={() => resetMarkdownText('code')}
                 code
               />
@@ -340,10 +317,7 @@ function AppearancePane({
   );
 }
 
-const MESSAGE_LAYOUT_META: Record<
-  MessageLayoutMode,
-  { label: string; icon: typeof AlignLeft }
-> = {
+const MESSAGE_LAYOUT_META: Record<MessageLayoutMode, { label: string; icon: typeof AlignLeft }> = {
   'all-left': { label: 'All left', icon: AlignLeft },
   'user-right': { label: 'Mine right', icon: AlignRight },
 };
@@ -354,19 +328,11 @@ function MessageAlignmentControl(): JSX.Element {
     <div className="grid gap-2 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-text-primary">
-            Message alignment
-          </h3>
-          <p className="truncate text-xs text-text-muted">
-            Only your own messages move
-          </p>
+          <h3 className="text-sm font-semibold text-text-primary">Message alignment</h3>
+          <p className="truncate text-xs text-text-muted">Only your own messages move</p>
         </div>
-        <div
-          role="radiogroup"
-          aria-label="Message alignment"
-          className="flex shrink-0 gap-2"
-        >
-          {MESSAGE_LAYOUT_MODES.map(id => {
+        <div role="radiogroup" aria-label="Message alignment" className="flex shrink-0 gap-2">
+          {MESSAGE_LAYOUT_MODES.map((id) => {
             const meta = MESSAGE_LAYOUT_META[id];
             const selected = id === mode;
             const Icon = meta.icon;
@@ -401,10 +367,10 @@ function AccountPane(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
 
   const dto =
-    viewer.data
-    && !isRegistrationRequired(viewer.data)
-    && !isBackendUnreachable(viewer.data)
-    && !isUpdateRequired(viewer.data)
+    viewer.data &&
+    !isRegistrationRequired(viewer.data) &&
+    !isBackendUnreachable(viewer.data) &&
+    !isUpdateRequired(viewer.data)
       ? viewer.data
       : undefined;
 
@@ -463,14 +429,15 @@ function AccountPane(): JSX.Element {
             </Button>
           </div>
           {error ? (
-            <p className="text-xs text-error" role="alert">{error}</p>
+            <p className="text-xs text-error" role="alert">
+              {error}
+            </p>
           ) : null}
         </div>
       </div>
     </section>
   );
 }
-
 
 /** Shared markdown font size — drives both `--md-prose-size` and
  *  `--md-code-size`. Thumb glides under the cursor (step="any") while
@@ -492,10 +459,7 @@ function SharedFontSizeControl({
   const thumbValue = dragRaw ?? sizeValue;
   const settleDrag = (): void => setDragRaw(null);
   const stepBy = (delta: number): void => {
-    const next = Math.min(
-      FONT_SIZE_MAX,
-      Math.max(FONT_SIZE_MIN, sizeValue + delta),
-    );
+    const next = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, sizeValue + delta));
     if (next !== sizeValue) onChange(next);
     setDragRaw(null);
   };
@@ -519,9 +483,7 @@ function SharedFontSizeControl({
             )}
           >
             {sizeValue}
-            <span className="ml-0.5 text-xs font-medium text-text-muted">
-              px
-            </span>
+            <span className="ml-0.5 text-xs font-medium text-text-muted">px</span>
           </span>
           <button
             type="button"
@@ -539,16 +501,15 @@ function SharedFontSizeControl({
         <span className="font-mono text-[length:var(--text-meta)] text-text-muted">
           {FONT_SIZE_MIN}px
         </span>
-        <input
+        <RangeInput
           id="markdown-font-size"
-          data-settings-slider
-          type="range"
+
           min={FONT_SIZE_MIN}
           max={FONT_SIZE_MAX}
           step="any"
           value={thumbValue}
           aria-label="Markdown font size"
-          onChange={e => {
+          onChange={(e) => {
             const raw = Number(e.target.value);
             setDragRaw(raw);
             const rounded = Math.round(raw);
@@ -557,7 +518,7 @@ function SharedFontSizeControl({
           onPointerUp={settleDrag}
           onPointerCancel={settleDrag}
           onBlur={settleDrag}
-          onKeyDown={e => {
+          onKeyDown={(e) => {
             switch (e.key) {
               case 'ArrowLeft':
               case 'ArrowDown':
@@ -591,7 +552,7 @@ function SharedFontSizeControl({
                 break;
             }
           }}
-          className="settings-font-size-slider"
+          className="w-full"
         />
         <span className="font-mono text-[length:var(--text-meta)] text-text-muted">
           {FONT_SIZE_MAX}px
@@ -648,9 +609,7 @@ function MarkdownFontControl({
           </span>
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
-            <p className="truncate text-xs text-text-muted">
-              {fontValue || 'Theme default font'}
-            </p>
+            <p className="truncate text-xs text-text-muted">{fontValue || 'Theme default font'}</p>
           </div>
         </div>
         <button
@@ -665,18 +624,16 @@ function MarkdownFontControl({
       </div>
 
       <div className="grid gap-2">
-        <Label htmlFor={`markdown-${title.toLowerCase()}-font`}>
-          Font family
-        </Label>
+        <Label htmlFor={`markdown-${title.toLowerCase()}-font`}>Font family</Label>
         <Input
           id={`markdown-${title.toLowerCase()}-font`}
           value={fontValue}
-          onChange={e => onFontChange(e.target.value)}
+          onChange={(e) => onFontChange(e.target.value)}
           placeholder="Theme default"
           spellCheck={false}
         />
         <div className="flex flex-wrap gap-1.5">
-          {presets.map(preset => {
+          {presets.map((preset) => {
             const isSelected = fontValue === preset.value;
             return (
               <button
@@ -724,10 +681,7 @@ function SettingsSection({
   children: ReactNode;
 }): JSX.Element {
   return (
-    <section
-      id={id}
-      className="scroll-mt-6 grid gap-4"
-    >
+    <section id={id} className="scroll-mt-6 grid gap-4">
       <SettingsHeading icon={icon} title={title} />
       <div className="min-w-0">{children}</div>
     </section>

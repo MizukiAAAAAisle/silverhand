@@ -85,12 +85,10 @@ export function useSidebarSectionExpanded(
   defaultExpanded: boolean,
 ): [boolean, () => void] {
   const [expanded, setExpanded] = useState(() =>
-    persistId === undefined
-      ? defaultExpanded
-      : readExpanded(persistId, defaultExpanded),
+    persistId === undefined ? defaultExpanded : readExpanded(persistId, defaultExpanded),
   );
   const toggle = useCallback(() => {
-    setExpanded(prev => {
+    setExpanded((prev) => {
       const next = !prev;
       if (persistId !== undefined) persistExpanded(persistId, next);
       return next;
@@ -329,8 +327,7 @@ export function SidebarSectionHeader({
     >
       <ChevronDown
         className={
-          'size-3 transition-transform duration-150 ' +
-          (expanded ? 'rotate-0' : '-rotate-90')
+          'size-3 transition-transform duration-150 ' + (expanded ? 'rotate-0' : '-rotate-90')
         }
       />
     </span>
@@ -364,25 +361,30 @@ export function SidebarSectionHeader({
       <span className="truncate">
         {label}
         {typeof count === 'number' ? (
-          <span className="ml-1 text-text-muted/70">{count}</span>
+          <span data-sidebar-count className="ml-1 text-text-muted/70">
+            {count}
+          </span>
         ) : null}
       </span>
       {caret}
     </span>
   ) : (
     <span className="flex items-center gap-1">
-      {collapsible ? (
-        <span className="text-text-muted">{fallbackChevron}</span>
-      ) : null}
+      {collapsible ? <span className="text-text-muted">{fallbackChevron}</span> : null}
       {icon ? (
-        <span data-sidebar-section-icon className="inline-flex shrink-0 items-center text-text-muted">
+        <span
+          data-sidebar-section-icon
+          className="inline-flex shrink-0 items-center text-text-muted"
+        >
           {icon}
         </span>
       ) : null}
       <span>
         {label}
         {typeof count === 'number' ? (
-          <span className="ml-1 text-text-muted/70">{count}</span>
+          <span data-sidebar-count className="ml-1 text-text-muted/70">
+            {count}
+          </span>
         ) : null}
       </span>
     </span>
@@ -542,13 +544,7 @@ export function UnreadBadge({
  * rows place it beside the name (shiki 2026-08-09), like the workspace row.
  */
 export function MutedMarker(): JSX.Element {
-  return (
-    <BellOff
-      className="size-3 shrink-0 opacity-60"
-      role="img"
-      aria-label="Muted"
-    />
-  );
+  return <BellOff className="size-3 shrink-0 opacity-60" role="img" aria-label="Muted" />;
 }
 
 interface RowProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClick' | 'title'> {
@@ -576,19 +572,22 @@ const STATUS_DOT: Record<NonNullable<RowProps['status']>, string> = {
   crashed: 'bg-error',
 };
 
-export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function SidebarRow({
-  icon,
-  title,
-  subtitle,
-  selected,
-  status,
-  badge,
-  badgeTier,
-  stacked,
-  onClick,
-  className,
-  ...buttonProps
-}: RowProps, ref): JSX.Element {
+export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function SidebarRow(
+  {
+    icon,
+    title,
+    subtitle,
+    selected,
+    status,
+    badge,
+    badgeTier,
+    stacked,
+    onClick,
+    className,
+    ...buttonProps
+  }: RowProps,
+  ref,
+): JSX.Element {
   return (
     <li>
       <button
@@ -620,13 +619,17 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
           // avatar/glyph). Belt-and-braces with `leading-[16px]` on the
           // button so the wrapper is pinned to 16px regardless of any
           // future line-height change above.
-          <span className="inline-flex shrink-0 items-center leading-none text-text-muted">{icon}</span>
+          <span className="inline-flex shrink-0 items-center leading-none text-text-muted">
+            {icon}
+          </span>
         ) : null}
-        <span className={
-          'flex min-w-0 flex-1 ' +
-          (stacked ? 'flex-col gap-0.5 ' : 'gap-1.5 ') +
-          (badge && badge > 0 && !selected ? 'font-semibold text-text-primary' : '')
-        }>
+        <span
+          className={
+            'flex min-w-0 flex-1 ' +
+            (stacked ? 'flex-col gap-0.5 ' : 'gap-1.5 ') +
+            (badge && badge > 0 && !selected ? 'font-semibold text-text-primary' : '')
+          }
+        >
           <span className="truncate">{title}</span>
           {stacked ? (
             // Stacked rows ALWAYS reserve the subtitle line so every row in
@@ -637,9 +640,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
             // (shiki dogfood: inconsistent heights). The nbsp holds the
             // line box when there's no subtitle; this is also the slot
             // per-row availability (Online / Offline) fills once enabled.
-            <span className="truncate text-xs text-text-muted">
-              {subtitle ?? ' '}
-            </span>
+            <span className="truncate text-xs text-text-muted">{subtitle ?? ' '}</span>
           ) : subtitle ? (
             <span className="truncate text-xs text-text-muted">{subtitle}</span>
           ) : null}
@@ -647,15 +648,20 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         {badge && badge > 0 ? (
           <UnreadBadge count={badge} tier={badgeTier} inverted={selected} />
         ) : status ? (
-          <span data-status-pip className={'size-1.5 rounded-[var(--pill-radius)] ' + STATUS_DOT[status]} />
+          <span
+            data-status-pip
+            className={'size-1.5 rounded-[var(--pill-radius)] ' + STATUS_DOT[status]}
+          />
         ) : null}
       </button>
     </li>
   );
 });
 
-interface ConversationRowLayoutProps
-  extends Omit<HTMLAttributes<HTMLDivElement>, 'title' | 'children' | 'className'> {
+interface ConversationRowLayoutProps extends Omit<
+  HTMLAttributes<HTMLDivElement>,
+  'title' | 'children' | 'className'
+> {
   /** `true` iff this row is the open conversation — the ONE selection object in
    *  the tree (`conversationSelectionTier`). Paints the row AND sets the
    *  `data-row-selected` theme hook. */

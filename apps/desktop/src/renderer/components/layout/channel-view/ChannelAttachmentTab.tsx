@@ -1,3 +1,4 @@
+import { RangeInput } from '@/components/ui/range-input';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Download, ExternalLink, ZoomIn, ZoomOut } from 'lucide-react';
@@ -116,16 +117,12 @@ export function ChannelAttachmentTab({
         // Toast only on a genuine content revision — the revision segment rising,
         // not the reconnect epoch — so a bare reconnect never claims an update.
         const isRevisionBump =
-          isRefresh &&
-          shown !== null &&
-          Number.isFinite(revision) &&
-          revision > shown.revision;
+          isRefresh && shown !== null && Number.isFinite(revision) && revision > shown.revision;
         shownRef.current = { attachmentId, revision };
         setState({ status: 'ready', text, contentType: fetchedType });
-        if (isRevisionBump)
-          toast('Attachment auto-updated', { icon: toastIcon('attachment') });
+        if (isRevisionBump) toast('Attachment auto-updated', { icon: toastIcon('attachment') });
       })
-      .catch(err => {
+      .catch((err) => {
         if (cancelled) return;
         // A failed refetch keeps the content already on screen; only a first load
         // has nothing to fall back to, so only it surfaces the error.
@@ -169,16 +166,14 @@ export function ChannelAttachmentTab({
             >
               <ZoomOut className="size-3.5" />
             </button>
-            <input
-              type="range"
-              data-settings-slider
-              className="settings-font-size-slider w-24"
+            <RangeInput
+              className="w-24"
               min={HTML_ZOOM_MIN * 100}
               max={HTML_ZOOM_MAX * 100}
               step="any"
               value={htmlZoom * 100}
               aria-label="Zoom level"
-              onChange={e => zoomTo(Number(e.target.value) / 100)}
+              onChange={(e) => zoomTo(Number(e.target.value) / 100)}
             />
             <button
               type="button"
@@ -258,7 +253,12 @@ function AttachmentTabBody({
   if (kind === 'html') {
     return (
       <div className="min-h-0 flex-1">
-        <AttachmentHtmlPreview html={state.text} title={filename} zoom={htmlZoom} onPinch={onPinch} />
+        <AttachmentHtmlPreview
+          html={state.text}
+          title={filename}
+          zoom={htmlZoom}
+          onPinch={onPinch}
+        />
       </div>
     );
   }
@@ -277,7 +277,9 @@ function AttachmentTabBody({
 
 function TabStatus({ children }: { children: React.ReactNode }): JSX.Element {
   return (
-    <div className={cn('flex min-h-0 flex-1 items-center justify-center p-6 text-xs text-text-muted')}>
+    <div
+      className={cn('flex min-h-0 flex-1 items-center justify-center p-6 text-xs text-text-muted')}
+    >
       {children}
     </div>
   );
