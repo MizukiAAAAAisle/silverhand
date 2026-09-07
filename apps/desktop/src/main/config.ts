@@ -13,14 +13,6 @@ import {
   type DesktopAppPaths,
 } from '@silverhand/shared/app-data-layout';
 
-// `event_ws_allowed_origins` is NEVER persisted. For embedded it is a
-// GENERATED value — the current boot's finalized loopback origin, re-seeded
-// fresh by `startBackend` every launch (#task:1428). Persisting it would let a
-// stale origin from an earlier port survive into the next boot's allowlist
-// (trusting a loopback the app no longer listens on), turning "trust the
-// current origin" into "accumulate every historical origin". Omit it so the
-// on-disk config carries only durable settings; the allowlist is always
-// derived, never inherited. (`auth_token` is omitted as a secret.)
 const PersistedServerConfigSchema = ServerConfigSchema.omit({
   auth_token: true,
   event_ws_allowed_origins: true,
@@ -30,12 +22,6 @@ export function silverhandDir(): string {
   return defaultAppRoot(process.env, homedir);
 }
 
-/**
- * #task:1603 (Cindy P1) — the Electron userData redirect gate must use
- * the SAME presence judgment as the root value: a whitespace-only
- * SILVERHAND_DIR is unset, so it must not redirect userData while the
- * app root itself falls back to home.
- */
 export function shouldRedirectElectronUserData(
   env: Record<string, string | undefined> = process.env,
 ): boolean {

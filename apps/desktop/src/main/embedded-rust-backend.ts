@@ -1,39 +1,3 @@
-// #task:2343 — the embedded-mode launcher that runs the PREBUILT Rust backend
-// (`silverhand-backend`) as a child process, replacing the legacy in-process TypeScript
-// backend. This module owns the whole out-of-process embedded lifecycle:
-//
-//   1. verify the packaged sidecar against its manifest (target/arch + SHA-256) BEFORE
-//      spawn — a missing/wrong-arch/corrupt artifact fails loud, never a TS fallback;
-//   2. spawn the child with a launcher-owned EXPLICIT env boundary (db, blobs, logs,
-//      bootstrap-token, listener, origins, daemon, signup, deployment_profile=embedded)
-//      + a launcher-minted `SILVERHAND_STARTUP_GENERATION`;
-//   3. read ordered preparing/prepared/bound frames, all echoing this generation;
-//   4. poll the reported URL for `/readyz=200` (the frame is `bound`, not `ready`);
-//   5. verify the API-epoch wire-compat from `/api/server/info`;
-//   6. publish an `EmbeddedRustBackendHandle { url, port, onTerminal, close }`.
-//
-// Migration is owned by the Rust child, which backs up, migrates, audits and closes
-// its preparation connection before opening application pools. The child is the only
-// opener of the SQLite file (no dual-open). Compatibility is the independent `api_epoch`;
-// this module performs NO version-equality check.
-//
-// #task:2343 seq362 hardening:
-//   - P0-1: a SECOND stdout line arriving DURING the ready/epoch probe (after the frame,
-//     before publish) rejects the in-flight startup promise IMMEDIATELY and reclaims the
-//     child BEFORE any handle/URL is published — never a set-flag-then-return-then-async-
-//     close race.
-//   - P0-2: every HTTP probe (`/readyz` single fetch, server-info fetch) runs under ONE
-//     shared startup deadline + a per-attempt AbortSignal, and races child-exit and a
-//     shutdown signal, so a never-resolving fetch can never bypass the budget.
-//   - P0-4: the published handle exposes a TYPED terminal surface (`onTerminal`): a
-//     post-publish fatal (child crash, stray/duplicate stdout line, stdout stream error)
-//     fires it exactly once so the Desktop main can invalidate the backend + control-plane
-//     URL and route the renderer through the visible runtime-failure path — not a silent
-//     background `void close()` while the app still believes it is healthy.
-//   - P0-5: child reclaim settles on `exit` OR `error` (Node can emit `error` WITHOUT a
-//     following `exit`, e.g. ENOENT), and never waits forever for an exit that will not
-//     come — SIGKILL falls through to resolve on a bounded grace.
-
 import type { ChildProcess } from 'node:child_process';
 
 import { classifyDesktopServerApiCompatibility } from '@silverhand/shared';
@@ -94,12 +58,6 @@ export type EmbeddedRustBackendTerminalReason =
 export interface EmbeddedRustBackendHandle {
   readonly url: string;
   readonly port: number;
-  /** #task:2343 P0-4 — register the SINGLE owner notified when a PUBLISHED backend dies
-   * for any reason (crash, post-publish protocol violation, stdout stream fatal). Fires
-   * at most once; if the backend already terminated, the callback is invoked
-   * synchronously on the next microtask with the recorded reason. The main process uses
-   * this to invalidate the global backend + clear the control-plane URL + route the
-   * renderer through the visible runtime-failure path. */
   onTerminal(listener: (reason: EmbeddedRustBackendTerminalReason) => void): void;
   /** Graceful shutdown: signal the child, await exit within a bound, hard-kill on
    * timeout, and best-effort remove the bootstrap token. Idempotent. */
@@ -300,21 +258,6 @@ function buildChildEnv(
   return env;
 }
 
-/**
- * #task:2343 P1 — a persistent startup-protocol monitor that CONTINUOUSLY drains the
- * child's stdout for its whole lifetime, and owns the child's exit/error/stream events.
- * stdout carries ONLY the one bound frame — a second non-blank line is never valid.
- *
- * Phases:
- *  - `awaiting`: `awaitBoundFrame` resolves on the first `bound` frame, rejects on
- *    invalid/duplicate/early-exit/error/timeout (each typed).
- *  - `bound` (frame accepted, handle NOT yet published): a second non-blank line, a child
- *    exit, or a stdout stream error is a PRE-PUBLISH violation — it settles the
- *    `prepublish` waiter so the startup promise rejects and the child is reclaimed BEFORE
- *    any handle/URL exists (P0-1). No pending-flag-then-return race.
- *  - `published`: the same events fire the TYPED terminal callback exactly once (P0-4),
- *    so the Desktop main invalidates the backend rather than silently dropping the line.
- */
 class StartupProtocolMonitor {
   onPrepared: () => void = () => {};
   private readonly reader: BoundFrameReader;
@@ -327,13 +270,10 @@ class StartupProtocolMonitor {
   private onStdoutEnd: (() => void) | null = null;
   private boundTimer: { clear(): void } | null = null;
 
-  /** Pre-publish (phase `bound`) waiter: resolved with a terminal reason if the child
-   * dies or violates the protocol before the handle is published. */
   private prepublishWaiter: {
     resolve: (reason: EmbeddedRustBackendTerminalReason) => void;
   } | null = null;
 
-  /** Post-publish terminal state (P0-4). */
   private terminalReason: EmbeddedRustBackendTerminalReason | null = null;
   private terminalListener:
     | ((reason: EmbeddedRustBackendTerminalReason) => void)
@@ -392,8 +332,6 @@ class StartupProtocolMonitor {
             );
           }
         } else {
-          // phase `bound` (pre-publish) or `published`: a further non-blank line is a
-          // protocol violation — stdout carries ONLY the one frame.
           if (outcome.status !== 'bound') {
             this.fireViolation('a second stdout line after the bound frame');
           }
@@ -459,12 +397,6 @@ class StartupProtocolMonitor {
     });
   }
 
-  /**
-   * #task:2343 P0-1 — wait for a PRE-PUBLISH terminal event (child exit / protocol
-   * violation / stdout stream error) that arrives between the bound frame and publish.
-   * Resolves with the reason; the readiness gate races this so a mid-probe violation
-   * rejects the startup promise and reclaims the child before any handle is published.
-   */
   awaitPrepublishTerminal(): Promise<EmbeddedRustBackendTerminalReason> {
     return new Promise((resolve) => {
       if (this.terminalReason) { resolve(this.terminalReason); return; }
@@ -551,14 +483,6 @@ class StartupProtocolMonitor {
   }
 }
 
-/**
- * #task:2343 P0-1/P0-2 — run the readiness poll then the epoch check under ONE shared,
- * cancelable startup deadline, racing:
- *   - a PRE-PUBLISH protocol violation / child exit / stream fatal (rejects immediately),
- *   - the bounded HTTP work (each attempt under its own AbortSignal),
- * so a never-resolving fetch cannot bypass the budget and a second stdout line during the
- * probe cancels startup before any handle/URL is published.
- */
 async function runReadyAndEpochGate(
   url: string,
   config: EmbeddedRustBackendConfig,
@@ -643,13 +567,6 @@ async function awaitReadyz(
   }
 }
 
-/**
- * #task:2343 P0 — the API-epoch compatibility gate. AFTER `/readyz=200` and BEFORE the
- * handle is published, read `/api/server/info.desktop_api` and require the embedded
- * backend to be wire-compatible with the Desktop's compiled epoch range. A missing/
- * malformed/aborted server-info, or an incompatible epoch, is a hard startup failure
- * (the caller reclaims the child + token) — never a fallback.
- */
 async function awaitEpochCheck(
   url: string,
   config: EmbeddedRustBackendConfig,
@@ -763,12 +680,6 @@ function buildHandle(
       );
   })();
 
-  // #task:2343 P0-4 — a single external terminal owner. The monitor keeps draining stdout
-  // and owns exit/error for the whole child lifetime; a post-publish fatal (child crash,
-  // stray/duplicate line, stdout stream error) delivers a TYPED reason here so the Desktop
-  // main can invalidate the backend + control-plane URL and route the renderer through the
-  // visible runtime-failure path. We do NOT auto-close here: the owner decides (it will
-  // call `close()` as part of invalidation), and `close()` is idempotent.
   let externalListener:
     | ((reason: EmbeddedRustBackendTerminalReason) => void)
     | null = null;
@@ -795,11 +706,7 @@ function buildHandle(
 
 /** Signal the child and await its exit within the grace period; SIGKILL on timeout so
  * there is never an orphan. Resolves once the child is gone (or was never alive).
- *
- * #task:2343 P0-5 — Node can emit `error` WITHOUT a following `exit` (e.g. an ENOENT that
- * surfaces asynchronously). We therefore resolve on `exit` OR `error`, and never wait
- * forever: after SIGKILL we await the same exit-or-error race under a final bounded grace
- * so a phantom child (error emitted, exit never coming) still completes reclaim. */
+ **/
 async function terminateChild(
   child: ChildProcess,
   graceMs: number,
@@ -855,15 +762,6 @@ function setTimeoutHandle(
   };
 }
 
-/**
- * #task:2343 — compose the child's process env: a NARROW inherited-OS allowlist plus the
- * launcher-owned explicit config boundary. #task:2343 P1-7: the child must NOT inherit the
- * parent's whole environment — unknown `SILVERHAND_*` keys, credentials, and injection
- * vectors (`DYLD_*`, `LD_*`, `NODE_OPTIONS`, …) must never reach the backend. Only a
- * fixed allowlist of OS runtime essentials (PATH, locale, temp dir, HOME) is forwarded,
- * and every backend input arrives through the explicit launcher boundary. This is the
- * SINGLE composer; there is no `{...process.env, ...boundary}` path.
- */
 export function composeRustBackendChildEnv(
   boundaryEnv: Record<string, string>,
   inheritedEnv: Record<string, string | undefined>,

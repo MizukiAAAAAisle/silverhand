@@ -28,21 +28,7 @@ export type LocalHostClaimStatus =
   | { status: 'claimed'; hostId: string }
   | { status: 'revoked'; hostId: string | null }
   | { status: 'error'; hostId: string | null }
-  // D3.b Commit 2 — daemon supervisor budget exhausted (i.e.
-  // `spawnDaemonChild` gave up restarting after exceeding
-  // `maxRestarts` within `restartWindowMs`). The local host row is
-  // still valid server-side; the renderer can show "Host stopped
-  // responding" and prompt the user to restart the app. Strict
-  // source rule (Cindy `#task:627` review gate): ONLY the supervisor's
-  // `onExit` fatal callback may flip into this state. Attach
-  // watchdog timeout / typed `host_outbound_attach` failure / 401 /
-  // revoked are NOT routed through `failed`.
   | { status: 'failed'; hostId: string | null };
-
-// #task:1598 — every function in this leaf receives RESOLVED file paths
-// (desktop composition root: `desktopAppPaths().installationId` /
-// `.localComputer.daemonConfig`); it never derives them from a root, so
-// a future layout-version flip happens in the selector only.
 
 export function loadOrCreateInstallationId(installationIdPath: string): string {
   const path = installationIdPath;
@@ -113,24 +99,6 @@ export function removeDaemonHostConfig(daemonConfigPath: string): void {
   }
 }
 
-/** Fit the machine name to the claim contract's `label` bound.
- *
- *  The default label is a SYSTEM value, so this side has to make it fit:
- *  `label` is `trim().min(1).max(HOST_DISPLAY_LABEL_MAX_LENGTH)`
- *  (#task:1849) and a long machine name — a corporate FQDN, say — would
- *  otherwise throw inside `buildHostClaimInput` and block claiming the
- *  local computer entirely. Truncating a hostname-derived default is
- *  safe (the user can rename the computer afterwards); refusing to claim
- *  is not.
- *
- *  Returns `null` when nothing usable survives (an empty or
- *  whitespace-only hostname), because `min(1)` would reject `''` just as
- *  hard as an over-long string. The caller then omits `label` — the
- *  claim route treats an absent label as "no preferred name" and the
- *  server picks the stable default name.
- *
- *  Trailing trim runs AFTER the slice: cutting at the bound can land
- *  mid-whitespace, and we want to send exactly what the schema keeps. */
 export function defaultClaimLabel(machineName: string): string | null {
   const fitted = machineName
     .trim()
@@ -240,19 +208,6 @@ export function assertApiProxyPath(path: string): void {
   }
 }
 
-/** Persist a freshly rotated host token. Pure side-effect helper —
- *  reused by the `hosts:rotate` IPC and unit-tested separately. The
- *  main process wraps this in network I/O + token bookkeeping.
- *
- *  D4.a Commit 5c-1:
- *  rotate does NOT change the profile generation, so it MUST preserve
- *  the existing `profile_version` from the current daemon-config. A
- *  rotate that silently drops the field would force the daemon to
- *  treat the next legitimate profile commit (5c-2 phase-2 reload) as
- *  a fingerprint flip from `<none>` to a value, even though both
- *  versions match — diagnostic logs would mis-attribute the reload
- *  to the rotate, not the profile commit.
- */
 export function applyRotateSideEffects(input: {
   daemonConfigPath: string;
   serverUrl: string;

@@ -1,16 +1,5 @@
 import { join } from 'node:path';
 
-/**
- * #task:1762 — the ONE description of where the renderer is loaded from.
- *
- * Both the window loader (`createWindow`) and the IPC sender validator
- * consume this resolver, so an allowed IPC source can never drift from the
- * actual load target. Writing the dev URL / packaged entry path twice is the
- * failure mode this exists to prevent: moving the renderer entry would
- * otherwise silently reject every IPC message the real app sends.
- *
- * Pure: no Electron imports, no IO — just the env/`__dirname` inputs.
- */
 export type RendererEntry =
   | { kind: 'dev-server'; url: string }
   | { kind: 'packaged-file'; filePath: string };

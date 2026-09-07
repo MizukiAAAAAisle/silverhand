@@ -1,24 +1,3 @@
-/**
- * D4.a Commit 2 — desktop main-process helper that probes a
- * candidate `server_url` and returns a typed outcome the Setup
- * Wizard / Settings UI can render copy off of.
- *
- * Scope:
- *   - Classify the URL via the shared {@link classifyServerUrl}
- *     primitive (so the wizard and the daemon agree on what's
- *     acceptable — see `packages/shared/src/server-url.ts`).
- *   - Issue `GET <url>/api/server/info` via the standard Node `fetch`
- *     (HTTP for `kind: 'loopback'` / `insecure: true`, HTTPS for
- *     `insecure: false` — Node's default system-CA pipeline does the
- *     verification with NO custom verifier).
- *   - Translate any thrown error to a typed outcome via
- *     {@link classifyTlsError}; non-TLS network errors collapse to
- *     `network_failed`; HTTP non-2xx becomes `http_failed`; body
- *     parse failure becomes `invalid_response`.
- *
- * Pure-ish: takes a `fetcher` seam so unit tests can drive every arm
- * without standing up a real HTTP server.
- */
 import {
   ServerInfoSchema,
   apiPaths,
@@ -63,20 +42,6 @@ export type ProbeServerInfoResult =
       kind: 'system_ca_verified' | 'loopback_ok' | 'insecure_dev_remote';
       info: ServerInfo;
       /**
-       * D4.a Commit 5 — canonical origin string for the URL that was
-       * actually probed. Equal to `new URL(serverUrl).origin` after
-       * passing the §7.1 origin-only invariant (`classifyServerUrl`
-       * rejects path / query / fragment, so by the time we see ok=true
-       * the origin is the entire server-side meaningful component of
-       * the URL the user typed).
-       *
-       * This is the value the caller MUST persist when committing the
-       * server connection profile (closes Cindy D4.a Commit 2 review
-       * nit "别让 'canonical' 和 'raw round-trip' 两套说法继续并存"):
-       * the rest of the desktop main process derives `server_url`
-       * from the persisted profile, so canonicalizing once at write
-       * time means every downstream transport reads the same origin.
-       *
        * Examples (post-classification — values that PASS the probe):
        *   `http://localhost:3000/` → `http://localhost:3000`
        *   `https://example.com`    → `https://example.com`

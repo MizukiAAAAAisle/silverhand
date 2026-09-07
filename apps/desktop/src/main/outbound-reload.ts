@@ -1,58 +1,3 @@
-/**
- * Stage D3.c Commit 3 — desktop main orchestrator for the Settings
- * "save server URL" flow.
- *
- * Background:
- *   Pre-D3.c, the desktop bootstrapped the outbound WS exactly once
- *   per login via `host_outbound_attach` (D3.a Commit 4) and never
- *   revisited that decision until the next login. D3.c adds a
- *   Settings affordance where the user edits the server URL (V1:
- *   loopback only) and saves — which has to atomically rewrite
- *   `daemon-config.json` AND inform the daemon to swap to the new
- *   bytes AND verify a fresh attachment landed at the backend, all
- *   without taking down the in-flight outbound on a typo / network
- *   blip / bad bytes.
- *
- *   D3.c Commit 2 already shipped the `host_outbound_reload` daemon
- *   IPC: stat-first safe-read, validate-first-then-swap, no silent
- *   fallback to attach, fingerprint-aware `unchanged` arm. This
- *   orchestrator wires it into the desktop Settings save path
- *   without leaking the lifecycle bookkeeping (snapshot before
- *   write, watchdog after `action: 'reloaded'`, skip watchdog on
- *   `action: 'unchanged'`) into renderer-visible code.
- *
- * What this module owns:
- *   - The "save Settings" pipeline as a SINGLE pure function with
- *     injected deps — every fan-out point (classify / atomic-write /
- *     IPC / watchdog) is a dep so the same orchestration logic is
- *     unit-tested end-to-end without touching disk / WS / IPC.
- *   - The typed `OutboundReloadOutcome` discriminated union exposed
- *     to the IPC handler in `index.ts`.
- *
- * What this module does NOT own:
- *   - The actual IPC handler (`index.ts` registers it and supplies
- *     real deps — `hostClient.hostOutboundReload`, real
- *     `writeDaemonHostConfig`, real `HostWsServerController.getAttachment`).
- *   - Renderer Settings UI (Commit 4 lands separately).
- *   - The user-facing `local_host_status` enum — this orchestrator's
- *     outcome is a diagnostic / save-confirmation signal, not a
- *     status mutation. The 5-value `local_host_status` enum is fed
- *     by the supervisor's restart-budget classifier only (per
- *     `local-host-claim.ts` Stage B.4 lock + D3.a/D3.d scope note).
- *
- * Three review anchors Cindy named for D3.c final (#task:634):
- *   1. raw input classify in main BEFORE atomic write — defense in
- *      depth (renderer also validates, but main must not trust it).
- *   2. atomic write BEFORE reload IPC — reload must never read a
- *      partial write. Reused via `writeDaemonHostConfig` which
- *      already does tmp + writeFileSync(0o600) + renameSync with
- *      tmp cleanup on error.
- *   3. reload `action: 'reloaded'` is NOT proof of connectivity —
- *      caller MUST await a fresh attachment via the same predicate
- *      `attachmentSatisfies` used at attach time (D3.a Commit 4).
- *      `action: 'unchanged'` skips the watchdog because the daemon
- *      kept the live client (no swap → no reconnect to wait for).
- */
 import type {
   ClassifyServerUrlOptions,
   DaemonHostConfig,
@@ -108,30 +53,12 @@ export type OutboundReloadOutcome =
       elapsedMs: number;
     }
   | {
-      /**
-       * `#task:1021` — REMOTE backend success arm. The daemon swapped to
-       * the new bytes (`reloaded: true`), but the in-process
-       * `HostWsServerController` is structurally absent in remote mode
-       * (the attachment registry lives in the remote backend process,
-       * not here — same root cause as the `#task:1010` connection pill).
-       * So from main we cannot watch the reattach. This is NOT a failure
-       * (`no_attachment_controller`): connectivity IS observable
-       * out-of-band via the renderer's connection indicator, which polls
-       * the remote backend's host-status `availability` — the single
-       * readiness signal source (#task:1010). The save is confirmed;
-       * verification is deferred to that indicator. The renderer renders
-       * "Saved. Reconnecting…" and points the user at it, never the old
-       * misleading "connection check is not available in this mode".
-       */
       ok: true;
       kind: 'reloaded_remote';
     }
   | {
       ok: false;
       kind: 'classify_rejected';
-      /** Mirrors `ServerUrlClassification` failure reasons so the
-       *  renderer can key off the same set the live input validator
-       *  does. */
       reason: ServerUrlRejectionReason;
       message: string;
     }
@@ -212,19 +139,6 @@ export interface PerformOutboundReloadDeps {
   hostOutboundReload: HostOutboundReloadFn;
   /** Backend attachment snapshot — `HostWsServerController.getAttachment`. */
   getAttachment: GetHostAttachmentFn | null;
-  /**
-   * `#task:1021` — true when this desktop runs against a REMOTE backend.
-   * In remote mode `getAttachment` is structurally null (the in-process
-   * `HostWsServerController` lives in the remote backend, not here), so
-   * the orchestrator cannot watch the reattach from main. But a reloaded
-   * client is still a SUCCESS, not a `no_attachment_controller` failure:
-   * the renderer's connection indicator polls the remote backend's
-   * host-status `availability` (#task:1010) and is the single readiness
-   * signal source. With this flag set, the no-controller branch returns
-   * the `reloaded_remote` success arm instead. Headless / unsupported
-   * edges leave it false → `no_attachment_controller` (verification is
-   * genuinely impossible there — no indicator polling either).
-   */
   remoteMode?: boolean;
   /**
    * Returns the local host id this desktop is currently bound to,
@@ -240,18 +154,6 @@ export interface PerformOutboundReloadDeps {
    * the bytes). Null when no current attachment.
    */
   currentHostToken: () => string | null;
-  /**
-   * D4.a Commit 5c-1 (per `docs/auth-and-host-model.md §3.2`):
-   * returns the current `profile_version` from the on-disk
-   * daemon-config, or undefined when the field is absent (D3.x
-   * config or embedded boot pre-Setup-Wizard). The legacy
-   * `settings:saveServerUrl` path is NOT a profile commit — it does
-   * not bump `profile_version`. We pass through whatever value the
-   * current config carried so the daemon-fingerprint behaviour
-   * (`<none>` ↔ value transitions) reflects only profile commits,
-   * not raw URL edits. Commit 5d redirects this entry point to the
-   * profile-driven phase-2 flow and removes the legacy carry-through.
-   */
   currentProfileVersion?: () => number | undefined;
   /**
    * Test seam for `startAttachWatchdog`. Production passes
@@ -279,34 +181,6 @@ export interface PerformOutboundReloadInput {
   serverUrl: string;
 }
 
-/**
- * The orchestrator. Pure-ish: side effects flow through deps. The
- * sequence is strict — each step's success is a precondition for
- * the next, and the snapshot for the freshness predicate is
- * captured BEFORE the atomic write (anchor 3 cross-references
- * D3.a's freshness contract: the daemon may attach the new bytes
- * before its IPC ack returns).
- *
- *   1. classifyServerUrl(input, callerPolicy) — reject up-front; no write.
- *   2. currentLocalHostId() / currentHostToken() — reload requires
- *      both. Missing → `reload_rejected/not_attached` (mirrors the
- *      daemon's own reject reason rather than minting a new one).
- *   3. Snapshot { previousConnectionId, expectAttachSince } —
- *      BEFORE write so the watchdog accepts an attachment whose
- *      `attachedAt` precedes the write.
- *   4. writeDaemonHostConfig(newConfig) — atomic. Throws → caller
- *      receives `config_write_failed`; reload IPC is NEVER fired
- *      after a write failure (would race a partial state).
- *   5. hostOutboundReload() — daemon swaps if and only if the new
- *      bytes validate. Failure arms passed through verbatim.
- *   6a. action: 'unchanged' — daemon kept the live client. Skip
- *       watchdog and return success. No WS bounce.
- *   6b. action: 'reloaded' — daemon spawned a fresh client. Start
- *       the watchdog with the pre-write snapshot. Watchdog success
- *       → `reloaded`; timeout → `connectivity_unverified`
- *       (success arm, downgraded confirmation — the user's config
- *       IS saved).
- */
 export async function performOutboundReload(
   input: PerformOutboundReloadInput,
   deps: PerformOutboundReloadDeps,
@@ -458,14 +332,6 @@ export async function performOutboundReload(
     // No in-process attachment registry to watch. Two very different
     // reasons land here:
     if (deps.remoteMode) {
-      // `#task:1021` — REMOTE backend. The controller lives in the
-      // remote process, so we can't observe the reattach from main.
-      // But the daemon acked `reloaded` AND connectivity is observable
-      // out-of-band: the renderer's connection indicator polls the
-      // remote backend's host-status `availability` (#task:1010), the
-      // single readiness signal source. So this is success with
-      // verification deferred to that indicator — NOT the misleading
-      // `no_attachment_controller` "can't verify in this mode".
       return { ok: true, kind: 'reloaded_remote' };
     }
     // Headless / unsupported edge — no controller AND no indicator to

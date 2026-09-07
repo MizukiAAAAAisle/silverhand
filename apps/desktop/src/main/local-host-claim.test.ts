@@ -29,8 +29,6 @@ import {
   writeDaemonHostConfig,
 } from './local-host-claim.js';
 
-// #task:1598 — the leaf takes RESOLVED file paths; tests build them the
-// way the desktop resolver does.
 const installationIdPath = (dir: string) => join(dir, 'installation_id');
 const daemonHostConfigPath = (dir: string) => join(dir, 'daemon-config.json');
 
@@ -116,10 +114,6 @@ describe('desktop local host claim helpers', () => {
   });
 
   it('fits a system hostname to the claim label bound', () => {
-    // #task:1849 tightened `label` to HOST_DISPLAY_LABEL_MAX_LENGTH. The
-    // hostname-derived DEFAULT must be fitted here, or a long machine
-    // name (corporate FQDN) would throw inside `buildHostClaimInput` and
-    // block claiming the local computer entirely.
     const long = `${'h'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH + 40)}.corp.example.com`;
     expect(defaultClaimLabel(long)).toBe(
       'h'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH),
@@ -146,9 +140,6 @@ describe('desktop local host claim helpers', () => {
   });
 
   it('marks every main-managed host route as not renderer-proxyable', () => {
-    // Stage B.4: claim + rotate + revoke all bypass the generic
-    // backend proxy. Old `isTokenBearingHostClaimPath` is kept as a
-    // deprecated alias.
     expect(isMainManagedHostPath(apiPaths.hostClaimOrCreate)).toBe(true);
     expect(isMainManagedHostPath(apiPaths.hostRotateToken('host-x'))).toBe(true);
     expect(isMainManagedHostPath(apiPaths.hostRevoke('host-x'))).toBe(true);
@@ -204,11 +195,6 @@ describe('desktop local host claim helpers', () => {
   });
 
   it('assertApiProxyPath rejects absolute / protocol-relative URLs even when their pathname looks like /api/', () => {
-    // P0 (round 2): `pathnameOf('http://evil/api/x') === '/api/x'`,
-    // so any guard that *only* checked the normalized pathname would
-    // accept the absolute URL, and `new URL(absolute, backendBase)`
-    // keeps the evil origin — the renderer's session bearer would
-    // get exfiltrated. The raw startsWith gate must run first.
     expect(() => assertApiProxyPath('http://evil.example/api/workspaces')).toThrow(
       /only accepts \/api\/\*/,
     );

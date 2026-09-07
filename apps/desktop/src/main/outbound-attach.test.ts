@@ -1,28 +1,3 @@
-/**
- * Tests for `outbound-attach.ts` — the desktop-side helper that owns
- * the `host_outbound_attach` freshness contract (D3.a Commit 4).
- *
- * Two lenses:
- *   1. `attachmentSatisfies` pure predicate — fail-loud on hostId
- *      mismatch, accepts on either fresh connection-id OR
- *      attachedAt >= lower-bound; pre-existing stale attachment must
- *      not satisfy.
- *   2. `startAttachWatchdog` lifecycle — synchronous resolve when the
- *      attachment is already fresh, timed wait when not, timeout
- *      surfaces a diagnostic outcome (NOT a UI status enum), abort
- *      is idempotent.
- *
- * Background on the predicate (see Cindy review notes
- * `3crX9IRnMUbm7CFv` / `v0-84W8MIUybpBTz` / `pqxWjGdeUTaAkHBd`):
- *   - The daemon may attach BEFORE its `host_outbound_attach` IPC
- *     ack returns to main, so an "after IPC ack" timestamp would
- *     wrongly exclude the very attach we want.
- *   - Snapshot the previous connection-id BEFORE the IPC; either a
- *     new connection-id OR `attachedAt >= preIpcLowerBound` is proof
- *     the attach is fresh.
- *   - hostId equality guard is fail-loud against future controller
- *     interface evolution and test-fake typos.
- */
 import { describe, expect, it } from 'vitest';
 import type { HostWsAttachment } from '@silverhand/backend';
 import {

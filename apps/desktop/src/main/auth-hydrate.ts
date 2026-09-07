@@ -1,32 +1,3 @@
-/**
- * D4.a Commit 6 fixup (Cindy P1 follow-up after `#task:658`).
- *
- * Pre-fix bug (`apps/desktop/src/main/index.ts:643-656` before this
- * change): `hydrateDesktopSession()` validated the persisted user
- * session token by fetching `/api/me` and collapsed the outcome
- * into `UserDto | null`. The `null` arm was reached by BOTH
- * `401/403` (server rejected the token) AND any other failure
- * (DNS, TLS, ECONNREFUSED, 5xx, …) — including the transient
- * `backend_unreachable` case D4.a is explicitly built to recover
- * from. A `null` arm then called `clearUserSession()`, which
- * unlinks `~/.silverhand/desktop/session.bin` AND deletes the
- * `~/.silverhand/daemon-config.json`. Net effect: a remote
- * backend being briefly unreachable at boot wiped a valid
- * persisted session + daemon-host config, forcing re-login and
- * re-claim after backend recovery.
- *
- * That violates D4.a's `backend_unreachable` invariant: transport
- * unreachability is a RECOVERABLE state and MUST NOT be folded
- * into "auth token invalid". Local credentials only get cleared
- * when the server explicitly says no (401 / 403).
- *
- * This module splits the outcome into a typed union and provides
- * a pure `executeHydrate()` orchestrator that takes injected
- * dependencies, so the three-arm flow is unit-testable without
- * Electron / fetch / disk side effects. `index.ts`
- * wires the real dependencies in. The regression test pinned by
- * Cindy lives in `__tests__/auth-hydrate.test.ts`.
- */
 import type { UserDto } from '@silverhand/shared';
 import { UserDtoSchema } from '@silverhand/shared';
 

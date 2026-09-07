@@ -43,11 +43,6 @@ import {
   type CategorizedLoggers,
   type FileLogger,
 } from '@silverhand/shared/node-file-logger';
-// #task:2343 — the embedded arm launches the PREBUILT Rust backend out-of-process, not
-// an in-process TS backend. ALL embedded-only runtime surface (migrator, launcher,
-// sidecar verifier, production deps) is reached through the ONE `embedded-launcher` seam,
-// which the remote-only build aliases to a throwing stub — so the remote-only main graph
-// contains no `@silverhand/backend` / `better-sqlite3` / launcher / sidecar.
 import {
   startDesktopEmbeddedBackend,
 } from './embedded-launcher.js';
@@ -63,8 +58,6 @@ import {
   DESKTOP_REMOTE_ONLY,
   PACKAGED_DEFAULT_SERVER_URL,
 } from '../build-flags.js';
-// #task:1630 — one declaration of the attachment discriminant, imported by
-// main / preload / (via `preload/api.d.ts`) renderer, and one producer for it.
 import type { LocalHostWsAttachment } from '../backend-info-contract.js';
 import { describeLocalHostWsAttachment } from './local-host-ws-attachment.js';
 import {
@@ -172,23 +165,11 @@ import {
   fetchBackendWithNetworkPolicy,
 } from './renderer-backend-network.js';
 
-/**
- * #task:1761 — the ONE main-process seam for backend HTTP. Injects the
- * client-info header (incl. desktop_api_epoch) on every request so server-side
- * epoch admission sees a uniform source on ALL desktop REST paths, not just the
- * renderer proxy. A source-scan test forbids raw calls of the underlying
- * network-policy fetch (literal `fetch` first argument) in this file outside
- * this wrapper — a new direct call missing the header is classified as a
- * pre-epoch legacy desktop and, now that relocation-v1 §6 closed the
- * observation bridge, is 426-rejected outright.
- */
 function backendFetch(
   input: string | URL,
   init?: RequestInit,
 ): Promise<Response> {
   const headers = new Headers(init?.headers);
-  // Admission input (#task:1761 round-2): the dedicated epoch header is a
-  // compiled constant — no IO, cannot fail, always present.
   headers.set(DESKTOP_API_EPOCH_HEADER, String(DESKTOP_SERVER_API_EPOCH));
   // Observability input: fail-open telemetry; null just omits the header.
   if (!headers.has(CLIENT_INFO_HEADER)) {
@@ -206,17 +187,6 @@ import {
 
 const nodeSystemCaActivation = enableNodeSystemCa();
 
-/**
- * D4.a Commit 5d — typed union of the two boot-time backend
- * adapters. The desktop main process always has either a local
- * embedded backend (the out-of-process Rust `EmbeddedRustBackendHandle`)
- * or a remote one (the user's profile pointed at a remote URL; main
- * built a `RemoteBackendHandle` instead). Code that needs the URL goes
- * through {@link requireBackendUrl}; code that depends on the embedded
- * arm goes through {@link requireEmbeddedBackend}, which typed-fails on
- * the remote arm so a remote boot can never silently consume an
- * embedded-only side effect.
- */
 type BackendHandle =
   | { readonly kind: 'embedded'; readonly running: EmbeddedRustBackendHandle }
   | RemoteBackendHandle;
@@ -244,9 +214,6 @@ let backend: BackendHandle | null = null;
 let daemon: DaemonHandle | null = null;
 let hostClient: HostClient | null = null;
 
-// #task:1603 — presence judged by the unified SILVERHAND_DIR contract
-// (whitespace-only = unset), never the raw env: the userData redirect and
-// the app root must take the same arm for the same input.
 if (shouldRedirectElectronUserData()) {
   app.setPath('userData', electronUserDataPath());
 }
@@ -256,20 +223,6 @@ let mainWindow: BrowserWindow | null = null;
 let userSessionToken: string | null = null;
 let userSessionUser: UserDto | null = null;
 
-// #task:1763 — runtime promotion of the epoch gate. Two inputs: a REST
-// proxy 426 with a valid UpgradeRequiredBody triggers ONE verifying
-// server-info probe; the backend:info handler feeds the authoritative
-// desktop_api advertisement directly (the ws-client re-runs that discovery
-// before every reconnect, so a rejected WS upgrade lands here without any
-// dead-socket inference). A confirmed client_too_old pushes
-// 'epoch:update-required' so the renderer re-asks getAuthState() and the
-// startup precheck (the single authority) gates.
-// #task:1762 — the single IPC ingress root: every renderer→main channel is
-// registered through this validator (see ipc/guarded-ipc.ts). A source fence
-// test keeps raw registrations out of the rest of main.
-// Resolved ONCE here (the composition root) and handed to both consumers:
-// the window loader below and the IPC sender validator. One value, so the
-// allowed IPC source is the load target by construction.
 const rendererEntry = resolveRendererEntry({
   devServerUrl: process.env['ELECTRON_RENDERER_URL'],
   mainDirname: __dirname,
@@ -296,24 +249,6 @@ const runtimeUpgradeMonitor = createRuntimeUpgradeMonitor({
 let localHostClaim: LocalHostClaimStatus = { status: 'unclaimed', hostId: null };
 let rendererBackendResolvedProxy: string | null = null;
 
-/**
- * D4.a Commit 5c-2 — in-memory state describing whether the desktop's
- * view of the server connection profile has been fully applied to the
- * daemon's running config (per `docs/auth-and-host-model.md §3.2`).
- *
- * Lives on the desktop main process only — NOT serialized to disk
- * (the source of truth is the comparison `profile.version` vs
- * `daemon-config.profile_version`, which 5c-3 reconciliation re-derives
- * on boot). NOT crossed into the wire / daemon protocol per §7.6 — R4
- * boundary: this is a local desktop UX concept, not a backend-observable
- * fact.
- *
- * Initial value is `{ kind: 'fully_applied' }`. Phase-2 transitions it
- * to `partial_apply_pending` on failure; a successful Retry or boot
- * reconciliation transitions it back. Renderer reads via the
- * `partialApply:get` IPC and triggers a re-attempt via
- * `partialApply:retry`.
- */
 let partialApplyState: PartialApplyState = { kind: 'fully_applied' };
 
 /** Set `SILVERHAND_HEADLESS=1` to boot the backend without a window.
@@ -341,15 +276,7 @@ const remoteDebugging = configureRemoteDebugging();
 type DesktopAuthState =
   | { status: 'authenticated'; signup_enabled: boolean; user: UserDto }
   | { status: 'unauthenticated'; signup_enabled: boolean }
-  // D4.a Commit 5d-fixup (Cindy P1-2): typed backend-unreachable arm.
-  // Pinned to `preload/index.ts` and `preload/api.d.ts` — the three
-  // copies stay in lock-step. **No `signup_enabled`** — unknown
-  // when the server is unreachable.
   | { status: 'backend_unreachable'; server_url: string; message: string }
-  // #task:1761 — desktop↔server API epoch hard gate, returned BEFORE any
-  // business DTO is read. `app_update_required`: this build is older than
-  // the server's minimum. `server_update_required`: the server (possibly
-  // pre-epoch, classified 0) is older than this build's minimum.
   | {
       status: 'app_update_required';
       server_api_epoch: number;
@@ -556,8 +483,6 @@ interface DaemonPaths {
   pidFilePath: string;
   logDir: string;
   runtimePidRootDir: string;
-  /** #task:1608 — the per-computer slots root; the daemon freezes the
-   *  accepted binding's `computers/<computer_id>` slot per generation. */
   computersRootDir: string;
   silverhandStateRootDir: string;
   daemonIdentityPath: string;
@@ -586,24 +511,6 @@ function embeddedBootstrapPath(): string {
   return desktopAppPaths().embeddedServer.bootstrap;
 }
 
-/**
- * D4.a Commit 5d — narrow accessors over the {@link BackendHandle}
- * union. Replaced the legacy `requireBackend()` (which returned the
- * embedded-only `RunningBackend` directly) so callers cannot
- * accidentally read embedded-only context (`backend.context.*`) on
- * the remote arm via optional-chain or `as` cast. Every callsite
- * picks the helper that matches its actual dependency:
- *
- *   - {@link requireBackendUrl} — works on both arms; returns the
- *     active backend's URL (embedded loopback or remote origin).
- *     Use for HTTP/WS/proxy URL construction and origin overrides.
- *
- *   - {@link requireEmbeddedBackend} — typed-throw on remote arm.
- *     Use ONLY for code that genuinely depends on the embedded arm's
- *     handle. The `reason` argument is logged in the throw so a
- *     regression that calls this on the remote arm fails loud at the
- *     offending site.
- */
 function requireBackendUrl(): string {
   if (!backend) throw new Error('backend not ready');
   return backend.kind === 'embedded' ? backend.running.url : backend.url;
@@ -621,19 +528,6 @@ function requireEmbeddedBackend(reason: string): EmbeddedRustBackendHandle {
   return backend.running;
 }
 
-/**
- * #task:2343 — the attachment-observer CAPABILITY: does Desktop main hold an
- * authoritative in-process backend registry observer?
- *
- * With the out-of-process Rust embedded backend (and remote), Desktop main has NO such
- * observer — the local-host WS attachment is owned by the daemon's generation-bound
- * `/ws/host` flow, not an in-process registry. So this is ALWAYS false now. It is a
- * CAPABILITY, deliberately NOT derived from `backend.kind` (which expresses deployment
- * mode only): a Rust embedded backend is out-of-process exactly like remote and must not
- * be treated as if a registry lived in this process. `observable:false` means "cannot
- * read a local registry", NOT "not connected" — connection status comes from the daemon/
- * backend status surfaces, and attach/reload/detach still run the real daemon flow.
- */
 function hasLocalRegistryObserver(): boolean {
   return false;
 }
@@ -674,29 +568,15 @@ async function syncEventWsSessionCookie(token: string | null): Promise<void> {
     });
 }
 
-/**
- * D4.a Commit 5d (Cindy review boundary 3) — install the Origin /
- * Cookie override for the event-WS upgrade. Works on **both**
- * embedded and remote arms: the origin is read from the active
- * {@link BackendHandle} via {@link backendOrigin}, and the URL filter
- * pattern is built from `requireBackendUrl()`. The function does NOT
- * assume embedded loopback — for a remote https profile the protocol
- * flips to `wss:`, the host is the remote backend's host, and the
- * `Origin` header is the remote backend's origin (which is exactly
- * what its CORS policy expects).
- *
- * Renamed from `installEventWsOriginOverride` to
- * {@link installBackendEventWsOriginOverride} so the name no longer
- * suggests an embedded-only assumption.
- */
 function installBackendEventWsOriginOverride(): void {
   if (!backend) return;
+
   const expectedOrigin = backendOrigin();
   const expectedUrl = new URL(apiPaths.eventWebSocket, requireBackendUrl());
   expectedUrl.protocol = expectedUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-  // #task:1530 — release telemetry. Assembled once (memoized), fail-open: null
-  // means "omit the header", never break the upgrade.
+
   const clientInfoHeader = desktopClientInfoHeaderValue(desktopAppPaths().installationId, logger);
+
   electronSession.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: [`${expectedUrl.protocol}//${expectedUrl.host}${apiPaths.eventWebSocket}`] },
     (details, callback) => {
@@ -714,8 +594,6 @@ function installBackendEventWsOriginOverride(): void {
         if (clientInfoHeader) {
           details.requestHeaders[CLIENT_INFO_HEADER] = clientInfoHeader;
         }
-        // #task:1761 — admission epoch on the WS upgrade; compiled constant,
-        // never absent (unlike the fail-open telemetry header above).
         details.requestHeaders[DESKTOP_API_EPOCH_HEADER] =
           String(DESKTOP_SERVER_API_EPOCH);
       }
@@ -789,13 +667,14 @@ function reseatCachedUserSessionFromProxy(
 async function clearUserSession(): Promise<void> {
   userSessionToken = null;
   userSessionUser = null;
+
   localHostClaim = { status: 'unclaimed', hostId: null };
-  // D3.a Commit 4: any in-flight attach watchdog targets the session
-  // we're about to drop. Abort it so the polling timer doesn't outlive
-  // the credential it was meant to verify.
+
   activeAttachWatchdog?.abort();
   activeAttachWatchdog = null;
+
   clearPersistedUserSession();
+
   await syncEventWsSessionCookie(null);
   try {
     removeDaemonHostConfig(desktopAppPaths().desktop.computerBinding);
@@ -824,13 +703,6 @@ async function fetchServerInfo(): Promise<ServerInfo> {
   });
 }
 
-/**
- * #task:1763 (Cindy round-3) — one cheap server-info read modeled as a NAMED
- * snapshot carrying BOTH remote-compatibility axes side by side, so neither
- * axis hides inside the other's helper and a future refactor cannot silently
- * drop one. Pure read — feeding the runtime upgrade monitor is the CALLER's
- * explicit job (the backend:info handler), not a side effect here.
- */
 interface RemoteCompatibilitySnapshot {
   outbound: OutboundProtocolCompatibility;
   desktopApi: DesktopApiAdvertisement | undefined;
@@ -868,14 +740,6 @@ async function fetchRemoteCompatibilitySnapshot(): Promise<RemoteCompatibilitySn
 async function validateUserSessionToken(
   token: string,
 ): Promise<SessionValidationResult> {
-  // D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up): the
-  // previous implementation returned `UserDto | null` and the
-  // `null` arm collapsed "server rejected (401/403)" with
-  // "couldn't reach the server (DNS/TLS/5xx/throw)". The latter
-  // was used by `hydrateDesktopSession` to clear local state,
-  // which violated D4.a's `backend_unreachable` recoverability
-  // invariant. We now return a typed three-arm union via the
-  // pure `classifyMeFetchOutcome` classifier (see auth-hydrate.ts).
   let res: Response;
   try {
     res = await backendFetch(backendUrl(apiPaths.me), {
@@ -899,11 +763,6 @@ async function validateUserSessionToken(
   });
 }
 
-// D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up): in-flight
-// guard so concurrent IPC handlers (boot-time bootstrap +
-// renderer `getAuthState` poll) cannot race two `executeHydrate`
-// orchestrations against the same persisted token. `store` /
-// `claim` are not idempotent against concurrent re-runs.
 let hydrateInFlight: Promise<HydrateOutcome> | null = null;
 
 async function runHydrate(): Promise<HydrateOutcome> {
@@ -930,16 +789,6 @@ async function hydrateDesktopSession(): Promise<boolean> {
 }
 
 async function desktopAuthState(): Promise<DesktopAuthState> {
-  // D4.a Commit 5d-fixup (Cindy P1-2): typed surface for backend
-  // unreachability. On the remote arm a network failure (server
-  // down / DNS / TLS / unreachable) MUST land on a typed
-  // `backend_unreachable` arm so the renderer renders a connect
-  // gate instead of the IPC promise rejecting and leaving the UI
-  // stuck on a Loading spinner. We deliberately do NOT include
-  // `signup_enabled` in this arm — when the server is unreachable
-  // we don't know its policy, and a default would leak a guess
-  // into the gate UI. Intentionally narrow what we catch:
-  // `fetch` rejections + `Error` instances thrown by `fetchServerInfo`.
   let info: ServerInfo;
   try {
     info = await fetchServerInfo();
@@ -956,13 +805,7 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
       message,
     };
   }
-  // #task:1761 — epoch hard gate. Runs after the discovery fetch and BEFORE
-  // the /api/me hydrate below, so an incompatible pair never reads a business
-  // DTO. A pre-epoch server (no `desktop_api` field) is classified epoch 0;
-  // while MINIMUM_SERVER_API_EPOCH is 0 that still passes (symmetric
-  // bootstrap). The server-side REST/WS admission remains the authoritative
-  // enforcement — this gate exists to give the user a typed explanation
-  // instead of scattered 426 failures.
+
   {
     const advertised = info.desktop_api;
     const serverEpoch = advertised?.current_epoch ?? 0;
@@ -991,17 +834,7 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
     // update cycles).
     runtimeUpgradeMonitor.reset();
   }
-  // D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up): recovery
-  // path. If our in-memory session is empty but a persisted token
-  // still sits on disk, hydrate was deferred at boot due to a
-  // transient `backend_unreachable` (rather than rejected — the
-  // rejected arm would have cleared the persisted blob). Now that
-  // `fetchServerInfo()` just succeeded, retry validation against
-  // the live backend. On valid → promote to in-memory session +
-  // claim host, no re-login required. On rejected → clear. On
-  // still-unreachable (e.g. `/api/me` 5xx while `/api/server/info`
-  // is OK) → fall through and we'll surface a backend_unreachable
-  // arm below rather than push the user toward unauthenticated.
+
   if (
     (!userSessionToken || !userSessionUser) &&
     loadPersistedUserSessionToken()
@@ -1015,15 +848,7 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
       user: userSessionUser,
     };
   }
-  // D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up): if we
-  // still have a persisted token on disk but nothing in memory
-  // after the hydrate attempt above, validation hit the
-  // `unreachable` arm (rejected would have cleared the blob).
-  // Surface as `backend_unreachable` so the renderer shows the
-  // unreachable gate and the user can click Retry — DO NOT route
-  // them to the registration / login gate, because their
-  // persisted session is still valid as far as we know; we just
-  // can't ask the server right now.
+
   if (loadPersistedUserSessionToken()) {
     const url = backendUrl('');
     return {
@@ -1040,13 +865,6 @@ async function postAuthSession(
   path: typeof authPaths.signup | typeof authPaths.login,
   input: AuthSignupInput | AuthLoginInput,
 ): Promise<DesktopAuthResult> {
-  // D4.a Commit 5d-fixup (Cindy P1-2): typed network-failure surface.
-  // A remote backend that disappears between renderer mount and
-  // login submit MUST NOT throw an untyped IPC rejection; we report
-  // `status: 0` ("Network Error") with a typed body so the renderer
-  // surfaces a connect gate instead of a generic "something went
-  // wrong". `ApiError` on the renderer special-cases status 0 and
-  // exposes `kind: 'backend_unreachable'`.
   let res: Response;
   try {
     res = await backendFetch(backendUrl(path), {
@@ -1087,22 +905,22 @@ async function postAuthSession(
 }
 
 async function bootstrapEmbeddedUserSession(): Promise<boolean> {
-  // D4.a Commit 5d — embedded-only path. The bootstrap token comes
-  // from a file the embedded backend itself writes on first run; on
-  // the remote arm there is no such file and no embedded backend —
-  // login flows through `/auth/login` driven by user input. Guard on
-  // the union discriminator (no `as` / no `?.`).
   if (backend?.kind !== 'embedded') return false;
+
   const path = embeddedBootstrapPath();
+
   if (!existsSync(path)) return false;
+
   const token = readFileSync(path, 'utf8').trim();
   if (!token) return false;
+
   const res = await backendFetch(backendUrl(authPaths.embeddedBootstrap), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token }),
   });
   const text = await res.text();
+
   if (!res.ok) {
     logger?.warn(
       { status: res.status, statusText: res.statusText },
@@ -1110,6 +928,7 @@ async function bootstrapEmbeddedUserSession(): Promise<boolean> {
     );
     return false;
   }
+
   const parsed = AuthSessionResponseSchema.safeParse(parseJson(text));
   if (!parsed.success) {
     logger?.warn(
@@ -1120,6 +939,7 @@ async function bootstrapEmbeddedUserSession(): Promise<boolean> {
   }
   await storeUserSession(parsed.data.user_token, parsed.data.user);
   await claimLocalHostForUserSession();
+
   return true;
 }
 
@@ -1130,17 +950,6 @@ async function claimLocalHostForUserSession(): Promise<void> {
     return;
   }
 
-  // D4.a Commit 5d (Cindy 5d review boundary 2 + 4): the claim path
-  // works on BOTH embedded and remote arms. `backendUrl()` resolves
-  // against `requireBackendUrl()`, which returns the active backend
-  // URL — embedded loopback on the embedded arm, the canonical
-  // remote origin on the remote arm. The fetch failure path below
-  // (try/catch around lines `localHostClaim = { status: 'error', … }`)
-  // already handles a remote backend that's unreachable: claim is
-  // logged + status flips to `error`; no throw escapes, no embedded
-  // fallback, no main crash. This satisfies the §4.2 hard gate
-  // "remote profile saved → next launch must not crash even if the
-  // remote backend is down".
   const backendUrlSnapshot = requireBackendUrl();
   const paths = desktopAppPaths();
   const existingConfig = readDaemonHostConfig(paths.desktop.computerBinding);
@@ -1190,22 +999,9 @@ async function claimLocalHostForUserSession(): Promise<void> {
       throw new Error('local host claim response omitted host_token without reusable config');
     }
 
-    // D3.a Commit 4: capture freshness window BEFORE writing the
-    // config + firing the IPC. The daemon may attach the outbound WS
-    // before its `host_outbound_attach` ack returns to main, so an
-    // "after-ack" lower bound would exclude the very attach we want.
-    // See `outbound-attach.ts` for the full freshness contract.
     const localHostId = parsed.data.host_id;
     const attachWindow = captureAttachWindow(localHostId);
 
-    // D4.a Commit 5c-1 (per `docs/auth-and-host-model.md §3.2`):
-    // when a server connection profile is committed, claim writes the
-    // profile generation into daemon-config so the daemon's fingerprint
-    // (5b) stays in sync with desktop's view of the current profile.
-    // Embedded mode without a profile (no Setup Wizard run yet) leaves
-    // the field undefined — the on-disk file omits it, the daemon
-    // fingerprint treats it as `<none>`, and the absence is itself a
-    // stable state distinct from any explicit version.
     const profileRead = readServerConnectionProfile({
       profilePath: paths.desktop.serverProfile,
       logger: logger ?? undefined,
@@ -1256,14 +1052,6 @@ async function logoutUserSession(): Promise<{ ok: true }> {
   return { ok: true };
 }
 
-/** Renderer-facing return shape for `hosts:rotate` / `hosts:revoke`.
- *  Deliberately omits `host_token` — main always strips it before
- *  the IPC reply so it never crosses the renderer boundary. The
- *  `local_host_*` fields mirror `BackendInfo` so the renderer can
- *  refresh in one round-trip. D3.c Commit 4 added
- *  `local_host_server_url` to the `BackendInfo` surface, and these
- *  mutation payloads are built via `...snapshotLocalHostInfo()`, so
- *  the typed surface MUST include it (Cindy `#task:634` re-review P2). */
 type DesktopHostMutationResult =
   | {
       ok: true;
@@ -1286,18 +1074,6 @@ type DesktopHostMutationResult =
       message?: string;
     };
 
-/**
- * The `local_host_*` block of `BackendInfo` (and of the host mutation
- * replies, which spread it).
- *
- * REQUIRES a live backend handle — it throws otherwise. All three
- * callers already prove one: `backend:info` answers `null` before
- * reaching here, and both host mutations bail on `!backend` before
- * their request. There is
- * deliberately no degraded snapshot: the honest answer to "no backend
- * yet" is no snapshot at all, not a snapshot whose attachment claims to
- * be unobservable (#task:1630).
- */
 function snapshotLocalHostInfo(): {
   local_host_id: string | null;
   local_host_status: LocalHostClaimStatus['status'];
@@ -1308,47 +1084,16 @@ function snapshotLocalHostInfo(): {
     local_host_id:
       localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
     local_host_status: localHostClaim.status,
-    // D3.a Commit 4: diagnostic-only field. The renderer can display
-    // "connected since" but MUST NOT use this to derive a new status
-    // word — the user-facing status enum is the 5-value
-    // `local_host_status` and nothing else (per the D3.a/D3.d locked
-    // scope on host status semantics).
-    //
-    // #task:2343: observability is the attachment-observer CAPABILITY
-    // (`hasLocalRegistryObserver()`), NOT the backend discriminant. With the
-    // out-of-process Rust embedded backend (and remote) Desktop main holds no local
-    // registry, so this is `observable:false` for both arms and no local `attached_at`
-    // is read. `observable:false` means "no local registry to read", not "not attached":
-    // connection status comes from the daemon/backend surfaces. The derivation lives in
-    // `local-host-ws-attachment.ts` so it stays unit-falsifiable.
     local_host_ws_attachment: describeLocalHostWsAttachment({
       hasLocalRegistryObserver: hasLocalRegistryObserver(),
       attachedAt: null,
     }),
-    // D3.c Commit 4: surface the daemon-config `server_url` so the
-    // Settings "Server" pane (and any future Hosts page readout) can
-    // distinguish "what the daemon dials" from `backend.url` ("what
-    // this desktop's embedded backend listens on"). Sourced directly
-    // from `readDaemonHostConfig`; returns null when no daemon-config
-    // exists (pre-claim state). Re-reads on every `backend:info`
-    // refetch so post-save invalidation surfaces the new URL.
     local_host_server_url:
       readDaemonHostConfig(desktopAppPaths().desktop.computerBinding)?.server_url ?? null,
   };
 }
 
-/**
- * D3.a Commit 4 — snapshot the freshness window BEFORE writing
- * `daemon-config.json` and firing the `host_outbound_attach` IPC.
- * See `outbound-attach.ts` for the full freshness contract: the
- * daemon may attach the outbound WS before its IPC ack returns,
- * which is exactly why the lower bound has to be captured here
- * (pre-IPC) rather than after `await`.
- */
 function captureAttachWindow(localHostId: string): ExpectedAttachWindow {
-  // #task:2343: no in-process registry observer (out-of-process backend), so there is no
-  // prior local attachment to read; the freshness lower bound is the current instant and
-  // the daemon-generation flow owns attach verification.
   return {
     expectedHostId: localHostId,
     previousConnectionId: null,
@@ -1360,23 +1105,6 @@ function captureAttachWindow(localHostId: string): ExpectedAttachWindow {
  *  doesn't leak a polling timer past its useful life. */
 let activeAttachWatchdog: { abort(): void } | null = null;
 
-/**
- * D3.a Commit 4 — fire the `host_outbound_attach` IPC and spawn a
- * watchdog that polls the backend's `HostWsServerController` until a
- * fresh attachment for `localHostId` lands (or the timeout budget
- * elapses). All outcomes are diagnostic; nothing here mutates
- * `localHostClaim` or the user-facing status enum.
- *
- * The "fresh" predicate is the load-bearing detail (see
- * `outbound-attach.ts` header). Two non-obvious choices baked in:
- *   - `attachWindow.expectAttachSince` is captured BEFORE the IPC
- *     by the caller (in `captureAttachWindow`), not here, because
- *     the daemon may attach before its IPC ack returns.
- *   - On attach IPC failure we log the typed reason but do NOT
- *     fail the surrounding claim flow — the host row is already
- *     valid server-side; subsequent rotate-token / re-login can
- *     re-attempt the attach.
- */
 async function triggerLocalHostOutboundAttach(input: {
   localHostId: string;
   configPath: string;
@@ -1395,8 +1123,6 @@ async function triggerLocalHostOutboundAttach(input: {
   try {
     result = await client.hostOutboundAttach({ config_path: input.configPath });
   } catch (err) {
-    // Genuine IPC transport error (socket closed, daemon dead). Logs
-    // only — D3.b supervisor restart will retry.
     logger?.warn(
       { err, localHostId: input.localHostId },
       'D3.a host_outbound_attach IPC failed (transport)',
@@ -1421,18 +1147,12 @@ async function triggerLocalHostOutboundAttach(input: {
       localHostId: input.localHostId,
       action: result.action,
     },
-    'D3.a host_outbound_attach ack',
+    'host_outbound_attach ack',
   );
 
   // Cancel any previously-running watchdog (rotate-token / re-login
   // can fire while a prior one is still polling).
   activeAttachWatchdog?.abort();
-  // #task:2343 — no in-process registry observer (out-of-process Rust embedded backend
-  // OR remote). We acked the attach IPC and the daemon owns the real generation-bound
-  // `/ws/host` attach; there is no local registry to poll, so the watchdog stays
-  // un-armed and the user-facing status simply waits for `local_host_status` updates from
-  // other surfaces (renderer poll / typed claim error). This is a CAPABILITY, not a kind
-  // check — Rust embedded must NOT be treated as a `no_attachment_controller` fault.
   if (!hasLocalRegistryObserver()) {
     return;
   }
@@ -1454,13 +1174,8 @@ async function rotateHostToken(
   }
   const daemonConfigPath = desktopAppPaths().desktop.computerBinding;
   const existingConfig = readDaemonHostConfig(daemonConfigPath);
+
   if (!existingConfig || existingConfig.host_id !== hostId) {
-    // Stage B.4 hard guard: rotate is only legal for the host this
-    // desktop is currently bound to. Rotating any other owned host
-    // and writing the returned token to local daemon-config would
-    // silently re-bind the daemon to a different host identity.
-    // Refuse without contacting the server so we don't leak whether
-    // the requested host even exists.
     return {
       ok: false,
       code: 'not_current_host',
@@ -1718,30 +1433,6 @@ function networkErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/**
- * D3.c Commit 3 — Settings "save server URL" handler.
- *
- * Wires the IPC payload to `performOutboundReload` with real
- * deps. The orchestrator (`outbound-reload.ts`) owns the full
- * decision tree; this thin handler only:
- *   - Pulls the current `host_token` from `daemon-config.json`
- *     via `readDaemonHostConfig` — the token NEVER appears in
- *     the renderer-supplied input. Treats missing/parse failure
- *     as `not_attached` (orchestrator's reason enum).
- *   - Pulls the current `local_host_id` from `localHostClaim`
- *     (the desktop's single source of truth for "what host am
- *     I bound to right now").
- *   - Aborts any active attach watchdog on success — analogous
- *     to the rotate-token / re-login paths that also pass
- *     through `triggerLocalHostOutboundAttach` and don't want
- *     two pollers racing for the same hostId.
- *
- * The returned `OutboundReloadOutcome` is structurally
- * identical to the renderer-side `DesktopSaveServerUrlResult`
- * declared in `preload/api.d.ts`; the IPC layer serializes the
- * tagged-union shape directly so both sides see the same
- * `kind`/`reason` discriminator.
- */
 async function saveServerUrlFromSettings(
   rawServerUrl: string,
 ): Promise<OutboundReloadOutcome> {
@@ -1761,29 +1452,9 @@ async function saveServerUrlFromSettings(
   }
 
   const daemonConfigPath = desktopAppPaths().desktop.computerBinding;
-  // **Controller snapshot (Cindy `#task:634` review P2)**: bind
-  // `getAttachment` to a NON-NULL controller ONLY when one exists.
-  // If we instead passed a function that always returns null, the
-  // orchestrator's `no_attachment_controller` arm would be
-  // unreachable in production — every "missing controller" case
-  // would silently fall through to starting the watchdog, polling
-  // nothing for 10s, and surfacing as `connectivity_unverified`.
-  // Snapshotting upfront makes the arm reachable and saves a full
-  // watchdog budget when verification is structurally impossible.
-  // Mirrors the D3.b `host_outbound_detach` controller-snapshot
-  // pattern.
-  //
-  // #task:2343 — the outbound-reload verification mode is the attachment-observer
-  // CAPABILITY, not `backend.kind`. With the out-of-process Rust embedded backend (and
-  // remote) there is NO local registry observer, so verification is daemon-only for BOTH
-  // arms (`remoteMode` = "no local observer" = true here). Deriving it from
-  // `kind === 'remote'` would leave Rust embedded expecting a local controller and
-  // falling into a `no_attachment_controller` false-fault (the exact conflation
-  // #task:1021 warned about) — so it is the capability, and `bindAttachmentAccessor(null)`
-  // yields no local watchdog. Connectivity is shown by the renderer's connection
-  // indicator (remote host-status availability, #task:1010).
   const controller = null;
   const allowInsecureRemote = desktopAllowsInsecureRemote();
+
   const outcome = await performOutboundReload(
     { serverUrl: rawServerUrl },
     {
@@ -1796,11 +1467,6 @@ async function saveServerUrlFromSettings(
       currentLocalHostId: () =>
         localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
       currentHostToken: () => readDaemonHostConfig(daemonConfigPath)?.host_token ?? null,
-      // 5c-1: pull `profile_version` from the on-disk config so the
-      // legacy settings:saveServerUrl path doesn't drop the field
-      // when it rewrites the file. Legacy save is NOT a profile
-      // commit; it should preserve whatever generation the existing
-      // daemon-config (post-claim) was stamped with.
       currentProfileVersion: () => readDaemonHostConfig(daemonConfigPath)?.profile_version,
     },
   );
@@ -1900,11 +1566,7 @@ async function proxyBackendRequest(
   if (input.bodyText !== undefined && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
-  // D4.a Commit 5d-fixup (Cindy P1-2): typed network-failure surface
-  // for backend proxy. A remote backend that disappears mid-session
-  // MUST NOT throw an untyped IPC rejection; the renderer's
-  // `ApiError` special-cases `status: 0` and tags it
-  // `kind: 'backend_unreachable'`.
+
   let res: Response;
   try {
     res = await backendFetch(backendUrl(input.path), {
@@ -1925,8 +1587,6 @@ async function proxyBackendRequest(
     await clearUserSessionAfterUnauthorized('backend request');
   }
   const response = await marshalBackendResponse(res, input.responseType ?? 'text');
-  // #task:1763 — runtime epoch promotion (suspect trigger only; verified by
-  // a server-info probe inside the monitor, never trusted directly).
   runtimeUpgradeMonitor.onRestResponse(response.status, response.bodyText);
   reseatCachedUserSessionFromProxy(
     { path: input.path, method: input.method },
@@ -1958,9 +1618,7 @@ async function proxyBackendUpload(
     });
     form.append(file.fieldName, blob, file.filename);
   }
-  // D4.a Commit 5d-fixup (Cindy P1-2): same typed network-failure
-  // surface as `proxyBackendRequest` — symmetric handling so the
-  // renderer can rely on `status: 0` regardless of which proxy ran.
+
   let res: Response;
   try {
     res = await backendFetch(backendUrl(input.path), {
@@ -1992,18 +1650,7 @@ async function proxyBackendUpload(
 async function bootstrap(): Promise<void> {
   try {
     const pathResult = patchPathFromLoginShell();
-    // D4.a Commit 5d fixup (Cindy P1-1): NOTE — `loadOrCreateServerConfig()`
-    // is intentionally NOT called here. The legacy
-    // `~/.silverhand/server-config.json` is an embedded-only boot
-    // artifact (it remembered the embedded server's chosen port +
-    // mode for cross-launch persistence). Calling it before the
-    // boot-mode decision would touch — and on missing/corrupt
-    // files **write** — embedded artifacts on a remote-profile
-    // boot, breaking the §4.2 hard gate ("remote profile saved →
-    // next launch must not crash, must not fall back to embedded").
-    // The loader now lives behind `executeBackendStartup`'s
-    // embedded arm only (see below); a unit-tested seam pins that
-    // remote / refuse plans never reach it.
+
     loggers = createCategorizedLoggers({
       dir: desktopAppPaths().logs,
       alsoConsole: !app.isPackaged,
@@ -2022,14 +1669,7 @@ async function bootstrap(): Promise<void> {
       },
       'logger initialized',
     );
-    // D4.a Commit 3 — boot-mode decision. We compute it AFTER the
-    // logger is initialized so the decision can be logged actionably,
-    // but BEFORE we spawn the daemon / start the embedded backend so
-    // the trip wire (remote mode → throw) fires before any partial
-    // state lands on disk. Inputs are taken from the existing
-    // local 0600 profile reader and the strict env helpers
-    // in `@silverhand/shared/config`. See `backend-boot-mode.ts` for
-    // the full decision matrix and the trip-wire rationale.
+
     const savedBootProfileView = readServerConnectionProfileViewOrNull({
       profilePath: desktopAppPaths().desktop.serverProfile,
       logger: logger
@@ -2079,11 +1719,7 @@ async function bootstrap(): Promise<void> {
       forceEmbedded: DESKTOP_REMOTE_ONLY ? false : forceEmbedded,
       allowInsecureRemote,
     });
-    // D4.a Commit 5d — convert the boot decision into a startup plan
-    // via the pure adapter (`backend-boot-mode.ts`). The adapter is
-    // unit-tested for every decision arm so the bootstrap site below
-    // only has to switch on `plan.mode` — it can't accidentally
-    // forget an arm and silently fall through.
+
     const startupPlan = planBackendStartup(bootDecision);
     if (startupPlan.mode === 'refuse') {
       logger.error(
@@ -2091,20 +1727,9 @@ async function bootstrap(): Promise<void> {
           profileUrl: startupPlan.profileUrl,
           classifyMessage: startupPlan.classifyMessage,
         },
-        'D4.a Commit 3 boot gate (5d adapter): profile present but classifier refused it; throwing (no silent embedded fallback)',
+        'profile present but classifier refused it, throwing (no silent embedded fallback)',
       );
-      // Throw rather than silently boot embedded (Cindy D4.a Commit
-      // 3 review P1-B). A present-but-unusable profile is data the
-      // user committed deliberately — silently falling back would
-      // muddle "configured backend is broken; please fix" with "no
-      // profile yet; using embedded". Repair path is in the error
-      // message: clear profile via Settings, or set the env flag
-      // that made the URL acceptable, or set `SILVERHAND_FORCE_EMBEDDED=1`.
-      //
-      // Construct the `profile_invalid` decision shape from the
-      // refuse-arm plan (the planner is `decision → plan` losslessly
-      // for this arm) so the error class' constructor gets exactly
-      // the variant it expects.
+
       throw new ProfileUnusableError({
         mode: 'profile_invalid',
         profileUrl: startupPlan.profileUrl,
@@ -2132,7 +1757,7 @@ async function bootstrap(): Promise<void> {
           serverUrl: startupPlan.serverUrl,
           insecure: startupPlan.insecure,
         },
-        'D4.a Commit 5d boot decision: remote',
+        'boot decision: remote',
       );
       if (startupPlan.insecure) {
         logger.warn(
@@ -2141,7 +1766,7 @@ async function bootstrap(): Promise<void> {
             packagedAllowInsecureRemote: DESKTOP_ALLOW_INSECURE_REMOTE,
             envAllowInsecureRemote: readAllowInsecureRemoteFlag(process.env),
           },
-          'D4.a Commit 5d remote-mode boot admitted insecure http URL; see runbook §12 for production guidance',
+          'remote-mode boot admitted insecure http URL; see runbook §12 for production guidance',
         );
       }
     } else {
@@ -2149,7 +1774,7 @@ async function bootstrap(): Promise<void> {
         {
           reason: startupPlan.embeddedReason,
         },
-        'D4.a Commit 5d boot decision: embedded',
+        'boot decision: embedded',
       );
     }
     if (remoteDebugging.enabled) {
@@ -2162,13 +1787,7 @@ async function bootstrap(): Promise<void> {
         'CDP remote debugging enabled',
       );
     }
-    // Spawn silverhand-daemon and connect a HostClient. Daemon is the
-    // only supported runtime path; backend routes every spawn / deliver
-    // / inbox delivery through this client. On connect failure we
-    // tear down what we partially created and re-throw — there is no
-    // runtime fallback (#task:512 cleanup Commit B deleted the
-    // in-process ConversationManager runtime, Commit C removed the
-    // env switch). Recovery is fixing the daemon spawn / socket.
+
     const paths = daemonPaths();
     if (startupPlan.mode === 'embedded') {
       await fsRm(paths.controlPlaneServerUrlPath, { force: true });
@@ -2190,21 +1809,7 @@ async function bootstrap(): Promise<void> {
         startupPlan.mode === 'embedded'
           ? paths.controlPlaneServerUrlPath
           : null,
-      // #task:2343: the local-outbound frame socket was the OLD in-process TS embedded
-      // backend's data plane. The out-of-process Rust embedded backend reaches the daemon
-      // over the SAME authenticated, generation-bound `/ws/host` outbound WebSocket as
-      // remote — there is NO local-outbound-socket data plane anymore, and enabling it
-      // would be a hidden fallback (and would select the wrong `local-embedded`
-      // workspace-registry namespace). So it is `null` for BOTH arms. Host-control IPC
-      // continues over `daemon.sock` in both arms (unchanged).
       localOutboundSocketPath: null,
-      // D3.a Commit 4: the daemon is spawned WITHOUT --host-config so
-      // it cannot dial a stale `daemon-config.json` left over from a
-      // previous user. Outbound attach is triggered after login via
-      // the `host_outbound_attach` IPC (see `attachLocalHostOutbound`
-      // below). `paths.hostConfigPath` is still the destination the
-      // post-login claim writes to — only the CLI-time auto-start is
-      // removed from this code path.
       alsoStderr: !app.isPackaged,
     });
     logger.info(
@@ -2235,40 +1840,9 @@ async function bootstrap(): Promise<void> {
         { kind: info.kind, reason: info.reason, code: info.code },
         'silverhand-daemon exited fatally',
       );
-      // D3.b Commit 2 — flip `local_host_status` to `'failed'` when
-      // (and only when) the supervisor's terminal exit means no
-      // automatic recovery is in flight. Strict source rule (Cindy
-      // `#task:627` / `#task:629` review gates) is enforced by
-      // `applyFatalExitToClaim`:
-      //   - `kind === 'restart_budget_exhausted'` → flips to failed
-      //     (modulo the `revoked` carve-out inside the helper)
-      //   - `kind === 'respawn_handshake_failed'` → leaves state alone
-      //     (recovery-surface ambiguous; logged only)
-      //   - attach-watchdog timeout / typed `host_outbound_attach`
-      //     failure / backend 401 → do NOT call this helper at all
-      // See `local-host-failure.ts` for the full classification.
       localHostClaim = applyFatalExitToClaim(localHostClaim, info);
     });
-    // D3.b Commit 1 — re-attach outbound after daemon generation change.
-    //
-    // Why this hook exists: D3.a Commit 4 deliberately spawns the local
-    // daemon WITHOUT `--host-config` so it never dials a stale config
-    // pre-login. When `spawnDaemonChild` respawns after a crash, the
-    // new daemon process is "empty" — its `OutboundSupervisor` has no
-    // attach config loaded — so main must re-fire `host_outbound_attach`
-    // for the currently-claimed local host. Without this, a daemon
-    // crash silently drops outbound and never recovers.
-    //
-    // Architectural framing (R1/R4): this IPC is a V1 desktop-embedded
-    // local supervisor adapter. It is NOT part of the server↔daemon
-    // formal protocol — terminal-state daemon is started by launchd
-    // with its local host credential and attaches without main, at
-    // which point this hook (and `spawnDaemonChild`) disappear.
-    //
-    // Dedup by `instanceId` only — the canonical daemon-generation
-    // discriminator. `attachmentSatisfies` freshness (connectionId /
-    // attachedAt) remains the only attach-success proof; this set is
-    // strictly hook-reentry guard.
+
     const reattachedGenerations = new Set<string>();
     daemon.onDaemonGenerationChanged(info => {
       if (reattachedGenerations.has(info.instanceId)) {
@@ -2306,21 +1880,11 @@ async function bootstrap(): Promise<void> {
         if (!client) {
           logger?.warn(
             { instanceId: info.instanceId },
-            'D3.b daemon generation changed but hostClient is null; skipping re-attach',
+            'daemon generation changed but hostClient is null; skipping re-attach',
           );
           return;
         }
         try {
-          // HostClient.connect() is idempotent and serialises on its
-          // internal readyPromise; if the socket is still reconnecting
-          // we await the same handle as the live consumers. But
-          // connect() ALONE doesn't prove the transport is talking to
-          // *this* daemon generation (Cindy `#task:627` P1-A): it can
-          // return a still-resolved readyPromise pointing at the old
-          // generation's transport, or land on a different generation
-          // mid-reconnect. The generation gate observes the client's
-          // own reconnect loop until `negotiated.instanceId` matches
-          // the one we got from the supervisor's hook.
           const ready = await waitForDaemonGeneration(client, info.instanceId);
           if (!ready.ok) {
             logger?.warn(
@@ -2329,14 +1893,14 @@ async function bootstrap(): Promise<void> {
                 reason: ready.reason,
                 err: ready.error,
               },
-              'D3.b host client did not reach expected daemon generation; skipping re-attach',
+              'host client did not reach expected daemon generation; skipping re-attach',
             );
             return;
           }
         } catch (err) {
           logger?.warn(
             { err, instanceId: info.instanceId },
-            'D3.b host client generation gate threw unexpectedly',
+            'host client generation gate threw unexpectedly',
           );
           return;
         }
@@ -2356,38 +1920,15 @@ async function bootstrap(): Promise<void> {
         );
       });
     });
-    // D4.a Commit 5d fixup (Cindy P1-1) — dispatch via the
-    // `executeBackendStartup` adapter. `loadOrCreateServerConfig`,
-    // `startDesktopEmbeddedBackend`, and `writeServerConfig` are
-    // all routed through `deps.startEmbeddedAndPersistConfig` ONLY
-    // on the embedded arm. The remote arm calls
-    // `buildRemoteBackendHandle` and never touches the legacy
-    // server-config artifact.
-    //
-    // Production dispatch: this call only ever sees `embedded` or
-    // `remote` plans. The `refuse` arm is intercepted by the
-    // pre-daemon guard above (`if (startupPlan.mode === 'refuse')`)
-    // which throws `ProfileUnusableError` BEFORE we get here — that
-    // ordering exists so a profile classifier reject fails loud
-    // before any daemon spawn / IPC subscribe / WS init runs. The
-    // adapter's `refuse` arm is therefore defense-in-depth seam,
-    // covered by unit tests in case a future refactor drops the
-    // pre-daemon guard.
-    //
-    // Seam pin: `__tests__/execute-backend-startup.test.ts` — the
-    // load-bearing fix for Cindy 5d-fixup P1-1.
+
     const startedBackend = await executeBackendStartup<
       EmbeddedRustBackendHandle,
       RemoteBackendHandle
     >(startupPlan, {
       loadOrCreateServerConfig: () => loadOrCreateServerConfig(),
       startEmbeddedAndPersistConfig: config => embeddedBackendOwner.start(async () => {
-        // #task:2343 — the embedded arm launches the PREBUILT Rust backend
-        // out-of-process. NO in-process TS backend, NO TS fallback.
         const appPaths = desktopAppPaths();
         const bootstrapTokenPath = embeddedBootstrapPath();
-        // (3) Spawn with the launcher-owned EXPLICIT config boundary + a minted
-        // generation; await the bound frame, `/readyz`, and the api_epoch gate.
         const serverConfig = config as Awaited<
           ReturnType<typeof loadOrCreateServerConfig>
         >;
@@ -2422,18 +1963,7 @@ async function bootstrap(): Promise<void> {
           await invalidateEmbeddedServerUrl(serverConfig);
           throw error;
         });
-        // (4) Persist the launcher-owned effective URL (from the bound frame) + the
-        // control-plane URL file the daemon reads. The backend does NOT self-persist an
-        // app-data ServerConfig; the launcher owns this boundary.
-        //
-        // #task:2343 P0-3 — the started child is now a live resource that the GLOBAL
-        // `backend` does NOT yet own (this closure has not returned). If either persist
-        // write throws, an un-guarded path would lose the only reference to the child
-        // (orphan) AND could leave a half-written control-plane URL that the daemon then
-        // reads as a live-but-dead server. `handle` is the typed owner across this
-        // boundary: on ANY persist failure we close the child (SIGTERM→grace→SIGKILL +
-        // token cleanup) and roll back the control-plane URL file before rethrowing, so
-        // the failure surfaces with zero orphan and zero stale effective URL.
+
         await persistEmbeddedBackend(handle, {
           config: () => writeServerConfig({ ...serverConfig, url: handle.url }),
           controlUrl: () => writeFileSync(paths.controlPlaneServerUrlPath, `${handle.url}\n`, { mode: 0o600 }),
@@ -2442,12 +1972,7 @@ async function bootstrap(): Promise<void> {
             finally { await invalidateEmbeddedServerUrl(serverConfig); }
           },
         }, embeddedBackendOwner.signal);
-        // #task:2343 P0-4 — register the single terminal owner. A post-publish fatal
-        // (child crash, stray/duplicate stdout line, stdout stream error) MUST invalidate
-        // the app's view of the backend rather than leaving `backend`/the renderer
-        // believing it is healthy while the child is dead. `onTerminal` fires at most
-        // once; we invalidate the global backend + clear the control-plane URL + route
-        // through the visible runtime-failure surface.
+
         return handle;
       }),
       buildRemoteHandle: input => buildRemoteBackendHandle(input),
@@ -2461,7 +1986,7 @@ async function bootstrap(): Promise<void> {
             profileUrl: refusePlan.profileUrl,
             classifyMessage: refusePlan.classifyMessage,
           },
-          'D4.a Commit 5d-fixup executor: refuse arm reached; throwing ProfileUnusableError',
+          'refuse arm reached, throwing ProfileUnusableError',
         );
         throw new ProfileUnusableError({
           mode: 'profile_invalid',
@@ -2482,42 +2007,12 @@ async function bootstrap(): Promise<void> {
     }
     installBackendEventWsOriginOverride();
     if (!HEADLESS) {
-      // D4.a Commit 5d: `hydrateDesktopSession` works on both arms —
-      // it tries the persisted user session token against
-      // `backendUrl(/api/me)`.
-      //
-      // D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up):
-      // validation now returns a typed three-arm union
-      // (`valid` / `rejected` / `unreachable`). The wrapper still
-      // returns a boolean (was-authenticated) here for the
-      // bootstrap fallback below, but the `unreachable` arm keeps
-      // the persisted token + daemon-host config on disk so that
-      // a transient `backend_unreachable` at boot does NOT cost
-      // the user a re-login. The renderer's
-      // `BackendUnreachableGate` + `desktopAuthState()` recovery
-      // path re-validates against the same persisted token when
-      // the user clicks Retry / backend recovers.
-      //
-      // `bootstrapEmbeddedUserSession` is the only step gated to
-      // the embedded arm: it short-circuits on remote backends
-      // (no embedded-bootstrap token on disk), so calling it on
-      // an unreachable remote arm is a no-op rather than a
-      // re-login prompt.
       const hydrated = await hydrateDesktopSession();
       if (!hydrated) {
         await bootstrapEmbeddedUserSession();
       }
     }
-    // D4.a Commit 5c-3 — boot-time partial-apply reconciliation.
-    // Cindy review gate 4: trigger AFTER hostClient/backend are
-    // ready (above) AND AFTER the auth-bootstrap claim attempt has
-    // settled (above) — the claim path may have written a fresh
-    // daemon-config so we want reconcile to see the post-claim
-    // state. Fire-and-forget so the renderer doesn't block on
-    // either the disk reads or a possible phase-2 IPC roundtrip.
-    // bootstrap() must continue regardless: the embedded backend
-    // and IPC handlers are already up; reconcile only updates the
-    // banner that the renderer reads via `partialApply:get`.
+
     void runBootReconciliation();
   } catch (err) {
     console.error('[main] bootstrap failed:', err);
@@ -2526,20 +2021,6 @@ async function bootstrap(): Promise<void> {
   }
 }
 
-/**
- * D4.a Commit 5c-3 — fire-and-forget reconcile at end of bootstrap.
- *
- * Pulls live profile + daemon-config snapshots, runs phase-2 if
- * there's drift, and replaces the in-memory `partialApplyState` with
- * the derived `PartialApplyState`. Logs the resulting kind so an
- * operator can correlate the launch's reconciliation outcome with
- * subsequent renderer-banner state (e.g. "user reports stuck Retry
- * button → check the boot log for `partial_apply_pending`").
- *
- * Catches all exceptions so a reconciliation bug NEVER bubbles into
- * the bootstrap promise (Cindy review gate 4: must not block
- * embedded normal startup).
- */
 async function runBootReconciliation(): Promise<void> {
   try {
     const state = await reconcilePartialApplyAtBoot({
@@ -2560,17 +2041,17 @@ async function runBootReconciliation(): Promise<void> {
           reason: state.reason,
           reloadRejectionReason: state.reloadRejectionReason,
         },
-        'D4.a 5c-3 boot reconciliation: partial_apply_pending — Retry button surfaced',
+        'boot reconciliation: partial_apply_pending — Retry button surfaced',
       );
     } else if (state.kind === 'unusable_profile') {
       logger?.warn(
         { reason: state.reason, detail: state.detail },
-        'D4.a 5c-3 boot reconciliation: unusable_profile — renderer should offer reset affordance',
+        'boot reconciliation: unusable_profile — renderer should offer reset affordance',
       );
     } else {
       logger?.info(
         { kind: state.kind },
-        'D4.a 5c-3 boot reconciliation: ok',
+        'boot reconciliation: ok',
       );
     }
   } catch (err) {
@@ -2582,7 +2063,7 @@ async function runBootReconciliation(): Promise<void> {
     // it — keeping this try/catch makes the swallow explicit.
     logger?.error(
       { err },
-      'D4.a 5c-3 boot reconciliation threw unexpectedly — leaving partialApplyState=fully_applied',
+      'boot reconciliation threw unexpectedly — leaving partialApplyState=fully_applied',
     );
   }
 }
@@ -2623,7 +2104,6 @@ function createWindow(): void {
     return { action: 'deny' };
   });
 
-  // #task:1762 — the SAME resolved entry the IPC sender validator was given.
   if (rendererEntry.kind === 'dev-server') {
     win.loadURL(rendererEntry.url);
   } else {
@@ -2810,11 +2290,7 @@ registerEventWsDiagnosticIpcHandler({ getLogger: () => logger, ipc: guardedIpc }
 
 guardedIpc.handle('backend:info', async () => {
   if (!backend) return null;
-  // D4.a Commit 5d — `mode` is the union discriminator on
-  // {@link BackendHandle}, not derived from the embedded-only
-  // `serverConfig.mode`. Both happen to render the same string set
-  // (`'embedded' | 'remote'`), so the renderer-facing `BackendInfo`
-  // contract is unchanged.
+
   if (backend.kind === 'embedded') {
     // Embedded ships both sides from one tree: zero skew by construction,
     // no snapshot fetch and no runtime-promotion feed needed.
@@ -2829,11 +2305,7 @@ guardedIpc.handle('backend:info', async () => {
     };
   }
   const snapshot = await fetchRemoteCompatibilitySnapshot();
-  // #task:1763 — EXPLICIT feed at the composition point: every backend:info
-  // request (renderer 30s poll AND the ws-client's pre-reconnect discovery)
-  // hands the authoritative desktop_api advertisement to the runtime
-  // upgrade monitor. A rejected event-WS upgrade therefore promotes within
-  // one reconnect cycle without inferring anything from the dead socket.
+
   runtimeUpgradeMonitor.onAdvertisement(snapshot.desktopApi);
   return {
     url: requireBackendUrl(),
@@ -2884,62 +2356,11 @@ guardedIpc.handle(
     }),
 );
 
-/**
- * D3.c Commit 3 — Settings "save server URL" entry point.
- *
- * Pipeline (full detail in `outbound-reload.ts` orchestrator):
- *   1. Validate raw input via `classifyServerUrl` (defense in
- *      depth — renderer's live validator is convenience).
- *   2. Atomically rewrite `daemon-config.json` (tmp + write +
- *      rename via `writeDaemonHostConfig`).
- *   3. Send `host_outbound_reload` IPC to the daemon.
- *   4. On `action: 'reloaded'`, start the same fresh-attach
- *      watchdog used at post-login attach time.
- *
- * Strict boundary: the renderer supplies ONLY `serverUrl`. The
- * `host_token` is read from `daemon-config.json` inside main via
- * `readDaemonHostConfig` — token bytes never cross the IPC.
- *
- * On any reload-watchdog success this also invalidates the
- * previous activeAttachWatchdog (analogous to the
- * rotate-token / re-login paths) so two polling timers don't
- * race after a save during an in-flight attach.
- */
 guardedIpc.handle(
   'settings:saveServerUrl',
   (_event, input: { serverUrl: string }) =>
     saveServerUrlFromSettings(input?.serverUrl ?? ''),
 );
-
-/**
- * D4.a Commit 2 — Server connection profile IPC surface.
- *
- * Pre-auth Setup Wizard / Settings UI uses these handlers to read,
- * test, and commit the on-disk server connection profile.
- *
- * Boundary discipline:
- *   - `profile:get` returns a redacted view (`server_url + updated_at`
- *     only). The raw profile file contents NEVER cross IPC. Schema metadata
- *     (`version`, `created_at`) stays in main.
- *   - `profile:saveWithTest` runs the validate → test-connect →
- *     commit pipeline atomically. Renderer never sees the
- *     intermediate "validated but not yet committed" state — if any
- *     step fails, nothing lands on disk and the renderer gets a
- *     typed failure with the failing phase.
- *   - `profile:clear` is the explicit reset affordance (recovery
- *     from `parse_failed` reads, and the
- *     "disconnect from remote backend" UX).
- *
- * Commit 2 scope:
- *   - No phase-2 daemon-config derivation here — that lands in
- *     Commit 5 alongside the `partial_apply_pending` state machine.
- *   - No automatic boot-time remote-mode activation — that lands in
- *     Commit 3 (boot gate).
- *   - After a successful save the renderer surfaces a manual
- *     "restart to connect" prompt; we deliberately do NOT auto-
- *     restart the app here so the user sees their action committed
- *     before the window goes away.
- */
 
 /**
  * Result shape of `profile:saveWithTest`. Kept structurally separate
@@ -2951,27 +2372,6 @@ export type ProfileSaveWithTestResult =
       ok: true;
       test: ProbeServerInfoResult & { ok: true };
       profile: ServerConnectionProfileView;
-      /**
-       * D4.a Commit 5c-2 — phase-2 outcome from
-       * `performProfilePhase2` after the profile commit succeeded.
-       *
-       * Three high-level kinds; renderer copy keys off the
-       * discriminator:
-       *   - `fully_applied` — profile + daemon-config in sync at this
-       *     generation. Sub-arms (`reloaded` / `unchanged` /
-       *     `connectivity_unverified`) reflect the reload IPC's action
-       *     plus post-IPC connectivity observation but all three mean
-       *     "config saved + daemon swapped (or no swap needed)".
-       *   - `no_op_no_host_claim` — phase-2 cannot run without a host
-       *     claim (Setup Wizard pre-auth). Profile is committed; the
-       *     next sign-in's `claimLocalHostForUserSession` (5c-1)
-       *     stamps `profile_version` into daemon-config naturally. NOT
-       *     a failure — there is nothing to reconcile.
-       *   - `partial_apply_pending` — phase-2 failed at write / IPC
-       *     ack. Profile is at the new version, daemon is on the old
-       *     config. Renderer surfaces a banner + Retry button via the
-       *     `partialApply:get` / `partialApply:retry` IPCs.
-       */
       phase2: ProfilePhase2Outcome;
     }
   | {
@@ -2980,29 +2380,10 @@ export type ProfileSaveWithTestResult =
       test: ProbeServerInfoResult & { ok: false };
     }
   | {
-      // D4.a Commit 3 review fixup (Cindy P1-A) — probe succeeded
-      // but the commit guard refused the URL.
-      //
-      // **5d note**: the guard now `{ allow: true }` for every
-      // currently-supported probe success kind (loopback / system_ca /
-      // insecure_dev_remote), because the bootstrap site has the
-      // real remote-mode branch. The `commit_guard` failure arm is
-      // therefore **structurally unreachable** in the current
-      // matrix; it is kept on the type surface for forward use
-      // (future TLS-policy / remote-prerequisite gates) and so
-      // pre-5d binaries' renderer still understands the shape if
-      // the main process is rolled back. See `evaluateProfileCommitGuard`
-      // in `backend-boot-mode.ts` for the lifted policy.
       ok: false;
       phase: 'commit_guard';
       reason: 'remote_backend_not_yet_supported';
       message: string;
-      /**
-       * The probe result that the guard rejected. Echoed back so
-       * the renderer can show "we successfully reached <host>
-       * (system_ca_verified) but cannot save the URL in this build"
-       * rather than implying the probe failed.
-       */
       test: ProbeServerInfoResult & { ok: true };
     }
   | {
@@ -3012,20 +2393,6 @@ export type ProfileSaveWithTestResult =
       detail?: string;
     };
 
-/**
- * D4.a Commit 5c-2 — `partialApply:retry` outcome.
- *
- * Three branches:
- *   - `ok: true` — phase-2 ran. Echo the new state + the raw outcome
- *     so the renderer can show the right copy.
- *   - `ok: false; reason: 'no_profile'` — no profile is committed (e.g.
- *     user pressed Retry without ever saving). Caller should send
- *     them through the Wizard, not surface a generic error.
- *   - `ok: false; reason: 'profile_unreadable'` — profile file exists
- *     but read failed (`parse_failed`). 5c-2
- *     surfaces this as-is; 5c-3 reconciliation owns the typed repair
- *     state (`unusable_profile`) per Cindy's 5c-1 review note.
- */
 export type PartialApplyRetryResult =
   | {
       ok: true;
@@ -3042,27 +2409,13 @@ export type PartialApplyRetryResult =
       detail: string;
     };
 
-/**
- * D4.a Commit 5c-2 — assemble phase-2 deps from current main process
- * state. Returns `null` when the backend or host client is not ready
- * (pre-bootstrap / mid-shutdown); callers map that to a typed failure
- * outcome so the renderer doesn't see an exception.
- *
- * Mirrors the dep-binding pattern of `saveServerUrlFromSettings` but
- * without the URL classifier (phase-2's input is a pre-validated
- * profile, not a raw URL — §7.5 contract).
- */
 function buildProfilePhase2Deps(): PerformProfilePhase2Deps | null {
   const client = hostClient;
   if (!client || !backend) return null;
+
   const daemonConfigPath = desktopAppPaths().desktop.computerBinding;
-  // D4.a Commit 5d — `null` on remote arm. The orchestrator's
-  // `no_attachment_controller` arm surfaces a typed
-  // `partial_apply_pending` so the renderer can render its banner
-  // without claiming to have verified attachment from main.
-  // #task:2343 — no local registry observer (out-of-process backend); attachment
-  // verification is daemon-only. `bindAttachmentAccessor(null)` → no local watchdog.
   const controller = null;
+
   return {
     allowInsecureRemote: desktopAllowsInsecureRemote(),
     writeDaemonHostConfig: config => writeDaemonHostConfig(daemonConfigPath, config),
@@ -3074,12 +2427,6 @@ function buildProfilePhase2Deps(): PerformProfilePhase2Deps | null {
   };
 }
 
-/**
- * D4.a Commit 5c-2 — run phase-2 against the just-committed profile
- * (or the on-disk profile for the Retry path) and update the in-memory
- * `partialApplyState`. Pure orchestration — `performProfilePhase2` owns
- * the decision tree.
- */
 async function runProfilePhase2(
   profile: ServerConnectionProfile,
 ): Promise<ProfilePhase2Outcome> {
@@ -3126,7 +2473,7 @@ function applyProfileToActiveRemoteBackend(input: {
       serverUrl: input.profile.server_url,
       insecure,
     },
-    'D4.a profile:saveWithTest retargeted active remote backend handle',
+    'profile:saveWithTest retargeted active remote backend handle',
   );
 }
 
@@ -3135,30 +2482,20 @@ async function handleProfileSaveWithTest(
 ): Promise<ProfileSaveWithTestResult> {
   const serverUrl = (input?.serverUrl ?? '').trim();
   const allowInsecureRemote = desktopAllowsInsecureRemote();
-  // Phase A — test the candidate URL against the live backend.
   const test = await probeServerInfo({ serverUrl, allowInsecureRemote });
   if (!test.ok) {
     logger?.warn(
       { kind: test.kind, serverUrl },
-      'D4.a profile:saveWithTest test phase failed',
+      'profile:saveWithTest test phase failed',
     );
     return { ok: false, phase: 'test', test };
   }
-  // Phase A.5 — Commit 3 review fixup (Cindy P1-A) → 5d lift: the
-  // commit guard now `allow: true` for every probe success kind
-  // (the bootstrap site has the real remote-mode branch, see
-  // `backend-boot-mode.ts` JSDoc). The call is kept here so future
-  // TLS-policy / remote-prerequisite gates can refuse without
-  // restructuring the save pipeline; today the guard is a
-  // structural pass-through. The `commit_guard` failure arm of
-  // `ProfileSaveWithTestResult` therefore never fires in the
-  // current matrix — the renderer's `commit_guard` branch is
-  // forward-compat plumbing only.
+
   const guard = evaluateProfileCommitGuard(test.kind);
   if (!guard.allow) {
     logger?.warn(
       { kind: test.kind, serverUrl, reason: guard.reason },
-      'D4.a profile:saveWithTest commit-guard refused (forward-compat arm — should be unreachable in current 5d matrix)',
+      'profile:saveWithTest commit-guard refused',
     );
     return {
       ok: false,
@@ -3168,16 +2505,7 @@ async function handleProfileSaveWithTest(
       test,
     };
   }
-  // Phase B — commit profile. The probe already classified `serverUrl`
-  // and the §7.1 origin-only invariant guarantees the canonical
-  // persistable form is `test.originUrl` (= `new URL(serverUrl).origin`).
-  // We persist that, NOT the raw string (closes Cindy D4.a Commit 2
-  // review nit — `server-url.ts` JSDoc previously said the writer
-  // "tests and persists `${parsed.origin}`" but main passed the raw
-  // string through; the two statements are now reconciled). Every
-  // downstream desktop transport reads `server_url` from the persisted
-  // profile, so canonicalizing once at write time means the rest of
-  // the system never sees the un-canonicalized round-trip.
+
   const writeResult = writeServerConnectionProfile({
     profilePath: desktopAppPaths().desktop.serverProfile,
     serverUrl: test.originUrl,
@@ -3186,7 +2514,7 @@ async function handleProfileSaveWithTest(
   if (!writeResult.ok) {
     logger?.warn(
       { reason: writeResult.reason, serverUrl },
-      'D4.a profile:saveWithTest write phase failed',
+      'profile:saveWithTest write phase failed',
     );
     return {
       ok: false,
@@ -3201,11 +2529,9 @@ async function handleProfileSaveWithTest(
       classification: test.kind,
       profileVersion: writeResult.profile.version,
     },
-    'D4.a profile:saveWithTest committed',
+    'profile:saveWithTest committed',
   );
-  // Phase 2 — derive daemon-config + reload (§7.5). Failures land on
-  // disk only as `partial_apply_pending` in-memory state; the profile
-  // commit above is already durable so we never roll it back.
+
   const phase2 = await runProfilePhase2(writeResult.profile);
   applyProfileToActiveRemoteBackend({
     profile: writeResult.profile,
@@ -3219,7 +2545,7 @@ async function handleProfileSaveWithTest(
         reason: phase2.reason,
         reloadRejectionReason: phase2.reloadRejectionReason,
       },
-      'D4.a profile:saveWithTest phase-2 partial_apply_pending',
+      'profile:saveWithTest partial_apply_pending',
     );
   } else if (phase2.kind === 'fully_applied') {
     logger?.info(
@@ -3228,12 +2554,12 @@ async function handleProfileSaveWithTest(
         reloadKind: phase2.reloadKind,
         elapsedMs: phase2.elapsedMs,
       },
-      'D4.a profile:saveWithTest phase-2 fully_applied',
+      'profile:saveWithTest fully_applied',
     );
   } else {
     logger?.info(
       { profileVersion: phase2.profileVersion },
-      'D4.a profile:saveWithTest phase-2 no_op_no_host_claim (pre-auth)',
+      'profile:saveWithTest no_op_no_host_claim (pre-auth)',
     );
   }
   return {
@@ -3244,28 +2570,6 @@ async function handleProfileSaveWithTest(
   };
 }
 
-/**
- * D4.a Commit 5c-2 — Retry handler for `partial_apply_pending`.
- *
- * Re-reads the on-disk profile (it may have changed via another path
- * since the last attempt), runs phase-2, updates the in-memory state.
- *
- * Why re-read instead of caching the profile object: the renderer can
- * trigger Retry minutes after the failed save, and another window /
- * IPC could have committed a newer profile in the meantime. Reading
- * fresh keeps Retry idempotent against the latest committed state.
- *
- * Profile read failure now (5c-3) ALSO mutates `partialApplyState`
- * to `unusable_profile` so the renderer banner reflects the latest
- * known repair state, not the stale `partial_apply_pending` from
- * before. The typed `profile_unreadable` retry outcome carries the
- * detail to the caller; the state mutation is the side-effect.
- *
- * `not_found` (no profile committed) returns `no_profile` retry
- * outcome AND mutates state to `no_profile` — same idea, the user
- * may have just cleared the profile via `profile:clear` and the
- * Retry button shouldn't pretend there's something to retry.
- */
 async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
   const read = readServerConnectionProfile({
     profilePath: desktopAppPaths().desktop.serverProfile,
@@ -3275,25 +2579,16 @@ async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
     if (read.reason === 'not_found') {
       logger?.warn(
         {},
-        'D4.a partialApply:retry — no committed profile (renderer triggered without a save)',
+        'partialApply:retry — no committed profile (renderer triggered without a save)',
       );
-      // 5c-3: mutate state to match the on-disk reality. If the
-      // profile was cleared between the failed save and the retry,
-      // the previous `partial_apply_pending` banner is no longer
-      // accurate.
       partialApplyState = { kind: 'no_profile' };
       return { ok: false, reason: 'no_profile' };
     }
-    // parse_failed — typed
-    // repair state. 5c-3 reconciliation produces the same
-    // `unusable_profile` from the same on-disk read. We mutate
-    // `partialApplyState` here so the renderer banner shows the
-    // reset affordance immediately after a failed Retry, not only
-    // after the next launch.
+
     const detail = read.detail;
     logger?.warn(
       { reason: read.reason, detail },
-      'D4.a partialApply:retry — profile read failed → unusable_profile state',
+      'partialApply:retry — profile read failed → unusable_profile state',
     );
     partialApplyState = {
       kind: 'unusable_profile',
@@ -3312,12 +2607,12 @@ async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
         reason: outcome.reason,
         reloadRejectionReason: outcome.reloadRejectionReason,
       },
-      'D4.a partialApply:retry — still partial_apply_pending',
+      'partialApply:retry — still partial_apply_pending',
     );
   } else {
     logger?.info(
       { kind: outcome.kind, profileVersion: outcome.profileVersion },
-      'D4.a partialApply:retry — phase-2 succeeded',
+      'partialApply:retry — phase-2 succeeded',
     );
   }
   return { ok: true, outcome, state: partialApplyState };
@@ -3343,32 +2638,11 @@ guardedIpc.handle('profile:clear', () => {
     logger: logger ?? undefined,
   });
   if (result.ok) {
-    // D4.a Commit 5c-3 P2 (Cindy review) — `no_profile` is defined
-    // as "profile:clear has been invoked / there is no on-disk
-    // profile". Sync the in-memory state synchronously so the
-    // renderer banner stops showing a stale `partial_apply_pending`
-    // / `unusable_profile` after a successful clear. Both
-    // `cleared: true` and `cleared: false` mean the file is now
-    // absent — `no_profile` is correct in both. On failure
-    // (`unlink_failed`), leave state alone: the file may still
-    // exist and the previous diagnosis is still the truthful one.
     partialApplyState = { kind: 'no_profile' };
   }
   return result;
 });
 
-/**
- * D4.a Commit 5c-2 — partial_apply_pending IPC surface.
- *
- * `partialApply:get` returns the current in-memory state; the
- * renderer reads on settings-pane mount + after every relevant
- * mutation (profile save, login completion, etc.).
- *
- * `partialApply:retry` re-runs phase-2 against the on-disk profile.
- * No input — Retry always targets the current committed profile. See
- * `handlePartialApplyRetry` for the semantics around profile read
- * failures vs absence.
- */
 guardedIpc.handle(
   'partialApply:get',
   (): PartialApplyState => partialApplyState,
@@ -3394,16 +2668,8 @@ app.whenReady().then(async () => {
   if (HEADLESS) {
     // One-line machine-readable handshake on stdout. Test scripts pipe
     // and JSON.parse this. Human-readable extras go to stderr below.
-    //
-    // D4.a Commit 5d — HEADLESS is an embedded-only mode. The whole
-    // point is "boot the backend without a window for smoke tests";
-    // a remote backend has nothing to expose locally on this code
-    // path. Typed-fail loudly if a regression boots HEADLESS with a
-    // remote profile (e.g. CI accidentally inherits `server-profile.bin`).
     const embedded = requireEmbeddedBackend('HEADLESS handshake (SILVERHAND_HEADLESS=1)');
-    // #task:2343: the bootstrap token path is LAUNCHER-owned (the launcher hands it to
-    // the Rust child as `SILVERHAND_BOOTSTRAP_TOKEN_PATH` and the child writes it there
-    // iff embedded+loopback). It is not read from an in-process backend context.
+
     process.stdout.write(
       JSON.stringify({
         url: embedded.url,
@@ -3466,16 +2732,6 @@ function reportStartupFailure(err: unknown): void {
   showStartupFailureWindow({ notice, logsDir });
 }
 
-/**
- * #task:2343 P0-4 — the single owner reaction to a PUBLISHED embedded backend dying
- * (child crash, post-publish stdout protocol violation, or stdout stream fatal). Unlike a
- * silent background `void close()`, this INVALIDATES the app's health view: it drops the
- * global {@link backend} so no request routes to a dead child, clears the control-plane
- * URL file so the daemon does not read a live-but-dead server, closes the handle
- * (idempotent — reclaims the child + token), and routes through the visible runtime-
- * failure surface. Idempotent and a no-op once shutdown has started (that path already
- * owns teardown).
- */
 async function handlePostPublishEmbeddedFatal(
   handle: EmbeddedRustBackendHandle,
   reason: EmbeddedRustBackendTerminalReason,
@@ -3532,20 +2788,7 @@ async function shutdown(): Promise<void> {
     if (hostClient) {
       const claimedHostId =
         localHostClaim.status === 'claimed' ? localHostClaim.hostId : null;
-      // Take the controller ONCE; only inject the accessor if it's
-      // actually available. A `null` controller (registry already
-      // torn down, embedded backend never booted, or the desktop is
-      // in remote mode where there is no in-process registry to
-      // observe) must NOT be smuggled through as a zero-arg
-      // accessor that returns null — the helper would then
-      // interpret that as "registry cleared successfully" instead
-      // of the truthful "we couldn't observe the registry at all"
-      // (Cindy #task:630 P1-A).
-      //
-      // #task:2343: no in-process registry observer (out-of-process Rust embedded
-      // backend OR remote), so shutdown detach is RPC-only — `getAttachment` is
-      // undefined and the helper never waits on a nonexistent local registry. The
-      // daemon's outbound socket close is observed by the daemon/backend, not from main.
+
       const getAttachment = undefined;
       const detachOutcome = await gracefullyDetachOutbound({
         client: hostClient,

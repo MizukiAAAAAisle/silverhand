@@ -19,8 +19,6 @@ export interface FetchServerInfoWithRetryOptions {
   fetcher?: ServerInfoFetcher;
   sleep?: SleepFn;
   retryDelaysMs?: readonly number[];
-  /** #task:2343 P0-2 — cancel an in-flight/pending fetch (and stop retrying) when the
-   * launcher's startup deadline / child-exit / shutdown aborts. */
   signal?: AbortSignal;
 }
 

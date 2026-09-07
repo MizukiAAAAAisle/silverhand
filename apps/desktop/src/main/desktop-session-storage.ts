@@ -1,17 +1,3 @@
-/**
- * Main-process persistence for the desktop user session bearer.
- *
- * V1 intentionally uses a 0600 plaintext local file for all desktop
- * long-lived local credentials. The security boundary is server-side
- * token lifecycle + renderer isolation; local encryption would not
- * defend against user-level desktop code execution and would diverge
- * from `daemon-config.json` host_token storage.
- *
- * #task:1598 — this module receives the RESOLVED session-file path
- * (desktop composition root: `desktopAppPaths().desktop.session`).
- * It never derives the path from a root, so a future layout-version
- * flip happens in the selector only.
- */
 import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 

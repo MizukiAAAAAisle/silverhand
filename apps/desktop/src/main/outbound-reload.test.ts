@@ -1,27 +1,3 @@
-/**
- * Stage D3.c Commit 3 — orchestrator tests for `performOutboundReload`.
- *
- * Coverage strategy: every dep is faked so the orchestration logic
- * is exercised without disk / WS / IPC. Tests focus on:
- *
- *   1. **Anchor 1 (raw input classify)** — `classify_rejected`
- *      surfaces all `ServerUrlRejectionReason` values verbatim;
- *      classify failure ALWAYS short-circuits BEFORE any write or
- *      IPC fire.
- *   2. **Anchor 2 (atomic write before reload)** — a write failure
- *      MUST NOT fire the reload IPC; a successful write happens
- *      BEFORE the snapshot's freshness lower bound is consumed by
- *      the watchdog.
- *   3. **Anchor 3 (reloaded ≠ connected)** — `action: 'reloaded'`
- *      goes through the watchdog using the same predicate as
- *      `outbound-attach`; `action: 'unchanged'` skips the watchdog.
- *   4. **Order pinning** — snapshot captured BEFORE write so the
- *      watchdog accepts attachments stamped between snapshot and
- *      IPC ack (mirrors the attach-side freshness contract).
- *   5. **Daemon reason pass-through** — every failure arm
- *      (`not_attached` / `config_unreadable` / `parse_failed` /
- *      `invalid_server_url`) reaches the renderer as-is.
- */
 import { describe, expect, it } from 'vitest';
 import type { HostWsAttachment } from '@silverhand/backend';
 import type {

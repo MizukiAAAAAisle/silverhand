@@ -1,35 +1,3 @@
-/**
- * D4.a Commit 2 — desktop main-process storage for the server
- * connection profile (per `docs/auth-and-host-model.md §3.2`).
- *
- * Contract:
- *   - File path: `<silverhandDir>/desktop/server-profile.bin`,
- *     mode 0600.
- *   - Contents: JSON-serialized {@link ServerConnectionProfile}.
- *     V1 local credential/profile storage deliberately uses
- *     0600 plaintext files for consistency with `daemon-config.json`
- *     host_token storage; desktop is inside the local trust boundary.
- *   - Writes are atomic: temp file → `writeFileSync({ mode: 0o600 })`
- *     → `fsync` → `rename` over the live path → `chmod` belt-and-
- *     braces. Crash anywhere before the rename leaves the old profile
- *     intact (per §7.5 phase-1 semantics).
- *
- * Scope discipline (Commit 2 only):
- *   - Read / write / clear primitives.
- *   - No daemon-config derivation here — that's Commit 5 (the
- *     additive `profile_version` field + phase-2 reload pipeline).
- *   - No `partial_apply_pending` state machine yet — Commit 2 only
- *     commits the profile; there is no phase 2 to fall partway out
- *     of.
- *   - No environment-variable bootstrap path; §7.7 calls that
- *     explicitly out of scope for D4.
- *
- * Local security model:
- *   - Main process only. Renderer receives only the redacted view.
- *   - File mode 0600. Never log or IPC the raw profile object.
- *   - Server-side URL/profile semantics remain authoritative; this
- *     file is a local desktop connection preference.
- */
 import { chmodSync, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync, openSync, fsyncSync, closeSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';

@@ -1,34 +1,3 @@
-/**
- * D4.a Commit 5c-2 — orchestrator tests for `performProfilePhase2`.
- *
- * Coverage strategy: every dep is faked so the orchestration logic is
- * exercised without disk / WS / IPC. Compared to
- * `outbound-reload.test.ts` (legacy raw-URL settings save), this
- * suite asserts the §7.5 distinctions:
- *
- *   1. **No classify / no remote guard** — phase-2's input is a
- *      pre-validated `ServerConnectionProfile`. The orchestrator must
- *      NOT re-classify and must NOT short-circuit on remote profiles
- *      (those are the writer's / boot-mode's concern).
- *   2. **`profile_version` carry-through** — every daemon-config write
- *      stamps `profile_version: profile.version` unconditionally. No
- *      preserve-existing-value path; phase-2 IS the path that bumps
- *      that field.
- *   3. **`no_op_no_host_claim` short-circuit** — Setup Wizard pre-auth
- *      flow: phase-2 returns gracefully without writing or firing IPC
- *      when no host claim exists. Distinct from
- *      `partial_apply_pending` (no inconsistency to reconcile).
- *   4. **Snapshot before write** — same freshness contract as
- *      `outbound-reload`: `expectAttachSince` is captured BEFORE the
- *      write so the watchdog accepts attachments stamped between
- *      snapshot and IPC ack.
- *   5. **Daemon reason pass-through** — `reload_rejected` failure arms
- *      preserve `HostOutboundReloadFailureReason` verbatim.
- *   6. **`derivePartialApplyState` purity** — the helper that
- *      collapses outcome → in-memory state must produce identical
- *      results regardless of caller (IPC handler vs 5c-3
- *      reconciliation).
- */
 import { describe, expect, it } from 'vitest';
 import type { HostWsAttachment } from '@silverhand/backend';
 import type {

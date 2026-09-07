@@ -1,17 +1,3 @@
-// #task:2343 P0-10 — the embedded-backend SEAM. This is the SINGLE module the Desktop
-// main statically imports for ALL embedded-only runtime surface:
-//   - explicit configuration for the Rust-owned database startup,
-//   - the out-of-process Rust launcher (`startEmbeddedRustBackend` + env composer),
-//   - the sidecar verifier (`verifySidecar` + manifest resolution),
-//   - the production dependency factory that binds the real child spawn + HTTP probes.
-//
-// Routing every embedded value through this one module lets the REMOTE-ONLY build ALIAS it
-// to a throwing stub (`embedded-launcher.remote-only.ts`), so a remote-only package's main
-// module graph contains NO import of `@silverhand/backend` (→ no `better-sqlite3`), NO
-// embedded launcher, and NO sidecar verifier. `index.ts` stays shared across both arms and
-// reaches embedded surface ONLY through this seam; a remote-only desktop refuses embedded
-// startup (see the `DESKTOP_REMOTE_ONLY` guards) long before any of these run.
-
 import type { ChildProcess } from 'node:child_process';
 import { spawn as spawnChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';

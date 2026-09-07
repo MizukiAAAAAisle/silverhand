@@ -5,13 +5,6 @@ import {
 } from '@silverhand/shared';
 import { createRuntimeUpgradeMonitor } from './runtime-upgrade-monitor.js';
 
-/**
- * #task:1763 — runtime promotion behavior. Structure/state only, no copy.
- * The monitor is a TRIGGER, not an authority: suspects must be verified by
- * the server-info probe before notify fires, and unrelated errors must never
- * probe at all.
- */
-
 const UPGRADE_BODY = JSON.stringify({
   error: 'upgrade_required',
   reason: 'client_too_old',

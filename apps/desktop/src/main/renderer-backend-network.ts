@@ -1,15 +1,3 @@
-/**
- * Keep Chromium-owned backend transports on the same network path as the
- * desktop main process.
- *
- * Backend REST requests run through Node's `fetch`, which is direct unless the
- * product explicitly supplies a dispatcher. The event WebSocket runs in the
- * renderer, so Chromium would otherwise inherit the OS proxy independently.
- * That split can leave REST healthy while the live event channel loops on
- * `1006`. Until proxy policy becomes an explicit server-profile property, the
- * only coherent behavior is direct for both transports.
- */
-
 export interface RendererSessionProxyController {
   setProxy(config: { mode: 'direct' }): Promise<void>;
   resolveProxy(url: string): Promise<string>;

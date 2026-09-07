@@ -6,37 +6,6 @@ import {
   type DesktopApiAdvertisement,
 } from '@silverhand/shared';
 
-/**
- * #task:1763 — runtime promotion of the desktop↔server API epoch gate.
- *
- * A desktop that is ALREADY RUNNING when a remote server raises its minimum
- * client epoch starts receiving structured 426s (REST) and failing WS
- * upgrades. This module turns those signals into ONE authoritative decision
- * without creating a second authority:
- *
- * Two inputs, one decision path (spike-verified — the Electron webRequest
- * layer CANNOT observe a failed WS upgrade's status/headers/body, so there
- * is deliberately no WS arm; a dead-socket event carries zero epoch
- * semantics):
- *
- *   REST 426 whose body parses as UpgradeRequiredBody   ── suspect only
- *        → single-flight server-info PROBE              ── same discovery
- *        → classifyDesktopServerApiCompatibility(...)    ── same classifier
- *   desktop_api advertisement from the EXISTING          ── authoritative,
- *   backend:info discovery (ws-client re-runs it before      no probe needed
- *   every reconnect — the primary path; the renderer's
- *   30s poll is only the idle fallback)
- *        → notify() once (latched)                      ── renderer re-asks
- *                                                          getAuthState()
- *
- * A suspect 426 is never trusted directly: spoofed/unrelated bodies trigger
- * at most one probe, and the probe compares the server's OWN advertisement
- * against the compiled constants — exactly the startup precheck's logic.
- * Idempotent: once notified, further inputs are ignored until `reset()`
- * (called when auth state observes a compatible server again, e.g. after
- * the server was rolled back or the app updated).
- */
-
 export interface RuntimeUpgradeMonitorDeps {
   /** Fetch the current `desktop_api` advertisement (server-info, exempt path). */
   probe: () => Promise<DesktopApiAdvertisement | undefined>;

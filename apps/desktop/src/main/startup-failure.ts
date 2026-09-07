@@ -1,17 +1,3 @@
-/**
- * Startup failure classification — the ONE place that decides what a
- * fail-closed launch tells the user.
- *
- * Startup is fail-closed by design: the boot-mode gate refuses to continue
- * rather than silently falling back (D4.a Commit 3 boot gate).
- * Refusing correctly is worthless if the user sees nothing, so
- * `index.ts` catches the rethrow and shows one failure exit built from
- * this notice.
- *
- * Detail is one short line on purpose. The classified arms quote only stable,
- * actionable facts; longer repair context belongs in the log file the exit
- * points at.
- */
 import {
   ProfileUnusableError,
   RemoteOnlyServerProfileRequiredError,

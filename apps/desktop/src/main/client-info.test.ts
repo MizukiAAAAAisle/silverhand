@@ -1,16 +1,3 @@
-/**
- * #task:1530 — desktop client-info telemetry header assembly.
- *
- * `desktopClientInfoHeaderValue` builds the release-identity header the main
- * process injects onto the event-WS upgrade. Pins:
- *   1. assembles a header that the server-side bounded parser accepts as `valid`
- *      with the expected release fields (deployment/app_version/platform/arch/
- *      installation_id).
- *   2. fail-open: if the version can't satisfy the bounded schema, it returns
- *      null (caller omits the header) instead of throwing — telemetry must never
- *      break the WS upgrade.
- *   3. memoized: build metadata is static per launch.
- */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

@@ -1,9 +1,3 @@
-// #task:2343 — the launcher-side dual of the Rust backend's stdout startup handoff
-// frames. The prebuilt child emits preparing, prepared, then bound (v2), each
-// correlated to the spawn generation. Only bound contains an endpoint:
-//
-//   {"v":2,"kind":"bound","generation":"<echo>","url":"http://127.0.0.1:<port>","port":<port>}
-//
 // This module parses that line under the hardened acceptance boundary (shiki+Cindy):
 // strict protocol version, length bound, single frame, and generation echo matching the
 // value THIS spawn minted. Anything unknown / malformed / oversize / duplicated / with a

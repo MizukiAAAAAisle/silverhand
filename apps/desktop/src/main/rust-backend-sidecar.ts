@@ -1,14 +1,3 @@
-// #task:2343 — sidecar artifact identity + integrity for the embedded Rust backend.
-//
-// The prebuilt `silverhand-backend` binary is shipped as a packaged sidecar next to a
-// MANIFEST that pins its target/arch and executable SHA-256. Before spawning it, the
-// launcher resolves the manifest and verifies the on-disk executable against it (arch
-// match + SHA-256 match). This is the embedded ARTIFACT-IDENTITY gate (the version axis
-// was deleted): a missing sidecar, a manifest/executable arch mismatch, or a corrupt/
-// substituted binary all FAIL LOUD — the embedded arm never falls back to the TS
-// backend. (Wire compatibility remains the independent `api_epoch`; process correlation
-// is the startup `generation`.)
-
 import { createHash } from 'node:crypto';
 import { createReadStream, constants as fsConstants } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';

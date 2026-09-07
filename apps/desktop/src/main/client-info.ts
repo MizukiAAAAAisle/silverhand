@@ -10,15 +10,6 @@ import { DESKTOP_REMOTE_ONLY } from '../build-flags.js';
 import { loadOrCreateInstallationId } from './local-host-claim.js';
 import { BUILD_COMMIT, BUILD_DIRTY } from './build-metadata.js';
 
-/**
- * #task:1530 — assemble the desktop release-telemetry header value the main
- * process injects onto the authenticated event-WS upgrade.
- *
- * Build metadata is static per launch, so the serialized value is memoized. This
- * is fail-open on the CLIENT side too: if anything (installation-id IO, a version
- * string the bounded schema rejects) throws, we return `null` and the caller
- * simply omits the header — telemetry must NEVER break the WS connection.
- */
 let cachedHeaderValue: string | null | undefined;
 
 export interface ClientInfoLogger {
@@ -41,9 +32,6 @@ export function desktopClientInfoHeaderValue(
       platform: process.platform,
       arch: process.arch,
       installation_id: loadOrCreateInstallationId(installationIdPath),
-      // #task:1761 — desktop↔server API epoch range compiled into this build.
-      // Carried on BOTH the REST proxy requests and the event-WS upgrade so
-      // server-side admission has one uniform source.
       desktop_api_epoch: DESKTOP_SERVER_API_EPOCH,
       minimum_server_api_epoch: MINIMUM_SERVER_API_EPOCH,
     };
