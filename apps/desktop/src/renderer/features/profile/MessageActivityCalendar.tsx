@@ -16,17 +16,23 @@ interface Props {
 
 export function MessageActivityCalendar({ year, days, today, timezone }: Props): JSX.Element {
   const cells = useMemo(() => messageActivityCalendar(year, days, today), [year, days, today]);
+
   const [focusedDate, setFocusedDate] = useState<string | null>(null);
+
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   const scroll = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    if (scroll.current)
+    if (scroll.current) {
       scroll.current.scrollLeft = year === 'recent' ? scroll.current.scrollWidth : 0;
+    }
   }, [year, today]);
+
   const firstVisible = cells.find((cell) => cell.visible)?.date;
   const activeDate = cells.some((cell) => cell.date === focusedDate && cell.visible)
     ? focusedDate
     : firstVisible;
+
   const columns = cells.length / 7;
   const monthLabels = cells.flatMap((cell, index) =>
     (year === 'recent' ? cell.visible : cell.date.startsWith(`${year}-`)) &&
@@ -34,6 +40,7 @@ export function MessageActivityCalendar({ year, days, today, timezone }: Props):
       ? [{ column: Math.floor(index / 7) + 1, date: cell.date }]
       : [],
   );
+
   const monthFormat = new Intl.DateTimeFormat('en-US', { month: 'short', timeZone: 'UTC' });
   const dateFormat = new Intl.DateTimeFormat('en-US', {
     month: 'short',
@@ -83,8 +90,11 @@ export function MessageActivityCalendar({ year, days, today, timezone }: Props):
                           aria-label={`${cell.date}: ${cell.count.toLocaleString()} ${cell.count === 1 ? 'message' : 'messages'}`}
                           tabIndex={cell.date === activeDate ? 0 : -1}
                           ref={(node) => {
-                            if (node) buttons.current.set(cell.date, node);
-                            else buttons.current.delete(cell.date);
+                            if (node) {
+                              buttons.current.set(cell.date, node);
+                            } else {
+                              buttons.current.delete(cell.date);
+                            }
                           }}
                           onFocus={() => setFocusedDate(cell.date)}
                           onKeyDown={(event) => {
@@ -94,11 +104,20 @@ export function MessageActivityCalendar({ year, days, today, timezone }: Props):
                               ArrowUp: -1,
                               ArrowDown: 1,
                             };
+
                             const delta = offsets[event.key];
-                            if (delta === undefined) return;
+
+                            if (delta === undefined) {
+                              return;
+                            }
+
                             event.preventDefault();
+
                             const next = cells[index + delta];
-                            if (next?.visible) buttons.current.get(next.date)?.focus();
+
+                            if (next?.visible) {
+                              buttons.current.get(next.date)?.focus();
+                            }
                           }}
                         />
                       </Tooltip.Trigger>

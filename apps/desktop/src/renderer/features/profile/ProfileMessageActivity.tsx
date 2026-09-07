@@ -8,9 +8,9 @@ import {
   FILTER_SELECT_CONTENT_CLASS,
 } from '@/components/ui/filter-select';
 import { cn } from '@/lib/cn';
-import { messageActivityRange, messageActivityYears } from './message-activity-calendar';
 import { ProfileSection } from '@/features/common/ProfileSummarySections';
 import { getCurrentUserId } from '@/lib/current-user';
+import { messageActivityRange, messageActivityYears } from './message-activity-calendar';
 import { MessageActivityCalendar } from './MessageActivityCalendar';
 import {
   shanghaiDate,
@@ -32,27 +32,36 @@ export function ProfileMessageActivity({
 }
 
 function MessageActivitySection({ subject }: { subject: ProfileMessageSubject }): JSX.Element {
+  const [year, setYear] = useState<number | 'recent'>('recent');
+  const [availableYears, setAvailableYears] = useState<number[]>([]);
+
   const today = shanghaiDate();
   const currentYear = Number(today.slice(0, 4));
-  const [year, setYear] = useState<number | 'recent'>('recent');
+
   const range = messageActivityRange(year, today);
   const queries = useQueries({
     queries: messageActivityYears(range).map((value) =>
       profileMessageCountsOptions(getCurrentUserId(), subject, value),
     ),
   });
+
   const data = queries.every((query) => query.data)
     ? queries
         .flatMap((query) => query.data?.days ?? [])
         .filter((day) => day.date >= range.start && day.date <= range.end)
     : undefined;
+
   const isError = queries.some((query) => query.isError);
   const isFetching = queries.some((query) => query.isFetching);
+
   const yearOptions = queries.flatMap((query) => query.data?.available_years ?? []).join(',');
-  const [availableYears, setAvailableYears] = useState<number[]>([]);
+
   useEffect(() => {
-    if (yearOptions) setAvailableYears(yearOptions.split(',').map(Number));
+    if (yearOptions) {
+      setAvailableYears(yearOptions.split(',').map(Number));
+    }
   }, [yearOptions]);
+
   const years = [
     ...new Set([...(year === 'recent' ? [] : [year]), currentYear, ...availableYears]),
   ].sort((a, b) => b - a);
