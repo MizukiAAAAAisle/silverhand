@@ -1,3 +1,4 @@
+import { DirectorySidebar } from '@/components/layout/DirectoryShell';
 import { Monitor, Plus, User, Users } from 'lucide-react';
 import { Fragment, useMemo, useState } from 'react';
 import type { AgentDto, HostDto } from '@silverhand/shared';
@@ -6,10 +7,7 @@ import { projectPresence } from '@/features/agents/presence-projection';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { CreateAgentDialog } from '@/features/agents/CreateAgentDialog';
 import { useHostsQuery } from '@/features/hosts/hooks';
-import {
-  hostDisplayName,
-  UNKNOWN_COMPUTER_LABEL,
-} from '@/features/hosts/host-display';
+import { hostDisplayName, UNKNOWN_COMPUTER_LABEL } from '@/features/hosts/host-display';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
@@ -25,27 +23,27 @@ import { UserAvatar } from '@/components/UserAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { Button } from '@/components/ui/button';
 import { CURRENT_USER_SUBTITLE } from '@/lib/current-user';
-import { SidebarRow, SidebarSection } from './sidebar-shared';
+import { SidebarRow, SidebarSection } from '@/components/layout/sidebar-shared';
 
-interface MembersPanelProps {
+interface AgentSidebarShellProps {
   selectedAgentId?: string | null;
   onSelectAgent?: (id: string) => void;
   /** Currently focused human-id in the right pane (`/members/u/:id`).
    *  Used to highlight the corresponding HUMANS row. */
   selectedUserId?: string | null;
   /** Click handler for HUMANS rows. Wired to `nav.toMembersUser(id)` in
-   *  the App. When omitted the rows render but aren't clickable —
+   *  AgentShell. When omitted the rows render but aren't clickable —
    *  matches the pre-#314 behaviour for surfaces that just want the
    *  list. */
   onSelectUser?: (id: string) => void;
 }
 
-export function MembersPanel({
+export function AgentSidebarShell({
   selectedAgentId,
   onSelectAgent,
   selectedUserId,
   onSelectUser,
-}: MembersPanelProps): JSX.Element {
+}: AgentSidebarShellProps): JSX.Element {
   const [open, setOpen] = useState(false);
   // AGENTS lists only the agents the login user CREATED (#task:1256, shiki
   // option A). The narrowing is defined by the backend `?scope=owned` contract
@@ -59,7 +57,7 @@ export function MembersPanel({
   // collapse into one restrained "Unknown computer" group at the end.
   const hostsQuery = useHostsQuery();
   const hostsById = useMemo(
-    () => new Map((hostsQuery.data?.hosts ?? []).map(h => [h.id, h] as const)),
+    () => new Map((hostsQuery.data?.hosts ?? []).map((h) => [h.id, h] as const)),
     [hostsQuery.data],
   );
   const agentGroups = useMemo(() => {
@@ -69,14 +67,17 @@ export function MembersPanel({
       const host = hostsById.get(a.host_id);
       if (host) {
         const group = known.get(host.id);
-        if (group) group.agents.push(a);
-        else known.set(host.id, { host, agents: [a] });
+        if (group) {
+          group.agents.push(a);
+        } else {
+          known.set(host.id, { host, agents: [a] });
+        }
       } else {
         unknown.push(a);
       }
     }
     const groups = [...known.values()]
-      .map(g => ({ key: g.host.id, name: hostDisplayName(g.host), agents: g.agents }))
+      .map((g) => ({ key: g.host.id, name: hostDisplayName(g.host), agents: g.agents }))
       .sort((a, b) => a.name.localeCompare(b.name));
     if (unknown.length > 0) {
       groups.push({ key: '__unknown__', name: UNKNOWN_COMPUTER_LABEL, agents: unknown });
@@ -99,9 +100,10 @@ export function MembersPanel({
   const viewerQuery = useViewerUser();
   const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
   const viewer =
-    viewerQuery.data
-    && !isRegistrationRequired(viewerQuery.data)
-    && !isBackendUnreachable(viewerQuery.data) && !isUpdateRequired(viewerQuery.data)
+    viewerQuery.data &&
+    !isRegistrationRequired(viewerQuery.data) &&
+    !isBackendUnreachable(viewerQuery.data) &&
+    !isUpdateRequired(viewerQuery.data)
       ? viewerQuery.data
       : null;
   // Multi-human audit 2026-06-03 #task:857 P0.6: HUMANS is the global
@@ -112,9 +114,7 @@ export function MembersPanel({
   const { data: allUsers = [] } = useUsers();
   // Other humans = directory minus viewer. Stable ordering: the server
   // returns alphabetized-by-name; we preserve that.
-  const otherHumans = viewer
-    ? allUsers.filter(u => u.id !== viewer.id)
-    : allUsers;
+  const otherHumans = viewer ? allUsers.filter((u) => u.id !== viewer.id) : allUsers;
   const otherAvatarUrls = useUserAvatarObjectUrls(otherHumans);
   const humansCount = (viewer ? 1 : 0) + otherHumans.length;
   // Human online/offline pip — online → green `active`, offline/unknown →
@@ -123,7 +123,7 @@ export function MembersPanel({
   const presenceById = usePresenceById();
 
   return (
-    <>
+    <DirectorySidebar>
       <SidebarSection
         label="AGENTS"
         icon={<Users className="size-3.5" />}
@@ -141,11 +141,9 @@ export function MembersPanel({
         }
       >
         {agents.length === 0 ? (
-          <li className="px-2 py-2 text-xs text-text-muted">
-            No agents yet. Use + to create one.
-          </li>
+          <li className="px-2 py-2 text-xs text-text-muted">No agents yet. Use + to create one.</li>
         ) : showGroups ? (
-          agentGroups.map(group => (
+          agentGroups.map((group) => (
             <Fragment key={group.key}>
               <li
                 data-agent-group-header
@@ -177,22 +175,17 @@ export function MembersPanel({
             subtitle={CURRENT_USER_SUBTITLE}
             status={presenceDotStatus(presenceById.get(viewer.id)?.presence)}
             selected={selectedUserId === viewer.id}
-            onClick={
-              onSelectUser ? () => onSelectUser(viewer.id) : undefined
-            }
+            onClick={onSelectUser ? () => onSelectUser(viewer.id) : undefined}
           />
         ) : null}
-        {otherHumans.map(u => {
+        {otherHumans.map((u) => {
           const avatarObjectUrl = otherAvatarUrls.get(u.id) ?? null;
           return (
             <SidebarRow
               key={u.id}
               className="h-[32px]"
               icon={
-                <HumanRowIcon
-                  avatarObjectUrl={avatarObjectUrl}
-                  alt={u.display_name || u.name}
-                />
+                <HumanRowIcon avatarObjectUrl={avatarObjectUrl} alt={u.display_name || u.name} />
               }
               title={u.display_name || u.name}
               subtitle={`@${u.name}`}
@@ -203,14 +196,12 @@ export function MembersPanel({
           );
         })}
         {!viewer && otherHumans.length === 0 ? (
-          <li className="px-2 py-2 text-xs text-text-muted">
-            No human registered yet.
-          </li>
+          <li className="px-2 py-2 text-xs text-text-muted">No human registered yet.</li>
         ) : null}
       </SidebarSection>
 
       <CreateAgentDialog open={open} onOpenChange={setOpen} />
-    </>
+    </DirectorySidebar>
   );
 }
 
@@ -265,7 +256,7 @@ function AgentRow({
 
 /**
  * 16×16 frame for human rows. Both AGENTS and HUMANS rows pass this
- * size; MembersPanel targets a 32px-tall row (icon 16 + py-1.5 / 12 +
+ * size; AgentSidebarShell targets a 32px-tall row (icon 16 + py-1.5 / 12 +
  * border 4) for IM-sidebar density (#task:912 review round 5 — earlier
  * the rows had mismatched icons + ran 36-38.5px tall, which read as
  * "settings list" rather than "Slack sidebar").
@@ -287,7 +278,5 @@ function HumanRowIcon({
   avatarObjectUrl: string | null | undefined;
   alt: string;
 }): JSX.Element {
-  return (
-    <UserAvatar size={AVATAR_PX.xs} avatarObjectUrl={avatarObjectUrl} alt={alt} />
-  );
+  return <UserAvatar size={AVATAR_PX.xs} avatarObjectUrl={avatarObjectUrl} alt={alt} />;
 }

@@ -1,0 +1,51 @@
+import type { ReactNode } from 'react';
+import { SectionLayer } from './SectionLayer';
+import { SectionShell } from './SectionShell';
+import { paneChrome } from './pane-chrome';
+
+export interface DirectoryLifecycle {
+  mounted: boolean;
+  visible: boolean;
+}
+
+/** Keep page controllers mounted; defer only their expensive presentation. */
+export function DirectoryShell({
+  mounted,
+  visible,
+  name,
+  sidebar,
+  children,
+  splitter,
+}: DirectoryLifecycle & {
+  name: string;
+  sidebar: ReactNode;
+  children: ReactNode;
+  splitter?: ReactNode;
+}): JSX.Element | null {
+  if (!mounted) {
+    return null;
+  }
+
+  return (
+    <SectionLayer visible={visible}>
+      <SectionShell name={name} width="var(--sidebar-width)" sidebar={sidebar} splitter={splitter}>
+        {children}
+      </SectionShell>
+    </SectionLayer>
+  );
+}
+
+export function DirectorySidebar({ children }: { children: ReactNode }): JSX.Element {
+  return <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">{children}</nav>;
+}
+
+export function DirectoryPlaceholder({ children }: { children: ReactNode }): JSX.Element {
+  return (
+    <main
+      className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+      style={{ ...paneChrome, overflow: 'hidden' }}
+    >
+      {children}
+    </main>
+  );
+}

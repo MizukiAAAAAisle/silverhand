@@ -1,5 +1,4 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
-import type { AgentDto } from '@silverhand/shared';
 import {
   useTouchSort,
   type ChannelListItem,
@@ -13,46 +12,26 @@ import {
 } from '@/lib/place-memory';
 import { chatPlaceForRoute } from '@/lib/chat-place-restore';
 
-/**
- * Selection-persistence side-effects lifted out of `App` (#task:1295) so the
- * shell stays a thinner composition root. These are the low-coupling
- * view-state persistence effects — last-viewed-channel memory, recent-opened
- * sort stamps (channel + workspace rail), and members/chat last-selected
- * memory. Each effect body is preserved byte-for-byte and keeps its original
- * relative order, so hook order and behavior are unchanged; this is a pure
- * boundary extraction. The high-risk restore / auto-select / layout-watermark
- * effects deliberately stay inline in `App`.
- *
- * `lastSelectedWorkspaceId` / `lastSelectedAgentId` are passed in because they
- * are shared with effects that stay in `App` (the workspace-restore reader and
- * the members-default nav). The per-list touch dedup refs and the touch
- * mutation are private to this hook.
- */
+/** Chat selection memory and recent-opened stamps. Page-specific selection lives in its Shell. */
 export function useSelectionPersistenceEffects(params: {
   selectedWorkspaceId: string | null;
   selectedChannelId: string | null;
-  selectedAgentId: string | null;
   chatSectionActive: boolean;
   directConversationId: string | null;
   directDraftAgentId: string | null;
   activeChannels: ChannelListItem[];
   workspaces: WorkspaceListItem[];
-  agents: AgentDto[];
   lastSelectedWorkspaceId: MutableRefObject<string | null>;
-  lastSelectedAgentId: MutableRefObject<string | null>;
 }): void {
   const {
     selectedWorkspaceId,
     selectedChannelId,
-    selectedAgentId,
     chatSectionActive,
     directConversationId,
     directDraftAgentId,
     activeChannels,
     workspaces,
-    agents,
     lastSelectedWorkspaceId,
-    lastSelectedAgentId,
   } = params;
 
   const touchSort = useTouchSort();
@@ -90,12 +69,7 @@ export function useSelectionPersistenceEffects(params: {
     });
     if (place === null) return;
     recordLastChatPlace(place);
-  }, [
-    chatSectionActive,
-    directDraftAgentId,
-    directConversationId,
-    selectedWorkspaceId,
-  ]);
+  }, [chatSectionActive, directDraftAgentId, directConversationId, selectedWorkspaceId]);
 
   // Stamp "recently opened" for the channel sort list whenever the viewer
   // selects a top-level channel (#task:1146). Recent = recently-OPENED by
@@ -105,7 +79,7 @@ export function useSelectionPersistenceEffects(params: {
   // fetch (no jump under the cursor).
   useEffect(() => {
     if (!selectedWorkspaceId || !selectedChannelId) return;
-    const isTopLevel = activeChannels.some(c => c.id === selectedChannelId);
+    const isTopLevel = activeChannels.some((c) => c.id === selectedChannelId);
     if (!isTopLevel) return;
     const key = `${selectedWorkspaceId}:${selectedChannelId}`;
     if (lastTouchedChannelRef.current === key) return;
@@ -123,20 +97,12 @@ export function useSelectionPersistenceEffects(params: {
   // filters them on read anyway, but this avoids the redundant POST).
   useEffect(() => {
     if (!selectedWorkspaceId) return;
-    const ws = workspaces.find(w => w.id === selectedWorkspaceId);
+    const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
     if (!ws || ws.archived_at !== null) return;
     if (lastTouchedWorkspaceRef.current === selectedWorkspaceId) return;
     lastTouchedWorkspaceRef.current = selectedWorkspaceId;
     touchSort.mutate({ list_key: 'workspaces', entity_id: selectedWorkspaceId });
   }, [selectedWorkspaceId, workspaces]);
-
-  // Record the last valid agent selected in the members panel this run, so the
-  // members-default effect (kept in `App`) can restore it on re-entry.
-  useEffect(() => {
-    if (!selectedAgentId) return;
-    if (!agents.some(a => a.id === selectedAgentId)) return;
-    lastSelectedAgentId.current = selectedAgentId;
-  }, [agents, selectedAgentId]);
 
   // Remember the workspace the user is actively viewing so returning to the
   // chat section (via bare `/chat`) restores it rather than `workspaces[0]`.
@@ -144,7 +110,7 @@ export function useSelectionPersistenceEffects(params: {
   // STARRED row after quitting and reopening (#task:1222/#task:1229).
   useEffect(() => {
     if (!selectedWorkspaceId) return;
-    if (!workspaces.some(w => w.id === selectedWorkspaceId)) return;
+    if (!workspaces.some((w) => w.id === selectedWorkspaceId)) return;
     if (lastSelectedWorkspaceId.current === selectedWorkspaceId) return;
     lastSelectedWorkspaceId.current = selectedWorkspaceId;
     recordLastWorkspace(selectedWorkspaceId);

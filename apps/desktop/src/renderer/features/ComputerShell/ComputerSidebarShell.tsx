@@ -1,16 +1,14 @@
+import { DirectorySidebar } from '@/components/layout/DirectoryShell';
 import type { JSX } from 'react';
 import { Monitor, Plus } from 'lucide-react';
 import type { HostDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { computerCopy } from '@/features/hosts/computer-copy';
 import { useHostStatusQuery } from '@/features/hosts/hooks';
-import {
-  describeHostStatus,
-  type HostStatusTone,
-} from '@/features/hosts/host-status-presentation';
-import { SidebarRow, SidebarSection } from './sidebar-shared';
+import { describeHostStatus, type HostStatusTone } from '@/features/hosts/host-status-presentation';
+import { SidebarRow, SidebarSection } from '@/components/layout/sidebar-shared';
 
-export interface ComputersPanelProps {
+export interface ComputerSidebarShellProps {
   hosts: HostDto[];
   localHostId: string | null;
   /** True while the hosts query has not yet resolved. Drives the
@@ -23,56 +21,56 @@ export interface ComputersPanelProps {
   onAddComputer?: () => void;
 }
 
-export function ComputersPanel({
+export function ComputerSidebarShell({
   hosts,
   localHostId,
   isLoading,
   selectedHostId,
   onSelectHost,
   onAddComputer,
-}: ComputersPanelProps): JSX.Element {
+}: ComputerSidebarShellProps): JSX.Element {
   const sorted = sortHostsForSidebar(
-    hosts.filter(
-      host => host.status === 'active' || host.status === 'revoked',
-    ),
+    hosts.filter((host) => host.status === 'active' || host.status === 'revoked'),
     localHostId,
   );
 
   return (
-    <SidebarSection
-      label="COMPUTERS"
-      icon={<Monitor className="size-3.5" />}
-      count={sorted.length}
-      action={
-        onAddComputer ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={onAddComputer}
-            aria-label={computerCopy.addComputer}
-            title={computerCopy.addComputer}
-          >
-            <Plus className="size-3.5" />
-          </Button>
-        ) : undefined
-      }
-    >
-      {sorted.length === 0 ? (
-        <li className="px-2 py-1.5 text-xs text-text-muted">
-          {isLoading ? 'Loading…' : 'No computers yet.'}
-        </li>
-      ) : (
-        sorted.map(host => (
-          <ComputerRow
-            key={host.id}
-            host={host}
-            isSelected={host.id === selectedHostId}
-            onSelect={() => onSelectHost(host.id)}
-          />
-        ))
-      )}
-    </SidebarSection>
+    <DirectorySidebar>
+      <SidebarSection
+        label="COMPUTERS"
+        icon={<Monitor className="size-3.5" />}
+        count={sorted.length}
+        action={
+          onAddComputer ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={onAddComputer}
+              aria-label={computerCopy.addComputer}
+              title={computerCopy.addComputer}
+            >
+              <Plus className="size-3.5" />
+            </Button>
+          ) : undefined
+        }
+      >
+        {sorted.length === 0 ? (
+          <li className="px-2 py-1.5 text-xs text-text-muted">
+            {isLoading ? 'Loading…' : 'No computers yet.'}
+          </li>
+        ) : (
+          sorted.map((host) => (
+            <ComputerRow
+              key={host.id}
+              host={host}
+              isSelected={host.id === selectedHostId}
+              onSelect={() => onSelectHost(host.id)}
+            />
+          ))
+        )}
+      </SidebarSection>
+    </DirectorySidebar>
   );
 }
 
@@ -124,9 +122,7 @@ function ComputerRow({
   // never the internal `kind` enum. The nbsp fallback holds the line box
   // while the first status request is in flight so the row height is
   // stable (matches SidebarRow's stacked reserve).
-  const availabilityLabel = isRevoked
-    ? computerCopy.lifecycleRevoked
-    : (view?.label ?? null);
+  const availabilityLabel = isRevoked ? computerCopy.lifecycleRevoked : (view?.label ?? null);
   const pip = isRevoked ? null : view ? TONE_TO_PIP[view.tone] : null;
 
   return (
@@ -166,13 +162,16 @@ function AppManagedBadge(): JSX.Element {
  * stable sort. Exported as a pure function so a unit test pins the
  * sort without spinning up React Query.
  */
-export function sortHostsForSidebar(
-  hosts: HostDto[],
-  localHostId: string | null,
-): HostDto[] {
+export function sortHostsForSidebar(hosts: HostDto[], localHostId: string | null): HostDto[] {
   return [...hosts].sort((a, b) => {
-    if (a.id === localHostId) return -1;
-    if (b.id === localHostId) return 1;
+    if (a.id === localHostId) {
+      return -1;
+    }
+
+    if (b.id === localHostId) {
+      return 1;
+    }
+
     const aLabel = (a.display_label ?? a.name).toLowerCase();
     const bLabel = (b.display_label ?? b.name).toLowerCase();
     return aLabel.localeCompare(bLabel);

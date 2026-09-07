@@ -1,15 +1,10 @@
+import { AgentShell } from '@/features/AgentShell/AgentShell';
+import { ComputerShell } from '@/features/ComputerShell/ComputerShell';
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { Power } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { NavRail, deriveNavRailDots } from '@/components/layout/NavRail';
-import { ComputersPanel } from '@/components/layout/ComputersPanel';
-import { NewComputerDialog } from '@/features/hosts/NewComputerDialog';
-import { HostDetailView } from '@/features/hosts/HostDetailView';
-import {
-  useBackendInfoSnapshot,
-  useHostsQuery,
-} from '@/features/hosts/hooks';
-import { MembersPanel } from '@/components/layout/MembersPanel';
+import { useBackendInfoSnapshot } from '@/features/hosts/hooks';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ChannelView } from '@/components/layout/ChannelView';
 import { ConversationViewSkeleton } from '@/components/layout/ConversationViewSkeleton';
@@ -63,7 +58,6 @@ import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
 import { useTaskBoardRealtime } from '@/features/tasks/useBoard';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { AgentView } from '@/features/agents/AgentView';
-import { HumanView } from '@/features/me/HumanView';
 import { SideUnresolvedPlaceholder } from '@/components/layout/SideUnresolvedPlaceholder';
 import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
 import { isWorkspacePlaced } from '@silverhand/shared';
@@ -366,15 +360,12 @@ function RegisteredAppShell({
     filesListOpen,
     taskDetailId,
     fullscreen: routeFullscreen,
-    agentId: selectedAgentId,
-    userId: selectedUserId,
     agentPanelId,
   } = route;
   const workspaceSidebarPane = layout.workspaceSidebar;
   const workspaceSidebarVisible = workspaceSidebarPane.visible;
 
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
-  const [newComputerOpen, setNewComputerOpen] = useState(false);
   // Which workspace a new channel is being created in — `null` closes the dialog.
   // Since #task:1889 the merged tree's rows are cross-workspace, so the target is
   // carried explicitly instead of being implied by "the current workspace".
@@ -382,13 +373,6 @@ function RegisteredAppShell({
     string | null
   >(null);
   const [workspaceSettingsId, setWorkspaceSettingsId] = useState<string | null>(null);
-  // #task:808 slice 4 — selected host in the Computers section. In-memory
-  // (no URL persistence in v1; no other surface deep-links to a specific
-  // host). Auto-defaults to the local host once the host list lands so
-  // the right pane isn't empty on first visit. Selection is cleared if
-  // the host disappears (e.g. revoke) so the detail view doesn't render
-  // a stale row.
-  const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const {
     jumpTarget,
     requestJump,
@@ -423,13 +407,6 @@ function RegisteredAppShell({
   // singleton above (persisted via localStorage). The recording effect
   // below writes through to storage on every mutation; the restore
   // effect reads from it when hydrating from a workspaceId-only URL.
-  const lastSelectedAgentId = useRef<string | null>(null);
-  // Same as `lastSelectedAgentId` but for the chat section: clicking the
-  // "Chat" navrail item routes to bare `/chat` (no workspaceId), so on the
-  // way back the auto-pick below must restore the workspace the user last had
-  // open instead of snapping to `workspaces[0]`. This one is persisted so an
-  // app restart can land back on a workspace that does not sort first
-  // (#task:1222/#task:1229).
   const lastSelectedWorkspaceId = useRef<string | null>(getLastWorkspaceId());
   const lastSelectedMessageReadKey = useRef<string | null>(null);
   const lastThreadMessageReadKey = useRef<string | null>(null);
@@ -1011,15 +988,12 @@ function RegisteredAppShell({
   useSelectionPersistenceEffects({
     selectedWorkspaceId,
     selectedChannelId,
-    selectedAgentId,
     chatSectionActive: appSection === 'chat',
     directConversationId,
     directDraftAgentId,
     activeChannels: memberActiveChannels,
     workspaces,
-    agents,
     lastSelectedWorkspaceId,
-    lastSelectedAgentId,
   });
 
   // Remember the channel's secondary-pane layout (threads-list / thread /
@@ -1088,61 +1062,7 @@ function RegisteredAppShell({
     messageUnreadData,
   ]);
 
-  // Members panel defaults to a concrete agent: restore the last selected one
-  // for this app run, or fall back to the first agent in the list.
-  useEffect(() => {
-    if (appSection !== 'members') return;
-    // A human-route resolution is its own valid landing. Skip the
-    // agent-first default so `/members/u/<userId>` doesn't get clobbered
-    // back to an agent on first paint.
-    if (selectedUserId) return;
-    if (agents.length === 0) return;
-    if (selectedAgentId && agents.some(a => a.id === selectedAgentId)) return;
-
-    const remembered = lastSelectedAgentId.current;
-    const target = remembered && agents.some(a => a.id === remembered)
-      ? remembered
-      : agents[0]!.id;
-    nav.go(routes.membersAgent(target), { replace: true });
-  }, [agents, appSection, nav, selectedAgentId, selectedUserId]);
-
-  const hostsQuery = useHostsQuery();
-
-  const backendInfoQuery = useBackendInfoSnapshot({
-    pollProtocolCompatibility: true,
-  });
-  const computerHosts = hostsQuery.data?.hosts ?? [];
-  const localHostIdForComputers =
-    backendInfoQuery.data?.local_host_id ?? null;
-  // The COMPUTERS rail derives each row's availability (including the
-  // app-managed local computer) from the per-host status query inside
-  // `ComputerRow`, the SAME predicate the detail-view pill uses — so no
-  // local-only attach probe is threaded here anymore (that fork read as
-  // an inconsistency: the local row had a pip, user-added rows didn't).
-  // Liveness is push-based via host-connection-sync, so no polling.
-  useEffect(() => {
-    if (computerHosts.length === 0) return;
-    // Drop a stale selection (e.g. the host was revoked from another
-    // surface) before falling through to the default-picker.
-    if (
-      selectedHostId &&
-      !computerHosts.some(h => h.id === selectedHostId)
-    ) {
-      setSelectedHostId(null);
-    }
-    if (selectedHostId) return;
-    const localHit = localHostIdForComputers
-      ? computerHosts.find(h => h.id === localHostIdForComputers)
-      : null;
-    setSelectedHostId(localHit?.id ?? computerHosts[0]!.id);
-  }, [computerHosts, localHostIdForComputers, selectedHostId]);
-  const selectedHost = useMemo(
-    () =>
-      selectedHostId
-        ? computerHosts.find(h => h.id === selectedHostId) ?? null
-        : null,
-    [computerHosts, selectedHostId],
-  );
+  useBackendInfoSnapshot({ pollProtocolCompatibility: true });
 
   const selectedChannel = channels.find(s => s.id === selectedChannelId) ?? null;
   // Resolve the selected conversation's per-viewer membership ONCE, from the
@@ -2270,85 +2190,16 @@ function RegisteredAppShell({
               <TasksSection onOpenTask={openTaskInModal} />
             </SectionLayer>
           )}
-          {deferredSection === 'members' && (
-            <SectionLayer visible={appSection !== 'chat'}>
-            <SectionShell
-              name="members"
-              width="var(--sidebar-width)"
-              sidebar={
-                <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
-                  <MembersPanel
-                    selectedAgentId={selectedAgentId}
-                    onSelectAgent={id => nav.toMembers(id)}
-                    selectedUserId={selectedUserId}
-                    onSelectUser={id => nav.toMembersUser(id)}
-                  />
-                </nav>
-              }
-            >
-              {selectedUserId ? (
-                <HumanView
-                  key={selectedUserId}
-                  userId={selectedUserId}
-                  onUnreachable={() => nav.toMembers()}
-                />
-              ) : selectedAgentId ? (
-                <AgentView
-                  key={selectedAgentId}
-                  agentId={selectedAgentId}
-                  onDeleted={() => nav.toMembers()}
-                  onMessageAgent={handleMessageAgent}
-                  onOpenConversation={s =>
-                    openAgentConversation(s.channel_id, s.workspace_id)
-                  }
-                  onOpenChat={t =>
-                    openAgentConversation(t.conversationId, t.workspaceId)
-                  }
-                />
-              ) : (
-                <main
-                  className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-                  style={{ ...paneChrome, overflow: 'hidden' }}
-                >
-                  Select an agent to see its details
-                </main>
-              )}
-            </SectionShell>
-            </SectionLayer>
-          )}
-          {deferredSection === 'computers' && (
-            <SectionLayer visible={appSection !== 'chat'}>
-            <SectionShell
-              name="computers"
-              width="var(--sidebar-width)"
-              sidebar={
-                <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
-                  <ComputersPanel
-                    hosts={computerHosts}
-                    localHostId={localHostIdForComputers}
-                    isLoading={hostsQuery.isLoading}
-                    selectedHostId={selectedHostId}
-                    onSelectHost={setSelectedHostId}
-                    onAddComputer={() => setNewComputerOpen(true)}
-                  />
-                </nav>
-              }
-            >
-              {selectedHost ? (
-                <HostDetailView key={selectedHost.id} host={selectedHost} />
-              ) : (
-                <main
-                  className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-                  style={{ ...paneChrome, overflow: 'hidden' }}
-                >
-                  {hostsQuery.isLoading
-                    ? 'Loading computers…'
-                    : 'Select a computer to see its details'}
-                </main>
-              )}
-            </SectionShell>
-            </SectionLayer>
-          )}
+          <AgentShell
+            mounted={deferredSection === 'members'}
+            visible={appSection !== 'chat'}
+            onMessageAgent={handleMessageAgent}
+            onOpenConversation={openAgentConversation}
+          />
+          <ComputerShell
+            mounted={deferredSection === 'computers'}
+            visible={appSection !== 'chat'}
+          />
           {deferredSection === 'activity' && (
             <SectionLayer visible={appSection !== 'chat'}>
             <SectionShell
@@ -2567,11 +2418,6 @@ function RegisteredAppShell({
         onCreated={({ workspaceId, channelId }) =>
           nav.toChannel(workspaceId, channelId)
         }
-      />
-      <NewComputerDialog
-        open={newComputerOpen}
-        onOpenChange={setNewComputerOpen}
-        onCreated={hostId => setSelectedHostId(hostId)}
       />
       <CreateChannelDialog
         open={createChannelWorkspaceId !== null}

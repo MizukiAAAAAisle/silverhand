@@ -128,7 +128,7 @@ export const routes = {
   members: () => '/members',
   membersAgent: (agentId: string) => `/members/${agentId}`,
   // Distinct prefix for users so a user id can never collide with the
-  // agent id namespace at the URL level. The MembersPanel writes this
+  // agent id namespace at the URL level. The AgentSidebarShell writes this
   // when a HUMANS row is clicked; AgentView and HumanView are then
   // mutually exclusive at the App level (parseRouteState produces one
   // of agentId / userId, never both).

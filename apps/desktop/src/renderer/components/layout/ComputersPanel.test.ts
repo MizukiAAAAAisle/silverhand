@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HostDto } from '@silverhand/shared';
-import { sortHostsForSidebar } from './ComputersPanel';
+import { sortHostsForSidebar } from '@/features/ComputerShell/ComputerSidebarShell';
 
 /**
  * #task:808 slice 4 — pure `sortHostsForSidebar` test. Pin the
@@ -45,7 +45,7 @@ describe('sortHostsForSidebar', () => {
       host({ id: 'local-1', name: 'local', display_label: 'Studio' }),
     ];
     const sorted = sortHostsForSidebar(hosts, 'local-1');
-    expect(sorted.map(h => h.id)).toEqual(['local-1', 'aaa', 'zzz']);
+    expect(sorted.map((h) => h.id)).toEqual(['local-1', 'aaa', 'zzz']);
   });
 
   it('case-insensitive label-ordered fallback when local id missing', () => {
@@ -55,11 +55,7 @@ describe('sortHostsForSidebar', () => {
       host({ id: '3', display_label: 'gamma' }),
     ];
     const sorted = sortHostsForSidebar(hosts, null);
-    expect(sorted.map(h => h.display_label)).toEqual([
-      'Alpha',
-      'beta',
-      'gamma',
-    ]);
+    expect(sorted.map((h) => h.display_label)).toEqual(['Alpha', 'beta', 'gamma']);
   });
 
   it('falls back to `name` when `display_label` is null', () => {
@@ -69,7 +65,7 @@ describe('sortHostsForSidebar', () => {
       host({ id: '3', name: 'mango' }),
     ];
     const sorted = sortHostsForSidebar(hosts, null);
-    expect(sorted.map(h => h.name)).toEqual(['apple', 'mango', 'zebra']);
+    expect(sorted.map((h) => h.name)).toEqual(['apple', 'mango', 'zebra']);
   });
 
   it('local-host anchor still wins even when the local label sorts last', () => {
@@ -78,6 +74,6 @@ describe('sortHostsForSidebar', () => {
       host({ id: 'l', display_label: 'zzz' }), // local; would sort last by label
     ];
     const sorted = sortHostsForSidebar(hosts, 'l');
-    expect(sorted.map(h => h.id)).toEqual(['l', 'a']);
+    expect(sorted.map((h) => h.id)).toEqual(['l', 'a']);
   });
 });
