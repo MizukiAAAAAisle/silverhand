@@ -15,12 +15,12 @@ export function MessageActivityCalendar({ year, days, today, timezone }: Props):
   const [focusedDate, setFocusedDate] = useState<string | null>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   const scroll = useRef<HTMLDivElement>(null);
-  useEffect(() => { if (scroll.current) scroll.current.scrollLeft = scroll.current.scrollWidth; }, [year, today]);
+  useEffect(() => { if (scroll.current) scroll.current.scrollLeft = year === 'recent' ? scroll.current.scrollWidth : 0; }, [year, today]);
   const firstVisible = cells.find(cell => cell.visible)?.date;
   const activeDate = cells.some(cell => cell.date === focusedDate && cell.visible) ? focusedDate : firstVisible;
   const columns = cells.length / 7;
   const monthLabels = cells.flatMap((cell, index) =>
-    cell.visible && cell.date.endsWith('-01')
+    (year === 'recent' ? cell.visible : cell.date.startsWith(`${year}-`)) && cell.date.endsWith('-01')
       ? [{ column: Math.floor(index / 7) + 1, date: cell.date }]
       : [],
   );

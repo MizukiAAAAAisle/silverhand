@@ -16,6 +16,14 @@ describe('message activity calendar coordinates', () => {
     expect(cells[0]?.date).toBe('2025-12-28');
   });
 
+  it('keeps the full natural year when today is in January', () => {
+    expect(messageActivityRange(2026, '2026-01-02')).toEqual({ start: '2026-01-01', end: '2026-12-31' });
+    const cells = messageActivityCalendar(2026, [], '2026-01-02');
+    expect(cells).toHaveLength(53 * 7);
+    expect(cells.find(cell => cell.date === '2026-12-31')).toEqual({ date: '2026-12-31', count: 0, visible: false });
+    expect(cells.filter(cell => cell.date.startsWith('2026-') && cell.date.endsWith('-01'))).toHaveLength(12);
+  });
+
   it('keeps leap day and the final day in a 54-week leap calendar', () => {
     const cells = messageActivityCalendar(2000, [{ date: '2000-02-29', count: 7 }], '2001-01-01');
     expect(cells).toHaveLength(378);

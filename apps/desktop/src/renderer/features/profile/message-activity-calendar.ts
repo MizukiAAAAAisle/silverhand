@@ -8,7 +8,7 @@ export interface MessageActivityCell extends MessageActivityDay {
 }
 
 export function messageActivityRange(selection: number | 'recent', today: string) {
-  if (selection !== 'recent') return { start: `${selection}-01-01`, end: `${selection}-12-31` < today ? `${selection}-12-31` : today };
+  if (selection !== 'recent') return { start: `${selection}-01-01`, end: `${selection}-12-31` };
   const end = new Date(`${today}T00:00:00Z`);
   const start = new Date(end);
   start.setUTCFullYear(start.getUTCFullYear() - 1);
@@ -37,7 +37,7 @@ export function messageActivityCalendar(
   const counts = new Map(days.map(day => [day.date, day.count]));
   return Array.from({ length }, (_, index) => {
     const date = new Date(first.getTime() + (index - offset) * 86_400_000).toISOString().slice(0, 10);
-    const visible = date >= range.start && date <= range.end;
+    const visible = date >= range.start && date <= range.end && date <= today;
     return { date, count: visible ? counts.get(date) ?? 0 : 0, visible };
   });
 }
