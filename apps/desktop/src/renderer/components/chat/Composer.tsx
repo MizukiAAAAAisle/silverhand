@@ -12,12 +12,7 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { AtSign, Hash, Paperclip, X } from 'lucide-react';
-import type {
-  AgentDto,
-  ChannelConversationDto,
-  Locator,
-  ReferenceKind,
-} from '@silverhand/shared';
+import type { AgentDto, ChannelConversationDto, Locator, ReferenceKind } from '@silverhand/shared';
 import {
   canonicalizeStoredConversationTitle,
   canonicalizeStoredWorkspaceName,
@@ -30,10 +25,7 @@ import {
   rewriteShorthandReferences,
   type ShorthandResolver,
 } from '@silverhand/shared/reference-markdown';
-import {
-  MAX_ATTACHMENTS,
-  shouldInterceptOversizedPaste,
-} from './oversize-paste';
+import { MAX_ATTACHMENTS, shouldInterceptOversizedPaste } from './oversize-paste';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
@@ -50,10 +42,7 @@ import {
   type WorkspaceMemberLists,
 } from '@/features/workspaces/hooks';
 import { useAgents } from '@/features/agents/hooks';
-import type {
-  ComposerDirectory,
-  MentionAgent,
-} from '@/features/conversations/pane-mode';
+import type { ComposerDirectory, MentionAgent } from '@/features/conversations/pane-mode';
 
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
 import { useSendMessage } from '@/features/channels/hooks';
@@ -206,9 +195,7 @@ export function Composer({
   // Draft identity: a reply-cluster composer keeps its own draft so it
   // never clobbers the channel's main draft. Network ops (send target,
   // members, attachment upload path) still use the real `conversationId`.
-  const draftKey = threadRootId
-    ? `${conversationId}#cluster#${threadRootId}`
-    : conversationId;
+  const draftKey = threadRootId ? `${conversationId}#cluster#${threadRootId}` : conversationId;
   const [initialDraft] = useState(() => readComposerDraft(draftKey));
   const [draft, setDraftState] = useState(initialDraft?.text ?? '');
   const [caret, setCaretState] = useState(initialDraft?.caret ?? 0);
@@ -245,12 +232,9 @@ export function Composer({
   }, []);
 
   function setPendingValue(
-    next:
-      | PendingAttachment[]
-      | ((current: PendingAttachment[]) => PendingAttachment[]),
+    next: PendingAttachment[] | ((current: PendingAttachment[]) => PendingAttachment[]),
   ): void {
-    const value =
-      typeof next === 'function' ? next(pendingRef.current) : next;
+    const value = typeof next === 'function' ? next(pendingRef.current) : next;
     pendingRef.current = value;
     setPendingState(value);
   }
@@ -278,22 +262,18 @@ export function Composer({
     if (!submitting) return;
     dropSentAttachmentsFromDraft(
       draftKey,
-      submitting.snapshot.pending.map(item => item.key),
+      submitting.snapshot.pending.map((item) => item.key),
     );
     submittingSnapshotRef.current = null;
-    patchComposerDraftText(
-      draftKey,
-      draftRef.current,
-      caretRef.current,
-    );
+    patchComposerDraftText(draftKey, draftRef.current, caretRef.current);
   }
 
   useEffect(() => {
     for (const item of pendingRef.current) {
       if (
-        item.state === 'uploading'
-        && item.file
-        && !hasComposerDraftInFlightUpload(draftKey, item.key)
+        item.state === 'uploading' &&
+        item.file &&
+        !hasComposerDraftInFlightUpload(draftKey, item.key)
       ) {
         void startComposerDraftAttachmentUpload({
           conversationId: draftKey,
@@ -307,7 +287,7 @@ export function Composer({
   }, [draftKey, conversationId]);
 
   useEffect(() => {
-    return subscribeComposerDraft(draftKey, event => {
+    return subscribeComposerDraft(draftKey, (event) => {
       if (event.type === 'clear') {
         retrySendRef.current = undefined;
         draftRef.current = '';
@@ -319,17 +299,11 @@ export function Composer({
         return;
       }
       if (event.type === 'attachment-remove') {
-        setPendingValue(curr =>
-          curr.filter(item => item.key !== event.attachmentKey),
-        );
+        setPendingValue((curr) => curr.filter((item) => item.key !== event.attachmentKey));
         return;
       }
-      setPendingValue(curr =>
-        curr.map(item =>
-          item.key === event.attachmentKey
-            ? { ...item, ...event.patch }
-            : item,
-        ),
+      setPendingValue((curr) =>
+        curr.map((item) => (item.key === event.attachmentKey ? { ...item, ...event.patch } : item)),
       );
     });
   }, [draftKey]);
@@ -369,11 +343,9 @@ export function Composer({
   // The DM counterpart agent (viewer arm only) — a conversation fact, even when the
   // viewer does not own it. null in every other arm and for a human / deleted /
   // unresolved counterpart.
-  const counterpartAgent =
-    directory.kind === 'viewer' ? directory.counterpartAgent : null;
+  const counterpartAgent = directory.kind === 'viewer' ? directory.counterpartAgent : null;
   const armWorkspaceId = directory.kind === 'workspace' ? directory.workspaceId : null;
-  const armWorkspaceName =
-    directory.kind === 'workspace' ? directory.workspaceName : null;
+  const armWorkspaceName = directory.kind === 'workspace' ? directory.workspaceName : null;
   const armHasChannelNamespace =
     directory.kind === 'workspace' ? directory.hasChannelNamespace : false;
   // Workspace arm `@` source: ONLY this workspace's members. Null id (any other
@@ -394,8 +366,7 @@ export function Composer({
   // picker, avatar prefetch, and send-time resolver so a non-owned counterpart the
   // picker offers still resolves on send (#task:2147).
   const viewerMentionAgents = useMemo<MentionAgent[]>(
-    () =>
-      isViewerArm ? mergeViewerMentionAgents(counterpartAgent, ownedAgents) : EMPTY_AGENTS,
+    () => (isViewerArm ? mergeViewerMentionAgents(counterpartAgent, ownedAgents) : EMPTY_AGENTS),
     [isViewerArm, counterpartAgent, ownedAgents],
   );
   // Viewer arm `#` source: every channel the viewer still participates in, across
@@ -405,7 +376,7 @@ export function Composer({
   // fan-out — and the workspace list it depends on — starts no query there.
   const workspacesQuery = useWorkspaces({ enabled: isViewerArm });
   const viewerWorkspaceIds = useMemo(
-    () => (isViewerArm ? (workspacesQuery.data ?? []).map(w => w.id) : []),
+    () => (isViewerArm ? (workspacesQuery.data ?? []).map((w) => w.id) : []),
     [isViewerArm, workspacesQuery.data],
   );
   const viewerChannelSlices = useChannelsAcrossWorkspaces(viewerWorkspaceIds);
@@ -415,15 +386,14 @@ export function Composer({
     return m;
   }, [workspacesQuery.data]);
 
-  const conversationMembers = useConversationMembers(
-    isWorkspaceArm ? conversationId : null,
-  );
+  const conversationMembers = useConversationMembers(isWorkspaceArm ? conversationId : null);
 
   const viewerQuery = useViewerUser();
   const viewerId =
-    viewerQuery.data
-    && !isRegistrationRequired(viewerQuery.data)
-    && !isBackendUnreachable(viewerQuery.data) && !isUpdateRequired(viewerQuery.data)
+    viewerQuery.data &&
+    !isRegistrationRequired(viewerQuery.data) &&
+    !isBackendUnreachable(viewerQuery.data) &&
+    !isUpdateRequired(viewerQuery.data)
       ? viewerQuery.data.id
       : null;
 
@@ -448,18 +418,15 @@ export function Composer({
     () => buildMentionHumans(workspaceHumans, viewerId),
     [workspaceHumans, viewerId],
   );
-  const agentAvatarUrls = useAgentAvatarObjectUrls(
-    isViewerArm ? viewerMentionAgents : agents,
-  );
+  const agentAvatarUrls = useAgentAvatarObjectUrls(isViewerArm ? viewerMentionAgents : agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(mentionHumans);
-  const { data: workspaceChannels = [], status: workspaceChannelsStatus } =
-    useChannelsForWorkspace(
-      armWorkspaceId,
-      // Sound as the hook's `workspaceResolved` argument: a namespace only exists
-      // for a RESOLVED workspace placement, so the bit implies the row resolved
-      // (the converse does not hold — hence two names, #task:2078).
-      armHasChannelNamespace,
-    );
+  const { data: workspaceChannels = [], status: workspaceChannelsStatus } = useChannelsForWorkspace(
+    armWorkspaceId,
+    // Sound as the hook's `workspaceResolved` argument: a namespace only exists
+    // for a RESOLVED workspace placement, so the bit implies the row resolved
+    // (the converse does not hold — hence two names, #task:2078).
+    armHasChannelNamespace,
+  );
 
   // The `@` mention source, assembled ONCE per arm and read by all THREE consumers
   // — the picker below, the send-time rewrite in `submit`, and its settle gate —
@@ -476,7 +443,7 @@ export function Composer({
       case 'workspace':
         return {
           sourceKnown: memberLists.data !== undefined,
-          select: query =>
+          select: (query) =>
             selectMentionCandidates(
               memberLists.data,
               rosterResolved,
@@ -493,12 +460,8 @@ export function Composer({
           // descriptor fact already folded into `viewerMentionAgents`, so it adds no
           // pending-ness — the settle gate is exactly the owned query's success.
           sourceKnown: ownedAgentsQuery.isSuccess,
-          select: query =>
-            selectViewerMentionCandidates(
-              viewerMentionAgents,
-              counterpartAgent?.id ?? null,
-              query,
-            ),
+          select: (query) =>
+            selectViewerMentionCandidates(viewerMentionAgents, counterpartAgent?.id ?? null, query),
           resolveShorthand: buildViewerShorthandResolver(viewerMentionAgents),
         };
       case 'withheld':
@@ -530,7 +493,7 @@ export function Composer({
       case 'workspace':
         return {
           offersChannels: armHasChannelNamespace,
-          select: query => ({
+          select: (query) => ({
             ...filterChannels(workspaceChannels, armWorkspaceName, query),
             status: channelSourceStatusOf(workspaceChannelsStatus),
           }),
@@ -538,7 +501,7 @@ export function Composer({
       case 'viewer':
         return {
           offersChannels: true,
-          select: query =>
+          select: (query) =>
             viewerChannelPickerResult(
               viewerChannelSlices,
               workspacesQuery.status,
@@ -628,10 +591,10 @@ export function Composer({
   };
 
   const sendDisabled =
-    disabled
-    || send.isPending
-    || pendingAttachmentsBlockSend(pending)
-    || (!draft.trim() && pending.filter(p => p.state === 'done').length === 0);
+    disabled ||
+    send.isPending ||
+    pendingAttachmentsBlockSend(pending) ||
+    (!draft.trim() && pending.filter((p) => p.state === 'done').length === 0);
 
   /** Insert a passage quoted from a message as a Markdown blockquote at
    *  the caret (#task:1544), routed here by the SelectionQuoteToolbar via
@@ -640,7 +603,7 @@ export function Composer({
    *  controlled re-render. Disabled/archived composers ignore quotes. */
   useEffect(() => {
     if (disabled) return;
-    return onQuoteToComposer(draftKey, text => {
+    return onQuoteToComposer(draftKey, (text) => {
       const el = ref.current;
       const pos = el?.selectionStart ?? caretRef.current;
       const { text: nextDraft, caret: nextCaret } = spliceQuoteIntoDraft(
@@ -688,16 +651,17 @@ export function Composer({
   function submit(): void {
     const content = draft.trim();
     const ready = pending
-      .filter(p => p.state === 'done' && p.attachment)
+      .filter((p) => p.state === 'done' && p.attachment)
       // Carry the compose-time label alongside the uploaded dto so the send
       // payload (and the optimistic snapshot) reference the same stable
       // identity the chip showed (#task:1324).
-      .map(p => ({ ...p.attachment!, label: p.label }));
+      .map((p) => ({ ...p.attachment!, label: p.label }));
     if ((!content && ready.length === 0) || disabled) return;
     if (pendingAttachmentsBlockSend(pending)) return;
-    const submittedPending = pending.filter(p => p.state === 'done' && p.attachment);
-    const sentAttachmentIds = ready.map(item => item.id);
-    const logicalSend = retrySendRef.current ?? createLogicalSend(conversationId, threadRootId ?? null);
+    const submittedPending = pending.filter((p) => p.state === 'done' && p.attachment);
+    const sentAttachmentIds = ready.map((item) => item.id);
+    const logicalSend =
+      retrySendRef.current ?? createLogicalSend(conversationId, threadRootId ?? null);
     retrySendRef.current = undefined;
     const submittedSnapshot: ComposerDraftSnapshot = {
       sendAttempt: logicalSend,
@@ -740,11 +704,7 @@ export function Composer({
         setCaretState(submittedSnapshot.caret);
         setPendingState(submittedSnapshot.pending);
       }
-      patchComposerDraftText(
-        draftKey,
-        submittedSnapshot.text,
-        submittedSnapshot.caret,
-      );
+      patchComposerDraftText(draftKey, submittedSnapshot.text, submittedSnapshot.caret);
       for (const item of submittedSnapshot.pending) {
         upsertComposerDraftAttachment(draftKey, item);
       }
@@ -792,7 +752,7 @@ export function Composer({
     // settle, so its refetch yields null and the draft is restored: a hand-typed
     // handle correctly stays pending until the placement resolves.
     void refetchMentionResolver()
-      .then(resolver => {
+      .then((resolver) => {
         if (!resolver) {
           restoreDraft();
           return;
@@ -863,10 +823,7 @@ export function Composer({
         previewUrl,
         label,
       };
-      setPendingValue(curr => [
-        ...curr,
-        item,
-      ]);
+      setPendingValue((curr) => [...curr, item]);
       void startComposerDraftAttachmentUpload({
         conversationId: draftKey,
         uploadChannelId: conversationId,
@@ -881,7 +838,7 @@ export function Composer({
   function removePending(key: string): void {
     detachSubmittingDraftForEdit();
     editGenerationRef.current += 1;
-    setPendingValue(curr => curr.filter(p => p.key !== key));
+    setPendingValue((curr) => curr.filter((p) => p.key !== key));
     removeComposerDraftAttachment(draftKey, key);
   }
 
@@ -992,12 +949,12 @@ export function Composer({
       if (items.length > 0) {
         if (e.key === 'ArrowDown') {
           e.preventDefault();
-          setActive(i => (i + 1) % items.length);
+          setActive((i) => (i + 1) % items.length);
           return;
         }
         if (e.key === 'ArrowUp') {
           e.preventDefault();
-          setActive(i => (i - 1 + items.length) % items.length);
+          setActive((i) => (i - 1 + items.length) % items.length);
           return;
         }
         if (e.key === 'Enter' || e.key === 'Tab') {
@@ -1035,15 +992,13 @@ export function Composer({
     >
       {pending.length > 0 ? (
         <div className="mb-2 flex flex-wrap gap-1.5">
-          {pending.map(p => (
+          {pending.map((p) => (
             <AttachmentChip
               key={p.key}
               item={p}
               onRemove={() => removePending(p.key)}
               onInsertLabel={
-                p.label && p.state !== 'error'
-                  ? () => insertLabelAtCaret(p.label!)
-                  : undefined
+                p.label && p.state !== 'error' ? () => insertLabelAtCaret(p.label!) : undefined
               }
               onPreview={
                 p.previewUrl
@@ -1081,15 +1036,12 @@ export function Composer({
             ref={ref}
             value={draft}
             data-composer-input
-            onChange={e => {
-              updateDraft(
-                e.target.value,
-                e.target.selectionStart ?? e.target.value.length,
-              );
+            onChange={(e) => {
+              updateDraft(e.target.value, e.target.selectionStart ?? e.target.value.length);
             }}
-            onKeyUp={e => updateCaret(e.currentTarget.selectionStart ?? 0)}
-            onClick={e => updateCaret(e.currentTarget.selectionStart ?? 0)}
-            onSelect={e => updateCaret(e.currentTarget.selectionStart ?? 0)}
+            onKeyUp={(e) => updateCaret(e.currentTarget.selectionStart ?? 0)}
+            onClick={(e) => updateCaret(e.currentTarget.selectionStart ?? 0)}
+            onSelect={(e) => updateCaret(e.currentTarget.selectionStart ?? 0)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             onCompositionStart={() => setComposing(true)}
@@ -1102,11 +1054,11 @@ export function Composer({
                   ? 'This conversation is read-only'
                   : disabled
                     ? 'This conversation is closed'
-                    // Hints follow the arm: `#channel` only where the arm offers
-                    // channels, `@member` only where it offers mentions — naming a
-                    // trigger whose picker opens on nothing promises a menu that
-                    // never appears (#task:2118). The withheld arm offers neither.
-                    : offersChannels
+                    : // Hints follow the arm: `#channel` only where the arm offers
+                      // channels, `@member` only where it offers mentions — naming a
+                      // trigger whose picker opens on nothing promises a menu that
+                      // never appears (#task:2118). The withheld arm offers neither.
+                      offersChannels
                       ? 'Enter to send · Shift + Enter for a new line · @member · #channel'
                       : offersMentions
                         ? 'Enter to send · Shift + Enter for a new line · @member'
@@ -1125,7 +1077,7 @@ export function Composer({
             type="file"
             multiple
             className="hidden"
-            onChange={e => {
+            onChange={(e) => {
               if (e.target.files) addFiles(e.target.files);
               // Reset so re-selecting the same file fires onChange.
               e.target.value = '';
@@ -1196,7 +1148,7 @@ export function Composer({
       </div>
       <Lightbox
         open={previewing !== null}
-        onOpenChange={open => {
+        onOpenChange={(open) => {
           if (!open) setPreviewing(null);
         }}
         src={previewing?.url ?? ''}
@@ -1256,11 +1208,7 @@ function AttachmentChip({
           className="block size-8 shrink-0 overflow-hidden rounded-sm border border-border-subtle focus-outline"
           aria-label="Preview image"
         >
-          <img
-            src={item.previewUrl}
-            alt={item.filename}
-            className="block size-full object-cover"
-          />
+          <img src={item.previewUrl} alt={item.filename} className="block size-full object-cover" />
         </button>
       ) : (
         <Paperclip className="size-3 shrink-0" />
@@ -1284,9 +1232,7 @@ function AttachmentChip({
             )
           ) : null}
           {item.label ? <span aria-hidden>·</span> : null}
-          <span className="shrink-0">
-            {item.state === 'uploading' ? 'Uploading…' : sizeLabel}
-          </span>
+          <span className="shrink-0">{item.state === 'uploading' ? 'Uploading…' : sizeLabel}</span>
         </div>
       </div>
       <button
@@ -1313,8 +1259,7 @@ export function resizeTextarea(el: HTMLTextAreaElement | null): void {
   el.style.height = 'auto';
   const nextHeight = Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT);
   el.style.height = `${nextHeight}px`;
-  el.style.overflowY =
-    el.scrollHeight > MAX_TEXTAREA_HEIGHT ? 'auto' : 'hidden';
+  el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_HEIGHT ? 'auto' : 'hidden';
 }
 
 // ── trigger detection ─────────────────────────────────────────────
@@ -1376,8 +1321,7 @@ export function detectTrigger(text: string, caret: number): ActiveTrigger | null
     const ch = text[i]!;
     if (ch === '@' || ch === '#') {
       const prev = i === 0 ? '' : text[i - 1]!;
-      const boundary =
-        prev === '' || (!TOKEN_TAIL_CHAR.test(prev) && prev !== '/');
+      const boundary = prev === '' || (!TOKEN_TAIL_CHAR.test(prev) && prev !== '/');
       if (!boundary) return null;
       return {
         kind: ch as '@' | '#',
@@ -1479,13 +1423,10 @@ export function buildShorthandResolver(
   for (const human of humans) kinds.set(human.name, 'human');
   // Second, so a collision resolves to the agent.
   for (const agent of agents) kinds.set(agent.name, 'agent');
-  return handle => kinds.get(handle) ?? null;
+  return (handle) => kinds.get(handle) ?? null;
 }
 
-export function canResolveShorthandNow(
-  content: string,
-  rosterKnown: boolean,
-): boolean {
+export function canResolveShorthandNow(content: string, rosterKnown: boolean): boolean {
   return rosterKnown || findShorthandCandidates(content).length === 0;
 }
 
@@ -1515,39 +1456,34 @@ export function filterMentionPeople(
 ): PickerResult {
   const q = query.toLowerCase();
   const matchedAgents = q
-    ? agents.filter(a =>
-        a.name.toLowerCase().includes(q) ||
-        (a.display_name ?? '').toLowerCase().includes(q),
+    ? agents.filter(
+        (a) => a.name.toLowerCase().includes(q) || (a.display_name ?? '').toLowerCase().includes(q),
       )
     : agents;
   const matchedHumans = q
-    ? humans.filter(h =>
-        h.name.toLowerCase().includes(q) ||
-        h.display_name.toLowerCase().includes(q),
+    ? humans.filter(
+        (h) => h.name.toLowerCase().includes(q) || h.display_name.toLowerCase().includes(q),
       )
     : humans;
   // Build the two sections. Each section orders humans before agents
   // (mirrors the previous single-section ordering rule for empty
   // queries) so user-attention lines up across both groups.
   const inHumans: PickerItem[] = matchedHumans
-    .filter(h => humanMemberIds.has(h.id))
-    .map(human => ({ kind: 'human', human, inConversation: true }));
+    .filter((h) => humanMemberIds.has(h.id))
+    .map((human) => ({ kind: 'human', human, inConversation: true }));
   const inAgents: PickerItem[] = matchedAgents
-    .filter(a => agentMemberIds.has(a.id))
-    .map(agent => ({ kind: 'agent', agent, inConversation: true }));
+    .filter((a) => agentMemberIds.has(a.id))
+    .map((agent) => ({ kind: 'agent', agent, inConversation: true }));
   const outHumans: PickerItem[] = matchedHumans
-    .filter(h => !humanMemberIds.has(h.id))
-    .map(human => ({ kind: 'human', human, inConversation: false }));
+    .filter((h) => !humanMemberIds.has(h.id))
+    .map((human) => ({ kind: 'human', human, inConversation: false }));
   const outAgents: PickerItem[] = matchedAgents
-    .filter(a => !agentMemberIds.has(a.id))
-    .map(agent => ({ kind: 'agent', agent, inConversation: false }));
+    .filter((a) => !agentMemberIds.has(a.id))
+    .map((agent) => ({ kind: 'agent', agent, inConversation: false }));
   const PER_SECTION_CAP = 5;
   const inItems = [...inHumans, ...inAgents];
   const outItems = [...outHumans, ...outAgents];
-  const items = [
-    ...inItems.slice(0, PER_SECTION_CAP),
-    ...outItems.slice(0, PER_SECTION_CAP),
-  ];
+  const items = [...inItems.slice(0, PER_SECTION_CAP), ...outItems.slice(0, PER_SECTION_CAP)];
   return {
     items,
     hiddenCount: inItems.length + outItems.length - items.length,
@@ -1582,13 +1518,7 @@ export function selectMentionCandidates(
 ): PickerResult {
   if (!memberLists || !rosterResolved) return { items: [], hiddenCount: 0 };
   const humans = buildMentionHumans(memberLists.humans, viewerId);
-  return filterMentionPeople(
-    memberLists.agents,
-    humans,
-    agentMemberIds,
-    humanMemberIds,
-    query,
-  );
+  return filterMentionPeople(memberLists.agents, humans, agentMemberIds, humanMemberIds, query);
 }
 
 export function filterChannels(
@@ -1601,15 +1531,13 @@ export function filterChannels(
     (c): c is ChannelConversationDto =>
       c.roster_policy === 'open' && c.archived_at === null && c.closed_at === null,
   );
-  const matched = q
-    ? onlyLive.filter(c => c.title.toLowerCase().includes(q))
-    : onlyLive;
+  const matched = q ? onlyLive.filter((c) => c.title.toLowerCase().includes(q)) : onlyLive;
   const items: PickerItem[] = matched
     .slice(0, CHANNEL_PICKER_CAP)
     // One workspace's list, so every row carries that one ambient name — the
     // viewer arm's cross-workspace list (below) stamps each row's OWN name
     // instead.
-    .map(channel => ({ kind: 'channel', channel, workspaceName }));
+    .map((channel) => ({ kind: 'channel', channel, workspaceName }));
   return { items, hiddenCount: matched.length - items.length };
 }
 
@@ -1628,10 +1556,7 @@ export function mergeViewerMentionAgents(
   ownedAgents: MentionAgent[],
 ): MentionAgent[] {
   if (!counterpartAgent) return ownedAgents;
-  return [
-    counterpartAgent,
-    ...ownedAgents.filter(a => a.id !== counterpartAgent.id),
-  ];
+  return [counterpartAgent, ...ownedAgents.filter((a) => a.id !== counterpartAgent.id)];
 }
 
 /**
@@ -1647,17 +1572,16 @@ export function selectViewerMentionCandidates(
 ): PickerResult {
   const q = query.toLowerCase();
   const matched = q
-    ? agents.filter(a =>
-        a.name.toLowerCase().includes(q) ||
-        (a.display_name ?? '').toLowerCase().includes(q),
+    ? agents.filter(
+        (a) => a.name.toLowerCase().includes(q) || (a.display_name ?? '').toLowerCase().includes(q),
       )
     : agents;
   const inAgents: PickerItem[] = matched
-    .filter(a => a.id === counterpartId)
-    .map(agent => ({ kind: 'agent', agent, inConversation: true }));
+    .filter((a) => a.id === counterpartId)
+    .map((agent) => ({ kind: 'agent', agent, inConversation: true }));
   const outAgents: PickerItem[] = matched
-    .filter(a => a.id !== counterpartId)
-    .map(agent => ({ kind: 'agent', agent, inConversation: false }));
+    .filter((a) => a.id !== counterpartId)
+    .map((agent) => ({ kind: 'agent', agent, inConversation: false }));
   const VIEWER_MENTION_CAP = 10;
   // The counterpart (at most one) always shows; the rest fill up to the cap.
   const items = [...inAgents, ...outAgents.slice(0, VIEWER_MENTION_CAP)];
@@ -1672,12 +1596,10 @@ export function selectViewerMentionCandidates(
  * same one the picker offered) resolves as `agent`; a handle outside it is left as
  * authored. No human arm — a `direct_pair` names no humans (#task:2147).
  */
-export function buildViewerShorthandResolver(
-  agents: MentionAgent[],
-): ShorthandResolver {
+export function buildViewerShorthandResolver(agents: MentionAgent[]): ShorthandResolver {
   const kinds = new Map<string, ReferenceKind>();
   for (const agent of agents) kinds.set(agent.name, 'agent');
-  return handle => kinds.get(handle) ?? null;
+  return (handle) => kinds.get(handle) ?? null;
 }
 
 /** The per-workspace query slice {@link filterViewerChannels} reads — just the
@@ -1701,11 +1623,7 @@ export function filterViewerChannels(
     if (slice.status !== 'success' || !slice.data) continue;
     for (const c of slice.data) {
       if (c.is_member !== true) continue;
-      if (
-        c.roster_policy !== 'open'
-        || c.archived_at !== null
-        || c.closed_at !== null
-      ) {
+      if (c.roster_policy !== 'open' || c.archived_at !== null || c.closed_at !== null) {
         continue;
       }
       if (q && !c.title.toLowerCase().includes(q)) continue;
@@ -1714,9 +1632,7 @@ export function filterViewerChannels(
       items.push({
         kind: 'channel',
         channel: c,
-        workspaceName: c.workspace_id
-          ? workspaceNameById.get(c.workspace_id) ?? null
-          : null,
+        workspaceName: c.workspace_id ? (workspaceNameById.get(c.workspace_id) ?? null) : null,
       });
     }
   }
@@ -1753,15 +1669,11 @@ export function viewerChannelPickerResult(
   workspaceNameById: ReadonlyMap<string, string>,
   query: string,
 ): ChannelPickerResult {
-  const { items, hiddenCount } = filterViewerChannels(
-    slices,
-    workspaceNameById,
-    query,
-  );
+  const { items, hiddenCount } = filterViewerChannels(slices, workspaceNameById, query);
   const status: ChannelSourceStatus =
-    workspacesStatus === 'error' || slices.some(s => s.status === 'error')
+    workspacesStatus === 'error' || slices.some((s) => s.status === 'error')
       ? 'partial_error'
-      : workspacesStatus === 'pending' || slices.some(s => s.status === 'pending')
+      : workspacesStatus === 'pending' || slices.some((s) => s.status === 'pending')
         ? 'loading'
         : 'complete';
   return { items, hiddenCount, status };
@@ -1834,51 +1746,42 @@ function PickerMenu({
   // is "other" and a lone "Other channels" header labels nothing — render it flat
   // instead (#task:2147).
   const hasInSection =
-    peopleSections
-    && items.some(item => item.kind !== 'channel' && item.inConversation);
+    peopleSections && items.some((item) => item.kind !== 'channel' && item.inConversation);
   const headerBoundaryIndex = hasInSection
-    ? items.findIndex(item => item.kind !== 'channel' && !item.inConversation)
+    ? items.findIndex((item) => item.kind !== 'channel' && !item.inConversation)
     : -1;
   return (
     <div
       className="absolute bottom-full left-0 mb-1.5 w-64 overflow-hidden rounded-[var(--select-content-radius)] bg-bg-floating shadow-popover"
       data-composer-picker=""
       data-dropdown-frame
-      onMouseDown={e => e.preventDefault()}
+      onMouseDown={(e) => e.preventDefault()}
     >
       <div className="scrollbar-hide max-h-64 overflow-y-auto p-1" role="listbox">
-      {items.map((item, i) => (
-        <Fragment key={rowKey(item)}>
-          {/* Section header — render BEFORE the row so the boundary
+        {items.map((item, i) => (
+          <Fragment key={rowKey(item)}>
+            {/* Section header — render BEFORE the row so the boundary
               aligns with the first "other channels" entry. The "In this
               channel" header only renders when that section is non-empty
               AND we haven't already passed it (i === 0 with at least one
               in-channel row). */}
-          {i === 0 && hasInSection ? (
-            <SectionHeader label="In this channel" />
-          ) : null}
-          {i === headerBoundaryIndex ? (
-            <SectionHeader label="Other channels" />
-          ) : null}
-          <Row
-            item={item}
-            active={i === active}
-            onPick={() => onPick(item)}
-            onHover={() => onHover(i)}
-            showChannelWorkspace={showChannelWorkspace}
-            agentAvatarUrl={
-              item.kind === 'agent'
-                ? agentAvatarUrls.get(item.agent.id) ?? null
-                : null
-            }
-            humanAvatarUrl={
-              item.kind === 'human'
-                ? humanAvatarUrls.get(item.human.id) ?? null
-                : null
-            }
-          />
-        </Fragment>
-      ))}
+            {i === 0 && hasInSection ? <SectionHeader label="In this channel" /> : null}
+            {i === headerBoundaryIndex ? <SectionHeader label="Other channels" /> : null}
+            <Row
+              item={item}
+              active={i === active}
+              onPick={() => onPick(item)}
+              onHover={() => onHover(i)}
+              showChannelWorkspace={showChannelWorkspace}
+              agentAvatarUrl={
+                item.kind === 'agent' ? (agentAvatarUrls.get(item.agent.id) ?? null) : null
+              }
+              humanAvatarUrl={
+                item.kind === 'human' ? (humanAvatarUrls.get(item.human.id) ?? null) : null
+              }
+            />
+          </Fragment>
+        ))}
       </div>
       {/* Truncation footer (#task:1206). When the display cap dropped
           matched candidates, name the count so truncation isn't silent.
@@ -1944,12 +1847,11 @@ function Row({
   agentAvatarUrl: string | null;
   humanAvatarUrl: string | null;
 }): JSX.Element {
-  const dimmed =
-    (item.kind === 'agent' || item.kind === 'human') && !item.inConversation;
+  const dimmed = (item.kind === 'agent' || item.kind === 'human') && !item.inConversation;
   const cls =
     'flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left ' +
-    (active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary')
-    + (dimmed && !active ? ' opacity-60' : '');
+    (active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary') +
+    (dimmed && !active ? ' opacity-60' : '');
 
   const rowRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -1974,11 +1876,6 @@ function Row({
             avatarObjectUrl={agentAvatarUrl}
             alt={item.agent.display_name || item.agent.name}
           />
-          {/* Two-line row: display_name leads (the primary thing the
-           *  user is choosing), with @handle + runtime as a muted
-           *  meta line underneath. Mirrors the AgentProfileCard /
-           *  PersonHero identity hierarchy so the popover doesn't
-           *  invent its own. */}
           <div className="flex min-w-0 flex-1 flex-col leading-tight">
             <span className="truncate text-sm font-medium text-text-primary">
               {item.agent.display_name?.trim() || item.agent.name}

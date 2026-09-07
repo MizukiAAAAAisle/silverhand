@@ -5,7 +5,7 @@
  * vocabulary so this surface feels like part of the app instead of an
  * admin dashboard.
  *
- *   Header        — PersonHero-shape strip: tinted icon square as the
+ *   Header        — identity strip: tinted icon square as the
  *                   "avatar" (sized to balance the right-column stack
  *                   weight) plus a 3-row identity column:
  *                     1. InlineRename'able display label,
@@ -1107,15 +1107,7 @@ function HostHero({
             onCommit={onRename}
           />
         </div>
-        {/* shiki dogfood `hLEODapuI_dHuCPz` / `z5DyAzlG34Rto52-`:
-            state row in the MIDDLE between title and meta.
-            v6.9 (#task:917): chip refactored to PresencePill geometry
-            (border + py-0.5 + text-[length:var(--text-badge)], ≈20-21px tall), so Refresh
-            and the Loading placeholder both drop from `h-7` (28px) to
-            a matching structural construction (border + py-0.5 around
-            a 15px glyph) — same vertical anatomy as the chip, no
-            fragile pixel pin. shiki "把 refresh icon 高度调整到和前面
-            的 status tag 一样高". */}
+
         <div className="flex items-center gap-2">
           {statusLabel && statusTone ? (
             <StatusChip label={statusLabel} tone={statusTone} />
@@ -1191,21 +1183,6 @@ function HostBadge(): JSX.Element {
   );
 }
 
-/**
- * Lightweight status indicator. Geometry now mirrors `PresencePill` in
- * PersonHero (`#task:917` v6.9 — shiki "READY 是状态信号，应该是 status
- * pill 不是裸文字+大圆点"): outline pill, 6px tone-coloured dot, uppercase
- * caps with letter-tracking. That makes the host Hero's status indicator a
- * sibling of the agent/human Hero's active/idle pill — same indicator
- * family, with the dot's colour carrying the tone signal (success/warning/
- * error/info/muted). The `data-panel-pill` hook lets forza6 paint it
- * further; default themes get the outline pill as-is.
- *
- * Before v6.9 this was `h-7 px-1` plain text + 10px filled dot, which
- * read as decoration ("a green ball next to a label") rather than "host
- * is in state X". The pill form structures it as the same kind of thing
- * IDLE / 1 RUNNING etc. are in the agent Hero.
- */
 function StatusChip({ label, tone }: { label: string; tone: HostStatusTone }): JSX.Element {
   return (
     <span
