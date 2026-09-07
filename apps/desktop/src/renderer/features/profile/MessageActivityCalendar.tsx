@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   messageActivityCalendar,
@@ -11,22 +11,14 @@ interface Props {
   year: number | 'recent';
   days: readonly MessageActivityDay[];
   today: string;
-  timezone: string;
 }
 
-export function MessageActivityCalendar({ year, days, today, timezone }: Props): JSX.Element {
+export function MessageActivityCalendar({ year, days, today }: Props): JSX.Element {
   const cells = useMemo(() => messageActivityCalendar(year, days, today), [year, days, today]);
 
   const [focusedDate, setFocusedDate] = useState<string | null>(null);
 
   const buttons = useRef(new Map<string, HTMLButtonElement>());
-  const scroll = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (scroll.current) {
-      scroll.current.scrollLeft = year === 'recent' ? scroll.current.scrollWidth : 0;
-    }
-  }, [year, today]);
 
   const firstVisible = cells.find((cell) => cell.visible)?.date;
   const activeDate = cells.some((cell) => cell.date === focusedDate && cell.visible)
@@ -50,8 +42,8 @@ export function MessageActivityCalendar({ year, days, today, timezone }: Props):
   });
 
   return (
-    <div data-message-activity>
-      <div ref={scroll} className="message-activity-scroll">
+    <div data-message-activity data-activity-columns={columns}>
+      <div className="message-activity-calendar">
         <div
           className="message-activity-plot"
           style={{ '--activity-columns': columns } as CSSProperties}
@@ -133,7 +125,7 @@ export function MessageActivityCalendar({ year, days, today, timezone }: Props):
                           </div>
                           <div className="mt-1 text-text-secondary">
                             {cell.count.toLocaleString()}{' '}
-                            {cell.count === 1 ? 'message' : 'messages'} · {timezone}
+                            {cell.count === 1 ? 'message' : 'messages'}
                           </div>
                         </Tooltip.Content>
                       </Tooltip.Portal>
@@ -147,8 +139,7 @@ export function MessageActivityCalendar({ year, days, today, timezone }: Props):
           </div>
         </div>
       </div>
-      <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-text-muted">
-        <span>Daily messages · {timezone}</span>
+      <div className="mt-3 flex items-center justify-end gap-3 text-[11px] text-text-muted">
         <div className="message-activity-legend" aria-label="Message count intensity">
           <span>Less</span>
           {[0, 1, 2, 3, 4].map((level) => (

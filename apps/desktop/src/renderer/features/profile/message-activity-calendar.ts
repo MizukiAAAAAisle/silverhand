@@ -50,9 +50,9 @@ export function messageActivityCalendar(
     const date = new Date(first.getTime() + (index - offset) * 86_400_000)
       .toISOString()
       .slice(0, 10);
-    const visible = date >= range.start && date <= range.end && date <= today;
+    const visible = date >= range.start && date <= range.end;
 
-    return { date, count: visible ? (counts.get(date) ?? 0) : 0, visible };
+    return { date, count: visible && date <= today ? (counts.get(date) ?? 0) : 0, visible };
   });
 }
 

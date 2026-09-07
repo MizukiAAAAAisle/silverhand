@@ -125,7 +125,7 @@ function MessageActivitySection({ subject }: { subject: ProfileMessageSubject })
             {total.toLocaleString()} {total === 1 ? 'message' : 'messages'}{' '}
             {year === 'recent' ? 'in the last year' : `in ${year}`}
           </p>
-          <MessageActivityCalendar year={year} days={data} today={today} timezone="Asia/Shanghai" />
+          <MessageActivityCalendar year={year} days={data} today={today} />
         </div>
       ) : (
         <div

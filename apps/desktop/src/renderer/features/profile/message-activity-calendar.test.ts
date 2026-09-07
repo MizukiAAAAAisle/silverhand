@@ -18,12 +18,19 @@ describe('message activity calendar coordinates', () => {
       '2026-01-02',
     );
 
-    expect(cells.filter((cell) => cell.visible)).toEqual([
+    expect(cells.filter((cell) => cell.visible).slice(0, 2)).toEqual([
       { date: '2026-01-01', count: 12, visible: true },
       { date: '2026-01-02', count: 0, visible: true },
     ]);
 
     expect(cells.reduce((sum, cell) => sum + cell.count, 0)).toBe(12);
+    expect(cells.filter((cell) => cell.visible)).toHaveLength(365);
+    expect(cells.find((cell) => cell.date === '2026-01-03')).toEqual({
+      date: '2026-01-03',
+      count: 0,
+      visible: true,
+    });
+    expect(cells.find((cell) => cell.date === '2025-12-31')?.visible).toBe(false);
 
     expect(cells[0]?.date).toBe('2025-12-28');
   });
@@ -40,7 +47,7 @@ describe('message activity calendar coordinates', () => {
     expect(cells.find((cell) => cell.date === '2026-12-31')).toEqual({
       date: '2026-12-31',
       count: 0,
-      visible: false,
+      visible: true,
     });
 
     expect(

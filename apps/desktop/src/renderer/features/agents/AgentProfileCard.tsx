@@ -69,7 +69,7 @@ export function AgentProfileCard({
   const [runtimeEditing, setRuntimeEditing] = useState(false);
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6">
+    <div data-profile-layout className="mx-auto flex flex-col gap-6">
       {!canEdit ? <ReadOnlyNotice /> : null}
 
       <ProfileSection

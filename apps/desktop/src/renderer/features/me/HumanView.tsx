@@ -71,6 +71,7 @@ export function HumanView({
 
   return (
     <main
+      data-profile-host="human"
       className="flex h-full flex-1 flex-col overflow-hidden bg-bg-base"
       style={paneChrome}
     >

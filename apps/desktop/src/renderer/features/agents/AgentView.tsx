@@ -207,6 +207,7 @@ export function AgentView({
 
   return (
     <main
+      data-profile-host="agent"
       className="flex h-full flex-1 flex-col overflow-hidden bg-bg-base"
       style={paneChrome}
     >
@@ -389,6 +390,7 @@ function SidePanelShell({
 }): JSX.Element {
   return (
     <section
+      data-profile-host="side"
       className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-bg-chat"
       style={paneChrome}
     >

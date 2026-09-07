@@ -61,7 +61,7 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
   const avatarObjectUrl = isSelf ? viewerAvatar : otherAvatar;
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6">
+    <div data-profile-layout className="mx-auto flex flex-col gap-6">
       {!isOwnProfile ? <ReadOnlyNotice /> : null}
 
       <ProfileSection

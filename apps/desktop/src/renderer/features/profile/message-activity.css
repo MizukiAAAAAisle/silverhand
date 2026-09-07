@@ -1,14 +1,47 @@
+[data-profile-layout],
+[data-profile-host]:has([data-profile-layout]) {
+  --profile-week-count: 53;
+  --profile-section-border: 1px;
+  --profile-grid-width: calc(
+    var(--profile-week-count) * 12px + (var(--profile-week-count) - 1) * 3px
+  );
+  --profile-content-width: calc(
+    var(--profile-grid-width) + 35px + 32px + 2 * var(--profile-section-border)
+  );
+}
+
+[data-profile-layout]:has([data-activity-columns='54']),
+[data-profile-host]:has([data-activity-columns='54']) {
+  --profile-week-count: 54;
+}
+
+[data-theme='forza6'] [data-profile-layout],
+[data-theme='forza6'] [data-profile-host]:has([data-profile-layout]) {
+  --profile-section-border: 2px;
+}
+
+[data-profile-layout] {
+  width: var(--profile-content-width);
+  min-width: var(--profile-content-width);
+}
+
+[data-profile-host='human']:has([data-profile-layout]) {
+  min-width: calc(var(--profile-content-width) + 64px + 6px);
+}
+
+[data-profile-host='agent']:has([data-profile-layout]) {
+  min-width: calc(var(--profile-content-width) + 24px + 160px + 6px);
+}
+
+[data-profile-host='side']:has([data-profile-layout]) {
+  min-width: calc(var(--profile-content-width) + 32px + 6px);
+}
+
 [data-message-activity] {
   --activity-empty: color-mix(in srgb, var(--text-primary) 8%, var(--bg-base));
   --activity-low: color-mix(in srgb, var(--message-activity-color) 25%, var(--activity-empty));
   --activity-medium: color-mix(in srgb, var(--message-activity-color) 50%, var(--activity-empty));
   --activity-high: color-mix(in srgb, var(--message-activity-color) 75%, var(--activity-empty));
-}
-
-.message-activity-scroll {
-  overflow-x: auto;
-  padding: 5px;
-  margin: -5px;
 }
 
 .message-activity-plot {
@@ -77,6 +110,10 @@
   background: var(--message-activity-color);
 }
 
+.message-activity-cell {
+  transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
 .message-activity-cell:hover {
   transform: scale(1.25) rotate(6deg);
   outline: none;
@@ -110,6 +147,5 @@
 }
 
 [data-theme='forza6'] .message-activity-cell:hover {
-  border: var(--control-border-width) solid var(--forza6-ink);
-  box-shadow: var(--forza6-poster-shadow-hover-sm);
+  box-shadow: var(--forza6-poster-shadow-hover-tiny);
 }

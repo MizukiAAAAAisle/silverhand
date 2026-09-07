@@ -67,6 +67,7 @@
   --forza6-poster-shadow: 1.5px 1.5px 0 var(--forza6-ink);
   --forza6-poster-shadow-lg: 2px 2px 0 var(--forza6-ink);
   --forza6-poster-shadow-xl: 2.5px 2.5px 0 var(--forza6-ink);
+  --forza6-poster-shadow-hover-tiny: 1.5px 1.5px 0 var(--forza6-ink);
   --forza6-poster-shadow-hover-sm: 2px 2px 0 var(--forza6-ink);
   --forza6-poster-shadow-hover-md: 3px 3px 0 var(--forza6-ink);
   --forza6-poster-shadow-hover-lg: 4px 4px 0 var(--forza6-ink);
@@ -280,5 +281,5 @@
 
 [data-theme='forza6'] {
   --message-activity-color: var(--bg-control-primary);
-  --message-activity-radius: 0;
+  --message-activity-radius: 3px;
 }
