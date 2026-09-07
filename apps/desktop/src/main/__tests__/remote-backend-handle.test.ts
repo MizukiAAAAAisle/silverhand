@@ -1,7 +1,4 @@
 /**
- * D4.a Commit 5d — unit tests for the {@link RemoteBackendHandle}
- * factory.
- *
  * The factory is intentionally trivial; the value of these tests is
  * pinning the SHAPE that `index.ts` consumes (specifically: a
  * remote-mode backend handle is discriminated by `kind: 'remote'`,
@@ -9,10 +6,6 @@
  * through unchanged, and its `close()` is a no-op promise that does
  * not depend on any external state).
  *
- * Cindy 5d review boundary 5: this provides the unit seam for the
- * remote-mode bootstrap branch — the factory's output is what the
- * `BackendHandle` union assigns to its `kind: 'remote'` arm in
- * bootstrap.
  */
 import { describe, expect, it } from 'vitest';
 import {

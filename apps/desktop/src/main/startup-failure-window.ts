@@ -8,8 +8,8 @@
  * screen, and rejects — with no window left behind — otherwise.**
  * `loadURL` is asynchronous, so a fire-and-forget `void win.loadURL(…)`
  * would swallow a failed load: no `ready-to-show`, an invisible window
- * kept alive, and the user back to zero feedback (#task:1641 review,
- * @Cindy). Hence: await the load, show explicitly on success, and tear
+ * kept alive, and the user back to zero feedback.
+ * Hence: await the load, show explicitly on success, and tear
  * the window down before rethrowing.
  */
 import { app, BrowserWindow, dialog, shell } from 'electron';

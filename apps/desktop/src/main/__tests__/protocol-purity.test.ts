@@ -10,26 +10,10 @@ const rendererRoot = fileURLToPath(new URL('../../renderer', import.meta.url));
 const desktopRoot = fileURLToPath(new URL('../../../', import.meta.url));
 
 const allowedBackendImports = [
-  // D3.a Commit 4: the freshness predicate in `outbound-attach.ts`
-  // takes a `HostWsAttachment | null` snapshot so its unit tests can
-  // assert the predicate purely without spinning up the backend. The
-  // type is structural (hostId / connectionId / attachedAt scalars)
-  // and carries no runtime dependency. Adding it does NOT relax the
-  // wider "desktop main does not import backend runtime" fence — only
-  // a shape type crosses, never a function or class.
   'HostWsAttachment',
-  // D3.c Commit 3: `outbound-reload.ts` is the Settings save
-  // orchestrator and threads the same `HostWsAttachment` shape
-  // through its `GetHostAttachmentFn` dep so the fresh-attach
-  // watchdog after a `host_outbound_reload` IPC uses the same
-  // predicate as the attach path. Same structural type, same
-  // zero-runtime guarantee — second occurrence allowed for the
-  // second consumer file.
-  'HostWsAttachment',
-].sort();
+];
 
 const allowedServerImports: string[] = [];
-
 
 const cataloguedIpcHandlers = [
   'attachment:openExternal',
@@ -52,16 +36,8 @@ const cataloguedIpcHandlers = [
   'hosts:proxyConfig:set',
   'notification:show',
   'notification:dismiss',
-  // D4.a Commit 5c-2 — partial_apply_pending state machine IPC.
-  // `partialApply:get` returns the in-memory state; `partialApply:retry`
-  // re-runs phase-2 against the on-disk profile. Both are local
-  // desktop UX concerns — NOT crossed into the wire / daemon protocol
-  // per §7.6 (R4 boundary).
   'partialApply:get',
   'partialApply:retry',
-  // D4.a Commit 2 — Setup Wizard / Settings server connection profile
-  // IPC surface (see `main/index.ts` "D4.a Commit 2 — Server connection
-  // profile IPC surface" block for the boundary discipline).
   'profile:clear',
   'profile:get',
   'profile:saveWithTest',
@@ -318,7 +294,7 @@ describe('desktop protocol purity catalogue', () => {
   });
 
   it('keeps main IPC handlers in sync with the protocol-purity catalogue', () => {
-    // #task:1762 — registrations go through the guarded registrar rather than
+    // registrations go through the guarded registrar rather than
     // the Electron object. The scan must NOT key on the receiver's local
     // variable name: a future module writing `registrar.handle('new:channel')`
     // would silently escape the catalogue. Match any `.handle(<string>)` in
@@ -359,48 +335,7 @@ describe('desktop protocol purity catalogue', () => {
     expect(offenders).toEqual([]);
   });
 
-  // #task:1133 — embedded-only-source guard. Some signals are observable
-  // ONLY inside the embedded backend process and are structurally
-  // null/empty in a remote-server deployment (the registry lives in the
-  // remote backend, not the desktop). Reading one without a remote second
-  // source is the #task:1132 / #task:1010 bug class (a connected local
-  // computer rendered offline).
-  //
-  // #task:1630 retired the file-level regex fence that used to sit here
-  // ("every renderer `local_host_ws_attached_at` consumer must also
-  // mention an availability token"). That field no longer exists: the
-  // BackendInfo surface now carries a discriminated
-  // `local_host_ws_attachment` (`{observable:true; attached_at} |
-  // {observable:false}`), so a consumer physically cannot read the
-  // timestamp without first handling the unobservable arm — the
-  // typechecker enforces at every call site what the regex could only
-  // approximate by scanning for co-located tokens. A grep fence that can
-  // no longer fail is worse than no fence: it reads as protection while
-  // guarding a name nothing uses.
-  //
-  // What the type still cannot express is where observability comes
-  // FROM, so that is the one fence kept below.
   it('mints the attachment discriminant only in the unit-tested producer (#task:1630)', () => {
-    // `getEmbeddedHostWsController()` returns null in TWO different
-    // situations: the remote arm (no in-process registry — genuinely
-    // unobservable) AND an embedded backend whose accessor is not wired
-    // yet (observable, just nothing attached). Minting the flag as
-    // `observable: getEmbeddedHostWsController() !== null` compiles
-    // fine and re-opens #task:1010 from the other side: the renderer
-    // would be told to stop waiting on an embedded attach that is merely
-    // slow.
-    //
-    // The producer therefore lives in `local-host-ws-attachment.ts`,
-    // where both wrong derivations are falsified by unit test
-    // (`__tests__/local-host-ws-attachment.test.ts`) rather than by a
-    // regex over this file's source — a source pattern for
-    // "`observable:` is followed by a literal" is satisfied by any decoy
-    // that happens to be shaped right. What a regex CAN still prove is
-    // that no second producer exists: main must contain no `observable:`
-    // literal of its own, so every BackendInfo / host-mutation reply
-    // goes through the tested seam. The type declaration also no longer
-    // lives here (one cross-process contract in
-    // `src/backend-info-contract.ts`), so the expected count is zero.
     const producerFile = join(mainRoot, 'local-host-ws-attachment.ts');
     const inlineMints = sourceFiles(mainRoot, new Set(['.ts']))
       .filter(source => source.path !== producerFile)
@@ -414,13 +349,6 @@ describe('desktop protocol purity catalogue', () => {
   });
 
   it('no longer has any getEmbeddedHostWsController() call site — the in-process registry observer is gone (#task:2343)', () => {
-    // #task:2343: with the out-of-process Rust embedded backend there is no in-process WS
-    // attachment registry to observe. The `getEmbeddedHostWsController` accessor and all
-    // its consumers were DELETED (not left as a forever-null compat shell); attachment
-    // observability is now the explicit `hasLocalRegistryObserver()` CAPABILITY (always
-    // false), and attach/reload/detach run the daemon generation-bound `/ws/host` flow.
-    // So there must be ZERO call sites — a re-introduction forces re-review of the whole
-    // observer model.
     const callSites = sourceFiles(mainRoot, new Set(['.ts'])).flatMap(source =>
       [
         ...stripComments(source.content).matchAll(

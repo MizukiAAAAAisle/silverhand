@@ -23,54 +23,6 @@ import { buildLocatorTargetUrl, useNav } from '@/router';
 import { faceLabel } from './ConversationRef';
 import { INLINE_REF_HOVER_CLASS } from './inline-ref-chip';
 
-/**
- * Inline rendering of a `silverhand://` LOCATOR — a coordinate for a container
- * (#task:2119 / #task:2120), as opposed to a reference, which addresses a person.
- *
- * WHAT IT DRAWS (shiki, 2026-08-21). One sigil per segment, all of equal weight:
- * the workspace wears a serif `W`, a channel `#`, a DM pair `@`, a thread the
- * product's thread glyph followed by the fixed word "thread". There is NO
- * separator character between segments — each segment's own glyph is its left
- * delimiter, which is why the chip stays readable without borrowing the URI's
- * slashes. The two handles of a pair are joined by `&`, which is unambiguous
- * because the handle charset cannot contain one. The whole coordinate sits inside
- * ONE filled block — the same box the sibling `#conv:` chip draws — so a
- * multi-segment locator reads as a single interactive object; see `LocatorChip`.
- *
- * EVERY SEGMENT THE LOCATOR SPELLS IS DRAWN, including a workspace the reader is
- * already in. The chip is a COORDINATE, so dropping a segment because it happens to
- * match the current context would make two different locators render identically and
- * make the same locator change shape as the reader navigates.
- *
- * THE TEXT COMES FROM THE PARSE, never from the resolved row (@Alice, `locator.ts`):
- * "a chip labelled from the resolved row's endpoints instead of from these parsed
- * handles would swap its two names the moment the locator became navigable". So
- * resolution decides ink and pointer only — the words are the author's, and they do
- * not move.
- *
- * THREE OUTCOMES, and only the last two are this component's:
- *   - a destination the grammar refuses is not a chip at all — it stays the literal
- *     text the author typed (`classifyReferenceHref`), silently;
- *   - a locator the viewer cannot open draws an INERT box: same shape, same glyphs,
- *     same size, the accent wash swapped for a neutral fill and the ink for muted,
- *     no pointer, no click. One state for "no such name", "two such names", "not
- *     your workspace" and "not your DM" — telling them apart is exactly the
- *     existence oracle the design refuses;
- *   - a navigable locator draws the accent-wash box. Closed or archived keeps the
- *     box and dims it, as `ChannelRef` does: the container is still reachable.
- */
-
-/** Live locator chip. Resolves against the viewer's own caches — see
- *  `locator-target.ts` for why that is a lookup rather than a request.
- *
- *  COST. Three of the four reads are viewer-global lists the app already holds
- *  mounted, so a stream of chips adds no traffic to them. The fourth is one
- *  workspace's channel tables, asked ONLY by a channel locator and only once its
- *  workspace resolved ({@link locatorChannelListWorkspaceId}); React Query dedupes it
- *  per workspace and `eventWsClient.subscribe` is ref-counted, so N chips naming one
- *  workspace cost one read and one WS scope. A channel locator naming a workspace the
- *  viewer is not currently looking at does open that scope for as long as the message
- *  is on screen — bounded by what is visible, and released on unmount. */
 export function LocatorRef({ locator }: { locator: Locator }): JSX.Element {
   const nav = useNav();
   const workspaces = useWorkspaces().data ?? [];
@@ -144,14 +96,7 @@ function LocatorChip({
 }): JSX.Element {
   const tooltip = locatorTooltip(locator);
   const body = <LocatorSegments locator={locator} />;
-  // Both states are the SAME box the sibling `#conv:` chip draws
-  // (`ConversationRef`): a filled, radiused, padded block, so the whole
-  // coordinate reads as ONE object instead of a run of loose words wearing two
-  // colours (shiki dogfood, 2026-08-21 — the flat form read as "grey workspace +
-  // accent channel", two controls). The state lives entirely in fill + ink:
-  // navigable is the faint accent wash under accent ink, inert is a neutral fill
-  // under one muted ink. Nothing is coloured per-segment — that split was the
-  // bug, and the box now carries "these belong together" on its own.
+
   const shared =
     'inline-flex max-w-[280px] items-center gap-1 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 align-baseline font-medium';
 
@@ -230,16 +175,6 @@ function LocatorSegments({ locator }: { locator: Locator }): JSX.Element {
   );
 }
 
-/** The workspace's sigil is a flat serif `W` — a letter, not the rail's ink badge
- *  (shiki, 2026-08-21). The badge is the workspace's identity primitive where it
- *  IS the subject; inside a coordinate every segment has to weigh the same, and a
- *  filled badge beside a hairline `#` does not. Segment ink is not set here: the
- *  chip is one colour end to end (see `LocatorChip`), so a leading workspace reads
- *  as context through its position and sigil, not through a colour demotion that
- *  would split the coordinate back into two voices.
- *
- *  Its cap-height is shorter than a same-box lucide glyph, so it takes a larger
- *  typography token than the icons to read as the same size. */
 function WorkspaceSegment({ name }: { name: string }): JSX.Element {
   return (
     <Segment

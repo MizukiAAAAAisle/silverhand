@@ -15,8 +15,6 @@ import {
   persistDesktopSessionToken,
 } from '../desktop-session-storage.js';
 
-// #task:1598 — the leaf takes the RESOLVED session path; tests build it
-// the way the desktop resolver does.
 const desktopSessionPath = (root: string) => join(root, 'desktop', 'session.bin');
 
 describe('desktop-session-storage', () => {

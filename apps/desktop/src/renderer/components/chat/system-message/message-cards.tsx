@@ -47,8 +47,7 @@ export function MentionCcCard({
   humansByName,
 }: RendererProps): JSX.Element {
   const meta = (message.metadata ?? {}) as Record<string, unknown>;
-  // WORKSPACE name, despite the metadata key's neighbours: a free-text label
-  // (#task:1827) that is not `#`-addressable, so it renders bare below.
+
   const workspaceName =
     typeof meta['source_workspace_name'] === 'string'
       ? (meta['source_workspace_name'] as string)
@@ -296,16 +295,6 @@ function SessionClearedRow({
   );
 }
 
-// ─── onboarding row (PR-6) ─────────────────────────────────────────────
-//
-// Onboarding messages used to render via `CollapsibleNarration` —
-// chevron + first-line preview, no kind identification. PR-6 keeps
-// the same collapsible affordance but adds an explicit "Onboarding"
-// badge so the row is recognisable at a glance even when the prose
-// has been rewritten. No metadata enrichment needed: the body itself
-// is the onboarding instruction (different shape per call site:
-// workspace join, agent DM, thread spawn).
-
 export function OnboardingRow({
   message,
   conversationRefsById,
@@ -320,13 +309,6 @@ export function OnboardingRow({
       type="button"
       onClick={() => setExpanded((v) => !v)}
       className={
-        // `items-start` (not `items-center`) so when expanded — body
-        // becomes multi-line Markdown (paragraphs / lists / code) —
-        // the chevron and badge stay anchored at the top instead of
-        // floating to the vertical center of the rendered block.
-        // Tiny per-element top offsets line them up visually against
-        // the first line of the body. PR-6 follow-up review by
-        // @Cindy on `6f15d96`.
         'group flex w-full items-start gap-2 px-2 py-1 text-left text-text-muted ' +
         (expanded ? 'bg-bg-floating' : 'rounded hover:bg-bg-hover')
       }
@@ -363,15 +345,6 @@ export function OnboardingRow({
   );
 }
 
-// ─── rename row (PR-6) ─────────────────────────────────────────────────
-//
-// Rename messages carry `{old_name, new_name}` in metadata since
-// PR-6's predecessor — the renderer parses them into a compact
-// audit row (`✎ workspace renamed old → new`) so the prose body
-// (which exists for the agent-stdin imperative wrap) doesn't have
-// to be the user-visible surface. Legacy rows without metadata fall
-// through to generic narration.
-
 export function RenameRow(props: RendererProps): JSX.Element {
   const meta = readRenameMetadata(
     (props.message.metadata ?? null) as Record<string, unknown> | null,
@@ -379,14 +352,7 @@ export function RenameRow(props: RendererProps): JSX.Element {
   if (!meta) {
     return <GenericNarrationFallback {...props} />;
   }
-  // Both scopes render the bare name. Channel titles were always freeform, and
-  // a workspace name is a freeform label too (#task:1827) — it is not
-  // `#`-addressable, so prefixing it would spell a channel reference that
-  // resolves to nothing. The names render as plain inline text (old = muted,
-  // new = emphasised) — the earlier `<code>` chips read as visual noise in the
-  // stream (@shiki feedback msg `otnb0ykIuDaNTtoC`). `scope` still splits the
-  // verb: a workspace rename broadcasts to every channel, a channel rename
-  // does not (#task:1108/1109); legacy rows lack it and default to 'workspace'.
+
   const isConversation = meta.scope === 'conversation';
   return (
     <div
@@ -456,6 +422,6 @@ function participantLabel(input: {
 }): string {
   if (input.kind === 'system') return 'system';
   // Recognition surface (system-message narration), not a mention — plain
-  // display name, no `@` handle (#task:1768, shiki 2026-08-01).
+  // display name, no `@` handle
   return input.displayName?.trim() || input.name;
 }

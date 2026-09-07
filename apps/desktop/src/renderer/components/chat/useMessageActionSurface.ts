@@ -18,7 +18,7 @@ import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
  *  #task:1065 save, #task:1068 copy/share). */
 export interface MessageRowActionProps {
   saved: boolean;
-  /** Save/unsave (收藏) is a member mutation. Absent (undefined) when the
+  /** Save/unsave is a member mutation. Absent (undefined) when the
    *  viewer may not mutate — a non-member browsing a public channel — which
    *  hides the Save affordance (MessageItem guards on `onSave`). Copy / share
    *  (read-side export) stay available regardless. */

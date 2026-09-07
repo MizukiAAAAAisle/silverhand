@@ -7,8 +7,8 @@ import { handleAttachmentSave } from './attachment-save.js';
 export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
   // Live OS notifications keyed by the renderer-supplied notification id (the
   // backend notification row id). Retained so `notification:dismiss` can
-  // `.close()` the exact alert when the backend reports it was read
-  // (#task:1431). Entries self-evict on the Notification's own `close` event.
+  // `.close()` the exact alert when the backend reports it was read.
+  // Entries self-evict on the Notification's own `close` event.
   const shownNotifications = new Map<string, Notification>();
 
   ipc.handle('dialog:pickDirectory', async (event, options?: { defaultPath?: string }) => {
@@ -47,7 +47,7 @@ export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
    *
    * Why not `window.open(blob_url)` / a fresh BrowserWindow? `shell.openExternal`
    * can't resolve a renderer-scoped `blob:` URL (the original `.html` bug,
-   * #task:383), and keeping untrusted HTML out of any Electron WebContents is
+   * and keeping untrusted HTML out of any Electron WebContents is
    * simpler than sandboxing it — the OS browser already provides origin
    * isolation and CSP.
    */

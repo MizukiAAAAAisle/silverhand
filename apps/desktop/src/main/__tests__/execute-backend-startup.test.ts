@@ -1,13 +1,4 @@
 /**
- * D4.a Commit 5d-fixup (Cindy P1-1) — seam tests for the
- * `executeBackendStartup` adapter.
- *
- * Cindy's tighter constraint (msg `N_XhNsao4iY2Tagx`) said:
- *
- *   > P1-1 的 pin 不要只靠 grep 字符串，最好同时有一个小的
- *   > seam/unit test：remote/refuse plan 不执行 injected
- *   > `loadOrCreateServerConfig`，embedded plan 才执行。
- *
  * These tests pin the load-bearing invariant of the §4.2 hard gate:
  * a remote (or refuse) BackendStartupPlan MUST NOT touch the embedded
  * server-config artifact. The whole point of the 5d-fixup is that on

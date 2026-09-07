@@ -11,44 +11,6 @@ import { TaskRef } from '@/components/chat/TaskRef';
 import { type RendererProps, useUserResolver } from './shared';
 
 // ─── task event row ───────────────────────────────────────────────────
-
-/**
- * Inline row for `task_create` / `task_claim` / `task_unclaim` /
- * `task_status` / `task_edit` system messages. Each row appears at its
- * real position in the message stream — same-task events are NOT
- * connected by a line; visual continuity comes from the `#task:N` chip
- * identity and its hover popover (already wired in PR-4 infra).
- *
- * Three sub-shapes (chosen by a defensive metadata cascade —
- * `readTaskSystemMetadata` → `readTaskSystemMetadataPartial` →
- * total fallback):
- *  - Full enriched metadata: `<dot> <actor> <verb> <chip>` for
- *    create/claim/unclaim/edit (`task_edit` → "edited" — a definition
- *    change, NOT a status move, so it takes the plain verb shape and
- *    the dot reflects the task's CURRENT status like create/claim, no
- *    `→ pill`); `<dot> <actor> moved <chip> → <status pill>` for status
- *    transitions. PR-9 unified actor position to the front across the
- *    subtypes (@shiki feedback msg `UoJ6LPHDpJCHYVFe`). The claim/unclaim
- *    VERB branches on `actor.kind`: an agent claims/unclaims (its own
- *    workflow move), a human assigns/unassigns from the board — where an
- *    assign DISPATCHES the work and an unassign is ownership-only, so the
- *    two are not symmetric; see `TaskEventBody`. A
- *    `task_create` carrying `cross_conversation` reads
- *    `<actor> filed <chip> from another conversation` (origin deliberately
- *    unnamed — see `TaskEventBody`).
- *  - Partial legacy metadata (pre-PR-2 rows: subtype + task_number +
- *    task_status only): degraded row keeps the dot + chip + verb (or
- *    `→ pill` for status), drops the actor pill / inline title — we
- *    have no metadata for them and we deliberately do NOT re-parse
- *    `message.content`.
- *  - No usable metadata: centered muted-italic narration showing
- *    `message.content` verbatim, as a true bottom fallback.
- *
- * Status colors stay subtle (the row is muted overall — quieter than a
- * real chat message). Cindy's PR-2 visual norms (msg `AjrWQyiFyq08zMya`):
- *  - row baseline = `text-text-secondary`
- *  - status colors only on the dot + the pill, not on row body.
- */
 export function TaskEventRow({ message }: RendererProps): JSX.Element {
   const meta = readTaskSystemMetadata(message.metadata);
   if (meta) return <TaskEventRowEnriched meta={meta} />;
@@ -72,11 +34,7 @@ function TaskEventRowEnriched({
   meta: TaskSystemMetadata;
 }): JSX.Element {
   const userResolver = useUserResolver();
-  // Recognition surface (who acted), not a mention — plain name for both kinds,
-  // no leading `@`. Matches the message author label / task-assignee rule; the
-  // `@` handle form is reserved for mentions, the composer, and the assignee
-  // picker — every assignee/creator DISPLAY (including the board) reads plain
-  // (#task:1768, shiki 2026-08-01).
+
   const actorLabel = meta.actor.kind === 'user'
     ? formatUserDisplayName(meta.actor.id, userResolver) || meta.actor.name || 'user'
     : meta.actor.name;
@@ -102,11 +60,6 @@ function TaskEventBody({
   meta: TaskSystemMetadata;
 }): JSX.Element {
   if (subtype === 'task_status') {
-    // PR-9 (@shiki feedback msg `UoJ6LPHDpJCHYVFe`): keep actor at the
-    // front like the create/claim/unclaim shape so all four task event
-    // subtypes share an `@actor verb chip [→ pill]` reading order.
-    // Verb is `moved` (Jira convention; covers any todo→in_progress /
-    // in_progress→in_review / *→done transition without naming each).
     return (
       <>
         <span className="font-medium text-text-primary">{actorLabel}</span>

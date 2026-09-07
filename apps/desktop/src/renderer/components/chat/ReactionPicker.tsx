@@ -55,7 +55,6 @@ export function ReactionPicker({
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
-          // z-[var(--z-popover-nested)]: above the reactor hover-card (z-[var(--z-popover)]), below modals.
           className="z-[var(--z-popover-nested)] rounded-[var(--floating-radius)] border border-border bg-bg-floating p-1.5 shadow-popover outline-none"
         >
           <div className="grid grid-cols-8 gap-0.5">

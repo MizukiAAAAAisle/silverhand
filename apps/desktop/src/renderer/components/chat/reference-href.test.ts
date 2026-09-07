@@ -9,7 +9,7 @@ import {
 } from './reference-href';
 
 /**
- * #task:2001 — the renderer's arm decision for the reference scheme.
+ * The renderer's arm decision for the reference scheme.
  *
  * These are BEHAVIOUR assertions, not painting: `other` is the arm whose tail
  * hands the href to `window.silverhand.openExternal`, so every case below that

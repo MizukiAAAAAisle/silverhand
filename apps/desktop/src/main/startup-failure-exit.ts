@@ -8,7 +8,7 @@
  * is convergence: **whatever goes wrong, the user is told and the
  * process exits non-zero.** A window whose document never loads is the
  * dangerous case — it leaves an invisible window and the same silence
- * this whole module exists to remove (#task:1641 review, @Cindy) — so
+ * this whole module exists to remove — so
  * the window dependency must reject rather than resolve on a failed
  * load, and that rejection lands on the native error box below.
  *

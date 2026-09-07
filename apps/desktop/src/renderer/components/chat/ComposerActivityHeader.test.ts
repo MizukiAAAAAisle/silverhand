@@ -5,15 +5,6 @@ import {
   selectActiveRunStates,
 } from './ComposerActivityHeader';
 
-/**
- * Locks the activity-bubble selection used by the Composer header,
- * including the thread follower filter (item 4 of #task:1047 cut B). The
- * bubble's run-state stream is channel-scoped — a reply cluster is not a
- * separate conversation — so inside the ThreadPanel it must be narrowed to
- * the thread's follower agents, or it would surface agents busy on the main
- * line / other clusters.
- */
-
 function runState(overrides: Partial<AgentRunState> = {}): AgentRunState {
   return {
     runId: `run-${overrides.agentId ?? 'x'}`,

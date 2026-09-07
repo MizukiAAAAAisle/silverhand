@@ -1,7 +1,4 @@
 /**
- * D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up) — regression
- * tests for the typed session-validation flow.
- *
  * What this pins:
  *
  *   - `classifyMeFetchOutcome`: exhaustive matrix of HTTP /

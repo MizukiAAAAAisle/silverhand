@@ -8,10 +8,6 @@ import type { ChannelReference } from '@/components/chat/ChannelRef';
 /**
  * Shared hook: build a resolver that maps `user_id` → display name.
  *
- * Used by every SystemMessage subtype renderer that surfaces a `user_id`
- * (quotes, audit lines, task events, …). Lives here so each renderer
- * doesn't repeat the `useUsersById + makeUserNameResolver` pair (multi-human
- * audit 2026-06-03 #task:857 P0.10). React Query memoizes the underlying
  * /api/users query so subscribing from multiple sub-components is free.
  */
 export function useUserResolver(): ReturnType<typeof makeUserNameResolver> {
@@ -39,8 +35,8 @@ export type SystemMessageRenderer = ComponentType<RendererProps>;
 // ─── Generic fallback ──────────────────────────────────────────────────
 
 /** IM-convention narration for unknown subtypes and any current
- *  subtype that doesn't have a custom renderer yet (PR-2..PR-6 will
- *  progressively replace fallthrough entries with bespoke components). */
+ *  subtype that doesn't have a custom renderer yet
+ * */
 export function GenericNarrationFallback({
   message,
   conversationRefsById,

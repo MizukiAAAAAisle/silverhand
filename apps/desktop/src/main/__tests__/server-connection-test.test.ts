@@ -1,6 +1,4 @@
 /**
- * D4.a Commit 2 — unit tests for the desktop `probeServerInfo` helper.
- *
  * Coverage:
  *   - Each success arm: loopback_ok, system_ca_verified, insecure_dev_remote.
  *   - classify_rejected mirrors the classifier's failure surface

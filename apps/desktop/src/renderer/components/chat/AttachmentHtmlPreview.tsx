@@ -1,19 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { htmlPreviewSrcDoc, readPinchDelta } from '@/lib/html-preview-csp';
 
-/**
- * Carries an HTML attachment inside the opaque-origin sandbox defined by
- * #task:2122. Only author scripts are allowed; host DOM, storage, navigation,
- * forms, downloads, and referrer data remain unavailable. Host-owned zoom
- * changes the iframe viewport geometry without inspecting the author DOM or
- * changing those capabilities.
- *
- * Trackpad pinch (#task:2161) can't be seen host-side — the `ctrl+wheel` fires
- * inside the opaque frame — so the srcDoc's trusted bridge forwards the pinch
- * `deltaY` here. This component validates the message (source is our own frame,
- * fixed shape) and coalesces a flood into one `onPinch` per animation frame, so
- * a forged or repeated message can't drive an unbounded render.
- */
 export function AttachmentHtmlPreview({
   html,
   title,

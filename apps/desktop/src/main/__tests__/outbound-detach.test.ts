@@ -1,6 +1,4 @@
 /**
- * D3.b Commit 3 — unit tests for `gracefullyDetachOutbound`.
- *
  * The helper is a best-effort shutdown-time hint that combines an
  * IPC `host_outbound_detach` call with a backend-registry
  * verification poll, both bounded by a single 1.5s budget. These

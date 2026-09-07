@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 
 import { describe, expect, it } from 'vitest';
 
-// #task:2343 — this task builds+verifies ONLY the current Desktop HOST target (no
+// this task builds+verifies ONLY the current Desktop HOST target (no
 // cross-compile / ECS here). package.sh derives the desktop target from the Electron
 // platform+arch and uses that ONE value for BOTH the manifest `target` and (implicitly,
 // host build) the artifact — never a recomputed uname triple. `verifySidecar` then checks

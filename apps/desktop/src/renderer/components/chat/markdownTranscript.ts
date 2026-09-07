@@ -32,7 +32,6 @@ import { authorStateLabel, presentAuthor } from './author-presentation';
  * agent from a human in plain text), applied on TOP of the seam's identity.
  * A frozen export has no hover to recover the deleted state, so the label also
  * carries the `(deleted account)` suffix from its ONE home (`authorStateLabel`)
- * (#task:1792 B3):
  *   - agent (active):    `@<label>`                    (`display_name || name`)
  *   - agent (deleted):   `@<label> (deleted account)`
  *   - agent (unresolved):`Unknown agent`               (no handle to prefix)

@@ -5,7 +5,7 @@ import {
   resolveDesktopAppPaths,
 } from '@silverhand/shared/app-data-layout';
 
-// #task:2343 — SINGLE path authority. The Desktop `resolveDesktopAppPaths` resolver is
+// SINGLE path authority. The Desktop `resolveDesktopAppPaths` resolver is
 // the ONLY interpreter of the app-data root (from `SILVERHAND_DIR`, via `defaultAppRoot`).
 // The launcher passes the resolver's fine-grained backend paths (database / blobs /
 // logs / bootstrap-token) to the out-of-process Rust child as explicit env; the Rust

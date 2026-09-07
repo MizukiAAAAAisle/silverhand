@@ -19,19 +19,6 @@ import type { ChannelReference } from '@/components/chat/ChannelRef';
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
 import { type RendererProps, useUserResolver, firstLine } from './shared';
 
-// ─── context-card series (PR-5) ───────────────────────────────────────
-//
-// `thread_anchor`, `child_context`, and `channel_context` share the
-// same render shape: left accent line (color per kind), kind tag,
-// source chip, collapsible body. Three thin subtype-specific shells
-// pull their metadata, normalize it into a `ContextCardModel`, and
-// hand off to `ContextCardShell` for the chrome.
-//
-// Cindy's visual rule (msg AjrWQyiFyq08zMya): kind accent color is
-// confined to the 2px left line + the small kind tag. The body itself
-// stays neutral text-primary so multiple stacked context cards don't
-// shout at the reader.
-
 type ContextCardKind = 'quoted' | 'inherited' | 'spawned';
 
 interface ContextCardModel {
@@ -195,18 +182,6 @@ function ContextCardShell({
   );
 }
 
-/** Muted fallback for legacy rows lacking enriched metadata. Preserves
- *  the kind tag + left accent line so the reader can still tell what
- *  flavor of context this was — strictly less informative than the
- *  enriched card (no clickable source chip, no toggle / blockquote /
- *  timestamp) but still distinguishable from generic narration.
- *
- *  Layout note: tag goes on its own row above the body. The body is a
- *  block `<div>` because `Markdown` renders block-level elements
- *  (`<p>`, lists, etc.) — wrapping it in an inline `<span>` produces
- *  invalid DOM that browsers silently restructure (PR-5 review by
- *  @Cindy on commit 3236554).
- */
 function ContextCardLegacyFallback({
   kind,
   tagLabel,

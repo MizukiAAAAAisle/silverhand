@@ -25,7 +25,7 @@ import { setCurrentUserId } from '@/lib/current-user';
 setCurrentUserId('local', 'you');
 
 function render(content: string, refs?: Map<string, WorkspaceChannelReference>): string {
-  // PR-4 commit 5 (Cindy review of `45fca42`): ConversationRef now
+  // ConversationRef now
   // calls `useConversationById` so it can resolve cross-workspace
   // refs that the synchronous `conversationRefsById` map can't see.
   // That hook requires a QueryClient context — wrap every render

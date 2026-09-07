@@ -17,7 +17,7 @@ describe('describeLocalHostWsAttachment (#task:1630 / #task:2343)', () => {
   });
 
   it('no local observer is unobservable and never leaks a timestamp', () => {
-    // #task:2343: with an out-of-process backend (Rust embedded OR remote) there is no
+    // with an out-of-process backend (Rust embedded OR remote) there is no
     // in-process registry to read. Even if a caller hands a number, the no-observer case
     // must not promote to observable.
     expect(

@@ -2,35 +2,6 @@ import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents }
 import { pathToFileURL } from 'node:url';
 import type { RendererEntry } from '../renderer-entry.js';
 
-/**
- * #task:1762 — sender validation for every renderer→main IPC ingress.
- *
- * Electron's `ipcMain` handlers are reachable from ANY WebContents in the
- * process that has the preload bridge, including a frame that navigated
- * somewhere unexpected. `file:` is a wide protocol, so "it's a file URL" is
- * not a trust signal. This registrar wraps registration so a message is
- * served only when all three hold:
- *
- *   1. `event.sender` is the app's own renderer WebContents (this product has
- *      a single main window, which is the strongest and cheapest fact
- *      available — deliberately NOT relaxed for hypothetical extra windows);
- *   2. the message came from that WebContents' TOP frame
- *      (`senderFrame === sender.mainFrame`); null/unknown/subframe is refused;
- *   3. the frame's URL matches the renderer entry contract, derived from the
- *      SAME resolver the window loader uses (`resolveRendererEntry`) — under
- *      dev the dev-server origin, packaged the real `renderer/index.html`
- *      path with the HashRouter fragment and query ignored.
- *
- * Failure semantics differ by direction, per review: `handle` throws (fail
- * loud — the caller is the app itself, so a rejection is a bug worth
- * surfacing), `on` returns without running the callback (fail closed — a
- * fire-and-forget message must not produce side effects).
- *
- * Rejection logs are minimal on purpose: channel, frame/top-level verdict,
- * sender id and a normalized source kind. The URL's hash/query carry
- * workspace and channel ids, so they are never logged.
- */
-
 export interface GuardedIpcLogger {
   warn(payload: Record<string, unknown>, message: string): void;
 }

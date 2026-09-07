@@ -1,7 +1,4 @@
 /**
- * D4.a Commit 3 → 5d — unit tests for the boot-mode decision
- * primitive + the 5d adapter (`planBackendStartup`).
- *
  * Coverage per arm:
  *   - forceEmbedded short-circuit (wins over a remote profile,
  *     ignores classifier failures)
