@@ -23,7 +23,6 @@ import { RegistrationGate } from '@/features/me/RegistrationGate';
 import { BackendUnreachableGate } from '@/features/me/BackendUnreachableGate';
 import { UpdateRequiredGate } from '@/features/me/UpdateRequiredGate';
 import { AppStatusBanner } from '@/features/me/AppStatusBanner';
-import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { shouldSecondaryFullscreen } from '@/lib/secondary-pane';
 import { LAST_CHANNEL_KEY, clearPlaceMemory } from '@/lib/place-memory';
@@ -140,8 +139,6 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: 'light' | 'dark' }
     titlebarWorkspaceName,
     openAgentConversation,
     deferredSection,
-    openTaskInModal,
-    taskModalId,
     handleJumpToMessage,
     handleMessageAgent,
   } = conversation.app;
@@ -206,7 +203,7 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: 'light' | 'dark' }
           )}
           {deferredSection === 'tasks' && (
             <SectionLayer visible={appSection !== 'chat'}>
-              <TaskShell onOpenTask={openTaskInModal} />
+              <TaskShell onJump={handleJumpToMessage} />
             </SectionLayer>
           )}
           <AgentShell
@@ -224,27 +221,6 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: 'light' | 'dark' }
         </div>
       </div>
 
-      <TaskDetailDialog
-        taskId={taskModalId}
-        onOpenChange={(next) => {
-          if (!next) {
-            nav.closeTask();
-          }
-        }}
-        onJump={(target) => {
-          const navigated = handleJumpToMessage(target);
-          // ONE navigation owner per action: the jump above already replaced the
-          // location, and a fresh channel path carries no query — `?task` is
-          // gone with it. Clearing the pointer separately would be a second
-          // navigation built off the PRE-jump location, which can undo the
-          // first. So it is only needed on the exits that navigated nothing
-          // (inline find on the open channel, unresolvable workspace), where the
-          // modal would otherwise stay open over a view it never moved.
-          if (!navigated) {
-            nav.closeTask();
-          }
-        }}
-      />
       {/* Toast surface follows the active theme: `theme` picks sonner's
        * light/dark default scale, and global.css maps its fill / text /
        * border / radius onto our tokens (forza6 gets the ink frame). No

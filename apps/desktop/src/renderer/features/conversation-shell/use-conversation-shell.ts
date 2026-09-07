@@ -1,3 +1,4 @@
+import { resolveTaskDetailSurface } from '@/features/tasks/task-detail-surface';
 import { senderFilterToParam } from '@/components/ui/sender-filter-select';
 import type { AdvancedSearchSeed } from '@/features/search/advanced-search-seed';
 
@@ -705,53 +706,11 @@ export function useConversationShell({
     }
   };
 
-  const [taskHost, setTaskHost] = useState<{
-    id: string;
-    host: 'pane' | 'modal';
-  } | null>(null);
+  const openTaskRef = useRef(nav.openTask);
+  openTaskRef.current = nav.openTask;
 
-  const openTask = useCallback(
-    (taskId: string, host: 'pane' | 'modal') => {
-      setTaskHost({ id: taskId, host });
-      nav.openTask(taskId);
-    },
-    [nav.openTask],
-  );
-
-  const openTaskRef = useRef(openTask);
-
-  openTaskRef.current = openTask;
-
-  const openTaskInPane = useCallback((taskId: string) => openTaskRef.current(taskId, 'pane'), []);
-
-  const openTaskInModal = useCallback((taskId: string) => openTaskRef.current(taskId, 'modal'), []);
-
-  const coldTaskHost: 'pane' | 'modal' =
-    appSection === 'chat' && view === 'channel' && selectedChannelId !== null ? 'pane' : 'modal';
-
-  const resolvedTaskHost: 'pane' | 'modal' | null =
-    taskDetailId === null
-      ? null
-      : taskHost && taskHost.id === taskDetailId
-        ? taskHost.host
-        : coldTaskHost;
-
-  useEffect(() => {
-    if (taskDetailId === null) {
-      // Pointer gone — drop any recorded host so a reopen re-classifies fresh.
-      if (taskHost !== null) {
-        setTaskHost(null);
-      }
-    } else if (!taskHost || taskHost.id !== taskDetailId) {
-      // Cold-load only: no opener recorded a host for this pointer. Freeze the
-      // URL-surface classification so subsequent renders read it, not `coldTaskHost`.
-      setTaskHost({ id: taskDetailId, host: coldTaskHost });
-    }
-  }, [taskDetailId, taskHost, coldTaskHost]);
-
-  const taskPaneId = resolvedTaskHost === 'pane' ? taskDetailId : null;
-
-  const taskModalId = resolvedTaskHost === 'modal' ? taskDetailId : null;
+  const openTaskInPane = useCallback((taskId: string) => openTaskRef.current(taskId), []);
+  const taskPaneId = resolveTaskDetailSurface(route) === 'pane' ? taskDetailId : null;
 
   const taskPaneEditingRef = useRef(false);
 
@@ -1225,8 +1184,6 @@ export function useConversationShell({
       titlebarWorkspaceName,
       openAgentConversation,
       deferredSection,
-      openTaskInModal,
-      taskModalId,
       handleJumpToMessage,
       handleMessageAgent,
       secondaryDescriptor,
