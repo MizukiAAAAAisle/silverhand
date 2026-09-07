@@ -1,3 +1,4 @@
+import { withHumanQuery } from './router';
 import { describe, expect, it } from 'vitest';
 import {
   buildAgentPanelOpenUrl,
@@ -59,10 +60,7 @@ describe('parseRouteState — chat URL matrix', () => {
   it('preserves ad-hoc query params untouched', () => {
     // Non-relevant query params (analytics, future flags, etc.) must
     // not be lost by the parser — withSideQuery preserves them too.
-    const r = parseRouteState(
-      '/chat/w/w-1/c/c-a',
-      '?side=c-other&utm_source=test',
-    );
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?side=c-other&utm_source=test');
     expect(r.sideConversationId).toBe('c-other');
   });
 
@@ -157,11 +155,7 @@ describe('withSideQuery — URL writer for openSide / closeSide', () => {
   });
 
   it('overwrites an existing ?side', () => {
-    const out = withSideQuery(
-      '/chat/w/w-1/c/c-a',
-      '?side=c-old',
-      'c-new',
-    );
+    const out = withSideQuery('/chat/w/w-1/c/c-a', '?side=c-old', 'c-new');
     expect(out).toBe('/chat/w/w-1/c/c-a?side=c-new');
   });
 
@@ -177,27 +171,15 @@ describe('withSideQuery — URL writer for openSide / closeSide', () => {
     // closeSide must drop fullscreen too — leaving fullscreen=1
     // dangling after closing a fullscreened side overlay would yank
     // the primary into fullscreen mode unexpectedly.
-    const out = withSideQuery(
-      '/chat/w/w-1/c/c-a',
-      '?side=c-other&fullscreen=1',
-      null,
-    );
+    const out = withSideQuery('/chat/w/w-1/c/c-a', '?side=c-other&fullscreen=1', null);
     expect(out).toBe('/chat/w/w-1/c/c-a');
   });
 
   it('preserves unrelated query params on both open and close', () => {
-    const opened = withSideQuery(
-      '/chat/w/w-1/c/c-a',
-      '?utm_source=test',
-      'c-other',
-    );
+    const opened = withSideQuery('/chat/w/w-1/c/c-a', '?utm_source=test', 'c-other');
     expect(opened).toContain('utm_source=test');
     expect(opened).toContain('side=c-other');
-    const closed = withSideQuery(
-      '/chat/w/w-1/c/c-a',
-      '?side=c-other&utm_source=test',
-      null,
-    );
+    const closed = withSideQuery('/chat/w/w-1/c/c-a', '?side=c-other&utm_source=test', null);
     expect(closed).toBe('/chat/w/w-1/c/c-a?utm_source=test');
   });
 });
@@ -218,11 +200,7 @@ describe('buildSideOpenUrl — openSide URL writer (PR-4 follow-up)', () => {
   it('strips ?fullscreen when opening side from a fullscreen view', () => {
     // User was at a fullscreen view. Clicking #conv:<id> must NOT inherit
     // fullscreen — that would hide the channel under a fullscreen side pane.
-    const out = buildSideOpenUrl(
-      '/chat/w/w-1/c/c-a',
-      '?fullscreen=1',
-      'c-other',
-    );
+    const out = buildSideOpenUrl('/chat/w/w-1/c/c-a', '?fullscreen=1', 'c-other');
     expect(out).toBe('/chat/w/w-1/c/c-a?side=c-other');
     expect(out).not.toContain('fullscreen');
   });
@@ -248,9 +226,9 @@ describe('buildChannelPathPreservingSide — view-in-channel keeps side overlay'
   // disappears even though they only asked to see its parent. This
   // helper builds the URL with `?side` preserved.
   it('writes /chat/w/<wid>/c/<cid>?side=<sideId> for cross-workspace parent jump', () => {
-    expect(
-      buildChannelPathPreservingSide('w-other', 'c-parent', 'c-side'),
-    ).toBe('/chat/w/w-other/c/c-parent?side=c-side');
+    expect(buildChannelPathPreservingSide('w-other', 'c-parent', 'c-side')).toBe(
+      '/chat/w/w-other/c/c-parent?side=c-side',
+    );
   });
 
   it('keeps the side overlay even when destination workspace differs from the side', () => {
@@ -286,8 +264,9 @@ describe('parseRouteState — ?task=<task_id> detail pointer (#task:1715)', () =
   it('keeps an id the viewer cannot resolve — the modal explains it', () => {
     // Dropping it here would strip the pointer the user just clicked and
     // leave them with no account of what happened.
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=deleted-task').taskDetailId)
-      .toBe('deleted-task');
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=deleted-task').taskDetailId).toBe(
+      'deleted-task',
+    );
   });
 
   it('treats an empty value and an absent param alike → null', () => {
@@ -298,10 +277,7 @@ describe('parseRouteState — ?task=<task_id> detail pointer (#task:1715)', () =
   it('coexists with ?side and ?fullscreen — independent dimensions', () => {
     // The detail modal, the side overlay, and fullscreen are orthogonal URL
     // dimensions; all three must survive parsing.
-    const r = parseRouteState(
-      '/chat/w/w-1/c/c-a',
-      '?side=c-other&task=t-7&fullscreen=1',
-    );
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?side=c-other&task=t-7&fullscreen=1');
     expect(r.taskDetailId).toBe('t-7');
     expect(r.sideConversationId).toBe('c-other');
     expect(r.fullscreen).toBe(true);
@@ -310,9 +286,7 @@ describe('parseRouteState — ?task=<task_id> detail pointer (#task:1715)', () =
 
 describe('withTaskQuery — URL writer for openTask / closeTask', () => {
   it('writes ?task=<task_id> on a bare path', () => {
-    expect(withTaskQuery('/chat/w/w-1/c/c-a', '', 't-5')).toBe(
-      '/chat/w/w-1/c/c-a?task=t-5',
-    );
+    expect(withTaskQuery('/chat/w/w-1/c/c-a', '', 't-5')).toBe('/chat/w/w-1/c/c-a?task=t-5');
   });
 
   it('overwrites an existing ?task', () => {
@@ -326,20 +300,14 @@ describe('withTaskQuery — URL writer for openTask / closeTask', () => {
     // it clears fullscreen on close like every other pane). A preserved
     // `?thread` resurfaces as the restore stack; `?side` cannot coexist with a
     // task overlay (it was cleared on open), so it is not part of this case.
-    const out = withTaskQuery(
-      '/chat/w/w-1/c/c-a',
-      '?thread=m-1&task=t-12&fullscreen=1',
-      null,
-    );
+    const out = withTaskQuery('/chat/w/w-1/c/c-a', '?thread=m-1&task=t-12&fullscreen=1', null);
     expect(out).toContain('thread=m-1');
     expect(out).not.toContain('fullscreen=1');
     expect(out).not.toContain('task=');
   });
 
   it('returns the bare path when no params remain after close', () => {
-    expect(withTaskQuery('/chat/w/w-1/c/c-a', '?task=t-7', null)).toBe(
-      '/chat/w/w-1/c/c-a',
-    );
+    expect(withTaskQuery('/chat/w/w-1/c/c-a', '?task=t-7', null)).toBe('/chat/w/w-1/c/c-a');
   });
 
   it('preserves unrelated query params on open', () => {
@@ -355,9 +323,7 @@ describe('buildTaskOpenUrl — openTask URL writer', () => {
   // the restore stack (matrix asserts this below).
 
   it('writes ?task=<task_id> on a bare path', () => {
-    expect(buildTaskOpenUrl('/chat/w/w-1/c/c-a', '', 't-7')).toBe(
-      '/chat/w/w-1/c/c-a?task=t-7',
-    );
+    expect(buildTaskOpenUrl('/chat/w/w-1/c/c-a', '', 't-7')).toBe('/chat/w/w-1/c/c-a?task=t-7');
   });
 
   it('clears ?side and ?fullscreen, preserving ?thread as the restore stack', () => {
@@ -373,11 +339,7 @@ describe('buildTaskOpenUrl — openTask URL writer', () => {
   });
 
   it('overwrites a stale ?task', () => {
-    const out = buildTaskOpenUrl(
-      '/chat/w/w-1/c/c-a',
-      '?task=t-3&utm_source=test',
-      't-8',
-    );
+    const out = buildTaskOpenUrl('/chat/w/w-1/c/c-a', '?task=t-3&utm_source=test', 't-8');
     expect(out).toContain('task=t-8');
     expect(out).not.toContain('task=t-3');
     expect(out).toContain('utm_source=test');
@@ -412,22 +374,14 @@ describe('parseRouteState — ?thread=<rootMessageId> thread pane pointer', () =
 
 describe('withThreadQuery — URL writer for openThread / closeThread', () => {
   it('writes ?thread=<id>, clearing ?side and ?fullscreen', () => {
-    const out = withThreadQuery(
-      '/chat/w/w-1/c/c-a',
-      '?side=c-other&fullscreen=1',
-      'm-1',
-    );
+    const out = withThreadQuery('/chat/w/w-1/c/c-a', '?side=c-other&fullscreen=1', 'm-1');
     expect(out).toContain('thread=m-1');
     expect(out).not.toContain('side=c-other');
     expect(out).not.toContain('fullscreen=1');
   });
 
   it('clears ?thread (and ?fullscreen) when id is null', () => {
-    const closed = withThreadQuery(
-      '/chat/w/w-1/c/c-a',
-      '?thread=m-1&fullscreen=1',
-      null,
-    );
+    const closed = withThreadQuery('/chat/w/w-1/c/c-a', '?thread=m-1&fullscreen=1', null);
     expect(closed).not.toContain('thread');
     expect(closed).not.toContain('fullscreen');
   });
@@ -435,11 +389,7 @@ describe('withThreadQuery — URL writer for openThread / closeThread', () => {
   it('preserves unrelated params but clears the task overlay when opening', () => {
     // thread is a `replace` pane → opening it clears every other secondary
     // pane, including the `task` overlay. Truly unrelated params survive.
-    const out = withThreadQuery(
-      '/chat/w/w-1/c/c-a',
-      '?task=7&utm_source=test',
-      'm-1',
-    );
+    const out = withThreadQuery('/chat/w/w-1/c/c-a', '?task=7&utm_source=test', 'm-1');
     expect(out).toContain('thread=m-1');
     expect(out).toContain('utm_source=test');
     expect(out).not.toContain('task=7');
@@ -448,9 +398,7 @@ describe('withThreadQuery — URL writer for openThread / closeThread', () => {
 
 describe('buildThreadOpenUrl — openThread URL writer', () => {
   it('is additive over withThreadQuery and mutually exclusive with side', () => {
-    expect(buildThreadOpenUrl('/chat/w/w-1/c/c-a', '', 'm-1')).toBe(
-      '/chat/w/w-1/c/c-a?thread=m-1',
-    );
+    expect(buildThreadOpenUrl('/chat/w/w-1/c/c-a', '', 'm-1')).toBe('/chat/w/w-1/c/c-a?thread=m-1');
     const out = buildThreadOpenUrl('/chat/w/w-1/c/c-a', '?side=c-other', 'm-1');
     expect(out).toContain('thread=m-1');
     expect(out).not.toContain('side=c-other');
@@ -473,12 +421,8 @@ describe('parseRouteState — ?threads=1 channel Threads-list pane (#task:1073)'
   });
 
   it('treats any value other than "1" as closed', () => {
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?threads=0').threadsListOpen).toBe(
-      false,
-    );
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?threads=').threadsListOpen).toBe(
-      false,
-    );
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?threads=0').threadsListOpen).toBe(false);
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?threads=').threadsListOpen).toBe(false);
   });
 });
 
@@ -496,22 +440,14 @@ describe('withThreadsQuery — URL writer for openThreadsList / closeThreadsList
   });
 
   it('clears ?threads (and ?fullscreen) when closing', () => {
-    const closed = withThreadsQuery(
-      '/chat/w/w-1/c/c-a',
-      '?threads=1&fullscreen=1',
-      false,
-    );
+    const closed = withThreadsQuery('/chat/w/w-1/c/c-a', '?threads=1&fullscreen=1', false);
     expect(closed).not.toContain('threads');
     expect(closed).not.toContain('fullscreen');
   });
 
   it('preserves unrelated params but clears the task overlay when opening', () => {
     // threads is a `replace` pane → opening it clears the `task` overlay.
-    const out = withThreadsQuery(
-      '/chat/w/w-1/c/c-a',
-      '?task=7&utm_source=test',
-      true,
-    );
+    const out = withThreadsQuery('/chat/w/w-1/c/c-a', '?task=7&utm_source=test', true);
     expect(out).toContain('threads=1');
     expect(out).toContain('utm_source=test');
     expect(out).not.toContain('task=7');
@@ -549,15 +485,9 @@ describe('parseRouteState — ?files=1 channel Attachments panel', () => {
   });
 
   it('treats any value other than "1" as closed (falsifier for slack parsing)', () => {
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?files=0').filesListOpen).toBe(
-      false,
-    );
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?files=').filesListOpen).toBe(
-      false,
-    );
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?files=true').filesListOpen).toBe(
-      false,
-    );
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?files=0').filesListOpen).toBe(false);
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?files=').filesListOpen).toBe(false);
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?files=true').filesListOpen).toBe(false);
   });
 });
 
@@ -600,11 +530,7 @@ describe('withFilesQuery — URL writer for openFilesList / closeFilesList', () 
   });
 
   it('clears ?files (and ?fullscreen defensively) when closing', () => {
-    const closed = withFilesQuery(
-      '/chat/w/w-1/c/c-a',
-      '?files=1&fullscreen=1',
-      false,
-    );
+    const closed = withFilesQuery('/chat/w/w-1/c/c-a', '?files=1&fullscreen=1', false);
     expect(closed).not.toContain('files');
     expect(closed).not.toContain('fullscreen');
   });
@@ -612,11 +538,7 @@ describe('withFilesQuery — URL writer for openFilesList / closeFilesList', () 
   it('preserves unrelated params but clears the task overlay when opening', () => {
     // files and task are both overlays → opening files clears the task
     // overlay (one overlay on top at a time). Unrelated params survive.
-    const out = withFilesQuery(
-      '/chat/w/w-1/c/c-a',
-      '?task=7&utm_source=test',
-      true,
-    );
+    const out = withFilesQuery('/chat/w/w-1/c/c-a', '?task=7&utm_source=test', true);
     expect(out).toContain('files=1');
     expect(out).toContain('utm_source=test');
     expect(out).not.toContain('task=7');
@@ -624,9 +546,7 @@ describe('withFilesQuery — URL writer for openFilesList / closeFilesList', () 
 
   it('returns the bare path when the resulting query is empty', () => {
     // Falsifier: closing must not leave a dangling `?` on the path.
-    expect(withFilesQuery('/chat/w/w-1/c/c-a', '?files=1', false)).toBe(
-      '/chat/w/w-1/c/c-a',
-    );
+    expect(withFilesQuery('/chat/w/w-1/c/c-a', '?files=1', false)).toBe('/chat/w/w-1/c/c-a');
   });
 });
 
@@ -665,11 +585,7 @@ describe('?agent + ?files — symmetric overlay mutual exclusion', () => {
     expect(out).not.toContain('files=1');
     expect(out).toContain('thread=m-1');
     // Close agent → thread survives (files was already swept on open).
-    const afterAgentClose = withAgentQuery(
-      '/chat/w/w-1/c/c-a',
-      out.split('?')[1] ?? '',
-      null,
-    );
+    const afterAgentClose = withAgentQuery('/chat/w/w-1/c/c-a', out.split('?')[1] ?? '', null);
     expect(afterAgentClose).not.toContain('agent');
     expect(afterAgentClose).not.toContain('files');
     expect(afterAgentClose).toContain('thread=m-1');
@@ -789,36 +705,23 @@ describe('withAgentQuery / buildAgentPanelOpenUrl — open / close the agent pan
   });
 
   it('round-trip: opening then closing the panel over a thread restores the thread pane (#task:1433)', () => {
-    const opened = buildAgentPanelOpenUrl(
-      '/chat/w/w-1/c/c-a',
-      '?thread=m-1',
-      'a-9',
-    );
+    const opened = buildAgentPanelOpenUrl('/chat/w/w-1/c/c-a', '?thread=m-1', 'a-9');
     const search = opened.slice(opened.indexOf('?'));
     const closed = withAgentQuery('/chat/w/w-1/c/c-a', search, null);
     expect(closed).not.toContain('agent');
     expect(closed).toContain('thread=m-1');
   });
 
-
   it('preserves unrelated params but clears the task overlay when opening', () => {
     // agent and task are both overlays → opening agent clears the task overlay.
-    const out = buildAgentPanelOpenUrl(
-      '/chat/w/w-1/c/c-a',
-      '?task=7&utm_source=test',
-      'a-9',
-    );
+    const out = buildAgentPanelOpenUrl('/chat/w/w-1/c/c-a', '?task=7&utm_source=test', 'a-9');
     expect(out).toContain('agent=a-9');
     expect(out).toContain('utm_source=test');
     expect(out).not.toContain('task=7');
   });
 
   it('clears ?agent (and ?fullscreen) when closing', () => {
-    const closed = withAgentQuery(
-      '/chat/w/w-1/c/c-a',
-      '?agent=a-9&fullscreen=1',
-      null,
-    );
+    const closed = withAgentQuery('/chat/w/w-1/c/c-a', '?agent=a-9&fullscreen=1', null);
     expect(closed).not.toContain('agent');
     expect(closed).not.toContain('fullscreen');
   });
@@ -915,10 +818,7 @@ describe('layoutMemoryFromRoute — RouteState → persisted layout', () => {
   it('persists the underlying pane, not the overlay, when files covers a thread', () => {
     // thread+files → the thread is the persisted layout, so channel re-entry
     // restores the thread (files overlay is dropped) rather than the overlay.
-    const threadUnderFiles = parseRouteState(
-      '/chat/w/w-1/c/c-a',
-      '?thread=m-1&files=1',
-    );
+    const threadUnderFiles = parseRouteState('/chat/w/w-1/c/c-a', '?thread=m-1&files=1');
     expect(layoutMemoryFromRoute(threadUnderFiles)).toEqual({
       kind: 'thread',
       rootId: 'm-1',
@@ -937,36 +837,34 @@ describe('layoutMemoryFromRoute — RouteState → persisted layout', () => {
         }),
       ),
     ).toEqual({ kind: 'side', id: 'c-x' });
-    expect(
-      layoutMemoryFromRoute(fields({ threadsListOpen: true })),
-    ).toEqual({ kind: 'threads-list' });
+    expect(layoutMemoryFromRoute(fields({ threadsListOpen: true }))).toEqual({
+      kind: 'threads-list',
+    });
   });
 });
 
 describe('buildChannelLayoutUrl — restore a channel with its layout', () => {
   it('yields the bare path for none / null memory', () => {
     expect(buildChannelLayoutUrl('w-1', 'c-a', null)).toBe('/chat/w/w-1/c/c-a');
-    expect(buildChannelLayoutUrl('w-1', 'c-a', { kind: 'none' })).toBe(
-      '/chat/w/w-1/c/c-a',
-    );
+    expect(buildChannelLayoutUrl('w-1', 'c-a', { kind: 'none' })).toBe('/chat/w/w-1/c/c-a');
   });
 
   it('restores a threads-list pane', () => {
-    expect(
-      buildChannelLayoutUrl('w-1', 'c-a', { kind: 'threads-list' }),
-    ).toBe('/chat/w/w-1/c/c-a?threads=1');
+    expect(buildChannelLayoutUrl('w-1', 'c-a', { kind: 'threads-list' })).toBe(
+      '/chat/w/w-1/c/c-a?threads=1',
+    );
   });
 
   it('restores a thread pane', () => {
-    expect(
-      buildChannelLayoutUrl('w-1', 'c-a', { kind: 'thread', rootId: 'm-1' }),
-    ).toBe('/chat/w/w-1/c/c-a?thread=m-1');
+    expect(buildChannelLayoutUrl('w-1', 'c-a', { kind: 'thread', rootId: 'm-1' })).toBe(
+      '/chat/w/w-1/c/c-a?thread=m-1',
+    );
   });
 
   it('restores a side overlay', () => {
-    expect(
-      buildChannelLayoutUrl('w-1', 'c-a', { kind: 'side', id: 'c-x' }),
-    ).toBe('/chat/w/w-1/c/c-a?side=c-x');
+    expect(buildChannelLayoutUrl('w-1', 'c-a', { kind: 'side', id: 'c-x' })).toBe(
+      '/chat/w/w-1/c/c-a?side=c-x',
+    );
   });
 
   it('round-trips: parse → memory → build → parse is stable', () => {
@@ -1002,9 +900,7 @@ describe('parseRouteState — the workspace-less /chat/d/:id route', () => {
     for (const pathname of ['/chat', '/chat/search', '/chat/saved', '/activity']) {
       expect(parseRouteState(pathname, '').directConversationId).toBeNull();
     }
-    expect(
-      parseRouteState('/chat/w/w-1/c/c-a', '').directConversationId,
-    ).toBeNull();
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '').directConversationId).toBeNull();
   });
 
   it('carries the secondary panes unchanged — they resolve against channelId', () => {
@@ -1097,3 +993,29 @@ describe('parseRouteState — the pre-mint /chat/d/new/:agentId route', () => {
 // workspace-less placement, and the builder's `workspaceId` is non-null by type.
 // A test that drove the removed null arm was asserting the opposite of the
 // ticket's own verdict, which is why it is gone rather than adapted.
+
+describe('human profile overlay routing', () => {
+  it('preserves the thread restore stack and removes covered conversations', () => {
+    const url = withHumanQuery(
+      '/chat/d/dm-a',
+      '?thread=root&side=other&agent=a&fullscreen=1',
+      'user-b',
+    );
+    const search = url.slice(url.indexOf('?'));
+    const route = parseRouteState('/chat/d/dm-a', search);
+
+    expect(route.humanPanelId).toBe('user-b');
+    expect(route.agentPanelId).toBeNull();
+    expect(route.sideConversationId).toBeNull();
+    expect(route.threadRootId).toBe('root');
+    expect(route.fullscreen).toBe(false);
+    expect(withHumanQuery('/chat/d/dm-a', search, null)).toBe('/chat/d/dm-a?thread=root');
+  });
+
+  it('replaces the human pane when another inspector opens', () => {
+    expect(withAgentQuery('/chat/d/dm-a', '?human=user-b&thread=root', 'a')).not.toContain(
+      'human=',
+    );
+    expect(parseRouteState('/chat/d/dm-a', '?human=').humanPanelId).toBeNull();
+  });
+});

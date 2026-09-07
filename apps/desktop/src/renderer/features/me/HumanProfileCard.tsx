@@ -1,20 +1,16 @@
 import { ProfileMessageActivity } from '@/features/profile/ProfileMessageActivity';
 import dayjs from 'dayjs';
-import { Lock, Pencil, User as UserIcon } from 'lucide-react';
+import { Pencil } from 'lucide-react';
 import type { UserDto } from '@silverhand/shared';
 import { useNav } from '@/router';
-import {
-  MetadataList,
-  ProfileSection,
-} from '@/features/common/ProfileSummarySections';
+import { MetadataList, ProfileSection } from '@/features/common/ProfileSummarySections';
 import { persistSettingsSection } from '@/features/settings/settings-section';
-import {
-  isBackendUnreachable,
-  isUpdateRequired,
-  useViewerAvatarObjectUrl,
-  useViewerUser,
-} from './hooks';
-import { useUserAvatarObjectUrl } from '@/features/users/avatar-hooks';
+import { isBackendUnreachable, isUpdateRequired, useViewerUser } from './hooks';
+import { useHumanAvatar } from './use-human-avatar';
+import { UserAvatar } from '@/components/UserAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
+import { useProfileHeroSize } from '@/features/common/use-profile-hero-size';
+import '@/features/agents/agent-profile-hero.css';
 import { canEditUserProfile } from './permissions';
 
 interface HumanProfileCardProps {
@@ -26,51 +22,29 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
   const viewerForPermissions =
     viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
   const isOwnProfile = canEditUserProfile(viewerForPermissions, user);
-  // Multi-human: pick the avatar resolver by viewer match so visiting
-  // another human's profile renders THEIR avatar, not the viewer's. Self
-  // continues to use the viewer-cached path (works even before /api/users
-  // hydrates).
-  const isSelf =
-    viewerForPermissions
-    && !('registration_required' in viewerForPermissions)
-    && viewerForPermissions.id === user.id;
-  const viewerAvatar = useViewerAvatarObjectUrl();
-  const otherAvatar = useUserAvatarObjectUrl({ userId: isSelf ? null : user.id });
-  const avatarObjectUrl = isSelf ? viewerAvatar : otherAvatar;
+  const avatarObjectUrl = useHumanAvatar(user.id);
+  const { profileRef, compactHero } = useProfileHeroSize();
 
   return (
-    <div data-profile-layout className="mx-auto flex flex-col gap-6">
-      {!isOwnProfile ? <ReadOnlyNotice /> : null}
-
-      <ProfileSection
-        title="Identity"
-        titleAdornment={isOwnProfile ? <EditInSettingsButton /> : null}
-      >
-        <div className="flex items-start gap-4">
-          <span data-avatar-ground className="grid size-14 place-items-center overflow-hidden rounded-none border border-border-subtle">
-            {avatarObjectUrl ? (
-              // eslint-disable-next-line jsx-a11y/img-redundant-alt
-              <img
-                src={avatarObjectUrl}
-                alt={user.display_name || user.name}
-                className="size-full object-cover"
-              />
-            ) : (
-              <UserIcon className="size-7 text-text-muted" />
-            )}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="font-serif text-lg font-semibold leading-tight text-text-primary">
-              {user.display_name || user.name}
-            </div>
-            <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted">
-              <span className="font-mono">@{user.name}</span>
-              <Lock className="size-3" />
-              <span>name is permanent</span>
-            </div>
+    <div ref={profileRef} data-profile-layout className="mx-auto flex flex-col gap-6">
+      <section aria-label="Human profile" data-compact={compactHero} className="agent-profile-hero">
+        <UserAvatar
+          size={compactHero ? AVATAR_PX.profileCompact : AVATAR_PX.profile}
+          avatarObjectUrl={avatarObjectUrl}
+          alt={user.display_name || user.name}
+        />
+        <div className="agent-profile-hero-fields min-w-0 flex-1">
+          <div className="agent-profile-hero-name break-words font-serif font-semibold text-text-primary">
+            {user.display_name || user.name}
           </div>
+          <div className="break-words font-mono text-xs text-text-muted">@{user.name}</div>
+          {isOwnProfile ? (
+            <div>
+              <EditInSettingsButton />
+            </div>
+          ) : null}
         </div>
-      </ProfileSection>
+      </section>
 
       <ProfileMessageActivity subject={{ kind: 'user', id: user.id }} />
 
@@ -118,22 +92,5 @@ function EditInSettingsButton(): JSX.Element {
       <Pencil className="size-3" />
       Edit in Settings
     </button>
-  );
-}
-
-/**
- * Single-source-of-truth read-only message for another human's profile.
- * Mirrors the agent equivalent — no `@<id>` substitution because there is
- * no users-by-id lookup yet.
- */
-function ReadOnlyNotice(): JSX.Element {
-  return (
-    <p
-      role="note"
-      className="text-xs text-text-muted"
-      data-testid="human-profile-readonly-notice"
-    >
-      Only this user can edit their profile.
-    </p>
   );
 }

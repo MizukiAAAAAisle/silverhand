@@ -23,18 +23,12 @@
 import { useMemo } from 'react';
 import { Hash } from 'lucide-react';
 import type { DirectPairCounterpart } from '@silverhand/shared';
-import {
-  AuthorAvatarView,
-  DeletedActorMarker,
-} from '@/components/chat/author-avatar-view';
+import { AuthorAvatarView, DeletedActorMarker } from '@/components/chat/author-avatar-view';
 import { useNav } from '@/router';
 import { focusAgentSideSection } from '@/features/agents/AgentView';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useAgent, useAgentPresence } from '@/features/agents/hooks';
-import {
-  PRESENCE_TONE_DOT,
-  projectPresence,
-} from '@/features/agents/presence-projection';
+import { PRESENCE_TONE_DOT, projectPresence } from '@/features/agents/presence-projection';
 import { usePresenceById } from '@/features/presence/hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import {
@@ -43,8 +37,7 @@ import {
 } from '@/features/direct-pairs/counterpart-presentation';
 import type { ConversationPaneCapabilities } from '@/features/conversations/pane-mode';
 
-const TITLE_CLASS =
-  'min-w-0 truncate font-serif text-base font-semibold text-text-primary';
+const TITLE_CLASS = 'min-w-0 truncate font-serif text-base font-semibold text-text-primary';
 
 /** Both header arms — the channel `#` and the DM avatar — share this one box edge
  *  so switching conversation kind never resizes the identity. */
@@ -126,11 +119,9 @@ function CounterpartIdentity({
   );
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(users);
-  const { openAgentPanel } = useNav();
+  const { openAgentPanel, openHumanPanel } = useNav();
   const agentId =
-    counterpart.status === 'active' && counterpart.kind === 'agent'
-      ? counterpart.id
-      : null;
+    counterpart.status === 'active' && counterpart.kind === 'agent' ? counterpart.id : null;
   const description = useAgent(agentId).data?.description?.trim() || null;
   const face = (
     <AuthorAvatarView
@@ -153,6 +144,16 @@ function CounterpartIdentity({
           }}
           aria-label={`Open ${presentation.label} activity`}
           title={`Open ${presentation.label} activity`}
+          className="focus-outline inline-flex shrink-0 rounded-none transition-[filter] duration-100 hover:brightness-90"
+        >
+          {face}
+        </button>
+      ) : counterpart.status === 'active' && counterpart.kind === 'human' ? (
+        <button
+          type="button"
+          onClick={() => openHumanPanel(counterpart.id)}
+          aria-label={`Open ${presentation.label} profile`}
+          title={`Open ${presentation.label} profile`}
           className="focus-outline inline-flex shrink-0 rounded-none transition-[filter] duration-100 hover:brightness-90"
         >
           {face}
@@ -229,8 +230,7 @@ function CounterpartPresenceDot({
  *  forza6 (`--pill-radius: 0`) and round elsewhere, so this dot matches every
  *  other presence pip instead of staying a hardcoded circle. Size stays the
  *  header's own (one tier above the rail) — that is layout, the consumer's call. */
-const PRESENCE_DOT_CLASS =
-  'size-2 shrink-0 rounded-[var(--pill-radius)]';
+const PRESENCE_DOT_CLASS = 'size-2 shrink-0 rounded-[var(--pill-radius)]';
 
 function AgentPresenceDot({ agentId }: { agentId: string }): JSX.Element | null {
   const presence = useAgentPresence(agentId);

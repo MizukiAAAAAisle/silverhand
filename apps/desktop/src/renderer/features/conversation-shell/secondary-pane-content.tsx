@@ -1,3 +1,4 @@
+import { HumanView } from '@/features/me/HumanView';
 import { ChannelView } from '@/components/layout/ChannelView';
 import { ThreadPanel } from '@/components/layout/ThreadPanel';
 import { ChannelThreadsPanel } from '@/components/layout/ChannelThreadsPanel';
@@ -14,6 +15,8 @@ export function SecondaryPaneContent({ model }: { model: SecondaryPaneModel }) {
       return null;
     case 'agent':
       return <AgentView variant="side" key={`side-${model.props.agentId}`} {...model.props} />;
+    case 'human':
+      return <HumanView variant="side" key={`human-${model.props.userId}`} {...model.props} />;
     case 'files':
       return <ChannelAttachmentsPanel {...model.props} />;
     case 'task':

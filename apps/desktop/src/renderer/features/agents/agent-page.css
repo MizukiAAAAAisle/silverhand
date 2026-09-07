@@ -1,3 +1,4 @@
+[data-profile-host='human'],
 [data-profile-host='agent'],
 [data-profile-host='side'] {
   min-width: 0;
@@ -129,5 +130,15 @@
 
   .agent-section-tab {
     padding-inline: 8px;
+  }
+}
+
+.human-profile-content {
+  padding: 16px;
+}
+
+@container agent-page (min-width: 560px) {
+  .human-profile-content {
+    padding: 24px;
   }
 }

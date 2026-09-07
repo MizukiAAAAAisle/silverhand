@@ -1,85 +1,47 @@
-import { User as UserIcon } from 'lucide-react';
 import type { UserDto } from '@silverhand/shared';
-import {
-  HeroDot,
-  PersonHero,
-} from '@/features/common/PersonHero';
-import {
-  isBackendUnreachable,
-  isRegistrationRequired,
-  isUpdateRequired,
-  useViewerAvatarObjectUrl,
-  useViewerUser,
-} from './hooks';
-import { useUserAvatarObjectUrl } from '@/features/users/avatar-hooks';
+import { UserAvatar } from '@/components/UserAvatar';
+import { AVATAR_PX } from '@/components/avatar-scale';
+import { SidePanelHeader } from '@/components/layout/SidePanelHeader';
+import { ProfileHeaderContent } from '@/features/common/profile-header-content';
+import { usePresenceById, presenceDotStatus, humanPresenceText } from '@/features/presence/hooks';
+import { useHumanAvatar } from './use-human-avatar';
 
-interface HumanHeaderProps {
+export function HumanHeader({
+  user,
+  compact = false,
+  onClose,
+}: {
   user: UserDto;
-}
-
-/**
- * Human panel header. Thin wrapper over {@link PersonHero} that renders
- * the supplied human's avatar + identity. v1 humans have no bio and no
- * agent-style actions (no Stop, no Delete), so the Hero is purely an
- * identity strip — the editable counterparts (avatar picker,
- * display-name input) live in the Profile section below.
- *
- * Symmetry-by-purpose, not symmetry-by-shape: we deliberately do NOT
- * mirror Agent's runtime/model/presence on the Human surface (Cindy
- * review #5), because humans don't have those affordances and leaving
- * them as empty placeholders would advertise functionality that doesn't
- * exist.
- *
- * Multi-human note (Alice audit 2026-06-03 #task:857 P0.8): both the
- * avatar object URL and the "you" meta tag are now scoped to the
- * `user` prop. Previously this hook hard-wired the viewer's avatar
- * regardless of `user.id`, so visiting `/members/u/<other>` rendered
- * the viewer's own avatar with a "you" badge against a stranger.
- */
-export function HumanHeader({ user }: HumanHeaderProps): JSX.Element {
-  const { data: viewerState } = useViewerUser();
-  const viewer =
-    viewerState
-    && !isRegistrationRequired(viewerState)
-    && !isBackendUnreachable(viewerState) && !isUpdateRequired(viewerState)
-      ? viewerState
-      : null;
-  const isSelf = viewer?.id === user.id;
-
-  // The viewer's own avatar route is auth-resolved (uses /api/me cache),
-  // so it works even before the public /api/users directory hydrates.
-  // For non-self rows we fall through to the directory-backed
-  // resolver — null until /api/users responds, then the right blob.
-  const viewerAvatar = useViewerAvatarObjectUrl();
-  const otherAvatar = useUserAvatarObjectUrl({ userId: isSelf ? null : user.id });
-  const avatarObjectUrl = isSelf ? viewerAvatar : otherAvatar;
-
-  return (
-    <PersonHero
+  compact?: boolean;
+  onClose?: () => void;
+}): JSX.Element {
+  const avatarObjectUrl = useHumanAvatar(user.id);
+  const presence = usePresenceById().get(user.id);
+  const online = presenceDotStatus(presence?.presence) === 'active';
+  const content = (
+    <ProfileHeaderContent
+      compact={compact}
       avatar={
-        <span data-avatar-ground className="grid size-12 place-items-center overflow-hidden rounded-none border border-border-subtle">
-          {avatarObjectUrl ? (
-            // eslint-disable-next-line jsx-a11y/img-redundant-alt
-            <img
-              src={avatarObjectUrl}
-              alt={user.display_name || user.name}
-              className="size-full object-cover"
-            />
-          ) : (
-            <UserIcon className="size-6 text-text-muted" />
-          )}
-        </span>
+        <UserAvatar
+          size={compact ? AVATAR_PX.md : AVATAR_PX.xl}
+          avatarObjectUrl={avatarObjectUrl}
+          alt={user.display_name || user.name}
+        />
       }
       displayName={user.display_name || user.name}
-      handle={user.name}
-      meta={
-        isSelf ? (
-          <>
-            <HeroDot />
-            <span>you</span>
-          </>
-        ) : undefined
+      status={
+        <span
+          data-status-pip
+          className={`size-1.5 shrink-0 rounded-[var(--pill-radius)] ${online ? 'bg-success' : 'bg-text-muted/40'}`}
+          title={humanPresenceText(presence?.presence, null, '')}
+        />
       }
     />
+  );
+
+  return compact ? (
+    <SidePanelHeader onClose={onClose}>{content}</SidePanelHeader>
+  ) : (
+    <header className="agent-header-full">{content}</header>
   );
 }

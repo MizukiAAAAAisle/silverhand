@@ -53,12 +53,7 @@ export const routes = {
    * The sidebar's own Search entry passes no seed, so it keeps carrying the
    * session filters across pane switches (#task:1259), as does a bare `?q=`.
    */
-  chatSearch: (seed?: {
-    q?: string;
-    workspace?: string;
-    sender?: string;
-    reset?: boolean;
-  }) => {
+  chatSearch: (seed?: { q?: string; workspace?: string; sender?: string; reset?: boolean }) => {
     const params = new URLSearchParams();
     const q = seed?.q?.trim();
     if (q) params.set('q', q);
@@ -71,8 +66,7 @@ export const routes = {
   chatSaved: () => '/chat/saved',
   chatArchived: () => '/chat/archived',
   chatWorkspace: (workspaceId: string) => `/chat/w/${workspaceId}`,
-  chatChannel: (workspaceId: string, channelId: string) =>
-    `/chat/w/${workspaceId}/c/${channelId}`,
+  chatChannel: (workspaceId: string, channelId: string) => `/chat/w/${workspaceId}/c/${channelId}`,
   /**
    * A WORKSPACE-LESS conversation (#task:2035): the `direct_pair` between the
    * viewer and one agent. One segment, because the conversation id is the WHOLE
@@ -123,8 +117,7 @@ export const routes = {
   // selected in Activity, staying in the Activity shell. Disjoint from
   // `activityChannel` by its `/d/` segment (mirrors the `chatDirect` vs
   // `chatChannel` split), and from `chatDirect` by the `/activity` prefix.
-  activityDirect: (conversationId: string) =>
-    `/activity/d/${conversationId}`,
+  activityDirect: (conversationId: string) => `/activity/d/${conversationId}`,
   members: () => '/members',
   membersAgent: (agentId: string) => `/members/${agentId}`,
   // Distinct prefix for users so a user id can never collide with the
@@ -258,7 +251,7 @@ export interface RouteState {
    *  re-entry (only the underlying thread/threads pane persists). The URL
    *  uses `?files` (matching `?threads=1`) rather than the product-facing
    *  word "Attachments" for symmetry; the panel title is "Attachments". */
-   filesListOpen: boolean;
+  filesListOpen: boolean;
   /** Open task-detail pointer (`?task=<task_id>`). When set, the app-level
    *  detail modal is open on that task (#task:1715).
    *
@@ -292,6 +285,7 @@ export interface RouteState {
    *  not stay "visible" while covered. Distinct from `agentId`, which is the
    *  `/members/:agentId` *full-page* route segment. */
   agentPanelId: string | null;
+  humanPanelId: string | null;
 }
 
 /**
@@ -328,8 +322,8 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   const mDirectDraft = matchPath(routePatterns.chatDirectDraft, pathname);
   const mDirect = mDirectDraft
     ? null
-    : matchPath(routePatterns.chatDirect, pathname) ??
-      matchPath(routePatterns.activityDirect, pathname);
+    : (matchPath(routePatterns.chatDirect, pathname) ??
+      matchPath(routePatterns.activityDirect, pathname));
   // Order matters: the user route is more specific (`/members/u/:userId`,
   // three segments) than the agent route (`/members/:agentId`, two
   // segments), and matchPath returns the first match. Trying the user
@@ -340,8 +334,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   const mUser = matchPath(routePatterns.membersUser, pathname);
   const mAgent = mUser ? null : matchPath(routePatterns.membersAgent, pathname);
 
-  const workspaceId =
-    mChannel?.params.workspaceId ?? mWorkspace?.params.workspaceId ?? null;
+  const workspaceId = mChannel?.params.workspaceId ?? mWorkspace?.params.workspaceId ?? null;
   // A pair's conversation id lands in `channelId` like any other open
   // conversation; `directConversationId` is what says it has no workspace.
   const directConversationId = mDirect?.params.conversationId ?? null;
@@ -371,8 +364,8 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   // unset (mirrors `?side`). Carries an agent id, not a conversation id —
   // the chat-section right pane renders it as `AgentView variant="side"`.
   const rawAgentPanel = searchParams.get('agent');
-  const agentPanelId =
-    rawAgentPanel && rawAgentPanel.length > 0 ? rawAgentPanel : null;
+  const agentPanelId = rawAgentPanel && rawAgentPanel.length > 0 ? rawAgentPanel : null;
+  const humanPanelId = searchParams.get('human') || null;
   const rawTask = searchParams.get('task');
   // Opaque id, treated exactly like `?side` / `?agent`: non-empty or null.
   // An unresolvable value is NOT filtered out here — the modal host resolves
@@ -383,8 +376,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
 
   // Advanced-search prefill query (`?q=`); empty treated as unset.
   const rawSearchQuery = searchParams.get('q');
-  const searchQuery =
-    rawSearchQuery && rawSearchQuery.length > 0 ? rawSearchQuery : null;
+  const searchQuery = rawSearchQuery && rawSearchQuery.length > 0 ? rawSearchQuery : null;
   // Advanced-search filter seed (#task:2114) — same non-empty-or-null rule.
   // `reset` is a presence flag: only the canonical `1` counts, so a hand-edited
   // `reset=false` reads as "no reset" instead of as a truthy string.
@@ -393,8 +385,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   const searchWorkspace =
     rawSearchWorkspace && rawSearchWorkspace.length > 0 ? rawSearchWorkspace : null;
   const rawSearchSender = searchParams.get('sender');
-  const searchSender =
-    rawSearchSender && rawSearchSender.length > 0 ? rawSearchSender : null;
+  const searchSender = rawSearchSender && rawSearchSender.length > 0 ? rawSearchSender : null;
 
   let section: AppSection = 'chat';
   if (pathname.startsWith('/members')) section = 'members';
@@ -431,6 +422,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     agentId: mAgent?.params.agentId ?? null,
     userId: mUser?.params.userId ?? null,
     agentPanelId,
+    humanPanelId,
   };
 }
 
@@ -489,9 +481,7 @@ export type SecondaryRouteFields = Pick<
  * query param is still present and wins; when it is open alone the layout
  * is `none`, so a bare channel + Files does not resurrect on re-entry.
  */
-export function layoutMemoryFromRoute(
-  route: SecondaryRouteFields,
-): ChannelLayout {
+export function layoutMemoryFromRoute(route: SecondaryRouteFields): ChannelLayout {
   if (route.sideConversationId) {
     return { kind: 'side', id: route.sideConversationId };
   }
@@ -628,12 +618,10 @@ const SECONDARY_PANES = {
   // `overlay` utility/inspector panes. survivesOverlay:false here is a SOFT
   // topology choice ("one overlay at a time"), flippable without correctness risk.
   agent: { mode: 'overlay', survivesOverlay: false },
+  human: { mode: 'overlay', survivesOverlay: false },
   files: { mode: 'overlay', survivesOverlay: false },
   task: { mode: 'overlay', survivesOverlay: false },
-} as const satisfies Record<
-  string,
-  { mode: 'overlay' | 'replace'; survivesOverlay: boolean }
->;
+} as const satisfies Record<string, { mode: 'overlay' | 'replace'; survivesOverlay: boolean }>;
 
 /** Every secondary-pane query param, derived from the registry. */
 export type SecondaryPane = keyof typeof SECONDARY_PANES;
@@ -648,11 +636,7 @@ const SECONDARY_PANE_KEYS = Object.keys(SECONDARY_PANES) as SecondaryPane[];
  * secondary param. `fullscreen` is always dropped — a freshly opened pane
  * shows at its normal width.
  */
-function writeSecondaryPaneOpen(
-  params: URLSearchParams,
-  pane: SecondaryPane,
-  value: string,
-): void {
+function writeSecondaryPaneOpen(params: URLSearchParams, pane: SecondaryPane, value: string): void {
   params.set(pane, value);
   params.delete('fullscreen');
   const overlay = SECONDARY_PANES[pane].mode === 'overlay';
@@ -668,10 +652,7 @@ function writeSecondaryPaneOpen(
  * param + `fullscreen` are removed; whatever the URL still carries below (the
  * restore stack an overlay preserved) surfaces on the next render — no memory.
  */
-function writeSecondaryPaneClose(
-  params: URLSearchParams,
-  pane: SecondaryPane,
-): void {
+function writeSecondaryPaneClose(params: URLSearchParams, pane: SecondaryPane): void {
   params.delete(pane);
   params.delete('fullscreen');
 }
@@ -692,11 +673,7 @@ function serializeQuery(pathname: string, params: URLSearchParams): string {
  *    every other secondary pane + `fullscreen`. Unrelated query params (not in
  *    the secondary family) are preserved verbatim.
  */
-export function withSideQuery(
-  pathname: string,
-  search: string,
-  id: string | null,
-): string {
+export function withSideQuery(pathname: string, search: string, id: string | null): string {
   const params = new URLSearchParams(search);
   if (id == null) {
     writeSecondaryPaneClose(params, 'side');
@@ -774,11 +751,7 @@ export function buildChannelPathPreservingAgent(
  *    visible/focused set. Whether the id resolves is the host's business (it
  *    renders a not-found state); this writer is dumb about resolution.
  */
-export function withTaskQuery(
-  pathname: string,
-  search: string,
-  taskId: string | null,
-): string {
+export function withTaskQuery(pathname: string, search: string, taskId: string | null): string {
   const params = new URLSearchParams(search);
   if (taskId == null) {
     writeSecondaryPaneClose(params, 'task');
@@ -797,11 +770,7 @@ export function withTaskQuery(
  *
  * Thin wrapper over {@link withTaskQuery}; closing is `withTaskQuery(…, null)`.
  */
-export function buildTaskOpenUrl(
-  pathname: string,
-  search: string,
-  taskId: string,
-): string {
+export function buildTaskOpenUrl(pathname: string, search: string, taskId: string): string {
   return withTaskQuery(pathname, search, taskId);
 }
 
@@ -816,11 +785,7 @@ export function buildTaskOpenUrl(
  * Unrelated query params are preserved so closeSide falls back to whatever was
  * below.
  */
-export function buildSideOpenUrl(
-  pathname: string,
-  search: string,
-  conversationId: string,
-): string {
+export function buildSideOpenUrl(pathname: string, search: string, conversationId: string): string {
   const params = new URLSearchParams(search);
   writeSecondaryPaneOpen(params, 'side', conversationId);
   return serializeQuery(pathname, params);
@@ -883,11 +848,7 @@ export function buildThreadOpenUrl(
  *    `?utm_source`) are preserved verbatim; the other secondary panes
  *    (`?task`, …) are same-family and cleared by the rule above.
  */
-export function withThreadsQuery(
-  pathname: string,
-  search: string,
-  open: boolean,
-): string {
+export function withThreadsQuery(pathname: string, search: string, open: boolean): string {
   const params = new URLSearchParams(search);
   if (!open) {
     writeSecondaryPaneClose(params, 'threads');
@@ -917,11 +878,7 @@ export function withThreadsQuery(
  *    `?utm_source`) are preserved verbatim; the other secondary panes
  *    (`?task`, …) are same-family and cleared by the rule above.
  */
-export function withFilesQuery(
-  pathname: string,
-  search: string,
-  open: boolean,
-): string {
+export function withFilesQuery(pathname: string, search: string, open: boolean): string {
   const params = new URLSearchParams(search);
   if (!open) {
     writeSecondaryPaneClose(params, 'files');
@@ -930,7 +887,6 @@ export function withFilesQuery(
   }
   return serializeQuery(pathname, params);
 }
-
 
 /**
  * Build a URL with `?agent` written or cleared (#task:1189). An OVERLAY pane
@@ -951,11 +907,7 @@ export function withFilesQuery(
  *    `?utm_source`) are preserved verbatim; the other secondary panes
  *    (`?task`, …) are same-family and cleared by the rule above.
  */
-export function withAgentQuery(
-  pathname: string,
-  search: string,
-  agentId: string | null,
-): string {
+export function withAgentQuery(pathname: string, search: string, agentId: string | null): string {
   const params = new URLSearchParams(search);
   if (agentId == null) {
     writeSecondaryPaneClose(params, 'agent');
@@ -965,15 +917,23 @@ export function withAgentQuery(
   return serializeQuery(pathname, params);
 }
 
+export function withHumanQuery(pathname: string, search: string, userId: string | null): string {
+  const params = new URLSearchParams(search);
+
+  if (userId === null) {
+    writeSecondaryPaneClose(params, 'human');
+  } else {
+    writeSecondaryPaneOpen(params, 'human', userId);
+  }
+
+  return serializeQuery(pathname, params);
+}
+
 /**
  * Build the URL written by `openAgentPanel(agentId)`. Thin wrapper over
  * `withAgentQuery` for call-site symmetry with `buildSideOpenUrl`.
  */
-export function buildAgentPanelOpenUrl(
-  pathname: string,
-  search: string,
-  agentId: string,
-): string {
+export function buildAgentPanelOpenUrl(pathname: string, search: string, agentId: string): string {
   return withAgentQuery(pathname, search, agentId);
 }
 
@@ -1072,21 +1032,18 @@ export function useNav(): {
   openAgentPanel: (agentId: string) => void;
   /** Close the agent side panel. Strips `?agent` (and `?fullscreen`). */
   closeAgentPanel: () => void;
+  openHumanPanel: (userId: string) => void;
+  closeHumanPanel: () => void;
 } {
   const navigate = useNavigate();
   const location = useLocation();
   const go = useCallback(
-    (to: string, opts?: { replace?: boolean }) =>
-      navigate(to, { replace: opts?.replace ?? false }),
+    (to: string, opts?: { replace?: boolean }) => navigate(to, { replace: opts?.replace ?? false }),
     [navigate],
   );
   const openSide = useCallback(
     (conversationId: string) => {
-      const next = buildSideOpenUrl(
-        location.pathname,
-        location.search,
-        conversationId,
-      );
+      const next = buildSideOpenUrl(location.pathname, location.search, conversationId);
       navigate(next, { replace: true });
     },
     [navigate, location.pathname, location.search],
@@ -1097,11 +1054,7 @@ export function useNav(): {
   }, [navigate, location.pathname, location.search]);
   const openThread = useCallback(
     (rootMessageId: string) => {
-      const next = buildThreadOpenUrl(
-        location.pathname,
-        location.search,
-        rootMessageId,
-      );
+      const next = buildThreadOpenUrl(location.pathname, location.search, rootMessageId);
       navigate(next, { replace: true });
     },
     [navigate, location.pathname, location.search],
@@ -1138,11 +1091,7 @@ export function useNav(): {
   }, [navigate, location.pathname, location.search]);
   const openTask = useCallback(
     (taskId: string) => {
-      const next = buildTaskOpenUrl(
-        location.pathname,
-        location.search,
-        taskId,
-      );
+      const next = buildTaskOpenUrl(location.pathname, location.search, taskId);
       navigate(next, { replace: true });
     },
     [navigate, location.pathname, location.search],
@@ -1153,11 +1102,7 @@ export function useNav(): {
   }, [navigate, location.pathname, location.search]);
   const openAgentPanel = useCallback(
     (agentId: string) => {
-      const next = buildAgentPanelOpenUrl(
-        location.pathname,
-        location.search,
-        agentId,
-      );
+      const next = buildAgentPanelOpenUrl(location.pathname, location.search, agentId);
       navigate(next, { replace: true });
     },
     [navigate, location.pathname, location.search],
@@ -1166,6 +1111,17 @@ export function useNav(): {
     const next = withAgentQuery(location.pathname, location.search, null);
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
+  const openHumanPanel = useCallback(
+    (userId: string) => {
+      navigate(withHumanQuery(location.pathname, location.search, userId), { replace: true });
+    },
+    [navigate, location.pathname, location.search],
+  );
+
+  const closeHumanPanel = useCallback(() => {
+    navigate(withHumanQuery(location.pathname, location.search, null), { replace: true });
+  }, [navigate, location.pathname, location.search]);
+
   const toChat = useCallback(() => go(routes.chat()), [go]);
   const toChatSearch = useCallback(
     (seed?: { q?: string; workspace?: string; sender?: string; reset?: boolean }) =>
@@ -1180,86 +1136,83 @@ export function useNav(): {
     (wid: string, cid: string) => go(routes.chatChannel(wid, cid)),
     [go],
   );
-  const toDirect = useCallback(
-    (cid: string) => go(routes.chatDirect(cid)),
-    [go],
-  );
-  const toDirectDraft = useCallback(
-    (agentId: string) => go(routes.chatDirectDraft(agentId)),
-    [go],
-  );
+  const toDirect = useCallback((cid: string) => go(routes.chatDirect(cid)), [go]);
+  const toDirectDraft = useCallback((agentId: string) => go(routes.chatDirectDraft(agentId)), [go]);
   const toMembers = useCallback(
-    (agentId?: string) =>
-      go(agentId ? routes.membersAgent(agentId) : routes.members()),
+    (agentId?: string) => go(agentId ? routes.membersAgent(agentId) : routes.members()),
     [go],
   );
-  const toMembersUser = useCallback(
-    (userId: string) => go(routes.membersUser(userId)),
-    [go],
-  );
+  const toMembersUser = useCallback((userId: string) => go(routes.membersUser(userId)), [go]);
   const toComputers = useCallback(() => go(routes.computers()), [go]);
   const toTasks = useCallback(() => go(routes.tasks()), [go]);
   const toSettings = useCallback(() => go(routes.settings()), [go]);
 
-  return useMemo(() => ({
-    go,
-    toChat,
-    toChatSearch,
-    toChatSaved,
-    toChatArchived,
-    toActivity,
-    toWorkspace,
-    toChannel,
-    toDirect,
-    toDirectDraft,
-    toMembers,
-    toMembersUser,
-    toComputers,
-    toTasks,
-    toSettings,
-    openSide,
-    closeSide,
-    openThread,
-    closeThread,
-    openThreadsList,
-    closeThreadsList,
-    toggleThreadsList,
-    openFilesList,
-    closeFilesList,
-    toggleFilesList,
-    openTask,
-    closeTask,
-    openAgentPanel,
-    closeAgentPanel,
-  }), [
-    go,
-    toChat,
-    toChatSearch,
-    toChatSaved,
-    toChatArchived,
-    toActivity,
-    toWorkspace,
-    toChannel,
-    toDirect,
-    toDirectDraft,
-    toMembers,
-    toMembersUser,
-    toComputers,
-    toTasks,
-    toSettings,
-    openSide,
-    closeSide,
-    openThread,
-    closeThread,
-    openThreadsList,
-    closeThreadsList,
-    toggleThreadsList,
-    openFilesList,
-    closeFilesList,
-    toggleFilesList,
-    openTask,
-    closeTask,
-    openAgentPanel,
-    closeAgentPanel,
-  ]);
+  return useMemo(
+    () => ({
+      go,
+      toChat,
+      toChatSearch,
+      toChatSaved,
+      toChatArchived,
+      toActivity,
+      toWorkspace,
+      toChannel,
+      toDirect,
+      toDirectDraft,
+      toMembers,
+      toMembersUser,
+      toComputers,
+      toTasks,
+      toSettings,
+      openSide,
+      closeSide,
+      openThread,
+      closeThread,
+      openThreadsList,
+      closeThreadsList,
+      toggleThreadsList,
+      openFilesList,
+      closeFilesList,
+      toggleFilesList,
+      openTask,
+      closeTask,
+      openAgentPanel,
+      closeAgentPanel,
+      openHumanPanel,
+      closeHumanPanel,
+    }),
+    [
+      go,
+      toChat,
+      toChatSearch,
+      toChatSaved,
+      toChatArchived,
+      toActivity,
+      toWorkspace,
+      toChannel,
+      toDirect,
+      toDirectDraft,
+      toMembers,
+      toMembersUser,
+      toComputers,
+      toTasks,
+      toSettings,
+      openSide,
+      closeSide,
+      openThread,
+      closeThread,
+      openThreadsList,
+      closeThreadsList,
+      toggleThreadsList,
+      openFilesList,
+      closeFilesList,
+      toggleFilesList,
+      openTask,
+      closeTask,
+      openAgentPanel,
+      closeAgentPanel,
+      openHumanPanel,
+      closeHumanPanel,
+    ],
+  );
 }

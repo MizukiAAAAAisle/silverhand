@@ -25,15 +25,13 @@
   min-width: var(--profile-content-width);
 }
 
-[data-profile-host='human']:has([data-profile-layout]) {
-  min-width: calc(var(--profile-content-width) + 64px + 6px);
-}
-
+[data-profile-host='human']:has([data-profile-layout]),
 [data-profile-host='agent']:has([data-profile-layout]),
 [data-profile-host='side']:has([data-profile-layout]) {
   min-width: 0;
 }
 
+[data-profile-host='human'] [data-profile-layout],
 [data-profile-host='agent'] [data-profile-layout],
 [data-profile-host='side'] [data-profile-layout] {
   width: 100%;

@@ -17,10 +17,7 @@ import { fileURLToPath } from 'node:url';
 // fence the source rather than render.
 
 describe('MessageItem — pending rows render no server-row affordance (#task:1267)', () => {
-  const source = readFileSync(
-    fileURLToPath(new URL('./MessageItem.tsx', import.meta.url)),
-    'utf8',
-  );
+  const source = readFileSync(fileURLToPath(new URL('./MessageItem.tsx', import.meta.url)), 'utf8');
 
   it('computes the committed gate from the message', () => {
     expect(source).toContain('const committed = isCommittedMessage(message)');
@@ -30,8 +27,8 @@ describe('MessageItem — pending rows render no server-row affordance (#task:12
     // The cluster div (which holds ReactionPicker + Thread + Save) is wrapped in
     // `{committed ? ( <div onFocus=... > … ) : null}`. Assert the wrap sits
     // immediately before the cluster div so a pending row renders none of them.
-    expect(source).toContain(
-      '{committed ? (\n      <div\n        onFocus={() => setFocusWithin(true)}',
+    expect(source.replace(/\s+/g, ' ')).toContain(
+      '{committed ? ( <div onFocus={() => setFocusWithin(true)}',
     );
   });
 

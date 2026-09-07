@@ -36,6 +36,7 @@ beforeEach(() => {
     directDraftAgentId: null,
     threadRootId: null,
     agentPanelId: null,
+    humanPanelId: null,
   };
   read = {
     workspaceNameById: (id) => id,
@@ -99,6 +100,7 @@ beforeEach(() => {
     toggleThreadsList: vi.fn(),
     toggleFilesList: vi.fn(),
     closeAgentPanel: vi.fn(),
+    closeHumanPanel: vi.fn(),
     closeFilesList: vi.fn(),
     closeThread: vi.fn(() => {
       calls.push('close');
@@ -329,5 +331,23 @@ describe('branch-specific data and commands', () => {
     expectTypeOf<Task['props']>().not.toHaveProperty('onMessageAgent');
     expectTypeOf<Files['props']>().not.toHaveProperty('taskId');
     expectTypeOf<Files['props']>().not.toHaveProperty('nav');
+  });
+});
+
+describe('human profile pane', () => {
+  it('keeps the exact subject and closes only the profile overlay', () => {
+    route.humanPanelId = 'other-human';
+    route.threadRootId = 'thread-root';
+    const model = secondary();
+
+    expect(model.kind).toBe('human');
+    if (model.kind !== 'human') {
+      throw new Error('Expected human pane');
+    }
+
+    expect(model.props.userId).toBe('other-human');
+    model.props.onClose?.();
+    expect(commands.closeHumanPanel).toHaveBeenCalledTimes(1);
+    expect(commands.closeThread).not.toHaveBeenCalled();
   });
 });

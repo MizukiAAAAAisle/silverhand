@@ -337,6 +337,7 @@ export function useConversationShell({
         toggleThreadsList: nav.toggleThreadsList,
         toggleFilesList: nav.toggleFilesList,
         closeAgentPanel: nav.closeAgentPanel,
+        closeHumanPanel: nav.closeHumanPanel,
         closeFilesList: nav.closeFilesList,
         closeThread: nav.closeThread,
         closeThreadsList: nav.closeThreadsList,

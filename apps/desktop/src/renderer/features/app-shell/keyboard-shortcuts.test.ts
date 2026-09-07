@@ -17,7 +17,7 @@ import {
 
 describe('NAV_SECTION_SHORTCUTS — ⌘1–5 → nav-rail section', () => {
   it('binds digits 1–5 to the five primary sections in rail order', () => {
-    expect(NAV_SECTION_SHORTCUTS.map(s => [s.digit, s.section])).toEqual([
+    expect(NAV_SECTION_SHORTCUTS.map((s) => [s.digit, s.section])).toEqual([
       [1, 'chat'],
       [2, 'activity'],
       [3, 'tasks'],
@@ -33,9 +33,7 @@ describe('NAV_SECTION_SHORTCUTS — ⌘1–5 → nav-rail section', () => {
   });
 
   it('never binds settings (bottom utility, no digit)', () => {
-    expect(NAV_SECTION_SHORTCUTS.some(s => (s.section as string) === 'settings')).toBe(
-      false,
-    );
+    expect(NAV_SECTION_SHORTCUTS.some((s) => (s.section as string) === 'settings')).toBe(false);
   });
 });
 
@@ -135,9 +133,10 @@ describe('resolveContextualClose — the ⌘W ladder', () => {
       }),
     ).toEqual({ outcome: 'closed-panel', target: 'thread' });
     // threads-list alone
-    expect(
-      resolveContextualClose({ ...NOTHING_OPEN, threadsListOpen: true }),
-    ).toEqual({ outcome: 'closed-panel', target: 'threads' });
+    expect(resolveContextualClose({ ...NOTHING_OPEN, threadsListOpen: true })).toEqual({
+      outcome: 'closed-panel',
+      target: 'threads',
+    });
   });
 
   it('layer 5: an Activity channel detail is peeled only after every overlay above it', () => {
@@ -150,9 +149,10 @@ describe('resolveContextualClose — the ⌘W ladder', () => {
       }),
     ).toEqual({ outcome: 'closed-panel', target: 'thread' });
     // nothing above it → pop back to the Activity list
-    expect(
-      resolveContextualClose({ ...NOTHING_OPEN, activityChannelOpen: true }),
-    ).toEqual({ outcome: 'closed-panel', target: 'activity-channel' });
+    expect(resolveContextualClose({ ...NOTHING_OPEN, activityChannelOpen: true })).toEqual({
+      outcome: 'closed-panel',
+      target: 'activity-channel',
+    });
   });
 
   it('layer 6: nothing to peel → background the app (macOS Hide)', () => {
@@ -179,4 +179,19 @@ describe('resolveContextualClose — the ⌘W ladder', () => {
     });
     expect(second).toEqual({ outcome: 'closed-panel', target: 'thread' });
   });
+});
+
+it('closes a human inspector before its preserved thread', () => {
+  expect(
+    resolveContextualClose({
+      agentPanelId: null,
+      humanPanelId: 'user-b',
+      filesListOpen: false,
+      taskPaneOpen: false,
+      sideConversationId: null,
+      threadRootId: 'root',
+      threadsListOpen: false,
+      activityChannelOpen: false,
+    }),
+  ).toEqual({ outcome: 'closed-panel', target: 'human' });
 });

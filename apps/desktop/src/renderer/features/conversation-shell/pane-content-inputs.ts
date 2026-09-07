@@ -77,6 +77,7 @@ export interface PaneContentCommands {
   toggleThreadsList: () => void;
   toggleFilesList: () => void;
   closeAgentPanel: () => void;
+  closeHumanPanel: () => void;
   closeFilesList: () => void;
   closeThread: () => void;
   closeThreadsList: () => void;
@@ -85,5 +86,10 @@ export interface PaneContentCommands {
 
 export type PaneContentRoute = Pick<
   RouteState,
-  'workspaceId' | 'channelId' | 'directDraftAgentId' | 'threadRootId' | 'agentPanelId'
+  | 'workspaceId'
+  | 'channelId'
+  | 'directDraftAgentId'
+  | 'threadRootId'
+  | 'agentPanelId'
+  | 'humanPanelId'
 >;

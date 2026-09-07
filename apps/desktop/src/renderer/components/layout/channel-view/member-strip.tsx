@@ -13,10 +13,7 @@ import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
 import { useAgents } from '@/features/agents/hooks';
 import { projectMemberRuntimeStatus } from '@/features/agents/member-runtime-status';
-import {
-  PRESENCE_TONE_DOT,
-  projectPresence,
-} from '@/features/agents/presence-projection';
+import { PRESENCE_TONE_DOT, projectPresence } from '@/features/agents/presence-projection';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useUsersById } from '@/features/users/hooks';
 import { usePresenceById, presenceDotStatus } from '@/features/presence/hooks';
@@ -67,11 +64,17 @@ export function MemberStrip({
   // UI meaning for chips and is intentionally not filtered.
   const membersResult = useConversationMembers(channelId);
   const { data: viewer } = useViewerUser();
-  const viewerUserId = viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) && !isUpdateRequired(viewer) ? viewer.id : null;
+  const viewerUserId =
+    viewer &&
+    !isRegistrationRequired(viewer) &&
+    !isBackendUnreachable(viewer) &&
+    !isUpdateRequired(viewer)
+      ? viewer.id
+      : null;
 
   const visibleMembers = useMemo(() => {
     if (membersResult.status !== 'resolved') return [];
-    return membersResult.members.filter(m => {
+    return membersResult.members.filter((m) => {
       if (m.kind !== 'human') return true;
       // Drop the current viewer — UI-self has no meaning in a chip strip
       // pointing at "who else is in this room with me".
@@ -88,7 +91,7 @@ export function MemberStrip({
     () =>
       visibleMembers
         .filter((m): m is Extract<MemberDto, { kind: 'human' }> => m.kind === 'human')
-        .map(m => ({
+        .map((m) => ({
           id: m.user_id,
           avatar_url: m.avatar_url ?? usersById.get(m.user_id)?.avatar_url ?? null,
         })),
@@ -110,7 +113,7 @@ export function MemberStrip({
       data-member-strip
       data-member-count={visibleMembers.length}
     >
-      {inline.map(member => {
+      {inline.map((member) => {
         if (member.kind === 'agent') {
           const agent = agentById.get(member.agent_id);
           if (!agent) return null;
@@ -168,9 +171,9 @@ export function MemberStrip({
                   <span
                     aria-hidden
                     className={
-                      'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm '
-                      + PRESENCE_TONE_DOT[presence.tone]
-                      + (presence.pulse ? ' motion-safe:animate-pulse' : '')
+                      'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm ' +
+                      PRESENCE_TONE_DOT[presence.tone] +
+                      (presence.pulse ? ' motion-safe:animate-pulse' : '')
                     }
                   />
                 )}
@@ -204,12 +207,6 @@ export function MemberStrip({
  * popover mirrors `HumanMention`'s content so inline `@handle` mentions and
  * header chips read the same.
  *
- * Clicking one goes where every other human identity chip goes — the members
- * user page (`HumanMention`, the stream byline). A human has no side panel to
- * open: `?agent=` renders an AGENT page, and there is no human equivalent, so
- * pointing this chip at the panel would be pointing it at nothing. Leaving it
- * click-dead next to a navigable agent chip would be worse: same shape, same
- * row, two different answers to the same gesture (#task:2117).
  */
 function HumanMemberChip({
   human,
@@ -232,7 +229,7 @@ function HumanMemberChip({
     >
       <button
         type="button"
-        onClick={() => nav.toMembersUser(human.user_id)}
+        onClick={() => nav.openHumanPanel(human.user_id)}
         aria-label={`@${human.name}`}
         data-member-chip="human"
         data-member-id={human.user_id}
@@ -248,12 +245,7 @@ function HumanMemberChip({
       >
         {avatarObjectUrl ? (
           // eslint-disable-next-line jsx-a11y/img-redundant-alt
-          <img
-            src={avatarObjectUrl}
-            alt=""
-            className="size-full object-cover"
-            draggable={false}
-          />
+          <img src={avatarObjectUrl} alt="" className="size-full object-cover" draggable={false} />
         ) : (
           // Neutral person glyph, never the display-name initial: a letter is a
           // second identity system next to the images and glyphs every other
@@ -265,8 +257,8 @@ function HumanMemberChip({
         )}
         <span
           className={
-            'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm '
-            + STATUS_DOT[dot]
+            'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm ' +
+            STATUS_DOT[dot]
           }
         />
       </button>

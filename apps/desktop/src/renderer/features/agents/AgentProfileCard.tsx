@@ -1,5 +1,6 @@
+import { useProfileHeroSize } from '@/features/common/use-profile-hero-size';
 import { ProfileMessageActivity } from '@/features/profile/ProfileMessageActivity';
-import { useLayoutEffect, useRef, useState, type JSX } from 'react';
+import { useState, type JSX } from 'react';
 import './agent-profile-hero.css';
 import dayjs from 'dayjs';
 import type { AgentDto } from '@silverhand/shared';
@@ -37,24 +38,8 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
   // owner-scoped, so a non-owner viewer's lookup would miss and collapse to
   // "Unknown computer". `host_label` is null only when the host is truly gone.
   const computerName = agent.host_label ?? UNKNOWN_COMPUTER_LABEL;
-  const profileRef = useRef<HTMLDivElement>(null);
-  const [compactHero, setCompactHero] = useState(true);
+  const { profileRef, compactHero } = useProfileHeroSize();
   const avatarSize = compactHero ? AVATAR_PX.profileCompact : AVATAR_PX.profile;
-
-  useLayoutEffect(() => {
-    const element = profileRef.current;
-
-    if (!element) {
-      return;
-    }
-
-    const updateWidth = () => setCompactHero(element.getBoundingClientRect().width <= 520);
-    updateWidth();
-    const observer = new ResizeObserver(updateWidth);
-    observer.observe(element);
-
-    return () => observer.disconnect();
-  }, []);
 
   const [nameEditing, setNameEditing] = useState(false);
   const [descriptionEditing, setDescriptionEditing] = useState(false);

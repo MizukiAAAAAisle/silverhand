@@ -89,12 +89,11 @@ function AgentMention({
     >
       <button
         type="button"
-        onClick={event => {
+        onClick={(event) => {
           event.preventDefault();
           // Agent mention chips open the compact side panel (`?agent=`),
           // identical to clicking an agent avatar in the stream — so the
           // channel stays put and Activity reads beside it (#task:1189).
-          // Human mentions still go to the full user page (HumanMention).
           nav.openAgentPanel(agent.id);
         }}
         className={MENTION_CHIP_CLASS}
@@ -117,10 +116,6 @@ function HumanMention({ human }: { human: UserDto }): JSX.Element {
   // unique human ids per channel page are small and React Query dedupes
   // the underlying /api/users fetch.
   const avatarObjectUrl = useUserAvatarObjectUrl({ userId: human.id });
-  // Keep element + classes identical to AgentMention so both mentions
-  // share box model, baseline, and focus ring. Human mentions navigate
-  // to the members human route; that route resolves both the viewer and
-  // other registered humans.
   return (
     <HumanInfoPopover
       human={human}
@@ -130,9 +125,9 @@ function HumanMention({ human }: { human: UserDto }): JSX.Element {
     >
       <button
         type="button"
-        onClick={event => {
+        onClick={(event) => {
           event.preventDefault();
-          nav.toMembersUser(human.id);
+          nav.openHumanPanel(human.id);
         }}
         className={MENTION_CHIP_CLASS}
         aria-label={`@${human.name}`}

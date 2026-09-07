@@ -87,6 +87,13 @@ export function resolveSecondaryPane(
     };
   }
 
+  if (route.humanPanelId) {
+    return {
+      kind: 'human',
+      props: { userId: route.humanPanelId, onClose: commands.closeHumanPanel },
+    };
+  }
+
   if (state.filesListMounted && route.channelId) {
     const channelId = route.channelId;
     return {

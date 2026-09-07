@@ -20,7 +20,6 @@ import type { RouteState } from '@/router';
  *     See the responder hook + the main-side menu wiring.
  */
 
-
 // ── ⌘1–5 nav-rail sections ──────────────────────────────────────────────────
 
 /** The five primary nav-rail sections, in rail order. `settings` is a bottom
@@ -53,10 +52,7 @@ export const NAV_SECTION_SHORTCUTS: ReadonlyArray<{
 
 /** Route a section to its nav call. Pure (no event / DOM) so the mapping is
  *  unit-testable without a keyboard harness. */
-export function dispatchNavSection(
-  nav: NavSectionApi,
-  section: NavShortcutSection,
-): void {
+export function dispatchNavSection(nav: NavSectionApi, section: NavShortcutSection): void {
   switch (section) {
     case 'chat':
       nav.toChat();
@@ -90,7 +86,7 @@ export function useNavSectionShortcuts(nav: NavSectionApi): void {
       if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
         return;
       }
-      const match = NAV_SECTION_SHORTCUTS.find(s => s.code === event.code);
+      const match = NAV_SECTION_SHORTCUTS.find((s) => s.code === event.code);
       if (!match) return;
       event.preventDefault();
       dispatchNavSection(navRef.current, match.section);
@@ -116,6 +112,7 @@ export type ContextualCloseOutcome = 'closed-panel' | 'background-app';
 
 /** Which surface to peel this press, or none. */
 type CloseTarget =
+  | 'human'
   | 'agent'
   | 'files'
   | 'task'
@@ -133,6 +130,7 @@ export interface ContextualCloseState {
    *  it above every other pane (`agent > files > task > side > thread > threads`), so
    *  ⌘W peels it first; closing it reveals whatever pane it covered. */
   agentPanelId: string | null;
+  humanPanelId?: string | null;
   filesListOpen: boolean;
   /** Task detail is showing as the OVERLAY SIDE PANE (`?task`, #task:1721), not
    *  the app-level modal. Only the pane is a ⌘W peel target — the modal (board /
@@ -175,11 +173,12 @@ export interface ContextualCloseResolution {
  * the surface actually on top. The Chat section's main ChannelView is not a
  * target — when only it remains, ⌘W backgrounds the app.
  */
-export function resolveContextualClose(
-  state: ContextualCloseState,
-): ContextualCloseResolution {
+export function resolveContextualClose(state: ContextualCloseState): ContextualCloseResolution {
   if (state.agentPanelId != null) {
     return { outcome: 'closed-panel', target: 'agent' };
+  }
+  if (state.humanPanelId != null) {
+    return { outcome: 'closed-panel', target: 'human' };
   }
   if (state.filesListOpen) return { outcome: 'closed-panel', target: 'files' };
   if (state.taskPaneOpen) return { outcome: 'closed-panel', target: 'task' };
@@ -198,10 +197,10 @@ export function resolveContextualClose(
   return { outcome: 'background-app', target: null };
 }
 
-
 /** The close half of `useNav()` this feature drives. Structural, as above. */
 export interface ContextualCloseNav {
   closeAgentPanel: () => void;
+  closeHumanPanel: () => void;
   closeFilesList: () => void;
   /** Clear `?task` — closes the task detail side pane (#task:1721). */
   closeTask: () => void;
@@ -217,6 +216,7 @@ type ContextualCloseRoute = Pick<
   | 'section'
   | 'channelId'
   | 'agentPanelId'
+  | 'humanPanelId'
   | 'filesListOpen'
   | 'sideConversationId'
   | 'threadRootId'
@@ -244,10 +244,11 @@ export function useContextualCloseResponder(
   useEffect(() => {
     const api = window.silverhand;
     if (!api.onContextualClose || !api.respondContextualClose) return;
-    return api.onContextualClose(reqId => {
+    return api.onContextualClose((reqId) => {
       const { route, nav, taskPaneOpen } = stateRef.current;
       const { outcome, target } = resolveContextualClose({
         agentPanelId: route.agentPanelId,
+        humanPanelId: route.humanPanelId,
         filesListOpen: route.filesListOpen,
         taskPaneOpen,
         sideConversationId: route.sideConversationId,
@@ -255,12 +256,14 @@ export function useContextualCloseResponder(
         threadsListOpen: route.threadsListOpen,
         // Only the Activity section's drilled-in channel is a peel target; the
         // Chat section's main channel is not (⌘W backgrounds the app there).
-        activityChannelOpen:
-          route.section === 'activity' && route.channelId != null,
+        activityChannelOpen: route.section === 'activity' && route.channelId != null,
       });
       switch (target) {
         case 'agent':
           nav.closeAgentPanel();
+          break;
+        case 'human':
+          nav.closeHumanPanel();
           break;
         case 'files':
           nav.closeFilesList();

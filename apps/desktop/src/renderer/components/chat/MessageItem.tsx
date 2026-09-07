@@ -23,17 +23,18 @@ import {
   loadAttachmentBlobUrl,
   useAttachmentBlobToken,
 } from '@/lib/attachment-blob-cache';
-import {
-  formatUserDisplayName,
-  isCurrentUserId,
-  type UserNameResolver,
-} from '@/lib/current-user';
+import { formatUserDisplayName, isCurrentUserId, type UserNameResolver } from '@/lib/current-user';
 import { Lightbox } from './Lightbox';
 import { saveAttachmentToDisk } from './save-attachment';
 import { openAttachmentExternally } from './open-attachment';
 import { attachmentPreviewKind } from '@/lib/attachment-preview';
 import { Markdown } from './Markdown';
-import { presentAuthor, authorStateLabel, classifyRowAuthor, type AuthorPresentation } from './author-presentation';
+import {
+  presentAuthor,
+  authorStateLabel,
+  classifyRowAuthor,
+  type AuthorPresentation,
+} from './author-presentation';
 import { AuthorAvatarView, AuthorName } from './author-avatar-view';
 import type { ChannelReference } from './ChannelRef';
 import type { WorkspaceChannelReference } from './ConversationRef';
@@ -42,12 +43,13 @@ import type { CachedMessage } from '@/features/channels/pending-message';
 import { isCommittedMessage } from '@/features/channels/pending-message';
 import { MessageReactions } from './MessageReactions';
 import { MessageRowContent } from './MessageRowContent';
-import {
-  ThreadReplyPreview,
-  visibleThreadReplyRows,
-} from './ThreadReplyPreview';
+import { ThreadReplyPreview, visibleThreadReplyRows } from './ThreadReplyPreview';
 import { ReactionPicker } from './ReactionPicker';
-import { StatusPicker, taskStatusLabel, TASK_STATUS_ICON } from '@/components/tasks/TaskStatusBadge';
+import {
+  StatusPicker,
+  taskStatusLabel,
+  TASK_STATUS_ICON,
+} from '@/components/tasks/TaskStatusBadge';
 import { useUpdateTaskStatus } from '@/features/tasks/hooks';
 import { useToggleReaction } from '@/features/channels/reaction-hooks';
 import { useMessageLayoutMode } from './useMessageLayoutMode';
@@ -266,10 +268,7 @@ export interface MessageItemProps {
  *                hook lifecycle.
  */
 export function MessageItem(props: MessageItemProps): JSX.Element | null {
-  const rowAuthor = classifyRowAuthor(
-    props.message.from_kind,
-    props.message.author,
-  );
+  const rowAuthor = classifyRowAuthor(props.message.from_kind, props.message.author);
   if (rowAuthor.kind === 'actor') {
     return <ActorMessageItem {...props} author={rowAuthor.author} />;
   }
@@ -371,7 +370,7 @@ function ActorMessageItem({
   const liveHuman =
     presentation.status === 'active' && presentation.kind === 'user'
       ? isCurrentUser
-        ? viewer ?? humansById?.get(presentation.navigableId ?? '')
+        ? (viewer ?? humansById?.get(presentation.navigableId ?? ''))
         : humansById?.get(presentation.navigableId ?? '')
       : undefined;
 
@@ -379,9 +378,9 @@ function ActorMessageItem({
     isCurrentUser && viewerAvatarObjectUrl ? viewerAvatarObjectUrl : undefined;
   const bylineAvatarUrl =
     presentation.avatar.variant === 'agent'
-      ? authorAgentAvatarUrls?.get(presentation.avatar.id) ?? null
+      ? (authorAgentAvatarUrls?.get(presentation.avatar.id) ?? null)
       : presentation.avatar.variant === 'user'
-        ? viewerAvatarOverride ?? authorUserAvatarUrls?.get(presentation.avatar.id) ?? null
+        ? (viewerAvatarOverride ?? authorUserAvatarUrls?.get(presentation.avatar.id) ?? null)
         : null;
 
   const createdAt = dayjs(message.created_at);
@@ -389,16 +388,13 @@ function ActorMessageItem({
   const timeTooltip = createdAt.format('YYYY-MM-DD HH:mm:ss');
 
   const continuationTimeLabel = createdAt.format('HH:mm');
-  const { openAgentPanel, toMembersUser } = useNav();
+  const { openAgentPanel, openHumanPanel } = useNav();
 
   const navigateToAgent = useCallback(
     (agentId: string) => openAgentPanel(agentId),
     [openAgentPanel],
   );
-  const navigateToHuman = useCallback(
-    (userId: string) => toMembersUser(userId),
-    [toMembersUser],
-  );
+  const navigateToHuman = useCallback((userId: string) => openHumanPanel(userId), [openHumanPanel]);
   const taskTag =
     message.linked_task !== null ? (
       <MessageTaskTag
@@ -432,15 +428,12 @@ function ActorMessageItem({
     messageId: message.id,
     threadRootId: message.thread_root_id,
   };
-  const handleActionsBlur = useCallback(
-    (event: FocusEvent<HTMLDivElement>) => {
-      const next = event.relatedTarget as Node | null;
-      if (!event.currentTarget.contains(next)) {
-        setFocusWithin(false);
-      }
-    },
-    [],
-  );
+  const handleActionsBlur = useCallback((event: FocusEvent<HTMLDivElement>) => {
+    const next = event.relatedTarget as Node | null;
+    if (!event.currentTarget.contains(next)) {
+      setFocusWithin(false);
+    }
+  }, []);
   // Visual-only: highlight forces the framed look; only real hover
   // reveals the action bar. Selection-mode also keeps the frame on
   // selected rows so the user can see at a glance which messages are
@@ -459,12 +452,8 @@ function ActorMessageItem({
   // to avatars + count + last-reply time. `repliers.length > 0` guards the
   // avatar strip; otherwise we keep the count-only label.
   const enrichedReply =
-    threadReplySummary && threadReplySummary.repliers.length > 0
-      ? threadReplySummary
-      : null;
-  const replyRelativeTime = enrichedReply
-    ? dayjs(enrichedReply.last_reply_at).fromNow()
-    : '';
+    threadReplySummary && threadReplySummary.repliers.length > 0 ? threadReplySummary : null;
+  const replyRelativeTime = enrichedReply ? dayjs(enrichedReply.last_reply_at).fromNow() : '';
   // Surface 3 (#task:1226): per-viewer unread for this reply-cluster, read from
   // the `useConversationUnread` read-model (threaded in as `threadUnread`) — the
   // SINGLE source of truth, NOT the message-window summary (which can't score
@@ -517,10 +506,7 @@ function ActorMessageItem({
   // tooltip alone. The preview block owns the width cap; this node owns weight /
   // color / marker.
   const renderReplierName = (author: MessageAuthorDto): JSX.Element => (
-    <AuthorName
-      presentation={presentAuthor(author)}
-      className="font-medium text-text-secondary"
-    />
+    <AuthorName presentation={presentAuthor(author)} className="font-medium text-text-secondary" />
   );
 
   // ── MessageRowContent slot nodes ────────────────────────────────────────
@@ -579,9 +565,7 @@ function ActorMessageItem({
   // Null when the message has no reactions — keeps the shared bottom row
   // (task tag · replies · reactions) from rendering an empty slot.
   const reactionsNode =
-    isCommittedMessage(message) &&
-    message.reactions &&
-    message.reactions.length > 0 ? (
+    isCommittedMessage(message) && message.reactions && message.reactions.length > 0 ? (
       <MessageReactions
         message={message}
         alignRight={alignRight}
@@ -633,9 +617,7 @@ function ActorMessageItem({
   // exists: deriving it separately in each place would let the two answers
   // drift. Same `onStartThread` gate as the badge — a surface that cannot open a
   // thread must not render a target that claims it can.
-  const threadPreviewRows = onStartThread
-    ? visibleThreadReplyRows(threadReplyPreviews)
-    : [];
+  const threadPreviewRows = onStartThread ? visibleThreadReplyRows(threadReplyPreviews) : [];
   // The block exists only when it can have its HEADER. Two independent cache
   // maps feed this row — the count (`replyCountsByRoot`) and the tail
   // (`replyPreviewsByRoot`) — so a tail can be present while the count is still
@@ -646,8 +628,7 @@ function ActorMessageItem({
   // (Cindy, #task:1751). Requiring both makes that state unrepresentable rather
   // than asserted, and the degradation is the plain root row — the same thing
   // the reader saw one frame earlier.
-  const badgeHeadsPreview =
-    threadPreviewRows.length > 0 && threadReplyCount !== undefined;
+  const badgeHeadsPreview = threadPreviewRows.length > 0 && threadReplyCount !== undefined;
   const replyBadgeNode =
     threadReplyCount !== undefined && onStartThread ? (
       <button
@@ -712,9 +693,7 @@ function ActorMessageItem({
         <ThreadIcon className="size-3 shrink-0" />
         {/* The subject of the row: it never wraps and never shrinks, so the
             count stays readable at any row width. */}
-        <span className="shrink-0 whitespace-nowrap font-medium">
-          {replyBadgeLabel}
-        </span>
+        <span className="shrink-0 whitespace-nowrap font-medium">{replyBadgeLabel}</span>
         {threadUnreadNode ??
           (enrichedReply ? (
             // Freshness is the row's DECORATION, so it is the segment that
@@ -766,7 +745,7 @@ function ActorMessageItem({
         // handler covers it. Outside selection mode this branch is a
         // no-op so links / attachments / popovers still work.
         selectionMode && committed
-          ? event => {
+          ? (event) => {
               event.preventDefault();
               event.stopPropagation();
               onToggleSelected?.(message);
@@ -791,16 +770,11 @@ function ActorMessageItem({
         (selectionMode && committed ? 'cursor-pointer ' : '') +
         (alignRight ? 'flex-row-reverse' : 'flex-row') +
         ' ' +
-        (framed
-          ? 'border-accent bg-bg-floating'
-          : 'border-transparent')
+        (framed ? 'border-accent bg-bg-floating' : 'border-transparent')
       }
     >
       {selectionMode && committed ? (
-        <SelectionCheckbox
-          checked={selected}
-          onChange={() => onToggleSelected?.(message)}
-        />
+        <SelectionCheckbox checked={selected} onChange={() => onToggleSelected?.(message)} />
       ) : null}
       {continuesPrevious ? (
         /* Continuation rail — occupies the avatar column's exact WIDTH (`w-8`)
@@ -866,8 +840,7 @@ function ActorMessageItem({
         // side's one exception: a root heading a reply cluster fills the cap so
         // every root in the cluster reads at one width.
         columnClassName={
-          'min-w-0 max-w-[85%]' +
-          (!alignRight || badgeHeadsPreview ? ' w-full' : '')
+          'min-w-0 max-w-[85%]' + (!alignRight || badgeHeadsPreview ? ' w-full' : '')
         }
         /* A continuation row states neither author nor time in the content
            column: the group head already named the author, and this row's own
@@ -909,68 +882,68 @@ function ActorMessageItem({
           affordance in that case, so a duplicate "go to thread" icon
           would just be noise. */}
       {committed ? (
-      <div
-        onFocus={() => setFocusWithin(true)}
-        onBlur={handleActionsBlur}
-        className={
-          'absolute top-1 z-[var(--z-raised)] flex items-center gap-3 text-xs transition-opacity ' +
-          (alignRight ? 'left-2' : 'right-2') +
-          ' ' +
-          (hover || focusWithin || reactionPickerOpen
-            ? 'opacity-100'
-            : 'pointer-events-none opacity-0')
-        }
-      >
-        {canReact ? (
-          <ReactionPicker
-            // The cluster itself is mirrored (`left-2` above), so the picker's
-            // growth direction has to mirror with it: a popover always opens
-            // from the trigger's own edge INTO the row, never out of it.
-            // `end` grows leftward, `start` rightward — so the left-hand
-            // cluster of an own message takes `start` (shiki 2026-08-06
-            // 「user message 的 reaction 在左侧,如果 popover 也往左,那么就
-            // 超出了」, #task:1840).
-            align={alignRight ? 'start' : 'end'}
-            onOpenChange={setReactionPickerOpen}
-            onPick={emoji =>
-              toggleReaction.mutate({
-                target: reactionTarget,
-                emoji,
-                remove: false,
-              })
-            }
-            trigger={
-              <button
-                type="button"
-                title="React"
-                aria-label="React"
-                className="flex items-center rounded-sm text-text-muted transition-colors hover:text-text-primary focus-outline"
-              >
-                <SmilePlus className="size-3.5" />
-              </button>
-            }
-          />
-        ) : null}
-        {onStartThread && threadReplyCount === undefined && canParticipate ? (
-          <ActionButton
-            icon={<ThreadIcon className="size-3.5" />}
-            label="Thread"
-            onClick={() => onStartThread(message)}
-            alwaysVisible
-            hovered={hover}
-          />
-        ) : null}
-        {onSave ? (
-          <ActionButton
-            icon={<Bookmark className={'size-3.5 ' + (saved ? 'fill-current' : '')} />}
-            label={saved ? 'Saved' : 'Save'}
-            active={saved}
-            onClick={() => onSave(message)}
-            alwaysVisible
-            hovered={hover}
-          />
-        ) : null}
-      </div>
+        <div
+          onFocus={() => setFocusWithin(true)}
+          onBlur={handleActionsBlur}
+          className={
+            'absolute top-1 z-[var(--z-raised)] flex items-center gap-3 text-xs transition-opacity ' +
+            (alignRight ? 'left-2' : 'right-2') +
+            ' ' +
+            (hover || focusWithin || reactionPickerOpen
+              ? 'opacity-100'
+              : 'pointer-events-none opacity-0')
+          }
+        >
+          {canReact ? (
+            <ReactionPicker
+              // The cluster itself is mirrored (`left-2` above), so the picker's
+              // growth direction has to mirror with it: a popover always opens
+              // from the trigger's own edge INTO the row, never out of it.
+              // `end` grows leftward, `start` rightward — so the left-hand
+              // cluster of an own message takes `start` (shiki 2026-08-06
+              // 「user message 的 reaction 在左侧,如果 popover 也往左,那么就
+              // 超出了」, #task:1840).
+              align={alignRight ? 'start' : 'end'}
+              onOpenChange={setReactionPickerOpen}
+              onPick={(emoji) =>
+                toggleReaction.mutate({
+                  target: reactionTarget,
+                  emoji,
+                  remove: false,
+                })
+              }
+              trigger={
+                <button
+                  type="button"
+                  title="React"
+                  aria-label="React"
+                  className="flex items-center rounded-sm text-text-muted transition-colors hover:text-text-primary focus-outline"
+                >
+                  <SmilePlus className="size-3.5" />
+                </button>
+              }
+            />
+          ) : null}
+          {onStartThread && threadReplyCount === undefined && canParticipate ? (
+            <ActionButton
+              icon={<ThreadIcon className="size-3.5" />}
+              label="Thread"
+              onClick={() => onStartThread(message)}
+              alwaysVisible
+              hovered={hover}
+            />
+          ) : null}
+          {onSave ? (
+            <ActionButton
+              icon={<Bookmark className={'size-3.5 ' + (saved ? 'fill-current' : '')} />}
+              label={saved ? 'Saved' : 'Save'}
+              active={saved}
+              onClick={() => onSave(message)}
+              alwaysVisible
+              hovered={hover}
+            />
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
@@ -979,16 +952,10 @@ function ActorMessageItem({
     <MessageContextMenu
       trigger={row}
       saved={saved}
-      onCopyMarkdown={
-        committed && onCopyMarkdown ? () => onCopyMarkdown(message) : undefined
-      }
+      onCopyMarkdown={committed && onCopyMarkdown ? () => onCopyMarkdown(message) : undefined}
       onToggleSave={committed && onSave ? () => onSave(message) : undefined}
       onShare={committed && onShare ? () => onShare(message) : undefined}
-      onUnfollowThread={
-        committed && onUnfollowThread
-          ? () => onUnfollowThread(message)
-          : undefined
-      }
+      onUnfollowThread={committed && onUnfollowThread ? () => onUnfollowThread(message) : undefined}
     />
   );
 }
@@ -1056,9 +1023,7 @@ function MessageTaskTag({
           than to the label alone). Space Mono digits read poorly in forza6
           (@shiki `sLh6CqwNw0uAtThk`, #task:1757). */}
       <span className="shrink-0">#{linkedTask.task_number}</span>
-      {assignee ? (
-        <span className="min-w-0 truncate font-normal">· {assignee}</span>
-      ) : null}
+      {assignee ? <span className="min-w-0 truncate font-normal">· {assignee}</span> : null}
     </>
   );
 
@@ -1088,9 +1053,7 @@ function MessageTaskTag({
   return (
     <StatusPicker
       current={status}
-      onChange={next =>
-        updateStatus.mutate({ taskId: linkedTask.task_id, status: next })
-      }
+      onChange={(next) => updateStatus.mutate({ taskId: linkedTask.task_id, status: next })}
     >
       <button
         type="button"
@@ -1103,7 +1066,7 @@ function MessageTaskTag({
         title={title}
         aria-label={`Task #${linkedTask.task_number} (${label}) — click to change status`}
         // Stop the click from reaching the row's selection/jump capture.
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         className="inline-flex h-[18px] max-w-[220px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[var(--task-status-radius)] px-2 text-[length:var(--text-meta)] font-medium leading-none transition-opacity hover:opacity-80 focus-outline"
       >
         {body}
@@ -1184,7 +1147,7 @@ function Avatar({
         <button
           type="button"
           aria-label={`@${liveAgent.name}`}
-          onClick={event => {
+          onClick={(event) => {
             event.preventDefault();
             onNavigateAgent(liveAgent.id);
           }}
@@ -1206,7 +1169,7 @@ function Avatar({
         <button
           type="button"
           aria-label={`@${liveHuman.name}`}
-          onClick={event => {
+          onClick={(event) => {
             event.preventDefault();
             onNavigateHuman(liveHuman.id);
           }}
@@ -1257,7 +1220,7 @@ function AuthorLabel({
       >
         <button
           type="button"
-          onClick={event => {
+          onClick={(event) => {
             event.preventDefault();
             onNavigateAgent(liveAgent.id);
           }}
@@ -1285,7 +1248,7 @@ function AuthorLabel({
       >
         <button
           type="button"
-          onClick={event => {
+          onClick={(event) => {
             event.preventDefault();
             onNavigateHuman(liveHuman.id);
           }}
@@ -1310,10 +1273,7 @@ function AuthorLabel({
       data-author-kind={presentation.kind}
       className="inline-flex items-baseline gap-1.5"
     >
-      <AuthorName
-        presentation={presentation}
-        className="font-bold text-text-primary"
-      />
+      <AuthorName presentation={presentation} className="font-bold text-text-primary" />
     </span>
   );
 }
@@ -1349,9 +1309,7 @@ function ActionButton({
         'flex items-center rounded-sm transition-colors transition-opacity focus-outline ' +
         (visible ? 'opacity-100' : 'pointer-events-none opacity-0') +
         ' ' +
-        (active
-          ? 'text-accent'
-          : 'text-text-muted hover:text-text-primary')
+        (active ? 'text-accent' : 'text-text-muted hover:text-text-primary')
       }
     >
       {icon}
@@ -1380,11 +1338,7 @@ function AttachmentList({
   // reader map an agent's "Image #1" back to the actual tile (#task:1324).
   const labels = resolveAttachmentLabels(attachments);
   return (
-    <div
-      className={
-        'mt-2 flex flex-wrap gap-2 ' + (alignRight ? 'justify-end' : 'justify-start')
-      }
-    >
+    <div className={'mt-2 flex flex-wrap gap-2 ' + (alignRight ? 'justify-end' : 'justify-start')}>
       {attachments.map((att, i) => (
         <AttachmentTile
           key={att.id}
@@ -1413,8 +1367,8 @@ function AttachmentTile({
   // The owner supplies the destination tab controller, directly or via a sibling
   // pane relay. Legacy generic MIME types still classify by filename suffix.
   const previewable =
-    onOpenAttachment != null
-    && attachmentPreviewKind(attachment.content_type, attachment.filename) != null;
+    onOpenAttachment != null &&
+    attachmentPreviewKind(attachment.content_type, attachment.filename) != null;
   // Generation token for this attachment (#task:1769). Bumps when the creator
   // updates the bytes in place (`attachment_changed`) or a reconnect gap forces
   // a coarse epoch bump — either way we re-fetch the latest bytes and swap them
@@ -1426,7 +1380,7 @@ function AttachmentTile({
   // session — so the swap from optimistic → real message never goes
   // through a "loading" frame.
   const [imageUrl, setImageUrl] = useState<string | null>(() =>
-    isImage ? getAttachmentBlobUrl(attachment.id) ?? null : null,
+    isImage ? (getAttachmentBlobUrl(attachment.id) ?? null) : null,
   );
   // The generation `imageUrl` was fetched under; a token change past this means
   // the displayed bytes are stale and the load effect must refetch.
@@ -1458,14 +1412,14 @@ function AttachmentTile({
     if (imageUrl && loadedTokenRef.current === token) return;
     let cancelled = false;
     loadAttachmentBlobUrl(attachment.id)
-      .then(url => {
+      .then((url) => {
         if (!cancelled) {
           loadedTokenRef.current = token;
           setImageUrl(url);
           setError(null);
         }
       })
-      .catch(err => {
+      .catch((err) => {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
         }
@@ -1513,7 +1467,7 @@ function AttachmentTile({
     // (the chip has its own error slot); the Attachments panel opts into
     // toasts.
     await openAttachmentExternally(attachment, {
-      onInlineError: msg => setError(msg),
+      onInlineError: (msg) => setError(msg),
     });
   }
 
@@ -1549,9 +1503,7 @@ function AttachmentTile({
             alt={attachment.filename}
             // Preview stays; download is a member export. Omitting
             // `onDownload` hides the Lightbox's download action (Copy remains).
-            onDownload={
-              canExport ? () => saveAttachmentToDisk(attachment) : undefined
-            }
+            onDownload={canExport ? () => saveAttachmentToDisk(attachment) : undefined}
           />
         ) : null}
       </div>

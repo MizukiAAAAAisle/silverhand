@@ -1,3 +1,4 @@
+import type { HumanView } from '@/features/me/HumanView';
 import type { ComponentProps } from 'react';
 import type { DirectPairDraftPane } from '@/features/direct-pairs/DirectPairDraftPane';
 import type { ChannelView } from '@/components/layout/ChannelView';
@@ -128,6 +129,7 @@ export type PrimaryPaneModel =
 export type SecondaryPaneModel =
   | { kind: 'none' }
   | { kind: 'agent'; props: AgentPaneProps }
+  | { kind: 'human'; props: Pick<ComponentProps<typeof HumanView>, 'userId' | 'onClose'> }
   | { kind: 'files'; props: FilesPaneProps }
   | { kind: 'task'; props: TaskPaneProps }
   | { kind: 'conversation'; status: 'resolved'; props: SidePaneProps }
