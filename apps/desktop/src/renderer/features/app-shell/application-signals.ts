@@ -3,7 +3,6 @@ import { useBackendInfoSnapshot } from '@/features/hosts/hooks';
 import { useTaskBoardRealtime } from '@/features/tasks/useBoard';
 import {
   useAppShellGlobalSync,
-  useShutdownProgress,
   useComposerDraftCleanup,
   useDockBadge,
   useSettingsMenuNav,
@@ -17,8 +16,6 @@ import { useNav } from '@/router';
 export function useApplicationSignals() {
   const nav = useNav();
   useAppShellGlobalSync();
-
-  const shutdownStep = useShutdownProgress();
 
   useComposerDraftCleanup();
 
@@ -47,5 +44,5 @@ export function useApplicationSignals() {
 
   useBackendInfoSnapshot({ pollProtocolCompatibility: true });
 
-  return { shutdownStep, unreadCounts, attentionBadges, navRailDots };
+  return { unreadCounts, attentionBadges, navRailDots };
 }
