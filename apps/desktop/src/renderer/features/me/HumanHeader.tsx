@@ -32,7 +32,7 @@ export function HumanHeader({
       status={
         <span
           data-status-pip
-          className={`size-1.5 shrink-0 rounded-[var(--pill-radius)] ${online ? 'bg-success' : 'bg-text-muted/40'}`}
+          className={`size-1.5 shrink-0 self-center rounded-full ${online ? 'bg-success' : 'bg-text-muted/40'}`}
           title={humanPresenceText(presence?.presence, null, '')}
         />
       }
