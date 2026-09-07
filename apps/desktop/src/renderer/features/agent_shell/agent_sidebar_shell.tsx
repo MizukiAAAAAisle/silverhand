@@ -1,4 +1,4 @@
-import { DirectorySidebar } from '@/components/layout/DirectoryShell';
+import { DirectorySidebar } from '@/components/layout/directory_shell';
 import { Monitor, Plus, User, Users } from 'lucide-react';
 import { Fragment, useMemo, useState } from 'react';
 import type { AgentDto, HostDto } from '@silverhand/shared';

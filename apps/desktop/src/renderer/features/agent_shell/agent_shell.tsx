@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { routes, useNav, useRouteState } from '@/router';
 import { useAgents } from '@/features/agents/hooks';
-import { DirectoryShell, type DirectoryLifecycle } from '@/components/layout/DirectoryShell';
-import { AgentSidebarShell } from './AgentSidebarShell';
-import { AgentDetailPage, type AgentNavigation } from './AgentDetailPage';
+import { DirectoryShell, type DirectoryLifecycle } from '@/components/layout/directory_shell';
+import { AgentSidebarShell } from './agent_sidebar_shell';
+import { AgentDetailPage, type AgentNavigation } from './agent_detail_page';
 import { resolveDefaultAgent } from './selection';
 
 export function AgentShell({

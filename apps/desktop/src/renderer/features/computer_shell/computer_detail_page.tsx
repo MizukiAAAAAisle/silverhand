@@ -1,6 +1,6 @@
 import type { HostDto } from '@silverhand/shared';
 import { HostDetailView } from '@/features/hosts/HostDetailView';
-import { DirectoryPlaceholder } from '@/components/layout/DirectoryShell';
+import { DirectoryPlaceholder } from '@/components/layout/directory_shell';
 
 export function ComputerDetailPage({
   host,

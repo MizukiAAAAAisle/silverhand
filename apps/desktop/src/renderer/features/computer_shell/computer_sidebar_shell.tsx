@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { DirectorySidebar } from '@/components/layout/DirectoryShell';
+import { DirectorySidebar } from '@/components/layout/directory_shell';
 import { Monitor, Plus } from 'lucide-react';
 import type { HostDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
