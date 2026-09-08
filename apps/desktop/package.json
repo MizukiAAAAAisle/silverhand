@@ -7,6 +7,8 @@
   "author": "shiki",
   "main": "./out/main/index.js",
   "scripts": {
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt --check .",
     "dev": "electron-vite dev",
     "dev:headless": "SILVERHAND_HEADLESS=1 electron-vite dev",
     "build": "electron-vite build",
