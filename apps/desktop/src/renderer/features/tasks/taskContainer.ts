@@ -19,22 +19,19 @@
  * PURE: no queries, no navigation. The caller resolves the facts, this decides.
  */
 
-import {
-  DEFAULT_TASK_FILTERS,
-  type TaskFilters,
-} from '@/features/tasks/taskFilters';
-import type { ConversationPaneMode } from '@/features/conversations/pane-mode';
+import { DEFAULT_TASK_FILTERS, type TaskFilters } from "@/features/tasks/taskFilters";
+import type { ConversationPaneMode } from "@/features/conversations/pane-mode";
 
 export type TaskBoardContainer =
   | {
-      kind: 'workspace_channel';
+      kind: "workspace_channel";
       workspaceId: string;
       /** The channel the tab was opened from, or null when the position has a
        *  workspace but no selected channel. */
       conversationId: string | null;
     }
   | {
-      kind: 'direct_pair';
+      kind: "direct_pair";
       conversationId: string;
     };
 
@@ -66,20 +63,20 @@ export function taskBoardContainerForPane(
   },
 ): TaskBoardContainer | null {
   switch (paneMode.kind) {
-    case 'direct_message':
+    case "direct_message":
       return {
-        kind: 'direct_pair',
+        kind: "direct_pair",
         conversationId: facts.conversationId,
       };
-    case 'workspace_channel':
+    case "workspace_channel":
       return paneMode.workspaceId
         ? {
-            kind: 'workspace_channel',
+            kind: "workspace_channel",
             workspaceId: paneMode.workspaceId,
             conversationId: facts.conversationId,
           }
         : null;
-    case 'unsupported':
+    case "unsupported":
       return null;
   }
 }
@@ -106,13 +103,11 @@ export function taskBoardContainerForPane(
  * (`channel_id` = `t.conversation_id`); it is not read back into a selectable
  * channel control here (#task:2041).
  */
-export function taskContainerBaseline(
-  container: TaskBoardContainer,
-): TaskFilters {
-  if (container.kind === 'direct_pair') {
+export function taskContainerBaseline(container: TaskBoardContainer): TaskFilters {
+  if (container.kind === "direct_pair") {
     return {
       ...DEFAULT_TASK_FILTERS,
-      container: 'direct_messages',
+      container: "direct_messages",
       channelId: container.conversationId,
     };
   }
@@ -147,11 +142,7 @@ export function taskContainerBaseline(
  * diff / grep / review.
  */
 export function taskContainerKey(container: TaskBoardContainer): string {
-  return container.kind === 'direct_pair'
-    ? JSON.stringify(['pair', container.conversationId])
-    : JSON.stringify([
-        'ws',
-        container.workspaceId,
-        container.conversationId ?? '',
-      ]);
+  return container.kind === "direct_pair"
+    ? JSON.stringify(["pair", container.conversationId])
+    : JSON.stringify(["ws", container.workspaceId, container.conversationId ?? ""]);
 }

@@ -2,12 +2,12 @@
 // extracted verbatim from hooks.ts (#task:1292). Owns the per-channel refcounted
 // patch buffer singletons; the central ingestor writes them and useChannelAgentRuntime
 // (still in hooks.ts) drains them. Depends only on the core key builder.
-import type { QueryClient } from '@tanstack/react-query';
-import type { ConversationAgentRuntimeDto } from '@silverhand/shared';
-import { agentRuntimeKey } from '@/features/channels/message-cache-core';
+import type { QueryClient } from "@tanstack/react-query";
+import type { ConversationAgentRuntimeDto } from "@silverhand/shared";
+import { agentRuntimeKey } from "@/features/channels/message-cache-core";
 
-export type ConversationAgentStatusPatch = Pick<ConversationAgentRuntimeDto, 'agent_id'> &
-  Partial<Pick<ConversationAgentRuntimeDto, 'status' | 'pid' | 'cli_session_id'>>;
+export type ConversationAgentStatusPatch = Pick<ConversationAgentRuntimeDto, "agent_id"> &
+  Partial<Pick<ConversationAgentRuntimeDto, "status" | "pid" | "cli_session_id">>;
 
 function applySessionAgentPatch(
   agent: ConversationAgentRuntimeDto,
@@ -18,9 +18,7 @@ function applySessionAgentPatch(
     ...agent,
     ...(patch.status !== undefined ? { status: patch.status } : {}),
     ...(patch.pid !== undefined ? { pid: patch.pid } : {}),
-    ...(patch.cli_session_id !== undefined
-      ? { cli_session_id: patch.cli_session_id }
-      : {}),
+    ...(patch.cli_session_id !== undefined ? { cli_session_id: patch.cli_session_id } : {}),
   };
 }
 
@@ -29,7 +27,7 @@ function applyPendingSessionAgentPatches(
   pending: Map<string, ConversationAgentStatusPatch>,
 ): ConversationAgentRuntimeDto[] {
   if (pending.size === 0) return agents;
-  return agents.map(agent => {
+  return agents.map((agent) => {
     const patch = pending.get(agent.agent_id);
     return patch ? applySessionAgentPatch(agent, patch) : agent;
   });
@@ -76,10 +74,7 @@ export function clearPendingAgentStatusPatches(channelId: string): void {
 /** Register a `useChannelAgentRuntime(channelId)` reader's interest in the patch
  *  buffer (#task:1255 P1c). */
 export function retainAgentStatusBuffer(channelId: string): void {
-  agentStatusBufferRefcount.set(
-    channelId,
-    (agentStatusBufferRefcount.get(channelId) ?? 0) + 1,
-  );
+  agentStatusBufferRefcount.set(channelId, (agentStatusBufferRefcount.get(channelId) ?? 0) + 1);
 }
 
 /** Release a reader's interest; clear the buffer only when the last reader for
@@ -102,22 +97,14 @@ export function mergePendingAgentStatusPatches(
   channelId: string,
   agents: ConversationAgentRuntimeDto[],
 ): ConversationAgentRuntimeDto[] {
-  return applyPendingSessionAgentPatches(
-    agents,
-    getPendingAgentStatusPatches(channelId),
-  );
+  return applyPendingSessionAgentPatches(agents, getPendingAgentStatusPatches(channelId));
 }
 
 /** True when a `useChannelAgentRuntime(channelId)` reader is mounted — the exact
  * runtime key has at least one active observer. Stage-2 P1c gate (#task:1255):
  * the ingestor patches process state only while a reader is alive. */
-export function hasActiveChannelAgentRuntimeReader(
-  qc: QueryClient,
-  channelId: string,
-): boolean {
-  const entry = qc
-    .getQueryCache()
-    .find({ queryKey: agentRuntimeKey(channelId), exact: true });
+export function hasActiveChannelAgentRuntimeReader(qc: QueryClient, channelId: string): boolean {
+  const entry = qc.getQueryCache().find({ queryKey: agentRuntimeKey(channelId), exact: true });
   return (entry?.getObserversCount() ?? 0) > 0;
 }
 
@@ -138,11 +125,10 @@ export function applyAgentStatusToCache(
 
   const key = agentRuntimeKey(channelId);
   const current = qc.getQueryData<ConversationAgentRuntimeDto[]>(key);
-  const hasCurrentRow =
-    current?.some(a => a.agent_id === patch.agent_id) ?? false;
+  const hasCurrentRow = current?.some((a) => a.agent_id === patch.agent_id) ?? false;
 
-  qc.setQueryData<ConversationAgentRuntimeDto[]>(key, prev =>
-    prev ? prev.map(a => applySessionAgentPatch(a, patch)) : prev,
+  qc.setQueryData<ConversationAgentRuntimeDto[]>(key, (prev) =>
+    prev ? prev.map((a) => applySessionAgentPatch(a, patch)) : prev,
   );
 
   if (!hasCurrentRow) {

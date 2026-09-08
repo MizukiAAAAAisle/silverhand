@@ -1,33 +1,26 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { Plus } from 'lucide-react';
-import type { TaskFilters } from '@/features/tasks/taskFilters';
-import { cn } from '@/lib/cn';
-import { useUpdateTaskStatus } from '@/features/tasks/hooks';
-import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
-import { useTaskFilterOptions } from '@/features/tasks/useTaskFilterOptions';
-import {
-  useBoardColumns,
-  useBoardCounts,
-  useBoardFacets,
-} from '@/features/tasks/useBoard';
-import { useColumnWindow } from '@/features/tasks/useColumnWindow';
+import { useCallback, useMemo, useRef, useState } from "react";
+import { Plus } from "lucide-react";
+import type { TaskFilters } from "@/features/tasks/taskFilters";
+import { cn } from "@/lib/cn";
+import { useUpdateTaskStatus } from "@/features/tasks/hooks";
+import { useKanbanColumnCollapse } from "@/features/tasks/useKanbanColumnCollapse";
+import { useTaskFilterOptions } from "@/features/tasks/useTaskFilterOptions";
+import { useBoardColumns, useBoardCounts, useBoardFacets } from "@/features/tasks/useBoard";
+import { useColumnWindow } from "@/features/tasks/useColumnWindow";
 import {
   taskContainerBaseline,
   taskContainerKey,
   type TaskBoardContainer,
-} from '@/features/tasks/taskContainer';
-import { TaskBoardColumns } from '@/components/tasks/TaskBoardColumns';
-import {
-  TaskFilterBar,
-  FILTER_ROW_TRIGGER_BOX,
-} from '@/components/tasks/TaskFilterBar';
+} from "@/features/tasks/taskContainer";
+import { TaskBoardColumns } from "@/components/tasks/TaskBoardColumns";
+import { TaskFilterBar, FILTER_ROW_TRIGGER_BOX } from "@/components/tasks/TaskFilterBar";
 import {
   CreateTaskDialog,
   useCreateTaskSubmit,
   type CreateTaskTarget,
-} from '@/components/tasks/CreateTaskDialog';
-import { Button } from '@/components/ui/button';
-import { primaryAction } from '@/features/common/PrimaryAction';
+} from "@/components/tasks/CreateTaskDialog";
+import { Button } from "@/components/ui/button";
+import { primaryAction } from "@/features/common/PrimaryAction";
 
 /**
  * The conversation's Tasks tab (#task:2121) — the five-column status kanban
@@ -54,10 +47,7 @@ export interface ChannelTasksTabProps {
   onOpenTask: (taskId: string) => void;
 }
 
-export function ChannelTasksTab({
-  container,
-  onOpenTask,
-}: ChannelTasksTabProps): JSX.Element {
+export function ChannelTasksTab({ container, onOpenTask }: ChannelTasksTabProps): JSX.Element {
   const baselineFilters = useMemo<TaskFilters>(
     () => taskContainerBaseline(container),
     // Keyed on the container's VALUE, not the prop's identity — a carrier
@@ -75,11 +65,7 @@ export function ChannelTasksTab({
     setFilters(baselineFilters);
   }
 
-  const {
-    columnWindow,
-    grow: growColumn,
-    reset: resetColumnWindow,
-  } = useColumnWindow();
+  const { columnWindow, grow: growColumn, reset: resetColumnWindow } = useColumnWindow();
   const applyFilters = useCallback(
     (next: TaskFilters) => {
       setFilters(next);
@@ -107,17 +93,17 @@ export function ChannelTasksTab({
   // contract §5); a workspace board offers the picker seeded from the current
   // channel filter when it resolves to a real member-channel option.
   const createTarget = useMemo<CreateTaskTarget>(() => {
-    if (container.kind === 'direct_pair') {
-      return { kind: 'locked', conversationId: container.conversationId };
+    if (container.kind === "direct_pair") {
+      return { kind: "locked", conversationId: container.conversationId };
     }
-    const defaultChannelId = channelOptions.some(o => o.id === filters.channelId)
+    const defaultChannelId = channelOptions.some((o) => o.id === filters.channelId)
       ? filters.channelId
       : null;
-    return { kind: 'pick', channelOptions, defaultChannelId };
+    return { kind: "pick", channelOptions, defaultChannelId };
   }, [container, channelOptions, filters.channelId]);
 
   return (
-    <div className={cn('flex h-full min-h-0 flex-col bg-bg-base')}>
+    <div className={cn("flex h-full min-h-0 flex-col bg-bg-base")}>
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2">
         <TaskFilterBar
           filters={filters}

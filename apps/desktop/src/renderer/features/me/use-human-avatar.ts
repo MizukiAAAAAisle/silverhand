@@ -4,8 +4,8 @@ import {
   isRegistrationRequired,
   isBackendUnreachable,
   isUpdateRequired,
-} from './hooks';
-import { useUserAvatarObjectUrl } from '@/features/users/avatar-hooks';
+} from "./hooks";
+import { useUserAvatarObjectUrl } from "@/features/users/avatar-hooks";
 
 export function useHumanAvatar(userId: string) {
   const { data: viewer } = useViewerUser();

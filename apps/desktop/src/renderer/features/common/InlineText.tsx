@@ -1,13 +1,6 @@
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type JSX,
-  type KeyboardEvent,
-} from 'react';
-import { cn } from '@/lib/cn';
-import { CancelButton, SaveButton } from './EditToolbarButtons';
+import { useEffect, useId, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { cn } from "@/lib/cn";
+import { CancelButton, SaveButton } from "./EditToolbarButtons";
 
 /**
  * Inline edit field for a required non-null string, controlled by the
@@ -129,19 +122,19 @@ export function InlineText({
       await onCommit(decision.next);
       onExitEdit();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save.');
+      setError(err instanceof Error ? err.message : "Could not save.");
     } finally {
       setPending(false);
     }
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       e.preventDefault();
       void commit();
       return;
     }
-    if (e.key === 'Escape') {
+    if (e.key === "Escape") {
       e.preventDefault();
       cancel();
     }
@@ -156,7 +149,7 @@ export function InlineText({
           data-input=""
           value={draft}
           disabled={pending}
-          onChange={e => setDraft(e.target.value)}
+          onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
           // No onBlur — commit is explicit only (Enter / Save button).
           // Focus loss preserves the draft. Locked by source fence in
@@ -165,7 +158,7 @@ export function InlineText({
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? errorId : undefined}
           className={cn(
-            'h-8 min-w-0 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 leading-tight text-text-primary outline-none focus:border-border-focus disabled:opacity-60',
+            "h-8 min-w-0 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 leading-tight text-text-primary outline-none focus:border-border-focus disabled:opacity-60",
             className,
           )}
         />
@@ -182,14 +175,5 @@ export function InlineText({
     );
   }
 
-  return (
-    <div
-      className={cn(
-        'min-w-0 truncate text-text-primary',
-        className,
-      )}
-    >
-      {value}
-    </div>
-  );
+  return <div className={cn("min-w-0 truncate text-text-primary", className)}>{value}</div>;
 }

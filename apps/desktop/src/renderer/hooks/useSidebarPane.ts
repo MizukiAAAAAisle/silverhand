@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
+import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 /**
  * Per-sidebar slide animation state machine. Wraps the user's persisted
@@ -38,7 +38,7 @@ import { flushSync } from 'react-dom';
 
 const SIDEBAR_ANIM_MS = 220;
 
-type Phase = 'closed' | 'opening' | 'open' | 'closing';
+type Phase = "closed" | "opening" | "open" | "closing";
 
 interface PaneState {
   phase: Phase;
@@ -63,7 +63,7 @@ export interface SidebarPane {
   present: boolean;
   /** Drives the slot's `data-state` for slide animation. `open` while
    *  visible (and during the brief closing tail), `closed` while hidden. */
-  surfaceState: 'open' | 'closed';
+  surfaceState: "open" | "closed";
   /** True only while the open/close transition is in flight. Consumers
    *  use this to gate CSS transitions on layout properties (slot
    *  flex-basis, margin-right) so a drag-resize that updates
@@ -79,8 +79,8 @@ export interface SidebarPane {
 function readVisible(key: string, defaultVisible: boolean): boolean {
   try {
     const raw = localStorage.getItem(key);
-    if (raw === '1') return true;
-    if (raw === '0') return false;
+    if (raw === "1") return true;
+    if (raw === "0") return false;
     return defaultVisible;
   } catch {
     return defaultVisible;
@@ -89,15 +89,15 @@ function readVisible(key: string, defaultVisible: boolean): boolean {
 
 function persistVisible(key: string, value: boolean): void {
   try {
-    localStorage.setItem(key, value ? '1' : '0');
+    localStorage.setItem(key, value ? "1" : "0");
   } catch {
     /* private mode / quota — in-memory state still wins */
   }
 }
 
 function prefersReducedMotion(): boolean {
-  if (typeof window === 'undefined' || !window.matchMedia) return false;
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (typeof window === "undefined" || !window.matchMedia) return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 export function useSidebarPane({
@@ -107,7 +107,7 @@ export function useSidebarPane({
 }: UseSidebarPaneOptions): SidebarPane {
   const [state, setState] = useState<PaneState>(() => {
     const v = readVisible(storageKey, defaultVisible);
-    return { phase: v ? 'open' : 'closed', visible: v };
+    return { phase: v ? "open" : "closed", visible: v };
   });
 
   // In-flight enter rAF id and exit timer id. We always cancel both before
@@ -147,7 +147,7 @@ export function useSidebarPane({
       // prefers-reduced-motion: snap to terminal phase synchronously so
       // the surface mounts/unmounts without the 220ms perceptual delay.
       if (prefersReducedMotion()) {
-        setState({ phase: next ? 'open' : 'closed', visible: next });
+        setState({ phase: next ? "open" : "closed", visible: next });
         return;
       }
 
@@ -158,10 +158,10 @@ export function useSidebarPane({
         // If it's still mounted (we were mid-closing), reuse the existing
         // surface and let CSS reverse the in-flight transform interpolation.
         const enter = () => {
-          setState(s =>
-            s.phase === 'open' || s.phase === 'closing'
-              ? { phase: 'open', visible: true }
-              : { phase: 'opening', visible: true },
+          setState((s) =>
+            s.phase === "open" || s.phase === "closing"
+              ? { phase: "open", visible: true }
+              : { phase: "opening", visible: true },
           );
         };
         if (keepMounted) enter();
@@ -174,29 +174,19 @@ export function useSidebarPane({
           enterRaf.current = null;
           enterRaf2.current = requestAnimationFrame(() => {
             enterRaf2.current = null;
-            setState(s =>
-              s.phase === 'opening'
-                ? { phase: 'open', visible: true }
-                : s,
-            );
+            setState((s) => (s.phase === "opening" ? { phase: "open", visible: true } : s));
           });
         });
       } else {
         // Hide: flip surface class to closed-state immediately; the
         // transform transition runs over the next ANIM_MS frames; once it
         // settles, the timer below unmounts the surface.
-        setState(s =>
-          s.phase === 'closed'
-            ? { ...s, visible: false }
-            : { phase: 'closing', visible: false },
+        setState((s) =>
+          s.phase === "closed" ? { ...s, visible: false } : { phase: "closing", visible: false },
         );
         exitTimer.current = window.setTimeout(() => {
           exitTimer.current = null;
-          setState(s =>
-            s.phase === 'closing'
-              ? { phase: 'closed', visible: false }
-              : s,
-          );
+          setState((s) => (s.phase === "closing" ? { phase: "closed", visible: false } : s));
         }, SIDEBAR_ANIM_MS);
       }
     },
@@ -213,9 +203,9 @@ export function useSidebarPane({
 
   return {
     visible: state.visible,
-    present: keepMounted || state.phase !== 'closed',
-    surfaceState: state.phase === 'open' ? 'open' : 'closed',
-    transitioning: state.phase === 'opening' || state.phase === 'closing',
+    present: keepMounted || state.phase !== "closed",
+    surfaceState: state.phase === "open" ? "open" : "closed",
+    transitioning: state.phase === "opening" || state.phase === "closing",
     setVisible,
     toggle,
   };

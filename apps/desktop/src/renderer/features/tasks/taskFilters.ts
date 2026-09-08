@@ -1,28 +1,23 @@
-import type { TaskBoardContainer as TaskBoardContainerAxis } from '@silverhand/shared';
-import {
-  isAgentSpace,
-  type WorkspaceOwnership,
-} from '@/features/workspaces/workspace-ownership';
+import type { TaskBoardContainer as TaskBoardContainerAxis } from "@silverhand/shared";
+import { isAgentSpace, type WorkspaceOwnership } from "@/features/workspaces/workspace-ownership";
 
 export type { TaskBoardContainerAxis };
 
 /** Which data source a channel option came from — the PRESENTATION axis the
  *  channel dropdown sections on, named once here so the three consumers cannot
  *  drift (#task:2066). Not a stored key: the filter value stays a channel id. */
-export type ChannelSourceGroup = 'agent_space' | 'workspace';
+export type ChannelSourceGroup = "agent_space" | "workspace";
 
 /** A person reference keyed by `{type,id}` — id alone is unsafe because
  *  agent and user ids share no namespace guarantee (Cindy boundary). */
-export type PersonRef =
-  | { type: 'agent'; id: string }
-  | { type: 'user'; id: string };
+export type PersonRef = { type: "agent"; id: string } | { type: "user"; id: string };
 
 /** Assignee/creator filter value. `unassigned` is meaningful for the
  *  assignee axis only (a task always has a creator). */
 export type PersonFilter =
-  | { kind: 'any' }
-  | { kind: 'unassigned' }
-  | { kind: 'person'; person: PersonRef };
+  | { kind: "any" }
+  | { kind: "unassigned" }
+  | { kind: "person"; person: PersonRef };
 
 export interface TaskFilters {
   /** The board's TOP-LEVEL container axis (#task:2041): which KIND of
@@ -60,8 +55,8 @@ export const DEFAULT_TASK_FILTERS: TaskFilters = {
   container: null,
   workspaceId: null,
   channelId: null,
-  assignee: { kind: 'any' },
-  creator: { kind: 'any' },
+  assignee: { kind: "any" },
+  creator: { kind: "any" },
 };
 
 /** Structural equality across all dimensions — drives the "filters differ
@@ -96,8 +91,7 @@ export function applyWorkspaceCascade(
     return { ...filters, workspaceId: null };
   }
   const keepChannel =
-    filters.channelId !== null &&
-    channelWorkspaceId(filters.channelId) === nextWorkspaceId;
+    filters.channelId !== null && channelWorkspaceId(filters.channelId) === nextWorkspaceId;
   return {
     ...filters,
     workspaceId: nextWorkspaceId,
@@ -107,15 +101,15 @@ export function applyWorkspaceCascade(
 
 export function workspaceBoardContainer(
   workspace: WorkspaceOwnership,
-): Extract<TaskBoardContainerAxis, 'workspace' | 'agent_space'> {
-  return isAgentSpace(workspace) ? 'agent_space' : 'workspace';
+): Extract<TaskBoardContainerAxis, "workspace" | "agent_space"> {
+  return isAgentSpace(workspace) ? "agent_space" : "workspace";
 }
 
 /** The container a channel of this data-source group belongs to. */
 export function channelGroupContainer(
   group: ChannelSourceGroup,
-): Extract<TaskBoardContainerAxis, 'workspace' | 'agent_space'> {
-  return group === 'agent_space' ? 'agent_space' : 'workspace';
+): Extract<TaskBoardContainerAxis, "workspace" | "agent_space"> {
+  return group === "agent_space" ? "agent_space" : "workspace";
 }
 
 /** Whether the within-workspace channel axis applies under a container, and over
@@ -151,7 +145,7 @@ export function channelAxisScope<C extends { group: ChannelSourceGroup }>(
   container: TaskBoardContainerAxis | null,
   channelOptions: C[],
 ): ChannelAxisScope<C> {
-  if (container === 'direct_messages') {
+  if (container === "direct_messages") {
     return { show: false, channelOptions: [] };
   }
   return {
@@ -159,16 +153,16 @@ export function channelAxisScope<C extends { group: ChannelSourceGroup }>(
     channelOptions:
       container === null
         ? channelOptions
-        : channelOptions.filter(o => channelGroupContainer(o.group) === container),
+        : channelOptions.filter((o) => channelGroupContainer(o.group) === container),
   };
 }
 
 export type BoardScopeSelection =
-  | { kind: 'all' }
+  | { kind: "all" }
   | {
-      kind: 'workspace';
+      kind: "workspace";
       workspaceId: string;
-      container: Extract<TaskBoardContainerAxis, 'workspace' | 'agent_space'>;
+      container: Extract<TaskBoardContainerAxis, "workspace" | "agent_space">;
     };
 
 /**
@@ -193,9 +187,9 @@ export function applyBoardScopeSelection(
   channelWorkspaceId: (channelId: string) => string | null,
 ): TaskFilters {
   switch (selection.kind) {
-    case 'all':
+    case "all":
       return { ...filters, container: null, workspaceId: null, channelId: null };
-    case 'workspace':
+    case "workspace":
       return {
         ...applyWorkspaceCascade(filters, selection.workspaceId, channelWorkspaceId),
         container: selection.container,
@@ -209,7 +203,7 @@ export function applyBoardScopeSelection(
  *  classification stays in this model module. Direct Messages are not a section:
  *  a DM is never a selectable global scope (contract §5). */
 export interface BoardScopeGroup<W> {
-  key: 'workspaces' | 'agent-spaces';
+  key: "workspaces" | "agent-spaces";
   label: string;
   workspaces: readonly W[];
 }
@@ -233,13 +227,13 @@ export function boardScopeGroups<W extends WorkspaceOwnership>(input: {
   workspaces: readonly W[];
 }): Array<BoardScopeGroup<W>> {
   const inContainer = (
-    container: Extract<TaskBoardContainerAxis, 'workspace' | 'agent_space'>,
-  ): readonly W[] => input.workspaces.filter(w => workspaceBoardContainer(w) === container);
+    container: Extract<TaskBoardContainerAxis, "workspace" | "agent_space">,
+  ): readonly W[] => input.workspaces.filter((w) => workspaceBoardContainer(w) === container);
   const defs: Array<BoardScopeGroup<W>> = [
-    { key: 'workspaces', label: 'Workspaces', workspaces: inContainer('workspace') },
-    { key: 'agent-spaces', label: 'Agent Spaces', workspaces: inContainer('agent_space') },
+    { key: "workspaces", label: "Workspaces", workspaces: inContainer("workspace") },
+    { key: "agent-spaces", label: "Agent Spaces", workspaces: inContainer("agent_space") },
   ];
-  return defs.filter(g => g.workspaces.length > 0);
+  return defs.filter((g) => g.workspaces.length > 0);
 }
 
 /** One selectable person in the assignee / creator menus. The `name` is the
@@ -253,6 +247,6 @@ export interface PersonOption {
 }
 
 export function personFilterKey(f: PersonFilter): string {
-  if (f.kind === 'person') return `${f.person.type}:${f.person.id}`;
+  if (f.kind === "person") return `${f.person.type}:${f.person.id}`;
   return f.kind;
 }

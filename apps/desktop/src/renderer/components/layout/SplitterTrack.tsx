@@ -1,4 +1,4 @@
-import { forwardRef, type PointerEvent as ReactPointerEvent } from 'react';
+import { forwardRef, type PointerEvent as ReactPointerEvent } from "react";
 
 interface SplitterTrackProps {
   onPointerDown?: (e: ReactPointerEvent) => void;
@@ -45,34 +45,32 @@ interface SplitterTrackProps {
  * gapped themes the track sits inside the empty gutter, so the stacking order is
  * a no-op there.
  */
-export const SplitterTrack = forwardRef<HTMLDivElement, SplitterTrackProps>(
-  function SplitterTrack(
-    { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, active },
-    ref,
-  ): JSX.Element {
-    return (
-      <div
-        ref={ref}
-        role="separator"
-        aria-orientation="vertical"
-        data-active={active ? 'true' : undefined}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerCancel}
-        style={{
-          marginInline: 'calc((var(--pane-gap) + 4px) / -2)',
-          zIndex: 1,
-        }}
-        className={
-          'relative w-1 shrink-0 cursor-col-resize bg-[var(--splitter-bg,var(--border-subtle))] ' +
-          'transition-colors hover:bg-[var(--splitter-hover-bg,var(--border))] ' +
-          'data-[active=true]:bg-[var(--splitter-hover-bg,var(--border))]'
-        }
-      >
-        {/* Wider invisible hit-target so users don't need pixel-perfect aim. */}
-        <div className="absolute -inset-x-1.5 inset-y-0" />
-      </div>
-    );
-  },
-);
+export const SplitterTrack = forwardRef<HTMLDivElement, SplitterTrackProps>(function SplitterTrack(
+  { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, active },
+  ref,
+): JSX.Element {
+  return (
+    <div
+      ref={ref}
+      role="separator"
+      aria-orientation="vertical"
+      data-active={active ? "true" : undefined}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      style={{
+        marginInline: "calc((var(--pane-gap) + 4px) / -2)",
+        zIndex: 1,
+      }}
+      className={
+        "relative w-1 shrink-0 cursor-col-resize bg-[var(--splitter-bg,var(--border-subtle))] " +
+        "transition-colors hover:bg-[var(--splitter-hover-bg,var(--border))] " +
+        "data-[active=true]:bg-[var(--splitter-hover-bg,var(--border))]"
+      }
+    >
+      {/* Wider invisible hit-target so users don't need pixel-perfect aim. */}
+      <div className="absolute -inset-x-1.5 inset-y-0" />
+    </div>
+  );
+});

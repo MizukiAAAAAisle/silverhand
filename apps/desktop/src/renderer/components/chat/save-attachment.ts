@@ -1,6 +1,6 @@
-import { toast } from 'sonner';
-import type { AttachmentSnapshot } from '@silverhand/shared';
-import { fetchAttachmentBytes } from '@/lib/api';
+import { toast } from "sonner";
+import type { AttachmentSnapshot } from "@silverhand/shared";
+import { fetchAttachmentBytes } from "@/lib/api";
 
 /**
  * Save-as flow for a chat attachment. Fetches the bytes through the
@@ -19,22 +19,20 @@ import { fetchAttachmentBytes } from '@/lib/api';
  * Exported for testing.
  */
 export async function saveAttachmentToDisk(
-  attachment: Pick<AttachmentSnapshot, 'id' | 'filename'>,
+  attachment: Pick<AttachmentSnapshot, "id" | "filename">,
   deps: SaveAttachmentDeps = defaultDeps,
 ): Promise<void> {
   try {
     const { bytes } = await deps.fetchBytes(attachment.id);
     const result = await deps.save({ filename: attachment.filename, bytes });
     if (result.ok) {
-      deps.toastSuccess('Saved');
+      deps.toastSuccess("Saved");
       return;
     }
-    if ('canceled' in result) return;
+    if ("canceled" in result) return;
     deps.toastError("Couldn't save: " + result.reason);
   } catch (err) {
-    deps.toastError(
-      "Couldn't save: " + (err instanceof Error ? err.message : String(err)),
-    );
+    deps.toastError("Couldn't save: " + (err instanceof Error ? err.message : String(err)));
   }
 }
 
@@ -45,21 +43,19 @@ export interface SaveAttachmentDeps {
     filename: string;
     bytes: Uint8Array;
   }) => Promise<
-    | { ok: true; path: string }
-    | { ok: false; canceled: true }
-    | { ok: false; reason: string }
+    { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; reason: string }
   >;
   toastSuccess: (message: string) => void;
   toastError: (message: string) => void;
 }
 
 const defaultDeps: SaveAttachmentDeps = {
-  fetchBytes: id => fetchAttachmentBytes(id),
-  save: input => window.silverhand.saveAttachment(input),
-  toastSuccess: msg => {
+  fetchBytes: (id) => fetchAttachmentBytes(id),
+  save: (input) => window.silverhand.saveAttachment(input),
+  toastSuccess: (msg) => {
     toast.success(msg);
   },
-  toastError: msg => {
+  toastError: (msg) => {
     toast.error(msg);
   },
 };

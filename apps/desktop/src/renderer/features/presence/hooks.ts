@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   apiPaths,
   UserPresenceEventSchema,
@@ -7,11 +7,11 @@ import {
   type ServerFrame,
   type UserPresence,
   type UserPresenceDto,
-} from '@silverhand/shared';
-import { api } from '@/lib/api';
-import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
+} from "@silverhand/shared";
+import { api } from "@/lib/api";
+import { onWsFrame, subscribeWsScope } from "@/lib/ws-client";
 
-const presenceKey = ['presence'] as const;
+const presenceKey = ["presence"] as const;
 const STALE_MS = 30 * 1000;
 const GC_MS = 5 * 60 * 1000;
 
@@ -19,7 +19,7 @@ export function usePresence() {
   return useQuery<PresenceResponse, Error, UserPresenceDto[]>({
     queryKey: presenceKey,
     queryFn: () => api<PresenceResponse>(apiPaths.presence),
-    select: res => res.users,
+    select: (res) => res.users,
     staleTime: STALE_MS,
     gcTime: GC_MS,
   });
@@ -59,17 +59,15 @@ export function usePresenceById(): Map<string, UserPresenceDto> {
 export function usePresenceSync(): void {
   const qc = useQueryClient();
   useEffect(() => {
-    const sub = subscribeWsScope('app');
-    const unsub = onWsFrame(frame => {
+    const sub = subscribeWsScope("app");
+    const unsub = onWsFrame((frame) => {
       const action = decidePresenceFrameAction(frame);
       if (!action) return;
-      if (action.kind === 'invalidate') {
+      if (action.kind === "invalidate") {
         void qc.invalidateQueries({ queryKey: presenceKey });
         return;
       }
-      qc.setQueryData<PresenceResponse>(presenceKey, prev =>
-        upsertPresence(prev, action.delta),
-      );
+      qc.setQueryData<PresenceResponse>(presenceKey, (prev) => upsertPresence(prev, action.delta));
     });
     return () => {
       sub.unsubscribe();
@@ -88,24 +86,18 @@ export function usePresenceSync(): void {
  * idiom so the hook body stays a thin dispatcher.
  */
 export type PresenceFrameAction =
-  | { kind: 'upsert'; delta: UserPresenceDto }
-  | { kind: 'invalidate' };
+  | { kind: "upsert"; delta: UserPresenceDto }
+  | { kind: "invalidate" };
 
-export function decidePresenceFrameAction(
-  frame: ServerFrame,
-): PresenceFrameAction | null {
-  if (frame.type === 'snapshot_required') {
-    return frame.scope === 'app' ? { kind: 'invalidate' } : null;
+export function decidePresenceFrameAction(frame: ServerFrame): PresenceFrameAction | null {
+  if (frame.type === "snapshot_required") {
+    return frame.scope === "app" ? { kind: "invalidate" } : null;
   }
-  if (
-    frame.type !== 'event' ||
-    frame.scope !== 'app' ||
-    frame.kind !== 'user_presence'
-  ) {
+  if (frame.type !== "event" || frame.scope !== "app" || frame.kind !== "user_presence") {
     return null;
   }
   const parsed = UserPresenceEventSchema.safeParse(frame.payload);
-  return parsed.success ? { kind: 'upsert', delta: parsed.data } : null;
+  return parsed.success ? { kind: "upsert", delta: parsed.data } : null;
 }
 
 /**
@@ -118,7 +110,7 @@ export function upsertPresence(
   delta: UserPresenceDto,
 ): PresenceResponse {
   if (!prev) return { users: [delta] };
-  const idx = prev.users.findIndex(u => u.user_id === delta.user_id);
+  const idx = prev.users.findIndex((u) => u.user_id === delta.user_id);
   if (idx === -1) return { users: [...prev.users, delta] };
   const users = prev.users.slice();
   users[idx] = delta;
@@ -131,10 +123,8 @@ export function upsertPresence(
  * Reuses the agent dot vocabulary so AGENTS / HUMANS rows render an
  * identical pip. Pure — exported for unit tests.
  */
-export function presenceDotStatus(
-  presence: UserPresence | undefined,
-): 'active' | 'idle' {
-  return presence === 'online' ? 'active' : 'idle';
+export function presenceDotStatus(presence: UserPresence | undefined): "active" | "idle" {
+  return presence === "online" ? "active" : "idle";
 }
 
 /**
@@ -149,7 +139,7 @@ export function humanPresenceText(
   lastSeenAt: number | null,
   relativeLastSeen: string,
 ): string {
-  if (presence === 'online') return 'Online';
+  if (presence === "online") return "Online";
   if (lastSeenAt != null) return `Last seen ${relativeLastSeen}`;
-  return 'Offline';
+  return "Offline";
 }

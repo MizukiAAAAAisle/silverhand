@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 import {
   DEFAULT_APPEARANCE,
   FONT_SIZE_MAX,
@@ -6,7 +6,7 @@ import {
   LEGACY_THEME_IDS,
   THEME_IDS,
   type AppearanceSettings,
-} from './types';
+} from "./types";
 
 /** Internal: font-size schema. Out-of-range values are clamped (not
  *  rejected) so a user editing localStorage by hand or a stale value
@@ -15,13 +15,13 @@ import {
 const FontSizeSchema = z
   .number()
   .finite()
-  .transform(n => Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, Math.round(n))));
+  .transform((n) => Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, Math.round(n))));
 
 /** Trim whitespace; drop if empty after trim. */
 const FontFamilySchema = z
   .string()
-  .transform(s => s.trim())
-  .refine(s => s.length > 0, { message: 'empty' });
+  .transform((s) => s.trim())
+  .refine((s) => s.length > 0, { message: "empty" });
 
 /** Per-slot input shape — only font family. Font size is shared and
  *  lives at the appearance level. */
@@ -38,8 +38,7 @@ const MarkdownTextInputSchema = z
  *  else unknown still degrades to the default. */
 const ThemeIdSchema = z
   .preprocess(
-    value =>
-      typeof value === 'string' ? LEGACY_THEME_IDS[value] ?? value : value,
+    (value) => (typeof value === "string" ? (LEGACY_THEME_IDS[value] ?? value) : value),
     z.enum(THEME_IDS),
   )
   .catch(DEFAULT_APPEARANCE.theme);
@@ -56,7 +55,7 @@ const AppearanceSchema = z
     const out: AppearanceSettings = {
       theme: raw.theme ?? DEFAULT_APPEARANCE.theme,
     };
-    if (typeof raw.fontSize === 'number') out.fontSize = raw.fontSize;
+    if (typeof raw.fontSize === "number") out.fontSize = raw.fontSize;
     if (raw.prose?.fontFamily) out.prose = { fontFamily: raw.prose.fontFamily };
     if (raw.code?.fontFamily) out.code = { fontFamily: raw.code.fontFamily };
     return out;
@@ -67,7 +66,7 @@ const AppearanceSchema = z
  *  gracefully to `DEFAULT_APPEARANCE`; partial inputs keep what
  *  parsed and drop the rest. Never throws. */
 export function parseAppearance(raw: unknown): AppearanceSettings {
-  if (raw === null || typeof raw !== 'object') return DEFAULT_APPEARANCE;
+  if (raw === null || typeof raw !== "object") return DEFAULT_APPEARANCE;
   const parsed = AppearanceSchema.safeParse(raw);
   if (!parsed.success) return DEFAULT_APPEARANCE;
   return parsed.data;

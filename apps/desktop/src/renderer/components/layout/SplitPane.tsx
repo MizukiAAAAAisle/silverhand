@@ -6,9 +6,9 @@ import {
   useRef,
   useState,
   type ReactNode,
-} from 'react';
-import { PANE_RADIUS } from './pane-chrome';
-import { SplitterTrack } from './SplitterTrack';
+} from "react";
+import { PANE_RADIUS } from "./pane-chrome";
+import { SplitterTrack } from "./SplitterTrack";
 
 interface SplitPaneProps {
   left: ReactNode;
@@ -26,7 +26,7 @@ interface SplitPaneProps {
  *  string on the left pane below. Two-stage mount uses it to time when
  *  the heavy `right` content lands. */
 const TRANSITION_MS = 220;
-const TRANSITION_CSS = '220ms cubic-bezier(0.4, 0, 0.2, 1)';
+const TRANSITION_CSS = "220ms cubic-bezier(0.4, 0, 0.2, 1)";
 
 /**
  * Vertical split pane (two panes side-by-side, draggable divider).
@@ -111,7 +111,7 @@ export function SplitPane({
   }, []);
 
   const setLeftWidthVar = useCallback((value: string) => {
-    containerRef.current?.style.setProperty('--split-left-width', value);
+    containerRef.current?.style.setProperty("--split-left-width", value);
   }, []);
 
   // Seed the CSS variable before first paint. useLayoutEffect runs
@@ -119,9 +119,7 @@ export function SplitPane({
   // already has the right width — no inline style on the container,
   // which means React re-renders cannot clobber animated values.
   useLayoutEffect(() => {
-    setLeftWidthVar(
-      hasRight ? `${ratioRef.current * 100}%` : '100%',
-    );
+    setLeftWidthVar(hasRight ? `${ratioRef.current * 100}%` : "100%");
     // Intentional: this runs once at mount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -167,19 +165,14 @@ export function SplitPane({
     // animation completes.
     clearOpenScheduled();
     setContentMounted(false);
-    setLeftWidthVar('100%');
+    setLeftWidthVar("100%");
 
     clearCloseScheduled();
     closeTimerRef.current = window.setTimeout(() => {
       closeTimerRef.current = null;
       setShellOpen(false);
     }, TRANSITION_MS);
-  }, [
-    hasRight,
-    clearOpenScheduled,
-    clearCloseScheduled,
-    setLeftWidthVar,
-  ]);
+  }, [hasRight, clearOpenScheduled, clearCloseScheduled, setLeftWidthVar]);
 
   // Cleanup pending timers + drag styles on unmount.
   useEffect(() => {
@@ -189,28 +182,34 @@ export function SplitPane({
       }
       clearOpenScheduled();
       clearCloseScheduled();
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     };
   }, [clearOpenScheduled, clearCloseScheduled]);
 
-  const persistRatio = useCallback((next: number): void => {
-    if (!storageKey) return;
-    try {
-      localStorage.setItem(storageKey, String(next));
-    } catch {
-      /* quota or private mode — fall back to in-memory */
-    }
-  }, [storageKey]);
+  const persistRatio = useCallback(
+    (next: number): void => {
+      if (!storageKey) return;
+      try {
+        localStorage.setItem(storageKey, String(next));
+      } catch {
+        /* quota or private mode — fall back to in-memory */
+      }
+    },
+    [storageKey],
+  );
 
-  const scheduleRatio = useCallback((next: number): void => {
-    ratioRef.current = next;
-    if (dragFrameRef.current !== null) return;
-    dragFrameRef.current = requestAnimationFrame(() => {
-      dragFrameRef.current = null;
-      setLeftWidthVar(`${ratioRef.current * 100}%`);
-    });
-  }, [setLeftWidthVar]);
+  const scheduleRatio = useCallback(
+    (next: number): void => {
+      ratioRef.current = next;
+      if (dragFrameRef.current !== null) return;
+      dragFrameRef.current = requestAnimationFrame(() => {
+        dragFrameRef.current = null;
+        setLeftWidthVar(`${ratioRef.current * 100}%`);
+      });
+    },
+    [setLeftWidthVar],
+  );
 
   const flushRatio = useCallback((): void => {
     if (dragFrameRef.current !== null) {
@@ -223,15 +222,15 @@ export function SplitPane({
   const dragging = useRef(false);
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     dragging.current = true;
-    dividerRef.current?.setAttribute('data-active', 'true');
+    dividerRef.current?.setAttribute("data-active", "true");
     // Suppress the width transition for the duration of the drag so
     // the pane tracks the cursor 1:1 instead of trailing behind.
     if (leftPaneRef.current) {
-      leftPaneRef.current.style.transition = 'none';
+      leftPaneRef.current.style.transition = "none";
     }
     e.currentTarget.setPointerCapture(e.pointerId);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
   }, []);
 
   const onPointerMove = useCallback(
@@ -250,7 +249,7 @@ export function SplitPane({
     (e: React.PointerEvent) => {
       if (!dragging.current) return;
       dragging.current = false;
-      dividerRef.current?.removeAttribute('data-active');
+      dividerRef.current?.removeAttribute("data-active");
       // Restore the width transition that onPointerDown suppressed.
       if (leftPaneRef.current) {
         leftPaneRef.current.style.transition = `width ${TRANSITION_CSS}`;
@@ -261,8 +260,8 @@ export function SplitPane({
       if (e.currentTarget.hasPointerCapture(e.pointerId)) {
         e.currentTarget.releasePointerCapture(e.pointerId);
       }
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     },
     [flushRatio, persistRatio],
   );
@@ -279,7 +278,7 @@ export function SplitPane({
       // gutter on the left, a 4px lane in the middle (#task:1965 residual,
       // #task:1971). The divider straddles the gap with a negative margin
       // (see below), so the VISIBLE distance stays exactly `--pane-gap`.
-      style={{ gap: 'var(--pane-gap)' }}
+      style={{ gap: "var(--pane-gap)" }}
     >
       <div
         ref={leftPaneRef}
@@ -287,9 +286,9 @@ export function SplitPane({
         // the right pane's reconciliation, so opening a thread doesn't
         // ripple a reflow through the message list.
         style={{
-          width: 'var(--split-left-width)',
+          width: "var(--split-left-width)",
           transition: `width ${TRANSITION_CSS}`,
-          contain: 'layout paint',
+          contain: "layout paint",
         }}
         className="flex h-full min-w-0 overflow-hidden"
       >
@@ -306,7 +305,7 @@ export function SplitPane({
           />
           <div
             style={{
-              contain: 'layout paint',
+              contain: "layout paint",
               borderRadius: PANE_RADIUS,
             }}
             className="flex h-full min-w-0 flex-1 overflow-hidden bg-bg-chat"

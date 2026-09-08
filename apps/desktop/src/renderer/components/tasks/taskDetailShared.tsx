@@ -1,30 +1,22 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import * as Popover from '@radix-ui/react-popover';
-import dayjs from 'dayjs';
-import { Check, Loader2, X } from 'lucide-react';
-import {
-  TASK_CONTENT_MAX_LEN,
-  type TaskDetailDto,
-  type TaskStatus,
-} from '@silverhand/shared';
-import { Textarea } from '@/components/ui/input';
-import { ChannelIcon } from '@/components/ChannelIcon';
-import { MiniIconButton } from '@/components/tasks/MiniIconButton';
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import * as Popover from "@radix-ui/react-popover";
+import dayjs from "dayjs";
+import { Check, Loader2, X } from "lucide-react";
+import { TASK_CONTENT_MAX_LEN, type TaskDetailDto, type TaskStatus } from "@silverhand/shared";
+import { Textarea } from "@/components/ui/input";
+import { ChannelIcon } from "@/components/ChannelIcon";
+import { MiniIconButton } from "@/components/tasks/MiniIconButton";
 import {
   PersonAvatar,
   usePersonDirectory,
   type PersonDirectory,
-} from '@/components/tasks/PersonAvatar';
-import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge';
-import {
-  useAssignTask,
-  useEditTask,
-  useUpdateTaskStatus,
-} from '@/features/tasks/hooks';
-import type { TaskDetailFailure } from '@/features/tasks/taskDetail';
-import { useConversationMembers } from '@/features/conversations/useConversationMembers';
-import { useDirectPairPane, projectDirectPairAssignee } from '@/features/direct-pairs/hooks';
-import { cn } from '@/lib/cn';
+} from "@/components/tasks/PersonAvatar";
+import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
+import { useAssignTask, useEditTask, useUpdateTaskStatus } from "@/features/tasks/hooks";
+import type { TaskDetailFailure } from "@/features/tasks/taskDetail";
+import { useConversationMembers } from "@/features/conversations/useConversationMembers";
+import { useDirectPairPane, projectDirectPairAssignee } from "@/features/direct-pairs/hooks";
+import { cn } from "@/lib/cn";
 
 /**
  * Substance shared by the two task-detail surfaces — the modal
@@ -41,30 +33,27 @@ import { cn } from '@/lib/cn';
 /** Which field is currently in inline-edit mode; `null` is the read view. Only
  *  one field edits at a time — the other field's pencil is hidden until the
  *  current edit finishes, so there is never a mid-edit switch. */
-export type EditingField = 'title' | 'content' | null;
+export type EditingField = "title" | "content" | null;
 
 // ── Failure copy ────────────────────────────────────────────────────
 
-export const FAILURE_COPY: Record<
-  TaskDetailFailure,
-  { header: string; body: string }
-> = {
+export const FAILURE_COPY: Record<TaskDetailFailure, { header: string; body: string }> = {
   not_found: {
-    header: 'Task not found',
+    header: "Task not found",
     // Both causes answer 404 and the viewer can't tell them apart, so the copy
     // names both rather than asserting the one we can't verify.
-    body: 'This task was deleted, or it belongs to a conversation you can’t read.',
+    body: "This task was deleted, or it belongs to a conversation you can’t read.",
   },
   unreachable: {
-    header: 'Can’t reach the server',
+    header: "Can’t reach the server",
     // No Retry here: the app-status banner already owns this signal and its
     // retry. A second, narrower retry button would be a competing control for
     // the same recovery.
-    body: 'The task can’t be loaded while the connection is down.',
+    body: "The task can’t be loaded while the connection is down.",
   },
   transient: {
-    header: 'Couldn’t load this task',
-    body: 'The request failed.',
+    header: "Couldn’t load this task",
+    body: "The request failed.",
   },
 };
 
@@ -93,10 +82,7 @@ export interface TaskWriteSlot {
  * — no lock, no revision; remote writes stay last-write-wins, converging over
  * `task_changed`. Both surfaces call this so the invariant holds identically.
  */
-export function useTaskWriteSlot(
-  taskId: string,
-  editingField: EditingField,
-): TaskWriteSlot {
+export function useTaskWriteSlot(taskId: string, editingField: EditingField): TaskWriteSlot {
   const updateStatus = useUpdateTaskStatus();
   const assign = useAssignTask();
   const metaPending = updateStatus.isPending || assign.isPending;
@@ -122,12 +108,9 @@ export function useTaskWriteSlot(
 /** Statuses whose ASSIGNMENT is frozen. `/claim` refuses both server-side, so
  *  offering the control would promise a click the server won't honour; the row
  *  stays a plain read-only value. (The 409 remains the authority.) */
-const ASSIGNMENT_FROZEN: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
-  'done',
-  'closed',
-]);
+const ASSIGNMENT_FROZEN: ReadonlySet<TaskStatus> = new Set<TaskStatus>(["done", "closed"]);
 
-const TIMESTAMP_FORMAT = 'YYYY-MM-DD HH:mm';
+const TIMESTAMP_FORMAT = "YYYY-MM-DD HH:mm";
 
 export interface TaskMetaWriteProps extends TaskWriteSlot {
   /** The AUTHORITATIVE detail read (never a board summary merged per field). */
@@ -167,8 +150,8 @@ export function useTaskMetaRows({
 
   const rows: TaskMetaRowSpec[] = [
     {
-      key: 'task',
-      label: 'Task',
+      key: "task",
+      label: "Task",
       value: (
         <span className="font-mono text-[length:var(--text-meta)] text-text-secondary">
           #{view.task_number}
@@ -176,23 +159,20 @@ export function useTaskMetaRows({
       ),
     },
     {
-      key: 'status',
-      label: 'Status',
-      error: statusFailed ? 'Couldn’t update status.' : null,
+      key: "status",
+      label: "Status",
+      error: statusFailed ? "Couldn’t update status." : null,
       value: (
         <span className="flex items-center gap-1.5">
-          <TaskStatusBadge
-            status={view.status}
-            {...(busy ? {} : { onChange: onStatusChange })}
-          />
+          <TaskStatusBadge status={view.status} {...(busy ? {} : { onChange: onStatusChange })} />
           {statusPending ? <PendingSpinner /> : null}
         </span>
       ),
     },
     {
-      key: 'assignee',
-      label: 'Assignee',
-      error: assignFailed ? 'Couldn’t update assignee.' : null,
+      key: "assignee",
+      label: "Assignee",
+      error: assignFailed ? "Couldn’t update assignee." : null,
       value: (
         // Clearing is an inline ✕ on the current value (not a picker row), so
         // the dropdown holds only candidates. Revealed on row hover / focus so
@@ -202,9 +182,7 @@ export function useTaskMetaRows({
             <AssigneePicker
               conversationId={view.place.conversation_id}
               placement={view.place.kind}
-              currentAgentId={
-                view.assignee?.type === 'agent' ? view.assignee.id : null
-              }
+              currentAgentId={view.assignee?.type === "agent" ? view.assignee.id : null}
               directory={directory}
               onPick={onAssign}
             >
@@ -228,11 +206,11 @@ export function useTaskMetaRows({
     {
       // "From", not "Creator": answers where the task came from and reads as the
       // counterpart of the Assignee row rather than a second ownership claim.
-      key: 'from',
-      label: 'From',
+      key: "from",
+      label: "From",
       value: (
         <span className="flex min-w-0 items-center gap-1.5">
-          {view.creator.type !== 'system' && view.creator.id ? (
+          {view.creator.type !== "system" && view.creator.id ? (
             <PersonAvatar
               person={{ type: view.creator.type, id: view.creator.id }}
               name={view.creator.name}
@@ -248,11 +226,11 @@ export function useTaskMetaRows({
     // Only a workspace placement has a channel coordinate. A DirectPair task's
     // "channel" is the pair itself — there is nothing to name — so the row is
     // omitted rather than shown with a stand-in label (shiki dogfood, #2041).
-    ...(view.place.kind === 'workspace'
+    ...(view.place.kind === "workspace"
       ? [
           {
-            key: 'channel',
-            label: 'Channel',
+            key: "channel",
+            label: "Channel",
             value: (
               <span className="flex min-w-0 items-center gap-1.5">
                 <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
@@ -265,8 +243,8 @@ export function useTaskMetaRows({
         ]
       : []),
     {
-      key: 'created',
-      label: 'Created',
+      key: "created",
+      label: "Created",
       value: <Timestamp at={view.created_at} />,
     },
   ];
@@ -276,8 +254,8 @@ export function useTaskMetaRows({
   // the task has actually been edited.
   if (editor && editedAt !== null) {
     rows.push({
-      key: 'edited',
-      label: 'Edited',
+      key: "edited",
+      label: "Edited",
       value: (
         <span className="flex min-w-0 flex-col gap-1">
           <span className="flex min-w-0 items-center gap-1.5">
@@ -298,8 +276,8 @@ export function useTaskMetaRows({
 
   if (view.closed_at !== null) {
     rows.push({
-      key: 'closed',
-      label: 'Closed',
+      key: "closed",
+      label: "Closed",
       value: <Timestamp at={view.closed_at} />,
     });
   }
@@ -311,7 +289,7 @@ function Timestamp({ at, muted }: { at: number; muted?: boolean }): JSX.Element 
   return (
     <time
       dateTime={new Date(at).toISOString()}
-      className={cn('font-mono text-[length:var(--text-meta)]', muted && 'text-text-muted')}
+      className={cn("font-mono text-[length:var(--text-meta)]", muted && "text-text-muted")}
     >
       {dayjs(at).format(TIMESTAMP_FORMAT)}
     </time>
@@ -319,9 +297,7 @@ function Timestamp({ at, muted }: { at: number; muted?: boolean }): JSX.Element 
 }
 
 function PendingSpinner(): JSX.Element {
-  return (
-    <Loader2 className="size-3 shrink-0 animate-spin text-text-muted" aria-hidden />
-  );
+  return <Loader2 className="size-3 shrink-0 animate-spin text-text-muted" aria-hidden />;
 }
 
 function AssigneeValue({
@@ -373,7 +349,7 @@ function AssigneePicker({
   children,
 }: {
   conversationId: string;
-  placement: 'workspace' | 'direct_pair';
+  placement: "workspace" | "direct_pair";
   currentAgentId: string | null;
   directory: PersonDirectory;
   /** Candidates only — `null` (clearing) belongs to the inline ✕. */
@@ -416,7 +392,7 @@ function AssigneePicker({
           className="z-[var(--z-popover-nested)] min-w-[180px] max-w-[240px] bg-bg-floating p-1 shadow-popover outline-none"
           onCloseAutoFocus={(e) => e.preventDefault()}
         >
-          {placement === 'direct_pair' ? (
+          {placement === "direct_pair" ? (
             <DirectPairPickerBody
               conversationId={conversationId}
               currentAgentId={currentAgentId}
@@ -480,12 +456,12 @@ function CandidateList({
           <button
             key={c.id}
             type="button"
-            aria-current={c.isCurrent ? 'true' : undefined}
+            aria-current={c.isCurrent ? "true" : undefined}
             onClick={() => onChoose(c)}
             className="flex w-full min-w-0 items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1 text-left text-xs transition-colors hover:bg-bg-hover"
           >
             <PersonAvatar
-              person={{ type: 'agent', id: c.id }}
+              person={{ type: "agent", id: c.id }}
               name={c.displayName}
               {...directory}
             />
@@ -530,17 +506,24 @@ function WorkspacePickerBody({
 }): JSX.Element {
   const roster = useConversationMembers(conversationId);
   const candidates = useMemo<AssigneeCandidate[]>(() => {
-    if (roster.status !== 'resolved') return [];
+    if (roster.status !== "resolved") return [];
     return roster.members.flatMap((m) =>
-      m.kind === 'agent' && m.agent_id !== currentAgentId
-        ? [{ id: m.agent_id, name: m.name, displayName: m.display_name || m.name, isCurrent: false }]
+      m.kind === "agent" && m.agent_id !== currentAgentId
+        ? [
+            {
+              id: m.agent_id,
+              name: m.name,
+              displayName: m.display_name || m.name,
+              isCurrent: false,
+            },
+          ]
         : [],
     );
   }, [roster, currentAgentId]);
   return (
     <CandidateList
       candidates={candidates}
-      placeholder={roster.status === 'loading' ? 'Loading…' : 'No other agents here.'}
+      placeholder={roster.status === "loading" ? "Loading…" : "No other agents here."}
       directory={directory}
       onChoose={onChoose}
     />
@@ -573,11 +556,11 @@ function DirectPairPickerBody({
   const paneState = useDirectPairPane(conversationId);
   const view = projectDirectPairAssignee(paneState, currentAgentId);
   const placeholder =
-    view.status === 'loading'
-      ? 'Loading…'
-      : view.status === 'error'
-        ? 'Couldn’t load.'
-        : 'No agent to assign.';
+    view.status === "loading"
+      ? "Loading…"
+      : view.status === "error"
+        ? "Couldn’t load."
+        : "No agent to assign.";
   return (
     <CandidateList
       candidates={view.candidates}
@@ -620,7 +603,7 @@ export function InlineFieldEditor({
   onCancel,
 }: {
   taskId: string;
-  field: 'title' | 'content';
+  field: "title" | "content";
   initial: string;
   onDone: () => void;
   onCancel: () => void;
@@ -629,7 +612,7 @@ export function InlineFieldEditor({
   const [value, setValue] = useState(initial);
   // Why the editor stayed open after a blur (required title empty / body over
   // its raw limit), if at all — drives the inline error and the error border.
-  const [blocked, setBlocked] = useState<'empty' | 'over' | null>(null);
+  const [blocked, setBlocked] = useState<"empty" | "over" | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   // Escape marks a cancel BEFORE the editor unmounts, so the blur that follows
   // the unmount is a no-op — an explicit cancel must beat blur-to-save.
@@ -640,7 +623,7 @@ export function InlineFieldEditor({
   // no-op; a FAILED save unlatches so the kept draft can retry.
   const submittingRef = useRef(false);
 
-  const isTitle = field === 'title';
+  const isTitle = field === "title";
 
   // Both fields auto-grow so the box never scrolls internally — the host owns
   // the scroll. Reset to `auto` first (so a shrink after a delete is measured
@@ -652,7 +635,7 @@ export function InlineFieldEditor({
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.style.height = 'auto';
+    el.style.height = "auto";
     for (let i = 0; i < 4; i++) {
       const clipped = el.scrollHeight - el.clientHeight;
       if (clipped <= 0) break;
@@ -670,7 +653,7 @@ export function InlineFieldEditor({
     // Mirror the schema's non-empty title rule for instant feedback; the schema
     // stays the authority (and collapses internal whitespace on the server).
     if (isTitle && value.trim().length === 0) {
-      setBlocked('empty');
+      setBlocked("empty");
       return;
     }
     // Length is hard-blocked only for the body (raw 10000). Title length is NOT
@@ -678,14 +661,12 @@ export function InlineFieldEditor({
     // testing its limit, so the renderer can't compute the canonical length and
     // defers title length to the server (returns as `edit.isError`, stays open).
     if (!isTitle && value.length > TASK_CONTENT_MAX_LEN) {
-      setBlocked('over');
+      setBlocked("over");
       return;
     }
     submittingRef.current = true; // latch before the write settles
     try {
-      await edit.mutateAsync(
-        isTitle ? { taskId, title: value } : { taskId, body: value },
-      );
+      await edit.mutateAsync(isTitle ? { taskId, title: value } : { taskId, body: value });
     } catch {
       submittingRef.current = false; // failed — unlatch so a retry can resubmit
       return; // stay open; `edit.isError` renders the inline error, draft kept
@@ -695,12 +676,12 @@ export function InlineFieldEditor({
 
   function onKeyDown(e: React.KeyboardEvent): void {
     if (e.nativeEvent.isComposing) return; // mid IME composition — leave it alone
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void commit();
       return;
     }
-    if (e.key === 'Escape') {
+    if (e.key === "Escape") {
       // Cancel the edit WITHOUT dismissing any host layer: preventDefault stops
       // a Radix DismissableLayer from also closing, and the cancel flag makes
       // the ensuing blur a no-op.
@@ -711,19 +692,19 @@ export function InlineFieldEditor({
   }
 
   const errorMsg =
-    blocked === 'empty'
-      ? 'Title can’t be empty.'
-      : blocked === 'over'
+    blocked === "empty"
+      ? "Title can’t be empty."
+      : blocked === "over"
         ? `Keep it under ${TASK_CONTENT_MAX_LEN} characters.`
         : edit.isError
-          ? 'Couldn’t save changes. Try again.'
+          ? "Couldn’t save changes. Try again."
           : null;
 
   return (
     <div className="flex flex-col gap-1">
       <Textarea
         ref={ref}
-        aria-label={isTitle ? 'Task title' : 'Task description'}
+        aria-label={isTitle ? "Task title" : "Task description"}
         rows={1}
         value={value}
         onChange={(e) => {
@@ -735,11 +716,11 @@ export function InlineFieldEditor({
         onBlur={() => void commit()}
         autoFocus
         className={cn(
-          'resize-none overflow-hidden',
+          "resize-none overflow-hidden",
           isTitle
-            ? 'min-h-0 py-1 text-base font-medium leading-snug'
-            : 'min-h-[120px] text-sm leading-relaxed',
-          errorMsg && 'border-error focus-visible:border-error',
+            ? "min-h-0 py-1 text-base font-medium leading-snug"
+            : "min-h-[120px] text-sm leading-relaxed",
+          errorMsg && "border-error focus-visible:border-error",
         )}
       />
       {errorMsg ? <p className="text-xs text-error">{errorMsg}</p> : null}

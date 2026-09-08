@@ -28,11 +28,11 @@
 // SSOT lives in the renderer's `features/app-shell/keyboard-shortcuts.ts`; the
 // type below is the main-side twin.
 
-export type ContextualCloseOutcome = 'closed-panel' | 'background-app';
+export type ContextualCloseOutcome = "closed-panel" | "background-app";
 
 /** The only outcome that triggers the app-level action; every other value
  *  (in-app surface handled it, or junk) is a no-op. */
-const BACKGROUND_APP: ContextualCloseOutcome = 'background-app';
+const BACKGROUND_APP: ContextualCloseOutcome = "background-app";
 
 /**
  * The window a single ⌘W press is bound to. Captured at press time and never

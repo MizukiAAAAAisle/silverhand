@@ -1,4 +1,4 @@
-import { conversationScope, conversationSideScope } from '@silverhand/shared';
+import { conversationScope, conversationSideScope } from "@silverhand/shared";
 
 export function wsConversationScope(conversationId: string): string {
   return conversationScope(conversationId);

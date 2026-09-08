@@ -23,15 +23,15 @@
  * spelling) while the avatar variant vocabulary is `'user'` (the message-author
  * one). The translation happens HERE, once, instead of at each rendering surface.
  */
-import type { AgentDto, DirectPairCounterpart } from '@silverhand/shared';
-import type { AuthorAvatar, AuthorAvatarSources } from '@/components/chat/author-presentation';
+import type { AgentDto, DirectPairCounterpart } from "@silverhand/shared";
+import type { AuthorAvatar, AuthorAvatarSources } from "@/components/chat/author-presentation";
 
 export interface CounterpartPresentation {
   /** The name to render — the pair's whole title. */
   label: string;
   /** The ENDPOINT kind, kept in the endpoint's own spelling. */
-  kind: 'agent' | 'human';
-  status: 'active' | 'deleted';
+  kind: "agent" | "human";
+  status: "active" | "deleted";
   /** Only a deleted counterpart shows the quiet marker, exactly like a byline. */
   isDeleted: boolean;
   /** The actor id for click-to-profile, or null when there is no profile to open.
@@ -41,24 +41,20 @@ export interface CounterpartPresentation {
 }
 
 /** Resolve a counterpart into its presentation. Pure. */
-export function presentCounterpart(
-  counterpart: DirectPairCounterpart,
-): CounterpartPresentation {
-  if (counterpart.status === 'deleted') {
+export function presentCounterpart(counterpart: DirectPairCounterpart): CounterpartPresentation {
+  if (counterpart.status === "deleted") {
     return {
       // Nothing about an endpoint is snapshotted, so this is as specific as the
       // truth allows. "Deleted", not "Unknown": the server proved the principal
       // is gone (the endpoint column still names it), which is a stronger claim
       // than a byline's `unresolved`.
-      label: counterpart.kind === 'agent' ? 'Deleted agent' : 'Deleted user',
+      label: counterpart.kind === "agent" ? "Deleted agent" : "Deleted user",
       kind: counterpart.kind,
-      status: 'deleted',
+      status: "deleted",
       isDeleted: true,
       navigableId: null,
       avatar:
-        counterpart.kind === 'agent'
-          ? { variant: 'neutral-agent' }
-          : { variant: 'neutral-user' },
+        counterpart.kind === "agent" ? { variant: "neutral-agent" } : { variant: "neutral-user" },
     };
   }
   // Same label rule as a byline (`presentAuthor`): the display name when the
@@ -67,13 +63,13 @@ export function presentCounterpart(
   return {
     label,
     kind: counterpart.kind,
-    status: 'active',
+    status: "active",
     isDeleted: false,
     navigableId: counterpart.id,
     avatar:
-      counterpart.kind === 'agent'
-        ? { variant: 'agent', id: counterpart.id, runtime: counterpart.runtime }
-        : { variant: 'user', id: counterpart.id },
+      counterpart.kind === "agent"
+        ? { variant: "agent", id: counterpart.id, runtime: counterpart.runtime }
+        : { variant: "user", id: counterpart.id },
   };
 }
 
@@ -93,8 +89,8 @@ export function presentCounterpart(
  */
 export function counterpartFromAgent(agent: AgentDto): DirectPairCounterpart {
   return {
-    status: 'active',
-    kind: 'agent',
+    status: "active",
+    kind: "agent",
     id: agent.id,
     name: agent.name,
     display_name: agent.display_name,
@@ -125,8 +121,8 @@ export function collectCounterpartAvatarSources(
   const users = new Map<string, string | null>();
   for (const pair of pairs) {
     const c = pair.counterpart;
-    if (c.status !== 'active') continue;
-    if (c.kind === 'agent') agents.set(c.id, c.avatar_url);
+    if (c.status !== "active") continue;
+    if (c.kind === "agent") agents.set(c.id, c.avatar_url);
     else users.set(c.id, c.avatar_url);
   }
   return {

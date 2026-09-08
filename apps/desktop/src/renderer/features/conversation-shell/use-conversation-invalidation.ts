@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from "react";
 
-import type { ConversationVisibility } from '@silverhand/shared';
+import type { ConversationVisibility } from "@silverhand/shared";
 
 import {
   useArchiveChannel,
@@ -8,17 +8,17 @@ import {
   useLeaveChannel,
   useSetChannelVisibility,
   type ChannelListItem,
-} from '@/features/workspaces/hooks';
+} from "@/features/workspaces/hooks";
 
 import {
   useForeignWorkspaceChannelRemovalSync,
   useViewerChannelRemovalSync,
-} from '@/features/channels/useViewerChannelRemovalSync';
+} from "@/features/channels/useViewerChannelRemovalSync";
 
-import { useNav, useRouteState } from '@/router';
-import { lastChannelByWorkspace, persistLastChannel } from '@/lib/place-memory';
+import { useNav, useRouteState } from "@/router";
+import { lastChannelByWorkspace, persistLastChannel } from "@/lib/place-memory";
 
-import { pickFallbackAfterArchive } from '@/lib/archive-fallback';
+import { pickFallbackAfterArchive } from "@/lib/archive-fallback";
 
 export interface RemovedPrimary {
   workspaceId: string;
@@ -116,7 +116,7 @@ export function useConversationInvalidation({
     async (channelId: string) => {
       const res = await leaveChannel.mutateAsync(channelId);
       const isPrivate =
-        res.channel.roster_policy === 'open' && res.channel.visibility === 'private';
+        res.channel.roster_policy === "open" && res.channel.visibility === "private";
       if (!isPrivate) {
         return;
       }

@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react';
-import type { AppSection } from '@/components/layout/NavRail';
-import type { RouteState } from '@/router';
+import { useEffect, useRef } from "react";
+import type { AppSection } from "@/components/layout/NavRail";
+import type { RouteState } from "@/router";
 
 /**
  * App-wide keyboard shortcuts. Deliberately a SMALL, fixed set —
@@ -24,7 +24,7 @@ import type { RouteState } from '@/router';
 
 /** The five primary nav-rail sections, in rail order. `settings` is a bottom
  *  utility button, deliberately NOT bound to a digit. */
-export type NavShortcutSection = Exclude<AppSection, 'settings'>;
+export type NavShortcutSection = Exclude<AppSection, "settings">;
 
 /** The nav-section subset of `useNav()` this feature drives. Structural so the
  *  hook doesn't couple to the full (large) nav API shape. */
@@ -43,30 +43,30 @@ export const NAV_SECTION_SHORTCUTS: ReadonlyArray<{
   code: string;
   section: NavShortcutSection;
 }> = [
-  { digit: 1, code: 'Digit1', section: 'chat' },
-  { digit: 2, code: 'Digit2', section: 'activity' },
-  { digit: 3, code: 'Digit3', section: 'tasks' },
-  { digit: 4, code: 'Digit4', section: 'members' },
-  { digit: 5, code: 'Digit5', section: 'computers' },
+  { digit: 1, code: "Digit1", section: "chat" },
+  { digit: 2, code: "Digit2", section: "activity" },
+  { digit: 3, code: "Digit3", section: "tasks" },
+  { digit: 4, code: "Digit4", section: "members" },
+  { digit: 5, code: "Digit5", section: "computers" },
 ];
 
 /** Route a section to its nav call. Pure (no event / DOM) so the mapping is
  *  unit-testable without a keyboard harness. */
 export function dispatchNavSection(nav: NavSectionApi, section: NavShortcutSection): void {
   switch (section) {
-    case 'chat':
+    case "chat":
       nav.toChat();
       return;
-    case 'activity':
+    case "activity":
       nav.toActivity();
       return;
-    case 'tasks':
+    case "tasks":
       nav.toTasks();
       return;
-    case 'members':
+    case "members":
       nav.toMembers();
       return;
-    case 'computers':
+    case "computers":
       nav.toComputers();
       return;
   }
@@ -91,8 +91,8 @@ export function useNavSectionShortcuts(nav: NavSectionApi): void {
       event.preventDefault();
       dispatchNavSection(navRef.current, match.section);
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 }
 
@@ -108,18 +108,18 @@ export function useNavSectionShortcuts(nav: NavSectionApi): void {
  *                        never destroyed — the session survives and ⌘Tab / the
  *                        dock bring it straight back.
  */
-export type ContextualCloseOutcome = 'closed-panel' | 'background-app';
+export type ContextualCloseOutcome = "closed-panel" | "background-app";
 
 /** Which surface to peel this press, or none. */
 type CloseTarget =
-  | 'human'
-  | 'agent'
-  | 'files'
-  | 'task'
-  | 'side'
-  | 'thread'
-  | 'threads'
-  | 'activity-channel'
+  | "human"
+  | "agent"
+  | "files"
+  | "task"
+  | "side"
+  | "thread"
+  | "threads"
+  | "activity-channel"
   | null;
 
 /** The authoritative slice of state the ⌘W ladder reads at keypress time. ⌘W
@@ -175,26 +175,26 @@ export interface ContextualCloseResolution {
  */
 export function resolveContextualClose(state: ContextualCloseState): ContextualCloseResolution {
   if (state.agentPanelId != null) {
-    return { outcome: 'closed-panel', target: 'agent' };
+    return { outcome: "closed-panel", target: "agent" };
   }
   if (state.humanPanelId != null) {
-    return { outcome: 'closed-panel', target: 'human' };
+    return { outcome: "closed-panel", target: "human" };
   }
-  if (state.filesListOpen) return { outcome: 'closed-panel', target: 'files' };
-  if (state.taskPaneOpen) return { outcome: 'closed-panel', target: 'task' };
+  if (state.filesListOpen) return { outcome: "closed-panel", target: "files" };
+  if (state.taskPaneOpen) return { outcome: "closed-panel", target: "task" };
   if (state.sideConversationId != null) {
-    return { outcome: 'closed-panel', target: 'side' };
+    return { outcome: "closed-panel", target: "side" };
   }
   if (state.threadRootId != null) {
-    return { outcome: 'closed-panel', target: 'thread' };
+    return { outcome: "closed-panel", target: "thread" };
   }
   if (state.threadsListOpen) {
-    return { outcome: 'closed-panel', target: 'threads' };
+    return { outcome: "closed-panel", target: "threads" };
   }
   if (state.activityChannelOpen) {
-    return { outcome: 'closed-panel', target: 'activity-channel' };
+    return { outcome: "closed-panel", target: "activity-channel" };
   }
-  return { outcome: 'background-app', target: null };
+  return { outcome: "background-app", target: null };
 }
 
 /** The close half of `useNav()` this feature drives. Structural, as above. */
@@ -213,14 +213,14 @@ export interface ContextualCloseNav {
 
 type ContextualCloseRoute = Pick<
   RouteState,
-  | 'section'
-  | 'channelId'
-  | 'agentPanelId'
-  | 'humanPanelId'
-  | 'filesListOpen'
-  | 'sideConversationId'
-  | 'threadRootId'
-  | 'threadsListOpen'
+  | "section"
+  | "channelId"
+  | "agentPanelId"
+  | "humanPanelId"
+  | "filesListOpen"
+  | "sideConversationId"
+  | "threadRootId"
+  | "threadsListOpen"
 >;
 
 /**
@@ -256,31 +256,31 @@ export function useContextualCloseResponder(
         threadsListOpen: route.threadsListOpen,
         // Only the Activity section's drilled-in channel is a peel target; the
         // Chat section's main channel is not (⌘W backgrounds the app there).
-        activityChannelOpen: route.section === 'activity' && route.channelId != null,
+        activityChannelOpen: route.section === "activity" && route.channelId != null,
       });
       switch (target) {
-        case 'agent':
+        case "agent":
           nav.closeAgentPanel();
           break;
-        case 'human':
+        case "human":
           nav.closeHumanPanel();
           break;
-        case 'files':
+        case "files":
           nav.closeFilesList();
           break;
-        case 'task':
+        case "task":
           nav.closeTask();
           break;
-        case 'side':
+        case "side":
           nav.closeSide();
           break;
-        case 'thread':
+        case "thread":
           nav.closeThread();
           break;
-        case 'threads':
+        case "threads":
           nav.closeThreadsList();
           break;
-        case 'activity-channel':
+        case "activity-channel":
           // Base-view drill-in: navigate back to the list, NOT an overlay-param
           // clear — this is the one rung that changes the path.
           nav.toActivity();

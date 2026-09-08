@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronRight,
@@ -11,7 +11,7 @@ import {
   ShieldCheck,
   Terminal,
   TriangleAlert,
-} from 'lucide-react';
+} from "lucide-react";
 import {
   MCP_CONFIG_FILENAME,
   parseMcpConfig,
@@ -25,12 +25,12 @@ import {
   type McpProbeResult,
   type McpServerConfig,
   type RuntimeKind,
-} from '@silverhand/shared';
-import { cn } from '@/lib/cn';
-import { ApiError } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { ProfileSection } from '@/features/common/ProfileSummarySections';
-import { useAgentProfileMcp, useMcpProbe } from './hooks';
+} from "@silverhand/shared";
+import { cn } from "@/lib/cn";
+import { ApiError } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { ProfileSection } from "@/features/common/ProfileSummarySections";
+import { useAgentProfileMcp, useMcpProbe } from "./hooks";
 
 interface AgentMcpPaneProps {
   agentId: string;
@@ -91,9 +91,7 @@ export function AgentMcpPane({ agentId, runtime }: AgentMcpPaneProps): JSX.Eleme
     return <PaneMessage>Couldn't load MCP config. {String(query.error)}</PaneMessage>;
   }
 
-  return (
-    <ProfileMcpScope agentId={agentId} runtime={runtime} raw={query.data ?? null} />
-  );
+  return <ProfileMcpScope agentId={agentId} runtime={runtime} raw={query.data ?? null} />;
 }
 
 // ── Profile scope block ──────────────────────────────────────────────────
@@ -111,7 +109,7 @@ function ProfileMcpScope({
   // bytes we already hold — not the "Check config" action, which is the
   // explicit, button-triggered verdict below. A malformed file simply can't
   // render a summary; we say so and lean on Check config (or the raw view).
-  const parsed = useMemo(() => parseMcpConfig(raw ?? ''), [raw]);
+  const parsed = useMemo(() => parseMcpConfig(raw ?? ""), [raw]);
   const servers = parsed.ok ? parsed.config.mcpServers : null;
   const serverNames = servers ? Object.keys(servers) : [];
   // Does this runtime actually load profile MCP at spawn? When not, the config
@@ -127,7 +125,7 @@ function ProfileMcpScope({
           <h2 className="font-serif text-lg font-semibold leading-tight text-text-primary">
             Profile MCP
           </h2>
-          {runtime !== 'pi' ? (
+          {runtime !== "pi" ? (
             <p className="mt-1 text-sm text-text-muted">
               Global MCP servers, loaded on top of the runtime's own.
             </p>
@@ -138,20 +136,18 @@ function ProfileMcpScope({
 
       {supported ? (
         <NoticeLine icon={<Info className="size-3.5 shrink-0" />}>
-          Changes take effect at the agent's <strong>next spawn</strong> — this is
-          not a hot reload.
+          Changes take effect at the agent's <strong>next spawn</strong> — this is not a hot reload.
         </NoticeLine>
       ) : (
         <div className="flex items-start gap-2 border border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed text-text-secondary">
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-error" />
           <span>
-            {runtime === 'pi' ? (
+            {runtime === "pi" ? (
               <>MCP is configured through Pi extensions. Profile MCP settings do not apply to Pi.</>
             ) : (
               <>
-                Profile MCP is not loaded for <strong>{runtimeLabel(runtime)}</strong>{' '}
-                yet. The servers below are kept but{' '}
-                <strong>ignored at the next spawn</strong>.
+                Profile MCP is not loaded for <strong>{runtimeLabel(runtime)}</strong> yet. The
+                servers below are kept but <strong>ignored at the next spawn</strong>.
               </>
             )}
           </span>
@@ -163,11 +159,11 @@ function ProfileMcpScope({
           <div className="flex items-start gap-2 text-sm text-text-secondary">
             <TriangleAlert className="size-4 shrink-0 text-error" />
             <span>
-              Can't render a summary — the config isn't valid.{' '}
+              Can't render a summary — the config isn't valid.{" "}
               {supported ? (
                 <>
-                  Run <strong>Check config</strong> for the exact error, or
-                  expand the raw view below.
+                  Run <strong>Check config</strong> for the exact error, or expand the raw view
+                  below.
                 </>
               ) : (
                 <>Expand the raw view below to inspect it.</>
@@ -178,7 +174,7 @@ function ProfileMcpScope({
           <EmptyServers />
         ) : (
           <ul className="flex flex-col divide-y divide-border-subtle/70">
-            {serverNames.map(name => (
+            {serverNames.map((name) => (
               <ServerRow
                 key={name}
                 agentId={agentId}
@@ -209,11 +205,9 @@ function ServerRow({
   server: McpServerConfig;
   canProbe: boolean;
 }): JSX.Element {
-  const isRemote = 'url' in server;
-  const type = isRemote ? server.type : 'stdio';
-  const target = isRemote
-    ? server.url
-    : [server.command, ...(server.args ?? [])].join(' ');
+  const isRemote = "url" in server;
+  const type = isRemote ? server.type : "stdio";
+  const target = isRemote ? server.url : [server.command, ...(server.args ?? [])].join(" ");
   // Secrets live in env / headers values — we count keys, never show values.
   const secretCount = isRemote
     ? server.headers
@@ -222,8 +216,8 @@ function ServerRow({
     : server.env
       ? Object.keys(server.env).length
       : 0;
-  const secretLabel = isRemote ? 'headers' : 'env';
-  const runtimeName = runtimeMcpServerName('profile', name);
+  const secretLabel = isRemote ? "headers" : "env";
+  const runtimeName = runtimeMcpServerName("profile", name);
 
   // One probe mutation per row → isolated pending/result state. `variables`
   // tells which action (Test connection vs List tools) is currently in flight.
@@ -233,8 +227,7 @@ function ServerRow({
   // The probe result is the OUTPUT of an explicit action — only mount its block
   // once something has happened, so an idle row stays pure static config and the
   // result never reads as just another metadata field.
-  const showProbe =
-    canProbe && (probe.isPending || probe.isError || probe.data != null);
+  const showProbe = canProbe && (probe.isPending || probe.isError || probe.data != null);
 
   return (
     <li className="flex flex-col gap-1.5 py-3 first:pt-0 last:pb-0">
@@ -258,10 +251,7 @@ function ServerRow({
           </div>
         ) : null}
       </div>
-      <div
-        className="flex items-center gap-1.5 font-mono text-xs text-text-muted"
-        title={target}
-      >
+      <div className="flex items-center gap-1.5 font-mono text-xs text-text-muted" title={target}>
         {isRemote ? (
           <Globe className="size-3 shrink-0" />
         ) : (
@@ -323,11 +313,7 @@ function ProbeButton({
  * `ok: false`, the host reached a `phase` and stopped). `message` is already
  * redacted server-side.
  */
-function ProbeResult({
-  probe,
-}: {
-  probe: ReturnType<typeof useMcpProbe>;
-}): JSX.Element | null {
+function ProbeResult({ probe }: { probe: ReturnType<typeof useMcpProbe> }): JSX.Element | null {
   if (probe.isPending) {
     return (
       <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
@@ -339,14 +325,8 @@ function ProbeResult({
   if (probe.isError) {
     const err = probe.error;
     const detail =
-      err instanceof ApiError && err.status === 404
-        ? 'probe endpoint not available'
-        : String(err);
-    return (
-      <ProbeLine ok={false}>
-        Probe failed — {detail}
-      </ProbeLine>
-    );
+      err instanceof ApiError && err.status === 404 ? "probe endpoint not available" : String(err);
+    return <ProbeLine ok={false}>Probe failed — {detail}</ProbeLine>;
   }
   const result = probe.data;
   if (!result) return null;
@@ -362,7 +342,7 @@ function ProbeResult({
 
   // Success. `tools` phase → the user asked for tools; otherwise it's a plain
   // reachability check that completed `initialize`.
-  if (result.phase === 'tools') {
+  if (result.phase === "tools") {
     return <ProbeTools tools={result.tools ?? []} />;
   }
   return (
@@ -370,48 +350,45 @@ function ProbeResult({
       Connected
       {result.server_info?.name ? (
         <span className="text-text-muted">
-          {' '}· {result.server_info.name}
-          {result.server_info.version ? ` ${result.server_info.version}` : ''}
+          {" "}
+          · {result.server_info.name}
+          {result.server_info.version ? ` ${result.server_info.version}` : ""}
         </span>
       ) : null}
     </ProbeLine>
   );
 }
 
-function ProbeTools({
-  tools,
-}: {
-  tools: NonNullable<McpProbeResult['tools']>;
-}): JSX.Element {
+function ProbeTools({ tools }: { tools: NonNullable<McpProbeResult["tools"]> }): JSX.Element {
   const [open, setOpen] = useState(true);
   const list = tools ?? [];
   return (
     <div className="flex flex-col gap-1">
       <button
         type="button"
-        onClick={() => setOpen(o => !o)}
+        onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-1.5 text-xs text-success transition-colors"
       >
         <ShieldCheck className="size-3.5 shrink-0" />
         <span>
-          Connected · {list.length} tool{list.length === 1 ? '' : 's'}
+          Connected · {list.length} tool{list.length === 1 ? "" : "s"}
         </span>
         {list.length > 0 ? (
           <ChevronRight
-            className={cn(
-              'size-3.5 text-text-muted transition-transform',
-              open ? 'rotate-90' : '',
-            )}
+            className={cn("size-3.5 text-text-muted transition-transform", open ? "rotate-90" : "")}
           />
         ) : null}
       </button>
       {open && list.length > 0 ? (
         <ul className="max-h-40 overflow-auto border border-border-subtle bg-bg-base/60 p-2">
-          {list.map(tool => (
+          {list.map((tool) => (
             <li key={tool.name} className="flex flex-col py-0.5">
               <span className="font-mono text-xs text-text-primary">{tool.name}</span>
               {tool.description ? (
-                <span className="truncate text-[length:var(--text-meta)] text-text-muted" title={tool.description}>
+                <span
+                  className="truncate text-[length:var(--text-meta)] text-text-muted"
+                  title={tool.description}
+                >
                   {tool.description}
                 </span>
               ) : null}
@@ -423,20 +400,9 @@ function ProbeTools({
   );
 }
 
-function ProbeLine({
-  ok,
-  children,
-}: {
-  ok: boolean;
-  children: ReactNode;
-}): JSX.Element {
+function ProbeLine({ ok, children }: { ok: boolean; children: ReactNode }): JSX.Element {
   return (
-    <div
-      className={cn(
-        'flex items-start gap-1.5 text-xs',
-        ok ? 'text-success' : 'text-error',
-      )}
-    >
+    <div className={cn("flex items-start gap-1.5 text-xs", ok ? "text-success" : "text-error")}>
       {ok ? (
         <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
       ) : (
@@ -449,18 +415,18 @@ function ProbeLine({
 
 function probePhaseLabel(phase: McpProbePhase): string {
   switch (phase) {
-    case 'parse':
-      return 'Config parse failed';
-    case 'not_found':
-      return 'Server not found in config';
-    case 'connect':
-      return 'Connection failed';
-    case 'initialize':
-      return 'Initialize failed';
-    case 'tools':
-      return 'Tools list failed';
+    case "parse":
+      return "Config parse failed";
+    case "not_found":
+      return "Server not found in config";
+    case "connect":
+      return "Connection failed";
+    case "initialize":
+      return "Initialize failed";
+    case "tools":
+      return "Tools list failed";
     default:
-      return 'Probe failed';
+      return "Probe failed";
   }
 }
 
@@ -474,9 +440,7 @@ function TypeBadge({ type }: { type: string }): JSX.Element {
 
 // ── Check config (explicit, client-side, no side effects) ────────────────
 
-type ConfigCheckResult =
-  | { ok: true; count: number }
-  | { ok: false; error: string };
+type ConfigCheckResult = { ok: true; count: number } | { ok: false; error: string };
 
 /**
  * Run the canonical STATIC config check in-process. Identical source to the
@@ -487,7 +451,7 @@ type ConfigCheckResult =
  * liveness/protocol check (that's the daemon's Test connection, phase 2).
  */
 function runConfigCheck(raw: string | null, runtime: RuntimeKind): ConfigCheckResult {
-  const parsed = parseMcpConfig(raw ?? '');
+  const parsed = parseMcpConfig(raw ?? "");
   if (!parsed.ok) return { ok: false, error: parsed.error };
   try {
     projectForRuntime(parsed.config, runtime);
@@ -505,17 +469,15 @@ function projectForRuntime(config: McpConfig, runtime: RuntimeKind): void {
   // instead (the UI also hides the trigger for these via
   // `runtimeSupportsProfileMcp`, so this is the belt-and-braces guard).
   switch (runtime) {
-    case 'claude':
-    case 'qoder':
-      toClaudeMcpConfig(config, 'profile');
+    case "claude":
+    case "qoder":
+      toClaudeMcpConfig(config, "profile");
       return;
-    case 'codex':
-      toCodexMcpOverrides(config, 'profile');
+    case "codex":
+      toCodexMcpOverrides(config, "profile");
       return;
     default:
-      throw new Error(
-        `Profile MCP is not loaded for ${runtimeLabel(runtime)}.`,
-      );
+      throw new Error(`Profile MCP is not loaded for ${runtimeLabel(runtime)}.`);
   }
 }
 
@@ -564,7 +526,7 @@ function CheckBadge({ result }: { result: ConfigCheckResult }): JSX.Element {
       <div className="flex items-center gap-1.5 text-xs text-success">
         <ShieldCheck className="size-3.5 shrink-0" />
         <span>
-          Config OK · {result.count} server{result.count === 1 ? '' : 's'}
+          Config OK · {result.count} server{result.count === 1 ? "" : "s"}
         </span>
       </div>
     );
@@ -596,13 +558,13 @@ function RawConfig({ raw }: { raw: string | null }): JSX.Element {
         <>
           <button
             type="button"
-            onClick={() => setOpen(o => !o)}
+            onClick={() => setOpen((o) => !o)}
             className="flex items-center gap-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
           >
             <ChevronRight
-              className={cn('size-3.5 transition-transform', open ? 'rotate-90' : '')}
+              className={cn("size-3.5 transition-transform", open ? "rotate-90" : "")}
             />
-            {open ? 'Hide' : 'Show'} raw config
+            {open ? "Hide" : "Show"} raw config
           </button>
           {open ? (
             <pre className="mt-2 max-h-96 overflow-auto border border-border-subtle bg-bg-base/60 p-3 font-mono text-xs leading-relaxed text-text-primary">
@@ -647,13 +609,7 @@ function EmptyCard({
   );
 }
 
-function NoticeLine({
-  icon,
-  children,
-}: {
-  icon: JSX.Element;
-  children: ReactNode;
-}): JSX.Element {
+function NoticeLine({ icon, children }: { icon: JSX.Element; children: ReactNode }): JSX.Element {
   return (
     <div className="flex items-start gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed text-text-muted">
       <span className="mt-0.5 text-text-muted">{icon}</span>
@@ -664,9 +620,7 @@ function NoticeLine({
 
 function PaneMessage({ children }: { children: ReactNode }): JSX.Element {
   return (
-    <div className="mx-auto max-w-3xl py-10 text-center text-sm text-text-muted">
-      {children}
-    </div>
+    <div className="mx-auto max-w-3xl py-10 text-center text-sm text-text-muted">{children}</div>
   );
 }
 
@@ -690,13 +644,13 @@ function CopyButton({
         });
       }}
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle px-2 py-1 text-text-secondary transition-colors hover:border-border hover:text-text-primary',
-        mono ? 'font-mono text-xs' : 'text-[length:var(--text-meta)]',
+        "inline-flex items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle px-2 py-1 text-text-secondary transition-colors hover:border-border hover:text-text-primary",
+        mono ? "font-mono text-xs" : "text-[length:var(--text-meta)]",
       )}
       title="Copy to clipboard"
     >
       {copied ? <Check className="size-3 shrink-0" /> : <Copy className="size-3 shrink-0" />}
-      <span className="truncate">{copied ? 'Copied' : label}</span>
+      <span className="truncate">{copied ? "Copied" : label}</span>
     </button>
   );
 }

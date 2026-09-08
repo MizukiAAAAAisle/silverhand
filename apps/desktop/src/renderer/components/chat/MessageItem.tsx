@@ -1,7 +1,7 @@
-import { type FocusEvent, useCallback, useEffect, useRef, useState } from 'react';
-import dayjs from 'dayjs';
-import relativeTime from 'dayjs/plugin/relativeTime';
-import { Bookmark, Check, Clock, Download, Eye, FileText, SmilePlus } from 'lucide-react';
+import { type FocusEvent, useCallback, useEffect, useRef, useState } from "react";
+import dayjs from "dayjs";
+import relativeTime from "dayjs/plugin/relativeTime";
+import { Bookmark, Check, Clock, Download, Eye, FileText, SmilePlus } from "lucide-react";
 import type {
   AgentDto,
   AttachmentSnapshot,
@@ -11,48 +11,48 @@ import type {
   TaskAssigneeDto,
   ThreadReplyPreviewRow,
   UserDto,
-} from '@silverhand/shared';
-import { resolveAttachmentLabels } from '@silverhand/shared';
-import { ThreadIcon } from '@/components/icons/conversation-icons';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { AgentInfoPopover } from '@/components/AgentInfoPopover';
-import { HumanInfoPopover } from '@/components/HumanInfoPopover';
-import { useNav } from '@/router';
+} from "@silverhand/shared";
+import { resolveAttachmentLabels } from "@silverhand/shared";
+import { ThreadIcon } from "@/components/icons/conversation-icons";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { AgentInfoPopover } from "@/components/AgentInfoPopover";
+import { HumanInfoPopover } from "@/components/HumanInfoPopover";
+import { useNav } from "@/router";
 import {
   getAttachmentBlobUrl,
   loadAttachmentBlobUrl,
   useAttachmentBlobToken,
-} from '@/lib/attachment-blob-cache';
-import { formatUserDisplayName, isCurrentUserId, type UserNameResolver } from '@/lib/current-user';
-import { Lightbox } from './Lightbox';
-import { saveAttachmentToDisk } from './save-attachment';
-import { openAttachmentExternally } from './open-attachment';
-import { attachmentPreviewKind } from '@/lib/attachment-preview';
-import { Markdown } from './Markdown';
+} from "@/lib/attachment-blob-cache";
+import { formatUserDisplayName, isCurrentUserId, type UserNameResolver } from "@/lib/current-user";
+import { Lightbox } from "./Lightbox";
+import { saveAttachmentToDisk } from "./save-attachment";
+import { openAttachmentExternally } from "./open-attachment";
+import { attachmentPreviewKind } from "@/lib/attachment-preview";
+import { Markdown } from "./Markdown";
 import {
   presentAuthor,
   authorStateLabel,
   classifyRowAuthor,
   type AuthorPresentation,
-} from './author-presentation';
-import { AuthorAvatarView, AuthorName } from './author-avatar-view';
-import type { ChannelReference } from './ChannelRef';
-import type { WorkspaceChannelReference } from './ConversationRef';
-import { MessageContextMenu } from './MessageContextMenu';
-import type { CachedMessage } from '@/features/channels/pending-message';
-import { isCommittedMessage } from '@/features/channels/pending-message';
-import { MessageReactions } from './MessageReactions';
-import { MessageRowContent } from './MessageRowContent';
-import { ThreadReplyPreview, visibleThreadReplyRows } from './ThreadReplyPreview';
-import { ReactionPicker } from './ReactionPicker';
+} from "./author-presentation";
+import { AuthorAvatarView, AuthorName } from "./author-avatar-view";
+import type { ChannelReference } from "./ChannelRef";
+import type { WorkspaceChannelReference } from "./ConversationRef";
+import { MessageContextMenu } from "./MessageContextMenu";
+import type { CachedMessage } from "@/features/channels/pending-message";
+import { isCommittedMessage } from "@/features/channels/pending-message";
+import { MessageReactions } from "./MessageReactions";
+import { MessageRowContent } from "./MessageRowContent";
+import { ThreadReplyPreview, visibleThreadReplyRows } from "./ThreadReplyPreview";
+import { ReactionPicker } from "./ReactionPicker";
 import {
   StatusPicker,
   taskStatusLabel,
   TASK_STATUS_ICON,
-} from '@/components/tasks/TaskStatusBadge';
-import { useUpdateTaskStatus } from '@/features/tasks/hooks';
-import { useToggleReaction } from '@/features/channels/reaction-hooks';
-import { useMessageLayoutMode } from './useMessageLayoutMode';
+} from "@/components/tasks/TaskStatusBadge";
+import { useUpdateTaskStatus } from "@/features/tasks/hooks";
+import { useToggleReaction } from "@/features/channels/reaction-hooks";
+import { useMessageLayoutMode } from "./useMessageLayoutMode";
 
 // Idempotent — the reply badge's "{time} ago" label uses dayjs.fromNow().
 // Other modules (useRelativeTime) extend the same plugin; re-extending is a
@@ -269,10 +269,10 @@ export interface MessageItemProps {
  */
 export function MessageItem(props: MessageItemProps): JSX.Element | null {
   const rowAuthor = classifyRowAuthor(props.message.from_kind, props.message.author);
-  if (rowAuthor.kind === 'actor') {
+  if (rowAuthor.kind === "actor") {
     return <ActorMessageItem {...props} author={rowAuthor.author} />;
   }
-  if (rowAuthor.kind === 'missing') {
+  if (rowAuthor.kind === "missing") {
     return <MissingAuthorRow message={props.message} reason={rowAuthor.reason} />;
   }
   return null; // 'system' — parents route these to SystemMessage.
@@ -283,7 +283,7 @@ function MissingAuthorRow({
   reason,
 }: {
   message: CachedMessage;
-  reason: 'absent' | 'kind-mismatch';
+  reason: "absent" | "kind-mismatch";
 }): null {
   useEffect(() => {
     console.error(
@@ -340,7 +340,7 @@ function ActorMessageItem({
   searchQuery,
   searchActive = false,
 }: ActorMessageItemProps): JSX.Element {
-  const isUser = message.from_kind === 'user';
+  const isUser = message.from_kind === "user";
   // A pending optimistic row has no server id/seq: every action that needs a
   // real server row (reaction, thread, save, share, copy, select) is not just
   // no-op'd in the handler — its affordance is not rendered at all, so the row
@@ -350,7 +350,7 @@ function ActorMessageItem({
   const committed = isCommittedMessage(message);
   const isCurrentUser = isUser && isCurrentUserId(message.from_user_id);
   const mode = useMessageLayoutMode();
-  const alignRight = mode === 'user-right' && isCurrentUser;
+  const alignRight = mode === "user-right" && isCurrentUser;
   // Identity / label / avatar all read the server-authoritative author DTO
   // (#task:1792) — NEVER a live-directory re-join by `from_*_id`, which loses a
   // hard-deleted actor's name and would guess "deleted" from a roster miss. The
@@ -364,30 +364,30 @@ function ActorMessageItem({
   // live row and no profile to open, so neither is fetched. The viewer's own
   // row wins for a self-send so the popover matches the member chip.
   const liveAgent =
-    presentation.status === 'active' && presentation.kind === 'agent'
-      ? agentsById.get(presentation.navigableId ?? '')
+    presentation.status === "active" && presentation.kind === "agent"
+      ? agentsById.get(presentation.navigableId ?? "")
       : undefined;
   const liveHuman =
-    presentation.status === 'active' && presentation.kind === 'user'
+    presentation.status === "active" && presentation.kind === "user"
       ? isCurrentUser
-        ? (viewer ?? humansById?.get(presentation.navigableId ?? ''))
-        : humansById?.get(presentation.navigableId ?? '')
+        ? (viewer ?? humansById?.get(presentation.navigableId ?? ""))
+        : humansById?.get(presentation.navigableId ?? "")
       : undefined;
 
   const viewerAvatarOverride =
     isCurrentUser && viewerAvatarObjectUrl ? viewerAvatarObjectUrl : undefined;
   const bylineAvatarUrl =
-    presentation.avatar.variant === 'agent'
+    presentation.avatar.variant === "agent"
       ? (authorAgentAvatarUrls?.get(presentation.avatar.id) ?? null)
-      : presentation.avatar.variant === 'user'
+      : presentation.avatar.variant === "user"
         ? (viewerAvatarOverride ?? authorUserAvatarUrls?.get(presentation.avatar.id) ?? null)
         : null;
 
   const createdAt = dayjs(message.created_at);
-  const timeLabel = createdAt.format('MM/DD HH:mm');
-  const timeTooltip = createdAt.format('YYYY-MM-DD HH:mm:ss');
+  const timeLabel = createdAt.format("MM/DD HH:mm");
+  const timeTooltip = createdAt.format("YYYY-MM-DD HH:mm:ss");
 
-  const continuationTimeLabel = createdAt.format('HH:mm');
+  const continuationTimeLabel = createdAt.format("HH:mm");
   const { openAgentPanel, openHumanPanel } = useNav();
 
   const navigateToAgent = useCallback(
@@ -445,15 +445,15 @@ function ActorMessageItem({
   // (which says "N replies"); the badge previously hard-coded "Reply".
   const replyBadgeLabel =
     threadReplyCount === undefined
-      ? ''
-      : `${threadReplyCount} ${threadReplyCount === 1 ? 'Reply' : 'Replies'}`;
+      ? ""
+      : `${threadReplyCount} ${threadReplyCount === 1 ? "Reply" : "Replies"}`;
 
   // P1 (#task:1073): when the enriched summary is present, the badge upgrades
   // to avatars + count + last-reply time. `repliers.length > 0` guards the
   // avatar strip; otherwise we keep the count-only label.
   const enrichedReply =
     threadReplySummary && threadReplySummary.repliers.length > 0 ? threadReplySummary : null;
-  const replyRelativeTime = enrichedReply ? dayjs(enrichedReply.last_reply_at).fromNow() : '';
+  const replyRelativeTime = enrichedReply ? dayjs(enrichedReply.last_reply_at).fromNow() : "";
   // Surface 3 (#task:1226): per-viewer unread for this reply-cluster, read from
   // the `useConversationUnread` read-model (threaded in as `threadUnread`) — the
   // SINGLE source of truth, NOT the message-window summary (which can't score
@@ -608,7 +608,7 @@ function ActorMessageItem({
   const threadUnreadNode =
     threadUnreadCount > 0 ? (
       <span className="shrink-0 whitespace-nowrap font-medium text-[var(--unread)]">
-        {threadUnreadCount > 99 ? '99+' : threadUnreadCount} new
+        {threadUnreadCount > 99 ? "99+" : threadUnreadCount} new
       </span>
     ) : null;
   // The badge and the preview lines are ONE object when there are lines to head
@@ -652,7 +652,7 @@ function ActorMessageItem({
           // exactly the "height is 30" misalignment. A row that states one fact
           // must stay one line high; when it cannot fit, the time segment gives
           // way (see below) rather than the row growing.
-          'inline-flex min-w-0 max-w-full items-center gap-1.5 text-xs leading-none text-text-muted transition-colors hover:text-text-primary focus-outline ' +
+          "inline-flex min-w-0 max-w-full items-center gap-1.5 text-xs leading-none text-text-muted transition-colors hover:text-text-primary focus-outline " +
           // Mirrored ONLY as the preview block's header, and only for an
           // own-message row (#task:1855). The badge's glyph is this block's
           // COLUMN MARKER — it is supposed to sit in the same column as the
@@ -672,7 +672,7 @@ function ActorMessageItem({
           // reason the prose keeps `text-align: left` in a right-hugging
           // bubble (shiki 2026-08-06). Reaction chips are the other precedent:
           // `emoji → count` does not flip either.
-          (badgeHeadsPreview && alignRight ? 'flex-row-reverse ' : '') +
+          (badgeHeadsPreview && alignRight ? "flex-row-reverse " : "") +
           // Its own fill / corner / inset ONLY when it stands alone. Inside the
           // preview block the wrapper owns all three: two stacked translucent
           // fills of the same token compose darker and would redraw the seam
@@ -686,8 +686,8 @@ function ActorMessageItem({
           // header there is no fill, so 18px would only add 6px of dead space
           // above lines that are themselves content-height.
           (badgeHeadsPreview
-            ? ''
-            : 'h-[18px] rounded-[var(--chip-radius)] bg-[var(--chip-bg)] px-2 hover:bg-[var(--chip-bg-hover)]')
+            ? ""
+            : "h-[18px] rounded-[var(--chip-radius)] bg-[var(--chip-bg)] px-2 hover:bg-[var(--chip-bg-hover)]")
         }
       >
         <ThreadIcon className="size-3 shrink-0" />
@@ -764,13 +764,13 @@ function ActorMessageItem({
         // rows; the horizontal padding and the leading-column width are
         // untouched, so every body in the group stays on the same text
         // baseline as its head.
-        'relative flex items-start gap-3 rounded-[var(--row-radius)] border-2 px-2 transition-colors ' +
-        (continuesPrevious ? 'py-0.5 ' : 'py-1.5 ') +
-        (jumpFlash ? 'msg-jump-flash ' : '') +
-        (selectionMode && committed ? 'cursor-pointer ' : '') +
-        (alignRight ? 'flex-row-reverse' : 'flex-row') +
-        ' ' +
-        (framed ? 'border-accent bg-bg-floating' : 'border-transparent')
+        "relative flex items-start gap-3 rounded-[var(--row-radius)] border-2 px-2 transition-colors " +
+        (continuesPrevious ? "py-0.5 " : "py-1.5 ") +
+        (jumpFlash ? "msg-jump-flash " : "") +
+        (selectionMode && committed ? "cursor-pointer " : "") +
+        (alignRight ? "flex-row-reverse" : "flex-row") +
+        " " +
+        (framed ? "border-accent bg-bg-floating" : "border-transparent")
       }
     >
       {selectionMode && committed ? (
@@ -798,9 +798,9 @@ function ActorMessageItem({
           dateTime={new Date(message.created_at).toISOString()}
           title={timeTooltip}
           className={
-            'w-8 shrink-0 select-none text-[length:var(--text-badge)] text-text-muted transition-opacity ' +
-            (alignRight ? 'text-left ' : 'text-right ') +
-            (hover ? 'opacity-100' : 'opacity-0')
+            "w-8 shrink-0 select-none text-[length:var(--text-badge)] text-text-muted transition-opacity " +
+            (alignRight ? "text-left " : "text-right ") +
+            (hover ? "opacity-100" : "opacity-0")
           }
         >
           {continuationTimeLabel}
@@ -840,7 +840,7 @@ function ActorMessageItem({
         // side's one exception: a root heading a reply cluster fills the cap so
         // every root in the cluster reads at one width.
         columnClassName={
-          'min-w-0 max-w-[85%]' + (!alignRight || badgeHeadsPreview ? ' w-full' : '')
+          "min-w-0 max-w-[85%]" + (!alignRight || badgeHeadsPreview ? " w-full" : "")
         }
         /* A continuation row states neither author nor time in the content
            column: the group head already named the author, and this row's own
@@ -886,12 +886,12 @@ function ActorMessageItem({
           onFocus={() => setFocusWithin(true)}
           onBlur={handleActionsBlur}
           className={
-            'absolute top-1 z-[var(--z-raised)] flex items-center gap-3 text-xs transition-opacity ' +
-            (alignRight ? 'left-2' : 'right-2') +
-            ' ' +
+            "absolute top-1 z-[var(--z-raised)] flex items-center gap-3 text-xs transition-opacity " +
+            (alignRight ? "left-2" : "right-2") +
+            " " +
             (hover || focusWithin || reactionPickerOpen
-              ? 'opacity-100'
-              : 'pointer-events-none opacity-0')
+              ? "opacity-100"
+              : "pointer-events-none opacity-0")
           }
         >
           {canReact ? (
@@ -903,7 +903,7 @@ function ActorMessageItem({
               // cluster of an own message takes `start` (shiki 2026-08-06
               // 「user message 的 reaction 在左侧,如果 popover 也往左,那么就
               // 超出了」, #task:1840).
-              align={alignRight ? 'start' : 'end'}
+              align={alignRight ? "start" : "end"}
               onOpenChange={setReactionPickerOpen}
               onPick={(emoji) =>
                 toggleReaction.mutate({
@@ -935,8 +935,8 @@ function ActorMessageItem({
           ) : null}
           {onSave ? (
             <ActionButton
-              icon={<Bookmark className={'size-3.5 ' + (saved ? 'fill-current' : '')} />}
-              label={saved ? 'Saved' : 'Save'}
+              icon={<Bookmark className={"size-3.5 " + (saved ? "fill-current" : "")} />}
+              label={saved ? "Saved" : "Save"}
               active={saved}
               onClick={() => onSave(message)}
               alwaysVisible
@@ -1007,7 +1007,7 @@ function MessageTaskTag({
     : null;
   const title = [`Task #${linkedTask.task_number}`, label, assignee, linkedTask.title]
     .filter(Boolean)
-    .join(' · ');
+    .join(" · ");
 
   // Shared chip body — identical glyph / number / assignee across both the
   // interactive and read-only forms, so a non-member reads the exact same
@@ -1080,7 +1080,7 @@ function formatTaskAssignee(
   agentsById: Map<string, AgentDto>,
   userResolver?: UserNameResolver,
 ): string {
-  if (assignee.type === 'user') {
+  if (assignee.type === "user") {
     return formatUserDisplayName(assignee.id, userResolver);
   }
   const agent = agentsById.get(assignee.id);
@@ -1089,7 +1089,7 @@ function formatTaskAssignee(
     agent?.name ||
     assignee.name.trim() ||
     assignee.id
-  ).replace(/^@/, '');
+  ).replace(/^@/, "");
   // In-message task cards are a recognition surface: plain names for both
   // kinds, no leading `@` (the user branch above is already bare). Every task
   // assignee/creator DISPLAY reads the same way now — board cards, the
@@ -1136,7 +1136,7 @@ function Avatar({
       objectUrlOverride={avatarObjectUrl}
     />
   );
-  if (presentation.status === 'active' && liveAgent) {
+  if (presentation.status === "active" && liveAgent) {
     return (
       <AgentInfoPopover
         agent={liveAgent}
@@ -1158,7 +1158,7 @@ function Avatar({
       </AgentInfoPopover>
     );
   }
-  if (presentation.status === 'active' && liveHuman) {
+  if (presentation.status === "active" && liveHuman) {
     return (
       <HumanInfoPopover
         human={liveHuman}
@@ -1210,7 +1210,7 @@ function AuthorLabel({
   onNavigateHuman: (userId: string) => void;
 }): JSX.Element {
   const label = presentation.label;
-  if (presentation.status === 'active' && liveAgent) {
+  if (presentation.status === "active" && liveAgent) {
     return (
       <AgentInfoPopover
         agent={liveAgent}
@@ -1238,7 +1238,7 @@ function AuthorLabel({
       </AgentInfoPopover>
     );
   }
-  if (presentation.status === 'active' && liveHuman) {
+  if (presentation.status === "active" && liveHuman) {
     return (
       <HumanInfoPopover
         human={liveHuman}
@@ -1306,10 +1306,10 @@ function ActionButton({
       title={label}
       aria-label={label}
       className={
-        'flex items-center rounded-sm transition-colors transition-opacity focus-outline ' +
-        (visible ? 'opacity-100' : 'pointer-events-none opacity-0') +
-        ' ' +
-        (active ? 'text-accent' : 'text-text-muted hover:text-text-primary')
+        "flex items-center rounded-sm transition-colors transition-opacity focus-outline " +
+        (visible ? "opacity-100" : "pointer-events-none opacity-0") +
+        " " +
+        (active ? "text-accent" : "text-text-muted hover:text-text-primary")
       }
     >
       {icon}
@@ -1338,7 +1338,7 @@ function AttachmentList({
   // reader map an agent's "Image #1" back to the actual tile (#task:1324).
   const labels = resolveAttachmentLabels(attachments);
   return (
-    <div className={'mt-2 flex flex-wrap gap-2 ' + (alignRight ? 'justify-end' : 'justify-start')}>
+    <div className={"mt-2 flex flex-wrap gap-2 " + (alignRight ? "justify-end" : "justify-start")}>
       {attachments.map((att, i) => (
         <AttachmentTile
           key={att.id}
@@ -1363,7 +1363,7 @@ function AttachmentTile({
   canExport?: boolean;
   onOpenAttachment?: (attachment: AttachmentSnapshot) => void;
 }): JSX.Element {
-  const isImage = attachment.content_type.startsWith('image/');
+  const isImage = attachment.content_type.startsWith("image/");
   // The owner supplies the destination tab controller, directly or via a sibling
   // pane relay. Legacy generic MIME types still classify by filename suffix.
   const previewable =
@@ -1490,7 +1490,7 @@ function AttachmentTile({
             />
           ) : (
             <div className="flex h-32 w-48 items-center justify-center text-xs text-text-muted">
-              {error ?? 'Loading…'}
+              {error ?? "Loading…"}
             </div>
           )}
         </button>
@@ -1613,13 +1613,13 @@ function SelectionCheckbox({
       type="button"
       role="checkbox"
       aria-checked={checked}
-      aria-label={checked ? 'Deselect message' : 'Select message'}
+      aria-label={checked ? "Deselect message" : "Select message"}
       onClick={onChange}
       className={
-        'mt-1.5 inline-flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border transition-colors focus-outline ' +
+        "mt-1.5 inline-flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border transition-colors focus-outline " +
         (checked
-          ? 'border-accent bg-accent text-bg-floating'
-          : 'border-border bg-bg-floating text-transparent hover:border-accent')
+          ? "border-accent bg-accent text-bg-floating"
+          : "border-border bg-bg-floating text-transparent hover:border-accent")
       }
     >
       <Check className="size-3" strokeWidth={3} />

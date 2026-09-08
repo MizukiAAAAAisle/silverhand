@@ -37,33 +37,30 @@
  * A row whose authority FAILED is disabled but says so honestly: fail-closed
  * licenses the disabling, not the claim that the viewer is not a participant.
  */
-import { useMemo, type JSX, type ReactNode } from 'react';
-import type { AgentAuditChatSummary } from '@silverhand/shared';
-import { cn } from '@/lib/cn';
-import { ChannelIcon } from '@/components/ChannelIcon';
+import { useMemo, type JSX, type ReactNode } from "react";
+import type { AgentAuditChatSummary } from "@silverhand/shared";
+import { cn } from "@/lib/cn";
+import { ChannelIcon } from "@/components/ChannelIcon";
 import {
   CollectionItemCard,
   COLLECTION_CARD_CLASS,
-} from '@/components/layout/collection-item-card';
-import {
-  AuthorAvatarView,
-  DeletedActorMarker,
-} from '@/components/chat/author-avatar-view';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
+} from "@/components/layout/collection-item-card";
+import { AuthorAvatarView, DeletedActorMarker } from "@/components/chat/author-avatar-view";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import {
   collectCounterpartAvatarSources,
   presentCounterpart,
   type CounterpartPresentation,
-} from '@/features/direct-pairs/counterpart-presentation';
-import { useDirectPairsList } from '@/features/direct-pairs/hooks';
+} from "@/features/direct-pairs/counterpart-presentation";
+import { useDirectPairsList } from "@/features/direct-pairs/hooks";
 import {
   useArchivedChannelsAcrossWorkspaces,
   useChannelsAcrossWorkspaces,
   useWorkspaces,
-} from '@/features/workspaces/hooks';
-import { useAgentAuditChats } from './audit-hooks';
-import { AGENT_PANE_INSET } from './agent-pane-layout';
+} from "@/features/workspaces/hooks";
+import { useAgentAuditChats } from "./audit-hooks";
+import { AGENT_PANE_INSET } from "./agent-pane-layout";
 import {
   collectMemberConversationIds,
   decideAgentChatRowAccess,
@@ -72,7 +69,7 @@ import {
   type AgentChatBlockedReason,
   type AgentChatRowAccess,
   type ViewerParticipation,
-} from './audit-participation';
+} from "./audit-participation";
 
 interface AgentChatsPaneProps {
   agentId: string;
@@ -83,17 +80,14 @@ interface AgentChatsPaneProps {
   onOpenChat?: (target: { conversationId: string; workspaceId: string | null }) => void;
 }
 
-export function AgentChatsPane({
-  agentId,
-  onOpenChat,
-}: AgentChatsPaneProps): JSX.Element {
+export function AgentChatsPane({ agentId, onOpenChat }: AgentChatsPaneProps): JSX.Element {
   const chatsQuery = useAgentAuditChats(agentId, true);
   // Archived conversations are excluded from this list (shiki #task:2116): the
   // owner-audit endpoint returns them, but the Chats page shows only live lines.
   // Filtered once here so grouping, counts, avatar batch and the empty state all
   // speak of the same set.
   const chats = useMemo(
-    () => chatsQuery.data?.chats.filter(c => c.archived_at === null),
+    () => chatsQuery.data?.chats.filter((c) => c.archived_at === null),
     [chatsQuery.data],
   );
 
@@ -121,16 +115,14 @@ export function AgentChatsPane({
   const participation: ViewerParticipation = {
     workspaces: viewerWorkspaces ?? null,
     resolvedWorkspaceIds: new Set(
-      workspaceIds.filter(
-        (_, i) => activeLists[i]?.isSuccess && archivedLists[i]?.isSuccess,
-      ),
+      workspaceIds.filter((_, i) => activeLists[i]?.isSuccess && archivedLists[i]?.isSuccess),
     ),
     memberConversationIds: collectMemberConversationIds([
-      ...activeLists.map(q => q.data),
-      ...archivedLists.map(q => q.data),
+      ...activeLists.map((q) => q.data),
+      ...archivedLists.map((q) => q.data),
     ]),
     directPairIds: pairsQuery.data
-      ? new Set(pairsQuery.data.direct_pairs.map(p => p.conversation_id))
+      ? new Set(pairsQuery.data.direct_pairs.map((p) => p.conversation_id))
       : null,
   };
   // Settled, not successful, and covering EVERY authority — the workspace list
@@ -138,7 +130,7 @@ export function AgentChatsPane({
   const participationSettled = viewerAuthoritiesSettled({
     workspacesPending: workspacesQuery.isPending,
     pairsPending: pairsQuery.isPending,
-    channelTablesPending: [...activeLists, ...archivedLists].map(q => q.isPending),
+    channelTablesPending: [...activeLists, ...archivedLists].map((q) => q.isPending),
   });
 
   // ONE avatar batch for the surface, over the counterpart set — the discipline
@@ -146,7 +138,7 @@ export function AgentChatsPane({
   const { agents, users } = useMemo(
     () =>
       collectCounterpartAvatarSources(
-        (chats ?? []).flatMap(c => (c.placement_kind === 'direct_pair' ? [c] : [])),
+        (chats ?? []).flatMap((c) => (c.placement_kind === "direct_pair" ? [c] : [])),
       ),
     [chats],
   );
@@ -165,8 +157,8 @@ export function AgentChatsPane({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className={cn('space-y-5', AGENT_PANE_INSET)}>
-        {groupAgentChats(chats).map(group => (
+      <div className={cn("space-y-5", AGENT_PANE_INSET)}>
+        {groupAgentChats(chats).map((group) => (
           <section key={group.key}>
             {/* Group chrome mirrors SearchPanel's sections — same product
                 concept (a labelled band of collection cards) — but the label is
@@ -180,12 +172,10 @@ export function AgentChatsPane({
                 Each ROW still wears its own entity's identity primitive. */}
             <header className="mb-2 flex items-center gap-2 px-1 text-[length:var(--text-meta)] font-semibold uppercase leading-none tracking-wider text-text-muted">
               <span className="min-w-0 truncate leading-none">{group.label}</span>
-              <span className="leading-none text-text-muted/70">
-                {group.chats.length}
-              </span>
+              <span className="leading-none text-text-muted/70">{group.chats.length}</span>
             </header>
             <ul className="space-y-2">
-              {group.chats.map(chat => (
+              {group.chats.map((chat) => (
                 <ChatRow
                   key={chat.conversation_id}
                   chat={chat}
@@ -224,14 +214,12 @@ interface AgentChatGroup {
  * may not even have for a container they are not in. Direct lines go last: a
  * pair is not a container, so it is the one group that names no place.
  */
-function groupAgentChats(
-  chats: readonly AgentAuditChatSummary[],
-): AgentChatGroup[] {
+function groupAgentChats(chats: readonly AgentAuditChatSummary[]): AgentChatGroup[] {
   const byWorkspace = new Map<string, AgentChatGroup>();
   const directs: AgentAuditChatSummary[] = [];
 
   for (const chat of chats) {
-    if (chat.placement_kind === 'direct_pair') {
+    if (chat.placement_kind === "direct_pair") {
       directs.push(chat);
       continue;
     }
@@ -249,7 +237,7 @@ function groupAgentChats(
 
   const groups = [...byWorkspace.values()];
   if (directs.length > 0) {
-    groups.push({ key: 'direct', label: 'Direct messages', chats: directs });
+    groups.push({ key: "direct", label: "Direct messages", chats: directs });
   }
   return groups;
 }
@@ -267,8 +255,8 @@ function PaneNote({ children }: { children: ReactNode }): JSX.Element {
  *  dressed up as "you're not in it": the second is a claim, the first is a
  *  temporary failure the viewer can retry by reopening the page. */
 const BLOCKED_TITLE: Record<AgentChatBlockedReason, string> = {
-  'not-a-participant': 'You’re not in this conversation.',
-  unverified: 'Couldn’t check your access to this conversation.',
+  "not-a-participant": "You’re not in this conversation.",
+  unverified: "Couldn’t check your access to this conversation.",
 };
 
 /**
@@ -286,7 +274,7 @@ function describeChatRow(chat: AgentAuditChatSummary): {
   title: string;
   counterpart: CounterpartPresentation | null;
 } {
-  if (chat.placement_kind === 'direct_pair') {
+  if (chat.placement_kind === "direct_pair") {
     const counterpart = presentCounterpart(chat.counterpart);
     return { title: counterpart.label, counterpart };
   }
@@ -353,19 +341,21 @@ function ChatRow({
     </>
   );
 
-  const inner = 'flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left';
+  const inner = "flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left";
 
-  if (access.kind === 'open' && onOpen) {
+  if (access.kind === "open" && onOpen) {
     return (
       <li>
         <CollectionItemCard
           as="button"
           type="button"
-          onClick={() => onOpen({
-            conversationId: access.conversationId,
-            workspaceId: access.workspaceId,
-          })}
-          className={cn(inner, 'text-text-primary focus-outline')}
+          onClick={() =>
+            onOpen({
+              conversationId: access.conversationId,
+              workspaceId: access.workspaceId,
+            })
+          }
+          className={cn(inner, "text-text-primary focus-outline")}
         >
           {body}
         </CollectionItemCard>
@@ -376,8 +366,8 @@ function ChatRow({
   return (
     <li>
       <div
-        className={cn(COLLECTION_CARD_CLASS, inner, 'text-text-muted')}
-        title={access.kind === 'blocked' ? BLOCKED_TITLE[access.reason] : undefined}
+        className={cn(COLLECTION_CARD_CLASS, inner, "text-text-muted")}
+        title={access.kind === "blocked" ? BLOCKED_TITLE[access.reason] : undefined}
       >
         {body}
       </div>

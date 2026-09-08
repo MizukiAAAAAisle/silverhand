@@ -1,28 +1,25 @@
-import { Fragment, useEffect, useState } from 'react';
-import { Pencil } from 'lucide-react';
-import type { TaskDetailDto } from '@silverhand/shared';
-import { Button } from '@/components/ui/button';
-import { TaskIcon } from '@/components/tasks/TaskIcon';
-import { MiniIconButton } from '@/components/tasks/MiniIconButton';
-import {
-  SidePanelHeader,
-  SidePanelHeaderTitle,
-} from '@/components/layout/SidePanelHeader';
-import { Markdown } from '@/components/chat/Markdown';
+import { Fragment, useEffect, useState } from "react";
+import { Pencil } from "lucide-react";
+import type { TaskDetailDto } from "@silverhand/shared";
+import { Button } from "@/components/ui/button";
+import { TaskIcon } from "@/components/tasks/TaskIcon";
+import { MiniIconButton } from "@/components/tasks/MiniIconButton";
+import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/SidePanelHeader";
+import { Markdown } from "@/components/chat/Markdown";
 import {
   FAILURE_COPY,
   InlineFieldEditor,
   useTaskMetaRows,
   useTaskWriteSlot,
   type EditingField,
-} from '@/components/tasks/taskDetailShared';
-import { useTaskDetail } from '@/features/tasks/hooks';
+} from "@/components/tasks/taskDetailShared";
+import { useTaskDetail } from "@/features/tasks/hooks";
 import {
   classifyTaskDetailFailure,
   resolveTaskDetailView,
   type TaskDetailFailure,
   type TaskDetailView,
-} from '@/features/tasks/taskDetail';
+} from "@/features/tasks/taskDetail";
 
 export interface TaskDetailPanelProps {
   /** Task identity to show. Never a summary DTO — the pane reads the
@@ -60,16 +57,18 @@ export interface TaskDetailPanelProps {
  * paints its states in plain markup — a side pane has no Radix Dialog to satisfy
  * with a `DialogTitle`/`DialogDescription`.
  */
-export function TaskDetailPanel({ taskId, onClose, onEditingChange }: TaskDetailPanelProps): JSX.Element {
+export function TaskDetailPanel({
+  taskId,
+  onClose,
+  onEditingChange,
+}: TaskDetailPanelProps): JSX.Element {
   const detailQuery = useTaskDetail(taskId, { enabled: true });
-  const failure = detailQuery.isError
-    ? classifyTaskDetailFailure(detailQuery.error)
-    : null;
+  const failure = detailQuery.isError ? classifyTaskDetailFailure(detailQuery.error) : null;
   const view = resolveTaskDetailView({ failure, detail: detailQuery.data });
   // The body this view paints, if any. `not_found` deliberately paints none even
   // when a stale one is still cached — the server has just disowned it.
   const painted =
-    view.kind === 'body' || view.kind === 'body_with_retry' || view.kind === 'body_stale'
+    view.kind === "body" || view.kind === "body_with_retry" || view.kind === "body_stale"
       ? view.detail
       : null;
 
@@ -96,10 +95,7 @@ export function TaskDetailPanel({ taskId, onClose, onEditingChange }: TaskDetail
     // makes it fill the SplitPane's right wrapper — without it the pane is a flex
     // row child that shrinks to its intrinsic content width (a thin strip); the
     // inner body's `flex-1` can only fill this root, not widen it (#task:1721).
-    <div
-      className="task-pane flex h-full w-full flex-col bg-bg-floating"
-      aria-label="Task detail"
-    >
+    <div className="task-pane flex h-full w-full flex-col bg-bg-floating" aria-label="Task detail">
       {/* The shared side-panel header, same primitive (and same title/subtitle
           idiom) the agent / thread / attachments panes use — so the close ✕ is
           the ONE `data-sticker-close` affordance forza6 stamps as a poster
@@ -114,7 +110,7 @@ export function TaskDetailPanel({ taskId, onClose, onEditingChange }: TaskDetail
           // with its edit pencil, so the header doesn't repeat it (shiki mockup
           // v2). Resolves with the read; blank until then, like the attachments
           // subtitle before its context loads.
-          subtitle={painted ? `#${painted.task_number}` : ''}
+          subtitle={painted ? `#${painted.task_number}` : ""}
         />
       </SidePanelHeader>
       <PaneContent
@@ -147,20 +143,20 @@ function PaneContent({
   onRetry: () => void;
 }): JSX.Element | null {
   switch (view.kind) {
-    case 'loading':
+    case "loading":
       return <PaneStatePanel failure={null} />;
-    case 'not_found':
+    case "not_found":
       return <PaneStatePanel failure="not_found" />;
-    case 'unreachable_empty':
+    case "unreachable_empty":
       return <PaneStatePanel failure="unreachable" />;
-    case 'transient_empty':
+    case "transient_empty":
       return <PaneStatePanel failure="transient" onRetry={onRetry} />;
-    case 'body':
+    case "body":
     // `body_stale` is the SAME body: the connection is down, so the last read is
     // the best available truth and the one app-status banner already says the
     // connection is down. A second copy of that notice here would be a second
     // surface claiming one fact.
-    case 'body_stale':
+    case "body_stale":
       return (
         <PaneBody
           detail={view.detail}
@@ -169,7 +165,7 @@ function PaneContent({
           onStopEditing={onStopEditing}
         />
       );
-    case 'body_with_retry':
+    case "body_with_retry":
       return (
         <div className="flex min-h-0 flex-1 flex-col">
           {/* The refresh failed over a body we still hold. Nothing re-reads it on
@@ -211,7 +207,11 @@ function PaneStatePanel({
 }): JSX.Element {
   if (failure === null) {
     return (
-      <div role="status" aria-label="Loading task" className="min-h-0 flex-1 overflow-hidden px-[18px] py-4">
+      <div
+        role="status"
+        aria-label="Loading task"
+        className="min-h-0 flex-1 overflow-hidden px-[18px] py-4"
+      >
         <div aria-hidden className="flex flex-col gap-4 motion-safe:animate-pulse">
           <div className="h-5 w-3/4 rounded-[var(--control-radius)] bg-bg-hover" />
           <div className="task-pane-meta items-center">
@@ -235,14 +235,12 @@ function PaneStatePanel({
   const copy = FAILURE_COPY[failure];
   return (
     <div className="flex flex-col gap-1.5 px-[18px] py-6">
-      <p className="text-sm font-semibold leading-snug text-text-primary">
-        {copy.header}
-      </p>
+      <p className="text-sm font-semibold leading-snug text-text-primary">{copy.header}</p>
       <p className="text-sm text-text-muted">{copy.body}</p>
       {/* Retry ONLY for the transient tier: the query client is `retry: 1` with
           no focus refetch, so nothing else re-reads this. `not_found` is terminal
           and `unreachable` recovers through the app-status banner. */}
-      {failure === 'transient' && onRetry ? (
+      {failure === "transient" && onRetry ? (
         <Button
           type="button"
           variant="outline"
@@ -276,13 +274,11 @@ function PaneBody({
   const { busy } = slot;
   // Same field SSOT the modal sidebar renders — minus the Task# row, which this
   // surface's header already carries (chrome choice, not a field-set fork).
-  const rows = useTaskMetaRows({ view: detail, ...slot }).filter(
-    (row) => row.key !== 'task',
-  );
+  const rows = useTaskMetaRows({ view: detail, ...slot }).filter((row) => row.key !== "task");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-[18px] py-4">
-      {editingField === 'title' ? (
+      {editingField === "title" ? (
         <InlineFieldEditor
           taskId={detail.id}
           field="title"
@@ -300,7 +296,7 @@ function PaneBody({
               icon={Pencil}
               label="Edit title"
               className="mt-0.5"
-              onClick={() => onEditField('title')}
+              onClick={() => onEditField("title")}
             />
           ) : null}
         </div>
@@ -331,15 +327,15 @@ function PaneBody({
           <h2 className="chrome-label text-[length:var(--text-badge)] font-medium text-text-muted">
             Description
           </h2>
-          {!busy && editingField !== 'content' ? (
+          {!busy && editingField !== "content" ? (
             <MiniIconButton
               icon={Pencil}
               label="Edit description"
-              onClick={() => onEditField('content')}
+              onClick={() => onEditField("content")}
             />
           ) : null}
         </div>
-        {editingField === 'content' ? (
+        {editingField === "content" ? (
           <InlineFieldEditor
             taskId={detail.id}
             field="content"

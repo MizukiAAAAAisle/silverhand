@@ -47,47 +47,47 @@
 // workspace's `channelsKey`). The old single-column sidebar could hold ONE
 // instance at the composition root because only one workspace was ever
 // rendered; the tree shows many at once, so each subtree owns its own.
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, type ReactNode } from "react";
 import {
   type ChannelAttentionMode,
   type ChannelAttentionModeRowDto,
   type ConversationVisibility,
-} from '@silverhand/shared';
-import { Plus } from 'lucide-react';
-import { useSortable } from '@dnd-kit/sortable';
-import { ChannelIcon } from '@/components/ChannelIcon';
-import { AppContextMenu } from '@/components/menus/AppContextMenu';
-import { ChannelRowMenuItems } from './ChannelRowMenuItems';
+} from "@silverhand/shared";
+import { Plus } from "lucide-react";
+import { useSortable } from "@dnd-kit/sortable";
+import { ChannelIcon } from "@/components/ChannelIcon";
+import { AppContextMenu } from "@/components/menus/AppContextMenu";
+import { ChannelRowMenuItems } from "./ChannelRowMenuItems";
 import {
   ConversationRowLayout,
   NESTED_GLYPH_INSET,
   MutedMarker,
   UnreadBadge,
-} from '@/components/layout/sidebar-shared';
-import { SortModeMenu } from '@/components/layout/SortModeMenu';
+} from "@/components/layout/sidebar-shared";
+import { SortModeMenu } from "@/components/layout/SortModeMenu";
 import {
   SortableGroup,
   animateLayoutChanges,
   sortableItemStyle,
   useListDragSort,
-} from '@/components/layout/list-drag-sort';
+} from "@/components/layout/list-drag-sort";
 import {
   useArchiveChannel,
   useChannelSortState,
   useChannelsForWorkspace,
   useSetSortMode,
   useStarChannel,
-} from '@/features/workspaces/hooks';
-import { useMessageUnreadCounts } from '@/features/channels/message-unread';
-import { useWorkspaceAttentionModes } from '@/features/attention/hooks';
-import { channelRowBadge, type RowBadge } from '@/lib/attention-mode';
-import { sortModeOf } from '@/lib/viewer-sort';
-import { collapsedRevealRows, excludeStarredChannels } from '@/lib/home-grouping';
+} from "@/features/workspaces/hooks";
+import { useMessageUnreadCounts } from "@/features/channels/message-unread";
+import { useWorkspaceAttentionModes } from "@/features/attention/hooks";
+import { channelRowBadge, type RowBadge } from "@/lib/attention-mode";
+import { sortModeOf } from "@/lib/viewer-sort";
+import { collapsedRevealRows, excludeStarredChannels } from "@/lib/home-grouping";
 
 interface ChannelNode {
   id: string;
   title: string;
-  roster_policy: 'open' | 'fixed';
+  roster_policy: "open" | "fixed";
   /** Identity-level visibility. `'private'` regular channels render a Lock
    *  glyph; `'public'` render the canonical `#`. Only meaningful for
    *  `roster_policy === 'open'` — a fixed-roster conversation is not a private *channel* and never
@@ -124,18 +124,14 @@ interface ChannelNode {
  * below is a literal `true` — same invariant, same origin as the one stated in
  * {@link WorkspaceChannels} (@Paul, #task:2078 F2).
  */
-export function ChannelSortMenu({
-  workspaceId,
-}: {
-  workspaceId: string;
-}): JSX.Element {
+export function ChannelSortMenu({ workspaceId }: { workspaceId: string }): JSX.Element {
   const { data: viewerSort } = useChannelSortState(workspaceId, true);
   const setSortMode = useSetSortMode();
   const listKey = `channels:${workspaceId}`;
   return (
     <SortModeMenu
       mode={sortModeOf(viewerSort)}
-      onChange={m => setSortMode.mutate({ list_key: listKey, mode: m })}
+      onChange={(m) => setSortMode.mutate({ list_key: listKey, mode: m })}
     />
   );
 }
@@ -214,8 +210,7 @@ export function WorkspaceChannels({
   const archiveChannel = useArchiveChannel(workspaceId);
 
   const attentionByChannel = useMemo(
-    () =>
-      new Map((attentionModes?.channels ?? []).map(c => [c.conversation_id, c])),
+    () => new Map((attentionModes?.channels ?? []).map((c) => [c.conversation_id, c])),
     [attentionModes],
   );
   // `undefined` until the batch resolves — the third state the row must not
@@ -233,7 +228,7 @@ export function WorkspaceChannels({
     for (const e of viewerSort?.entries ?? []) {
       if (e.starred_at !== null) starredAt.set(e.entity_id, e.starred_at);
     }
-    return items.map(s => ({
+    return items.map((s) => ({
       id: s.id,
       title: s.title,
       roster_policy: s.roster_policy,
@@ -247,12 +242,12 @@ export function WorkspaceChannels({
   }, [items, viewerSort]);
 
   const homeTopLevel = excludeStarredChannels(nodes);
-  const { orderedGroups, onReorder } = useListDragSort<'channels', ChannelNode>({
+  const { orderedGroups, onReorder } = useListDragSort<"channels", ChannelNode>({
     listKey: `channels:${workspaceId}`,
     groups: { channels: homeTopLevel },
     viewerSort,
-    getId: c => c.id,
-    getCreatedAt: c => c.created_at,
+    getId: (c) => c.id,
+    getCreatedAt: (c) => c.created_at,
   });
   const ordered = orderedGroups.channels;
 
@@ -269,17 +264,14 @@ export function WorkspaceChannels({
   if (collapsed) {
     const revealed = collapsedRevealRows(ordered, {
       pokeUnread,
-      isSelected: c => c.id === selectedChannelId,
+      isSelected: (c) => c.id === selectedChannelId,
       // Same-source with the row paint: a row pokes out iff the badge it would
       // show is `loud` (`channelNodeBadge`), which is exactly what it contributes
       // to the workspace wake badge. With `pokeUnread` off (a collapsed section, or
       // a branch kept only for its selection) only the selected row survives.
-      isLoud: c =>
-        channelNodeBadge(
-          c,
-          attentionByChannel.get(c.id),
-          unreadByChannel[c.id] ?? 0,
-        )?.tier === 'loud',
+      isLoud: (c) =>
+        channelNodeBadge(c, attentionByChannel.get(c.id), unreadByChannel[c.id] ?? 0)?.tier ===
+        "loud",
     });
     if (revealed.length === 0) return <></>;
     return (
@@ -288,7 +280,7 @@ export function WorkspaceChannels({
             wake-gate-lit-but-empty branch (starred-only loud, or loading/failure)
             renders NEITHER caption nor rows — no orphan title (see `revealCaption`). */}
         {revealCaption}
-        {revealed.map(c => (
+        {revealed.map((c) => (
           <li key={c.id}>
             <ChannelRow
               channel={c}
@@ -318,7 +310,7 @@ export function WorkspaceChannels({
           type="button"
           onClick={() => onCreateChannel(workspaceId)}
           className={
-            'flex h-7 w-full items-center gap-1.5 text-left text-xs text-text-muted hover:text-text-primary ' +
+            "flex h-7 w-full items-center gap-1.5 text-left text-xs text-text-muted hover:text-text-primary " +
             NESTED_GLYPH_INSET
           }
         >
@@ -332,8 +324,7 @@ export function WorkspaceChannels({
   const rowProps = {
     selectedChannelId,
     onSelect: (channelId: string) => onSelectChannel(channelId, workspaceId),
-    onStar: (channelId: string, starred: boolean) =>
-      starChannel.mutate({ channelId, starred }),
+    onStar: (channelId: string, starred: boolean) => starChannel.mutate({ channelId, starred }),
     onArchive: (channelId: string, archived: boolean) =>
       archiveChannel.mutate({ channelId, archived, workspaceId }),
     archivePending: archiveChannel.isPending,
@@ -343,11 +334,8 @@ export function WorkspaceChannels({
   };
 
   return (
-    <SortableGroup
-      ids={ordered.map(c => c.id)}
-      onReorder={next => onReorder('channels', next)}
-    >
-      {ordered.map(channel => (
+    <SortableGroup ids={ordered.map((c) => c.id)} onReorder={(next) => onReorder("channels", next)}>
+      {ordered.map((channel) => (
         <SortableChannelItem key={channel.id} channel={channel} {...rowProps} />
       ))}
     </SortableGroup>
@@ -388,8 +376,10 @@ function SortableChannelItem({
   attentionByChannel,
   workspaceMuted,
 }: { channel: ChannelNode } & RowChildProps): JSX.Element {
-  const { setNodeRef, transform, transition, isDragging, attributes, listeners } =
-    useSortable({ id: channel.id, animateLayoutChanges });
+  const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({
+    id: channel.id,
+    animateLayoutChanges,
+  });
   return (
     <li
       ref={setNodeRef}
@@ -430,7 +420,7 @@ function channelNodeBadge(
 ): RowBadge | null {
   if (channel.is_member !== true) return null;
   const effectiveMode: ChannelAttentionMode | undefined =
-    channel.roster_policy === 'open' ? attention?.effective_mode : 'all';
+    channel.roster_policy === "open" ? attention?.effective_mode : "all";
   return channelRowBadge({
     effectiveMode,
     positionalUnread: unreadCount,
@@ -493,7 +483,7 @@ function ChannelRow({
   // tier at all (the backend 404s it; a DB trigger forbids an agent_home
   // suppressor), so `mode` is forever `undefined` there and a DM never marks —
   // no default is resolved for it.
-  const isSilenced = attention?.mode === 'mute';
+  const isSilenced = attention?.mode === "mute";
 
   const row = (
     <ConversationRowLayout
@@ -510,14 +500,10 @@ function ChannelRow({
         // Lock is opt-in for a private *regular* channel only. A `dm_channel`
         // is not a private channel, so it keeps the canonical `#` — pass the
         // visibility only when the row is a real channel.
-        visibility={channel.roster_policy === 'open' ? channel.visibility : undefined}
-        className={isClosed ? 'text-text-muted/50' : 'text-text-muted'}
+        visibility={channel.roster_policy === "open" ? channel.visibility : undefined}
+        className={isClosed ? "text-text-muted/50" : "text-text-muted"}
       />
-      <span
-        className={
-          'min-w-0 truncate ' + (isClosed ? 'line-through text-text-muted' : '')
-        }
-      >
+      <span className={"min-w-0 truncate " + (isClosed ? "line-through text-text-muted" : "")}>
         {channel.title}
       </span>
       {/* Mute rides WITH the name, matching the workspace row (shiki 2026-08-09):
@@ -528,9 +514,7 @@ function ChannelRow({
           <MutedMarker />
         </span>
       ) : null}
-      {badge ? (
-        <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" />
-      ) : null}
+      {badge ? <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" /> : null}
     </ConversationRowLayout>
   );
 

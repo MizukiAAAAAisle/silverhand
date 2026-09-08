@@ -1,12 +1,6 @@
-import type { ReactNode } from 'react';
+import type { ReactNode } from "react";
 
-export function SettingsHeading({
-  icon,
-  title,
-}: {
-  icon: ReactNode;
-  title: string;
-}): JSX.Element {
+export function SettingsHeading({ icon, title }: { icon: ReactNode; title: string }): JSX.Element {
   return (
     <div className="flex items-center gap-3">
       <span
@@ -15,9 +9,7 @@ export function SettingsHeading({
       >
         {icon}
       </span>
-      <h2 className="min-w-0 font-serif text-base font-semibold text-text-primary">
-        {title}
-      </h2>
+      <h2 className="min-w-0 font-serif text-base font-semibold text-text-primary">{title}</h2>
     </div>
   );
 }

@@ -1,5 +1,5 @@
-import type { MessageDto } from '@silverhand/shared';
-import { authorStateLabel, presentAuthor } from './author-presentation';
+import type { MessageDto } from "@silverhand/shared";
+import { authorStateLabel, presentAuthor } from "./author-presentation";
 
 /**
  * Build a markdown transcript from a list of selected messages.
@@ -54,7 +54,7 @@ export function buildMarkdownTranscript(
 ): string {
   const formatTime = opts.formatTime ?? defaultFormatTime;
 
-  const blocks = messages.map(m => {
+  const blocks = messages.map((m) => {
     const sender = formatSenderLabel(m);
     const time = formatTime(m.created_at);
     const header = `## ${sender} · ${time}`;
@@ -66,12 +66,12 @@ export function buildMarkdownTranscript(
   // from the previous block + one blank line + the next block's content).
   // The result is `## A\n\n<a>\n\n\n## B\n\n<b>` which renders as the
   // intended visual gap when round-tripped through any markdown viewer.
-  return blocks.join('\n\n\n') + '\n';
+  return blocks.join("\n\n\n") + "\n";
 }
 
 export function formatSenderLabel(m: MessageDto): string {
   const { author } = m;
-  if (author === null) return 'system';
+  if (author === null) return "system";
   const p = presentAuthor(author);
   // Carry the deleted state into this frozen export (#task:1792 B3): there is
   // no hover or color here to recover it later, so the label appends the
@@ -81,9 +81,7 @@ export function formatSenderLabel(m: MessageDto): string {
   // Agents keep the transcript's `@handle` decoration, but only when the seam
   // resolved a real handle — an `unresolved` agent has no name to prefix, so
   // its "Unknown agent" placeholder stands alone.
-  return p.kind === 'agent' && p.status !== 'unresolved'
-    ? `@${decorated}`
-    : decorated;
+  return p.kind === "agent" && p.status !== "unresolved" ? `@${decorated}` : decorated;
 }
 
 function defaultFormatTime(epochMs: number): string {
@@ -100,11 +98,11 @@ export function suggestImageFilename(
   messages: readonly MessageDto[],
   channelTitle: string | null,
 ): string {
-  const safeTitle = (channelTitle ?? 'transcript')
-    .replace(/[\\/:*?"<>|]/g, '')
-    .replace(/\s+/g, '-')
+  const safeTitle = (channelTitle ?? "transcript")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, "-")
     .trim()
     .slice(0, 80);
   const firstSeq = messages.length > 0 ? messages[0]!.seq : 0;
-  return `${safeTitle || 'transcript'}-${firstSeq}.png`;
+  return `${safeTitle || "transcript"}-${firstSeq}.png`;
 }

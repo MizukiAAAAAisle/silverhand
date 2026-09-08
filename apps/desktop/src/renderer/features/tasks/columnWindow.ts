@@ -1,4 +1,4 @@
-import type { TaskStatus } from '@silverhand/shared';
+import type { TaskStatus } from "@silverhand/shared";
 
 export const COLUMN_PAGE_SIZE = 20;
 
@@ -15,17 +15,11 @@ export const FIRST_COLUMN_WINDOW: ColumnWindow = {
 };
 
 /** How many rows this column may render. */
-export function columnVisibleCount(
-  window: ColumnWindow,
-  status: TaskStatus,
-): number {
+export function columnVisibleCount(window: ColumnWindow, status: TaskStatus): number {
   return window[status] * COLUMN_PAGE_SIZE;
 }
 
 /** Reveal one more page of ONE column. */
-export function growColumnWindow(
-  window: ColumnWindow,
-  status: TaskStatus,
-): ColumnWindow {
+export function growColumnWindow(window: ColumnWindow, status: TaskStatus): ColumnWindow {
   return { ...window, [status]: window[status] + 1 };
 }

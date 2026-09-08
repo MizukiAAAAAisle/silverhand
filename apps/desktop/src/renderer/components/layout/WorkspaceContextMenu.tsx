@@ -1,10 +1,10 @@
-import { useState, type ReactElement, type JSX } from 'react';
-import { LogOut } from 'lucide-react';
-import { AppContextMenu, AppContextMenuItem } from '@/components/menus/AppContextMenu';
-import { useWorkspaceMemberLists } from '@/features/workspaces/hooks';
-import { canLeaveWorkspace } from '@/features/workspaces/workspace-permissions';
-import { LeaveWorkspaceConfirmDialog } from '@/features/workspaces/LeaveWorkspaceConfirmDialog';
-import { WorkspaceMuteMenuItem } from './ChannelAttentionSurfaces';
+import { useState, type ReactElement, type JSX } from "react";
+import { LogOut } from "lucide-react";
+import { AppContextMenu, AppContextMenuItem } from "@/components/menus/AppContextMenu";
+import { useWorkspaceMemberLists } from "@/features/workspaces/hooks";
+import { canLeaveWorkspace } from "@/features/workspaces/workspace-permissions";
+import { LeaveWorkspaceConfirmDialog } from "@/features/workspaces/LeaveWorkspaceConfirmDialog";
+import { WorkspaceMuteMenuItem } from "./ChannelAttentionSurfaces";
 
 /**
  * The container row's right-click menu — the container species' menu, mounted on

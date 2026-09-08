@@ -12,7 +12,7 @@
  * resolve against the real id.
  */
 let currentUserId: string | null = null;
-let currentUserDisplayName: string = 'you';
+let currentUserDisplayName: string = "you";
 
 export function setCurrentUserId(id: string, displayName?: string): void {
   currentUserId = id;
@@ -21,7 +21,7 @@ export function setCurrentUserId(id: string, displayName?: string): void {
 
 export function clearCurrentUser(): void {
   currentUserId = null;
-  currentUserDisplayName = 'you';
+  currentUserDisplayName = "you";
 }
 
 /** Resolved viewer id, or null until the boot-time hydration finishes. */
@@ -29,8 +29,8 @@ export function getCurrentUserId(): string | null {
   return currentUserId;
 }
 
-export const CURRENT_USER_DISPLAY_NAME = 'you' as const;
-export const CURRENT_USER_SUBTITLE = 'current viewer' as const;
+export const CURRENT_USER_DISPLAY_NAME = "you" as const;
+export const CURRENT_USER_SUBTITLE = "current viewer" as const;
 
 /**
  * Displayed label for rows whose author has been lost (pre-multi-human
@@ -43,7 +43,7 @@ export const CURRENT_USER_SUBTITLE = 'current viewer' as const;
  * write to whoever happened to be signed in (Alice audit 2026-06-03
  * #task:857 P0.5 / #2).
  */
-export const UNKNOWN_USER_DISPLAY_NAME = 'Unknown user' as const;
+export const UNKNOWN_USER_DISPLAY_NAME = "Unknown user" as const;
 
 /**
  * Type narrowing: is the supplied user id the current viewer?

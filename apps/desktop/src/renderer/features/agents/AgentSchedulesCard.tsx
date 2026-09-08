@@ -1,21 +1,10 @@
-import { useMemo, useState } from 'react';
-import {
-  Ban,
-  CalendarClock,
-  Clock,
-  RefreshCcw,
-  Repeat,
-  Zap,
-} from 'lucide-react';
-import dayjs from 'dayjs';
-import relativeTime from 'dayjs/plugin/relativeTime';
-import type {
-  ScheduleDto,
-  ScheduleListStatusFilter,
-  ScheduleStatus,
-} from '@silverhand/shared';
-import { cn } from '@/lib/cn';
-import { useAgentSchedules, useCancelAgentSchedule } from './hooks';
+import { useMemo, useState } from "react";
+import { Ban, CalendarClock, Clock, RefreshCcw, Repeat, Zap } from "lucide-react";
+import dayjs from "dayjs";
+import relativeTime from "dayjs/plugin/relativeTime";
+import type { ScheduleDto, ScheduleListStatusFilter, ScheduleStatus } from "@silverhand/shared";
+import { cn } from "@/lib/cn";
+import { useAgentSchedules, useCancelAgentSchedule } from "./hooks";
 
 dayjs.extend(relativeTime);
 
@@ -24,11 +13,11 @@ interface AgentSchedulesCardProps {
 }
 
 const STATUS_FILTERS: Array<{ value: ScheduleListStatusFilter; label: string }> = [
-  { value: 'active', label: 'Active' },
-  { value: 'all', label: 'All' },
-  { value: 'done', label: 'Done' },
-  { value: 'cancelled', label: 'Cancelled' },
-  { value: 'failed', label: 'Failed' },
+  { value: "active", label: "Active" },
+  { value: "all", label: "All" },
+  { value: "done", label: "Done" },
+  { value: "cancelled", label: "Cancelled" },
+  { value: "failed", label: "Failed" },
 ];
 
 /**
@@ -52,7 +41,7 @@ const STATUS_FILTERS: Array<{ value: ScheduleListStatusFilter; label: string }> 
  * meta row underneath. PR-3 (#task:396).
  */
 export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.Element {
-  const [filter, setFilter] = useState<ScheduleListStatusFilter>('active');
+  const [filter, setFilter] = useState<ScheduleListStatusFilter>("active");
   const query = useAgentSchedules(agentId, filter);
   const cancel = useCancelAgentSchedule(agentId);
 
@@ -74,9 +63,7 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
           aria-label="Refresh schedules"
           title="Refresh"
         >
-          <RefreshCcw
-            className={`size-3 ${query.isFetching ? 'animate-spin' : ''}`}
-          />
+          <RefreshCcw className={`size-3 ${query.isFetching ? "animate-spin" : ""}`} />
         </button>
       </header>
 
@@ -96,13 +83,11 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
           data-panel-card="placeholder"
           className="border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted"
         >
-          {filter === 'active'
-            ? 'No active schedules.'
-            : `No schedules with status ${filter}.`}
+          {filter === "active" ? "No active schedules." : `No schedules with status ${filter}.`}
         </div>
       ) : (
         <ul className="flex flex-col gap-2">
-          {rows.map(row => (
+          {rows.map((row) => (
             <ScheduleItem
               key={row.id}
               row={row}
@@ -125,12 +110,12 @@ function ScheduleItem({
   cancelling: boolean;
   onCancel: () => void;
 }): JSX.Element {
-  const cancellable = row.status === 'pending' || row.status === 'firing';
+  const cancellable = row.status === "pending" || row.status === "firing";
   // `next_fire_at` is only meaningful while the row is still live. For
   // any terminal status the stored value is stale (e.g. a failed row
   // would otherwise keep saying "in 3 minutes" forever), so collapse
   // the countdown to em-dash and skip the ISO tooltip.
-  const hasFutureFire = row.status === 'pending' || row.status === 'firing';
+  const hasFutureFire = row.status === "pending" || row.status === "firing";
   const terminal = !cancellable;
   return (
     <li
@@ -154,16 +139,13 @@ function ScheduleItem({
         // the tile now sits 16px from row top + 16px from row left in
         // 1-/2-line rows, ~17.5px in 3-line rows (visually identical
         // to the eye).
-        'flex items-center gap-3 border border-border-subtle bg-bg-floating/50 p-4 transition-colors hover:border-border hover:bg-bg-hover/60',
-        terminal ? 'opacity-70' : '',
+        "flex items-center gap-3 border border-border-subtle bg-bg-floating/50 p-4 transition-colors hover:border-border hover:bg-bg-hover/60",
+        terminal ? "opacity-70" : "",
       )}
     >
       <KindTile kind={row.spec.kind} />
       <div className="min-w-0 flex-1">
-        <div
-          className="truncate text-sm font-medium text-text-primary"
-          title={row.title}
-        >
+        <div className="truncate text-sm font-medium text-text-primary" title={row.title}>
           {row.title}
         </div>
         {row.message && row.message !== row.title ? (
@@ -176,7 +158,7 @@ function ScheduleItem({
             className="font-medium text-text-secondary"
             title={hasFutureFire ? dayjs(row.next_fire_at).toISOString() : undefined}
           >
-            {hasFutureFire ? dayjs(row.next_fire_at).fromNow() : '—'}
+            {hasFutureFire ? dayjs(row.next_fire_at).fromNow() : "—"}
           </span>
           <StatusPill status={row.status} />
           {/* Kind sits right before the spec chip so a cron row reads
@@ -197,10 +179,7 @@ function ScheduleItem({
            *  here — schedule list is the single auth boundary, and
            *  fan-out lookups would mix two ACL models. The full id is
            *  retained as the tooltip for audit. */}
-          <TargetPill
-            label={row.target_label}
-            conversationId={row.target_conversation_id}
-          />
+          <TargetPill label={row.target_label} conversationId={row.target_conversation_id} />
         </div>
       </div>
       <div className="flex shrink-0 items-center">
@@ -279,23 +258,14 @@ function ScheduleItem({
  *  forza6's brand-saturated chrome. We deliberately avoid `--accent-2`:
  *  the other themes alias it to `--accent`, which would collapse to the
  *  once color and lose discriminability. */
-function KindTile({
-  kind,
-}: {
-  kind: ScheduleDto['spec']['kind'];
-}): JSX.Element {
+function KindTile({ kind }: { kind: ScheduleDto["spec"]["kind"] }): JSX.Element {
   const cls =
-    kind === 'once'
-      ? 'bg-accent text-text-on-accent'
-      : kind === 'interval'
-        ? 'bg-success text-text-on-success'
-        : 'bg-warning text-text-on-warning';
-  const Icon =
-    kind === 'once'
-      ? Clock
-      : kind === 'interval'
-        ? Repeat
-        : CalendarClock;
+    kind === "once"
+      ? "bg-accent text-text-on-accent"
+      : kind === "interval"
+        ? "bg-success text-text-on-success"
+        : "bg-warning text-text-on-warning";
+  const Icon = kind === "once" ? Clock : kind === "interval" ? Repeat : CalendarClock;
   return (
     <span
       data-panel-pill="kind-tile"
@@ -307,7 +277,7 @@ function KindTile({
         // 这样比较协调'. size-9 (36px) was visibly inset more than
         // 16px from top/bottom in 3-line rows because content
         // overflowed the tile and items-center pushed it down.
-        'grid size-14 shrink-0 place-items-center',
+        "grid size-14 shrink-0 place-items-center",
         cls,
       )}
       title={kind}
@@ -327,22 +297,18 @@ function KindTile({
  *  KindTile mapping (once=accent, interval=success, cron=warning) so
  *  the leading tile and the pill stay color-keyed. The tile is the
  *  landmark; this pill is the literal label. */
-function KindPill({
-  kind,
-}: {
-  kind: ScheduleDto['spec']['kind'];
-}): JSX.Element {
+function KindPill({ kind }: { kind: ScheduleDto["spec"]["kind"] }): JSX.Element {
   const cls =
-    kind === 'once'
-      ? 'bg-accent text-text-on-accent'
-      : kind === 'interval'
-        ? 'bg-success text-text-on-success'
-        : 'bg-warning text-text-on-warning';
+    kind === "once"
+      ? "bg-accent text-text-on-accent"
+      : kind === "interval"
+        ? "bg-success text-text-on-success"
+        : "bg-warning text-text-on-warning";
   return (
     <span
       data-panel-pill="kind"
       className={cn(
-        'inline-flex items-center px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider',
+        "inline-flex items-center px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider",
         cls,
       )}
       aria-label={`${kind} schedule`}
@@ -386,21 +352,21 @@ function KindPill({
  */
 function SpecPill({ row }: { row: ScheduleDto }): JSX.Element | null {
   const spec = row.spec;
-  if (spec.kind === 'once') return null;
+  if (spec.kind === "once") return null;
   // Kind-keyed background: same palette as KindTile / KindPill so the
   // three elements on a cron row (tile + pill + spec) all read as one
   // saturated colour family. `bg-warning` for cron, `bg-success` for
   // interval — mirroring KindPill's mapping exactly.
   const cls =
-    spec.kind === 'interval'
-      ? 'bg-success text-text-on-success'
-      : 'bg-warning text-text-on-warning';
-  if (spec.kind === 'interval') {
+    spec.kind === "interval"
+      ? "bg-success text-text-on-success"
+      : "bg-warning text-text-on-warning";
+  if (spec.kind === "interval") {
     return (
       <span
         data-panel-pill="schedule-spec"
         className={cn(
-          'inline-flex items-center px-2 py-0.5 font-mono text-[length:var(--text-badge)]',
+          "inline-flex items-center px-2 py-0.5 font-mono text-[length:var(--text-badge)]",
           cls,
         )}
         title={`every ${spec.every_seconds} seconds`}
@@ -414,7 +380,7 @@ function SpecPill({ row }: { row: ScheduleDto }): JSX.Element | null {
       <span
         data-panel-pill="schedule-spec"
         className={cn(
-          'inline-flex items-center px-2 py-0.5 font-mono text-[length:var(--text-badge)]',
+          "inline-flex items-center px-2 py-0.5 font-mono text-[length:var(--text-badge)]",
           cls,
         )}
         title={`cron expression — ${spec.expression}`}
@@ -483,7 +449,7 @@ function TargetPill({
  */
 export function formatFiredCount(row: ScheduleDto): string {
   const fired = row.fired_count;
-  if (row.spec.kind === 'once') {
+  if (row.spec.kind === "once") {
     // A `once` row's capacity is always 1, even when the DTO leaves
     // `max_occurrences` null.
     return `${fired} / 1 fired`;
@@ -512,11 +478,7 @@ export function formatFiredCount(row: ScheduleDto): string {
  */
 function FireCounter({ row }: { row: ScheduleDto }): JSX.Element {
   const cap =
-    row.spec.kind === 'once'
-      ? 1
-      : row.max_occurrences != null
-        ? row.max_occurrences
-        : null;
+    row.spec.kind === "once" ? 1 : row.max_occurrences != null ? row.max_occurrences : null;
   return (
     <span
       className="inline-flex items-center gap-1 text-text-secondary"
@@ -536,20 +498,20 @@ function StatusPill({ status }: { status: ScheduleStatus }): JSX.Element {
   // washes looked dull next to forza6's brand chrome — solid tiles
   // read as deliberate state markers in every theme.
   const cls =
-    status === 'pending'
-      ? 'bg-success text-text-on-success'
-      : status === 'firing'
-        ? 'bg-accent text-text-on-accent'
-        : status === 'done'
-          ? 'bg-bg-surface text-text-muted'
-          : status === 'cancelled'
-            ? 'bg-bg-surface text-text-secondary'
-            : 'bg-error text-text-on-error'; // failed
+    status === "pending"
+      ? "bg-success text-text-on-success"
+      : status === "firing"
+        ? "bg-accent text-text-on-accent"
+        : status === "done"
+          ? "bg-bg-surface text-text-muted"
+          : status === "cancelled"
+            ? "bg-bg-surface text-text-secondary"
+            : "bg-error text-text-on-error"; // failed
   return (
     <span
       data-panel-pill="status"
       className={cn(
-        'inline-flex items-center px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider',
+        "inline-flex items-center px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider",
         cls,
       )}
     >
@@ -570,16 +532,16 @@ function FilterTabs({
       data-panel-tabs
       className="flex shrink-0 items-center border border-border-subtle bg-bg-base p-0.5"
     >
-      {STATUS_FILTERS.map(opt => (
+      {STATUS_FILTERS.map((opt) => (
         <button
           key={opt.value}
           type="button"
           onClick={() => onChange(opt.value)}
           className={cn(
-            'px-2 py-0.5 text-[length:var(--text-meta)] transition-colors',
+            "px-2 py-0.5 text-[length:var(--text-meta)] transition-colors",
             opt.value === value
-              ? 'bg-accent-2 text-text-on-accent-2'
-              : 'text-text-muted hover:text-text-primary',
+              ? "bg-accent-2 text-text-on-accent-2"
+              : "text-text-muted hover:text-text-primary",
           )}
         >
           {opt.label}

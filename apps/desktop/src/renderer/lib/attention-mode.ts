@@ -14,8 +14,8 @@
 // OPTIMISTIC path only — flipping the workspace suppressor re-resolves every
 // channel row in the workspace, and waiting a round-trip to re-silence N rows
 // after a direct manipulation reads as lag.
-import type { ChannelAttentionMode } from '@silverhand/shared';
-import type { UnreadBadgeTier } from '@/components/layout/sidebar-shared';
+import type { ChannelAttentionMode } from "@silverhand/shared";
+import type { UnreadBadgeTier } from "@/components/layout/sidebar-shared";
 
 /**
  * The EFFECTIVE tier for one channel: the workspace mute suppressor collapses any
@@ -30,7 +30,7 @@ export function resolveEffectiveAttentionMode(
   channelMode: ChannelAttentionMode,
   workspaceMuted: boolean,
 ): ChannelAttentionMode {
-  return workspaceMuted ? 'mute' : channelMode;
+  return workspaceMuted ? "mute" : channelMode;
 }
 
 /**
@@ -54,10 +54,8 @@ export function resolveWorkspaceMuteToggle(muted: boolean | undefined): {
   /** The value a click writes; `null` = current unknown, offer no action. */
   next: boolean | null;
 } {
-  if (muted === undefined) return { label: 'Mute', next: null };
-  return muted
-    ? { label: 'Unmute', next: false }
-    : { label: 'Mute', next: true };
+  if (muted === undefined) return { label: "Mute", next: null };
+  return muted ? { label: "Unmute", next: false } : { label: "Mute", next: true };
 }
 
 /** What a sidebar row should show in its status slot: a count at one of the
@@ -127,12 +125,12 @@ export function channelRowBadge(input: {
 }): RowBadge | null {
   const { effectiveMode, positionalUnread, directedUnread } = input;
   if (effectiveMode === undefined) return null;
-  if (effectiveMode === 'all') {
-    return positionalUnread > 0 ? { count: positionalUnread, tier: 'loud' } : null;
+  if (effectiveMode === "all") {
+    return positionalUnread > 0 ? { count: positionalUnread, tier: "loud" } : null;
   }
-  if (directedUnread > 0) return { count: directedUnread, tier: 'loud' };
-  if (effectiveMode === 'mentions' && positionalUnread > 0) {
-    return { count: positionalUnread, tier: 'quiet' };
+  if (directedUnread > 0) return { count: directedUnread, tier: "loud" };
+  if (effectiveMode === "mentions" && positionalUnread > 0) {
+    return { count: positionalUnread, tier: "quiet" };
   }
   return null;
 }

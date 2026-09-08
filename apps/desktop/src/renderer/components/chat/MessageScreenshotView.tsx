@@ -1,22 +1,17 @@
-import type {
-  AgentDto,
-  AttachmentSnapshot,
-  MessageDto,
-  UserDto,
-} from '@silverhand/shared';
-import { resolveAttachmentLabels } from '@silverhand/shared';
-import { FileText, Hash } from 'lucide-react';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { getAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
-import { AuthorAvatarView, AuthorName } from './author-avatar-view';
-import { authorStateLabel, presentAuthor } from './author-presentation';
-import { continuesAuthorGroup } from './authorGrouping';
-import { Markdown } from './Markdown';
-import { MessageRowContent } from './MessageRowContent';
-import { ReactionChipRow } from './ReactionChipRow';
-import type { ChannelReference } from './ChannelRef';
-import type { WorkspaceChannelReference } from './ConversationRef';
-import type { StaticTaskRefSummary } from './TaskRef';
+import type { AgentDto, AttachmentSnapshot, MessageDto, UserDto } from "@silverhand/shared";
+import { resolveAttachmentLabels } from "@silverhand/shared";
+import { FileText, Hash } from "lucide-react";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { getAttachmentBlobUrl } from "@/lib/attachment-blob-cache";
+import { AuthorAvatarView, AuthorName } from "./author-avatar-view";
+import { authorStateLabel, presentAuthor } from "./author-presentation";
+import { continuesAuthorGroup } from "./authorGrouping";
+import { Markdown } from "./Markdown";
+import { MessageRowContent } from "./MessageRowContent";
+import { ReactionChipRow } from "./ReactionChipRow";
+import type { ChannelReference } from "./ChannelRef";
+import type { WorkspaceChannelReference } from "./ConversationRef";
+import type { StaticTaskRefSummary } from "./TaskRef";
 
 /**
  * Static, NON-interactive renderer for the image-export pipeline.
@@ -104,9 +99,7 @@ export function MessageScreenshotView({
    *  rendered diagrams; a diagram absent here falls back to source. */
   mermaidSvgByCode?: ReadonlyMap<string, string>;
 }): JSX.Element {
-  const safeChannelTitle = channelTitle
-    ? sanitizeScreenshotText(channelTitle)
-    : null;
+  const safeChannelTitle = channelTitle ? sanitizeScreenshotText(channelTitle) : null;
   return (
     <div
       data-screenshot-root
@@ -142,8 +135,7 @@ export function MessageScreenshotView({
         // keeps the collapse honest — the byline we drop always equals the
         // visible row above, never a different author (#task:1802).
         const previous = i > 0 ? messages[i - 1]! : null;
-        const continuesPrevious =
-          previous != null && continuesAuthorGroup(m, previous);
+        const continuesPrevious = previous != null && continuesAuthorGroup(m, previous);
         return (
           <ScreenshotRow
             key={m.id}
@@ -210,18 +202,16 @@ function ScreenshotRow({
   const safePresentation = presentation
     ? { ...presentation, label: sanitizeScreenshotText(presentation.label) }
     : null;
-  const avatarLabel = safePresentation
-    ? authorStateLabel(safePresentation)
-    : 'system';
+  const avatarLabel = safePresentation ? authorStateLabel(safePresentation) : "system";
   // Feed the viewer's own already-resolved avatar blob when they authored the
   // row (active user matching the viewer's id); every other active author pulls
   // its bytes from the author-DTO-derived batch (#task:1792 B2 — not the
   // directory), and deleted/unresolved render a neutral square.
   const viewerAvatarOverride =
-    presentation?.avatar.variant === 'user' &&
+    presentation?.avatar.variant === "user" &&
     viewer != null &&
     presentation.avatar.id === viewer.id
-      ? viewerAvatarObjectUrl ?? null
+      ? (viewerAvatarObjectUrl ?? null)
       : null;
   const time = formatExportTime(message.created_at);
   const content = sanitizeScreenshotText(message.content);
@@ -230,7 +220,7 @@ function ScreenshotRow({
     // A grouped continuation pulls up toward its head (the parent's `gap-3`
     // minus this) so a one-author run reads as one block, matching the live
     // stream's tightening (#task:1737 / #task:1802).
-    <div className={'flex items-start gap-3' + (continuesPrevious ? ' -mt-2' : '')}>
+    <div className={"flex items-start gap-3" + (continuesPrevious ? " -mt-2" : "")}>
       {continuesPrevious ? (
         // Continuation: no avatar, but hold the avatar column's WIDTH so every
         // body in the run stays on the group head's text baseline. No hover
@@ -239,7 +229,7 @@ function ScreenshotRow({
         <div className="w-8 shrink-0" aria-hidden />
       ) : (
         <AuthorAvatarView
-          avatar={presentation?.avatar ?? { variant: 'neutral-user' }}
+          avatar={presentation?.avatar ?? { variant: "neutral-user" }}
           size={AVATAR_PX.lg}
           label={avatarLabel}
           className="border-[length:var(--border-avatar-width)] border-border-avatar"
@@ -263,10 +253,7 @@ function ScreenshotRow({
            (#task:1802). A system row (no presentation) shows a bare "system". */
         author={
           continuesPrevious ? null : safePresentation ? (
-            <AuthorName
-              presentation={safePresentation}
-              className="font-bold text-text-primary"
-            />
+            <AuthorName presentation={safePresentation} className="font-bold text-text-primary" />
           ) : (
             <span className="font-bold text-text-primary">system</span>
           )
@@ -289,12 +276,8 @@ function ScreenshotRow({
             humansByName={humansByName ? new Map(humansByName) : undefined}
             agentAvatarUrls={agentAvatarUrls ? new Map(agentAvatarUrls) : undefined}
             channelsByName={channelsByName ? new Map(channelsByName) : undefined}
-            conversationRefsById={
-              conversationRefsById ? new Map(conversationRefsById) : undefined
-            }
-            taskRefsByNumber={
-              taskRefsByNumber ? new Map(taskRefsByNumber) : undefined
-            }
+            conversationRefsById={conversationRefsById ? new Map(conversationRefsById) : undefined}
+            taskRefsByNumber={taskRefsByNumber ? new Map(taskRefsByNumber) : undefined}
             interactive={false}
             mermaidSvgByCode={mermaidSvgByCode}
           />
@@ -339,9 +322,8 @@ function ScreenshotAttachmentList({
           attachment={attachment}
           label={labels[i]}
           imageUrl={
-            attachment.content_type.startsWith('image/')
-              ? imageUrls?.get(attachment.id) ??
-                getAttachmentBlobUrl(attachment.id)
+            attachment.content_type.startsWith("image/")
+              ? (imageUrls?.get(attachment.id) ?? getAttachmentBlobUrl(attachment.id))
               : undefined
           }
         />
@@ -359,7 +341,7 @@ function ScreenshotAttachmentTile({
   label?: string;
   imageUrl?: string;
 }): JSX.Element {
-  const isImage = attachment.content_type.startsWith('image/');
+  const isImage = attachment.content_type.startsWith("image/");
   const filename = sanitizeScreenshotText(attachment.filename);
   const labelBadge = label ? (
     <span className="block w-full text-center font-mono text-[length:var(--text-badge)] text-text-muted">
@@ -401,10 +383,10 @@ function ScreenshotAttachmentTile({
 // dependency; the output string is the one to keep in step with live.
 function formatExportTime(epochMs: number): string {
   const d = new Date(epochMs);
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mi = String(d.getMinutes()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
   return `${mm}/${dd} ${hh}:${mi}`;
 }
 
@@ -416,7 +398,7 @@ function formatExportTime(epochMs: number): string {
 const XML_INVALID_CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
 
 function sanitizeScreenshotText(value: string): string {
-  return value.replace(XML_INVALID_CONTROL_RE, '');
+  return value.replace(XML_INVALID_CONTROL_RE, "");
 }
 
 function formatBytes(n: number): string {

@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react';
-import type { MessageAuthorDto, ThreadReplyPreviewRow } from '@silverhand/shared';
-import { Paperclip } from 'lucide-react';
+import type { ReactNode } from "react";
+import type { MessageAuthorDto, ThreadReplyPreviewRow } from "@silverhand/shared";
+import { Paperclip } from "lucide-react";
 
 /**
  * The wire row is the SHARED contract (`@silverhand/shared`), not a renderer
@@ -47,9 +47,7 @@ export function visibleThreadReplyRows(
   for (const row of previews) {
     if (!byId.has(row.message_id)) byId.set(row.message_id, row);
   }
-  return [...byId.values()]
-    .sort((a, b) => a.seq - b.seq)
-    .slice(-MAX_PREVIEW_LINES);
+  return [...byId.values()].sort((a, b) => a.seq - b.seq).slice(-MAX_PREVIEW_LINES);
 }
 
 interface ThreadReplyPreviewProps {
@@ -77,11 +75,7 @@ interface ThreadReplyPreviewProps {
    *  (MessageItem's `renderReplierAvatar`, the same call the reply chip's
    *  stacked avatars make), so this block stays purely presentational and every
    *  surface keeps ONE avatar path — including its miss behaviour. */
-  renderAuthorAvatar: (
-    author: MessageAuthorDto,
-    size: number,
-    key: string,
-  ) => ReactNode;
+  renderAuthorAvatar: (author: MessageAuthorDto, size: number, key: string) => ReactNode;
   /** The author's display NAME NODE, resolved by the SAME owner as the avatar so
    *  identity is one lookup, not two. It arrives as a node (not a bare string)
    *  because a visible text author name MUST carry its deleted state through the
@@ -149,19 +143,19 @@ export function ThreadReplyPreview({
     // hovering the badge and hovering a line give the identical response.
     <div
       data-thread-reply-group
-      onClick={event => {
+      onClick={(event) => {
         // The badge is a nested control that already fires this SAME action
         // (both are `onStartThread(message, threadFirstUnreadId)` — the block
         // jumps to first-unread exactly like the badge, shiki 2026-07-31), so
         // this guard is about not firing it TWICE on one press, not about two
         // different behaviours. A bare click's target is a text node or a plain
         // span, which never matches.
-        if ((event.target as HTMLElement).closest('button, a')) return;
+        if ((event.target as HTMLElement).closest("button, a")) return;
         onOpen();
       }}
       title={title}
       className={
-        'group mt-1.5 flex w-full cursor-pointer flex-col gap-1 rounded-[var(--chip-radius)] px-2 py-1.5 transition-colors ' +
+        "group mt-1.5 flex w-full cursor-pointer flex-col gap-1 rounded-[var(--chip-radius)] px-2 py-1.5 transition-colors " +
         // A recessed WASH separates the replies from the message body above
         // (shiki 2026-07-31) — one layer only: the fill REPLACED the hairline
         // rule that used to do this job rather than stacking on top of it, and
@@ -173,8 +167,8 @@ export function ThreadReplyPreview({
         // one shape there). All three themes declare the pair — `forza6.css`
         // owns `:root`, so an omitted token inherits forza6's value instead of
         // reaching the fallback below.
-        'bg-[var(--thread-preview-bg,var(--chip-bg))] hover:bg-[var(--thread-preview-bg-hover,var(--chip-bg-hover))] ' +
-        (alignRight ? 'items-end' : 'items-start')
+        "bg-[var(--thread-preview-bg,var(--chip-bg))] hover:bg-[var(--thread-preview-bg-hover,var(--chip-bg-hover))] " +
+        (alignRight ? "items-end" : "items-start")
       }
     >
       {badge}
@@ -200,20 +194,19 @@ export function ThreadReplyPreview({
           // fallback here only covers a theme that does not exist yet. The ink
           // lifts on a hover ANYWHERE in the block (`group-hover`), not only
           // over the lines: one target, one response.
-          'flex w-full flex-col gap-1 text-xs leading-tight text-[var(--thread-preview-text,var(--text-muted))] transition-colors group-hover:text-text-secondary ' +
-          (alignRight ? 'items-end text-right' : 'items-start text-left')
+          "flex w-full flex-col gap-1 text-xs leading-tight text-[var(--thread-preview-text,var(--text-muted))] transition-colors group-hover:text-text-secondary " +
+          (alignRight ? "items-end text-right" : "items-start text-left")
         }
       >
-      {rows.map(row => (
-        <span
-          key={row.message_id}
-          className={
-            'flex w-full min-w-0 items-center gap-1.5 ' +
-            (alignRight ? 'flex-row-reverse' : '')
-          }
-        >
-          {renderAuthorAvatar(row.author, 14, row.message_id)}
-          {/* WHO said it: the mainline's own name rule, with no `@` for either
+        {rows.map((row) => (
+          <span
+            key={row.message_id}
+            className={
+              "flex w-full min-w-0 items-center gap-1.5 " + (alignRight ? "flex-row-reverse" : "")
+            }
+          >
+            {renderAuthorAvatar(row.author, 14, row.message_id)}
+            {/* WHO said it: the mainline's own name rule, with no `@` for either
               actor kind (shiki 2026-07-31) — the avatar directly to its left
               already identifies the actor, and an `@` would read as a mention.
               The name node carries its deleted state (the shared `AuthorName`
@@ -222,32 +215,28 @@ export function ThreadReplyPreview({
               40% and truncates rather than shrinking to an ellipsis stub — the
               reply text keeps shrink priority and the name simply caps, while
               the deleted marker (shrink-0) stays visible past the truncation. */}
-          <span className="flex max-w-[40%] shrink-0 items-baseline">
-            {renderAuthorName(row.author)}
-          </span>
-          {/* Shrinks and truncates but never GROWS: a short reply must not
+            <span className="flex max-w-[40%] shrink-0 items-baseline">
+              {renderAuthorName(row.author)}
+            </span>
+            {/* Shrinks and truncates but never GROWS: a short reply must not
               stretch its line and push the attachment label out to the far
               edge, where the label reads as unrelated to the text it belongs
               to. The label follows the text immediately. */}
-          {row.preview ? (
-            <span className="min-w-0 shrink truncate">{row.preview}</span>
-          ) : null}
-          {row.attachment_count > 0 ? (
-            // Label only, capped so it cannot squeeze the reply text to nothing
-            // (canonical labels are short, but the cap also holds if a theme
-            // widens the type scale).
-            <span className="flex min-w-0 max-w-[40%] items-center gap-1">
-              <Paperclip className="size-3 shrink-0" />
-              <span className="truncate">
-                {row.first_attachment_label ?? 'Attachment'}
+            {row.preview ? <span className="min-w-0 shrink truncate">{row.preview}</span> : null}
+            {row.attachment_count > 0 ? (
+              // Label only, capped so it cannot squeeze the reply text to nothing
+              // (canonical labels are short, but the cap also holds if a theme
+              // widens the type scale).
+              <span className="flex min-w-0 max-w-[40%] items-center gap-1">
+                <Paperclip className="size-3 shrink-0" />
+                <span className="truncate">{row.first_attachment_label ?? "Attachment"}</span>
+                {row.attachment_count > 1 ? (
+                  <span className="shrink-0">+{row.attachment_count - 1}</span>
+                ) : null}
               </span>
-              {row.attachment_count > 1 ? (
-                <span className="shrink-0">+{row.attachment_count - 1}</span>
-              ) : null}
-            </span>
-          ) : null}
-        </span>
-      ))}
+            ) : null}
+          </span>
+        ))}
       </div>
     </div>
   );

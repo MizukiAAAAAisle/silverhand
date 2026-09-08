@@ -1,10 +1,10 @@
-import { useEffect, useRef } from 'react';
-import { routes, useNav, useRouteState } from '@/router';
-import { useAgents } from '@/features/agents/hooks';
-import { DirectoryShell, type DirectoryLifecycle } from '@/components/layout/directory-shell';
-import { AgentSidebarShell } from './agent-sidebar-shell';
-import { AgentDetailPage, type AgentNavigation } from './agent-detail-page';
-import { resolveDefaultAgent } from './selection';
+import { useEffect, useRef } from "react";
+import { routes, useNav, useRouteState } from "@/router";
+import { useAgents } from "@/features/agents/hooks";
+import { DirectoryShell, type DirectoryLifecycle } from "@/components/layout/directory-shell";
+import { AgentSidebarShell } from "./agent-sidebar-shell";
+import { AgentDetailPage, type AgentNavigation } from "./agent-detail-page";
+import { resolveDefaultAgent } from "./selection";
 
 export function AgentShell({
   mounted,
@@ -24,7 +24,7 @@ export function AgentShell({
   }, [agents, route.agentId]);
 
   useEffect(() => {
-    if (route.section !== 'members') {
+    if (route.section !== "members") {
       return;
     }
 

@@ -1,7 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
 
 /**
  * Combobox source fence — locks a load-bearing invariant that can't be
@@ -17,12 +17,12 @@ import { describe, expect, it } from 'vitest';
  */
 
 const SRC = readFileSync(
-  path.join(fileURLToPath(new URL('./combobox.tsx', import.meta.url))),
-  'utf8',
+  path.join(fileURLToPath(new URL("./combobox.tsx", import.meta.url))),
+  "utf8",
 );
 
-describe('Combobox source invariants', () => {
-  it('does NOT auto-open on input focus (regression: chevron-close → focus → reopen flicker)', () => {
+describe("Combobox source invariants", () => {
+  it("does NOT auto-open on input focus (regression: chevron-close → focus → reopen flicker)", () => {
     // The input element must have no `onFocus={...setOpen(true)...}` handler.
     // Opens via click, ArrowDown, or typing. Tab-focus never auto-opens
     // (WAI-ARIA combobox convention).

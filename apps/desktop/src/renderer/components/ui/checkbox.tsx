@@ -1,8 +1,8 @@
-import { Check } from 'lucide-react';
-import { forwardRef, type ButtonHTMLAttributes } from 'react';
-import { cn } from '@/lib/cn';
+import { Check } from "lucide-react";
+import { forwardRef, type ButtonHTMLAttributes } from "react";
+import { cn } from "@/lib/cn";
 
-interface CheckboxProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onChange'> {
+interface CheckboxProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onChange"> {
   checked: boolean;
   onCheckedChange?: (checked: boolean) => void;
 }
@@ -19,13 +19,11 @@ export const Checkbox = forwardRef<HTMLButtonElement, CheckboxProps>(
       disabled={disabled}
       onClick={() => onCheckedChange?.(!checked)}
       className={cn(
-        'flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] transition-colors',
+        "flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] transition-colors",
         checked
-          ? 'border-transparent bg-[var(--bg-control-primary)] text-[var(--text-on-control-primary)]'
-          : 'border-border bg-bg-floating text-transparent',
-        disabled
-          ? 'opacity-50'
-          : 'cursor-pointer hover:border-[var(--bg-control-primary)]',
+          ? "border-transparent bg-[var(--bg-control-primary)] text-[var(--text-on-control-primary)]"
+          : "border-border bg-bg-floating text-transparent",
+        disabled ? "opacity-50" : "cursor-pointer hover:border-[var(--bg-control-primary)]",
         className,
       )}
       {...props}
@@ -34,4 +32,4 @@ export const Checkbox = forwardRef<HTMLButtonElement, CheckboxProps>(
     </button>
   ),
 );
-Checkbox.displayName = 'Checkbox';
+Checkbox.displayName = "Checkbox";

@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react';
-import { useRouteState } from '@/router';
-import { SAVED_FILTER_DEFAULT, type SavedFilterState } from '@/components/layout/SavedListView';
-import { SEARCH_FILTER_DEFAULT, type SearchFilterState } from '@/components/layout/SearchPanel';
+import { useEffect, useState } from "react";
+import { useRouteState } from "@/router";
+import { SAVED_FILTER_DEFAULT, type SavedFilterState } from "@/components/layout/SavedListView";
+import { SEARCH_FILTER_DEFAULT, type SearchFilterState } from "@/components/layout/SearchPanel";
 import {
   ARCHIVED_FILTER_DEFAULT,
   type ArchivedFilterState,
-} from '@/components/layout/ArchivedChannelsPanel';
-import { senderFilterFromParam } from '@/components/ui/sender-filter-select';
+} from "@/components/layout/ArchivedChannelsPanel";
+import { senderFilterFromParam } from "@/components/ui/sender-filter-select";
 
 /** Session filters survive presentation changes; URL seeds remain one-way. */
 export function useChatBrowse() {
@@ -23,7 +23,7 @@ export function useChatBrowse() {
   const seedSender = route.searchSender;
 
   useEffect(() => {
-    if (route.chatView !== 'search') {
+    if (route.chatView !== "search") {
       return;
     }
     if (!seedReset) {

@@ -1,24 +1,21 @@
-import { useMemo } from 'react';
+import { useMemo } from "react";
 import {
   useInfiniteQuery,
   useQuery,
   type InfiniteData,
   type QueryClient,
-} from '@tanstack/react-query';
+} from "@tanstack/react-query";
 import {
   apiPaths,
   type AttachmentListItem,
   type AttachmentListPage,
   type AttachmentSenderFacet,
   type AttachmentSenderFacets,
-} from '@silverhand/shared';
-import { api } from '@/lib/api';
-import {
-  dateFilterSince,
-  type DateFilterValue,
-} from '@/components/ui/date-filter-select';
-import { wsConversationScope } from '@/hooks/useConversationStream';
-import { useInterest } from '@/features/realtime/interest-registry';
+} from "@silverhand/shared";
+import { api } from "@/lib/api";
+import { dateFilterSince, type DateFilterValue } from "@/components/ui/date-filter-select";
+import { wsConversationScope } from "@/hooks/useConversationStream";
+import { useInterest } from "@/features/realtime/interest-registry";
 
 /**
  * Channel Attachments panel data source. Lists every attachment referenced
@@ -48,9 +45,9 @@ const ATTACHMENTS_PAGE_LIMIT = 40;
  *  non-empty id, `system` carries none. Sourced from the sender facets, so it
  *  can only ever name a real canonical-source actor (never a dead option). */
 export type AttachmentSenderFilter =
-  | { kind: 'user'; userId: string }
-  | { kind: 'agent'; agentId: string }
-  | { kind: 'system' };
+  | { kind: "user"; userId: string }
+  | { kind: "agent"; agentId: string }
+  | { kind: "system" };
 
 /** The panel's full filter state. `time` reuses the shared recency options
  *  (`all` = unbounded); the hook resolves it to a `since` epoch-ms once, frozen
@@ -63,13 +60,13 @@ export interface AttachmentListFilter {
 /** The unfiltered default — every attachment, all time. */
 export const ALL_ATTACHMENTS_FILTER: AttachmentListFilter = {
   sender: null,
-  time: 'all',
+  time: "all",
 };
 
 /** True when a filter narrows the list (drives the "no matches" empty state
  *  and the Clear affordance vs the genuine "channel has no attachments"). */
 export function isAttachmentFilterActive(f: AttachmentListFilter): boolean {
-  return f.sender !== null || f.time !== 'all';
+  return f.sender !== null || f.time !== "all";
 }
 
 /** Stable, hashable projection of a filter's discrete axes (sender + time
@@ -84,11 +81,11 @@ export function attachmentFilterKey(f: AttachmentListFilter): {
   const s =
     f.sender === null
       ? null
-      : f.sender.kind === 'user'
+      : f.sender.kind === "user"
         ? `u:${f.sender.userId}`
-        : f.sender.kind === 'agent'
+        : f.sender.kind === "agent"
           ? `a:${f.sender.agentId}`
-          : 'sys';
+          : "sys";
   return { s, t: f.time };
 }
 
@@ -105,18 +102,18 @@ export function attachmentsListSearchParams(
   opts: { cursor?: string | null; limit: number; since: number | null },
 ): URLSearchParams {
   const params = new URLSearchParams();
-  params.set('limit', String(opts.limit));
-  if (opts.cursor != null) params.set('cursor', opts.cursor);
+  params.set("limit", String(opts.limit));
+  if (opts.cursor != null) params.set("cursor", opts.cursor);
   if (filter.sender) {
-    params.set('sender_kind', filter.sender.kind);
-    if (filter.sender.kind === 'user') {
-      params.set('sender_id', filter.sender.userId);
-    } else if (filter.sender.kind === 'agent') {
-      params.set('sender_id', filter.sender.agentId);
+    params.set("sender_kind", filter.sender.kind);
+    if (filter.sender.kind === "user") {
+      params.set("sender_id", filter.sender.userId);
+    } else if (filter.sender.kind === "agent") {
+      params.set("sender_id", filter.sender.agentId);
     }
     // system: no sender_id (the wire rejects one).
   }
-  if (opts.since !== null) params.set('since', String(opts.since));
+  if (opts.since !== null) params.set("since", String(opts.since));
   return params;
 }
 
@@ -124,23 +121,20 @@ export function attachmentsListSearchParams(
  *  window. Changing channel, sender, or time preset starts a NEW session
  *  (and thus resolves a fresh cutoff). Used as the memo key that freezes the
  *  resolved cutoff for the session. */
-export function attachmentAnchorId(
-  channelId: string,
-  f: AttachmentListFilter,
-): string {
+export function attachmentAnchorId(channelId: string, f: AttachmentListFilter): string {
   const k = attachmentFilterKey(f);
-  return `${channelId}|${k.s ?? ''}|${k.t}`;
+  return `${channelId}|${k.s ?? ""}|${k.t}`;
 }
 
 /** Base (filter-agnostic) key. Every filtered list is a child of this prefix,
  *  so `invalidateChannelAttachmentsList` and the reader gate operate on the
  *  whole family without enumerating filters. */
 export const channelAttachmentsKey = (channelId: string) =>
-  ['channels', channelId, 'attachments-list'] as const;
+  ["channels", channelId, "attachments-list"] as const;
 
 /** Distinct canonical-source senders for one channel — the filter facets. */
 export const channelAttachmentSendersKey = (channelId: string) =>
-  ['channels', channelId, 'attachment-senders'] as const;
+  ["channels", channelId, "attachment-senders"] as const;
 
 /** The FULL list query key: base prefix + filter projection + the FROZEN
  *  resolved cutoff. Two sessions with the same preset but different resolved
@@ -152,11 +146,7 @@ export function attachmentsListQueryKey(
   filter: AttachmentListFilter,
   resolvedSince: number | null,
 ) {
-  return [
-    ...channelAttachmentsKey(channelId),
-    attachmentFilterKey(filter),
-    resolvedSince,
-  ] as const;
+  return [...channelAttachmentsKey(channelId), attachmentFilterKey(filter), resolvedSince] as const;
 }
 
 /** True when a `useChannelAttachments(channelId, …)` reader is mounted for
@@ -166,14 +156,11 @@ export function attachmentsListQueryKey(
  *  conversation ingestor only invalidates the attachments list while a
  *  reader is alive, so interest-only scope subscription (no visible
  *  consumer) doesn't spin up needless refetches. */
-export function hasActiveChannelAttachmentsReader(
-  qc: QueryClient,
-  channelId: string,
-): boolean {
+export function hasActiveChannelAttachmentsReader(qc: QueryClient, channelId: string): boolean {
   return qc
     .getQueryCache()
     .findAll({ queryKey: channelAttachmentsKey(channelId) })
-    .some(entry => entry.getObserversCount() > 0);
+    .some((entry) => entry.getObserversCount() > 0);
 }
 
 /** Invalidate every filtered variant of the channel Attachments list —
@@ -222,7 +209,7 @@ export function useChannelAttachments(
   refetch: () => void;
 } {
   const enabled = !!channelId;
-  const cid = channelId ?? 'none';
+  const cid = channelId ?? "none";
 
   // Freeze the resolved time cutoff for the lifetime of this filter session,
   // recomputing only when the session identity (channel / sender / preset)
@@ -264,7 +251,7 @@ export function useChannelAttachments(
       });
       return api<AttachmentListPage>(`${base}?${params.toString()}`, { signal });
     },
-    getNextPageParam: lastPage => lastPage.next_cursor,
+    getNextPageParam: (lastPage) => lastPage.next_cursor,
   });
 
   // Same interest / invalidation contract as `useChannelThreads`: hold WS
@@ -274,10 +261,7 @@ export function useChannelAttachments(
   useInterest(channelId ? wsConversationScope(channelId) : null);
 
   // Flatten pages once so consumers don't reach into InfiniteData shape.
-  const items = useMemo(
-    () => query.data?.pages.flatMap(p => p.items) ?? [],
-    [query.data],
-  );
+  const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
 
   return {
     items,
@@ -315,7 +299,7 @@ export function useChannelAttachmentSenders(
   refetch: () => void;
 } {
   const query = useQuery<AttachmentSenderFacets, Error>({
-    queryKey: channelAttachmentSendersKey(channelId ?? 'none'),
+    queryKey: channelAttachmentSendersKey(channelId ?? "none"),
     enabled: opts.enabled && !!channelId,
     queryFn: ({ signal }) =>
       api<AttachmentSenderFacets>(apiPaths.channelAttachmentSenders(channelId!), {

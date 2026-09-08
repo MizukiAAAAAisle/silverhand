@@ -1,6 +1,6 @@
-[data-profile-host='human'],
-[data-profile-host='agent'],
-[data-profile-host='side'] {
+[data-profile-host="human"],
+[data-profile-host="agent"],
+[data-profile-host="side"] {
   min-width: 0;
   container: agent-page / inline-size;
 }
@@ -99,7 +99,7 @@
   gap: 8px;
 }
 
-.agent-header-content[data-compact='true'] {
+.agent-header-content[data-compact="true"] {
   --agent-name-size: 14px;
   --agent-name-line: 16px;
   --agent-description-size: 11px;
@@ -108,21 +108,21 @@
   gap: 8px;
 }
 
-.agent-header-content[data-compact='true'] .agent-header-actions {
+.agent-header-content[data-compact="true"] .agent-header-actions {
   gap: 6px;
 }
 
 @container agent-page (max-width: 560px) {
-  .agent-header-content[data-compact='false'] {
+  .agent-header-content[data-compact="false"] {
     flex-wrap: wrap;
     gap: 12px;
   }
 
-  .agent-header-content[data-compact='false'] .agent-header-identity {
+  .agent-header-content[data-compact="false"] .agent-header-identity {
     min-width: 140px;
   }
 
-  .agent-header-content[data-compact='false'] .agent-header-actions {
+  .agent-header-content[data-compact="false"] .agent-header-actions {
     flex-basis: 100%;
     flex-wrap: wrap;
     justify-content: flex-end;

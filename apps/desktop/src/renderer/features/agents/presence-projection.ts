@@ -1,6 +1,6 @@
-import type { ConversationAgentStatus } from '@silverhand/shared';
-import type { GlobalPresence } from './hooks';
-import type { AgentSlotScopeKind, MemberRuntimeStatus } from './member-runtime-status';
+import type { ConversationAgentStatus } from "@silverhand/shared";
+import type { GlobalPresence } from "./hooks";
+import type { AgentSlotScopeKind, MemberRuntimeStatus } from "./member-runtime-status";
 
 /**
  * THE ONE PLACE A PRESENCE NATIVE STATE BECOMES WORDS (#task:2128).
@@ -22,7 +22,7 @@ import type { AgentSlotScopeKind, MemberRuntimeStatus } from './member-runtime-s
  * two agents in the same state can never read differently on different surfaces.
  * A leaf must not import this back — the dependency points one way, native → words.
  */
-export type PresenceTone = 'online' | 'away' | 'offline' | 'failed' | 'membership';
+export type PresenceTone = "online" | "away" | "offline" | "failed" | "membership";
 
 export interface PresenceDisplay {
   /** The visible word. */
@@ -51,23 +51,23 @@ export interface PresenceDisplay {
  *  conversation arm never sees a `GlobalPresence`. "Two sources do not merge" is
  *  a property of this type, not a discipline. */
 export type PresenceInput =
-  | { scope: 'global'; presence: GlobalPresence }
-  | { scope: 'conversation'; runtime: MemberRuntimeStatus };
+  | { scope: "global"; presence: GlobalPresence }
+  | { scope: "conversation"; runtime: MemberRuntimeStatus };
 
 /** `null` = draw nothing (an unsettled read has no honest word — never a
  *  speculative status). Only the conversation arm has that case (`unknown`); the
  *  global arm is total, so its overload returns a non-null `PresenceDisplay` and
  *  its callers need no null check. */
 export function projectPresence(input: {
-  scope: 'global';
+  scope: "global";
   presence: GlobalPresence;
 }): PresenceDisplay;
 export function projectPresence(input: {
-  scope: 'conversation';
+  scope: "conversation";
   runtime: MemberRuntimeStatus;
 }): PresenceDisplay | null;
 export function projectPresence(input: PresenceInput): PresenceDisplay | null {
-  return input.scope === 'global'
+  return input.scope === "global"
     ? projectGlobalPresence(input.presence)
     : projectConversationPresence(input.runtime);
 }
@@ -77,11 +77,11 @@ export function projectPresence(input: PresenceInput): PresenceDisplay | null {
  *  alarm for an agent that will answer on the next message. `failed` is the only
  *  loud one besides `online`, because a crash is the one thing worth a colour. */
 export const PRESENCE_TONE_DOT: Record<PresenceTone, string> = {
-  online: 'bg-success',
-  away: 'bg-text-muted/50',
-  offline: 'bg-text-muted/50',
-  failed: 'bg-error',
-  membership: 'bg-text-muted/50',
+  online: "bg-success",
+  away: "bg-text-muted/50",
+  offline: "bg-text-muted/50",
+  failed: "bg-error",
+  membership: "bg-text-muted/50",
 };
 
 function display(
@@ -101,30 +101,28 @@ function display(
 
 function projectGlobalPresence(presence: GlobalPresence): PresenceDisplay {
   switch (presence) {
-    case 'online':
-      return display('Online', 'online', 'This agent is online.');
-    case 'away':
-      return display('Away', 'away', 'This agent is away.');
-    case 'offline':
-      return display('Offline', 'offline', 'This agent is offline.');
+    case "online":
+      return display("Online", "online", "This agent is online.");
+    case "away":
+      return display("Away", "away", "This agent is away.");
+    case "offline":
+      return display("Offline", "offline", "This agent is offline.");
   }
 }
 
-function projectConversationPresence(
-  runtime: MemberRuntimeStatus,
-): PresenceDisplay | null {
+function projectConversationPresence(runtime: MemberRuntimeStatus): PresenceDisplay | null {
   switch (runtime.kind) {
-    case 'unknown':
+    case "unknown":
       return null;
-    case 'not_here':
-      return display('Not here', 'membership', 'Not a member of this channel.');
-    case 'no_session':
+    case "not_here":
+      return display("Not here", "membership", "Not a member of this channel.");
+    case "no_session":
       // A member with no slot row: in this channel there is nothing running, so
       // the honest IM word is Offline — not Away, which needs a live-but-idle
       // session. This is the deliberate split from #2123's code, where both this
       // and `session·idle` read `Idle` (@Alice #task:2128 baseline).
-      return display('Offline', 'offline', 'This channel has no live session.');
-    case 'session':
+      return display("Offline", "offline", "This channel has no live session.");
+    case "session":
       return projectSession(runtime.status, runtime.scope);
   }
 }
@@ -134,19 +132,19 @@ function projectSession(
   scope: AgentSlotScopeKind,
 ): PresenceDisplay {
   switch (status) {
-    case 'active':
-      return display('Online', 'online', sessionSentence(scope, 'is online'));
-    case 'starting':
-      return display('Connecting…', 'online', sessionSentence(scope, 'is starting'), {
+    case "active":
+      return display("Online", "online", sessionSentence(scope, "is online"));
+    case "starting":
+      return display("Connecting…", "online", sessionSentence(scope, "is starting"), {
         pulse: true,
       });
-    case 'idle':
-      return display('Away', 'away', sessionSentence(scope, 'is idle'));
-    case 'crashed':
+    case "idle":
+      return display("Away", "away", sessionSentence(scope, "is idle"));
+    case "crashed":
       // Label folds into Offline (no fourth word), tone stays `failed`, and the
       // accessible name keeps the fault the word drops.
-      return display('Offline', 'failed', sessionSentence(scope, 'failed'), {
-        a11yLabel: 'Offline — session failed',
+      return display("Offline", "failed", sessionSentence(scope, "failed"), {
+        a11yLabel: "Offline — session failed",
       });
   }
 }
@@ -162,9 +160,9 @@ function projectSession(
  */
 function sessionSentence(scope: AgentSlotScopeKind, predicate: string): string {
   switch (scope) {
-    case 'conversation':
+    case "conversation":
       return `This channel's session ${predicate}.`;
-    case 'agent':
+    case "agent":
       return `This agent's one session, shared across every channel, ${predicate}.`;
   }
 }

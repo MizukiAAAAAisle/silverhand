@@ -1,9 +1,6 @@
-import { useState, useEffect, useMemo, type FormEvent } from 'react';
-import { Lock, Hash, X } from 'lucide-react';
-import type {
-  ConversationVisibility,
-  CreateConversationChannelInput,
-} from '@silverhand/shared';
+import { useState, useEffect, useMemo, type FormEvent } from "react";
+import { Lock, Hash, X } from "lucide-react";
+import type { ConversationVisibility, CreateConversationChannelInput } from "@silverhand/shared";
 import {
   Dialog,
   DialogContent,
@@ -11,20 +8,20 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Input, Label } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
-import { cn } from '@/lib/cn';
+} from "@/components/ui/dialog";
+import { Input, Label } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
+import { cn } from "@/lib/cn";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useViewerUser,
-} from '@/features/me/hooks';
-import { MemberPicker, type MemberPickerCandidate } from './AgentPicker';
-import { useCreateChannel, useWorkspaceMemberLists } from './hooks';
-import type { WorkspaceCapabilities } from './workspace-capabilities';
+} from "@/features/me/hooks";
+import { MemberPicker, type MemberPickerCandidate } from "./AgentPicker";
+import { useCreateChannel, useWorkspaceMemberLists } from "./hooks";
+import type { WorkspaceCapabilities } from "./workspace-capabilities";
 
 // Stable empty member object so the useEffect dependency on `members` doesn't
 // create a new reference every render when the query hasn't resolved yet.
@@ -77,7 +74,7 @@ export function computeSelectableHumans<T extends { id: string }>(
   viewerUserId: string | null,
 ): T[] {
   if (viewerUserId === null) return [];
-  return humans.filter(user => user.id !== viewerUserId);
+  return humans.filter((user) => user.id !== viewerUserId);
 }
 
 /**
@@ -91,7 +88,7 @@ export function pruneSelectedHumanIds(
   validHumanIds: ReadonlyArray<string>,
 ): string[] {
   const valid = new Set(validHumanIds);
-  return selected.filter(id => valid.has(id));
+  return selected.filter((id) => valid.has(id));
 }
 
 interface CreateChannelDialogProps {
@@ -112,8 +109,8 @@ export function CreateChannelDialog({
   capabilities,
   onCreated,
 }: CreateChannelDialogProps): JSX.Element {
-  const [title, setTitle] = useState('');
-  const [visibility, setVisibility] = useState<ConversationVisibility>('private');
+  const [title, setTitle] = useState("");
+  const [visibility, setVisibility] = useState<ConversationVisibility>("private");
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [selectedHumans, setSelectedHumans] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -122,10 +119,10 @@ export function CreateChannelDialog({
   const createChannel = useCreateChannel(workspaceId);
   const viewer = useViewerUser();
   const viewerUserId =
-    viewer.data
-    && !isRegistrationRequired(viewer.data)
-    && !isBackendUnreachable(viewer.data)
-    && !isUpdateRequired(viewer.data)
+    viewer.data &&
+    !isRegistrationRequired(viewer.data) &&
+    !isBackendUnreachable(viewer.data) &&
+    !isUpdateRequired(viewer.data)
       ? viewer.data.id
       : null;
 
@@ -137,8 +134,8 @@ export function CreateChannelDialog({
   // the creator is unioned in server-side).
   useEffect(() => {
     if (open) return;
-    setTitle('');
-    setVisibility('private');
+    setTitle("");
+    setVisibility("private");
     setSelectedAgents([]);
     setSelectedHumans([]);
     setError(null);
@@ -146,12 +143,12 @@ export function CreateChannelDialog({
 
   const candidates = useMemo<MemberPickerCandidate[]>(
     () => [
-      ...members.agents.map(agent => ({ kind: 'agent' as const, agent })),
+      ...members.agents.map((agent) => ({ kind: "agent" as const, agent })),
       // The creator is auto-added server-side and must never be a selectable
       // human candidate; while the viewer identity is unknown we offer no
       // humans at all. See `computeSelectableHumans` for the timing rationale.
-      ...computeSelectableHumans(members.humans, viewerUserId).map(user => ({
-        kind: 'human' as const,
+      ...computeSelectableHumans(members.humans, viewerUserId).map((user) => ({
+        kind: "human" as const,
         user,
       })),
     ],
@@ -163,18 +160,16 @@ export function CreateChannelDialog({
   // resolved). Functional update preserves the array reference when nothing
   // changed, so this cannot loop.
   useEffect(() => {
-    const validHumanIds = candidates
-      .filter(c => c.kind === 'human')
-      .map(c => c.user.id);
-    setSelectedHumans(prev => {
+    const validHumanIds = candidates.filter((c) => c.kind === "human").map((c) => c.user.id);
+    setSelectedHumans((prev) => {
       const next = pruneSelectedHumanIds(prev, validHumanIds);
       return next.length === prev.length ? prev : next;
     });
   }, [candidates]);
   const selectedMembers = useMemo(
     () => [
-      ...selectedAgents.map(id => `agent:${id}`),
-      ...selectedHumans.map(id => `human:${id}`),
+      ...selectedAgents.map((id) => `agent:${id}`),
+      ...selectedHumans.map((id) => `human:${id}`),
     ],
     [selectedAgents, selectedHumans],
   );
@@ -183,7 +178,7 @@ export function CreateChannelDialog({
     e.preventDefault();
     setError(null);
     if (!title.trim()) {
-      setError('Please enter a channel title');
+      setError("Please enter a channel title");
       return;
     }
     // A channel in a memberless container (Agent Space) carries no member
@@ -221,28 +216,26 @@ export function CreateChannelDialog({
             <Input
               id="se-title"
               value={title}
-              onChange={e => setTitle(e.target.value)}
+              onChange={(e) => setTitle(e.target.value)}
               placeholder="fix the login bug"
               autoFocus
             />
           </div>
 
-          {hasMembers ? (
-            <VisibilitySelect value={visibility} onChange={setVisibility} />
-          ) : null}
+          {hasMembers ? <VisibilitySelect value={visibility} onChange={setVisibility} /> : null}
 
           {hasMembers ? (
             <RegularMemberPicker
               candidates={candidates}
               selected={selectedMembers}
-              onChange={values => {
+              onChange={(values) => {
                 const agents: string[] = [];
                 const humans: string[] = [];
                 for (const value of values) {
-                  const [kind, id] = value.split(':', 2);
+                  const [kind, id] = value.split(":", 2);
                   if (!id) continue;
-                  if (kind === 'agent') agents.push(id);
-                  if (kind === 'human') humans.push(id);
+                  if (kind === "agent") agents.push(id);
+                  if (kind === "human") humans.push(id);
                 }
                 setSelectedAgents(agents);
                 setSelectedHumans(humans);
@@ -261,12 +254,8 @@ export function CreateChannelDialog({
             >
               Cancel
             </Button>
-            <Button
-              type="submit"
-              disabled={createChannel.isPending}
-              {...primaryAction()}
-            >
-              {createChannel.isPending ? 'Creating…' : 'Create'}
+            <Button type="submit" disabled={createChannel.isPending} {...primaryAction()}>
+              {createChannel.isPending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>
         </form>
@@ -285,8 +274,8 @@ const VISIBILITY_OPTIONS: ReadonlyArray<{
   label: string;
   icon: typeof Lock;
 }> = [
-  { value: 'private', label: 'Private', icon: Lock },
-  { value: 'public', label: 'Public', icon: Hash },
+  { value: "private", label: "Private", icon: Lock },
+  { value: "public", label: "Public", icon: Hash },
 ];
 
 function VisibilitySelect({
@@ -303,12 +292,8 @@ function VisibilitySelect({
           independent buttons, each carrying its own border (no segmented
           container frame). Selected reuses the canonical neutral selected-row
           recipe (ink fill + border, never a brand hue). */}
-      <div
-        role="radiogroup"
-        aria-label="Channel visibility"
-        className="flex gap-2 self-start"
-      >
-        {VISIBILITY_OPTIONS.map(opt => {
+      <div role="radiogroup" aria-label="Channel visibility" className="flex gap-2 self-start">
+        {VISIBILITY_OPTIONS.map((opt) => {
           const selected = opt.value === value;
           const Icon = opt.icon;
           return (
@@ -319,17 +304,17 @@ function VisibilitySelect({
               aria-checked={selected}
               onClick={() => onChange(opt.value)}
               className={cn(
-                'flex items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs font-medium transition-colors',
+                "flex items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs font-medium transition-colors",
                 selected
-                  ? 'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-text-on-selected'
-                  // Resting matches the member chips below (bg-base + subtle
-                  // border). Hover is the canonical control-hover recipe: an
-                  // ink border (`--border-control-hover` — dark ink in warm,
-                  // near-black in forza6, neutral in slack) plus the shared
-                  // selectable-option fill (`--bg-option-hover` — forza6 pale
-                  // lime, warm/slack neutral). NOT `--bg-row-hover`, which is a
-                  // magenta brand tint in forza6.
-                  : 'border-border-subtle bg-bg-base text-text-secondary hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
+                  ? "border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-text-on-selected"
+                  : // Resting matches the member chips below (bg-base + subtle
+                    // border). Hover is the canonical control-hover recipe: an
+                    // ink border (`--border-control-hover` — dark ink in warm,
+                    // near-black in forza6, neutral in slack) plus the shared
+                    // selectable-option fill (`--bg-option-hover` — forza6 pale
+                    // lime, warm/slack neutral). NOT `--bg-row-hover`, which is a
+                    // magenta brand tint in forza6.
+                    "border-border-subtle bg-bg-base text-text-secondary hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)] hover:text-text-primary",
               )}
             >
               <Icon className="size-3.5" />
@@ -356,8 +341,7 @@ function RegularMemberPicker({
       <div className="flex flex-col gap-1.5">
         <Label>Members</Label>
         <span className="text-xs text-text-muted">
-          This workspace has no members yet. Add them from the Members panel
-          first.
+          This workspace has no members yet. Add them from the Members panel first.
         </span>
       </div>
     );
@@ -393,9 +377,7 @@ function RegularMemberPicker({
         candidates={candidates}
         value={selected}
         onChange={onChange}
-        placeholder={
-          selected.length === 0 ? 'Select members to add…' : 'Add more members…'
-        }
+        placeholder={selected.length === 0 ? "Select members to add…" : "Add more members…"}
         allSelectedText="All members added"
       />
     </div>

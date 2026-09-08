@@ -1,20 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
-import {
-  Brain,
-  ChevronDown,
-  ChevronUp,
-  Hourglass,
-  Layers,
-  Loader2,
-} from 'lucide-react';
-import type { AgentDto, AgentRunState } from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { useAgentRunStates } from '@/features/channels/hooks';
-import { useAgents } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useNav } from '@/router';
-import { focusAgentSideSection } from '@/features/agents/AgentView';
+import { useEffect, useMemo, useState } from "react";
+import { Brain, ChevronDown, ChevronUp, Hourglass, Layers, Loader2 } from "lucide-react";
+import type { AgentDto, AgentRunState } from "@silverhand/shared";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { useAgentRunStates } from "@/features/channels/hooks";
+import { useAgents } from "@/features/agents/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useNav } from "@/router";
+import { focusAgentSideSection } from "@/features/agents/AgentView";
 
 // ── Time helpers ─────────────────────────────────────────────────────────
 
@@ -39,23 +32,23 @@ function useLiveMs(epochMs: number): number {
 // ── Status model ─────────────────────────────────────────────────────────
 
 const STATUS_LABEL: Record<string, string> = {
-  starting: 'Starting…',
-  thinking: 'Thinking…',
-  tool_running: 'Thinking…',
-  waiting: 'Waiting…',
+  starting: "Starting…",
+  thinking: "Thinking…",
+  tool_running: "Thinking…",
+  waiting: "Waiting…",
 };
 
 const ACTIVITY_SNIPPET_KIND_LABEL: Record<
-  NonNullable<AgentRunState['activitySnippetKind']>,
+  NonNullable<AgentRunState["activitySnippetKind"]>,
   string
 > = {
-  thinking: 'Thinking',
-  text: 'Writing',
-  api_response: 'Notice',
+  thinking: "Thinking",
+  text: "Writing",
+  api_response: "Notice",
 };
 
 export function activitySnippetKindLabel(
-  kind: AgentRunState['activitySnippetKind'],
+  kind: AgentRunState["activitySnippetKind"],
 ): string | null {
   return kind ? ACTIVITY_SNIPPET_KIND_LABEL[kind] : null;
 }
@@ -68,11 +61,11 @@ export function activitySnippetKindLabel(
  * activity (see `pickOrder`).
  */
 function statusRank(state: AgentRunState): number {
-  if (state.status === 'tool_running') return 0;
+  if (state.status === "tool_running") return 0;
   if (state.compacting) return 1;
-  if (state.status === 'thinking') return 2;
-  if (state.status === 'waiting') return 3;
-  if (state.status === 'starting') return 4;
+  if (state.status === "thinking") return 2;
+  if (state.status === "waiting") return 3;
+  if (state.status === "starting") return 4;
   return 5;
 }
 
@@ -98,8 +91,8 @@ export function selectActiveRunStates(
 ): AgentRunState[] {
   const restrictSet = restrictToAgentIds ? new Set(restrictToAgentIds) : null;
   return runStates
-    .filter(s => s.status !== 'idle' && s.status !== 'failed')
-    .filter(s => !restrictSet || restrictSet.has(s.agentId))
+    .filter((s) => s.status !== "idle" && s.status !== "failed")
+    .filter((s) => !restrictSet || restrictSet.has(s.agentId))
     .sort(pickOrder);
 }
 
@@ -120,7 +113,7 @@ interface ToolSummary {
  * per-tool breakdown lives in the expanded rows.
  */
 function currentToolSummary(state: AgentRunState): ToolSummary | null {
-  if (state.status !== 'tool_running') return null;
+  if (state.status !== "tool_running") return null;
   const counts = state.toolCallCounts ?? {};
   const entries = Object.entries(counts).filter(([, count]) => count > 0);
   let name = state.detail?.trim() || null;
@@ -141,7 +134,7 @@ function currentToolSummary(state: AgentRunState): ToolSummary | null {
 }
 
 function displayNameOf(agent: AgentDto | undefined): string {
-  return agent ? `@${agent.display_name?.trim() || agent.name}` : '@agent';
+  return agent ? `@${agent.display_name?.trim() || agent.name}` : "@agent";
 }
 
 // ── Component ────────────────────────────────────────────────────────────
@@ -197,7 +190,7 @@ export function ComposerActivityHeader({
   // sticky section AND reactively redirects an already-open panel so all cases
   // (closed / other agent / same agent on another tab) converge on Activity.
   const openAgentActivity = (agentId: string): void => {
-    focusAgentSideSection(agentId, 'activity');
+    focusAgentSideSection(agentId, "activity");
     openAgentPanel(agentId);
   };
 
@@ -216,8 +209,8 @@ export function ComposerActivityHeader({
 
   // Avatars only for the agents actually shown — not the whole directory.
   const activeAgents = useMemo(() => {
-    const ids = new Set(active.map(s => s.agentId));
-    return directoryAgents.filter(a => ids.has(a.id));
+    const ids = new Set(active.map((s) => s.agentId));
+    return directoryAgents.filter((a) => ids.has(a.id));
   }, [directoryAgents, active]);
   const agentAvatarUrls = useAgentAvatarObjectUrls(activeAgents);
 
@@ -246,28 +239,24 @@ export function ComposerActivityHeader({
       ? `${tool.name} ×${tool.count}`
       : tool.name
     : showCompaction
-      ? 'Compacting'
+      ? "Compacting"
       : null;
   const snippetKindLabel =
     subject.activitySnippet && !badge
       ? activitySnippetKindLabel(subject.activitySnippetKind)
       : null;
   const SnippetKindIcon =
-    subject.activitySnippetKind === 'thinking'
+    subject.activitySnippetKind === "thinking"
       ? Brain
-      : subject.activitySnippetKind === 'api_response'
+      : subject.activitySnippetKind === "api_response"
         ? Hourglass
         : null;
-  const snippet =
-    subject.activitySnippet || STATUS_LABEL[subject.status] || subject.status;
+  const snippet = subject.activitySnippet || STATUS_LABEL[subject.status] || subject.status;
   const extra = active.length - 1;
   const StatusIcon = showCompaction ? Layers : Loader2;
 
   return (
-    <div
-      data-composer-activity=""
-      className="border-b border-border-subtle bg-bg-floating"
-    >
+    <div data-composer-activity="" className="border-b border-border-subtle bg-bg-floating">
       {expanded ? (
         // Expanded: a slim GENERIC header (collapse control only — no
         // per-agent info, so it never duplicates the first detail row) plus
@@ -283,13 +272,13 @@ export function ComposerActivityHeader({
           >
             <Loader2 className="size-3 shrink-0 animate-spin text-accent" />
             <span className="font-medium text-text-secondary">
-              Running{active.length > 1 ? ` · ${active.length} agents` : ''}
+              Running{active.length > 1 ? ` · ${active.length} agents` : ""}
             </span>
             <span className="min-w-0 flex-1" />
             <ChevronUp className="size-3 shrink-0 text-text-muted/60" />
           </button>
           <div className="flex flex-col gap-0.5 px-1 pb-1.5">
-            {active.map(state => (
+            {active.map((state) => (
               <ActivityDetailRow
                 key={state.runId}
                 state={state}
@@ -309,8 +298,8 @@ export function ComposerActivityHeader({
           role="button"
           tabIndex={0}
           onClick={() => setExpanded(true)}
-          onKeyDown={e => {
-            if (e.key === 'Enter' || e.key === ' ') {
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
               setExpanded(true);
             }
@@ -327,7 +316,7 @@ export function ComposerActivityHeader({
               borderless avatar's ONLY keyboard-focus a11y signal. */}
           <button
             type="button"
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation();
               openAgentActivity(subject.agentId);
             }}
@@ -336,7 +325,7 @@ export function ComposerActivityHeader({
             className="shrink-0 cursor-pointer focus-outline"
           >
             <AgentAvatar
-              runtime={subjectAgent?.runtime ?? 'claude'}
+              runtime={subjectAgent?.runtime ?? "claude"}
               size={AVATAR_PX.xs}
               className="shrink-0"
               avatarObjectUrl={agentAvatarUrls.get(subject.agentId) ?? null}
@@ -345,8 +334,7 @@ export function ComposerActivityHeader({
           </button>
           <StatusIcon
             className={
-              'size-3 shrink-0 ' +
-              (showCompaction ? 'text-text-muted' : 'animate-spin text-accent')
+              "size-3 shrink-0 " + (showCompaction ? "text-text-muted" : "animate-spin text-accent")
             }
           />
           {/* The name is a second click target for the same open-Activity
@@ -354,7 +342,7 @@ export function ComposerActivityHeader({
               idiomatic keyboard-focus signal, no hover chrome. */}
           <button
             type="button"
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation();
               openAgentActivity(subject.agentId);
             }}
@@ -374,9 +362,7 @@ export function ComposerActivityHeader({
               <span>{snippetKindLabel}</span>
             </span>
           ) : null}
-          <span className="min-w-0 flex-1 truncate text-left text-text-muted">
-            {snippet}
-          </span>
+          <span className="min-w-0 flex-1 truncate text-left text-text-muted">{snippet}</span>
           {extra > 0 ? (
             <span className="shrink-0 rounded-full bg-bg-hover px-1.5 text-[length:var(--text-badge)] leading-4 text-text-muted">
               +{extra}
@@ -405,23 +391,20 @@ function ActivityDetailRow({
 }): JSX.Element {
   const elapsedMs = useLiveMs(state.startedAt);
   const compactionElapsedMs = useLiveMs(state.compactingSince ?? state.startedAt);
-  const runtime = agent?.runtime ?? 'claude';
+  const runtime = agent?.runtime ?? "claude";
   const name = displayNameOf(agent);
-  const progressText =
-    state.activitySnippet || STATUS_LABEL[state.status] || state.status;
+  const progressText = state.activitySnippet || STATUS_LABEL[state.status] || state.status;
   const snippetKindLabel = state.activitySnippet
     ? activitySnippetKindLabel(state.activitySnippetKind)
     : null;
   const SnippetKindIcon =
-    state.activitySnippetKind === 'thinking'
+    state.activitySnippetKind === "thinking"
       ? Brain
-      : state.activitySnippetKind === 'api_response'
+      : state.activitySnippetKind === "api_response"
         ? Hourglass
         : null;
-  const toolEntries = Object.entries(state.toolCallCounts ?? {}).filter(
-    ([, count]) => count > 0,
-  );
-  const compactionText = 'Compacting…';
+  const toolEntries = Object.entries(state.toolCallCounts ?? {}).filter(([, count]) => count > 0);
+  const compactionText = "Compacting…";
   const CompactionIcon = Layers;
 
   return (
@@ -459,12 +442,8 @@ function ActivityDetailRow({
               <span>{snippetKindLabel}</span>
             </span>
           ) : null}
-          <span className="min-w-0 flex-1 truncate text-text-secondary">
-            {progressText}
-          </span>
-          <span className="shrink-0 tabular-nums text-text-muted/50">
-            {formatMs(elapsedMs)}
-          </span>
+          <span className="min-w-0 flex-1 truncate text-text-secondary">{progressText}</span>
+          <span className="shrink-0 tabular-nums text-text-muted/50">{formatMs(elapsedMs)}</span>
         </span>
         {state.compacting ? (
           <span className="flex min-w-0 items-center gap-1.5 leading-5 text-text-muted">

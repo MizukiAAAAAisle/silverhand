@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
-import * as Select from '@radix-ui/react-select';
-import { ChevronDown, RefreshCw } from 'lucide-react';
-import { toast } from 'sonner';
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import * as Select from "@radix-ui/react-select";
+import { ChevronDown, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 import type {
   AgentDto,
   ReasoningEffort,
@@ -9,7 +9,7 @@ import type {
   RuntimeKind,
   SwitchAgentRuntimeInput,
   UpdateAgentInput,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 import {
   RUNTIME_CATALOG,
   reasoningEffortLabel,
@@ -19,24 +19,21 @@ import {
   runtimeCliLabel,
   runtimeSupportsFastMode,
   runtimeSupportsReasoningEffort,
-} from '@silverhand/shared';
-import { Combobox } from '@/components/ui/combobox';
-import { Label } from '@/components/ui/input';
-import { cn } from '@/lib/cn';
-import { describeApiError } from '@/lib/api-error-message';
-import { CancelButton, SaveButton } from '@/features/common/EditToolbarButtons';
-import { SwitchRuntimeConfirmDialog } from './SwitchRuntimeConfirmDialog';
-import { useSwitchAgentRuntime, useUpdateAgent } from './hooks';
-import {
-  useHostAvailabilityMap,
-  useHostRuntimeCatalog,
-} from '@/features/hosts/hooks';
-import { isComputerAvailable } from '@/features/hosts/host-display';
+} from "@silverhand/shared";
+import { Combobox } from "@/components/ui/combobox";
+import { Label } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
+import { describeApiError } from "@/lib/api-error-message";
+import { CancelButton, SaveButton } from "@/features/common/EditToolbarButtons";
+import { SwitchRuntimeConfirmDialog } from "./SwitchRuntimeConfirmDialog";
+import { useSwitchAgentRuntime, useUpdateAgent } from "./hooks";
+import { useHostAvailabilityMap, useHostRuntimeCatalog } from "@/features/hosts/hooks";
+import { isComputerAvailable } from "@/features/hosts/host-display";
 import {
   deriveRuntimePickerMode,
   runtimeChipDisabled,
   runtimeSectionHint,
-} from './runtime-detection-ui';
+} from "./runtime-detection-ui";
 
 /**
  * Runtime configuration section — one edit affordance covering all four
@@ -64,10 +61,10 @@ import {
  *  (canSave / routeSave / buildPatch). Exported for the unit tests. */
 export interface RuntimeConfigDraft {
   runtime: RuntimeKind;
-  modelChoice: 'unset' | 'default' | 'specify';
+  modelChoice: "unset" | "default" | "specify";
   modelValue: string;
-  reasoning: '' | '__default__' | ReasoningEffort;
-  fastMode: '' | '__default__' | 'true' | 'false';
+  reasoning: "" | "__default__" | ReasoningEffort;
+  fastMode: "" | "__default__" | "true" | "false";
 }
 
 /** Seed a draft from the persisted agent — used on `enterEdit` and on
@@ -76,8 +73,8 @@ export interface RuntimeConfigDraft {
 export function draftFromAgent(agent: AgentDto): RuntimeConfigDraft {
   return {
     runtime: agent.runtime,
-    modelChoice: agent.model === null ? 'default' : 'specify',
-    modelValue: agent.model ?? '',
+    modelChoice: agent.model === null ? "default" : "specify",
+    modelValue: agent.model ?? "",
     reasoning: reasoningToDraft(agent.runtime, agent.reasoning_effort),
     fastMode: fastModeToDraft(agent.runtime, agent.fast_mode),
   };
@@ -86,18 +83,18 @@ export function draftFromAgent(agent: AgentDto): RuntimeConfigDraft {
 function reasoningToDraft(
   runtime: RuntimeKind,
   value: ReasoningEffort | null,
-): RuntimeConfigDraft['reasoning'] {
-  if (!runtimeSupportsReasoningEffort(runtime)) return '';
-  return value ?? '__default__';
+): RuntimeConfigDraft["reasoning"] {
+  if (!runtimeSupportsReasoningEffort(runtime)) return "";
+  return value ?? "__default__";
 }
 
 function fastModeToDraft(
   runtime: RuntimeKind,
   value: boolean | null,
-): RuntimeConfigDraft['fastMode'] {
-  if (!runtimeSupportsFastMode(runtime)) return '';
-  if (value === null) return '__default__';
-  return value ? 'true' : 'false';
+): RuntimeConfigDraft["fastMode"] {
+  if (!runtimeSupportsFastMode(runtime)) return "";
+  if (value === null) return "__default__";
+  return value ? "true" : "false";
 }
 
 /** Return the draft after a runtime pick. When the target differs from the
@@ -110,33 +107,27 @@ function fastModeToDraft(
  *
  *  Takes no current draft on purpose: neither arm reads it — one re-hydrates
  *  from `agent`, the other blanks every tuning field. */
-export function draftAfterRuntimeChange(
-  agent: AgentDto,
-  target: RuntimeKind,
-): RuntimeConfigDraft {
+export function draftAfterRuntimeChange(agent: AgentDto, target: RuntimeKind): RuntimeConfigDraft {
   if (target === agent.runtime) return draftFromAgent(agent);
   return {
     runtime: target,
-    modelChoice: 'unset',
-    modelValue: '',
-    reasoning: '',
-    fastMode: '',
+    modelChoice: "unset",
+    modelValue: "",
+    reasoning: "",
+    fastMode: "",
   };
 }
 
 /** True iff the draft is different from what's persisted. Save button gates
  *  on this — an unchanged draft cannot be committed. */
-export function draftIsDirty(
-  agent: AgentDto,
-  draft: RuntimeConfigDraft,
-): boolean {
+export function draftIsDirty(agent: AgentDto, draft: RuntimeConfigDraft): boolean {
   const base = draftFromAgent(agent);
   return (
-    draft.runtime !== base.runtime
-    || draft.modelChoice !== base.modelChoice
-    || draft.modelValue.trim() !== base.modelValue.trim()
-    || draft.reasoning !== base.reasoning
-    || draft.fastMode !== base.fastMode
+    draft.runtime !== base.runtime ||
+    draft.modelChoice !== base.modelChoice ||
+    draft.modelValue.trim() !== base.modelValue.trim() ||
+    draft.reasoning !== base.reasoning ||
+    draft.fastMode !== base.fastMode
   );
 }
 
@@ -146,28 +137,22 @@ export function draftIsDirty(
  *
  *  Reasoning validity uses the static product table (`reasoningEffortValidForRuntime`),
  *  which encodes the model-specific rules (e.g. Codex `ultra` only on sol). */
-export function canSaveRuntimeConfig(
-  agent: AgentDto,
-  draft: RuntimeConfigDraft,
-): boolean {
+export function canSaveRuntimeConfig(agent: AgentDto, draft: RuntimeConfigDraft): boolean {
   if (!draftIsDirty(agent, draft)) return false;
-  if (draft.modelChoice === 'unset') return false;
-  if (draft.modelChoice === 'specify' && draft.modelValue.trim().length === 0) {
+  if (draft.modelChoice === "unset") return false;
+  if (draft.modelChoice === "specify" && draft.modelValue.trim().length === 0) {
     return false;
   }
-  if (runtimeSupportsReasoningEffort(draft.runtime) && draft.reasoning === '') {
+  if (runtimeSupportsReasoningEffort(draft.runtime) && draft.reasoning === "") {
     return false;
   }
-  const model =
-    draft.modelChoice === 'specify' ? draft.modelValue.trim() : null;
+  const model = draft.modelChoice === "specify" ? draft.modelValue.trim() : null;
   const reasoning =
-    draft.reasoning === '' || draft.reasoning === '__default__'
-      ? null
-      : draft.reasoning;
+    draft.reasoning === "" || draft.reasoning === "__default__" ? null : draft.reasoning;
   if (!reasoningEffortValidForRuntime(draft.runtime, reasoning, model)) {
     return false;
   }
-  if (runtimeSupportsFastMode(draft.runtime) && draft.fastMode === '') {
+  if (runtimeSupportsFastMode(draft.runtime) && draft.fastMode === "") {
     return false;
   }
   return true;
@@ -176,22 +161,18 @@ export function canSaveRuntimeConfig(
 /** Convert a valid draft to the wire payload for the runtime transition
  *  endpoint. Fields the target runtime doesn't support are always `null` —
  *  the shared schema rejects any other value on non-supporting runtimes. */
-export function buildSwitchPayload(
-  draft: RuntimeConfigDraft,
-): SwitchAgentRuntimeInput {
-  const model = draft.modelChoice === 'default' ? null : draft.modelValue.trim();
-  const reasoning_effort: ReasoningEffort | null =
-    !runtimeSupportsReasoningEffort(draft.runtime)
+export function buildSwitchPayload(draft: RuntimeConfigDraft): SwitchAgentRuntimeInput {
+  const model = draft.modelChoice === "default" ? null : draft.modelValue.trim();
+  const reasoning_effort: ReasoningEffort | null = !runtimeSupportsReasoningEffort(draft.runtime)
+    ? null
+    : draft.reasoning === "__default__" || draft.reasoning === ""
       ? null
-      : draft.reasoning === '__default__' || draft.reasoning === ''
-        ? null
-        : (draft.reasoning as ReasoningEffort);
-  const fast_mode: boolean | null =
-    !runtimeSupportsFastMode(draft.runtime)
+      : (draft.reasoning as ReasoningEffort);
+  const fast_mode: boolean | null = !runtimeSupportsFastMode(draft.runtime)
+    ? null
+    : draft.fastMode === "__default__" || draft.fastMode === ""
       ? null
-      : draft.fastMode === '__default__' || draft.fastMode === ''
-        ? null
-        : draft.fastMode === 'true';
+      : draft.fastMode === "true";
   return {
     runtime: draft.runtime,
     model,
@@ -204,16 +185,13 @@ export function buildSwitchPayload(
  *  return only the changed tuning fields. Runtime is deliberately NOT in
  *  the shape (it belongs to the transition command; PATCH schema rejects
  *  it as `z.never()`). */
-export function buildTuningPatch(
-  agent: AgentDto,
-  draft: RuntimeConfigDraft,
-): UpdateAgentInput {
+export function buildTuningPatch(agent: AgentDto, draft: RuntimeConfigDraft): UpdateAgentInput {
   const patch: UpdateAgentInput = {};
-  const nextModel = draft.modelChoice === 'default' ? null : draft.modelValue.trim();
+  const nextModel = draft.modelChoice === "default" ? null : draft.modelValue.trim();
   if (nextModel !== agent.model) patch.model = nextModel;
   if (runtimeSupportsReasoningEffort(draft.runtime)) {
     const nextReasoning: ReasoningEffort | null =
-      draft.reasoning === '__default__' || draft.reasoning === ''
+      draft.reasoning === "__default__" || draft.reasoning === ""
         ? null
         : (draft.reasoning as ReasoningEffort);
     if (nextReasoning !== agent.reasoning_effort) {
@@ -222,9 +200,7 @@ export function buildTuningPatch(
   }
   if (runtimeSupportsFastMode(draft.runtime)) {
     const nextFastMode: boolean | null =
-      draft.fastMode === '__default__' || draft.fastMode === ''
-        ? null
-        : draft.fastMode === 'true';
+      draft.fastMode === "__default__" || draft.fastMode === "" ? null : draft.fastMode === "true";
     if (nextFastMode !== agent.fast_mode) patch.fast_mode = nextFastMode;
   }
   return patch;
@@ -238,14 +214,14 @@ export function routeRuntimeConfigSave(
   agent: AgentDto,
   draft: RuntimeConfigDraft,
 ):
-  | { kind: 'switch'; payload: SwitchAgentRuntimeInput }
-  | { kind: 'patch'; payload: UpdateAgentInput }
-  | { kind: 'nothing' } {
-  if (!draftIsDirty(agent, draft)) return { kind: 'nothing' };
+  | { kind: "switch"; payload: SwitchAgentRuntimeInput }
+  | { kind: "patch"; payload: UpdateAgentInput }
+  | { kind: "nothing" } {
+  if (!draftIsDirty(agent, draft)) return { kind: "nothing" };
   if (draft.runtime !== agent.runtime) {
-    return { kind: 'switch', payload: buildSwitchPayload(draft) };
+    return { kind: "switch", payload: buildSwitchPayload(draft) };
   }
-  return { kind: 'patch', payload: buildTuningPatch(agent, draft) };
+  return { kind: "patch", payload: buildTuningPatch(agent, draft) };
 }
 
 /** Toast copy for a successful transition, mirroring the partial-success
@@ -253,16 +229,16 @@ export function routeRuntimeConfigSave(
 export function describeSwitchToast(
   runtime: RuntimeKind,
   restartFailures: number,
-): { tone: 'success' | 'warning'; message: string } {
+): { tone: "success" | "warning"; message: string } {
   const label = runtimeCliLabel(runtime);
   if (restartFailures > 0) {
-    const plural = restartFailures === 1 ? '' : 's';
+    const plural = restartFailures === 1 ? "" : "s";
     return {
-      tone: 'warning',
+      tone: "warning",
       message: `Switched to ${label}, but ${restartFailures} conversation${plural} couldn't restart.`,
     };
   }
-  return { tone: 'success', message: `Switched to ${label}` };
+  return { tone: "success", message: `Switched to ${label}` };
 }
 
 interface RuntimeConfigEditorProps {
@@ -278,11 +254,8 @@ export function RuntimeConfigEditor({
   editing,
   onExitEdit,
 }: RuntimeConfigEditorProps): JSX.Element {
-  const [draft, setDraft] = useState<RuntimeConfigDraft>(() =>
-    draftFromAgent(agent),
-  );
-  const [pendingSwitch, setPendingSwitch] =
-    useState<SwitchAgentRuntimeInput | null>(null);
+  const [draft, setDraft] = useState<RuntimeConfigDraft>(() => draftFromAgent(agent));
+  const [pendingSwitch, setPendingSwitch] = useState<SwitchAgentRuntimeInput | null>(null);
   const switchMut = useSwitchAgentRuntime(agent.id);
   const patchMut = useUpdateAgent(agent.id);
   const pending = switchMut.isPending || patchMut.isPending;
@@ -322,10 +295,7 @@ export function RuntimeConfigEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
 
-  const targets = useMemo(
-    () => RUNTIME_CATALOG.filter(entry => entry.selectable),
-    [],
-  );
+  const targets = useMemo(() => RUNTIME_CATALOG.filter((entry) => entry.selectable), []);
 
   const catalogEntry = runtimeCatalogEntry(draft.runtime);
 
@@ -334,10 +304,7 @@ export function RuntimeConfigEditor({
   // The probe LIFECYCLE is edit-only: a readonly profile view must never fetch
   // — both are gated on `editing` (empty `hostIds` + `enabled: editing`), so
   // opening a profile costs nothing; React Query dedups the shared query key.
-  const hostIds = useMemo(
-    () => (editing ? [agent.host_id] : []),
-    [editing, agent.host_id],
-  );
+  const hostIds = useMemo(() => (editing ? [agent.host_id] : []), [editing, agent.host_id]);
   const { availabilityById, allSettled } = useHostAvailabilityMap(hostIds);
   const hostAvailable = isComputerAvailable(availabilityById.get(agent.host_id));
   const runtimeCatalog = useHostRuntimeCatalog(agent.host_id, {
@@ -356,7 +323,7 @@ export function RuntimeConfigEditor({
     try {
       const result = await switchMut.mutateAsync(payload);
       const t = describeSwitchToast(payload.runtime, result.restart_failures);
-      if (t.tone === 'warning') toast.warning(t.message);
+      if (t.tone === "warning") toast.warning(t.message);
       else toast.success(t.message);
       setPendingSwitch(null);
       onExitEdit();
@@ -367,11 +334,11 @@ export function RuntimeConfigEditor({
   }
   async function onSave() {
     const route = routeRuntimeConfigSave(agent, draft);
-    if (route.kind === 'nothing') {
+    if (route.kind === "nothing") {
       onExitEdit();
       return;
     }
-    if (route.kind === 'switch') {
+    if (route.kind === "switch") {
       setPendingSwitch(route.payload);
       return;
     }
@@ -385,26 +352,20 @@ export function RuntimeConfigEditor({
 
   const switchErrorMessage = switchMut.error
     ? describeApiError(switchMut.error, {
-        backendUnreachableMessage:
-          'Switch failed: cannot reach the backend.',
-        fallbackMessage: 'Failed to switch runtime.',
-        actionLabel: 'Switch runtime',
+        backendUnreachableMessage: "Switch failed: cannot reach the backend.",
+        fallbackMessage: "Failed to switch runtime.",
+        actionLabel: "Switch runtime",
       })
     : null;
 
   return (
     <div
       className="flex flex-col gap-3"
-      onKeyDownCapture={e => {
+      onKeyDownCapture={(e) => {
         // Capture Escape before Radix Select triggers consume it. Skip
         // while the confirm dialog is open — Radix Dialog owns Escape
         // there, and canceling the whole edit would drop the draft.
-        if (
-          editing
-          && !pending
-          && pendingSwitch === null
-          && e.key === 'Escape'
-        ) {
+        if (editing && !pending && pendingSwitch === null && e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
           cancel();
@@ -430,10 +391,9 @@ export function RuntimeConfigEditor({
       {editing && patchMut.error ? (
         <div className="text-xs text-error">
           {describeApiError(patchMut.error, {
-            backendUnreachableMessage:
-              'Save failed: cannot reach the backend.',
-            fallbackMessage: 'Failed to save runtime configuration.',
-            actionLabel: 'Save',
+            backendUnreachableMessage: "Save failed: cannot reach the backend.",
+            fallbackMessage: "Failed to save runtime configuration.",
+            actionLabel: "Save",
           })}
         </div>
       ) : null}
@@ -451,7 +411,7 @@ export function RuntimeConfigEditor({
 
       <SwitchRuntimeConfirmDialog
         open={pendingSwitch !== null}
-        onOpenChange={next => {
+        onOpenChange={(next) => {
           if (!next && !pending) {
             setPendingSwitch(null);
             switchMut.reset();
@@ -476,17 +436,11 @@ function ReadOnlyGrid({ agent }: { agent: AgentDto }): JSX.Element {
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-3">
       <ReadOnlyRow label="Runtime" value={runtimeCliLabel(agent.runtime)} />
-      <ReadOnlyRow
-        label="Model"
-        value={agent.model}
-        placeholder="driver default"
-      />
+      <ReadOnlyRow label="Model" value={agent.model} placeholder="driver default" />
       {supportsReasoning ? (
         <ReadOnlyRow
           label="Reasoning"
-          value={
-            agent.reasoning_effort ? reasoningEffortLabel(agent.reasoning_effort) : null
-          }
+          value={agent.reasoning_effort ? reasoningEffortLabel(agent.reasoning_effort) : null}
           placeholder="driver default"
         />
       ) : null}
@@ -497,8 +451,8 @@ function ReadOnlyGrid({ agent }: { agent: AgentDto }): JSX.Element {
             agent.fast_mode === null || agent.fast_mode === undefined
               ? null
               : agent.fast_mode
-                ? 'Enabled'
-                : 'Disabled'
+                ? "Enabled"
+                : "Disabled"
           }
           placeholder="driver default"
         />
@@ -520,13 +474,8 @@ function ReadOnlyRow({
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-xs text-text-muted">{label}</span>
-      <span
-        className={cn(
-          'text-sm',
-          displayed ? 'text-text-primary' : 'text-text-muted italic',
-        )}
-      >
-        {displayed ?? placeholder ?? '—'}
+      <span className={cn("text-sm", displayed ? "text-text-primary" : "text-text-muted italic")}>
+        {displayed ?? placeholder ?? "—"}
       </span>
     </div>
   );
@@ -571,19 +520,15 @@ function EditForm({
   // Reasoning options come from the static product table (model-aware): the
   // per-model allowlist encodes extensions like Codex Ultra (sol only). The
   // open wire token + daemon capability keep this from bumping the protocol.
-  const reasoningModel =
-    draft.modelChoice === 'specify' ? draft.modelValue : null;
-  const reasoningOptions = reasoningEffortOptionsForRuntime(
-    draft.runtime,
-    reasoningModel,
-  );
+  const reasoningModel = draft.modelChoice === "specify" ? draft.modelValue : null;
+  const reasoningOptions = reasoningEffortOptionsForRuntime(draft.runtime, reasoningModel);
   // Re-add an already-selected value when it isn't in the current options — a
   // legal persisted value must not vanish from the picker (e.g. after a model
   // change the commit path clears it into a positive re-pick; this is the
   // load-time guard so the stored value stays visible until then).
   const reasoningDisplayOptions =
-    draft.reasoning !== '' &&
-    draft.reasoning !== '__default__' &&
+    draft.reasoning !== "" &&
+    draft.reasoning !== "__default__" &&
     !reasoningOptions.includes(draft.reasoning)
       ? [...reasoningOptions, draft.reasoning]
       : reasoningOptions;
@@ -597,29 +542,26 @@ function EditForm({
     isError: runtimeCatalog.isError,
   });
   const sectionHint = runtimeSectionHint(mode);
-  const detecting =
-    !allSettled || runtimeCatalog.isLoading || runtimeCatalog.isReprobing;
+  const detecting = !allSettled || runtimeCatalog.isLoading || runtimeCatalog.isReprobing;
 
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-x-4 gap-y-3">
         <div className="flex flex-col gap-1.5">
           {/* All four label rows in this grid are fixed h-5 (see Model /
-             * Reasoning / Fast mode wrappers below). Recheck lives INSIDE
-             * that height: `size-5 p-0` = 20×20 button, icon `size-3.5` =
-             * 14px, box never exceeds row height so its show/hide can't
-             * move the Select trigger top (Cindy round-8 #1). shiki
-             * measured the pre-fix version's real culprit: Recheck's
-             * box was ~24px (14px icon + p-1 border), not the glyph. */}
+           * Reasoning / Fast mode wrappers below). Recheck lives INSIDE
+           * that height: `size-5 p-0` = 20×20 button, icon `size-3.5` =
+           * 14px, box never exceeds row height so its show/hide can't
+           * move the Select trigger top (Cindy round-8 #1). shiki
+           * measured the pre-fix version's real culprit: Recheck's
+           * box was ~24px (14px icon + p-1 border), not the glyph. */}
           <div className="flex h-5 items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Label htmlFor="rc-runtime" required>
                 Runtime
               </Label>
               {detecting ? (
-                <span className="text-xs font-normal text-text-muted">
-                  Detecting…
-                </span>
+                <span className="text-xs font-normal text-text-muted">Detecting…</span>
               ) : null}
             </div>
             {hostAvailable ? (
@@ -631,9 +573,7 @@ function EditForm({
                 title="Recheck"
                 className="inline-flex size-5 items-center justify-center p-0 text-text-muted transition-colors hover:text-text-primary disabled:cursor-default disabled:opacity-60"
               >
-                <RefreshCw
-                  className={cn('size-3.5', detecting && 'animate-spin')}
-                />
+                <RefreshCw className={cn("size-3.5", detecting && "animate-spin")} />
               </button>
             ) : null}
           </div>
@@ -644,11 +584,9 @@ function EditForm({
             mode={mode}
             runtimeStateByKind={runtimeStateByKind}
             triggerRef={triggerRef}
-            onChange={next => onDraft(draftAfterRuntimeChange(agent, next))}
+            onChange={(next) => onDraft(draftAfterRuntimeChange(agent, next))}
           />
-          {sectionHint ? (
-            <p className="text-xs text-text-muted">{sectionHint}</p>
-          ) : null}
+          {sectionHint ? <p className="text-xs text-text-muted">{sectionHint}</p> : null}
         </div>
 
         <div className="flex flex-col gap-1.5">
@@ -675,16 +613,16 @@ function EditForm({
               value={draft.reasoning}
               placeholder="Choose…"
               options={[
-                { value: '__default__', label: 'Use driver default' },
-                ...reasoningDisplayOptions.map(v => ({
+                { value: "__default__", label: "Use driver default" },
+                ...reasoningDisplayOptions.map((v) => ({
                   value: v,
                   label: reasoningEffortLabel(v),
                 })),
               ]}
-              onChange={v =>
+              onChange={(v) =>
                 onDraft({
                   ...draft,
-                  reasoning: v as RuntimeConfigDraft['reasoning'],
+                  reasoning: v as RuntimeConfigDraft["reasoning"],
                 })
               }
             />
@@ -703,14 +641,14 @@ function EditForm({
               value={draft.fastMode}
               placeholder="Choose…"
               options={[
-                { value: '__default__', label: 'Use codex default' },
-                { value: 'true', label: 'Enabled' },
-                { value: 'false', label: 'Disabled' },
+                { value: "__default__", label: "Use codex default" },
+                { value: "true", label: "Enabled" },
+                { value: "false", label: "Disabled" },
               ]}
-              onChange={v =>
+              onChange={(v) =>
                 onDraft({
                   ...draft,
-                  fastMode: v as RuntimeConfigDraft['fastMode'],
+                  fastMode: v as RuntimeConfigDraft["fastMode"],
                 })
               }
             />
@@ -739,7 +677,7 @@ function RuntimeSelect({
   triggerRef?: React.Ref<HTMLButtonElement>;
 }): JSX.Element {
   return (
-    <Select.Root value={value} onValueChange={v => onChange(v as RuntimeKind)}>
+    <Select.Root value={value} onValueChange={(v) => onChange(v as RuntimeKind)}>
       <Select.Trigger
         id={id}
         ref={triggerRef}
@@ -759,7 +697,7 @@ function RuntimeSelect({
           className={contentClass()}
         >
           <Select.Viewport>
-            {targets.map(t => {
+            {targets.map((t) => {
               const state = runtimeStateByKind.get(t.kind);
               // Disabled ONLY on `detected` + `absent` — a probe gap
               // never traps a runtime the user actually has installed.
@@ -769,13 +707,13 @@ function RuntimeSelect({
               // Agent chip picker's semantics.
               const absent = runtimeChipDisabled(mode, state);
               const title =
-                mode !== 'detected'
+                mode !== "detected"
                   ? undefined
-                  : state === 'absent'
-                    ? 'Not detected on this computer'
-                    : state === 'present_unverified'
-                      ? 'Installed · version unverified'
-                      : state === 'unknown'
+                  : state === "absent"
+                    ? "Not detected on this computer"
+                    : state === "present_unverified"
+                      ? "Installed · version unverified"
+                      : state === "unknown"
                         ? "Couldn't verify — you can still pick"
                         : undefined;
               return (
@@ -788,9 +726,7 @@ function RuntimeSelect({
                 >
                   <Select.ItemText>{runtimeCliLabel(t.kind)}</Select.ItemText>
                   {absent ? (
-                    <span className="ml-auto text-xs text-text-muted">
-                      · not installed
-                    </span>
+                    <span className="ml-auto text-xs text-text-muted">· not installed</span>
                   ) : null}
                 </Select.Item>
               );
@@ -817,11 +753,7 @@ function ChoicePickerSelect({
 }): JSX.Element {
   return (
     <Select.Root value={value} onValueChange={onChange}>
-      <Select.Trigger
-        id={id}
-        data-panel-control="select-trigger"
-        className={triggerClass()}
-      >
+      <Select.Trigger id={id} data-panel-control="select-trigger" className={triggerClass()}>
         <Select.Value placeholder={placeholder} />
         <Select.Icon>
           <ChevronDown className="size-3.5 text-text-muted" />
@@ -835,12 +767,8 @@ function ChoicePickerSelect({
           className={contentClass()}
         >
           <Select.Viewport>
-            {options.map(opt => (
-              <Select.Item
-                key={opt.value}
-                value={opt.value}
-                className={itemClass()}
-              >
+            {options.map((opt) => (
+              <Select.Item key={opt.value} value={opt.value} className={itemClass()}>
                 <Select.ItemText>{opt.label}</Select.ItemText>
               </Select.Item>
             ))}
@@ -870,7 +798,7 @@ function ChoicePickerSelect({
  *  - Pick a suggestion or type + Enter/blur   → modelChoice='specify'
  *  - Clear the input                          → modelChoice='unset'
  */
-const MODEL_DEFAULT_LABEL = 'Use driver default';
+const MODEL_DEFAULT_LABEL = "Use driver default";
 
 function ModelPicker({
   id,
@@ -883,11 +811,9 @@ function ModelPicker({
   suggestions: readonly string[];
   onDraft: (next: RuntimeConfigDraft) => void;
 }): JSX.Element {
-  const inputValue = draft.modelChoice === 'specify' ? draft.modelValue : '';
+  const inputValue = draft.modelChoice === "specify" ? draft.modelValue : "";
   const placeholder =
-    draft.modelChoice === 'default'
-      ? 'Using driver default'
-      : 'Choose or type a model…';
+    draft.modelChoice === "default" ? "Using driver default" : "Choose or type a model…";
   const items = [MODEL_DEFAULT_LABEL, ...suggestions];
   return (
     <Combobox
@@ -896,16 +822,16 @@ function ModelPicker({
       value={inputValue}
       placeholder={placeholder}
       suggestions={items}
-      onChange={next => {
+      onChange={(next) => {
         // Keystrokes go straight into `specify`. When the user picks the
         // driver-default item from the dropdown, `pick()` fires onChange
         // with the label first — skip it here and let onCommit handle the
         // sentinel below (avoids a transient "specify + modelValue='Use
         // driver default'" flicker).
         if (next === MODEL_DEFAULT_LABEL) return;
-        onDraft({ ...draft, modelChoice: 'specify', modelValue: next });
+        onDraft({ ...draft, modelChoice: "specify", modelValue: next });
       }}
-      onCommit={next => onDraft(modelDraftAfterCommit(draft, next))}
+      onCommit={(next) => onDraft(modelDraftAfterCommit(draft, next))}
       // Align model input surface with the sibling Runtime / Reasoning triggers
       // (both are `bg-bg-base` via `selectTriggerClass()`). Shared Combobox
       // defaults to `bg-bg-floating`; we override at THIS consumer only —
@@ -927,15 +853,12 @@ function ModelPicker({
  *  is `''`; without this guard the user's positive choice is silently
  *  overwritten). Only `specify` collapsing to empty means the user
  *  cleared their typed value — that is a real transition to unset. */
-export function modelDraftAfterCommit(
-  draft: RuntimeConfigDraft,
-  next: string,
-): RuntimeConfigDraft {
+export function modelDraftAfterCommit(draft: RuntimeConfigDraft, next: string): RuntimeConfigDraft {
   if (next === MODEL_DEFAULT_LABEL) {
     return clearIncompatibleReasoning({
       ...draft,
-      modelChoice: 'default',
-      modelValue: '',
+      modelChoice: "default",
+      modelValue: "",
     });
   }
   const trimmed = next.trim();
@@ -943,16 +866,16 @@ export function modelDraftAfterCommit(
     // Bare empty commit: preserve `default` (its input value is empty by
     // design); collapse `specify` to `unset` (user cleared what they
     // typed); leave `unset` unchanged.
-    if (draft.modelChoice === 'default') return draft;
+    if (draft.modelChoice === "default") return draft;
     return clearIncompatibleReasoning({
       ...draft,
-      modelChoice: 'unset',
-      modelValue: '',
+      modelChoice: "unset",
+      modelValue: "",
     });
   }
   return clearIncompatibleReasoning({
     ...draft,
-    modelChoice: 'specify',
+    modelChoice: "specify",
     modelValue: trimmed,
   });
 }
@@ -961,29 +884,26 @@ export function modelDraftAfterCommit(
  *  product table (e.g. switching off a sol model clears Ultra), forcing a
  *  positive re-pick instead of leaving a stale selection Save would reject. A
  *  baseline value stays valid for any model. */
-function clearIncompatibleReasoning(
-  draft: RuntimeConfigDraft,
-): RuntimeConfigDraft {
+function clearIncompatibleReasoning(draft: RuntimeConfigDraft): RuntimeConfigDraft {
   if (!runtimeSupportsReasoningEffort(draft.runtime)) return draft;
-  if (draft.reasoning === '' || draft.reasoning === '__default__') return draft;
-  const model =
-    draft.modelChoice === 'specify' ? draft.modelValue.trim() : null;
+  if (draft.reasoning === "" || draft.reasoning === "__default__") return draft;
+  const model = draft.modelChoice === "specify" ? draft.modelValue.trim() : null;
   if (reasoningEffortValidForRuntime(draft.runtime, draft.reasoning, model)) {
     return draft;
   }
   // Force a positive re-pick instead of silently downgrading (Ultra→…) when the
   // model changes to one the product table excludes.
-  return { ...draft, reasoning: '' };
+  return { ...draft, reasoning: "" };
 }
 
 function triggerClass(): string {
-  return 'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 text-sm text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] data-[state=open]:border-border-focus focus-visible:border-border-focus data-[placeholder]:text-text-muted';
+  return "flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 text-sm text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] data-[state=open]:border-border-focus focus-visible:border-border-focus data-[placeholder]:text-text-muted";
 }
 
 function contentClass(): string {
-  return 'z-[var(--z-in-dialog)] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating p-1 shadow-popover';
+  return "z-[var(--z-in-dialog)] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating p-1 shadow-popover";
 }
 
 function itemClass(): string {
-  return 'flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[disabled]:cursor-not-allowed data-[disabled]:text-text-muted data-[disabled]:data-[highlighted]:bg-transparent';
+  return "flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[disabled]:cursor-not-allowed data-[disabled]:text-text-muted data-[disabled]:data-[highlighted]:bg-transparent";
 }

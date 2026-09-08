@@ -1,13 +1,9 @@
-import * as Popover from '@radix-ui/react-popover';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import dayjs from 'dayjs';
-import relativeTime from 'dayjs/plugin/relativeTime';
-import { User as UserIcon } from 'lucide-react';
-import {
-  humanPresenceText,
-  presenceDotStatus,
-  usePresenceById,
-} from '@/features/presence/hooks';
+import * as Popover from "@radix-ui/react-popover";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import dayjs from "dayjs";
+import relativeTime from "dayjs/plugin/relativeTime";
+import { User as UserIcon } from "lucide-react";
+import { humanPresenceText, presenceDotStatus, usePresenceById } from "@/features/presence/hooks";
 
 dayjs.extend(relativeTime);
 
@@ -38,14 +34,14 @@ interface HumanInfoPopoverProps {
    * and the line is skipped.
    */
   userId?: string;
-  side?: 'top' | 'bottom' | 'left' | 'right';
-  align?: 'start' | 'center' | 'end';
+  side?: "top" | "bottom" | "left" | "right";
+  align?: "start" | "center" | "end";
   /** `'click'` opens on click for standalone controls. `'hover'`
    *  (default) opens on pointer-enter and closes on pointer-leave with
    *  a small grace window so the user can move into the popover
    *  content. Mirrors `AgentInfoPopover` so agent and human triggers
    *  feel identical. */
-  trigger?: 'click' | 'hover';
+  trigger?: "click" | "hover";
   /**
    * Avatar object URL resolved by the parent.
    *
@@ -86,9 +82,9 @@ export function HumanInfoPopover({
   human,
   children,
   userId,
-  side = 'bottom',
-  align = 'start',
-  trigger = 'hover',
+  side = "bottom",
+  align = "start",
+  trigger = "hover",
   avatarObjectUrl,
 }: HumanInfoPopoverProps): JSX.Element {
   const [hoverOpen, setHoverOpen] = useState(false);
@@ -105,30 +101,23 @@ export function HumanInfoPopover({
   useEffect(() => () => clearTimer(), []);
 
   const scheduleOpen = (): void => {
-    if (trigger !== 'hover') return;
+    if (trigger !== "hover") return;
     clearTimer();
     timerRef.current = window.setTimeout(() => setHoverOpen(true), HOVER_OPEN_DELAY_MS);
   };
   const scheduleClose = (): void => {
-    if (trigger !== 'hover') return;
+    if (trigger !== "hover") return;
     clearTimer();
     timerRef.current = window.setTimeout(() => setHoverOpen(false), HOVER_CLOSE_DELAY_MS);
   };
 
-  const rootProps =
-    trigger === 'hover'
-      ? { open: hoverOpen, onOpenChange: setHoverOpen }
-      : {};
+  const rootProps = trigger === "hover" ? { open: hoverOpen, onOpenChange: setHoverOpen } : {};
 
   const label = human.display_name?.trim() || human.name;
 
   return (
     <Popover.Root {...rootProps}>
-      <Popover.Trigger
-        asChild
-        onPointerEnter={scheduleOpen}
-        onPointerLeave={scheduleClose}
-      >
+      <Popover.Trigger asChild onPointerEnter={scheduleOpen} onPointerLeave={scheduleClose}>
         {children}
       </Popover.Trigger>
       <Popover.Portal>
@@ -144,13 +133,12 @@ export function HumanInfoPopover({
         >
           <div className="flex items-start gap-3">
             {avatarObjectUrl ? (
-              <span data-avatar-ground className="inline-block size-9 shrink-0 overflow-hidden rounded-none">
+              <span
+                data-avatar-ground
+                className="inline-block size-9 shrink-0 overflow-hidden rounded-none"
+              >
                 {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
-                <img
-                  src={avatarObjectUrl}
-                  alt=""
-                  className="size-full object-cover"
-                />
+                <img src={avatarObjectUrl} alt="" className="size-full object-cover" />
               </span>
             ) : (
               // Same neutral square as the chip that opens this card — no
@@ -172,9 +160,7 @@ export function HumanInfoPopover({
                 </span>
                 {userId ? <HumanPresenceInline userId={userId} /> : null}
               </div>
-              <div className="truncate font-mono text-xs text-text-muted">
-                @{human.name}
-              </div>
+              <div className="truncate font-mono text-xs text-text-muted">@{human.name}</div>
             </div>
           </div>
         </Popover.Content>
@@ -183,9 +169,9 @@ export function HumanInfoPopover({
   );
 }
 
-const PRESENCE_DOT: Record<'active' | 'idle', string> = {
-  active: 'bg-success',
-  idle: 'bg-text-muted/40',
+const PRESENCE_DOT: Record<"active" | "idle", string> = {
+  active: "bg-success",
+  idle: "bg-text-muted/40",
 };
 
 /**
@@ -203,14 +189,18 @@ function HumanPresenceInline({ userId }: { userId: string }): JSX.Element {
   const label = humanPresenceText(
     presence?.presence,
     lastSeenAt,
-    lastSeenAt != null ? dayjs(lastSeenAt).fromNow() : '',
+    lastSeenAt != null ? dayjs(lastSeenAt).fromNow() : "",
   );
   return (
     <span
       className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted"
       title={label}
     >
-      <span data-status-pip className={`size-1.5 rounded-[var(--pill-radius)] ${PRESENCE_DOT[dot]}`} aria-hidden />
+      <span
+        data-status-pip
+        className={`size-1.5 rounded-[var(--pill-radius)] ${PRESENCE_DOT[dot]}`}
+        aria-hidden
+      />
       {label}
     </span>
   );

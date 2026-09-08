@@ -1,32 +1,32 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   apiPaths,
   ENTITY_NAME_MAX_LENGTH,
   ParticipantNameSchema,
   WorkspaceNameSchema,
   type NameAvailabilityDto,
-} from '@silverhand/shared';
-import { api } from '@/lib/api';
-import { cn } from '@/lib/cn';
+} from "@silverhand/shared";
+import { api } from "@/lib/api";
+import { cn } from "@/lib/cn";
 
-export type NameCheckKind = 'agent' | 'workspace';
+export type NameCheckKind = "agent" | "workspace";
 
 export type NameCheckStatus =
-  | 'idle' // untouched, or field empty → say nothing
-  | 'checking' // format ok, uniqueness probe in flight
-  | 'available'
-  | 'invalid' // fails the selected shared schema (charset / length)
-  | 'taken' // uniqueness collision
-  | 'error'; // probe network failure — advisory only, never blocks
+  | "idle" // untouched, or field empty → say nothing
+  | "checking" // format ok, uniqueness probe in flight
+  | "available"
+  | "invalid" // fails the selected shared schema (charset / length)
+  | "taken" // uniqueness collision
+  | "error"; // probe network failure — advisory only, never blocks
 
-type FormatIssue = 'charset' | 'length';
+type FormatIssue = "charset" | "length";
 
 const NAME_RULE = {
   agent: {
     schema: ParticipantNameSchema,
     message: {
-      charset: 'Must start with a letter; letters, numbers, - and _ only.',
+      charset: "Must start with a letter; letters, numbers, - and _ only.",
       length: `Must be ${ENTITY_NAME_MAX_LENGTH} characters or fewer.`,
     },
   },
@@ -38,7 +38,7 @@ const NAME_RULE = {
       // render — pasted zero-width joiners, BOM, bidi overrides. Naming the
       // invisible cause is the whole value of this line; "invalid name" would
       // leave the user staring at text that looks correct.
-      charset: 'Control and invisible characters are not allowed.',
+      charset: "Control and invisible characters are not allowed.",
       length: `Must be ${ENTITY_NAME_MAX_LENGTH} characters or fewer.`,
     },
   },
@@ -50,7 +50,7 @@ const NAME_RULE = {
   }
 >;
 
-const TAKEN_MESSAGE = 'This name is already taken.';
+const TAKEN_MESSAGE = "This name is already taken.";
 
 export interface NameCheckView {
   status: NameCheckStatus;
@@ -64,22 +64,14 @@ export interface NameCheckView {
  *  The schema owns both character and length semantics. Reading its issues
  *  avoids recreating a kind-blind `string.length` rule in this advisory layer;
  *  if both fail, length remains the more actionable verdict. */
-export function nameFormatIssue(
-  kind: NameCheckKind,
-  name: string,
-): FormatIssue | null {
+export function nameFormatIssue(kind: NameCheckKind, name: string): FormatIssue | null {
   if (name.length === 0) return null;
   const parsed = NAME_RULE[kind].schema.safeParse(name);
   if (parsed.success) return null;
-  return parsed.error.issues.some(issue => issue.code === 'too_big')
-    ? 'length'
-    : 'charset';
+  return parsed.error.issues.some((issue) => issue.code === "too_big") ? "length" : "charset";
 }
 
-export function nameFormatMessage(
-  kind: NameCheckKind,
-  name: string,
-): string | null {
+export function nameFormatMessage(kind: NameCheckKind, name: string): string | null {
   const issue = nameFormatIssue(kind, name);
   return issue ? NAME_RULE[kind].message[issue] : null;
 }
@@ -96,15 +88,14 @@ export function nameAvailabilityView(input: {
   isError: boolean;
   isFetching: boolean;
 }): NameCheckView {
-  const { kind, touched, name, formatIssue, inSync, data, isError, isFetching } =
-    input;
+  const { kind, touched, name, formatIssue, inSync, data, isError, isFetching } = input;
 
   if (!touched || name.length === 0) {
-    return { status: 'idle', message: null, blocking: false };
+    return { status: "idle", message: null, blocking: false };
   }
   if (formatIssue) {
     return {
-      status: 'invalid',
+      status: "invalid",
       message: NAME_RULE[kind].message[formatIssue],
       blocking: true,
     };
@@ -116,19 +107,19 @@ export function nameAvailabilityView(input: {
   // (freshness ≠ fact — the #1376 rule).
   if (data) {
     return data.available
-      ? { status: 'available', message: null, blocking: false }
-      : { status: 'taken', message: TAKEN_MESSAGE, blocking: true };
+      ? { status: "available", message: null, blocking: false }
+      : { status: "taken", message: TAKEN_MESSAGE, blocking: true };
   }
   // No settled verdict yet: debounce still catching up, or the initial probe is
   // in flight. Non-blocking — create backstops a fast submit.
   if (!inSync || isFetching) {
-    return { status: 'checking', message: null, blocking: false };
+    return { status: "checking", message: null, blocking: false };
   }
   if (isError) {
     // Probe couldn't reach the backend — stay silent and let create decide.
-    return { status: 'error', message: null, blocking: false };
+    return { status: "error", message: null, blocking: false };
   }
-  return { status: 'checking', message: null, blocking: false };
+  return { status: "checking", message: null, blocking: false };
 }
 
 function useDebounced<T>(value: T, ms: number): T {
@@ -170,18 +161,15 @@ export function useNameAvailability(kind: NameCheckKind, rawName: string): NameC
   const debounced = useDebounced(name, 300);
   const inSync = debounced === name;
   const path =
-    kind === 'agent'
-      ? apiPaths.agentNameAvailability
-      : apiPaths.workspaceNameAvailability;
+    kind === "agent" ? apiPaths.agentNameAvailability : apiPaths.workspaceNameAvailability;
 
   // Keyed by the concrete name → responses cache per-name and a slow reply for
   // an old name can never overwrite the verdict for the current one
   // (stale-guard by construction). Enabled only once armed, format-ok, and the
   // debounce has settled.
   const query = useQuery({
-    queryKey: ['name-availability', kind, name],
-    queryFn: () =>
-      api<NameAvailabilityDto>(`${path}?name=${encodeURIComponent(name)}`),
+    queryKey: ["name-availability", kind, name],
+    queryFn: () => api<NameAvailabilityDto>(`${path}?name=${encodeURIComponent(name)}`),
     enabled: touched && name.length > 0 && formatIssue === null && inSync,
     staleTime: 30_000,
     retry: false,
@@ -225,15 +213,12 @@ function useSettledTrue(active: boolean, ms: number): boolean {
 }
 
 export function NameAvailabilityHint({ check }: { check: NameCheckView }): JSX.Element | null {
-  const slowProbe = useSettledTrue(
-    check.status === 'checking',
-    CHECKING_NOTE_DELAY_MS,
-  );
-  const problem = check.status === 'invalid' || check.status === 'taken';
+  const slowProbe = useSettledTrue(check.status === "checking", CHECKING_NOTE_DELAY_MS);
+  const problem = check.status === "invalid" || check.status === "taken";
   if (!problem && !slowProbe) return null;
   return (
-    <p className={cn('text-xs leading-4', problem ? 'text-error' : 'text-text-muted')}>
-      {problem ? check.message : 'Checking…'}
+    <p className={cn("text-xs leading-4", problem ? "text-error" : "text-text-muted")}>
+      {problem ? check.message : "Checking…"}
     </p>
   );
 }

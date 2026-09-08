@@ -1,8 +1,8 @@
-import { Clock } from 'lucide-react';
-import { type ScheduleFireMetadata, readScheduleFireMetadata } from '@silverhand/shared';
-import { Markdown } from '@/components/chat/Markdown';
-import { useRelativeTime } from '@/components/chat/useRelativeTime';
-import type { RendererProps } from './shared';
+import { Clock } from "lucide-react";
+import { type ScheduleFireMetadata, readScheduleFireMetadata } from "@silverhand/shared";
+import { Markdown } from "@/components/chat/Markdown";
+import { useRelativeTime } from "@/components/chat/useRelativeTime";
+import type { RendererProps } from "./shared";
 
 // ─── schedule_fire wake banner ─────────────────────────────────────────
 
@@ -34,12 +34,12 @@ export function ScheduleFireBanner({
   // change); legacy rows fall back to `message.content` so older DB
   // wakes still surface their reminder text.
   const bodyMd = meta?.body ?? message.content;
-  const headerTitle = meta?.title?.trim() || 'Scheduled wake';
+  const headerTitle = meta?.title?.trim() || "Scheduled wake";
 
   return (
     <div
       className="border-y border-border-subtle border-l-[3px] border-l-warning bg-bg-floating px-4 py-2"
-      data-schedule-fire={meta ? '1' : '0'}
+      data-schedule-fire={meta ? "1" : "0"}
     >
       <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-text-secondary">
         <Clock aria-hidden className="size-3.5 shrink-0 text-warning" />
@@ -52,9 +52,7 @@ export function ScheduleFireBanner({
           </span>
         ) : null}
       </div>
-      {meta ? (
-        <ScheduleFirePills meta={meta} />
-      ) : null}
+      {meta ? <ScheduleFirePills meta={meta} /> : null}
       <div className="text-text-primary">
         <Markdown
           content={bodyMd}
@@ -74,21 +72,16 @@ function ScheduleFirePills({ meta }: { meta: ScheduleFireMetadata }): JSX.Elemen
     <div className="mb-2 flex flex-wrap gap-1">
       <ScheduleFireFiredPill firedAt={meta.actual_fire_at} />
       {meta.planned_fire_at !== null ? (
-        <ScheduleFirePlannedPill
-          plannedAt={meta.planned_fire_at}
-          actualAt={meta.actual_fire_at}
-        />
+        <ScheduleFirePlannedPill plannedAt={meta.planned_fire_at} actualAt={meta.actual_fire_at} />
       ) : null}
       <ScheduleFireMissedPill count={meta.missed_count} />
-      {meta.next_fire_at !== null ? (
-        <ScheduleFireNextPill nextAt={meta.next_fire_at} />
-      ) : null}
+      {meta.next_fire_at !== null ? <ScheduleFireNextPill nextAt={meta.next_fire_at} /> : null}
     </div>
   );
 }
 
 const PILL_BASE =
-  'inline-flex items-center gap-1 rounded bg-bg-elevated px-1.5 py-0.5 text-[length:var(--text-meta)] tabular-nums text-text-secondary';
+  "inline-flex items-center gap-1 rounded bg-bg-elevated px-1.5 py-0.5 text-[length:var(--text-meta)] tabular-nums text-text-secondary";
 
 function ScheduleFireFiredPill({ firedAt }: { firedAt: number }): JSX.Element {
   const { relative, absolute } = useRelativeTime(firedAt);
@@ -123,9 +116,8 @@ function ScheduleFirePlannedPill({
 }
 
 function ScheduleFireMissedPill({ count }: { count: number }): JSX.Element {
-  const cls = count === 0
-    ? PILL_BASE + ' text-text-muted'
-    : PILL_BASE + ' bg-warning/10 text-warning';
+  const cls =
+    count === 0 ? PILL_BASE + " text-text-muted" : PILL_BASE + " bg-warning/10 text-warning";
   return (
     <span className={cls} data-pill="missed" data-missed-count={String(count)}>
       <span className="text-text-muted">missed</span>
@@ -159,5 +151,5 @@ function formatScheduleDelta(deltaMs: number): string {
   // symmetric with "next in <value>" by using "ago"/"in".
   if (deltaMs > 0) return `${value} ago`;
   if (deltaMs < 0) return `in ${value}`;
-  return 'on time';
+  return "on time";
 }

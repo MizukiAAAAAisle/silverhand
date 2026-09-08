@@ -43,42 +43,31 @@
 // membership is RETAINED, because deleting rows there would diverge from the
 // server and be resurrected on the next refetch (see `notifications` in the
 // classification below).
-import type { QueryClient, QueryKey } from '@tanstack/react-query';
-import type { ListActivityDto, SavedMessageDto, TaskSummaryDto } from '@silverhand/shared';
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import type { ListActivityDto, SavedMessageDto, TaskSummaryDto } from "@silverhand/shared";
 import {
   activityKey,
   activityHeldChannelIds,
   removeConversationFromActivity,
-} from '@/features/attention/hooks';
-import {
-  removeChannelFromSaved,
-  savedHeldChannelIds,
-  savedKey,
-} from '@/features/saved/hooks';
-import {
-  removeChannelFromSearch,
-  searchHeldChannelIds,
-  searchKey,
-} from '@/features/search/hooks';
-import {
-  removeChannelFromTasks,
-  tasksHeldChannelIds,
-} from '@/features/tasks/hooks';
-import { boardColumnKey, boardFilterKey } from '@/features/tasks/boardQuery';
-import { DEFAULT_TASK_FILTERS } from '@/features/tasks/taskFilters';
+} from "@/features/attention/hooks";
+import { removeChannelFromSaved, savedHeldChannelIds, savedKey } from "@/features/saved/hooks";
+import { removeChannelFromSearch, searchHeldChannelIds, searchKey } from "@/features/search/hooks";
+import { removeChannelFromTasks, tasksHeldChannelIds } from "@/features/tasks/hooks";
+import { boardColumnKey, boardFilterKey } from "@/features/tasks/boardQuery";
+import { DEFAULT_TASK_FILTERS } from "@/features/tasks/taskFilters";
 import {
   messageUnreadHeldChannelIds,
   messageUnreadSummaryKey,
   removeConversationFromMessageUnread,
-} from '@/features/channels/message-unread';
+} from "@/features/channels/message-unread";
 import {
   messageKey,
   messagesHeldChannelIds,
   removeChannelFromMessages,
-} from '@/features/messages/hooks';
-import { ApiError } from '@/lib/api';
-import { channelWorkspaceOf } from './channel-workspace-index';
-import { isMemberChannel, type MembershipCarrier } from './membership';
+} from "@/features/messages/hooks";
+import { ApiError } from "@/lib/api";
+import { channelWorkspaceOf } from "./channel-workspace-index";
+import { isMemberChannel, type MembershipCarrier } from "./membership";
 
 /** Why the viewer stopped being a member — decides NAVIGATION and, for the
  *  channel-keyed layer, DISCARD vs RE-READ (see {@link handleViewerChannelRemoved}).
@@ -87,7 +76,7 @@ import { isMemberChannel, type MembershipCarrier } from './membership';
  *  `membership-loss`: a public channel the viewer can still browse — the pane
  *  stays and collapses to the Join affordance, so what is still observed is
  *  revalidated in place and only the unobserved caches are dropped. */
-export type ChannelLossMode = 'visibility-loss' | 'membership-loss';
+export type ChannelLossMode = "visibility-loss" | "membership-loss";
 
 /** The one fact every cleanup consumes. `workspaceId` is required because two
  *  projections are keyed by the WORKSPACE and carry the channel inside the
@@ -125,9 +114,9 @@ export type ChannelAttributedRow =
    *  axes (`workspace_id` + `conversation_id`). */
   | {
       place:
-        | { kind: 'workspace'; conversation_id: string; workspace_id: string }
-        | { kind: 'workspace_channel'; conversation_id: string; workspace_id: string }
-        | { kind: 'direct_pair'; conversation_id: string };
+        | { kind: "workspace"; conversation_id: string; workspace_id: string }
+        | { kind: "workspace_channel"; conversation_id: string; workspace_id: string }
+        | { kind: "direct_pair"; conversation_id: string };
     };
 
 /** How a viewer-local cache carries a channel — each settles differently.
@@ -135,18 +124,18 @@ export type ChannelAttributedRow =
  *  {@link handleViewerChannelRemoved} or the `never` check fails to compile. */
 export type ChannelProjectionForm =
   /** key = `[…, cid, …]` with the id in position 1 → layer-1 predicate sweep. */
-  | 'conversation-keyed'
+  | "conversation-keyed"
   /** global/workspace key, data = `{ …: Record<cid, …> }` → delete map entry. */
-  | 'record-keyed-map'
+  | "record-keyed-map"
   /** global key, data = `{ items: ConversationAttributed[] }` → filter items. */
-  | 'item-scoped-list'
+  | "item-scoped-list"
   /** MANY keys under one root, data = rows carrying `workspace_id`+`channel_id`
    *  → filter rows in every loaded variant (Saved, task board). */
-  | 'attributed-row-family'
+  | "attributed-row-family"
   /** many keys under one root whose payload REFERENCES channels but cannot be
    *  patched into refetch shape (ranked/capped result sets, single-object reads)
    *  → discard the referencing query. */
-  | 'opaque-reference-family';
+  | "opaque-reference-family";
 
 type ChannelCleanupFn = (qc: QueryClient, target: ChannelRemovalTarget) => void;
 
@@ -190,7 +179,7 @@ interface ChannelReadModelEntry {
 export function itemScopedList<TData>(
   entry: TData extends ConversationScopedListData ? ChannelReadModelEntry : never,
 ): RegisteredChannelReadModel {
-  return { ...(entry as ChannelReadModelEntry), form: 'item-scoped-list' };
+  return { ...(entry as ChannelReadModelEntry), form: "item-scoped-list" };
 }
 
 /**
@@ -200,7 +189,7 @@ export function itemScopedList<TData>(
  * required by signature.
  */
 export function recordKeyedMap(entry: ChannelReadModelEntry): RegisteredChannelReadModel {
-  return { ...entry, form: 'record-keyed-map' };
+  return { ...entry, form: "record-keyed-map" };
 }
 
 /**
@@ -213,7 +202,7 @@ export function recordKeyedMap(entry: ChannelReadModelEntry): RegisteredChannelR
 export function attributedRowFamily<TData>(
   entry: TData extends readonly ChannelAttributedRow[] ? ChannelReadModelEntry : never,
 ): RegisteredChannelReadModel {
-  return { ...(entry as ChannelReadModelEntry), form: 'attributed-row-family' };
+  return { ...(entry as ChannelReadModelEntry), form: "attributed-row-family" };
 }
 
 /**
@@ -223,10 +212,8 @@ export function attributedRowFamily<TData>(
  * rather than patches — the falsifier asserts the referencing query is gone, not
  * trimmed.
  */
-export function opaqueReferenceFamily(
-  entry: ChannelReadModelEntry,
-): RegisteredChannelReadModel {
-  return { ...entry, form: 'opaque-reference-family' };
+export function opaqueReferenceFamily(entry: ChannelReadModelEntry): RegisteredChannelReadModel {
+  return { ...entry, form: "opaque-reference-family" };
 }
 
 /**
@@ -236,58 +223,58 @@ export function opaqueReferenceFamily(
  */
 export const VIEWER_LOCAL_CHANNEL_READ_MODELS: readonly RegisteredChannelReadModel[] = [
   itemScopedList<ListActivityDto>({
-    id: 'activity',
+    id: "activity",
     key: activityKey(),
-    roots: ['activity'],
+    roots: ["activity"],
     cleanup: (qc, t) => removeConversationFromActivity(qc, t.channelId),
     heldChannelIds: activityHeldChannelIds,
   }),
   recordKeyedMap({
-    id: 'message-unread',
+    id: "message-unread",
     key: messageUnreadSummaryKey,
     // Settles THREE places at once: the workspace `by_conversation` map + its
     // `total`, and the global summary's `by_workspace[wsId]`. The workspace map
     // is keyed by the WORKSPACE, so the layer-1 channel sweep can never reach it
     // — hence the second root.
-    roots: ['message-unread', 'workspaces'],
+    roots: ["message-unread", "workspaces"],
     cleanup: (qc, t) => removeConversationFromMessageUnread(qc, t.workspaceId, t.channelId),
     heldChannelIds: messageUnreadHeldChannelIds,
   }),
   attributedRowFamily<SavedMessageDto[]>({
-    id: 'saved',
+    id: "saved",
     key: savedKey,
-    roots: ['saved'],
+    roots: ["saved"],
     cleanup: (qc, t) => removeChannelFromSaved(qc, t.channelId),
     heldChannelIds: savedHeldChannelIds,
   }),
   attributedRowFamily<TaskSummaryDto[]>({
-    id: 'tasks',
+    id: "tasks",
     // The Todo column under the default filters — the key every board mount
     // creates, and the row-carrying face this entry patches. A representative
     // key must name a variant that EXISTS: it used to be `tasksKey({})`, whose
     // fetch-all list was retired with #task:1892.
-    key: boardColumnKey('todo', boardFilterKey(DEFAULT_TASK_FILTERS)),
+    key: boardColumnKey("todo", boardFilterKey(DEFAULT_TASK_FILTERS)),
     // One entry, three roots: the column pages are patched, the two
     // single-object task reads are discarded, and all three are membership-gated
     // by the SAME server predicate (board / task read → `EXISTS
     // conversation_users`), so splitting them would only let one drift. The two
     // board aggregates share the `tasks` root and are invalidated by the same
     // cleanup — they carry no rows to patch.
-    roots: ['tasks', 'task-detail', 'task-by-number'],
+    roots: ["tasks", "task-detail", "task-by-number"],
     cleanup: (qc, t) => removeChannelFromTasks(qc, t.channelId),
     heldChannelIds: tasksHeldChannelIds,
   }),
   opaqueReferenceFamily({
-    id: 'search',
+    id: "search",
     key: searchKey,
-    roots: ['search'],
+    roots: ["search"],
     cleanup: (qc, t) => removeChannelFromSearch(qc, t.channelId),
     heldChannelIds: searchHeldChannelIds,
   }),
   opaqueReferenceFamily({
-    id: 'messages',
-    key: messageKey('any'),
-    roots: ['messages'],
+    id: "messages",
+    key: messageKey("any"),
+    roots: ["messages"],
     // Keyed by MESSAGE id, so no key sweep reaches it, but the payload's
     // `conversation_id` is the parent channel — discarded, because a single-object
     // read has no membership-filtered shape to patch to.
@@ -302,11 +289,11 @@ export const VIEWER_LOCAL_CHANNEL_READ_MODELS: readonly RegisteredChannelReadMod
  *  the loss); `retained` = deliberately left alone with a reason; `exempt` = the
  *  root carries no channel attribution at all. */
 export type ChannelKeyVerdict =
-  | 'swept'
-  | 'cleaned'
-  | 'refetch-authoritative'
-  | 'retained'
-  | 'exempt';
+  | "swept"
+  | "cleaned"
+  | "refetch-authoritative"
+  | "retained"
+  | "exempt";
 
 export interface ChannelKeyClassification {
   readonly verdicts: readonly ChannelKeyVerdict[];
@@ -334,129 +321,127 @@ export interface ChannelKeyClassification {
  * by this net. It is a completeness net over the known shapes, not a
  * query-definition chokepoint; the renderer has no such chokepoint today.
  */
-export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<
-  string,
-  ChannelKeyClassification
-> = {
+export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<string, ChannelKeyClassification> = {
   activity: {
-    verdicts: ['cleaned'],
-    reason: 'global list; every item carries conversation_id → registry `activity`',
+    verdicts: ["cleaned"],
+    reason: "global list; every item carries conversation_id → registry `activity`",
   },
-  'agent-audit-chats': {
-    verdicts: ['retained'],
+  "agent-audit-chats": {
+    verdicts: ["retained"],
     reason:
       "['agent-audit-chats', agentId] — the owner-audit Chats list (#task:2036). Scoped by AGENT ownership + the agent's participation resolved server-side, NOT by the viewer's channel membership: a viewer losing a channel does not change the owner's audit ACL, so there is nothing to clean, and a local delete would diverge from an authoritative refetch. The key carries no channel_id to sweep by",
   },
   agents: {
-    verdicts: ['exempt'],
+    verdicts: ["exempt"],
     reason:
       "keyed by agent identity (['agents'], ['agents', id], ['agents', id, 'workspace']); an agent's presence in a channel lives under ['channels', cid, 'agents'] → swept",
   },
-  'archived-channels': {
-    verdicts: ['refetch-authoritative'],
+  "archived-channels": {
+    verdicts: ["refetch-authoritative"],
     reason:
-      'cross-workspace archived restore index, server membership-filtered; already invalidated on workspace_channels_changed / snapshot_required and re-read',
+      "cross-workspace archived restore index, server membership-filtered; already invalidated on workspace_channels_changed / snapshot_required and re-read",
   },
   attention: {
-    verdicts: ['refetch-authoritative'],
+    verdicts: ["refetch-authoritative"],
     reason:
       "['attention','badges'] roll-up + ['attention','modes', wsId] tier batch (#task:1870) — both are server membership-filtered (each JOINs conversation_users) and neither is patchable here: the badge is an absolute per-workspace number this client cannot recompute, and the batch's rows are the server's tier resolution. Settled by invalidate-and-re-read on workspace_channels_changed / snapshot_required — a membership change deliberately emits NO attention_badge_updated frame",
   },
-  'backend-info': { verdicts: ['exempt'], reason: 'backend build info; no conversation axis' },
-  'channel-detail': { verdicts: ['swept'], reason: "['channel-detail', cid] → position 1" },
+  "backend-info": { verdicts: ["exempt"], reason: "backend build info; no conversation axis" },
+  "channel-detail": { verdicts: ["swept"], reason: "['channel-detail', cid] → position 1" },
   channels: {
-    verdicts: ['swept'],
+    verdicts: ["swept"],
     reason:
       "['channels', cid, …] — messages, clusters, live gaps, thread roots/followers, threads-list, attachments, channel agents → position 1",
   },
   conversation: {
-    verdicts: ['swept'],
+    verdicts: ["swept"],
     reason: "['conversation', cid, …] — per-stream unread → position 1",
   },
-  'conversation-members': {
-    verdicts: ['swept'],
+  "conversation-members": {
+    verdicts: ["swept"],
     reason: "['conversation-members', cid] → position 1",
   },
-  'conversation-ref': { verdicts: ['swept'], reason: "['conversation-ref', cid] → position 1" },
+  "conversation-ref": { verdicts: ["swept"], reason: "['conversation-ref', cid] → position 1" },
   conversations: {
-    verdicts: ['swept'],
+    verdicts: ["swept"],
     reason: "['conversations', cid, 'agent-activity', agentId] → position 1",
   },
-  'direct-pairs': {
-    verdicts: ['exempt'],
+  "direct-pairs": {
+    verdicts: ["exempt"],
     reason:
       "['direct-pairs'] — the viewer's `direct_pair` list (#task:2035). Not a channel projection in either direction: the rows have no workspace and no channel_id to filter by, and a pair can never BE the lost channel — its roster is its two endpoints, so there is no `conversation_users` row to lose and no channel list that could detect one. The viewer-scoped `direct_pairs_changed` invalidation is this list's only settler",
   },
   favorites: {
-    verdicts: ['exempt'],
+    verdicts: ["exempt"],
     reason:
-      'favorites are conversation rows keyed by parent workspace — channel loss does not settle that parent-scoped projection here',
+      "favorites are conversation rows keyed by parent workspace — channel loss does not settle that parent-scoped projection here",
   },
-  host: { verdicts: ['exempt'], reason: 'computer-scoped host record; no conversation axis' },
-  'host-proxy-config': {
-    verdicts: ['exempt'],
-    reason: 'computer-scoped host network config; no conversation axis',
+  host: { verdicts: ["exempt"], reason: "computer-scoped host record; no conversation axis" },
+  "host-proxy-config": {
+    verdicts: ["exempt"],
+    reason: "computer-scoped host network config; no conversation axis",
   },
-  'host-resources': {
-    verdicts: ['exempt'],
-    reason: 'computer-scoped host resource sampling; no conversation axis',
+  "host-resources": {
+    verdicts: ["exempt"],
+    reason: "computer-scoped host resource sampling; no conversation axis",
   },
-  'host-runtime-catalog': {
-    verdicts: ['exempt'],
-    reason: 'computer-scoped runtime inventory; no conversation axis',
+  "host-runtime-catalog": {
+    verdicts: ["exempt"],
+    reason: "computer-scoped runtime inventory; no conversation axis",
   },
-  'host-status': {
-    verdicts: ['exempt'],
-    reason: 'computer-scoped host liveness; no conversation axis',
+  "host-status": {
+    verdicts: ["exempt"],
+    reason: "computer-scoped host liveness; no conversation axis",
   },
   hosts: {
-    verdicts: ['exempt'],
-    reason: 'computer-scoped host list; no conversation axis',
+    verdicts: ["exempt"],
+    reason: "computer-scoped host list; no conversation axis",
   },
-  'inline-find': { verdicts: ['swept'], reason: "['inline-find', cid, …] → position 1" },
-  me: { verdicts: ['exempt'], reason: 'viewer identity + capabilities; no conversation axis' },
-  'message-reactions': {
-    verdicts: ['retained'],
+  "inline-find": { verdicts: ["swept"], reason: "['inline-find', cid, …] → position 1" },
+  me: { verdicts: ["exempt"], reason: "viewer identity + capabilities; no conversation axis" },
+  "message-reactions": {
+    verdicts: ["retained"],
     reason:
-      'keyed by message id, and the PAYLOAD is a reaction aggregate that names no conversation — this client has no message→channel carrier for it. The only readers are the swept channel projections, so entries are unreachable after the loss and expire by gc. NOT the same reason as `messages`, whose payload does carry the attribution',
+      "keyed by message id, and the PAYLOAD is a reaction aggregate that names no conversation — this client has no message→channel carrier for it. The only readers are the swept channel projections, so entries are unreachable after the loss and expire by gc. NOT the same reason as `messages`, whose payload does carry the attribution",
   },
-  'message-unread': {
-    verdicts: ['cleaned'],
-    reason: 'global summary; patched by registry `message-unread`',
+  "message-unread": {
+    verdicts: ["cleaned"],
+    reason: "global summary; patched by registry `message-unread`",
   },
   messages: {
-    verdicts: ['cleaned'],
+    verdicts: ["cleaned"],
     reason:
       "single-message cache keyed by message id; its MessageDto.conversation_id is the PARENT channel-like conversation (a thread is identified by thread_root_id, not a separate conversation), so the entry is channel-attributable and is discarded by registry `messages`",
   },
-  'name-availability': { verdicts: ['exempt'], reason: 'transient naming probe' },
+  "name-availability": { verdicts: ["exempt"], reason: "transient naming probe" },
   notifications: {
-    verdicts: ['retained'],
+    verdicts: ["retained"],
     reason:
-      'RETAINED ON PURPOSE: notification-repo filters by recipient only, NOT by conversation membership, so a refetch still returns these rows — a local delete would diverge from the server and be resurrected. Whether losing a channel should clear its notifications is a backend domain decision, not a viewer-local cleanup',
+      "RETAINED ON PURPOSE: notification-repo filters by recipient only, NOT by conversation membership, so a refetch still returns these rows — a local delete would diverge from the server and be resurrected. Whether losing a channel should clear its notifications is a backend domain decision, not a viewer-local cleanup",
   },
-  presence: { verdicts: ['exempt'], reason: 'per-user presence; no conversation axis' },
-  'profile-message-counts': {
-    verdicts: ['exempt'],
-    reason: 'public per-subject annual counts, independent of source conversation ACL; channel membership loss does not change this aggregate',
+  presence: { verdicts: ["exempt"], reason: "per-user presence; no conversation axis" },
+  "profile-message-counts": {
+    verdicts: ["exempt"],
+    reason:
+      "public per-subject annual counts, independent of source conversation ACL; channel membership loss does not change this aggregate",
   },
-  saved: { verdicts: ['cleaned'], reason: 'rows carry channel_id → registry `saved`' },
+  saved: { verdicts: ["cleaned"], reason: "rows carry channel_id → registry `saved`" },
   search: {
-    verdicts: ['cleaned'],
-    reason: 'ranked/capped result sets referencing the channel are discarded → registry `search`',
+    verdicts: ["cleaned"],
+    reason: "ranked/capped result sets referencing the channel are discarded → registry `search`",
   },
-  'task-by-number': {
-    verdicts: ['cleaned'],
-    reason: 'single-object task read → discarded by registry `tasks`',
+  "task-by-number": {
+    verdicts: ["cleaned"],
+    reason: "single-object task read → discarded by registry `tasks`",
   },
-  'task-detail': {
-    verdicts: ['cleaned'],
-    reason: 'single-object task read → discarded by registry `tasks`',
+  "task-detail": {
+    verdicts: ["cleaned"],
+    reason: "single-object task read → discarded by registry `tasks`",
   },
-  tasks: { verdicts: ['cleaned'], reason: 'rows carry channel_id → registry `tasks`' },
-  users: { verdicts: ['exempt'], reason: 'user directory; no conversation axis' },
+  tasks: { verdicts: ["cleaned"], reason: "rows carry channel_id → registry `tasks`" },
+  users: { verdicts: ["exempt"], reason: "user directory; no conversation axis" },
   workspaces: {
-    verdicts: ['cleaned', 'refetch-authoritative', 'exempt'],
+    verdicts: ["cleaned", "refetch-authoritative", "exempt"],
     reason:
       "one root, three answers: the message-unread map (['workspaces', ws, 'message-unread']) is patched by registry `message-unread`; the channel + archived channel lists are refetch-authoritative and are what DETECTS the loss; members / capabilities / workspace list carry no channel attribution",
   },
@@ -534,28 +519,25 @@ function assertNever(x: never): never {
  *
  * Idempotent: every cleanup is present-only, so a repeat call writes nothing.
  */
-export function handleViewerChannelRemoved(
-  qc: QueryClient,
-  target: ChannelRemovalTarget,
-): void {
+export function handleViewerChannelRemoved(qc: QueryClient, target: ChannelRemovalTarget): void {
   const predicate = (query: { queryKey: unknown }) =>
     isConversationKeyed(query.queryKey, target.channelId);
-  if (target.mode === 'visibility-loss') {
+  if (target.mode === "visibility-loss") {
     qc.removeQueries({ predicate });
   } else {
-    void qc.invalidateQueries({ predicate, type: 'active' });
-    qc.removeQueries({ predicate, type: 'inactive' });
+    void qc.invalidateQueries({ predicate, type: "active" });
+    qc.removeQueries({ predicate, type: "inactive" });
   }
   for (const rm of VIEWER_LOCAL_CHANNEL_READ_MODELS) {
     switch (rm.form) {
-      case 'conversation-keyed':
+      case "conversation-keyed":
         // Covered by the layer-1 sweep; no registered entry uses this form
         // today, but the branch keeps the dispatch exhaustive + documents it.
         break;
-      case 'record-keyed-map':
-      case 'item-scoped-list':
-      case 'attributed-row-family':
-      case 'opaque-reference-family':
+      case "record-keyed-map":
+      case "item-scoped-list":
+      case "attributed-row-family":
+      case "opaque-reference-family":
         rm.cleanup(qc, target);
         break;
       default:
@@ -588,10 +570,7 @@ export function handleViewerChannelRemoved(
  *     could not repair it either: the first converged tick there only establishes
  *     a baseline, and the removed channel is in neither list to be diffed.
  */
-export function heldChannelIdsInWorkspace(
-  qc: QueryClient,
-  workspaceId: string,
-): Set<string> {
+export function heldChannelIdsInWorkspace(qc: QueryClient, workspaceId: string): Set<string> {
   const ids = new Set<string>();
   for (const rm of VIEWER_LOCAL_CHANNEL_READ_MODELS) {
     for (const id of rm.heldChannelIds(qc, workspaceId)) ids.add(id);
@@ -628,16 +607,13 @@ export function heldChannelIdsInWorkspace(
  * and expires by gc, and a CONFLICTING attribution is dropped outright rather
  * than being trusted.
  */
-export function channelKeyedHeldChannelIds(
-  qc: QueryClient,
-  workspaceId: string,
-): Set<string> {
+export function channelKeyedHeldChannelIds(qc: QueryClient, workspaceId: string): Set<string> {
   const ids = new Set<string>();
   for (const query of qc.getQueryCache().getAll()) {
     const key = query.queryKey;
     if (!Array.isArray(key)) continue;
     const candidate = key[1];
-    if (typeof candidate !== 'string' || !candidate) continue;
+    if (typeof candidate !== "string" || !candidate) continue;
     if (ids.has(candidate)) continue;
     if (channelWorkspaceOf(candidate) === workspaceId) ids.add(candidate);
   }
@@ -651,7 +627,7 @@ export function channelKeyedHeldChannelIds(
  *  has to know WHICH list a row came from to read membership off it. */
 export interface ChannelMembershipRow extends MembershipCarrier {
   id: string;
-  visibility?: 'public' | 'private';
+  visibility?: "public" | "private";
 }
 
 export interface ChannelMembershipLoss {
@@ -702,14 +678,14 @@ export function resolveChannelMembershipLosses(input: {
   for (const channelId of input.observed) {
     const row = rows.get(channelId);
     if (!row) {
-      losses.push({ channelId, mode: 'visibility-loss' });
+      losses.push({ channelId, mode: "visibility-loss" });
       continue;
     }
     if (isMemberChannel(row)) continue; // still a member
-    if (typeof row.is_member !== 'boolean') continue; // unresolved → never fire
+    if (typeof row.is_member !== "boolean") continue; // unresolved → never fire
     losses.push({
       channelId,
-      mode: row.visibility === 'public' ? 'membership-loss' : 'visibility-loss',
+      mode: row.visibility === "public" ? "membership-loss" : "visibility-loss",
     });
   }
   return losses;
@@ -738,7 +714,7 @@ export function resolveChannelMembershipLosses(input: {
 export function isWorkspaceVisibilityDenied(error: unknown): boolean {
   return (
     error instanceof ApiError &&
-    error.kind === 'http' &&
+    error.kind === "http" &&
     (error.status === 403 || error.status === 404)
   );
 }
@@ -759,10 +735,8 @@ export function isWorkspaceVisibilityDenied(error: unknown): boolean {
  * different (and larger) handler. This clears exactly the channel-scope
  * projections this contract owns.
  */
-export function resolveWorkspaceVisibilityLosses(
-  held: Iterable<string>,
-): ChannelMembershipLoss[] {
-  return [...held].map(channelId => ({ channelId, mode: 'visibility-loss' as const }));
+export function resolveWorkspaceVisibilityLosses(held: Iterable<string>): ChannelMembershipLoss[] {
+  return [...held].map((channelId) => ({ channelId, mode: "visibility-loss" as const }));
 }
 
 /** The authoritative member set for one settled tick — the `observed` input of

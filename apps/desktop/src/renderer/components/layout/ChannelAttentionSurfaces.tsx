@@ -1,15 +1,12 @@
-import { Bell, BellOff, Check } from 'lucide-react';
-import type { ChannelAttentionMode } from '@silverhand/shared';
-import {
-  AppContextMenuItem,
-  AppContextMenuSeparator,
-} from '@/components/menus/AppContextMenu';
+import { Bell, BellOff, Check } from "lucide-react";
+import type { ChannelAttentionMode } from "@silverhand/shared";
+import { AppContextMenuItem, AppContextMenuSeparator } from "@/components/menus/AppContextMenu";
 import {
   useSetChannelAttentionPreference,
   useSetWorkspaceAttentionPreference,
   useWorkspaceAttentionPreference,
-} from '@/features/attention/hooks';
-import { resolveWorkspaceMuteToggle } from '@/lib/attention-mode';
+} from "@/features/attention/hooks";
+import { resolveWorkspaceMuteToggle } from "@/lib/attention-mode";
 
 /**
  * The context-menu surfaces of the two Attention write aggregates (#task:1227
@@ -31,9 +28,9 @@ export const ATTENTION_OPTIONS: {
   mode: ChannelAttentionMode;
   label: string;
 }[] = [
-  { mode: 'all', label: 'All messages' },
-  { mode: 'mentions', label: 'Mentions only' },
-  { mode: 'mute', label: 'Mute' },
+  { mode: "all", label: "All messages" },
+  { mode: "mentions", label: "Mentions only" },
+  { mode: "mute", label: "Mute" },
 ];
 
 /**
@@ -70,7 +67,7 @@ export function ChannelAttentionMenuItems({
 
   return (
     <>
-      {ATTENTION_OPTIONS.map(o => (
+      {ATTENTION_OPTIONS.map((o) => (
         <AppContextMenuItem
           key={o.mode}
           icon={o.mode === mode ? <Check className="size-3.5" /> : null}
@@ -113,24 +110,14 @@ export function ChannelAttentionMenuItems({
  * defaulted: see `resolveWorkspaceMuteToggle` for why a `false` default silently
  * turns the user's Unmute into a second `true`.
  */
-export function WorkspaceMuteMenuItem({
-  workspaceId,
-}: {
-  workspaceId: string;
-}): JSX.Element {
+export function WorkspaceMuteMenuItem({ workspaceId }: { workspaceId: string }): JSX.Element {
   const { data } = useWorkspaceAttentionPreference(workspaceId);
   const setPref = useSetWorkspaceAttentionPreference(workspaceId);
   const { label, next } = resolveWorkspaceMuteToggle(data?.muted);
 
   return (
     <AppContextMenuItem
-      icon={
-        next === false ? (
-          <Bell className="size-3.5" />
-        ) : (
-          <BellOff className="size-3.5" />
-        )
-      }
+      icon={next === false ? <Bell className="size-3.5" /> : <BellOff className="size-3.5" />}
       disabled={next === null}
       onSelect={() => {
         // Belt and braces with `disabled`: the guarantee is "never write a

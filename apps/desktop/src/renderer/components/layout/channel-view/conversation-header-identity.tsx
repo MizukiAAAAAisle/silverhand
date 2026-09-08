@@ -20,24 +20,24 @@
  * or a pair whose carrier resolved no counterpart): no borrowed chrome, no
  * invented face.
  */
-import { useMemo } from 'react';
-import { Hash } from 'lucide-react';
-import type { DirectPairCounterpart } from '@silverhand/shared';
-import { AuthorAvatarView, DeletedActorMarker } from '@/components/chat/author-avatar-view';
-import { useNav } from '@/router';
-import { focusAgentSideSection } from '@/features/agents/AgentView';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useAgent, useAgentPresence } from '@/features/agents/hooks';
-import { PRESENCE_TONE_DOT, projectPresence } from '@/features/agents/presence-projection';
-import { usePresenceById } from '@/features/presence/hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
+import { useMemo } from "react";
+import { Hash } from "lucide-react";
+import type { DirectPairCounterpart } from "@silverhand/shared";
+import { AuthorAvatarView, DeletedActorMarker } from "@/components/chat/author-avatar-view";
+import { useNav } from "@/router";
+import { focusAgentSideSection } from "@/features/agents/AgentView";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useAgent, useAgentPresence } from "@/features/agents/hooks";
+import { PRESENCE_TONE_DOT, projectPresence } from "@/features/agents/presence-projection";
+import { usePresenceById } from "@/features/presence/hooks";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import {
   collectCounterpartAvatarSources,
   presentCounterpart,
-} from '@/features/direct-pairs/counterpart-presentation';
-import type { ConversationPaneCapabilities } from '@/features/conversations/pane-mode';
+} from "@/features/direct-pairs/counterpart-presentation";
+import type { ConversationPaneCapabilities } from "@/features/conversations/pane-mode";
 
-const TITLE_CLASS = 'min-w-0 truncate font-serif text-base font-semibold text-text-primary';
+const TITLE_CLASS = "min-w-0 truncate font-serif text-base font-semibold text-text-primary";
 
 /** Both header arms — the channel `#` and the DM avatar — share this one box edge
  *  so switching conversation kind never resizes the identity. */
@@ -48,15 +48,15 @@ const HEADER_IDENTITY_GLYPH_PX = 18;
 /** Inline size WINS over a theme's own `#` selectors, so the box is fixed here and
  *  a theme only projects paint/effect — it must never carry the size itself. */
 const IDENTITY_BOX_STYLE = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
   inlineSize: HEADER_IDENTITY_PX,
   blockSize: HEADER_IDENTITY_PX,
-  boxSizing: 'border-box',
+  boxSizing: "border-box",
   padding: 0,
-  verticalAlign: 'middle',
-  flex: 'none',
+  verticalAlign: "middle",
+  flex: "none",
 } as const;
 
 export function ConversationHeaderIdentity({
@@ -64,18 +64,18 @@ export function ConversationHeaderIdentity({
   title,
   counterpart,
 }: {
-  identity: ConversationPaneCapabilities['headerIdentity'];
+  identity: ConversationPaneCapabilities["headerIdentity"];
   title: string;
   /** Only consulted for `counterpart` identity; `null` falls back to the title
    *  alone. */
   counterpart?: DirectPairCounterpart | null;
 }): JSX.Element {
-  if (identity === 'counterpart' && counterpart) {
+  if (identity === "counterpart" && counterpart) {
     return <CounterpartIdentity title={title} counterpart={counterpart} />;
   }
   return (
     <span data-conversation-title className={TITLE_CLASS}>
-      {identity === 'channel_hash' ? (
+      {identity === "channel_hash" ? (
         <span
           data-conversation-hash-icon
           data-sticker
@@ -121,7 +121,7 @@ function CounterpartIdentity({
   const humanAvatarUrls = useUserAvatarObjectUrls(users);
   const { openAgentPanel, openHumanPanel } = useNav();
   const agentId =
-    counterpart.status === 'active' && counterpart.kind === 'agent' ? counterpart.id : null;
+    counterpart.status === "active" && counterpart.kind === "agent" ? counterpart.id : null;
   const description = useAgent(agentId).data?.description?.trim() || null;
   const face = (
     <AuthorAvatarView
@@ -139,7 +139,7 @@ function CounterpartIdentity({
         <button
           type="button"
           onClick={() => {
-            focusAgentSideSection(agentId, 'activity');
+            focusAgentSideSection(agentId, "activity");
             openAgentPanel(agentId);
           }}
           aria-label={`Open ${presentation.label} activity`}
@@ -148,7 +148,7 @@ function CounterpartIdentity({
         >
           {face}
         </button>
-      ) : counterpart.status === 'active' && counterpart.kind === 'human' ? (
+      ) : counterpart.status === "active" && counterpart.kind === "human" ? (
         <button
           type="button"
           onClick={() => openHumanPanel(counterpart.id)}
@@ -209,8 +209,8 @@ function CounterpartPresenceDot({
 }: {
   counterpart: DirectPairCounterpart;
 }): JSX.Element | null {
-  if (counterpart.status !== 'active') return null;
-  return counterpart.kind === 'agent' ? (
+  if (counterpart.status !== "active") return null;
+  return counterpart.kind === "agent" ? (
     <AgentPresenceDot agentId={counterpart.id} />
   ) : (
     <HumanPresenceDot userId={counterpart.id} />
@@ -230,12 +230,12 @@ function CounterpartPresenceDot({
  *  forza6 (`--pill-radius: 0`) and round elsewhere, so this dot matches every
  *  other presence pip instead of staying a hardcoded circle. Size stays the
  *  header's own (one tier above the rail) — that is layout, the consumer's call. */
-const PRESENCE_DOT_CLASS = 'size-2 shrink-0 rounded-[var(--pill-radius)]';
+const PRESENCE_DOT_CLASS = "size-2 shrink-0 rounded-[var(--pill-radius)]";
 
 function AgentPresenceDot({ agentId }: { agentId: string }): JSX.Element | null {
   const presence = useAgentPresence(agentId);
   if (presence === null) return null;
-  const display = projectPresence({ scope: 'global', presence });
+  const display = projectPresence({ scope: "global", presence });
   return (
     <span
       data-status-pip
@@ -251,12 +251,12 @@ function AgentPresenceDot({ agentId }: { agentId: string }): JSX.Element | null 
  *  that dotted only agents would answer the same question twice differently. */
 function HumanPresenceDot({ userId }: { userId: string }): JSX.Element {
   const presence = usePresenceById().get(userId)?.presence;
-  const online = presence === 'online';
+  const online = presence === "online";
   return (
     <span
       data-status-pip
-      title={online ? 'Online' : 'Offline'}
-      className={`${PRESENCE_DOT_CLASS} ${online ? 'bg-success' : 'bg-text-muted/40'}`}
+      title={online ? "Online" : "Offline"}
+      className={`${PRESENCE_DOT_CLASS} ${online ? "bg-success" : "bg-text-muted/40"}`}
     />
   );
 }

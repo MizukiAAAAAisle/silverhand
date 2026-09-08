@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from "vitest";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Mechanism-layer fence for the identity-avatar square scale (#task:1440,
 // Cindy review invariant #4 + follow-up). Every identity-avatar square — the
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 // Allowed forms: `size={AVATAR_PX.xs}`, `size={size}` (passthrough), or no size
 // (defaults to md). Only a raw digit is an offender.
 
-const RENDERER_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const RENDERER_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 // Match the OPENING tag of any identity-avatar component. `EditableAgentAvatar`
 // / `AvatarPickerButton` are not self-closing and carry arrow-function props
@@ -42,15 +42,15 @@ function walk(dir: string): string[] {
   return out;
 }
 
-describe('avatar size is scale-only, never a hand-written literal (#task:1440)', () => {
-  it('no identity-avatar tag uses a numeric size={NN} — all go through AVATAR_PX', () => {
+describe("avatar size is scale-only, never a hand-written literal (#task:1440)", () => {
+  it("no identity-avatar tag uses a numeric size={NN} — all go through AVATAR_PX", () => {
     const offenders: string[] = [];
     for (const file of walk(RENDERER_ROOT)) {
-      const src = readFileSync(file, 'utf8');
+      const src = readFileSync(file, "utf8");
       for (const tag of src.match(AVATAR_TAG) ?? []) {
         if (NUMERIC_SIZE.test(tag)) {
-          const rel = relative(RENDERER_ROOT, file).split(sep).join('/');
-          offenders.push(`${rel}: ${tag.replace(/\s+/g, ' ').trim()}`);
+          const rel = relative(RENDERER_ROOT, file).split(sep).join("/");
+          offenders.push(`${rel}: ${tag.replace(/\s+/g, " ").trim()}`);
         }
       }
     }

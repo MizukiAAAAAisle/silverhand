@@ -57,7 +57,7 @@
  * by the app-shell host connection sync, which invalidates this query from
  * viewer-scoped WS events / `snapshot_required`; no per-view poll loop needed.
  */
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Check,
@@ -70,8 +70,8 @@ import {
   ShieldOff,
   Trash2,
   Unplug,
-} from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent, type JSX, type ReactNode } from 'react';
+} from "lucide-react";
+import { useEffect, useMemo, useState, type FormEvent, type JSX, type ReactNode } from "react";
 import type {
   AgentOnHostDto,
   HostAdmissionFailure,
@@ -79,19 +79,19 @@ import type {
   HostDto,
   HostStatusResponse,
   RuntimeKind,
-} from '@silverhand/shared';
-import { RuntimeKindSchema, RUNTIME_ORDER_LIST, runtimeLabel } from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+} from "@silverhand/shared";
+import { RuntimeKindSchema, RUNTIME_ORDER_LIST, runtimeLabel } from "@silverhand/shared";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useViewerUser,
-} from '@/features/me/hooks';
-import { useNav } from '@/router';
-import { Button } from '@/components/ui/button';
+} from "@/features/me/hooks";
+import { useNav } from "@/router";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -99,10 +99,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Input, Label } from '@/components/ui/input';
-import { cn } from '@/lib/cn';
-import { paneChrome } from '@/components/layout/pane-chrome';
+} from "@/components/ui/dialog";
+import { Input, Label } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
+import { paneChrome } from "@/components/layout/pane-chrome";
 import {
   hostStatusKey,
   useAgentOnlineByHost,
@@ -119,28 +119,28 @@ import {
   useUpdateHostMutation,
   isHostProxyOfflineError,
   type HostProxyConfig,
-} from './hooks';
+} from "./hooks";
 import {
   resolveDeleteComputerPhase,
   resolveDeleteFailure,
   type DeleteComputerFailure,
-} from './delete-computer-phase';
-import { computerActions } from './computer-actions';
-import { destructiveAction, destructiveCancel } from '@/features/common/DestructiveAction';
-import { primaryAction } from '@/features/common/PrimaryAction';
-import { neutralAction } from '@/features/common/ControlInkBorder';
-import { HOST_ACTION_BUTTON_DANGER } from './host-action-button';
+} from "./delete-computer-phase";
+import { computerActions } from "./computer-actions";
+import { destructiveAction, destructiveCancel } from "@/features/common/DestructiveAction";
+import { primaryAction } from "@/features/common/PrimaryAction";
+import { neutralAction } from "@/features/common/ControlInkBorder";
+import { HOST_ACTION_BUTTON_DANGER } from "./host-action-button";
 import {
   describeAdmissionFailure,
   describeHostStatus,
   formatUptime,
   type HostStatusTone,
-} from './host-status-presentation';
-import { InlineRename } from './InlineRename';
-import { ConnectionCommandCard } from './ConnectionCommandCard';
-import { HostDiagnosticsAction } from './HostDiagnosticsAction';
-import { computerCopy } from './computer-copy';
-import { formatOsShort } from './format-os';
+} from "./host-status-presentation";
+import { InlineRename } from "./InlineRename";
+import { ConnectionCommandCard } from "./ConnectionCommandCard";
+import { HostDiagnosticsAction } from "./HostDiagnosticsAction";
+import { computerCopy } from "./computer-copy";
+import { formatOsShort } from "./format-os";
 
 /**
  * Lightweight status indicator — colored dot + uppercase text. shiki
@@ -154,19 +154,19 @@ import { formatOsShort } from './format-os';
  * tracking-wider so it visually rhymes with the section card titles.
  */
 const TONE_DOT_CLASS: Record<HostStatusTone, string> = {
-  accent: 'bg-accent',
-  success: 'bg-success',
-  warning: 'bg-warning',
-  error: 'bg-error',
-  muted: 'bg-text-muted/60',
+  accent: "bg-accent",
+  success: "bg-success",
+  warning: "bg-warning",
+  error: "bg-error",
+  muted: "bg-text-muted/60",
 };
 
 const TONE_BANNER_CLASS: Record<HostStatusTone, string> = {
-  accent: 'border-accent text-accent',
-  success: 'border-success text-success',
-  warning: 'border-warning text-warning',
-  error: 'border-error text-error',
-  muted: 'border-border-subtle text-text-secondary',
+  accent: "border-accent text-accent",
+  success: "border-success text-success",
+  warning: "border-warning text-warning",
+  error: "border-error text-error",
+  muted: "border-border-subtle text-text-secondary",
 };
 
 /** The proxy form lists every known runtime kind (availability-agnostic:
@@ -192,7 +192,7 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
     [statusQuery.data],
   );
 
-  const trimmedLabel = host.display_label?.trim() ?? '';
+  const trimmedLabel = host.display_label?.trim() ?? "";
   const showStableName = trimmedLabel.length > 0 && trimmedLabel !== host.name;
   const viewerState = viewer.data;
   const viewerId =
@@ -231,7 +231,7 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
         onRename={async (next) => {
           await renameMutation.mutateAsync({ display_label: next });
         }}
-        appManaged={host.provisioning_source === 'app_install'}
+        appManaged={host.provisioning_source === "app_install"}
       />
 
       <div className="mx-auto flex w-full max-w-2xl flex-col px-6">
@@ -243,19 +243,19 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
           <div className="py-6">
             <Banner tone="error">
               Could not load this computer&rsquo;s status.
-              {statusQuery.error instanceof Error ? ` (${statusQuery.error.message})` : ''}
+              {statusQuery.error instanceof Error ? ` (${statusQuery.error.message})` : ""}
             </Banner>
           </div>
         ) : statusQuery.data ? (
           <>
-            {statusQuery.data.availability === 'disconnected' &&
+            {statusQuery.data.availability === "disconnected" &&
             statusQuery.data.admission_failure ? (
               <AdmissionFailureNotice
                 failure={statusQuery.data.admission_failure}
-                appManaged={host.provisioning_source === 'app_install'}
+                appManaged={host.provisioning_source === "app_install"}
               />
             ) : null}
-            {statusQuery.data.availability === 'available' ? (
+            {statusQuery.data.availability === "available" ? (
               <SystemSection snapshot={statusQuery.data.snapshot} />
             ) : (
               <OfflineSection status={statusQuery.data} />
@@ -319,7 +319,7 @@ function ConnectionSection({
   availability,
 }: {
   host: HostDto;
-  availability: HostStatusResponse['availability'];
+  availability: HostStatusResponse["availability"];
 }): JSX.Element {
   const rotate = useRotateConnectTokenMutation(host.id);
   const disconnect = useDisconnectHostMutation(host.id);
@@ -363,7 +363,7 @@ function ConnectionSection({
           <ConnectionCommandCard
             daemonNpmSpec={minted.daemonNpmSpec}
             connectToken={minted.connectToken}
-            connectedServerUrl={backendInfo.data?.url ?? ''}
+            connectedServerUrl={backendInfo.data?.url ?? ""}
           />
         ) : null}
 
@@ -372,7 +372,7 @@ function ConnectionSection({
             size="sm"
             onClick={() => void handleGenerate()}
             disabled={rotate.isPending}
-            {...primaryAction('gap-2')}
+            {...primaryAction("gap-2")}
           >
             {rotate.isPending ? (
               <Loader2 className="size-3.5 animate-spin" />
@@ -382,13 +382,13 @@ function ConnectionSection({
             {computerCopy.generateCommand}
           </Button>
 
-          {availability === 'available' ? (
+          {availability === "available" ? (
             <Button
               size="sm"
               variant="outline"
               onClick={() => void handleDisconnect()}
               disabled={disconnect.isPending}
-              {...neutralAction('gap-2')}
+              {...neutralAction("gap-2")}
             >
               {disconnect.isPending ? (
                 <Loader2 className="size-3.5 animate-spin" />
@@ -450,7 +450,7 @@ function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Element {
             size="sm"
             onClick={() => void handleRefresh()}
             disabled={rotate.isPending}
-            {...primaryAction('gap-2')}
+            {...primaryAction("gap-2")}
           >
             {rotate.isPending ? (
               <Loader2 className="size-3.5 animate-spin" />
@@ -564,7 +564,7 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
               variant="danger"
               onClick={() => void handleRevoke()}
               disabled={revoke.isPending}
-              {...destructiveAction('gap-2')}
+              {...destructiveAction("gap-2")}
               aria-label={`${computerCopy.revokeComputer}: ${label}`}
             >
               {revoke.isPending ? (
@@ -669,7 +669,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
         }}
       >
         <DialogContent className="max-w-md">
-          {failure === 'pending' ? (
+          {failure === "pending" ? (
             <>
               <DialogHeader>
                 <DialogTitle>{computerCopy.deletePendingTitle}</DialogTitle>
@@ -687,14 +687,14 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                 <Button
                   onClick={() => void handleDelete()}
                   disabled={del.isPending}
-                  {...primaryAction('gap-2')}
+                  {...primaryAction("gap-2")}
                 >
                   {del.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
                   {computerCopy.deleteRetry}
                 </Button>
               </DialogFooter>
             </>
-          ) : phase.kind === 'unavailable' ? (
+          ) : phase.kind === "unavailable" ? (
             <>
               <DialogHeader>
                 <DialogTitle>{computerCopy.deleteConfirmTitle}</DialogTitle>
@@ -707,7 +707,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                 <Button
                   onClick={() => void resources.refetch()}
                   disabled={resources.isFetching}
-                  {...primaryAction('gap-2')}
+                  {...primaryAction("gap-2")}
                 >
                   {resources.isFetching ? <Loader2 className="size-3.5 animate-spin" /> : null}
                   {computerCopy.deleteRetry}
@@ -724,10 +724,10 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                     plus exactly what else goes. */}
                 <DialogDescription>{computerCopy.deleteConfirmBody}</DialogDescription>
               </DialogHeader>
-              {phase.kind === 'confirm' && phase.agents.length > 0 ? (
+              {phase.kind === "confirm" && phase.agents.length > 0 ? (
                 <CascadeImpact agents={phase.agents} />
               ) : null}
-              {failure === 'generic' ? (
+              {failure === "generic" ? (
                 <p className="text-xs text-error">{computerCopy.deleteFailed}</p>
               ) : null}
               <DialogFooter>
@@ -745,11 +745,11 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                   // Armed only once the impact is on screen: the `loading` phase
                   // renders this same confirm, so this guard is what stops a
                   // confirm of an impact the user has not seen.
-                  disabled={phase.kind !== 'confirm' || del.isPending}
-                  {...destructiveAction('gap-2')}
+                  disabled={phase.kind !== "confirm" || del.isPending}
+                  {...destructiveAction("gap-2")}
                   aria-label={`${computerCopy.deleteComputer}: ${label}`}
                 >
-                  {del.isPending || phase.kind === 'loading' ? (
+                  {del.isPending || phase.kind === "loading" ? (
                     <Loader2 className="size-3.5 animate-spin" />
                   ) : (
                     <Trash2 className="size-3.5" />
@@ -827,7 +827,7 @@ function ProxySection({
   availability,
 }: {
   hostId: string;
-  availability: HostStatusResponse['availability'];
+  availability: HostStatusResponse["availability"];
 }): JSX.Element {
   // Proxy config is host-local truth: the backend can only read/write it by
   // dispatching to a *live* daemon, so the section is editable strictly on
@@ -835,10 +835,10 @@ function ProxySection({
   // user-managed computer edits its own proxy just fine while online). When
   // offline, read and write are both unavailable, so we collapse to a single
   // short hint rather than showing a stale/locked form.
-  const online = availability === 'available';
+  const online = availability === "available";
   const query = useHostProxyConfigQuery(hostId, { enabled: online });
   const saveMutation = useSaveHostProxyConfigMutation(hostId);
-  const [proxyUrl, setProxyUrl] = useState('');
+  const [proxyUrl, setProxyUrl] = useState("");
   const [proxyRuntimes, setProxyRuntimes] = useState<Set<RuntimeKind>>(() => new Set());
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -849,7 +849,7 @@ function ProxySection({
   // writer today, but the snapshot is shared so we still react to it).
   useEffect(() => {
     if (!query.data) return;
-    setProxyUrl(query.data.proxy_url ?? '');
+    setProxyUrl(query.data.proxy_url ?? "");
     setProxyRuntimes(new Set(query.data.proxy_runtimes));
     setError(null);
     setSaved(false);
@@ -903,7 +903,7 @@ function ProxySection({
         setError(
           err instanceof Error && err.message
             ? `Could not save proxy settings. (${err.message})`
-            : 'Could not save proxy settings. Please try again.',
+            : "Could not save proxy settings. Please try again.",
         );
       }
     }
@@ -930,7 +930,7 @@ function ProxySection({
         ) : (
           <Banner tone="error">
             Could not load proxy settings.
-            {query.error instanceof Error ? ` (${query.error.message})` : ''}
+            {query.error instanceof Error ? ` (${query.error.message})` : ""}
           </Banner>
         )
       ) : (
@@ -971,11 +971,11 @@ function ProxySection({
                   setProxyRuntimes(allChecked ? new Set() : new Set(PROXY_RUNTIMES));
                 }}
               >
-                {allChecked ? 'Clear all' : 'Select all'}
+                {allChecked ? "Clear all" : "Select all"}
               </button>
             </div>
 
-            <div className={cn('grid gap-2 sm:grid-cols-2', !proxyEnabled && 'opacity-55')}>
+            <div className={cn("grid gap-2 sm:grid-cols-2", !proxyEnabled && "opacity-55")}>
               {PROXY_RUNTIMES.map((kind) => {
                 const checked = proxyRuntimes.has(kind);
                 return (
@@ -994,11 +994,11 @@ function ProxySection({
                     data-runtime-tile
                     data-checked={checked || undefined}
                     className={cn(
-                      'flex min-w-0 items-center gap-3 rounded-[var(--control-radius)] border px-3 py-2 transition-colors',
-                      proxyEnabled ? 'cursor-pointer' : 'cursor-not-allowed',
+                      "flex min-w-0 items-center gap-3 rounded-[var(--control-radius)] border px-3 py-2 transition-colors",
+                      proxyEnabled ? "cursor-pointer" : "cursor-not-allowed",
                       checked
-                        ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))]'
-                        : 'border-border-subtle bg-bg-floating hover:bg-[var(--bg-option-hover)]',
+                        ? "border-accent bg-[var(--bg-row-selected,var(--bg-selected))]"
+                        : "border-border-subtle bg-bg-floating hover:bg-[var(--bg-option-hover)]",
                     )}
                   >
                     <input
@@ -1012,10 +1012,10 @@ function ProxySection({
                       data-runtime-tile-check
                       data-checked={checked || undefined}
                       className={cn(
-                        'flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border',
+                        "flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border",
                         checked
-                          ? 'border-accent bg-accent text-text-on-accent'
-                          : 'border-border-subtle bg-bg-floating text-transparent',
+                          ? "border-accent bg-accent text-text-on-accent"
+                          : "border-border-subtle bg-bg-floating text-transparent",
                       )}
                       aria-hidden
                     >
@@ -1051,13 +1051,13 @@ function ProxySection({
                 </span>
               ) : null}
             </div>
-            <Button type="submit" disabled={saving || settingsLoading} {...primaryAction('gap-2')}>
+            <Button type="submit" disabled={saving || settingsLoading} {...primaryAction("gap-2")}>
               {saving ? (
                 <Loader2 className="size-3.5 animate-spin" />
               ) : (
                 <Save className="size-3.5" />
               )}
-              {saving ? 'Saving...' : 'Save settings'}
+              {saving ? "Saving..." : "Save settings"}
             </Button>
           </div>
         </form>
@@ -1133,7 +1133,7 @@ function HostHero({
             aria-label="Refresh host status"
             title="Refresh"
           >
-            <RefreshCw className={cn('size-[15px]', refreshing && 'animate-spin')} />
+            <RefreshCw className={cn("size-[15px]", refreshing && "animate-spin")} />
           </Button>
         </div>
         {/* Meta line: stable `host.name` (mono) ONLY when the user has
@@ -1192,7 +1192,7 @@ function StatusChip({ label, tone }: { label: string; tone: HostStatusTone }): J
     >
       <span
         data-status-pip
-        className={cn('size-1.5 rounded-[var(--pill-radius)]', TONE_DOT_CLASS[tone])}
+        className={cn("size-1.5 rounded-[var(--pill-radius)]", TONE_DOT_CLASS[tone])}
         aria-hidden
       />
       {label}
@@ -1223,7 +1223,7 @@ function ProvenanceChip(): JSX.Element {
 function SystemSection({
   snapshot,
 }: {
-  snapshot: Extract<HostStatusResponse, { availability: 'available' }>['snapshot'];
+  snapshot: Extract<HostStatusResponse, { availability: "available" }>["snapshot"];
 }): JSX.Element {
   return (
     <HostSection title="System">
@@ -1317,7 +1317,7 @@ function AdmissionFailureNotice({
 function OfflineSection({
   status,
 }: {
-  status: Exclude<HostStatusResponse, { availability: 'available' }>;
+  status: Exclude<HostStatusResponse, { availability: "available" }>;
 }): JSX.Element {
   const view = describeHostStatus(status);
   // No generic "will appear when the computer is back online" fallback:
@@ -1377,8 +1377,8 @@ function RegisteredAgentsSection({
         <ul className="flex flex-col gap-2" aria-label="Agents on this machine">
           {agents.map((agent) => {
             const live = liveOnlineByHost.get(agent.agent_id);
-            const online: 'online' | 'offline' =
-              live === undefined ? agent.online : live ? 'online' : 'offline';
+            const online: "online" | "offline" =
+              live === undefined ? agent.online : live ? "online" : "offline";
             return (
               <AgentCard
                 key={agent.agent_id}
@@ -1474,7 +1474,7 @@ function AgentCard({
   onOpen,
 }: {
   agent: AgentOnHostDto;
-  online: 'online' | 'offline';
+  online: "online" | "offline";
   avatarObjectUrl: string | null;
   onOpen: () => void;
 }): JSX.Element {
@@ -1529,22 +1529,22 @@ function AgentCard({
  * stay quiet on hover/sweep and the green dot does the at-a-glance
  * signaling (shiki dogfood `CEq57Kisu3w2d-Pl`: "色彩使用注意主题搭配").
  */
-function AgentStatusPip({ online }: { online: 'online' | 'offline' }): JSX.Element {
+function AgentStatusPip({ online }: { online: "online" | "offline" }): JSX.Element {
   return (
     <span
       role="status"
-      aria-label={online === 'online' ? 'Online' : 'Offline'}
+      aria-label={online === "online" ? "Online" : "Offline"}
       className="inline-flex items-center gap-1.5 text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-muted"
     >
       <span
         data-status-pip
         className={cn(
-          'size-1.5 rounded-[var(--pill-radius)]',
-          online === 'online' ? 'bg-success' : 'bg-text-muted/40',
+          "size-1.5 rounded-[var(--pill-radius)]",
+          online === "online" ? "bg-success" : "bg-text-muted/40",
         )}
         aria-hidden
       />
-      {online === 'online' ? 'Online' : 'Offline'}
+      {online === "online" ? "Online" : "Offline"}
     </span>
   );
 }
@@ -1563,7 +1563,7 @@ function SectionSkeleton({ label }: { label: string }): JSX.Element {
 function Banner({ tone, children }: { tone: HostStatusTone; children: ReactNode }): JSX.Element {
   return (
     <div
-      className={cn('border bg-bg-floating px-3 py-2 text-sm', TONE_BANNER_CLASS[tone])}
+      className={cn("border bg-bg-floating px-3 py-2 text-sm", TONE_BANNER_CLASS[tone])}
       role="status"
     >
       {children}

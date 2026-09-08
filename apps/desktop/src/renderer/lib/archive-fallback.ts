@@ -30,11 +30,11 @@ export function pickFallbackAfterArchive(
   activeTopLevel: readonly { id: string }[],
   archivedId: string,
 ): string | null {
-  const idx = activeTopLevel.findIndex(c => c.id === archivedId);
+  const idx = activeTopLevel.findIndex((c) => c.id === archivedId);
   if (idx === -1) {
     // The archived channel isn't in the active top-level list (already
     // gone, or not top-level) — just pick the first remaining active one.
-    return activeTopLevel.find(c => c.id !== archivedId)?.id ?? null;
+    return activeTopLevel.find((c) => c.id !== archivedId)?.id ?? null;
   }
   const next = activeTopLevel[idx + 1];
   if (next) return next.id;
@@ -64,5 +64,5 @@ export function pickDefaultChannel(
   activeTopLevel: readonly { id: string }[],
   excludeId: string | null,
 ): string | null {
-  return activeTopLevel.find(c => c.id !== excludeId)?.id ?? null;
+  return activeTopLevel.find((c) => c.id !== excludeId)?.id ?? null;
 }

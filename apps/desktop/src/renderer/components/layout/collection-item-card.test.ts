@@ -1,9 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
-import { COLLECTION_CARD_CLASS, CollectionItemCard } from './collection-item-card';
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import { COLLECTION_CARD_CLASS, CollectionItemCard } from "./collection-item-card";
 
 /**
  * Invariant: every side-panel "collection item" card — Search, Saved, Archived,
@@ -21,14 +21,14 @@ import { COLLECTION_CARD_CLASS, CollectionItemCard } from './collection-item-car
  */
 
 function readSource(rel: string): string {
-  return readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+  return readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 }
 
 /** Strip `//` line comments and `/* *​/` block comments (covers JSX `{/* *​/}`
  *  and CSS comments) so a hook NAME mentioned in prose never trips the fences —
  *  only live code counts. */
 function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 }
 
 /** The bare shell marker as a JSX attribute / CSS selector — `-icon` and other
@@ -41,53 +41,53 @@ const BARE_MARKER = /data-collection-card(?![-\w])/g;
 const RETIRED_HOOK = /data-(?:list-row|thread-row|attachment-row)(?![-\w])/g;
 
 const CONSUMERS = [
-  'SearchPanel.tsx',
-  'SavedListView.tsx',
-  'ArchivedChannelsPanel.tsx',
-  'ActivityView.tsx',
-  'ChannelThreadsPanel.tsx',
-  'ChannelAttachmentsPanel.tsx',
+  "SearchPanel.tsx",
+  "SavedListView.tsx",
+  "ArchivedChannelsPanel.tsx",
+  "ActivityView.tsx",
+  "ChannelThreadsPanel.tsx",
+  "ChannelAttachmentsPanel.tsx",
 ] as const;
 
 const THEME_CSS = [
-  '../../styles/themes/forza6-components.css',
-  '../../styles/themes/slack-dark.css',
-  '../../styles/themes/studio-light.css',
+  "../../styles/themes/forza6-components.css",
+  "../../styles/themes/slack-dark.css",
+  "../../styles/themes/studio-light.css",
 ] as const;
 
-describe('CollectionItemCard — the shell owns the theme-paint marker', () => {
-  it('emits data-collection-card even when a consumer tries to override it', () => {
+describe("CollectionItemCard — the shell owns the theme-paint marker", () => {
+  it("emits data-collection-card even when a consumer tries to override it", () => {
     // Hostile passthrough: a consumer spreads a prop that would strip/rewrite
     // the marker. The shell spreads the marker LAST, so it always wins.
     const html = renderToStaticMarkup(
       React.createElement(
         CollectionItemCard as unknown as React.FC<Record<string, unknown>>,
-        { 'data-collection-card': 'HACKED', className: 'consumer-layout' },
-        'body',
+        { "data-collection-card": "HACKED", className: "consumer-layout" },
+        "body",
       ),
     );
-    expect(html).toContain('data-collection-card');
-    expect(html).not.toContain('HACKED');
+    expect(html).toContain("data-collection-card");
+    expect(html).not.toContain("HACKED");
     // frame + consumer class both present, children rendered
-    expect(html).toContain('consumer-layout');
-    expect(html).toContain('body');
+    expect(html).toContain("consumer-layout");
+    expect(html).toContain("body");
   });
 
-  it('honours `as` for the element type while still carrying the marker', () => {
+  it("honours `as` for the element type while still carrying the marker", () => {
     const html = renderToStaticMarkup(
       React.createElement(
         CollectionItemCard as unknown as React.FC<Record<string, unknown>>,
-        { as: 'button', type: 'button' },
-        'x',
+        { as: "button", type: "button" },
+        "x",
       ),
     );
     expect(html).toMatch(/^<button\b/);
-    expect(html).toContain('data-collection-card');
+    expect(html).toContain("data-collection-card");
   });
 });
 
-describe('collection-item-card — one shell, one marker, no drift', () => {
-  it('frame SSOT never falls back to a hardcoded framework default', () => {
+describe("collection-item-card — one shell, one marker, no drift", () => {
+  it("frame SSOT never falls back to a hardcoded framework default", () => {
     // The frame must ride the theme token clusters, never raw `rounded-md` /
     // bare `border` (1px). Failure mode if this regresses: the shell splits
     // across themes — forza6 (radius 0) vs warm/slack (radius 6px) render
@@ -98,8 +98,8 @@ describe('collection-item-card — one shell, one marker, no drift', () => {
     expect(COLLECTION_CARD_CLASS).not.toMatch(/(?:^|\s)border(?=\s|$)/);
   });
 
-  it('the shell is the SOLE hand-written source of the marker', () => {
-    const shell = stripComments(readSource('./collection-item-card.tsx'));
+  it("the shell is the SOLE hand-written source of the marker", () => {
+    const shell = stripComments(readSource("./collection-item-card.tsx"));
     expect(shell.match(BARE_MARKER) ?? []).toHaveLength(1);
   });
 
@@ -116,7 +116,7 @@ describe('collection-item-card — one shell, one marker, no drift', () => {
   }
 
   for (const css of THEME_CSS) {
-    it(`${css.split('/').pop()} has no retired hook selector left`, () => {
+    it(`${css.split("/").pop()} has no retired hook selector left`, () => {
       const src = stripComments(readSource(css));
       expect(src.match(RETIRED_HOOK) ?? []).toHaveLength(0);
     });

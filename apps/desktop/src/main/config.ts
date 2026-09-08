@@ -1,17 +1,14 @@
-import { promises as fs } from 'node:fs';
-import { dirname } from 'node:path';
-import { homedir } from 'node:os';
-import { randomUUID } from 'node:crypto';
-import {
-  ServerConfigSchema,
-  type ServerConfig,
-} from '@silverhand/shared';
+import { promises as fs } from "node:fs";
+import { dirname } from "node:path";
+import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { ServerConfigSchema, type ServerConfig } from "@silverhand/shared";
 import {
   appRootEnvOverride,
   defaultAppRoot,
   resolveDesktopAppPaths,
   type DesktopAppPaths,
-} from '@silverhand/shared/app-data-layout';
+} from "@silverhand/shared/app-data-layout";
 
 const PersistedServerConfigSchema = ServerConfigSchema.omit({
   auth_token: true,
@@ -40,13 +37,13 @@ export async function loadOrCreateServerConfig(): Promise<ServerConfig> {
   const filepath = desktopAppPaths().embeddedServer.serverConfig;
 
   try {
-    const raw = await fs.readFile(filepath, 'utf8');
+    const raw = await fs.readFile(filepath, "utf8");
     const parsed = ServerConfigSchema.parse(JSON.parse(raw));
     return parsed;
   } catch {
     const fresh: ServerConfig = {
-      mode: 'embedded',
-      url: 'http://127.0.0.1:0',
+      mode: "embedded",
+      url: "http://127.0.0.1:0",
       refresh_token: null,
       child_sessions: {
         max_concurrent_per_parent: null,
@@ -75,8 +72,8 @@ export async function writeServerConfig(config: ServerConfig): Promise<void> {
 
 /** Clear transient endpoint availability while retaining durable user configuration. */
 export async function invalidateEmbeddedServerUrl(snapshot?: ServerConfig): Promise<void> {
-  const config = snapshot ?? await loadOrCreateServerConfig();
-  await writeServerConfig({ ...config, url: 'http://127.0.0.1:0' });
+  const config = snapshot ?? (await loadOrCreateServerConfig());
+  await writeServerConfig({ ...config, url: "http://127.0.0.1:0" });
 }
 
 export function databasePath(): string {

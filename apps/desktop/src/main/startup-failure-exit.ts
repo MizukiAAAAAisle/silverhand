@@ -17,14 +17,13 @@
  * `ipcRenderer`, therefore no dependency on any IPC surface that may be
  * exactly what failed to come up.
  */
-import type { StartupFailureNotice } from './startup-failure.js';
+import type { StartupFailureNotice } from "./startup-failure.js";
 
-export const STARTUP_FAILURE_ACTION_ORIGIN =
-  'https://startup-failure.silverhand.invalid';
+export const STARTUP_FAILURE_ACTION_ORIGIN = "https://startup-failure.silverhand.invalid";
 export const REVEAL_LOGS_URL = `${STARTUP_FAILURE_ACTION_ORIGIN}/reveal-logs`;
 export const QUIT_URL = `${STARTUP_FAILURE_ACTION_ORIGIN}/quit`;
 export const STARTUP_FAILURE_EXIT_CODE = 1;
-export const STARTUP_FAILURE_TITLE = 'Silverhand could not start';
+export const STARTUP_FAILURE_TITLE = "Silverhand could not start";
 
 /**
  * Which build refused to start. Shown because this window is, in
@@ -50,10 +49,7 @@ export interface StartupFailureExitDeps {
    * resolves only once the document is actually on screen. MUST reject —
    * leaving no window behind — if the load fails or never settles.
    */
-  openWindow: (input: {
-    html: string;
-    onAction: (url: string) => void;
-  }) => Promise<void>;
+  openWindow: (input: { html: string; onAction: (url: string) => void }) => Promise<void>;
   /** Native, renderer-free last resort. */
   showErrorBox: (title: string, body: string) => void;
   revealLogs: (dir: string) => void;
@@ -61,18 +57,18 @@ export interface StartupFailureExitDeps {
 }
 
 function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, char => {
+  return value.replace(/[&<>"']/g, (char) => {
     switch (char) {
-      case '&':
-        return '&amp;';
-      case '<':
-        return '&lt;';
-      case '>':
-        return '&gt;';
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
       case '"':
-        return '&quot;';
+        return "&quot;";
       default:
-        return '&#39;';
+        return "&#39;";
     }
   });
 }
@@ -97,24 +93,20 @@ export function renderStartupFailureDocument(
   logsDir: string | null,
   build: StartupFailureBuild | null = null,
 ): string {
-  const detail = notice.detail
-    ? `<p class="detail">${escapeHtml(notice.detail)}</p>`
-    : '';
+  const detail = notice.detail ? `<p class="detail">${escapeHtml(notice.detail)}</p>` : "";
   const logs = logsDir
     ? `<section>
         <h2>Logs</h2>
         <p class="path">${escapeHtml(logsDir)}</p>
       </section>`
-    : '';
+    : "";
   const buildSection = build
     ? `<section>
         <h2>Build</h2>
         <p class="path">${escapeHtml(formatBuild(build))}</p>
       </section>`
-    : '';
-  const revealLogs = logsDir
-    ? `<a class="button" href="${REVEAL_LOGS_URL}">Reveal Logs</a>`
-    : '';
+    : "";
+  const revealLogs = logsDir ? `<a class="button" href="${REVEAL_LOGS_URL}">Reveal Logs</a>` : "";
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -231,7 +223,7 @@ export function renderStartupFailureErrorBox(
   if (notice.detail) lines.push(notice.detail);
   if (logsDir) lines.push(`Logs: ${logsDir}`);
   if (build) lines.push(`Build: ${formatBuild(build)}`);
-  return lines.join('\n\n');
+  return lines.join("\n\n");
 }
 
 /**

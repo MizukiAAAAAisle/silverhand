@@ -25,7 +25,7 @@
  * shared `ConversationRowLayout` — the same split-authority the tier itself exists
  * to prevent.
  */
-export type RowSelectionTier = 'primary' | 'none';
+export type RowSelectionTier = "primary" | "none";
 
 /**
  * A conversation row's tier: `primary` iff it is the open conversation. Keyed on the
@@ -38,6 +38,6 @@ export function conversationSelectionTier(
   selectedConversationId: string | null,
 ): RowSelectionTier {
   return selectedConversationId !== null && conversationId === selectedConversationId
-    ? 'primary'
-    : 'none';
+    ? "primary"
+    : "none";
 }

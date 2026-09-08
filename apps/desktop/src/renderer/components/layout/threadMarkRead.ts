@@ -1,9 +1,6 @@
-import type { MessageSeq } from '@silverhand/shared';
-import type { JumpPhase } from '@/features/channels/messageJumpPhase';
-import {
-  lastCommittedSeq,
-  type CachedMessage,
-} from '@/features/channels/pending-message';
+import type { MessageSeq } from "@silverhand/shared";
+import type { JumpPhase } from "@/features/channels/messageJumpPhase";
+import { lastCommittedSeq, type CachedMessage } from "@/features/channels/pending-message";
 
 /**
  * Pure freshness gate for thread mark-read (#task:1226 surface 4, §9).
@@ -39,9 +36,7 @@ export interface ThreadMarkReadGateInput {
   openedAt: number;
 }
 
-export function threadMarkReadSnapshot(
-  input: ThreadMarkReadGateInput,
-): MessageSeq | null {
+export function threadMarkReadSnapshot(input: ThreadMarkReadGateInput): MessageSeq | null {
   // Already marked for this open — do not re-fire (idempotent per open).
   if (input.alreadyMarkedForOpen) return null;
   // Wait for any in-flight fetch to settle before reading the head.
@@ -67,9 +62,7 @@ export function threadMarkReadSnapshot(
  * Pure so the clobber-prevention decision is locked by a unit test instead of
  * only living in component wiring.
  */
-export function threadOpenNeedsLatestRefetch(input: {
-  isJumpOpen: boolean;
-}): boolean {
+export function threadOpenNeedsLatestRefetch(input: { isJumpOpen: boolean }): boolean {
   return !input.isJumpOpen;
 }
 
@@ -130,7 +123,7 @@ export function threadClusterShowsLoader(input: {
   isLoading: boolean;
   jumpPhase: JumpPhase | null;
 }): boolean {
-  return input.isLoading || input.jumpPhase === 'priming';
+  return input.isLoading || input.jumpPhase === "priming";
 }
 
 /**
@@ -151,7 +144,7 @@ export function threadReplyRows<T extends { id: string }>(
   messages: readonly T[],
   rootMessageId: string,
 ): T[] {
-  return messages.filter(m => m.id !== rootMessageId);
+  return messages.filter((m) => m.id !== rootMessageId);
 }
 
 /**
@@ -228,19 +221,13 @@ export interface ThreadLiveMarkReadInput {
  * skip while a mark is in flight. Pure so the gate is unit-tested without React
  * render/scroll timing.
  */
-export function threadLiveMarkReadSeq(
-  input: ThreadLiveMarkReadInput,
-): MessageSeq | null {
+export function threadLiveMarkReadSeq(input: ThreadLiveMarkReadInput): MessageSeq | null {
   if (!input.tailVisible) return null;
   if (!input.documentVisible) return null;
   if (input.maxVisibleReplySeq === null) return null;
   // Same-stream (this thread) MessageSeq compare, guarded on explicit absence:
   // "nothing marked yet" (null) never blocks the first advance (#task:1267 B4).
-  if (
-    input.lastMarkedSeq !== null &&
-    input.maxVisibleReplySeq <= input.lastMarkedSeq
-  )
-    return null;
+  if (input.lastMarkedSeq !== null && input.maxVisibleReplySeq <= input.lastMarkedSeq) return null;
   return input.maxVisibleReplySeq;
 }
 
@@ -263,11 +250,8 @@ export interface ThreadTailVisibilityInput {
  * `scrollIntoView()` is clamped/no-op at an already-visible bottom. Read-state
  * must follow what the user can see, not that stale intent bit.
  */
-export function threadTailIsVisible(
-  input: ThreadTailVisibilityInput,
-): boolean {
+export function threadTailIsVisible(input: ThreadTailVisibilityInput): boolean {
   if (!input.streamAtTail) return false;
-  const remaining =
-    input.scrollHeight - input.scrollTop - input.clientHeight;
+  const remaining = input.scrollHeight - input.scrollTop - input.clientHeight;
   return remaining <= (input.tolerancePx ?? 20);
 }

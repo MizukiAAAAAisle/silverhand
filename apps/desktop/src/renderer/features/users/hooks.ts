@@ -1,15 +1,15 @@
-import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { apiPaths, type UsersResponse, type UserDto } from '@silverhand/shared';
-import { api } from '@/lib/api';
-import type { UserNameResolver } from '@/lib/current-user';
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { apiPaths, type UsersResponse, type UserDto } from "@silverhand/shared";
+import { api } from "@/lib/api";
+import type { UserNameResolver } from "@/lib/current-user";
 
 /** Query key of the global human directory. Exported so a mutation that
  *  changes a human's profile (`features/me/hooks.ts`) can invalidate the
  *  directory copy of it — `UserDto.display_name` / `avatar_url` are
  *  denormalized into this list, so writing only `['me']` leaves every
  *  directory-backed surface showing the old name or avatar. */
-export const usersKey = ['users'] as const;
+export const usersKey = ["users"] as const;
 const STALE_MS = 30 * 1000;
 const GC_MS = 5 * 60 * 1000;
 
@@ -32,7 +32,7 @@ export function useUsers(options?: { enabled?: boolean }) {
   return useQuery<UsersResponse, Error, UserDto[]>({
     queryKey: usersKey,
     queryFn: () => api<UsersResponse>(apiPaths.users),
-    select: res => res.users,
+    select: (res) => res.users,
     staleTime: STALE_MS,
     gcTime: GC_MS,
     enabled: options?.enabled ?? true,
@@ -73,8 +73,6 @@ export function useUsersById(): Map<string, UserDto> {
  * authors). This keeps the resolver contract self-contained — callers
  * never have to reach into the map themselves.
  */
-export function makeUserNameResolver(
-  usersById: Map<string, UserDto>,
-): UserNameResolver {
+export function makeUserNameResolver(usersById: Map<string, UserDto>): UserNameResolver {
   return (userId: string) => usersById.get(userId)?.display_name ?? null;
 }

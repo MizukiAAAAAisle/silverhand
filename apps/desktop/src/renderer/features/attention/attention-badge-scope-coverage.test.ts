@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
 
 // #task:1870 — the attention badge roll-up's MEMBERSHIP closure.
 //
@@ -29,7 +29,7 @@ import { describe, expect, it } from 'vitest';
 // approach as `realtime-ingestion-read-inert.test.ts`.
 
 function read(rel: string): string {
-  return readFileSync(new URL(rel, import.meta.url), 'utf8');
+  return readFileSync(new URL(rel, import.meta.url), "utf8");
 }
 
 /** Body of `declaration` up to the next top-level `export function`/`function`. */
@@ -43,51 +43,51 @@ function sliceFunctionBody(source: string, declaration: string): string {
   return end === -1 ? rest : rest.slice(0, end);
 }
 
-describe('attention badge membership closure: every viewer workspace scope stays subscribed', () => {
-  it('App mounts the foreign-workspace sync for ALL workspaces, unfiltered', () => {
+describe("attention badge membership closure: every viewer workspace scope stays subscribed", () => {
+  it("App mounts the foreign-workspace sync for ALL workspaces, unfiltered", () => {
     const app =
-      read('../conversation-shell/use-conversation-read-model.ts') +
-      read('../conversation-shell/use-conversation-invalidation.ts');
+      read("../conversation-shell/use-conversation-read-model.ts") +
+      read("../conversation-shell/use-conversation-invalidation.ts");
     // The id set is every workspace from the authoritative list — a `.filter(`
     // here would silently shrink the badge's live coverage.
-    expect(app).toContain('const visibleWorkspaceIds = useMemo(');
+    expect(app).toContain("const visibleWorkspaceIds = useMemo(");
     expect(app).toMatch(
       /const visibleWorkspaceIds = useMemo\(\s*\(\) => workspaces\.map\(\(workspace\) => workspace\.id\),/,
     );
-    expect(app).toContain('workspaceIds: visibleWorkspaceIds,');
+    expect(app).toContain("workspaceIds: visibleWorkspaceIds,");
   });
 
-  it('the foreign-workspace sync subscribes every id (the selected skip is handler-only)', () => {
-    const src = read('../channels/useViewerChannelRemovalSync.ts');
-    const body = sliceFunctionBody(src, 'export function useForeignWorkspaceChannelRemovalSync');
+  it("the foreign-workspace sync subscribes every id (the selected skip is handler-only)", () => {
+    const src = read("../channels/useViewerChannelRemovalSync.ts");
+    const body = sliceFunctionBody(src, "export function useForeignWorkspaceChannelRemovalSync");
     // `ids` is the whole input set, and the subscribe loop maps over it directly.
     expect(body).toContain("const ids = scopeIdsKey ? scopeIdsKey.split(',') : [];");
-    const subscribeAt = body.indexOf('ids.map(id => subscribeWsScope(');
+    const subscribeAt = body.indexOf("ids.map(id => subscribeWsScope(");
     expect(
       subscribeAt,
-      'the per-workspace scope subscription loop was renamed or narrowed — the ' +
-        'attention badge depends on it holding EVERY workspace:<id> scope',
+      "the per-workspace scope subscription loop was renamed or narrowed — the " +
+        "attention badge depends on it holding EVERY workspace:<id> scope",
     ).toBeGreaterThan(-1);
     // No id is dropped on the way in.
-    expect(body.slice(0, subscribeAt)).not.toContain('ids.filter(');
+    expect(body.slice(0, subscribeAt)).not.toContain("ids.filter(");
     // The selected-workspace skip must stay DOWNSTREAM of the subscribe loop: it
     // exists so the two reconcilers never race for the pane, NOT to narrow the
     // subscription set. Gating the loop on it would drop the selected
     // workspace's frames from every other global listener too.
-    const skipAt = body.indexOf('workspaceId === selectedRef.current');
-    expect(skipAt, 'the selected-workspace reconcile skip was renamed').toBeGreaterThan(-1);
+    const skipAt = body.indexOf("workspaceId === selectedRef.current");
+    expect(skipAt, "the selected-workspace reconcile skip was renamed").toBeGreaterThan(-1);
     expect(
       skipAt,
-      'the selected-workspace skip moved above the subscribe loop — that narrows ' +
-        'the subscribed scopes, not just the reconcile',
+      "the selected-workspace skip moved above the subscribe loop — that narrows " +
+        "the subscribed scopes, not just the reconcile",
     ).toBeGreaterThan(subscribeAt);
   });
 
-  it('the attention listener handles workspace_channels_changed on ANY scope', () => {
-    const src = read('./hooks.ts');
-    const body = sliceFunctionBody(src, 'export function applyAttentionFrame');
+  it("the attention listener handles workspace_channels_changed on ANY scope", () => {
+    const src = read("./hooks.ts");
+    const body = sliceFunctionBody(src, "export function applyAttentionFrame");
     const membershipArm = body.indexOf("frame.kind === 'workspace_channels_changed'");
-    const viewerGate = body.indexOf('if (!isViewerScope) return;');
+    const viewerGate = body.indexOf("if (!isViewerScope) return;");
     expect(membershipArm).toBeGreaterThan(-1);
     expect(viewerGate).toBeGreaterThan(-1);
     // The viewer-scope gate belongs to the viewer-scoped kinds BELOW it. Hoisting
@@ -96,8 +96,8 @@ describe('attention badge membership closure: every viewer workspace scope stays
     // viewer-scoped.
     expect(
       membershipArm,
-      'the viewer-scope gate now precedes the workspace_channels_changed arm — ' +
-        'membership changes would no longer settle the badge in ANY workspace',
+      "the viewer-scope gate now precedes the workspace_channels_changed arm — " +
+        "membership changes would no longer settle the badge in ANY workspace",
     ).toBeLessThan(viewerGate);
   });
 });

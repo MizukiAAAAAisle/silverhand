@@ -7,8 +7,8 @@ import type {
   ServerInfo,
   TlsErrorCode,
   UserDto,
-} from '@silverhand/shared';
-import type { LocalHostWsAttachment } from '../backend-info-contract.js';
+} from "@silverhand/shared";
+import type { LocalHostWsAttachment } from "../backend-info-contract.js";
 
 /**
  * #task:1630 — the daemon's outbound-WS attachment as seen from THIS
@@ -25,22 +25,22 @@ export type { LocalHostWsAttachment };
 
 export interface BackendInfo {
   url: string;
-  mode: 'embedded' | 'remote';
+  mode: "embedded" | "remote";
   /** Local comparison between the protocol compiled into this app's bundled
    * daemon and the exact outbound protocol accepted by the connected server. */
   outbound_protocol_compatibility:
     | {
-        status: 'compatible' | 'app_update_required' | 'server_update_required';
+        status: "compatible" | "app_update_required" | "server_update_required";
         app_protocol_version: number;
         server_protocol_version: number;
       }
     | {
-        status: 'unknown';
+        status: "unknown";
         app_protocol_version: number;
         server_protocol_version: null;
       };
   local_host_id: string | null;
-  local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
+  local_host_status: "unclaimed" | "claimed" | "revoked" | "error" | "failed";
   /**
    * D3.a Commit 4 — the daemon outbound WS attachment for
    * `local_host_id`, as reported by the backend's
@@ -81,19 +81,19 @@ export interface BackendInfo {
 }
 
 export type DesktopAuthState =
-  | { status: 'authenticated'; signup_enabled: boolean; user: UserDto }
-  | { status: 'unauthenticated'; signup_enabled: boolean }
+  | { status: "authenticated"; signup_enabled: boolean; user: UserDto }
+  | { status: "unauthenticated"; signup_enabled: boolean }
   // D4.a Commit 5d-fixup (Cindy P1-2): typed backend-unreachable arm.
   // No `signup_enabled` — unknown when the server is unreachable.
-  | { status: 'backend_unreachable'; server_url: string; message: string }
+  | { status: "backend_unreachable"; server_url: string; message: string }
   // #task:1761 — desktop↔server API epoch hard gate arms; see main/index.ts.
   | {
-      status: 'app_update_required';
+      status: "app_update_required";
       server_api_epoch: number;
       minimum_client_epoch: number;
     }
   | {
-      status: 'server_update_required';
+      status: "server_update_required";
       server_api_epoch: number;
       desktop_api_epoch: number;
     };
@@ -107,7 +107,7 @@ export interface BackendProxyRequest {
   method?: string;
   headers?: Record<string, string>;
   bodyText?: string;
-  responseType?: 'text' | 'arrayBuffer';
+  responseType?: "text" | "arrayBuffer";
 }
 
 export interface BackendProxyResponse {
@@ -146,15 +146,15 @@ export type DesktopHostProxyConfigResult =
   | {
       ok: false;
       code:
-        | 'not_local_host'
-        | 'unauthorized'
-        | 'host_not_found'
-        | 'host_not_active'
-        | 'host_revoked'
-        | 'computer_offline'
-        | 'daemon_unavailable'
-        | 'daemon_error'
-        | 'invalid_input';
+        | "not_local_host"
+        | "unauthorized"
+        | "host_not_found"
+        | "host_not_active"
+        | "host_revoked"
+        | "computer_offline"
+        | "daemon_unavailable"
+        | "daemon_error"
+        | "invalid_input";
       message?: string;
     };
 
@@ -164,25 +164,25 @@ export type DesktopHostMutationResult =
   | {
       ok: true;
       host: HostDto;
-      local_host_id: BackendInfo['local_host_id'];
-      local_host_status: BackendInfo['local_host_status'];
-      local_host_ws_attachment: BackendInfo['local_host_ws_attachment'];
+      local_host_id: BackendInfo["local_host_id"];
+      local_host_status: BackendInfo["local_host_status"];
+      local_host_ws_attachment: BackendInfo["local_host_ws_attachment"];
       /** D3.c Commit 4 — see `preload/index.ts` for the rationale.
        *  Built from `...snapshotLocalHostInfo()` so the typed surface
        *  must include it; renderer post-mutation refresh keys off this
        *  same field via `useBackendInfoSnapshot`. */
-      local_host_server_url: BackendInfo['local_host_server_url'];
+      local_host_server_url: BackendInfo["local_host_server_url"];
     }
   | {
       ok: false;
       code:
-        | 'unauthorized'
-        | 'not_current_host'
-        | 'host_not_found'
-        | 'host_revoked'
-        | 'kind_not_supported'
-        | 'invalid_response'
-        | 'network_error';
+        | "unauthorized"
+        | "not_current_host"
+        | "host_not_found"
+        | "host_revoked"
+        | "kind_not_supported"
+        | "invalid_response"
+        | "network_error";
       message?: string;
     };
 
@@ -213,25 +213,25 @@ export type DesktopHostMutationResult =
  * directly so the UI can't accidentally collapse the two success arms.
  */
 export type DesktopSaveServerUrlResult =
-  | { ok: true; kind: 'reloaded'; elapsedMs: number; attachedAt: number }
-  | { ok: true; kind: 'unchanged' }
-  | { ok: true; kind: 'connectivity_unverified'; elapsedMs: number }
-  | { ok: true; kind: 'reloaded_remote' }
+  | { ok: true; kind: "reloaded"; elapsedMs: number; attachedAt: number }
+  | { ok: true; kind: "unchanged" }
+  | { ok: true; kind: "connectivity_unverified"; elapsedMs: number }
+  | { ok: true; kind: "reloaded_remote" }
   | {
       ok: false;
-      kind: 'classify_rejected';
+      kind: "classify_rejected";
       reason:
-        | 'malformed_url'
-        | 'unsupported_scheme'
+        | "malformed_url"
+        | "unsupported_scheme"
         // D4.a Commit 2 fixup — server connection profile is
         // origin-only. See `packages/shared/src/server-url.ts`.
-        | 'non_origin_url'
+        | "non_origin_url"
         // D4.a Commit 1 — replaces D3's `non_loopback_host`. Surfaced
         // when the user types a non-loopback http URL without the dev
         // env flag (`SILVERHAND_ALLOW_INSECURE_REMOTE=1`). The
         // user-facing message points at the two valid escape routes
         // (use https, or set the flag).
-        | 'insecure_remote_http_disallowed'
+        | "insecure_remote_http_disallowed"
         // D4.a Commit 1 review (Cindy 2026-05-28) — disguised
         // loopback form (`http://0x7f000001`, `http://127.000.000.001`,
         // `http://[0:0:0:0:0:0:0:1]`, etc.) where the raw authority
@@ -240,17 +240,17 @@ export type DesktopSaveServerUrlResult =
         // regardless of scheme or dev flag — keeps the visible URL
         // form aligned with the host the daemon would actually
         // connect to.
-        | 'obfuscated_loopback_disallowed';
+        | "obfuscated_loopback_disallowed";
       message: string;
     }
-  | { ok: false; kind: 'config_write_failed'; message: string }
+  | { ok: false; kind: "config_write_failed"; message: string }
   | {
       ok: false;
-      kind: 'reload_rejected';
-      reason: 'not_attached' | 'config_unreadable' | 'parse_failed' | 'invalid_server_url';
+      kind: "reload_rejected";
+      reason: "not_attached" | "config_unreadable" | "parse_failed" | "invalid_server_url";
       message: string;
     }
-  | { ok: false; kind: 'no_attachment_controller'; message: string };
+  | { ok: false; kind: "no_attachment_controller"; message: string };
 
 /**
  * D4.a Commit 2 — Setup Wizard / Settings server-connection-profile
@@ -270,7 +270,7 @@ export type DesktopSaveServerUrlResult =
 export type DesktopProbeServerInfoResult =
   | {
       ok: true;
-      kind: 'system_ca_verified' | 'loopback_ok' | 'insecure_dev_remote';
+      kind: "system_ca_verified" | "loopback_ok" | "insecure_dev_remote";
       info: ServerInfo;
       /**
        * D4.a Commit 5 — canonical origin form of the URL the user
@@ -284,30 +284,30 @@ export type DesktopProbeServerInfoResult =
     }
   | {
       ok: false;
-      kind: 'classify_rejected';
+      kind: "classify_rejected";
       // The discriminator strings mirror `ServerUrlRejectionReason`
       // in `@silverhand/shared`. Kept inline so the preload doesn't
       // depend on a separate type re-export.
       reason:
-        | 'malformed_url'
-        | 'unsupported_scheme'
+        | "malformed_url"
+        | "unsupported_scheme"
         // D4.a Commit 2 fixup — origin-only invariant. See shared
         // `server-url.ts` for the contract rationale.
-        | 'non_origin_url'
-        | 'insecure_remote_http_disallowed'
-        | 'obfuscated_loopback_disallowed';
+        | "non_origin_url"
+        | "insecure_remote_http_disallowed"
+        | "obfuscated_loopback_disallowed";
       message: string;
     }
-  | { ok: false; kind: 'tls_failed'; code: TlsErrorCode; message: string }
+  | { ok: false; kind: "tls_failed"; code: TlsErrorCode; message: string }
   | {
       ok: false;
-      kind: 'http_failed';
+      kind: "http_failed";
       status: number;
       statusText: string;
       bodyText: string;
     }
-  | { ok: false; kind: 'network_failed'; message: string }
-  | { ok: false; kind: 'invalid_response'; message: string };
+  | { ok: false; kind: "network_failed"; message: string }
+  | { ok: false; kind: "invalid_response"; message: string };
 
 export type DesktopProfileSaveWithTestResult =
   | {
@@ -334,7 +334,7 @@ export type DesktopProfileSaveWithTestResult =
     }
   | {
       ok: false;
-      phase: 'test';
+      phase: "test";
       test: DesktopProbeServerInfoResult & { ok: false };
     }
   | {
@@ -342,15 +342,15 @@ export type DesktopProfileSaveWithTestResult =
       // but the main-side commit guard refused the URL because
       // remote-mode bootstrap is not yet wired (Commit 5 lifts this).
       ok: false;
-      phase: 'commit_guard';
-      reason: 'remote_backend_not_yet_supported';
+      phase: "commit_guard";
+      reason: "remote_backend_not_yet_supported";
       message: string;
       test: DesktopProbeServerInfoResult & { ok: true };
     }
   | {
       ok: false;
-      phase: 'write';
-      reason: 'write_failed';
+      phase: "write";
+      reason: "write_failed";
       detail?: string;
     };
 
@@ -366,33 +366,33 @@ export type DesktopProfileSaveWithTestResult =
  */
 export type DesktopServerProfileApplyOutcome =
   | {
-      kind: 'fully_applied';
+      kind: "fully_applied";
       profileVersion: number;
-      reloadKind: 'reloaded' | 'unchanged' | 'connectivity_unverified';
+      reloadKind: "reloaded" | "unchanged" | "connectivity_unverified";
       elapsedMs: number;
     }
   | {
-      kind: 'no_op_no_host_claim';
+      kind: "no_op_no_host_claim";
       profileVersion: number;
     }
   | {
-      kind: 'partial_apply_pending';
+      kind: "partial_apply_pending";
       profileVersion: number;
       reason:
-        | 'config_write_failed'
-        | 'reload_rejected'
-        | 'no_attachment_controller'
+        | "config_write_failed"
+        | "reload_rejected"
+        | "no_attachment_controller"
         // D4.a Commit 5c-2 fixup (Cindy P1) — claimed host but no
         // token in daemon-config (missing / corrupt). Distinct from
         // `no_op_no_host_claim` (genuine pre-auth) because the
         // profile commit upstream landed and the daemon is now on
         // the previous-generation config.
-        | 'host_token_missing';
+        | "host_token_missing";
       reloadRejectionReason:
-        | 'not_attached'
-        | 'config_unreadable'
-        | 'parse_failed'
-        | 'invalid_server_url'
+        | "not_attached"
+        | "config_unreadable"
+        | "parse_failed"
+        | "invalid_server_url"
         | null;
       detail: string;
     };
@@ -411,31 +411,31 @@ export type DesktopServerProfileApplyOutcome =
  * concept, not a backend-observable fact).
  */
 export type DesktopPartialApplyState =
-  | { kind: 'fully_applied' }
-  | { kind: 'no_profile' }
+  | { kind: "fully_applied" }
+  | { kind: "no_profile" }
   | {
-      kind: 'unusable_profile';
+      kind: "unusable_profile";
       // D4.a Commit 5c-3 (Cindy 5c-1 review note) — profile file
       // exists but the storage layer could not return it. Distinct
       // from `no_profile` (file absent) — renderer surfaces "reset
       // profile" affordance, not "configure backend".
-      reason: 'parse_failed';
+      reason: "parse_failed";
       detail: string;
       lastReadAt: number;
     }
   | {
-      kind: 'partial_apply_pending';
+      kind: "partial_apply_pending";
       profileVersion: number;
       reason:
-        | 'config_write_failed'
-        | 'reload_rejected'
-        | 'no_attachment_controller'
-        | 'host_token_missing';
+        | "config_write_failed"
+        | "reload_rejected"
+        | "no_attachment_controller"
+        | "host_token_missing";
       reloadRejectionReason:
-        | 'not_attached'
-        | 'config_unreadable'
-        | 'parse_failed'
-        | 'invalid_server_url'
+        | "not_attached"
+        | "config_unreadable"
+        | "parse_failed"
+        | "invalid_server_url"
         | null;
       detail: string;
       lastAttemptAt: number;
@@ -455,8 +455,8 @@ export type DesktopPartialApplyRetryResult =
       outcome: DesktopServerProfileApplyOutcome;
       state: DesktopPartialApplyState;
     }
-  | { ok: false; reason: 'no_profile' }
-  | { ok: false; reason: 'profile_unreadable'; detail: string };
+  | { ok: false; reason: "no_profile" }
+  | { ok: false; reason: "profile_unreadable"; detail: string };
 
 /**
  * D4.a Commit 2 — `profile:clear` result. Idempotent; reports whether
@@ -464,7 +464,7 @@ export type DesktopPartialApplyRetryResult =
  */
 export type DesktopClearProfileResult =
   | { ok: true; cleared: boolean }
-  | { ok: false; reason: 'unlink_failed'; detail: string };
+  | { ok: false; reason: "unlink_failed"; detail: string };
 
 export interface DesktopBuildConfig {
   remote_only: boolean;
@@ -473,17 +473,17 @@ export interface DesktopBuildConfig {
 }
 
 export type DesktopEventWsDiagnosticKind =
-  | 'socket_open'
-  | 'socket_close'
-  | 'authenticated'
-  | 'subscribed'
-  | 'message_event'
-  | 'live_gap'
-  | 'resume_sent'
-  | 'snapshot_required'
-  | 'orphan_frame'
-  | 'markSatisfied_no_floor'
-  | 'satisfied_pending_overflow';
+  | "socket_open"
+  | "socket_close"
+  | "authenticated"
+  | "subscribed"
+  | "message_event"
+  | "live_gap"
+  | "resume_sent"
+  | "snapshot_required"
+  | "orphan_frame"
+  | "markSatisfied_no_floor"
+  | "satisfied_pending_overflow";
 
 export interface DesktopEventWsDiagnostic {
   kind: DesktopEventWsDiagnosticKind;
@@ -617,7 +617,7 @@ declare global {
       /** Renderer's authoritative answer to one `onContextualClose` request.
        *  `outcome` mirrors `ContextualCloseOutcome` in the renderer's
        *  `features/app-shell/keyboard-shortcuts.ts` (the SSOT). */
-      respondContextualClose(reqId: string, outcome: 'closed-panel' | 'background-app'): void;
+      respondContextualClose(reqId: string, outcome: "closed-panel" | "background-app"): void;
       savePngExport(input: {
         pngBytes: Uint8Array;
         suggestedName: string;

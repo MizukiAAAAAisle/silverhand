@@ -1,6 +1,6 @@
 export interface RemoteBackendHandle {
   /** Discriminator — pairs with the `embedded` arm in the union. */
-  readonly kind: 'remote';
+  readonly kind: "remote";
   /**
    * Canonical origin URL of the remote backend (already classified
    * + origin-normalized by `decideBackendBootMode` / the writer
@@ -66,11 +66,9 @@ export interface RemoteBackendHandleInput {
  *     handle is usable (e.g. a `/readyz` ping, a TLS info snapshot)
  *     can live behind this constructor without changing the call site.
  */
-export function buildRemoteBackendHandle(
-  input: RemoteBackendHandleInput,
-): RemoteBackendHandle {
+export function buildRemoteBackendHandle(input: RemoteBackendHandleInput): RemoteBackendHandle {
   return {
-    kind: 'remote',
+    kind: "remote",
     url: input.serverUrl,
     insecure: input.insecure,
     close: () => Promise.resolve(),

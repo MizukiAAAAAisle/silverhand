@@ -1,25 +1,25 @@
-import { useMemo } from 'react';
-import type { AgentDto, UserDto } from '@silverhand/shared';
-import { useAgents } from '@/features/agents/hooks';
-import { useUsers, makeUserNameResolver } from '@/features/users/hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
+import { useMemo } from "react";
+import type { AgentDto, UserDto } from "@silverhand/shared";
+import { useAgents } from "@/features/agents/hooks";
+import { useUsers, makeUserNameResolver } from "@/features/users/hooks";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import {
   useWorkspaces,
   useChannelsForWorkspace,
   useArchivedChannelsForWorkspace,
   type ChannelListItem,
-} from '@/features/workspaces/hooks';
-import { useConversationMembers } from '@/features/conversations/useConversationMembers';
+} from "@/features/workspaces/hooks";
+import { useConversationMembers } from "@/features/conversations/useConversationMembers";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useViewerAvatarObjectUrl,
   useViewerUser,
-} from '@/features/me/hooks';
-import type { UserNameResolver } from '@/lib/current-user';
+} from "@/features/me/hooks";
+import type { UserNameResolver } from "@/lib/current-user";
 
-import type { ChannelReference } from './ChannelRef';
+import type { ChannelReference } from "./ChannelRef";
 
 /**
  * Single source of truth for the lookup maps every message-rendering
@@ -87,11 +87,8 @@ export function useMessageRenderContext(
   // the terminal state for a workspace-less conversation (#task:2035): a
   // `direct_pair` has no channel namespace, so `#name` refs there render as inert
   // text, exactly as an unresolvable one does.
-  const workspaceResolved = workspaces.some(w => w.id === workspaceId);
-  const { data: liveChannels = [] } = useChannelsForWorkspace(
-    workspaceId,
-    workspaceResolved,
-  );
+  const workspaceResolved = workspaces.some((w) => w.id === workspaceId);
+  const { data: liveChannels = [] } = useChannelsForWorkspace(workspaceId, workspaceResolved);
   const { data: archivedChannels = [] } = useArchivedChannelsForWorkspace(
     workspaceId,
     workspaceResolved,
@@ -100,7 +97,8 @@ export function useMessageRenderContext(
   const viewer =
     rawViewer &&
     !isRegistrationRequired(rawViewer) &&
-    !isBackendUnreachable(rawViewer) && !isUpdateRequired(rawViewer)
+    !isBackendUnreachable(rawViewer) &&
+    !isUpdateRequired(rawViewer)
       ? rawViewer
       : undefined;
   const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
@@ -118,9 +116,7 @@ export function useMessageRenderContext(
   // rows, "rosterless by construction"). So a pair resolves @human chips the
   // same way a non-member does — it doesn't — and nothing waits on it
   // (#task:2035).
-  const conversationMembers = useConversationMembers(
-    membersEnabled ? conversationId : null,
-  );
+  const conversationMembers = useConversationMembers(membersEnabled ? conversationId : null);
 
   const { agentsById, agentsByName } = useMemo(() => {
     const byId = new Map<string, AgentDto>();
@@ -139,16 +135,13 @@ export function useMessageRenderContext(
     return byId;
   }, [users, viewer]);
 
-  const userResolver = useMemo(
-    () => makeUserNameResolver(humansById),
-    [humansById],
-  );
+  const userResolver = useMemo(() => makeUserNameResolver(humansById), [humansById]);
 
   const humansByName = useMemo(() => {
     const byName = new Map<string, UserDto>();
-    if (conversationMembers.status === 'resolved') {
+    if (conversationMembers.status === "resolved") {
       for (const member of conversationMembers.members) {
-        if (member.kind !== 'human') continue;
+        if (member.kind !== "human") continue;
         const user = humansById.get(member.user_id);
         if (user) byName.set(user.name, user);
       }

@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
-import { createReadStream, constants as fsConstants } from 'node:fs';
-import { readFile, realpath, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { createHash } from "node:crypto";
+import { createReadStream, constants as fsConstants } from "node:fs";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 /** The packaged sidecar manifest (`silverhand-backend.manifest.json`). No build_id /
  * version — only artifact location + platform identity + integrity. */
@@ -25,16 +25,16 @@ export interface VerifiedSidecar {
 }
 
 export type SidecarFailureKind =
-  | 'manifest-missing'
-  | 'manifest-invalid'
-  | 'unsupported-platform'
-  | 'target-mismatch'
-  | 'arch-mismatch'
-  | 'executable-uncontained'
-  | 'executable-missing'
-  | 'executable-not-regular'
-  | 'executable-not-executable'
-  | 'sha256-mismatch';
+  | "manifest-missing"
+  | "manifest-invalid"
+  | "unsupported-platform"
+  | "target-mismatch"
+  | "arch-mismatch"
+  | "executable-uncontained"
+  | "executable-missing"
+  | "executable-not-regular"
+  | "executable-not-executable"
+  | "sha256-mismatch";
 
 export class SidecarVerificationError extends Error {
   constructor(
@@ -43,7 +43,7 @@ export class SidecarVerificationError extends Error {
     readonly detail?: unknown,
   ) {
     super(message);
-    this.name = 'SidecarVerificationError';
+    this.name = "SidecarVerificationError";
   }
 }
 
@@ -72,21 +72,18 @@ const HEX64 = /^[0-9a-fA-F]{64}$/;
  * or an x64 build on an arm64 mac is rejected. Returns `null` for a platform/arch pair
  * the Desktop embedded build does not support (→ typed rejection).
  */
-export function expectedRustTarget(
-  platform: string,
-  arch: string,
-): string | null {
+export function expectedRustTarget(platform: string, arch: string): string | null {
   const table: Record<string, Record<string, string>> = {
     darwin: {
-      arm64: 'aarch64-apple-darwin',
-      x64: 'x86_64-apple-darwin',
+      arm64: "aarch64-apple-darwin",
+      x64: "x86_64-apple-darwin",
     },
     linux: {
-      arm64: 'aarch64-unknown-linux-gnu',
-      x64: 'x86_64-unknown-linux-gnu',
+      arm64: "aarch64-unknown-linux-gnu",
+      x64: "x86_64-unknown-linux-gnu",
     },
     win32: {
-      x64: 'x86_64-pc-windows-msvc',
+      x64: "x86_64-pc-windows-msvc",
     },
   };
   return table[platform]?.[arch] ?? null;
@@ -108,7 +105,7 @@ export async function verifySidecar(
     raw = await deps.readManifest(manifestPath);
   } catch (err) {
     throw new SidecarVerificationError(
-      'manifest-missing',
+      "manifest-missing",
       `embedded Rust backend sidecar manifest not found at ${manifestPath}`,
       err,
     );
@@ -120,15 +117,15 @@ export async function verifySidecar(
   const requiredTarget = expectedRustTarget(deps.currentPlatform, deps.currentArch);
   if (requiredTarget === null) {
     throw new SidecarVerificationError(
-      'unsupported-platform',
+      "unsupported-platform",
       `embedded Rust backend has no supported target for platform ${deps.currentPlatform} arch ${deps.currentArch}`,
     );
   }
   if (manifest.target !== requiredTarget) {
     throw new SidecarVerificationError(
-      'target-mismatch',
-      `embedded Rust backend sidecar target ${manifest.target} does not match the required desktop target ${requiredTarget} `
-        + `(platform ${deps.currentPlatform} arch ${deps.currentArch})`,
+      "target-mismatch",
+      `embedded Rust backend sidecar target ${manifest.target} does not match the required desktop target ${requiredTarget} ` +
+        `(platform ${deps.currentPlatform} arch ${deps.currentArch})`,
     );
   }
   // #task:2343 P1-8 — the manifest `arch` must not contradict the running process. The
@@ -136,7 +133,7 @@ export async function verifySidecar(
   // it means it MUST agree with `process.arch`, otherwise the manifest is self-inconsistent.
   if (manifest.arch !== deps.currentArch) {
     throw new SidecarVerificationError(
-      'arch-mismatch',
+      "arch-mismatch",
       `embedded Rust backend sidecar manifest arch ${manifest.arch} does not match process arch ${deps.currentArch}`,
     );
   }
@@ -147,15 +144,20 @@ export async function verifySidecar(
   const manifestDir = dirname(manifestPath);
   if (isAbsolute(manifest.executable)) {
     throw new SidecarVerificationError(
-      'executable-uncontained',
+      "executable-uncontained",
       `embedded Rust backend sidecar executable must be relative to the manifest directory, got absolute ${manifest.executable}`,
     );
   }
   const executablePath = resolve(manifestDir, manifest.executable);
   const containedRel = relative(manifestDir, executablePath);
-  if (containedRel === '' || containedRel === '..' || containedRel.startsWith(`..${sep}`) || isAbsolute(containedRel)) {
+  if (
+    containedRel === "" ||
+    containedRel === ".." ||
+    containedRel.startsWith(`..${sep}`) ||
+    isAbsolute(containedRel)
+  ) {
     throw new SidecarVerificationError(
-      'executable-uncontained',
+      "executable-uncontained",
       `embedded Rust backend sidecar executable ${manifest.executable} escapes the manifest directory`,
     );
   }
@@ -167,7 +169,7 @@ export async function verifySidecar(
     canonicalExecutable = await deps.realpath(executablePath);
   } catch (err) {
     throw new SidecarVerificationError(
-      'executable-missing',
+      "executable-missing",
       `embedded Rust backend executable not found at ${executablePath}`,
       err,
     );
@@ -176,15 +178,20 @@ export async function verifySidecar(
     canonicalDir = await deps.realpath(manifestDir);
   } catch (err) {
     throw new SidecarVerificationError(
-      'executable-uncontained',
+      "executable-uncontained",
       `embedded Rust backend sidecar manifest directory ${manifestDir} could not be canonicalized`,
       err,
     );
   }
   const canonicalRel = relative(canonicalDir, canonicalExecutable);
-  if (canonicalRel === '' || canonicalRel === '..' || canonicalRel.startsWith(`..${sep}`) || isAbsolute(canonicalRel)) {
+  if (
+    canonicalRel === "" ||
+    canonicalRel === ".." ||
+    canonicalRel.startsWith(`..${sep}`) ||
+    isAbsolute(canonicalRel)
+  ) {
     throw new SidecarVerificationError(
-      'executable-uncontained',
+      "executable-uncontained",
       `embedded Rust backend sidecar executable resolves (via symlink) outside the manifest directory: ${canonicalExecutable}`,
     );
   }
@@ -195,20 +202,20 @@ export async function verifySidecar(
     fileStat = await deps.statExecutable(executablePath);
   } catch (err) {
     throw new SidecarVerificationError(
-      'executable-missing',
+      "executable-missing",
       `embedded Rust backend executable not readable at ${executablePath}`,
       err,
     );
   }
   if (!fileStat.isRegularFile) {
     throw new SidecarVerificationError(
-      'executable-not-regular',
+      "executable-not-regular",
       `embedded Rust backend sidecar executable ${executablePath} is not a regular file`,
     );
   }
   if (!fileStat.isExecutable) {
     throw new SidecarVerificationError(
-      'executable-not-executable',
+      "executable-not-executable",
       `embedded Rust backend sidecar executable ${executablePath} is not executable`,
     );
   }
@@ -217,14 +224,14 @@ export async function verifySidecar(
     actualSha = await deps.hashFile(executablePath);
   } catch (err) {
     throw new SidecarVerificationError(
-      'executable-missing',
+      "executable-missing",
       `embedded Rust backend executable not readable at ${executablePath}`,
       err,
     );
   }
   if (actualSha.toLowerCase() !== manifest.sha256.toLowerCase()) {
     throw new SidecarVerificationError(
-      'sha256-mismatch',
+      "sha256-mismatch",
       `embedded Rust backend executable SHA-256 ${actualSha} does not match manifest ${manifest.sha256}`,
     );
   }
@@ -237,15 +244,15 @@ function parseManifest(raw: string): SidecarManifest {
     parsed = JSON.parse(raw);
   } catch (err) {
     throw new SidecarVerificationError(
-      'manifest-invalid',
-      'embedded Rust backend sidecar manifest is not valid JSON',
+      "manifest-invalid",
+      "embedded Rust backend sidecar manifest is not valid JSON",
       err,
     );
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new SidecarVerificationError(
-      'manifest-invalid',
-      'embedded Rust backend sidecar manifest must be a JSON object',
+      "manifest-invalid",
+      "embedded Rust backend sidecar manifest must be a JSON object",
     );
   }
   const record = parsed as Record<string, unknown>;
@@ -255,18 +262,18 @@ function parseManifest(raw: string): SidecarManifest {
   const sha256 = record.sha256;
   if (
     Object.keys(record).length !== 4 ||
-    typeof executable !== 'string' ||
+    typeof executable !== "string" ||
     executable.length === 0 ||
-    typeof target !== 'string' ||
+    typeof target !== "string" ||
     target.length === 0 ||
-    typeof arch !== 'string' ||
+    typeof arch !== "string" ||
     arch.length === 0 ||
-    typeof sha256 !== 'string' ||
+    typeof sha256 !== "string" ||
     !HEX64.test(sha256)
   ) {
     throw new SidecarVerificationError(
-      'manifest-invalid',
-      'embedded Rust backend sidecar manifest is missing/malformed fields (executable, target, arch, sha256)',
+      "manifest-invalid",
+      "embedded Rust backend sidecar manifest is missing/malformed fields (executable, target, arch, sha256)",
     );
   }
   return { executable, target, arch, sha256 };
@@ -276,23 +283,21 @@ function parseManifest(raw: string): SidecarManifest {
  * executable with SHA-256. */
 export function productionSidecarDeps(): SidecarDeps {
   return {
-    readManifest: (manifestPath) => readFile(manifestPath, 'utf8'),
+    readManifest: (manifestPath) => readFile(manifestPath, "utf8"),
     hashFile: (executablePath) =>
       new Promise<string>((resolvePromise, reject) => {
-        const hash = createHash('sha256');
+        const hash = createHash("sha256");
         const stream = createReadStream(executablePath);
-        stream.on('error', reject);
-        stream.on('data', (chunk) => hash.update(chunk));
-        stream.on('end', () => resolvePromise(hash.digest('hex')));
+        stream.on("error", reject);
+        stream.on("data", (chunk) => hash.update(chunk));
+        stream.on("end", () => resolvePromise(hash.digest("hex")));
       }),
     realpath: (path) => realpath(path),
     statExecutable: async (path) => {
       const st = await stat(path);
       // Owner/group/other execute bit (any) — the packaged sidecar is chmod +x.
       const isExecutable =
-        (st.mode &
-          (fsConstants.S_IXUSR | fsConstants.S_IXGRP | fsConstants.S_IXOTH)) !==
-        0;
+        (st.mode & (fsConstants.S_IXUSR | fsConstants.S_IXGRP | fsConstants.S_IXOTH)) !== 0;
       return { isRegularFile: st.isFile(), isExecutable };
     },
     currentPlatform: process.platform,
@@ -311,7 +316,7 @@ export interface BackendSidecarLocation {
 }
 
 /** The manifest filename shipped alongside the sidecar executable. */
-export const SIDECAR_MANIFEST_FILENAME = 'silverhand-backend.manifest.json';
+export const SIDECAR_MANIFEST_FILENAME = "silverhand-backend.manifest.json";
 
 /**
  * Resolve the absolute path to the sidecar MANIFEST for the current environment. The
@@ -328,12 +333,10 @@ export const SIDECAR_MANIFEST_FILENAME = 'silverhand-backend.manifest.json';
  * NEVER a Cargo invocation at runtime: this only LOCATES a prebuilt artifact + manifest;
  * a missing manifest/binary fails loud in `verifySidecar`.
  */
-export function resolveBackendSidecarManifestPath(
-  location: BackendSidecarLocation,
-): string {
+export function resolveBackendSidecarManifestPath(location: BackendSidecarLocation): string {
   if (location.isPackaged) {
-    return resolve(location.resourcesPath, 'silverhand-backend', SIDECAR_MANIFEST_FILENAME);
+    return resolve(location.resourcesPath, "silverhand-backend", SIDECAR_MANIFEST_FILENAME);
   }
-  const repoRoot = resolve(location.appPath, '../..');
-  return resolve(repoRoot, 'rust/target/release', SIDECAR_MANIFEST_FILENAME);
+  const repoRoot = resolve(location.appPath, "../..");
+  return resolve(repoRoot, "rust/target/release", SIDECAR_MANIFEST_FILENAME);
 }

@@ -1,31 +1,38 @@
-import * as Popover from '@radix-ui/react-popover';
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { AgentDto, SortGroup } from '@silverhand/shared';
-import { useSortable } from '@dnd-kit/sortable';
-import { ChevronDown, LayoutGrid, MessagesSquare, MoreVertical, Plus, Settings } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { WorkspaceIcon } from '@/components/WorkspaceIcon';
+import * as Popover from "@radix-ui/react-popover";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import type { AgentDto, SortGroup } from "@silverhand/shared";
+import { useSortable } from "@dnd-kit/sortable";
+import {
+  ChevronDown,
+  LayoutGrid,
+  MessagesSquare,
+  MoreVertical,
+  Plus,
+  Settings,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { WorkspaceIcon } from "@/components/WorkspaceIcon";
 import {
   SortableGroup,
   animateLayoutChanges,
   sortableItemStyle,
-} from '@/components/layout/list-drag-sort';
+} from "@/components/layout/list-drag-sort";
 import {
   OUTER_GLYPH_INSET,
   SidebarSection,
   MutedMarker,
   useSidebarSectionExpanded,
-} from './sidebar-shared';
-import { WorkspaceChannels } from './WorkspaceChannels';
-import { WorkspaceContextMenu } from './WorkspaceContextMenu';
-import { agentSpaceRecognitionName } from '@/lib/workspace-name';
+} from "./sidebar-shared";
+import { WorkspaceChannels } from "./WorkspaceChannels";
+import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
+import { agentSpaceRecognitionName } from "@/lib/workspace-name";
 import {
   branchHoldsSelectedRow,
   collapsedGroupRevealBranches,
   isWorkspaceAwake,
   type SelectedConversation,
-} from '@/lib/home-grouping';
-import { isAgentSpace } from '@/features/workspaces/workspace-ownership';
+} from "@/lib/home-grouping";
+import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
 
 export interface WorkspaceItem {
   id: string;
@@ -150,10 +157,7 @@ function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element 
  *  agent (no `@`, no `· DM` suffix — shiki, #task:1768), any other workspace as its
  *  own name. Shared by the interactive header and the collapsed-group caption so the
  *  two can never drift. */
-function workspaceRowTitle(
-  workspace: WorkspaceItem,
-  ctx: RailRowContext,
-): string {
+function workspaceRowTitle(workspace: WorkspaceItem, ctx: RailRowContext): string {
   const ownerAgent = workspace.owner_agent_id
     ? ctx.agentsById?.get(workspace.owner_agent_id)
     : undefined;
@@ -187,9 +191,9 @@ function WorkspaceCaption({
     <li>
       <div
         className={
-          'sidebar-row-gutter flex h-7 w-full items-center pr-2 ' +
+          "sidebar-row-gutter flex h-7 w-full items-center pr-2 " +
           OUTER_GLYPH_INSET +
-          ' text-text-muted'
+          " text-text-muted"
         }
       >
         <span className="flex size-4 shrink-0 items-center justify-center">
@@ -288,8 +292,8 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   // only loud row is STARRED — or whose row queries are loading/failed — shows nothing,
   // never an orphan title (@Cindy MUST FIX).
   const revealBranches = collapsedGroupRevealBranches(workspaces, {
-    holdsSelection: w => branchHoldsSelectedRow(w.id, selected),
-    isAwake: w => isWorkspaceAwake(w),
+    holdsSelection: (w) => branchHoldsSelectedRow(w.id, selected),
+    isAwake: (w) => isWorkspaceAwake(w),
   });
 
   return (
@@ -305,7 +309,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
       collapsedContent={
         revealBranches.length > 0 ? (
           <>
-            {revealBranches.map(w => (
+            {revealBranches.map((w) => (
               <WorkspaceChannels
                 key={w.id}
                 workspaceId={w.id}
@@ -333,7 +337,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
       }
     >
       {workspaces.length === 0 ? (
-        <li className="px-2 py-2 text-xs text-text-muted">{emptyHint ?? 'Empty'}</li>
+        <li className="px-2 py-2 text-xs text-text-muted">{emptyHint ?? "Empty"}</li>
       ) : (
         renderSortableGroups(workspaces, sort, ctx)
       )}
@@ -351,8 +355,8 @@ function renderSortableGroups<GroupKey extends SortGroup>(
   ctx: RailRowContext,
 ): ReactNode {
   const partitions = sort.order
-    .map(key => ({ key, items: workspaces.filter(w => sort.groupKeyOf(w) === key) }))
-    .filter(p => p.items.length > 0);
+    .map((key) => ({ key, items: workspaces.filter((w) => sort.groupKeyOf(w) === key) }))
+    .filter((p) => p.items.length > 0);
 
   return partitions.map((p, i) => (
     <Fragment key={p.key}>
@@ -362,10 +366,10 @@ function renderSortableGroups<GroupKey extends SortGroup>(
         </li>
       ) : null}
       <SortableGroup
-        ids={p.items.map(w => w.id)}
-        onReorder={ordered => sort.onReorder(p.key, ordered)}
+        ids={p.items.map((w) => w.id)}
+        onReorder={(ordered) => sort.onReorder(p.key, ordered)}
       >
-        {p.items.map(w => (
+        {p.items.map((w) => (
           <SortableWorkspaceItem key={w.id} workspace={w} ctx={ctx} />
         ))}
       </SortableGroup>
@@ -389,8 +393,10 @@ function SortableWorkspaceItem({
   workspace: WorkspaceItem;
   ctx: RailRowContext;
 }): JSX.Element {
-  const { setNodeRef, transform, transition, isDragging, attributes, listeners } =
-    useSortable({ id: workspace.id, animateLayoutChanges });
+  const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({
+    id: workspace.id,
+    animateLayoutChanges,
+  });
   return (
     <li
       ref={setNodeRef}
@@ -551,9 +557,9 @@ function WorkspaceHeaderRow({
   // open — otherwise it vanishes from under an open Radix popover the moment the
   // pointer leaves the row.
   const hoverOnly =
-    'opacity-0 transition-opacity group-hover/wsbranch:opacity-100 '
-    + 'focus-visible:opacity-100 [&:has(:focus-visible)]:opacity-100 '
-    + '[&:has([data-state=open])]:opacity-100';
+    "opacity-0 transition-opacity group-hover/wsbranch:opacity-100 " +
+    "focus-visible:opacity-100 [&:has(:focus-visible)]:opacity-100 " +
+    "[&:has([data-state=open])]:opacity-100";
 
   const row = (
     <div
@@ -582,10 +588,10 @@ function WorkspaceHeaderRow({
         // 「workspace 叶子需要 medium，而不是 bold」). It briefly wore `font-bold` — the
         // wrong reading of "group" — which put the loudest weight in the tree on
         // the line that is only a container.
-        'sidebar-row-gutter group/ws flex h-7 w-full items-stretch pr-2 ' +
+        "sidebar-row-gutter group/ws flex h-7 w-full items-stretch pr-2 " +
         OUTER_GLYPH_INSET +
-        ' ' +
-        'text-text-secondary hover:text-text-primary'
+        " " +
+        "text-text-secondary hover:text-text-primary"
       }
     >
       <button
@@ -607,9 +613,7 @@ function WorkspaceHeaderRow({
             it needs its own column, and keeping the one indent step then costs
             every channel another 12px in an already narrow list
             (docs/app-layout.md §3). The trailing caret costs no column. */}
-        <span className="flex size-4 shrink-0 items-center justify-center">
-          {icon}
-        </span>
+        <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
         <span className="ml-2 min-w-0 truncate">{title}</span>
         {/* Mute rides WITH the name (shiki, 2026-08-09): it is a two-state fact
             about the workspace identity, so it belongs on the identity line — and
@@ -649,8 +653,7 @@ function WorkspaceHeaderRow({
         >
           <ChevronDown
             className={
-              'size-3 transition-transform duration-150 ' +
-              (expanded ? 'rotate-0' : '-rotate-90')
+              "size-3 transition-transform duration-150 " + (expanded ? "rotate-0" : "-rotate-90")
             }
           />
         </span>
@@ -663,7 +666,9 @@ function WorkspaceHeaderRow({
           <WorkspaceActions
             title={title}
             onCreate={() => ctx.onCreateChannel(workspace.id)}
-            onSettings={isAgentSpace(workspace) ? undefined : () => ctx.onOpenWorkspaceSettings(workspace.id)}
+            onSettings={
+              isAgentSpace(workspace) ? undefined : () => ctx.onOpenWorkspaceSettings(workspace.id)
+            }
           />
         </span>
       </span>
@@ -676,17 +681,12 @@ function WorkspaceHeaderRow({
   // (the hazard `ChannelRow` documents). Wrapping also scopes the surface to the
   // header — a pointerdown on a child channel row can never start a workspace drag.
   return (
-    <div
-      className="mt-1.5 cursor-grab select-none active:cursor-grabbing"
-      {...dragHandleProps}
-    >
+    <div className="mt-1.5 cursor-grab select-none active:cursor-grabbing" {...dragHandleProps}>
       <WorkspaceContextMenu
         trigger={row}
         muteWorkspaceId={canMuteWorkspace(workspace) ? workspace.id : null}
         leaveWorkspace={
-          canLeaveWorkspaceRow(workspace)
-            ? { id: workspace.id, name: workspace.name }
-            : null
+          canLeaveWorkspaceRow(workspace) ? { id: workspace.id, name: workspace.name } : null
         }
       />
     </div>
@@ -711,31 +711,92 @@ function canLeaveWorkspaceRow(workspace: WorkspaceItem): boolean {
   return !isAgentSpace(workspace) && !workspace.archived;
 }
 
-function WorkspaceActions({ title, onCreate, onSettings }: { title: string; onCreate: () => void; onSettings?: () => void }): JSX.Element {
+function WorkspaceActions({
+  title,
+  onCreate,
+  onSettings,
+}: {
+  title: string;
+  onCreate: () => void;
+  onSettings?: () => void;
+}): JSX.Element {
   const [open, setOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout>>();
   const keyboardOpen = useRef(false);
   const contentRef = useRef<HTMLDivElement>(null);
-  const cancelClose = (): void => { clearTimeout(closeTimer.current); };
-  const show = (): void => { cancelClose(); setOpen(true); };
-  const hide = (): void => { cancelClose(); closeTimer.current = setTimeout(() => setOpen(false), 150); };
+  const cancelClose = (): void => {
+    clearTimeout(closeTimer.current);
+  };
+  const show = (): void => {
+    cancelClose();
+    setOpen(true);
+  };
+  const hide = (): void => {
+    cancelClose();
+    closeTimer.current = setTimeout(() => setOpen(false), 150);
+  };
   useEffect(() => () => clearTimeout(closeTimer.current), []);
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
-        <Button variant="ghost" size="icon" className="h-6 w-6" aria-label={`Actions for ${title}`} onMouseEnter={show} onMouseLeave={hide} onClick={event => {
-          event.preventDefault();
-          keyboardOpen.current = event.detail === 0;
-          show();
-          if (keyboardOpen.current) contentRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
-        }}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6"
+          aria-label={`Actions for ${title}`}
+          onMouseEnter={show}
+          onMouseLeave={hide}
+          onClick={(event) => {
+            event.preventDefault();
+            keyboardOpen.current = event.detail === 0;
+            show();
+            if (keyboardOpen.current)
+              contentRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+          }}
+        >
           <MoreVertical className="size-3.5" />
         </Button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content ref={contentRef} align="end" sideOffset={4} onMouseEnter={cancelClose} onMouseLeave={hide} onOpenAutoFocus={event => { if (!keyboardOpen.current) event.preventDefault(); }} onCloseAutoFocus={event => { if (!keyboardOpen.current) event.preventDefault(); }} data-popover-frame="menu" className="z-[var(--z-dialog)] min-w-40 bg-bg-floating p-1 shadow-popover">
-          <button type="button" className="flex w-full items-center gap-2 rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover" onClick={() => { setOpen(false); onCreate(); }}><Plus className="size-3.5" />Create channel</button>
-          {onSettings ? <button type="button" className="flex w-full items-center gap-2 rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover" onClick={() => { setOpen(false); onSettings(); }}><Settings className="size-3.5" />Settings</button> : null}
+        <Popover.Content
+          ref={contentRef}
+          align="end"
+          sideOffset={4}
+          onMouseEnter={cancelClose}
+          onMouseLeave={hide}
+          onOpenAutoFocus={(event) => {
+            if (!keyboardOpen.current) event.preventDefault();
+          }}
+          onCloseAutoFocus={(event) => {
+            if (!keyboardOpen.current) event.preventDefault();
+          }}
+          data-popover-frame="menu"
+          className="z-[var(--z-dialog)] min-w-40 bg-bg-floating p-1 shadow-popover"
+        >
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover"
+            onClick={() => {
+              setOpen(false);
+              onCreate();
+            }}
+          >
+            <Plus className="size-3.5" />
+            Create channel
+          </button>
+          {onSettings ? (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover"
+              onClick={() => {
+                setOpen(false);
+                onSettings();
+              }}
+            >
+              <Settings className="size-3.5" />
+              Settings
+            </button>
+          ) : null}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>

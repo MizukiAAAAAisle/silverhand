@@ -1,30 +1,30 @@
-import { useMemo } from 'react';
+import { useMemo } from "react";
 import type {
   AgentDto,
   ConversationAgentRuntimeDto,
   HumanMemberDto,
   MemberDto,
-} from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { STATUS_DOT } from '@/components/status-dot';
-import { AgentInfoPopover } from '@/components/AgentInfoPopover';
-import { HumanInfoPopover } from '@/components/HumanInfoPopover';
-import { useAgents } from '@/features/agents/hooks';
-import { projectMemberRuntimeStatus } from '@/features/agents/member-runtime-status';
-import { PRESENCE_TONE_DOT, projectPresence } from '@/features/agents/presence-projection';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
-import { useUsersById } from '@/features/users/hooks';
-import { usePresenceById, presenceDotStatus } from '@/features/presence/hooks';
+} from "@silverhand/shared";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { STATUS_DOT } from "@/components/status-dot";
+import { AgentInfoPopover } from "@/components/AgentInfoPopover";
+import { HumanInfoPopover } from "@/components/HumanInfoPopover";
+import { useAgents } from "@/features/agents/hooks";
+import { projectMemberRuntimeStatus } from "@/features/agents/member-runtime-status";
+import { PRESENCE_TONE_DOT, projectPresence } from "@/features/agents/presence-projection";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
+import { useUsersById } from "@/features/users/hooks";
+import { usePresenceById, presenceDotStatus } from "@/features/presence/hooks";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useViewerUser,
-} from '@/features/me/hooks';
-import { useConversationMembers } from '@/features/conversations/useConversationMembers';
-import { useNav } from '@/router';
+} from "@/features/me/hooks";
+import { useConversationMembers } from "@/features/conversations/useConversationMembers";
+import { useNav } from "@/router";
 
 // ── Member strip ────────────────────────────────────────────────────────
 
@@ -73,9 +73,9 @@ export function MemberStrip({
       : null;
 
   const visibleMembers = useMemo(() => {
-    if (membersResult.status !== 'resolved') return [];
+    if (membersResult.status !== "resolved") return [];
     return membersResult.members.filter((m) => {
-      if (m.kind !== 'human') return true;
+      if (m.kind !== "human") return true;
       // Drop the current viewer — UI-self has no meaning in a chip strip
       // pointing at "who else is in this room with me".
       return m.user_id !== viewerUserId;
@@ -90,7 +90,7 @@ export function MemberStrip({
   const humanAvatarSources = useMemo(
     () =>
       visibleMembers
-        .filter((m): m is Extract<MemberDto, { kind: 'human' }> => m.kind === 'human')
+        .filter((m): m is Extract<MemberDto, { kind: "human" }> => m.kind === "human")
         .map((m) => ({
           id: m.user_id,
           avatar_url: m.avatar_url ?? usersById.get(m.user_id)?.avatar_url ?? null,
@@ -114,15 +114,15 @@ export function MemberStrip({
       data-member-count={visibleMembers.length}
     >
       {inline.map((member) => {
-        if (member.kind === 'agent') {
+        if (member.kind === "agent") {
           const agent = agentById.get(member.agent_id);
           if (!agent) return null;
           const presence = projectPresence({
-            scope: 'conversation',
+            scope: "conversation",
             runtime: projectMemberRuntimeStatus({
               // Membership is established by the iteration itself: this loop IS
               // the roster, so the only open question is the runtime read.
-              membership: 'member',
+              membership: "member",
               runtime: agentRuntime,
               agentId: member.agent_id,
             }),
@@ -171,9 +171,9 @@ export function MemberStrip({
                   <span
                     aria-hidden
                     className={
-                      'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm ' +
+                      "pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm " +
                       PRESENCE_TONE_DOT[presence.tone] +
-                      (presence.pulse ? ' motion-safe:animate-pulse' : '')
+                      (presence.pulse ? " motion-safe:animate-pulse" : "")
                     }
                   />
                 )}
@@ -257,7 +257,7 @@ function HumanMemberChip({
         )}
         <span
           className={
-            'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm ' +
+            "pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating shadow-sm " +
             STATUS_DOT[dot]
           }
         />

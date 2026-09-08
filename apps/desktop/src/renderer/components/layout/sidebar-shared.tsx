@@ -5,10 +5,10 @@ import {
   type ButtonHTMLAttributes,
   type HTMLAttributes,
   type ReactNode,
-} from 'react';
-import { BellOff, ChevronDown, ChevronRight, Plus } from 'lucide-react';
-import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
+} from "react";
+import { BellOff, ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 
 /**
  * "Copy name" for a conversation row. Shared because a starred channel now has TWO
@@ -19,7 +19,7 @@ import { Button } from '@/components/ui/button';
 export async function copyConversationName(name: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(name);
-    toast.success('Name copied');
+    toast.success("Name copied");
   } catch {
     toast.error("Couldn't copy the name");
   }
@@ -40,13 +40,13 @@ export async function copyConversationName(name: string): Promise<void> {
  * list sort mode / rank, which is viewer-scoped server state
  * (docs/list-sort-v1.md) and must not fork per surface.
  */
-const SECTION_KEY_PREFIX = 'silverhand:layout.sidebar-section.';
+const SECTION_KEY_PREFIX = "silverhand:layout.sidebar-section.";
 
 function readExpanded(persistId: string, fallback: boolean): boolean {
   try {
     const raw = localStorage.getItem(SECTION_KEY_PREFIX + persistId);
-    if (raw === '1') return true;
-    if (raw === '0') return false;
+    if (raw === "1") return true;
+    if (raw === "0") return false;
     return fallback;
   } catch {
     return fallback;
@@ -55,7 +55,7 @@ function readExpanded(persistId: string, fallback: boolean): boolean {
 
 function persistExpanded(persistId: string, value: boolean): void {
   try {
-    localStorage.setItem(SECTION_KEY_PREFIX + persistId, value ? '1' : '0');
+    localStorage.setItem(SECTION_KEY_PREFIX + persistId, value ? "1" : "0");
   } catch {
     /* private mode / quota — in-memory state still wins */
   }
@@ -138,8 +138,8 @@ export function useSidebarSectionExpanded(
  * The outer column is 8px (shiki 2026-08-10, up from 4px) — the two values move
  * TOGETHER, because the 16px step above is the invariant, not either absolute x.
  */
-export const OUTER_GLYPH_INSET = 'pl-2';
-export const NESTED_GLYPH_INSET = 'pl-6';
+export const OUTER_GLYPH_INSET = "pl-2";
+export const NESTED_GLYPH_INSET = "pl-6";
 
 /**
  * The shared selected/hover recipe for a sidebar row — channel and container
@@ -165,8 +165,8 @@ export const NESTED_GLYPH_INSET = 'pl-6';
  */
 export function sidebarRowStateClass(selected: boolean | undefined): string {
   return selected
-    ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-    : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,transparent)] hover:text-text-primary';
+    ? "border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected"
+    : "border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,transparent)] hover:text-text-primary";
 }
 
 interface SectionProps {
@@ -292,10 +292,10 @@ export function SidebarSectionHeader({
   // `[&:has([data-state=open])]` keeps them up while their own menu is open — by
   // then the pointer has left the group.
   const actionReveal = swapGlyph
-    ? 'flex items-center transition-opacity opacity-0 ' +
-      'group-hover/sectionscope:opacity-100 [&:has(:focus-visible)]:opacity-100 ' +
-      '[&:has([data-state=open])]:opacity-100'
-    : 'flex items-center';
+    ? "flex items-center transition-opacity opacity-0 " +
+      "group-hover/sectionscope:opacity-100 [&:has(:focus-visible)]:opacity-100 " +
+      "[&:has([data-state=open])]:opacity-100"
+    : "flex items-center";
   // The collapse affordance, #task:1948. A PERMANENT state hint, not a button:
   // until now the only sign that a section collapsed was a disclosure triangle
   // that replaced the identity glyph on hover, so "this can be collapsed" was
@@ -321,13 +321,13 @@ export function SidebarSectionHeader({
       aria-hidden
       data-sidebar-section-caret
       className={
-        'inline-flex shrink-0 items-center opacity-70 transition-opacity ' +
-        'group-hover/section:opacity-100 group-focus-visible/sectiontoggle:opacity-100'
+        "inline-flex shrink-0 items-center opacity-70 transition-opacity " +
+        "group-hover/section:opacity-100 group-focus-visible/sectiontoggle:opacity-100"
       }
     >
       <ChevronDown
         className={
-          'size-3 transition-transform duration-150 ' + (expanded ? 'rotate-0' : '-rotate-90')
+          "size-3 transition-transform duration-150 " + (expanded ? "rotate-0" : "-rotate-90")
         }
       />
     </span>
@@ -360,7 +360,7 @@ export function SidebarSectionHeader({
       </span>
       <span className="truncate">
         {label}
-        {typeof count === 'number' ? (
+        {typeof count === "number" ? (
           <span data-sidebar-count className="ml-1 text-text-muted/70">
             {count}
           </span>
@@ -381,7 +381,7 @@ export function SidebarSectionHeader({
       ) : null}
       <span>
         {label}
-        {typeof count === 'number' ? (
+        {typeof count === "number" ? (
           <span data-sidebar-count className="ml-1 text-text-muted/70">
             {count}
           </span>
@@ -402,8 +402,8 @@ export function SidebarSectionHeader({
         // themes, whereas primary-vs-secondary collapses inside forza6's sidebar
         // (both are pinned to near-black there). Size stays 12px — a label is not
         // content (shiki: 「分组标题…保持 12」).
-        'mb-1 flex items-stretch justify-between text-xs font-bold tracking-wider text-text-muted ' +
-        (swapGlyph ? 'group/section' : '')
+        "mb-1 flex items-stretch justify-between text-xs font-bold tracking-wider text-text-muted " +
+        (swapGlyph ? "group/section" : "")
       }
     >
       {collapsible ? (
@@ -411,7 +411,7 @@ export function SidebarSectionHeader({
           type="button"
           onClick={onToggle}
           className={
-            'group/sectiontoggle flex flex-1 items-center h-6 text-left ' +
+            "group/sectiontoggle flex flex-1 items-center h-6 text-left " +
             // A GROUP HEADER is a label, not a row. Its only hover feedback is the
             // caret lifting to full muted — no background, no border, no ink change
             // on the label (shiki, 2026-08-08). Hence `sidebar-row-gutter`, which
@@ -420,8 +420,8 @@ export function SidebarSectionHeader({
             // forza6). The icon-less fallback is off the tree column, so it keeps
             // its own padding + hover ink.
             (swapGlyph
-              ? 'sidebar-row-gutter ' + OUTER_GLYPH_INSET
-              : 'px-2 hover:text-text-secondary')
+              ? "sidebar-row-gutter " + OUTER_GLYPH_INSET
+              : "px-2 hover:text-text-secondary")
           }
           aria-expanded={expanded}
         >
@@ -458,7 +458,7 @@ export function SidebarSectionHeader({
  * Utility-vs-semantic budget: `quiet` deliberately spends NO saturated hue — the
  * accent fill is the one thing that separates "look here" from "for reference".
  */
-export type UnreadBadgeTier = 'loud' | 'quiet';
+export type UnreadBadgeTier = "loud" | "quiet";
 
 /**
  * The ONE unread count pill for every sidebar surface (home rail workspace rows,
@@ -480,7 +480,7 @@ export type UnreadBadgeTier = 'loud' | 'quiet';
  */
 export function UnreadBadge({
   count,
-  tier = 'loud',
+  tier = "loud",
   inverted = false,
   className,
 }: {
@@ -492,26 +492,26 @@ export function UnreadBadge({
 }): JSX.Element | null {
   if (count <= 0) return null;
   const skin =
-    tier === 'quiet'
-      ? 'border border-border text-text-secondary'
+    tier === "quiet"
+      ? "border border-border text-text-secondary"
       : inverted
-        ? 'bg-bg-floating text-[var(--unread)]'
-        : 'bg-[var(--unread)] text-text-on-accent';
+        ? "bg-bg-floating text-[var(--unread)]"
+        : "bg-[var(--unread)] text-text-on-accent";
   return (
     <span
       data-sidebar-unread
       data-unread-tier={tier}
       className={
-        'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-[var(--pill-radius)] px-1 text-[length:var(--text-badge)] tabular-nums ' +
+        "inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-[var(--pill-radius)] px-1 text-[length:var(--text-badge)] tabular-nums " +
         // Quiet drops the weight too: hairline + regular weight is one coherent
         // step down, not a ring bolted onto a loud pill.
-        (tier === 'quiet' ? 'font-medium ' : 'font-semibold ') +
+        (tier === "quiet" ? "font-medium " : "font-semibold ") +
         skin +
-        (className ? ` ${className}` : '')
+        (className ? ` ${className}` : "")
       }
       aria-label={`${count} unread`}
     >
-      {count > 99 ? '99+' : count}
+      {count > 99 ? "99+" : count}
     </span>
   );
 }
@@ -547,12 +547,12 @@ export function MutedMarker(): JSX.Element {
   return <BellOff className="size-3 shrink-0 opacity-60" role="img" aria-label="Muted" />;
 }
 
-interface RowProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClick' | 'title'> {
+interface RowProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick" | "title"> {
   icon?: ReactNode;
   title: ReactNode;
   subtitle?: ReactNode;
   selected?: boolean;
-  status?: 'active' | 'idle' | 'crashed' | null;
+  status?: "active" | "idle" | "crashed" | null;
   /** Unread count pill on the right edge. Falsy / 0 hides it. */
   badge?: number;
   /** Loudness of {@link badge} — see {@link UnreadBadgeTier}. Mute renders no
@@ -566,10 +566,10 @@ interface RowProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClic
   onClick?: () => void;
 }
 
-const STATUS_DOT: Record<NonNullable<RowProps['status']>, string> = {
-  active: 'bg-success',
-  idle: 'bg-text-muted/40',
-  crashed: 'bg-error',
+const STATUS_DOT: Record<NonNullable<RowProps["status"]>, string> = {
+  active: "bg-success",
+  idle: "bg-text-muted/40",
+  crashed: "bg-error",
 };
 
 export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function SidebarRow(
@@ -607,10 +607,10 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
           // (#task:1946, shiki `2uEqqwZpm372oo-D`) — grep both forms.
           // `stacked` rows are two lines, so they need more vertical
           // padding than the compact single-line default.
-          'sidebar-row-border flex w-full items-center gap-2 border px-2 text-left text-sm leading-[16px] transition-colors ' +
-          (stacked ? 'py-2 ' : 'py-1.5 ') +
+          "sidebar-row-border flex w-full items-center gap-2 border px-2 text-left text-sm leading-[16px] transition-colors " +
+          (stacked ? "py-2 " : "py-1.5 ") +
           sidebarRowStateClass(selected) +
-          (className ? ` ${className}` : '')
+          (className ? ` ${className}` : "")
         }
       >
         {icon ? (
@@ -625,9 +625,9 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         ) : null}
         <span
           className={
-            'flex min-w-0 flex-1 ' +
-            (stacked ? 'flex-col gap-0.5 ' : 'gap-1.5 ') +
-            (badge && badge > 0 && !selected ? 'font-semibold text-text-primary' : '')
+            "flex min-w-0 flex-1 " +
+            (stacked ? "flex-col gap-0.5 " : "gap-1.5 ") +
+            (badge && badge > 0 && !selected ? "font-semibold text-text-primary" : "")
           }
         >
           <span className="truncate">{title}</span>
@@ -640,7 +640,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
             // (shiki dogfood: inconsistent heights). The nbsp holds the
             // line box when there's no subtitle; this is also the slot
             // per-row availability (Online / Offline) fills once enabled.
-            <span className="truncate text-xs text-text-muted">{subtitle ?? ' '}</span>
+            <span className="truncate text-xs text-text-muted">{subtitle ?? " "}</span>
           ) : subtitle ? (
             <span className="truncate text-xs text-text-muted">{subtitle}</span>
           ) : null}
@@ -650,7 +650,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         ) : status ? (
           <span
             data-status-pip
-            className={'size-1.5 rounded-[var(--pill-radius)] ' + STATUS_DOT[status]}
+            className={"size-1.5 rounded-[var(--pill-radius)] " + STATUS_DOT[status]}
           />
         ) : null}
       </button>
@@ -660,7 +660,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
 
 interface ConversationRowLayoutProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
-  'title' | 'children' | 'className'
+  "title" | "children" | "className"
 > {
   /** `true` iff this row is the open conversation — the ONE selection object in
    *  the tree (`conversationSelectionTier`). Paints the row AND sets the
@@ -670,7 +670,7 @@ interface ConversationRowLayoutProps extends Omit<
    *  conversation nested under its workspace takes `nested`; the same
    *  conversation in STARRED takes `outer`, because there the group is its
    *  parent. It is a prop precisely because one row species appears on both. */
-  column: 'nested' | 'outer';
+  column: "nested" | "outer";
   /** Paint the grab cursor so the row reads as draggable. Set by a sortable
    *  wrapper only — drag is always available (a drop is what flips the list to
    *  manual), but a row rendered outside the sortable group (STARRED's
@@ -728,9 +728,9 @@ export const ConversationRowLayout = forwardRef<HTMLDivElement, ConversationRowL
         {...rest}
         data-row-selected={selected || undefined}
         className={
-          'sidebar-row-border flex h-8 w-full items-stretch border pr-2 ' +
-          (column === 'nested' ? NESTED_GLYPH_INSET : OUTER_GLYPH_INSET) +
-          ' ' +
+          "sidebar-row-border flex h-8 w-full items-stretch border pr-2 " +
+          (column === "nested" ? NESTED_GLYPH_INSET : OUTER_GLYPH_INSET) +
+          " " +
           // No `transition-colors`: selected/hover switch instantly (#task:1162).
           // Selected is a discrete, already-committed state — fading it over 150ms
           // is what read as the leaving-row "flicker" (and the entering row "slow to
@@ -739,7 +739,7 @@ export const ConversationRowLayout = forwardRef<HTMLDivElement, ConversationRowL
           // of keeping it (the whole drag-time colour-freeze apparatus) wasn't worth
           // it. Hover now switches instantly too.
           sidebarRowStateClass(selected) +
-          (draggable ? ' cursor-grab select-none active:cursor-grabbing' : '')
+          (draggable ? " cursor-grab select-none active:cursor-grabbing" : "")
         }
       >
         {/* The name button grows to fill the row, so the whole width is clickable.

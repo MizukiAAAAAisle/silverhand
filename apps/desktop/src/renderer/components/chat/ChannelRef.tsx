@@ -1,5 +1,5 @@
-import { Hash } from 'lucide-react';
-import { INLINE_REF_HOVER_CLASS } from './inline-ref-chip';
+import { Hash } from "lucide-react";
+import { INLINE_REF_HOVER_CLASS } from "./inline-ref-chip";
 
 export interface ChannelReference {
   id: string;
@@ -64,7 +64,7 @@ export function ChannelRef({ name, channel, onOpen }: ChannelRefProps): JSX.Elem
     return (
       <span
         className="font-mono text-text-muted"
-        data-channel-ref-state={channel === null ? 'ambiguous' : 'unresolved'}
+        data-channel-ref-state={channel === null ? "ambiguous" : "unresolved"}
       >
         #{name}
       </span>
@@ -91,20 +91,20 @@ export function ChannelRef({ name, channel, onOpen }: ChannelRefProps): JSX.Elem
       role="button"
       tabIndex={0}
       className={
-        'inline-flex cursor-pointer items-baseline gap-0.5 rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent focus-outline ' +
+        "inline-flex cursor-pointer items-baseline gap-0.5 rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent focus-outline " +
         INLINE_REF_HOVER_CLASS +
-        (dim ? ' opacity-60' : '')
+        (dim ? " opacity-60" : "")
       }
       title={tooltip}
       data-channel-ref-state="resolved"
       data-channel-ref-id={channel.id}
-      onClick={event => {
+      onClick={(event) => {
         event.preventDefault();
         event.stopPropagation();
         onOpen(channel.id);
       }}
-      onKeyDown={event => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         event.stopPropagation();
         onOpen(channel.id);

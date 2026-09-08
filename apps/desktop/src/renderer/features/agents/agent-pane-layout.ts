@@ -10,4 +10,4 @@
  * an outer inset would eat its rail width. Lives in its own module rather than
  * `AgentView` to avoid an import cycle (AgentView → AgentChatsPane → back).
  */
-export const AGENT_PANE_INSET = 'p-3';
+export const AGENT_PANE_INSET = "p-3";

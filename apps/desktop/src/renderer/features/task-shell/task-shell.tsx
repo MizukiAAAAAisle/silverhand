@@ -1,9 +1,9 @@
-import { useCallback, useRef } from 'react';
-import { useNav, useRouteState } from '@/router';
-import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
-import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
-import { resolveTaskDetailSurface } from '@/features/tasks/task-detail-surface';
-import { TaskBoard } from './task-board';
+import { useCallback, useRef } from "react";
+import { useNav, useRouteState } from "@/router";
+import { TaskDetailDialog } from "@/components/tasks/TaskDetailDialog";
+import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import { resolveTaskDetailSurface } from "@/features/tasks/task-detail-surface";
+import { TaskBoard } from "./task-board";
 
 export function TaskShell({ onJump }: { onJump: (target: MessageJumpTarget) => boolean }) {
   const route = useRouteState();
@@ -12,7 +12,7 @@ export function TaskShell({ onJump }: { onJump: (target: MessageJumpTarget) => b
   openTaskRef.current = nav.openTask;
 
   const openTask = useCallback((taskId: string) => openTaskRef.current(taskId), []);
-  const taskId = resolveTaskDetailSurface(route) === 'dialog' ? route.taskDetailId : null;
+  const taskId = resolveTaskDetailSurface(route) === "dialog" ? route.taskDetailId : null;
 
   return (
     <>

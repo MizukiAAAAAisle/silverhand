@@ -29,23 +29,31 @@
  * dependency on the App module.
  */
 
-import type { ChannelLayout } from '@/router';
-import type { MessageSeq } from '@silverhand/shared';
-import { decodeMessageSeq } from '@silverhand/shared';
-import { firstTabKey, isDefaultTabs, normalizeTabs, parseTabs, resolveActiveTabKey, tabKey, type Tab } from './conversation-tabs';
+import type { ChannelLayout } from "@/router";
+import type { MessageSeq } from "@silverhand/shared";
+import { decodeMessageSeq } from "@silverhand/shared";
+import {
+  firstTabKey,
+  isDefaultTabs,
+  normalizeTabs,
+  parseTabs,
+  resolveActiveTabKey,
+  tabKey,
+  type Tab,
+} from "./conversation-tabs";
 
-export const LAST_CHANNEL_KEY = 'silverhand:layout.last-channel-by-workspace';
-export const LAST_WORKSPACE_KEY = 'silverhand:layout.last-workspace';
-export const LAST_CHAT_PLACE_KEY = 'silverhand:layout.last-chat-place';
-export const LAST_LAYOUT_KEY = 'silverhand:layout.last-layout-by-channel';
-export const CLOSE_WATERMARK_KEY = 'silverhand:layout.close-watermark-by-channel';
-export const CONVERSATION_TABS_KEY = 'silverhand:layout.conversation-tabs';
-export const FUNCTIONAL_TABS_KEY = 'silverhand:layout.functional-tabs';
+export const LAST_CHANNEL_KEY = "silverhand:layout.last-channel-by-workspace";
+export const LAST_WORKSPACE_KEY = "silverhand:layout.last-workspace";
+export const LAST_CHAT_PLACE_KEY = "silverhand:layout.last-chat-place";
+export const LAST_LAYOUT_KEY = "silverhand:layout.last-layout-by-channel";
+export const CLOSE_WATERMARK_KEY = "silverhand:layout.close-watermark-by-channel";
+export const CONVERSATION_TABS_KEY = "silverhand:layout.conversation-tabs";
+export const FUNCTIONAL_TABS_KEY = "silverhand:layout.functional-tabs";
 
 function loadStringValue(key: string): string | null {
   try {
     const value = localStorage.getItem(key);
-    return typeof value === 'string' && value.length > 0 ? value : null;
+    return typeof value === "string" && value.length > 0 ? value : null;
   } catch {
     return null;
   }
@@ -64,11 +72,9 @@ function loadStringMap(key: string): Map<string, string> {
     const raw = localStorage.getItem(key);
     if (!raw) return new Map();
     const obj = JSON.parse(raw) as Record<string, string>;
-    if (!obj || typeof obj !== 'object') return new Map();
+    if (!obj || typeof obj !== "object") return new Map();
     return new Map(
-      Object.entries(obj).filter(
-        ([k, v]) => typeof k === 'string' && typeof v === 'string',
-      ),
+      Object.entries(obj).filter(([k, v]) => typeof k === "string" && typeof v === "string"),
     );
   } catch {
     return new Map();
@@ -88,11 +94,11 @@ function loadNumberMap(key: string): Map<string, number> {
     const raw = localStorage.getItem(key);
     if (!raw) return new Map();
     const obj = JSON.parse(raw) as Record<string, unknown>;
-    if (!obj || typeof obj !== 'object') return new Map();
+    if (!obj || typeof obj !== "object") return new Map();
     return new Map(
       Object.entries(obj).filter(
         (entry): entry is [string, number] =>
-          typeof entry[0] === 'string' && typeof entry[1] === 'number',
+          typeof entry[0] === "string" && typeof entry[1] === "number",
       ),
     );
   } catch {
@@ -145,19 +151,19 @@ export function persistLastChannel(): void {
  * instead of restoring a dead route from stale memory.
  */
 export type ChatPlace =
-  | { kind: 'workspace_channel' }
-  | { kind: 'direct_pair'; conversationId: string };
+  | { kind: "workspace_channel" }
+  | { kind: "direct_pair"; conversationId: string };
 
 /** Validate one persisted place. Any shape that doesn't round-trip the
  *  {@link ChatPlace} contract is dropped rather than trusted — same discipline as
  *  {@link parseLayout}, and the reason a hand-edited value cannot become a route. */
 function parseChatPlace(value: unknown): ChatPlace | null {
-  if (!value || typeof value !== 'object') return null;
+  if (!value || typeof value !== "object") return null;
   const place = value as { kind?: unknown; conversationId?: unknown };
-  if (place.kind === 'workspace_channel') return { kind: 'workspace_channel' };
-  if (place.kind === 'direct_pair') {
-    return typeof place.conversationId === 'string' && place.conversationId.length > 0
-      ? { kind: 'direct_pair', conversationId: place.conversationId }
+  if (place.kind === "workspace_channel") return { kind: "workspace_channel" };
+  if (place.kind === "direct_pair") {
+    return typeof place.conversationId === "string" && place.conversationId.length > 0
+      ? { kind: "direct_pair", conversationId: place.conversationId }
       : null;
   }
   return null;
@@ -183,12 +189,13 @@ export function getLastChatPlace(): ChatPlace | null {
  *  place is unchanged so an unrelated route change doesn't thrash localStorage. */
 export function recordLastChatPlace(place: ChatPlace): void {
   if (
-    lastChatPlace
-    && lastChatPlace.kind === place.kind
-    && (place.kind === 'workspace_channel'
-      || (lastChatPlace.kind === 'direct_pair'
-        && lastChatPlace.conversationId === place.conversationId))
-  ) return;
+    lastChatPlace &&
+    lastChatPlace.kind === place.kind &&
+    (place.kind === "workspace_channel" ||
+      (lastChatPlace.kind === "direct_pair" &&
+        lastChatPlace.conversationId === place.conversationId))
+  )
+    return;
   lastChatPlace = place;
   saveStringValue(LAST_CHAT_PLACE_KEY, JSON.stringify(place));
 }
@@ -205,10 +212,10 @@ function loadLayoutMap(key: string): Map<string, ChannelLayout> {
     const raw = localStorage.getItem(key);
     if (!raw) return new Map();
     const obj = JSON.parse(raw) as Record<string, unknown>;
-    if (!obj || typeof obj !== 'object') return new Map();
+    if (!obj || typeof obj !== "object") return new Map();
     const out = new Map<string, ChannelLayout>();
     for (const [k, v] of Object.entries(obj)) {
-      if (typeof k !== 'string') continue;
+      if (typeof k !== "string") continue;
       const parsed = parseLayout(v);
       if (parsed) out.set(k, parsed);
     }
@@ -221,20 +228,20 @@ function loadLayoutMap(key: string): Map<string, ChannelLayout> {
 /** Validate one persisted layout entry. Returns null for any shape that
  *  doesn't round-trip the {@link ChannelLayout} contract. */
 function parseLayout(value: unknown): ChannelLayout | null {
-  if (!value || typeof value !== 'object') return null;
+  if (!value || typeof value !== "object") return null;
   const layout = value as { kind?: unknown; rootId?: unknown; id?: unknown };
   switch (layout.kind) {
-    case 'none':
-      return { kind: 'none' };
-    case 'threads-list':
-      return { kind: 'threads-list' };
-    case 'thread':
-      return typeof layout.rootId === 'string' && layout.rootId.length > 0
-        ? { kind: 'thread', rootId: layout.rootId }
+    case "none":
+      return { kind: "none" };
+    case "threads-list":
+      return { kind: "threads-list" };
+    case "thread":
+      return typeof layout.rootId === "string" && layout.rootId.length > 0
+        ? { kind: "thread", rootId: layout.rootId }
         : null;
-    case 'side':
-      return typeof layout.id === 'string' && layout.id.length > 0
-        ? { kind: 'side', id: layout.id }
+    case "side":
+      return typeof layout.id === "string" && layout.id.length > 0
+        ? { kind: "side", id: layout.id }
         : null;
     default:
       return null;
@@ -245,10 +252,7 @@ export const lastLayoutByChannel = loadLayoutMap(LAST_LAYOUT_KEY);
 
 function persistLastLayout(): void {
   try {
-    localStorage.setItem(
-      LAST_LAYOUT_KEY,
-      JSON.stringify(Object.fromEntries(lastLayoutByChannel)),
-    );
+    localStorage.setItem(LAST_LAYOUT_KEY, JSON.stringify(Object.fromEntries(lastLayoutByChannel)));
   } catch {
     // Quota / disabled storage — fall back to in-memory only.
   }
@@ -264,10 +268,7 @@ export function getChannelLayout(channelId: string): ChannelLayout | null {
  * No-ops when the layout is byte-identical to what's already stored so we
  * don't thrash localStorage on every unrelated route change.
  */
-export function recordChannelLayout(
-  channelId: string,
-  layout: ChannelLayout,
-): void {
+export function recordChannelLayout(channelId: string, layout: ChannelLayout): void {
   const prev = lastLayoutByChannel.get(channelId);
   if (prev && JSON.stringify(prev) === JSON.stringify(layout)) return;
   lastLayoutByChannel.set(channelId, layout);
@@ -320,10 +321,10 @@ function loadTabsMap(key: string): Map<string, Tab[]> {
     const raw = localStorage.getItem(key);
     if (!raw) return new Map();
     const obj = JSON.parse(raw) as Record<string, unknown>;
-    if (!obj || typeof obj !== 'object') return new Map();
+    if (!obj || typeof obj !== "object") return new Map();
     const out = new Map<string, Tab[]>();
     for (const [k, v] of Object.entries(obj)) {
-      if (typeof k !== 'string' || !Array.isArray(v)) continue;
+      if (typeof k !== "string" || !Array.isArray(v)) continue;
       const tabs = parseTabs(v);
       // Only keep a conversation the viewer actually customized; a stored
       // default is redundant with the get-time fallback.
@@ -340,18 +341,23 @@ export const tabsByConversation = loadTabsMap(CONVERSATION_TABS_KEY);
 function loadFunctionalTabs(): Tab[] {
   try {
     const raw = localStorage.getItem(FUNCTIONAL_TABS_KEY);
-    if (raw) return normalizeTabs(parseTabs(JSON.parse(raw)).filter(tab => tab.kind !== 'attachment'));
+    if (raw)
+      return normalizeTabs(parseTabs(JSON.parse(raw)).filter((tab) => tab.kind !== "attachment"));
   } catch {
     // Invalid storage falls back to the existing layouts.
   }
-  return normalizeTabs(Array.from(tabsByConversation.values()).flat().filter(tab => tab.kind !== 'attachment'));
+  return normalizeTabs(
+    Array.from(tabsByConversation.values())
+      .flat()
+      .filter((tab) => tab.kind !== "attachment"),
+  );
 }
 
 let functionalTabs = loadFunctionalTabs();
 const activeTabByConversation = new Map<string, string>(
   Array.from(tabsByConversation).flatMap(([id, tabs]) => {
     const first = tabs[0];
-    return first?.kind === 'attachment' ? [[id, tabKey(first)] as const] : [];
+    return first?.kind === "attachment" ? [[id, tabKey(first)] as const] : [];
   }),
 );
 const tabListeners = new Set<() => void>();
@@ -359,7 +365,9 @@ let tabsVersion = 0;
 export const getConversationTabsVersion = (): number => tabsVersion;
 export function subscribeConversationTabs(listener: () => void): () => void {
   tabListeners.add(listener);
-  return () => { tabListeners.delete(listener); };
+  return () => {
+    tabListeners.delete(listener);
+  };
 }
 function notifyConversationTabs(): void {
   tabsVersion += 1;
@@ -384,7 +392,7 @@ export function getConversationTabs(conversationId: string): Tab[] {
   const remaining = [...functionalTabs];
   const tabs: Tab[] = [];
   for (const tab of local) {
-    if (tab.kind === 'attachment') tabs.push(tab);
+    if (tab.kind === "attachment") tabs.push(tab);
     else {
       const next = remaining.shift();
       if (next) tabs.push(next);
@@ -395,7 +403,10 @@ export function getConversationTabs(conversationId: string): Tab[] {
 
 export function getConversationActiveTab(conversationId: string): string {
   const tabs = getConversationTabs(conversationId);
-  const key = resolveActiveTabKey(tabs, activeTabByConversation.get(conversationId) ?? firstTabKey(functionalTabs));
+  const key = resolveActiveTabKey(
+    tabs,
+    activeTabByConversation.get(conversationId) ?? firstTabKey(functionalTabs),
+  );
   // Remember the initial choice too, so a later shared reorder does not switch it.
   activeTabByConversation.set(conversationId, key);
   return key;
@@ -403,7 +414,7 @@ export function getConversationActiveTab(conversationId: string): string {
 
 /** Every active selection belongs to its conversation, including functional tabs. */
 export function recordConversationActiveTab(conversationId: string, key: string): void {
-  if (!getConversationTabs(conversationId).some(tab => tabKey(tab) === key)) return;
+  if (!getConversationTabs(conversationId).some((tab) => tabKey(tab) === key)) return;
   if (activeTabByConversation.get(conversationId) === key) return;
   activeTabByConversation.set(conversationId, key);
   notifyConversationTabs();
@@ -412,10 +423,11 @@ export function recordConversationActiveTab(conversationId: string, key: string)
 /** Persist shared functional order/open state and this conversation's file positions. */
 export function recordConversationTabs(conversationId: string, tabs: Tab[]): void {
   const normalized = normalizeTabs(tabs);
-  const nextFunctional = normalized.filter(tab => tab.kind !== 'attachment');
+  const nextFunctional = normalized.filter((tab) => tab.kind !== "attachment");
   const prev = tabsByConversation.get(conversationId);
-  const changed = JSON.stringify(functionalTabs) !== JSON.stringify(nextFunctional)
-    || JSON.stringify(prev ?? []) !== JSON.stringify(isDefaultTabs(normalized) ? [] : normalized);
+  const changed =
+    JSON.stringify(functionalTabs) !== JSON.stringify(nextFunctional) ||
+    JSON.stringify(prev ?? []) !== JSON.stringify(isDefaultTabs(normalized) ? [] : normalized);
   if (!changed) return;
   functionalTabs = nextFunctional;
   if (isDefaultTabs(normalized)) tabsByConversation.delete(conversationId);

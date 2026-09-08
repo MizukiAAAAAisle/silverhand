@@ -1,6 +1,6 @@
-import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
-import { pathToFileURL } from 'node:url';
-import type { RendererEntry } from '../renderer-entry.js';
+import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron";
+import { pathToFileURL } from "node:url";
+import type { RendererEntry } from "../renderer-entry.js";
 
 export interface GuardedIpcLogger {
   warn(payload: Record<string, unknown>, message: string): void;
@@ -33,7 +33,10 @@ export interface GuardedIpcRegistrar {
 
 type SenderVerdict =
   | { ok: true }
-  | { ok: false; reason: 'no_renderer' | 'foreign_web_contents' | 'not_top_frame' | 'url_mismatch' };
+  | {
+      ok: false;
+      reason: "no_renderer" | "foreign_web_contents" | "not_top_frame" | "url_mismatch";
+    };
 
 /** The two fields the guard reads off an Electron ipc event. */
 interface SenderLike {
@@ -41,31 +44,33 @@ interface SenderLike {
   senderFrame: { url: string } | null;
 }
 
-export function createGuardedIpcRegistrar(
-  deps: GuardedIpcRegistrarDeps,
-): GuardedIpcRegistrar {
+export function createGuardedIpcRegistrar(deps: GuardedIpcRegistrarDeps): GuardedIpcRegistrar {
   const validate = (event: SenderLike): SenderVerdict => {
     const expected = deps.resolveRendererWebContents();
-    if (!expected) return { ok: false, reason: 'no_renderer' };
+    if (!expected) return { ok: false, reason: "no_renderer" };
     if (event.sender !== expected) {
-      return { ok: false, reason: 'foreign_web_contents' };
+      return { ok: false, reason: "foreign_web_contents" };
     }
     const frame = event.senderFrame;
     // A null frame means the sender is gone or unknown — refuse rather than
     // fall through to a URL check we cannot perform.
-    if (!frame) return { ok: false, reason: 'not_top_frame' };
+    if (!frame) return { ok: false, reason: "not_top_frame" };
     if (frame !== (event.sender as unknown as { mainFrame: unknown }).mainFrame) {
-      return { ok: false, reason: 'not_top_frame' };
+      return { ok: false, reason: "not_top_frame" };
     }
     return matchesRendererEntry(frame.url, deps.entry)
       ? { ok: true }
-      : { ok: false, reason: 'url_mismatch' };
+      : { ok: false, reason: "url_mismatch" };
   };
 
-  const logRejection = (channel: string, verdict: SenderVerdict & { ok: false }, event: SenderLike): void => {
+  const logRejection = (
+    channel: string,
+    verdict: SenderVerdict & { ok: false },
+    event: SenderLike,
+  ): void => {
     deps.log?.warn(
       {
-        action: 'ipc_sender_rejected',
+        action: "ipc_sender_rejected",
         channel,
         reason: verdict.reason,
         // Ids only — never the URL itself (its hash/query name workspaces
@@ -78,7 +83,7 @@ export function createGuardedIpcRegistrar(
         // page from a wrong dev origin, with no path/hash/query.
         source_kind: normalizeSourceKind(event.senderFrame?.url),
       },
-      'ipc sender validation rejected a message',
+      "ipc sender validation rejected a message",
     );
   };
 
@@ -122,17 +127,14 @@ export function createGuardedIpcRegistrar(
  * path exactly — the HashRouter fragment and any query are stripped first,
  * so `index.html#/c/abc?x=1` is the same document as `index.html`.
  */
-export function matchesRendererEntry(
-  frameUrl: string,
-  entry: RendererEntry,
-): boolean {
+export function matchesRendererEntry(frameUrl: string, entry: RendererEntry): boolean {
   let url: URL;
   try {
     url = new URL(frameUrl);
   } catch {
     return false;
   }
-  if (entry.kind === 'dev-server') {
+  if (entry.kind === "dev-server") {
     let expected: URL;
     try {
       expected = new URL(entry.url);
@@ -141,13 +143,13 @@ export function matchesRendererEntry(
     }
     // Only real origins can be compared; an opaque origin (`null`) would
     // otherwise match any other opaque-origin page.
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
-    if (expected.protocol !== 'http:' && expected.protocol !== 'https:') {
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    if (expected.protocol !== "http:" && expected.protocol !== "https:") {
       return false;
     }
     return url.origin === expected.origin;
   }
-  if (url.protocol !== 'file:') return false;
+  if (url.protocol !== "file:") return false;
   return url.pathname === pathToFileURL(entry.filePath).pathname;
 }
 
@@ -157,15 +159,15 @@ export function matchesRendererEntry(
  */
 function normalizeSourceKind(
   url: string | undefined,
-): 'file' | 'http' | 'other' | 'malformed' | 'missing' {
-  if (url === undefined) return 'missing';
+): "file" | "http" | "other" | "malformed" | "missing" {
+  if (url === undefined) return "missing";
   try {
     const protocol = new URL(url).protocol;
-    if (protocol === 'file:') return 'file';
-    if (protocol === 'http:' || protocol === 'https:') return 'http';
-    return 'other';
+    if (protocol === "file:") return "file";
+    if (protocol === "http:" || protocol === "https:") return "http";
+    return "other";
   } catch {
-    return 'malformed';
+    return "malformed";
   }
 }
 

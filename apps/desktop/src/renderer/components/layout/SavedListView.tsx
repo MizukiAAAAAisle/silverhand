@@ -1,38 +1,38 @@
-import { useMemo } from 'react';
-import { Bookmark, Clock, Layers } from 'lucide-react';
-import dayjs from 'dayjs';
-import type { AgentDto, SavedMessageDto } from '@silverhand/shared';
-import { Markdown } from '@/components/chat/Markdown';
-import { CollectionItemCard } from '@/components/layout/collection-item-card';
-import { ChannelIcon } from '@/components/ChannelIcon';
-import { WorkspaceIcon } from '@/components/WorkspaceIcon';
-import { AuthorAvatarView, AuthorName } from '@/components/chat/author-avatar-view';
-import { presentAuthor } from '@/components/chat/author-presentation';
-import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { useAgents } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useUsers, useUsersById, makeUserNameResolver } from '@/features/users/hooks';
-import { useSavedMessages, useUnsaveMessage } from '@/features/saved/hooks';
-import type { WorkspaceListItem } from '@/features/workspaces/hooks';
-import { FilterBlock } from '@/components/ui/filter-select';
-import { ListRowsSkeleton } from './ListRowsSkeleton';
+import { useMemo } from "react";
+import { Bookmark, Clock, Layers } from "lucide-react";
+import dayjs from "dayjs";
+import type { AgentDto, SavedMessageDto } from "@silverhand/shared";
+import { Markdown } from "@/components/chat/Markdown";
+import { CollectionItemCard } from "@/components/layout/collection-item-card";
+import { ChannelIcon } from "@/components/ChannelIcon";
+import { WorkspaceIcon } from "@/components/WorkspaceIcon";
+import { AuthorAvatarView, AuthorName } from "@/components/chat/author-avatar-view";
+import { presentAuthor } from "@/components/chat/author-presentation";
+import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { useAgents } from "@/features/agents/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useUsers, useUsersById, makeUserNameResolver } from "@/features/users/hooks";
+import { useSavedMessages, useUnsaveMessage } from "@/features/saved/hooks";
+import type { WorkspaceListItem } from "@/features/workspaces/hooks";
+import { FilterBlock } from "@/components/ui/filter-select";
+import { ListRowsSkeleton } from "./ListRowsSkeleton";
 import {
   WorkspaceFilterSelect,
   workspaceFilterId,
   type WorkspaceFilterValue,
-} from '@/components/ui/workspace-filter-select';
+} from "@/components/ui/workspace-filter-select";
 import {
   SenderFilterSelect,
   parseSenderFilter,
   type SenderFilterValue,
-} from '@/components/ui/sender-filter-select';
+} from "@/components/ui/sender-filter-select";
 import {
   DateFilterSelect,
   dateFilterSince,
   type DateFilterValue,
-} from '@/components/ui/date-filter-select';
-import { paneChrome } from './pane-chrome';
+} from "@/components/ui/date-filter-select";
+import { paneChrome } from "./pane-chrome";
 
 /** Saved-view filter selection. Lifted to App so it survives pane switches
  *  for the app session (shiki #task:1258 follow-up) — NOT persisted, so a
@@ -46,9 +46,9 @@ export interface SavedFilterState {
 }
 
 export const SAVED_FILTER_DEFAULT: SavedFilterState = {
-  workspace: 'all',
-  sender: 'all',
-  date: 'all',
+  workspace: "all",
+  sender: "all",
+  date: "all",
 };
 
 /** A Saved card navigates on click, but it wraps fully-interactive message
@@ -62,12 +62,8 @@ export function isBareCardClick(
   card: HTMLElement,
   selection: Selection | null,
 ): boolean {
-  if (target.closest('button, a')) return false;
-  if (
-    selection &&
-    !selection.isCollapsed &&
-    card.contains(selection.anchorNode)
-  ) {
+  if (target.closest("button, a")) return false;
+  if (selection && !selection.isCollapsed && card.contains(selection.anchorNode)) {
     return false;
   }
   return true;
@@ -109,10 +105,8 @@ export function SavedListView({
   const { workspace, sender, date } = filter;
   const setWorkspace = (next: WorkspaceFilterValue) =>
     onFilterChange({ ...filter, workspace: next });
-  const setSender = (next: SenderFilterValue) =>
-    onFilterChange({ ...filter, sender: next });
-  const setDate = (next: DateFilterValue) =>
-    onFilterChange({ ...filter, date: next });
+  const setSender = (next: SenderFilterValue) => onFilterChange({ ...filter, sender: next });
+  const setDate = (next: DateFilterValue) => onFilterChange({ ...filter, date: next });
   const wsId = workspaceFilterId(workspace);
   const senderQuery = useMemo(() => parseSenderFilter(sender), [sender]);
   const since = useMemo(() => dateFilterSince(date), [date]);
@@ -138,7 +132,7 @@ export function SavedListView({
     agentId: senderQuery.agentId,
   });
   const items = useMemo(() => data ?? [], [data]);
-  const hasFilters = workspace !== 'all' || sender !== 'all' || date !== 'all';
+  const hasFilters = workspace !== "all" || sender !== "all" || date !== "all";
   // Keep the filter row visible whenever a filter is active, even if it yields
   // zero rows — else filtering to empty would hide the controls and trap the
   // user with no way to clear.
@@ -152,10 +146,7 @@ export function SavedListView({
   // container identity comes from the joined workspace itself, so a saved row
   // and a rail row cannot disagree about the same container — which is what a
   // second answer travelling with the pointer would have allowed.
-  const workspacesById = useMemo(
-    () => new Map(workspaces.map(w => [w.id, w])),
-    [workspaces],
-  );
+  const workspacesById = useMemo(() => new Map(workspaces.map((w) => [w.id, w])), [workspaces]);
   // A `direct_pair` row wears NO "where" segment at all (shiki #task:2060): a
   // pair is not a place, and standing its counterpart's agent identity in the
   // workspace slot reads as "this lives in that agent" — a place that does not
@@ -166,32 +157,26 @@ export function SavedListView({
   // option domain above, and the WorkspaceIcon's owner avatar here (the agent that
   // owns the workspace — not the row's author, and not the row's sender).
   const agentsById = useMemo<ReadonlyMap<string, AgentDto>>(
-    () => new Map(agents.map(a => [a.id, a])),
+    () => new Map(agents.map((a) => [a.id, a])),
     [agents],
   );
   const ownerAgentAvatarUrls = useAgentAvatarObjectUrls(agents);
   // The byline avatar's bytes come STRICTLY from each row's own author DTO
   // (#task:1792 B2) — never a directory join, so a saved message whose author is
   // outside the loaded directory (or deleted) still renders its own avatar.
-  const authors = useMemo(() => items.map(i => i.message.author), [items]);
+  const authors = useMemo(() => items.map((i) => i.message.author), [items]);
   const { agentAvatarUrls: authorAgentAvatarUrls, humanAvatarUrls: authorHumanAvatarUrls } =
     useAuthorAvatarObjectUrls(authors);
 
   return (
     <main
       className="flex h-full flex-1 flex-col bg-bg-chat"
-      style={{ ...paneChrome, overflow: 'hidden' }}
+      style={{ ...paneChrome, overflow: "hidden" }}
     >
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <Bookmark className="size-3.5 fill-current text-accent" />
-        <span className="font-serif text-sm font-semibold text-text-primary">
-          Saved
-        </span>
-        {data ? (
-          <span className="text-xs tabular-nums text-text-muted">
-            {items.length}
-          </span>
-        ) : null}
+        <span className="font-serif text-sm font-semibold text-text-primary">Saved</span>
+        {data ? <span className="text-xs tabular-nums text-text-muted">{items.length}</span> : null}
       </header>
 
       {showFilters ? (
@@ -216,11 +201,7 @@ export function SavedListView({
               />
             </FilterBlock>
             <FilterBlock label="Saved date" className="w-full sm:w-48">
-              <DateFilterSelect
-                value={date}
-                onChange={setDate}
-                ariaLabel="Saved date filter"
-              />
+              <DateFilterSelect value={date} onChange={setDate} ariaLabel="Saved date filter" />
             </FilterBlock>
           </div>
         </section>
@@ -231,11 +212,11 @@ export function SavedListView({
           <ListRowsSkeleton />
         ) : items.length === 0 ? (
           <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-text-muted">
-            {hasFilters ? 'No matches' : 'No saved messages'}
+            {hasFilters ? "No matches" : "No saved messages"}
           </div>
         ) : (
           <ul className="space-y-2">
-            {items.map(item => (
+            {items.map((item) => (
               <SavedItem
                 key={item.id}
                 item={item}
@@ -246,7 +227,7 @@ export function SavedListView({
                 authorHumanAvatarUrls={authorHumanAvatarUrls}
                 onJump={() =>
                   onJump(
-                    item.place.kind === 'workspace_channel'
+                    item.place.kind === "workspace_channel"
                       ? {
                           workspaceId: item.place.workspace_id,
                           channelId: item.place.conversation_id,
@@ -306,14 +287,9 @@ function SavedItem({
   // degrades to "Unknown …" here exactly as in the stream — never a live
   // directory re-join by `from_*_id`. A saved system message (`author === null`)
   // reads as "System" with a neutral person square.
-  const presentation = item.message.author
-    ? presentAuthor(item.message.author)
-    : null;
-  const sender = presentation?.label ?? 'System';
-  const when = useMemo(
-    () => dayjs(item.saved_at).format('YYYY-MM-DD HH:mm'),
-    [item.saved_at],
-  );
+  const presentation = item.message.author ? presentAuthor(item.message.author) : null;
+  const sender = presentation?.label ?? "System";
+  const when = useMemo(() => dayjs(item.saved_at).format("YYYY-MM-DD HH:mm"), [item.saved_at]);
 
   // The saved's "where" lives in its discriminated `place` (#task:2055): a
   // `workspace_channel` save is the workspace + channel it sits in, joined live
@@ -322,9 +298,7 @@ function SavedItem({
   // only one that resolves one.
   const place = item.place;
   const workspace =
-    place.kind === 'workspace_channel'
-      ? workspacesById.get(place.workspace_id) ?? null
-      : null;
+    place.kind === "workspace_channel" ? (workspacesById.get(place.workspace_id) ?? null) : null;
 
   return (
     <li>
@@ -337,19 +311,13 @@ function SavedItem({
       <CollectionItemCard
         role="button"
         tabIndex={0}
-        onClick={e => {
-          if (
-            isBareCardClick(
-              e.target as HTMLElement,
-              e.currentTarget,
-              window.getSelection(),
-            )
-          ) {
+        onClick={(e) => {
+          if (isBareCardClick(e.target as HTMLElement, e.currentTarget, window.getSelection())) {
             onJump();
           }
         }}
-        onKeyDown={e => {
-          if (e.key === 'Enter' || e.key === ' ') {
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onJump();
           }
@@ -375,7 +343,7 @@ function SavedItem({
             it gets a `Clock` — utility scale (14px), a notch under the 16px
             identity glyphs beside it. */}
         <header className="mb-2 flex items-center gap-2 text-xs text-text-muted">
-          {place.kind === 'workspace_channel' ? (
+          {place.kind === "workspace_channel" ? (
             <>
               {/* The workspace segment is drawn only when the join RESOLVED
                   (#task:2078). It used to render unconditionally, filling the
@@ -403,7 +371,7 @@ function SavedItem({
           ) : null}
           <span className="inline-flex min-w-0 items-center gap-1">
             <AuthorAvatarView
-              avatar={presentation?.avatar ?? { variant: 'neutral-user' }}
+              avatar={presentation?.avatar ?? { variant: "neutral-user" }}
               size={AVATAR_PX.xs}
               label={sender}
               agentAvatarUrls={authorAgentAvatarUrls}
@@ -412,11 +380,7 @@ function SavedItem({
             {/* Author name carries its deleted state through the ONE shared
                 primitive (#task:1792 B3); a saved system row has no author DTO
                 and reads "System". */}
-            {presentation ? (
-              <AuthorName presentation={presentation} />
-            ) : (
-              <span>{sender}</span>
-            )}
+            {presentation ? <AuthorName presentation={presentation} /> : <span>{sender}</span>}
           </span>
           <span className="inline-flex shrink-0 items-center gap-1">
             <Clock aria-hidden className="size-3.5 shrink-0" />
@@ -424,7 +388,7 @@ function SavedItem({
           </span>
           <button
             type="button"
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation();
               onUnsave();
             }}

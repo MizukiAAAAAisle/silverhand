@@ -1,4 +1,4 @@
-import { X } from 'lucide-react';
+import { X } from "lucide-react";
 
 /**
  * The fixed-height header row shared by every right-pane side panel — the agent
@@ -40,10 +40,7 @@ export function SidePanelHeader({
       {actions ? (
         // `data-channel-actions` lays the trailing controls out only; each
         // button declares its own forza6 sticker axes.
-        <div
-          data-channel-actions
-          className="ml-auto flex shrink-0 items-center gap-1.5"
-        >
+        <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1.5">
           {actions}
           {closeButton}
         </div>
@@ -58,7 +55,7 @@ export function SidePanelHeader({
 
 function SidePanelCloseButton({
   onClose,
-  className = '',
+  className = "",
 }: {
   onClose: () => void;
   className?: string;
@@ -74,7 +71,7 @@ function SidePanelCloseButton({
       data-sticker-size="md"
       data-sticker-tone="neutral"
       className={
-        'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline ' +
+        "flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline " +
         className
       }
     >
@@ -101,12 +98,8 @@ export function SidePanelHeaderTitle({
     <>
       {icon}
       <div className="min-w-0 flex-1 leading-tight">
-        <div className="truncate text-sm font-medium text-text-primary">
-          {title}
-        </div>
-        {subtitle ? (
-          <div className="truncate text-xs text-text-muted">{subtitle}</div>
-        ) : null}
+        <div className="truncate text-sm font-medium text-text-primary">{title}</div>
+        {subtitle ? <div className="truncate text-xs text-text-muted">{subtitle}</div> : null}
       </div>
     </>
   );

@@ -1,5 +1,5 @@
-import { useState, type ReactElement, type ReactNode } from 'react';
-import * as Popover from '@radix-ui/react-popover';
+import { useState, type ReactElement, type ReactNode } from "react";
+import * as Popover from "@radix-ui/react-popover";
 import {
   Archive,
   ArrowRight,
@@ -8,13 +8,10 @@ import {
   createLucideIcon,
   Eye,
   type LucideIcon,
-} from 'lucide-react';
-import type { TaskStatus } from '@silverhand/shared';
-import { cn } from '@/lib/cn';
-import {
-  AppContextMenu,
-  AppContextMenuItem,
-} from '@/components/menus/AppContextMenu';
+} from "lucide-react";
+import type { TaskStatus } from "@silverhand/shared";
+import { cn } from "@/lib/cn";
+import { AppContextMenu, AppContextMenuItem } from "@/components/menus/AppContextMenu";
 
 /**
  * Small inline status chip for task cards (global section + per-conversation Tasks tab).
@@ -34,29 +31,23 @@ import {
  * task, the four open statuses (reopen).
  */
 const LABELS: Record<TaskStatus, string> = {
-  todo: 'todo',
-  in_progress: 'in progress',
-  in_review: 'in review',
-  done: 'done',
-  closed: 'closed',
+  todo: "todo",
+  in_progress: "in progress",
+  in_review: "in review",
+  done: "done",
+  closed: "closed",
 };
 
 /** Title-case labels for menu/sentence contexts ("Move to In review"). */
 const MOVE_LABELS: Record<TaskStatus, string> = {
-  todo: 'Todo',
-  in_progress: 'In progress',
-  in_review: 'In review',
-  done: 'Done',
-  closed: 'Closed',
+  todo: "Todo",
+  in_progress: "In progress",
+  in_review: "In review",
+  done: "Done",
+  closed: "Closed",
 };
 
-const ALL_STATUSES: TaskStatus[] = [
-  'todo',
-  'in_progress',
-  'in_review',
-  'done',
-  'closed',
-];
+const ALL_STATUSES: TaskStatus[] = ["todo", "in_progress", "in_review", "done", "closed"];
 
 /** Canonical lowercase status label (`todo` / `in progress` / …). Exported so
  *  other surfaces (e.g. the message task tag) render the SAME vocabulary
@@ -78,15 +69,15 @@ export function taskStatusLabel(status: TaskStatus): string {
  * ring keeps the inherited stroke. Inset r=6 leaves a gap to the r=10
  * ring so the fill reads as a distinct pie, not a thick arc.
  */
-const CircleProgress = createLucideIcon('CircleProgress', [
-  ['circle', { cx: '12', cy: '12', r: '10', key: 'ring' }],
+const CircleProgress = createLucideIcon("CircleProgress", [
+  ["circle", { cx: "12", cy: "12", r: "10", key: "ring" }],
   [
-    'path',
+    "path",
     {
-      d: 'M12 12 L12 6 A6 6 0 1 1 6 12 Z',
-      fill: 'currentColor',
-      stroke: 'none',
-      key: 'fill',
+      d: "M12 12 L12 6 A6 6 0 1 1 6 12 Z",
+      fill: "currentColor",
+      stroke: "none",
+      key: "fill",
     },
   ],
 ]);
@@ -119,7 +110,7 @@ const CHIP =
   // viewport + per-conversation Tasks tab at MIN_WIDTH share 5 columns). The
   // chip drops to its own line beneath `#nnn` instead of breaking
   // mid-word.
-  'rounded-[var(--task-status-radius)] whitespace-nowrap px-1 py-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wide leading-none';
+  "rounded-[var(--task-status-radius)] whitespace-nowrap px-1 py-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wide leading-none";
 
 export function TaskStatusBadge({
   status,
@@ -152,10 +143,10 @@ export function TaskStatusBadge({
         title="Change status"
         // Stop the click from reaching the card's stretched jump
         // overlay underneath.
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         className={cn(
           CHIP,
-          'cursor-pointer transition-opacity hover:opacity-80 focus-outline',
+          "cursor-pointer transition-opacity hover:opacity-80 focus-outline",
           className,
         )}
       >
@@ -197,7 +188,7 @@ export function StatusPicker({
   return (
     <Popover.Root
       open={open}
-      onOpenChange={next => {
+      onOpenChange={(next) => {
         setOpen(next);
         onOpenChange?.(next);
       }}
@@ -207,13 +198,13 @@ export function StatusPicker({
         <Popover.Content
           align="start"
           sideOffset={4}
-          onClick={e => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
           // Don't bounce focus back to the trigger badge on close. When
           // this picker lives inside a hover-card popover, returning
           // focus to the (hover-card-owned) badge re-arms the card's
           // focus-open and fights the card's dismissal (#task:923 bug:
           // 点击 status 后卡片无法失焦消失).
-          onCloseAutoFocus={e => e.preventDefault()}
+          onCloseAutoFocus={(e) => e.preventDefault()}
           data-popover-frame="info"
           // z-[var(--z-popover-nested)] clears the hover-card task popover (z-[var(--z-popover)] in
           // HoverPopover) so the picker isn't trapped behind its own
@@ -224,7 +215,7 @@ export function StatusPicker({
           <div className="px-1.5 pb-1 pt-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
             Move to
           </div>
-          {ALL_STATUSES.filter(s => s !== current).map(s => (
+          {ALL_STATUSES.filter((s) => s !== current).map((s) => (
             <button
               key={s}
               type="button"
@@ -266,7 +257,7 @@ export function TaskCardContextMenu({
 }): JSX.Element {
   return (
     <AppContextMenu trigger={children}>
-      {ALL_STATUSES.filter(s => s !== status).map(s => (
+      {ALL_STATUSES.filter((s) => s !== status).map((s) => (
         <AppContextMenuItem
           key={s}
           icon={<ArrowRight className="size-3.5" />}

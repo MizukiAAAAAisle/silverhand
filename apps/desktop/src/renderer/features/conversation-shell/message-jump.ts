@@ -1,8 +1,8 @@
-import type { AppSection } from '@/components/layout/NavRail';
-import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
-import type { DirectPairAuthority } from '@/lib/chat-place-restore';
-import { resolveJumpNav, resolveJumpRoute, jumpBasePath } from '@/lib/message-jump-nav';
-import { withThreadQuery } from '@/router';
+import type { AppSection } from "@/components/layout/NavRail";
+import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import type { DirectPairAuthority } from "@/lib/chat-place-restore";
+import { resolveJumpNav, resolveJumpRoute, jumpBasePath } from "@/lib/message-jump-nav";
+import { withThreadQuery } from "@/router";
 
 export interface MessageJumpEnvironment {
   section: AppSection;
@@ -26,7 +26,7 @@ export function executeMessageJump(
     channelId: target.channelId,
     pairs: env.pairs,
   });
-  if (decision === 'fail-closed') {
+  if (decision === "fail-closed") {
     return false;
   }
 
@@ -41,6 +41,6 @@ export function executeMessageJump(
   }
 
   env.prime(target);
-  env.navigate(withThreadQuery(jumpBasePath(env.section, route), '', route.threadRootId));
+  env.navigate(withThreadQuery(jumpBasePath(env.section, route), "", route.threadRootId));
   return true;
 }

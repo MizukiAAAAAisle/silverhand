@@ -1,7 +1,4 @@
-import {
-  MAX_MESSAGE_ATTACHMENTS,
-  messageContentExceedsLimit,
-} from '@silverhand/shared';
+import { MAX_MESSAGE_ATTACHMENTS, messageContentExceedsLimit } from "@silverhand/shared";
 
 /** Composer-local alias for the shared per-message attachment cap. */
 export const MAX_ATTACHMENTS = MAX_MESSAGE_ATTACHMENTS;
@@ -14,13 +11,6 @@ export const MAX_ATTACHMENTS = MAX_MESSAGE_ATTACHMENTS;
  * available: `addFiles` is a no-op at capacity, so intercepting without
  * a slot would silently swallow the pasted text.
  */
-export function shouldInterceptOversizedPaste(
-  text: string,
-  pendingCount: number,
-): boolean {
-  return (
-    text.length > 0 &&
-    messageContentExceedsLimit(text) &&
-    pendingCount < MAX_ATTACHMENTS
-  );
+export function shouldInterceptOversizedPaste(text: string, pendingCount: number): boolean {
+  return text.length > 0 && messageContentExceedsLimit(text) && pendingCount < MAX_ATTACHMENTS;
 }

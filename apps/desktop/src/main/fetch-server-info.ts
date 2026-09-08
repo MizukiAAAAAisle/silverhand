@@ -1,4 +1,4 @@
-import { ServerInfoSchema, type ServerInfo } from '@silverhand/shared';
+import { ServerInfoSchema, type ServerInfo } from "@silverhand/shared";
 
 export type ServerInfoFetcher = (
   input: string,
@@ -23,7 +23,7 @@ export interface FetchServerInfoWithRetryOptions {
 }
 
 class InvalidServerInfoResponseError extends Error {
-  override name = 'InvalidServerInfoResponseError';
+  override name = "InvalidServerInfoResponseError";
 }
 
 function parseJson(text: string): unknown {
@@ -34,8 +34,8 @@ function parseJson(text: string): unknown {
   }
 }
 
-const defaultSleep: SleepFn = ms =>
-  new Promise(resolve => {
+const defaultSleep: SleepFn = (ms) =>
+  new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
 
@@ -71,29 +71,33 @@ export async function fetchServerInfoWithRetry(
 
   for (let attempt = 0; ; attempt += 1) {
     if (opts.signal?.aborted) {
-      throw new Error('server info fetch aborted');
+      throw new Error("server info fetch aborted");
     }
     try {
       return await fetchServerInfoOnce(opts.url, fetcher, opts.signal);
     } catch (err) {
       const retryDelayMs = retryDelaysMs[attempt];
-      if (
-        retryDelayMs === undefined ||
-        !shouldRetryServerInfoError(err) ||
-        opts.signal?.aborted
-      ) {
+      if (retryDelayMs === undefined || !shouldRetryServerInfoError(err) || opts.signal?.aborted) {
         throw err;
       }
-      if (!opts.signal) { await sleep(retryDelayMs); continue; }
+      if (!opts.signal) {
+        await sleep(retryDelayMs);
+        continue;
+      }
       const signal = opts.signal;
       let abort = (): void => {};
       try {
-        await Promise.race([sleep(retryDelayMs), new Promise<never>((_, reject) => {
-          abort = () => reject(new Error('server info retry aborted'));
-          signal.addEventListener('abort', abort, { once: true });
-          if (signal.aborted) abort();
-        })]);
-      } finally { signal.removeEventListener('abort', abort); }
+        await Promise.race([
+          sleep(retryDelayMs),
+          new Promise<never>((_, reject) => {
+            abort = () => reject(new Error("server info retry aborted"));
+            signal.addEventListener("abort", abort, { once: true });
+            if (signal.aborted) abort();
+          }),
+        ]);
+      } finally {
+        signal.removeEventListener("abort", abort);
+      }
     }
   }
 }

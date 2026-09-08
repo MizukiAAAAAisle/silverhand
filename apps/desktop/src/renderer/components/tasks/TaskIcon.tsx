@@ -1,4 +1,4 @@
-import { ListChecks, type LucideIcon } from 'lucide-react';
+import { ListChecks, type LucideIcon } from "lucide-react";
 
 /**
  * The Task ENTITY icon — Lucide `ListChecks`, the single source for every surface

@@ -1,19 +1,19 @@
-import { queryOptions, useQuery } from '@tanstack/react-query';
+import { queryOptions, useQuery } from "@tanstack/react-query";
 import {
   apiPaths,
   ProfileMessageCountsSchema,
   type ProfileMessageCounts,
-} from '@silverhand/shared';
-import { api } from '@/lib/api';
-import { getCurrentUserId } from '@/lib/current-user';
+} from "@silverhand/shared";
+import { api } from "@/lib/api";
+import { getCurrentUserId } from "@/lib/current-user";
 
-export type ProfileMessageSubject = ProfileMessageCounts['subject'];
+export type ProfileMessageSubject = ProfileMessageCounts["subject"];
 
 export const profileMessageCountsKey = (
   viewerId: string | null,
   subject: ProfileMessageSubject,
   year: number,
-) => ['profile-message-counts', viewerId, subject.kind, subject.id, year] as const;
+) => ["profile-message-counts", viewerId, subject.kind, subject.id, year] as const;
 
 export function profileMessageCountsOptions(
   viewerId: string | null,
@@ -24,7 +24,7 @@ export function profileMessageCountsOptions(
     queryKey: profileMessageCountsKey(viewerId, subject, year),
     queryFn: async ({ signal }) => {
       if (!viewerId || getCurrentUserId() !== viewerId) {
-        throw new Error('Session changed.');
+        throw new Error("Session changed.");
       }
 
       const data = ProfileMessageCountsSchema.parse(
@@ -34,7 +34,7 @@ export function profileMessageCountsOptions(
       );
 
       if (getCurrentUserId() !== viewerId) {
-        throw new Error('Session changed.');
+        throw new Error("Session changed.");
       }
 
       if (
@@ -42,15 +42,15 @@ export function profileMessageCountsOptions(
         data.subject.id !== subject.id ||
         data.year !== year
       ) {
-        throw new Error('Message activity response does not match the profile.');
+        throw new Error("Message activity response does not match the profile.");
       }
 
       return data;
     },
     enabled: viewerId !== null,
     staleTime: 0,
-    refetchOnMount: 'always',
-    refetchOnWindowFocus: 'always',
+    refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
     retry: false,
   });
 }
@@ -60,15 +60,15 @@ export function useProfileMessageCounts(subject: ProfileMessageSubject, year: nu
 }
 
 export function shanghaiDate(now = new Date()): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
   }).formatToParts(now);
 
   const value = (type: Intl.DateTimeFormatPartTypes) =>
     parts.find((part) => part.type === type)!.value;
 
-  return `${value('year')}-${value('month')}-${value('day')}`;
+  return `${value("year")}-${value("month")}-${value("day")}`;
 }

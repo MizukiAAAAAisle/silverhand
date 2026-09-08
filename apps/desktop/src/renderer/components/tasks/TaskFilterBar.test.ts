@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { describe, expect, it } from "vitest";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import {
   buildChannelFilterOptions,
@@ -9,15 +9,13 @@ import {
   type ChannelFilterCandidate,
   type ChannelOption,
   type WorkspaceOption,
-} from './TaskFilterBar';
-import { DEFAULT_TASK_FILTERS } from '@/features/tasks/taskFilters';
-import { workspaceChannelCandidates } from '@/features/tasks/useTaskFilterOptions';
+} from "./TaskFilterBar";
+import { DEFAULT_TASK_FILTERS } from "@/features/tasks/taskFilters";
+import { workspaceChannelCandidates } from "@/features/tasks/useTaskFilterOptions";
 
-function candidate(
-  over: Partial<ChannelFilterCandidate> & { id: string },
-): ChannelFilterCandidate {
+function candidate(over: Partial<ChannelFilterCandidate> & { id: string }): ChannelFilterCandidate {
   return {
-    workspaceId: 'ws-default',
+    workspaceId: "ws-default",
     title: `title-${over.id}`,
     archived_at: null,
     fromAgentSpace: false,
@@ -25,46 +23,44 @@ function candidate(
   };
 }
 
-describe('buildChannelFilterOptions', () => {
-  it('maps a plain channel to a channel option (title is the label)', () => {
-    const out = buildChannelFilterOptions([
-      candidate({ id: 'c1', title: 'General' }),
-    ]);
+describe("buildChannelFilterOptions", () => {
+  it("maps a plain channel to a channel option (title is the label)", () => {
+    const out = buildChannelFilterOptions([candidate({ id: "c1", title: "General" })]);
     expect(out).toEqual([
-      { id: 'c1', workspaceId: 'ws-default', label: 'General', group: 'workspace' },
+      { id: "c1", workspaceId: "ws-default", label: "General", group: "workspace" },
     ]);
   });
 
-  it('skips archived channels — this is the archived-channel leak being fixed', () => {
+  it("skips archived channels — this is the archived-channel leak being fixed", () => {
     const out = buildChannelFilterOptions([
-      candidate({ id: 'c1' }),
-      candidate({ id: 'c2', archived_at: 1700000000000 }),
+      candidate({ id: "c1" }),
+      candidate({ id: "c2", archived_at: 1700000000000 }),
     ]);
-    expect(out.map(o => o.id)).toEqual(['c1']);
+    expect(out.map((o) => o.id)).toEqual(["c1"]);
   });
 
-  it('dedups by id, first occurrence wins', () => {
+  it("dedups by id, first occurrence wins", () => {
     const out = buildChannelFilterOptions([
-      candidate({ id: 'c1', title: 'First', sublabel: 'ws-a' }),
-      candidate({ id: 'c1', title: 'Second', sublabel: 'ws-b' }),
+      candidate({ id: "c1", title: "First", sublabel: "ws-a" }),
+      candidate({ id: "c1", title: "Second", sublabel: "ws-b" }),
     ]);
     expect(out).toEqual([
       {
-        id: 'c1',
-        workspaceId: 'ws-default',
-        label: 'First',
-        group: 'workspace',
-        sublabel: 'ws-a',
+        id: "c1",
+        workspaceId: "ws-default",
+        label: "First",
+        group: "workspace",
+        sublabel: "ws-a",
       },
     ]);
   });
 
-  it('carries the owning workspaceId through for the cascade (#task:1387)', () => {
+  it("carries the owning workspaceId through for the cascade (#task:1387)", () => {
     const out = buildChannelFilterOptions([
-      candidate({ id: 'c1', workspaceId: 'ws-eng' }),
-      candidate({ id: 'c2', workspaceId: 'ws-design' }),
+      candidate({ id: "c1", workspaceId: "ws-eng" }),
+      candidate({ id: "c2", workspaceId: "ws-design" }),
     ]);
-    expect(out.map(o => o.workspaceId)).toEqual(['ws-eng', 'ws-design']);
+    expect(out.map((o) => o.workspaceId)).toEqual(["ws-eng", "ws-design"]);
   });
 
   // One determinant, one test. There used to be two — one keyed on
@@ -72,45 +68,43 @@ describe('buildChannelFilterOptions', () => {
   // both. The roster disjunct is gone (#task:2077): roster is a capability
   // fact, the group is a container question, and a fixed-roster channel in a
   // people-owned workspace belongs under Workspaces.
-  it('files a channel from an agent space under the agent-space group', () => {
-    const out = buildChannelFilterOptions([
-      candidate({ id: 'c1', fromAgentSpace: true }),
-    ]);
-    expect(out[0]?.group).toBe('agent_space');
+  it("files a channel from an agent space under the agent-space group", () => {
+    const out = buildChannelFilterOptions([candidate({ id: "c1", fromAgentSpace: true })]);
+    expect(out[0]?.group).toBe("agent_space");
   });
 
-  it('omits sublabel when none is provided (single-workspace surface)', () => {
-    const out = buildChannelFilterOptions([candidate({ id: 'c1' })]);
-    expect(out[0]).not.toHaveProperty('sublabel');
+  it("omits sublabel when none is provided (single-workspace surface)", () => {
+    const out = buildChannelFilterOptions([candidate({ id: "c1" })]);
+    expect(out[0]).not.toHaveProperty("sublabel");
   });
 
-  it('preserves input order so a pre-sorted caller keeps its order', () => {
+  it("preserves input order so a pre-sorted caller keeps its order", () => {
     const out = buildChannelFilterOptions([
-      candidate({ id: 'b' }),
-      candidate({ id: 'a' }),
-      candidate({ id: 'c' }),
+      candidate({ id: "b" }),
+      candidate({ id: "a" }),
+      candidate({ id: "c" }),
     ]);
-    expect(out.map(o => o.id)).toEqual(['b', 'a', 'c']);
+    expect(out.map((o) => o.id)).toEqual(["b", "a", "c"]);
   });
 });
 
-describe('workspaceChannelCandidates — channel picker label/subtitle rule', () => {
+describe("workspaceChannelCandidates — channel picker label/subtitle rule", () => {
   const ch = (id: string, title: string, over: Partial<{ archived_at: number | null }> = {}) => ({
     id,
     title,
     archived_at: over.archived_at ?? null,
   });
 
-  it('people-owned workspace channel: title is the label, workspace name is the subtitle', () => {
+  it("people-owned workspace channel: title is the label, workspace name is the subtitle", () => {
     const out = workspaceChannelCandidates(
-      { id: 'ws-eng', name: 'Engineering', owner_agent_id: null },
-      [ch('c1', 'general')],
+      { id: "ws-eng", name: "Engineering", owner_agent_id: null },
+      [ch("c1", "general")],
     );
     expect(out[0]).toMatchObject({
-      id: 'c1',
-      workspaceId: 'ws-eng',
-      title: 'general',
-      sublabel: 'Engineering',
+      id: "c1",
+      workspaceId: "ws-eng",
+      title: "general",
+      sublabel: "Engineering",
       fromAgentSpace: false,
     });
   });
@@ -121,33 +115,34 @@ describe('workspaceChannelCandidates — channel picker label/subtitle rule', ()
     // label, the agent name the subtitle — so the rows are distinguishable.
     // The name arrives bare — an agent space's row name IS the agent's handle
     // (#task:2066 retired the `dm-` list prefix).
-    const out = workspaceChannelCandidates({ id: 'ws-alice', name: 'Alice', owner_agent_id: 'agent-alice' }, [
-      ch('c1', 'Mentions'),
-      ch('c2', 'Onboarding'),
-    ]);
-    expect(out.map(c => c.title)).toEqual(['Mentions', 'Onboarding']);
-    expect(out.every(c => c.sublabel === 'Alice')).toBe(true);
+    const out = workspaceChannelCandidates(
+      { id: "ws-alice", name: "Alice", owner_agent_id: "agent-alice" },
+      [ch("c1", "Mentions"), ch("c2", "Onboarding")],
+    );
+    expect(out.map((c) => c.title)).toEqual(["Mentions", "Onboarding"]);
+    expect(out.every((c) => c.sublabel === "Alice")).toBe(true);
     // No two rows collide on (label, subtitle).
     const built = buildChannelFilterOptions(out);
-    const keys = built.map(o => `${o.label}::${o.sublabel}`);
+    const keys = built.map((o) => `${o.label}::${o.sublabel}`);
     expect(new Set(keys).size).toBe(built.length);
-    expect(built.map(o => o.label)).toEqual(['Mentions', 'Onboarding']);
+    expect(built.map((o) => o.label)).toEqual(["Mentions", "Onboarding"]);
   });
 
-  it('a single-channel agent space still carries the agent-name subtitle', () => {
-    const out = workspaceChannelCandidates({ id: 'ws-judy', name: 'Judy', owner_agent_id: 'agent-judy' }, [
-      ch('c1', 'Onboarding'),
-    ]);
-    expect(out[0]).toMatchObject({ title: 'Onboarding', sublabel: 'Judy' });
+  it("a single-channel agent space still carries the agent-name subtitle", () => {
+    const out = workspaceChannelCandidates(
+      { id: "ws-judy", name: "Judy", owner_agent_id: "agent-judy" },
+      [ch("c1", "Onboarding")],
+    );
+    expect(out[0]).toMatchObject({ title: "Onboarding", sublabel: "Judy" });
   });
 });
 
-describe('TaskFilterBar — trigger glyphs stay height-uniform (#task:1437)', () => {
+describe("TaskFilterBar — trigger glyphs stay height-uniform (#task:1437)", () => {
   const workspaceOptions: WorkspaceOption[] = [
-    { id: 'ws-1', label: 'Engineering', owner_agent_id: null },
+    { id: "ws-1", label: "Engineering", owner_agent_id: null },
   ];
   const channelOptions: ChannelOption[] = [
-    { id: 'c-1', workspaceId: 'ws-1', label: 'general', group: 'workspace' },
+    { id: "c-1", workspaceId: "ws-1", label: "general", group: "workspace" },
   ];
 
   function renderBar(): string {
@@ -164,7 +159,7 @@ describe('TaskFilterBar — trigger glyphs stay height-uniform (#task:1437)', ()
           baselineFilters: DEFAULT_TASK_FILTERS,
           workspaceOptions,
           channelOptions,
-          allChannelsLabel: 'All channels',
+          allChannelsLabel: "All channels",
           people: {
             known: true,
             value: { assignees: [], creators: [], hasUnassigned: false },
@@ -174,7 +169,7 @@ describe('TaskFilterBar — trigger glyphs stay height-uniform (#task:1437)', ()
     );
   }
 
-  it('channel trigger uses the sticker `#` identity hook (#task:1441)', () => {
+  it("channel trigger uses the sticker `#` identity hook (#task:1441)", () => {
     // #task:1437 originally kept the channel trigger on the UTILITY `#` (no
     // `data-channel-icon` hook) so the forza6 sticker recipe couldn't inflate
     // it past its 14px siblings. #task:1441 SUPERSEDES that: now that the
@@ -185,6 +180,6 @@ describe('TaskFilterBar — trigger glyphs stay height-uniform (#task:1437)', ()
     // scope, and an accepted trade-off for identity consistency.)
     const html = renderBar();
     expect(html).toContain('aria-label="Channel"');
-    expect(html).toContain('data-channel-icon');
+    expect(html).toContain("data-channel-icon");
   });
 });

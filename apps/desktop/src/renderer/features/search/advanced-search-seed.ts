@@ -1,8 +1,8 @@
-import type { DirectPairCounterpart } from '@silverhand/shared';
+import type { DirectPairCounterpart } from "@silverhand/shared";
 import {
   senderFilterForEndpoint,
   type SenderFilterValue,
-} from '@/components/ui/sender-filter-select';
+} from "@/components/ui/sender-filter-select";
 
 /**
  * What an in-conversation find carries when it hands off to advanced search
@@ -53,6 +53,6 @@ export interface AdvancedSearchSeed {
 export function directPairSenderSeed(
   counterpart: DirectPairCounterpart | null | undefined,
 ): SenderFilterValue | undefined {
-  if (!counterpart || counterpart.status !== 'active') return undefined;
+  if (!counterpart || counterpart.status !== "active") return undefined;
   return senderFilterForEndpoint(counterpart.kind, counterpart.id);
 }

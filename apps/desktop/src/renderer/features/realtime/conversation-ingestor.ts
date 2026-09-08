@@ -1,14 +1,19 @@
-import { confirmLogicalSend } from '@/features/channels/logical-send';
-import { messagesKey, clusterMessagesKey, reconcilePendingMessage, type MessagesCache } from '@/features/channels/message-cache-core';
-import { useEffect } from 'react';
-import { useQueryClient, notifyManager } from '@tanstack/react-query';
-import type { QueryClient } from '@tanstack/react-query';
+import { confirmLogicalSend } from "@/features/channels/logical-send";
+import {
+  messagesKey,
+  clusterMessagesKey,
+  reconcilePendingMessage,
+  type MessagesCache,
+} from "@/features/channels/message-cache-core";
+import { useEffect } from "react";
+import { useQueryClient, notifyManager } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import {
   ATTACHMENT_CHANGED_EVENT,
   MESSAGE_REACTION_CHANGED_EVENT,
   parseConversationScope,
   parseConversationSideScope,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 import type {
   AgentRunState,
   AttachmentChangedEvent,
@@ -19,33 +24,30 @@ import type {
   MessageReactionChangedEvent,
   ServerFrame,
   TaskChangedEvent,
-} from '@silverhand/shared';
-import { onWsFrame, eventWsClient } from '@/lib/ws-client';
-import {
-  bumpAttachmentBlobEpoch,
-  bumpAttachmentRevision,
-} from '@/lib/attachment-blob-cache';
-import { getCurrentUserId } from '@/lib/current-user';
+} from "@silverhand/shared";
+import { onWsFrame, eventWsClient } from "@/lib/ws-client";
+import { bumpAttachmentBlobEpoch, bumpAttachmentRevision } from "@/lib/attachment-blob-cache";
+import { getCurrentUserId } from "@/lib/current-user";
 import {
   appendAgentActivityToCache,
   hasActiveAgentActivityReader,
   reconcileAgentActivityOnSnapshotRequired,
-} from '@/features/agents/useAgentActivityFeed';
+} from "@/features/agents/useAgentActivityFeed";
 import {
   applyAgentRunStateToCache,
   hasActiveAgentRunStatesReader,
   invalidateAgentRunStates,
-} from '@/lib/agentRunStateCache';
+} from "@/lib/agentRunStateCache";
 import {
   hasActiveChannelThreadsReader,
   invalidateChannelThreadsList,
   invalidateChannelThreadsUnread,
-} from '@/features/channels/useChannelThreads';
+} from "@/features/channels/useChannelThreads";
 import {
   hasActiveChannelAttachmentsReader,
   invalidateChannelAttachmentsList,
   invalidateChannelAttachmentSenders,
-} from '@/features/channels/useChannelAttachments';
+} from "@/features/channels/useChannelAttachments";
 import {
   applyAgentStatusToCache,
   applyClusterMessageToCaches,
@@ -70,21 +72,18 @@ import {
   removeInactiveClusterCache,
   removeInactiveMainlineCache,
   warmInactiveClusterRoots,
-} from '@/features/channels/hooks';
-import type { ConversationAgentStatusPatch } from '@/features/channels/hooks';
-import { applyCommittedReactionFromEvent } from '@/features/channels/reaction-hooks';
-import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByNumber';
+} from "@/features/channels/hooks";
+import type { ConversationAgentStatusPatch } from "@/features/channels/hooks";
+import { applyCommittedReactionFromEvent } from "@/features/channels/reaction-hooks";
+import { applyTaskChangedToTaskByNumberCache } from "@/features/tasks/useTaskByNumber";
 import {
   dispositionSettle,
   ingestMessageProjections,
   validateMessageProjections,
-} from './projection-registry';
+} from "./projection-registry";
 
-type ReplayCursorEffect = 'content-apply' | 'cursor-inert';
-type ReplayRecoveryEffect =
-  | 'idempotent'
-  | 'authoritative-invalidate'
-  | 'side-scope-self-healing';
+type ReplayCursorEffect = "content-apply" | "cursor-inert";
+type ReplayRecoveryEffect = "idempotent" | "authoritative-invalidate" | "side-scope-self-healing";
 
 type ReplaySafetySpec = {
   readonly cursor: ReplayCursorEffect;
@@ -94,126 +93,120 @@ type ReplaySafetySpec = {
 
 export const REPLAY_SAFETY_CONTRACTS = {
   mainline_row_window: {
-    cursor: 'content-apply',
-    recovery: 'idempotent',
+    cursor: "content-apply",
+    recovery: "idempotent",
     summary:
-      'mainline row append / live-gap affordance is id-deduped content; the row loads authoritatively when the window reaches tail',
+      "mainline row append / live-gap affordance is id-deduped content; the row loads authoritatively when the window reaches tail",
   },
   mainline_reply_count: {
-    cursor: 'cursor-inert',
-    recovery: 'authoritative-invalidate',
+    cursor: "cursor-inert",
+    recovery: "authoritative-invalidate",
     summary:
-      'mainline reply badge is a message-derived count; #1263 (c) recovers it authoritatively (no optimistic +1), replay-safe',
+      "mainline reply badge is a message-derived count; #1263 (c) recovers it authoritatively (no optimistic +1), replay-safe",
   },
   cluster_message_window: {
-    cursor: 'content-apply',
-    recovery: 'idempotent',
-    summary: 'cluster message append is deduped by message id',
+    cursor: "content-apply",
+    recovery: "idempotent",
+    summary: "cluster message append is deduped by message id",
   },
   thread_root_reply_count: {
-    cursor: 'cursor-inert',
-    recovery: 'authoritative-invalidate',
+    cursor: "cursor-inert",
+    recovery: "authoritative-invalidate",
     summary:
-      'thread-root reply count is message-derived; #1263 (c) recovers it authoritatively (no optimistic +1), replay-safe',
+      "thread-root reply count is message-derived; #1263 (c) recovers it authoritatively (no optimistic +1), replay-safe",
   },
   thread_followers_invalidate: {
-    cursor: 'cursor-inert',
-    recovery: 'authoritative-invalidate',
-    summary:
-      'followers projection refetches from its own source',
+    cursor: "cursor-inert",
+    recovery: "authoritative-invalidate",
+    summary: "followers projection refetches from its own source",
   },
   channel_threads_invalidate: {
-    cursor: 'cursor-inert',
-    recovery: 'authoritative-invalidate',
-    summary: 'threads list is message-derived invalidate, not message content',
+    cursor: "cursor-inert",
+    recovery: "authoritative-invalidate",
+    summary: "threads list is message-derived invalidate, not message content",
   },
   task_message_patch: {
-    cursor: 'content-apply',
-    recovery: 'idempotent',
+    cursor: "content-apply",
+    recovery: "idempotent",
     summary:
-      'task chip sets an absolute linked_task snapshot on the SOURCE message row (by source_message_id) across active AND warm-inactive caches; a source-backed frame ALWAYS satisfies the floor (displayed/warm → patched, absent row → authoritative-on-paginate vacuous-satisfy), a source-less task is vacuously satisfied',
+      "task chip sets an absolute linked_task snapshot on the SOURCE message row (by source_message_id) across active AND warm-inactive caches; a source-backed frame ALWAYS satisfies the floor (displayed/warm → patched, absent row → authoritative-on-paginate vacuous-satisfy), a source-less task is vacuously satisfied",
   },
   reaction_message_patch: {
-    cursor: 'content-apply',
-    recovery: 'idempotent',
+    cursor: "content-apply",
+    recovery: "idempotent",
     summary:
-      'reaction patch sets absolute reaction state by message id — the FLOOR-BEARING effect of a reaction frame (its synchronous content-apply gate)',
+      "reaction patch sets absolute reaction state by message id — the FLOOR-BEARING effect of a reaction frame (its synchronous content-apply gate)",
   },
   reactors_list_refresh: {
-    cursor: 'cursor-inert',
-    recovery: 'authoritative-invalidate',
+    cursor: "cursor-inert",
+    recovery: "authoritative-invalidate",
     summary:
       'reactors popover detail list (who-reacted) refreshed by the reaction patch — a FIRE-AND-FORGET, authoritative-on-open detail invalidate. NOT resume-floor-bearing: a reaction frame keeps the SYNCHRONOUS content-apply gate on reaction_message_patch (#1263 hybrid boundary), so unlike a `message` frame this cursor-inert effect is deliberately NOT commit-gated via allSettled — do not "unify" it into the message satisfaction path',
   },
   agent_run_states: {
-    cursor: 'cursor-inert',
-    recovery: 'side-scope-self-healing',
-    summary: 'side scope cache with its own refetch-on-mount/snapshot reconcile',
+    cursor: "cursor-inert",
+    recovery: "side-scope-self-healing",
+    summary: "side scope cache with its own refetch-on-mount/snapshot reconcile",
   },
   channel_agents: {
-    cursor: 'cursor-inert',
-    recovery: 'side-scope-self-healing',
-    summary: 'side scope runtime cache with snapshot reconcile and pending patch buffer',
+    cursor: "cursor-inert",
+    recovery: "side-scope-self-healing",
+    summary: "side scope runtime cache with snapshot reconcile and pending patch buffer",
   },
   agent_activity_feed: {
-    cursor: 'cursor-inert',
-    recovery: 'side-scope-self-healing',
-    summary: 'side scope activity feed merges by row id and has REST cold-start',
+    cursor: "cursor-inert",
+    recovery: "side-scope-self-healing",
+    summary: "side scope activity feed merges by row id and has REST cold-start",
   },
   attachment_blob_generation: {
-    cursor: 'cursor-inert',
-    recovery: 'side-scope-self-healing',
+    cursor: "cursor-inert",
+    recovery: "side-scope-self-healing",
     summary:
-      'side scope blob-URL cache generation; attachment_changed bumps the named id revision (and invalidates the open files-panel list so its size refreshes), snapshot_required coarse-bumps the epoch, both self-heal via no-store refetch of the latest bytes (holds no message content)',
+      "side scope blob-URL cache generation; attachment_changed bumps the named id revision (and invalidates the open files-panel list so its size refreshes), snapshot_required coarse-bumps the epoch, both self-heal via no-store refetch of the latest bytes (holds no message content)",
   },
 } as const satisfies Record<string, ReplaySafetySpec>;
 
 type ReplaySafetyContracts = typeof REPLAY_SAFETY_CONTRACTS;
 type ReplayEffectId = keyof ReplaySafetyContracts;
 type ReplayEffectByCursor<C extends ReplayCursorEffect> = {
-  [K in ReplayEffectId]: ReplaySafetyContracts[K]['cursor'] extends C ? K : never;
+  [K in ReplayEffectId]: ReplaySafetyContracts[K]["cursor"] extends C ? K : never;
 }[ReplayEffectId];
 
 function contentEffectApplied(
-  _effect: ReplayEffectByCursor<'content-apply'>,
+  _effect: ReplayEffectByCursor<"content-apply">,
   applied: boolean,
 ): boolean {
   return applied;
 }
 
-function cursorInertEffect(_effect: ReplayEffectByCursor<'cursor-inert'>): void {}
+function cursorInertEffect(_effect: ReplayEffectByCursor<"cursor-inert">): void {}
 
 export const MESSAGE_STREAM_KIND_CONTRACTS = {
   message: [
-    'mainline_row_window',
-    'mainline_reply_count',
-    'cluster_message_window',
-    'thread_root_reply_count',
-    'thread_followers_invalidate',
-    'channel_threads_invalidate',
+    "mainline_row_window",
+    "mainline_reply_count",
+    "cluster_message_window",
+    "thread_root_reply_count",
+    "thread_followers_invalidate",
+    "channel_threads_invalidate",
   ],
-  task_changed: ['task_message_patch'],
-  [MESSAGE_REACTION_CHANGED_EVENT]: [
-    'reaction_message_patch',
-    'reactors_list_refresh',
-  ],
+  task_changed: ["task_message_patch"],
+  [MESSAGE_REACTION_CHANGED_EVENT]: ["reaction_message_patch", "reactors_list_refresh"],
 } as const satisfies Record<string, readonly ReplayEffectId[]>;
 
 type MessageStreamKind = keyof typeof MESSAGE_STREAM_KIND_CONTRACTS;
 
 export const SIDE_KIND_CONTRACTS = {
-  agent_activity: ['agent_run_states'],
-  agent_status: ['channel_agents'],
-  conversation_activity: ['agent_activity_feed'],
-  [ATTACHMENT_CHANGED_EVENT]: ['attachment_blob_generation'],
+  agent_activity: ["agent_run_states"],
+  agent_status: ["channel_agents"],
+  conversation_activity: ["agent_activity_feed"],
+  [ATTACHMENT_CHANGED_EVENT]: ["attachment_blob_generation"],
 } as const satisfies Record<string, readonly ReplayEffectId[]>;
 
 type SideKind = keyof typeof SIDE_KIND_CONTRACTS;
 
 function asMessageStreamKind(kind: string): MessageStreamKind | null {
-  return kind in MESSAGE_STREAM_KIND_CONTRACTS
-    ? (kind as MessageStreamKind)
-    : null;
+  return kind in MESSAGE_STREAM_KIND_CONTRACTS ? (kind as MessageStreamKind) : null;
 }
 
 function asSideKind(kind: string): SideKind | null {
@@ -522,8 +515,12 @@ export function applyCommittedMessage(
   // refetch settles resolve outside the batch and gate the WS floor via the result.
   const settles = notifyManager.batch(() => {
     confirmLogicalSend(qc, msg);
-    const key = msg.thread_root_id ? clusterMessagesKey(channelId, msg.thread_root_id) : messagesKey(channelId);
-    qc.setQueryData<MessagesCache | undefined>(key, data => reconcilePendingMessage(data, msg, getCurrentUserId()));
+    const key = msg.thread_root_id
+      ? clusterMessagesKey(channelId, msg.thread_root_id)
+      : messagesKey(channelId);
+    qc.setQueryData<MessagesCache | undefined>(key, (data) =>
+      reconcilePendingMessage(data, msg, getCurrentUserId()),
+    );
     return committedMessageEffects(qc, channelId, msg, projections);
   });
   return Promise.allSettled(settles);
@@ -533,13 +530,9 @@ export function applyCommittedMessage(
  *  (#task:1255 P1c). Verbatim move of the old shared `ingestConversationEvent`
  *  side-effect, now gated on a mounted run-states reader (a non-terminal event
  *  would otherwise bootstrap an incomplete one-row list with no snapshot). */
-function ingestAgentActivity(
-  qc: QueryClient,
-  channelId: string,
-  state: AgentRunState,
-): void {
+function ingestAgentActivity(qc: QueryClient, channelId: string, state: AgentRunState): void {
   if (hasActiveAgentRunStatesReader(qc, channelId)) {
-    cursorInertEffect('agent_run_states');
+    cursorInertEffect("agent_run_states");
     applyAgentRunStateToCache(channelId, state, qc);
   }
 }
@@ -552,7 +545,7 @@ function ingestAgentStatus(
   patch: ConversationAgentStatusPatch,
 ): void {
   if (hasActiveChannelAgentRuntimeReader(qc, channelId)) {
-    cursorInertEffect('channel_agents');
+    cursorInertEffect("channel_agents");
     applyAgentStatusToCache(qc, channelId, patch);
   }
 }
@@ -570,16 +563,12 @@ function ingestConversationActivity(
   const agentId = row.agent_id;
   if (!agentId) return;
   if (hasActiveAgentActivityReader(qc, channelId, agentId)) {
-    cursorInertEffect('agent_activity_feed');
+    cursorInertEffect("agent_activity_feed");
     appendAgentActivityToCache(qc, channelId, agentId, row);
   }
 }
 
-function ingestTaskChanged(
-  qc: QueryClient,
-  channelId: string,
-  task: TaskChangedEvent,
-): boolean {
+function ingestTaskChanged(qc: QueryClient, channelId: string, task: TaskChangedEvent): boolean {
   // The task-by-number cache is a SEPARATE projection (the inline `#task:<n>`
   // chip + its hover card), not the message-stream content the resume floor
   // tracks. It is an ABSOLUTE by-id cache write — no request — fired outside
@@ -616,8 +605,7 @@ function ingestTaskChanged(
   // a task source commonly sits >1 window back, and pinning strands that seq out
   // of the contiguous satisfied set (ws-client authoritative-on-paginate). We do
   // NOT copy reaction's active-only contract here (its scope is unchanged).
-  const patchRow = (message: MessageDto): MessageDto =>
-    applyTaskChangedToMessage(message, task);
+  const patchRow = (message: MessageDto): MessageDto => applyTaskChangedToMessage(message, task);
   const target = {
     channelId,
     messageId: task.source_message_id,
@@ -625,7 +613,7 @@ function ingestTaskChanged(
   };
   patchMessageInActiveProjections(qc, target, patchRow);
   patchWarmInactiveMessageRow(qc, channelId, task.source_message_id, patchRow);
-  return contentEffectApplied('task_message_patch', true);
+  return contentEffectApplied("task_message_patch", true);
 }
 
 /** WS wrapper over the ordered-plane committed-reaction seam (#task:1753). Its
@@ -649,10 +637,9 @@ function ingestReaction(
   channelId: string,
   ev: MessageReactionChangedEvent,
 ): boolean {
-  const byViewer =
-    ev.reactor_kind === 'user' && ev.reactor_id === getCurrentUserId();
+  const byViewer = ev.reactor_kind === "user" && ev.reactor_id === getCurrentUserId();
   return contentEffectApplied(
-    'reaction_message_patch',
+    "reaction_message_patch",
     applyCommittedReactionFromEvent(qc, {
       // `channelId` comes from the frame SCOPE, the routing authority — not the
       // event's self-declared `conversation_id`.
@@ -663,7 +650,7 @@ function ingestReaction(
       },
       emoji: ev.emoji,
       count: ev.count,
-      viewerReacted: byViewer ? ev.op === 'add' : null,
+      viewerReacted: byViewer ? ev.op === "add" : null,
     }),
   );
 }
@@ -680,10 +667,7 @@ function ingestReaction(
  *  still display post-commit stale rows (`event-ws-transport-v1.md §8`). Empty ⇒
  *  `allSettled([])` is all-fulfilled ⇒ commit (a scope with no live content is
  *  vacuously recoverable). #1255 P2 step-4. */
-function ingestMessageStreamSnapshotRequired(
-  qc: QueryClient,
-  channelId: string,
-): Promise<void>[] {
+function ingestMessageStreamSnapshotRequired(qc: QueryClient, channelId: string): Promise<void>[] {
   const settles: Promise<void>[] = [];
   if (hasActiveMainlineReader(qc, channelId)) {
     settles.push(reconcileChannelMainlineOnSnapshotRequired(qc, channelId));
@@ -786,24 +770,21 @@ function ingestSideSnapshotRequired(qc: QueryClient, channelId: string): void {
  * transport (`acceptEventFrame`), so the ingestor never calls `markSatisfied` /
  * `commitSnapshotBaseline` for it (Alice's contract).
  */
-export function ingestConversationFrame(
-  qc: QueryClient,
-  frame: ServerFrame,
-): void {
-  if (frame.type !== 'event' && frame.type !== 'snapshot_required') return;
+export function ingestConversationFrame(qc: QueryClient, frame: ServerFrame): void {
+  if (frame.type !== "event" && frame.type !== "snapshot_required") return;
   const messageStreamId = parseConversationScope(frame.scope);
   const sideId = parseConversationSideScope(frame.scope);
   if (!messageStreamId && !sideId) return;
 
-  if (frame.type === 'snapshot_required') {
+  if (frame.type === "snapshot_required") {
     if (messageStreamId) {
       const settles = ingestMessageStreamSnapshotRequired(qc, messageStreamId);
       const { scope, epoch } = frame;
       // Apply-gated commit: advance the floor to the server-stamped baseline
       // ONLY once every reconcile settled fulfilled. A rejected/aborted refetch
       // leaves the floor pinned — the transport re-drives on the next resume.
-      void Promise.allSettled(settles).then(results => {
-        if (results.every(r => r.status === 'fulfilled')) {
+      void Promise.allSettled(settles).then((results) => {
+        if (results.every((r) => r.status === "fulfilled")) {
           eventWsClient.commitSnapshotBaseline(scope, epoch);
         }
       });
@@ -831,7 +812,7 @@ export function ingestConversationFrame(
   //    warm cache).
   if (messageStreamId) {
     const kind = asMessageStreamKind(frame.kind);
-    if (kind === 'message') {
+    if (kind === "message") {
       const payload = frame.payload as MessageEventPayload | undefined;
       const msg = payload?.message;
       if (msg) {
@@ -842,21 +823,18 @@ export function ingestConversationFrame(
         // may re-fire the invalidate-only effects — accepted, #task:1749.
         // `markSatisfied` is WS-exclusive: it is the only transport-water write,
         // gated on every effect settling fulfilled.
-        void applyCommittedMessage(
-          qc,
-          messageStreamId,
-          msg,
-          payload?.projections,
-        ).then(results => {
-          if (results.every(r => r.status === 'fulfilled')) {
-            eventWsClient.markSatisfied(scope, seq, epoch);
-          }
-        });
+        void applyCommittedMessage(qc, messageStreamId, msg, payload?.projections).then(
+          (results) => {
+            if (results.every((r) => r.status === "fulfilled")) {
+              eventWsClient.markSatisfied(scope, seq, epoch);
+            }
+          },
+        );
       }
       return;
     }
     let applied = false;
-    if (kind === 'task_changed') {
+    if (kind === "task_changed") {
       const task = frame.payload as TaskChangedEvent | undefined;
       if (task?.task_id) applied = ingestTaskChanged(qc, messageStreamId, task);
     } else if (kind === MESSAGE_REACTION_CHANGED_EVENT) {
@@ -871,13 +849,13 @@ export function ingestConversationFrame(
   // the transport auto-advances the side floor; never call markSatisfied here.
   if (!sideId) return;
   const sideKind = asSideKind(frame.kind);
-  if (sideKind === 'agent_activity') {
+  if (sideKind === "agent_activity") {
     const state = frame.payload as AgentRunState | undefined;
     if (state?.runId) ingestAgentActivity(qc, sideId, state);
-  } else if (sideKind === 'agent_status') {
+  } else if (sideKind === "agent_status") {
     const patch = frame.payload as ConversationAgentStatusPatch | undefined;
     if (patch?.agent_id) ingestAgentStatus(qc, sideId, patch);
-  } else if (sideKind === 'conversation_activity') {
+  } else if (sideKind === "conversation_activity") {
     const row = frame.payload as ConversationActivityEvent | undefined;
     if (row?.id != null) ingestConversationActivity(qc, sideId, row);
   } else if (sideKind === ATTACHMENT_CHANGED_EVENT) {
@@ -903,8 +881,6 @@ export function ingestConversationFrame(
 export function useConversationIngestor(): void {
   const qc = useQueryClient();
   useEffect(() => {
-    return onWsFrame((frame: ServerFrame) =>
-      ingestConversationFrame(qc, frame),
-    );
+    return onWsFrame((frame: ServerFrame) => ingestConversationFrame(qc, frame));
   }, [qc]);
 }

@@ -1,4 +1,4 @@
-import type { DirectPairCounterpart, DirectPairListItem } from '@silverhand/shared';
+import type { DirectPairCounterpart, DirectPairListItem } from "@silverhand/shared";
 
 /** The open pre-mint line: route state, not a stored conversation. */
 export interface DirectLineDraft {
@@ -19,10 +19,10 @@ interface DirectLineRowBase {
 
 export type DirectLineRow =
   /** An existing line. Opening it navigates to the pair. */
-  | (DirectLineRowBase & { kind: 'pair'; conversationId: string })
+  | (DirectLineRowBase & { kind: "pair"; conversationId: string })
   /** The line being started. Opening it stays on the draft — including when a
    *  pair already exists, which is the whole point of this arm. */
-  | (DirectLineRowBase & { kind: 'draft'; agentId: string });
+  | (DirectLineRowBase & { kind: "draft"; agentId: string });
 
 /**
  * Whether a pair is shown in the sidebar DIRECT MESSAGES list. A `deleted`
@@ -30,10 +30,8 @@ export type DirectLineRow =
  * counterpart is shown. Behaviour decides the branch, so it is a named predicate
  * with its own test rather than an inline `!== 'deleted'`.
  */
-export function directLinePairVisibleInSidebar(
-  pair: DirectPairListItem,
-): boolean {
-  return pair.counterpart.status !== 'deleted';
+export function directLinePairVisibleInSidebar(pair: DirectPairListItem): boolean {
+  return pair.counterpart.status !== "deleted";
 }
 
 /**
@@ -58,15 +56,13 @@ export function mergeDirectLineRows({
 }): DirectLineRow[] {
   let draftMerged = false;
   const visiblePairs = pairs.filter(directLinePairVisibleInSidebar);
-  const rows: DirectLineRow[] = visiblePairs.map(pair => {
+  const rows: DirectLineRow[] = visiblePairs.map((pair) => {
     const isDraftsPair =
-      draft !== null
-      && pair.counterpart.kind === 'agent'
-      && pair.counterpart.id === draft.agentId;
+      draft !== null && pair.counterpart.kind === "agent" && pair.counterpart.id === draft.agentId;
     if (isDraftsPair && draft !== null) {
       draftMerged = true;
       return {
-        kind: 'draft',
+        kind: "draft",
         key: pair.conversation_id,
         agentId: draft.agentId,
         counterpart: pair.counterpart,
@@ -77,19 +73,17 @@ export function mergeDirectLineRows({
       };
     }
     return {
-      kind: 'pair',
+      kind: "pair",
       key: pair.conversation_id,
       conversationId: pair.conversation_id,
       counterpart: pair.counterpart,
       unread: pair.unread_count,
-      selected:
-        selectedConversationId !== null
-        && pair.conversation_id === selectedConversationId,
+      selected: selectedConversationId !== null && pair.conversation_id === selectedConversationId,
     };
   });
   if (draft !== null && !draftMerged) {
     rows.push({
-      kind: 'draft',
+      kind: "draft",
       key: `draft:${draft.agentId}`,
       agentId: draft.agentId,
       counterpart: draft.counterpart,

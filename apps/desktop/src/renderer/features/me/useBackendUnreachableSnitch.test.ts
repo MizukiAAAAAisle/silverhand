@@ -1,113 +1,103 @@
-import { describe, expect, it, vi } from 'vitest';
-import { QueryClient } from '@tanstack/react-query';
-import { ApiError } from '@/lib/api';
-import { backendInfoKey } from '@/features/hosts/hooks';
+import { describe, expect, it, vi } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import { ApiError } from "@/lib/api";
+import { backendInfoKey } from "@/features/hosts/hooks";
 import {
   decideNextVisible,
   isBackendUnreachableError,
   type SnitchCacheEvent,
-} from './useBackendUnreachableSnitch';
+} from "./useBackendUnreachableSnitch";
 
-describe('isBackendUnreachableError — pure classifier', () => {
+describe("isBackendUnreachableError — pure classifier", () => {
   it('returns true ONLY for ApiError with kind="backend_unreachable"', () => {
     expect(
-      isBackendUnreachableError(
-        new ApiError(0, 'Network Error', '', 'backend_unreachable'),
-      ),
+      isBackendUnreachableError(new ApiError(0, "Network Error", "", "backend_unreachable")),
     ).toBe(true);
   });
 
   it('returns false for generic ApiError with kind="http" (regression bait)', () => {
-    expect(isBackendUnreachableError(new ApiError(404, 'Not Found', '{}'))).toBe(
-      false,
-    );
+    expect(isBackendUnreachableError(new ApiError(404, "Not Found", "{}"))).toBe(false);
+    expect(isBackendUnreachableError(new ApiError(500, "Server Error", "{}"))).toBe(false);
     expect(
-      isBackendUnreachableError(new ApiError(500, 'Server Error', '{}')),
-    ).toBe(false);
-    expect(
-      isBackendUnreachableError(
-        new ApiError(401, 'Unauthorized', '{"error_code":"auth_failed"}'),
-      ),
+      isBackendUnreachableError(new ApiError(401, "Unauthorized", '{"error_code":"auth_failed"}')),
     ).toBe(false);
   });
 
-  it('returns false for plain Error / non-ApiError throwables', () => {
-    expect(isBackendUnreachableError(new Error('fetch failed'))).toBe(false);
-    expect(isBackendUnreachableError(new TypeError('xxx'))).toBe(false);
-    expect(isBackendUnreachableError('backend_unreachable')).toBe(false);
-    expect(
-      isBackendUnreachableError({ kind: 'backend_unreachable' }),
-    ).toBe(false);
+  it("returns false for plain Error / non-ApiError throwables", () => {
+    expect(isBackendUnreachableError(new Error("fetch failed"))).toBe(false);
+    expect(isBackendUnreachableError(new TypeError("xxx"))).toBe(false);
+    expect(isBackendUnreachableError("backend_unreachable")).toBe(false);
+    expect(isBackendUnreachableError({ kind: "backend_unreachable" })).toBe(false);
   });
 
-  it('returns false for null / undefined', () => {
+  it("returns false for null / undefined", () => {
     expect(isBackendUnreachableError(null)).toBe(false);
     expect(isBackendUnreachableError(undefined)).toBe(false);
   });
 });
 
-describe('decideNextVisible — pure reducer shared by hook + tests', () => {
+describe("decideNextVisible — pure reducer shared by hook + tests", () => {
   // This is the load-bearing pin. The hook's cache subscriber
   // calls this exact function — there is no separate "driver"
   // that could drift from production behavior. Add any new
   // status / error variant cases here.
 
-  it('error + backend_unreachable → true (show banner)', () => {
+  it("error + backend_unreachable → true (show banner)", () => {
     const ev: SnitchCacheEvent = {
-      status: 'error',
-      error: new ApiError(0, 'Network Error', '', 'backend_unreachable'),
+      status: "error",
+      error: new ApiError(0, "Network Error", "", "backend_unreachable"),
     };
     expect(decideNextVisible(ev)).toBe(true);
   });
 
-  it('error + generic http kind → null (no state change)', () => {
+  it("error + generic http kind → null (no state change)", () => {
     const ev: SnitchCacheEvent = {
-      status: 'error',
-      error: new ApiError(404, 'Not Found', '{}'),
+      status: "error",
+      error: new ApiError(404, "Not Found", "{}"),
     };
     expect(decideNextVisible(ev)).toBe(null);
   });
 
-  it('error + non-ApiError → null (renderer bugs do not impersonate server-down)', () => {
+  it("error + non-ApiError → null (renderer bugs do not impersonate server-down)", () => {
     const ev: SnitchCacheEvent = {
-      status: 'error',
-      error: new TypeError('bug'),
+      status: "error",
+      error: new TypeError("bug"),
     };
     expect(decideNextVisible(ev)).toBe(null);
   });
 
-  it('success → false (clear banner regardless of prior state)', () => {
-    const ev: SnitchCacheEvent = { status: 'success', error: null };
+  it("success → false (clear banner regardless of prior state)", () => {
+    const ev: SnitchCacheEvent = { status: "success", error: null };
     expect(decideNextVisible(ev)).toBe(false);
   });
 
-  it('pending / paused / unknown status → null (ignored)', () => {
-    expect(decideNextVisible({ status: 'pending', error: null })).toBe(null);
-    expect(decideNextVisible({ status: 'paused', error: null })).toBe(null);
-    expect(decideNextVisible({ status: 'idle', error: null })).toBe(null);
+  it("pending / paused / unknown status → null (ignored)", () => {
+    expect(decideNextVisible({ status: "pending", error: null })).toBe(null);
+    expect(decideNextVisible({ status: "paused", error: null })).toBe(null);
+    expect(decideNextVisible({ status: "idle", error: null })).toBe(null);
   });
 
-  it('neutral query → null regardless of status (#task:1462 local-IPC poll)', () => {
+  it("neutral query → null regardless of status (#task:1462 local-IPC poll)", () => {
     // A reachability-neutral query (backend:info) must never toggle the
     // banner: neither its success clears it nor its error raises it.
     expect(
       decideNextVisible({
-        status: 'success',
+        status: "success",
         error: null,
-        backendReachability: 'neutral',
+        backendReachability: "neutral",
       }),
     ).toBe(null);
     expect(
       decideNextVisible({
-        status: 'error',
-        error: new ApiError(0, 'Network Error', '', 'backend_unreachable'),
-        backendReachability: 'neutral',
+        status: "error",
+        error: new ApiError(0, "Network Error", "", "backend_unreachable"),
+        backendReachability: "neutral",
       }),
     ).toBe(null);
   });
 });
 
-describe('live React Query cache → shared reducer integration', () => {
+describe("live React Query cache → shared reducer integration", () => {
   // We attach a subscriber that funnels real cache events
   // through `decideNextVisible` — the exact same call the hook
   // makes. State is held in a tiny `{ visible }` shell so we can
@@ -123,7 +113,7 @@ describe('live React Query cache → shared reducer integration', () => {
       if (next === null) return;
       state.visible = next;
     };
-    const unsubQ = client.getQueryCache().subscribe(event => {
+    const unsubQ = client.getQueryCache().subscribe((event) => {
       const q = (
         event as {
           query?: {
@@ -136,11 +126,10 @@ describe('live React Query cache → shared reducer integration', () => {
         apply({
           status: q.state.status,
           error: q.state.error,
-          backendReachability:
-            q.meta?.backendReachability === 'neutral' ? 'neutral' : undefined,
+          backendReachability: q.meta?.backendReachability === "neutral" ? "neutral" : undefined,
         });
     });
-    const unsubM = client.getMutationCache().subscribe(event => {
+    const unsubM = client.getMutationCache().subscribe((event) => {
       const m = (event as { mutation?: { state: SnitchCacheEvent } }).mutation;
       if (m) apply(m.state);
     });
@@ -159,20 +148,15 @@ describe('live React Query cache → shared reducer integration', () => {
     });
   }
 
-  it('query throwing ApiError(backend_unreachable) → visible=true', async () => {
+  it("query throwing ApiError(backend_unreachable) → visible=true", async () => {
     const client = makeClient();
     const { state, teardown } = attach(client);
     try {
       await client
         .fetchQuery({
-          queryKey: ['x1'],
+          queryKey: ["x1"],
           queryFn: async () => {
-            throw new ApiError(
-              0,
-              'Network Error',
-              '',
-              'backend_unreachable',
-            );
+            throw new ApiError(0, "Network Error", "", "backend_unreachable");
           },
         })
         .catch(() => {});
@@ -182,15 +166,15 @@ describe('live React Query cache → shared reducer integration', () => {
     }
   });
 
-  it('query throwing generic 404 → visible stays false', async () => {
+  it("query throwing generic 404 → visible stays false", async () => {
     const client = makeClient();
     const { state, teardown } = attach(client);
     try {
       await client
         .fetchQuery({
-          queryKey: ['x2'],
+          queryKey: ["x2"],
           queryFn: async () => {
-            throw new ApiError(404, 'Not Found', '{}');
+            throw new ApiError(404, "Not Found", "{}");
           },
         })
         .catch(() => {});
@@ -200,15 +184,15 @@ describe('live React Query cache → shared reducer integration', () => {
     }
   });
 
-  it('query throwing TypeError (renderer bug) → visible stays false', async () => {
+  it("query throwing TypeError (renderer bug) → visible stays false", async () => {
     const client = makeClient();
     const { state, teardown } = attach(client);
     try {
       await client
         .fetchQuery({
-          queryKey: ['x3'],
+          queryKey: ["x3"],
           queryFn: async () => {
-            throw new TypeError('bug in renderer');
+            throw new TypeError("bug in renderer");
           },
         })
         .catch(() => {});
@@ -218,26 +202,21 @@ describe('live React Query cache → shared reducer integration', () => {
     }
   });
 
-  it('error then success → auto-clears (server is back)', async () => {
+  it("error then success → auto-clears (server is back)", async () => {
     const client = makeClient();
     const { state, teardown } = attach(client);
     try {
       await client
         .fetchQuery({
-          queryKey: ['recover-1'],
+          queryKey: ["recover-1"],
           queryFn: async () => {
-            throw new ApiError(
-              0,
-              'Network Error',
-              '',
-              'backend_unreachable',
-            );
+            throw new ApiError(0, "Network Error", "", "backend_unreachable");
           },
         })
         .catch(() => {});
       expect(state.visible).toBe(true);
       await client.fetchQuery({
-        queryKey: ['recover-2'],
+        queryKey: ["recover-2"],
         queryFn: async () => ({ ok: true }),
       });
       expect(state.visible).toBe(false);
@@ -246,18 +225,13 @@ describe('live React Query cache → shared reducer integration', () => {
     }
   });
 
-  it('mutation: backend_unreachable → visible=true; success → auto-clears', async () => {
+  it("mutation: backend_unreachable → visible=true; success → auto-clears", async () => {
     const client = makeClient();
     const { state, teardown } = attach(client);
     try {
       const failing = client.getMutationCache().build(client, {
         mutationFn: async () => {
-          throw new ApiError(
-            0,
-            'Network Error',
-            '',
-            'backend_unreachable',
-          );
+          throw new ApiError(0, "Network Error", "", "backend_unreachable");
         },
       });
       await failing.execute(undefined).catch(() => {});
@@ -273,7 +247,7 @@ describe('live React Query cache → shared reducer integration', () => {
     }
   });
 
-  it('#task:1462 REGRESSION BAIT: a neutral query (backend:info poll) succeeding does NOT clear a live unreachable banner', async () => {
+  it("#task:1462 REGRESSION BAIT: a neutral query (backend:info poll) succeeding does NOT clear a live unreachable banner", async () => {
     // The bug: enabling the 30s protocol-compatibility poll made
     // backend:info emit a periodic `success`. Because backend:info is a
     // local-IPC query (always resolves, and its probe swallows failure
@@ -286,9 +260,9 @@ describe('live React Query cache → shared reducer integration', () => {
       // A real remote query fails → banner up.
       await client
         .fetchQuery({
-          queryKey: ['reach-1'],
+          queryKey: ["reach-1"],
           queryFn: async () => {
-            throw new ApiError(0, 'Network Error', '', 'backend_unreachable');
+            throw new ApiError(0, "Network Error", "", "backend_unreachable");
           },
         })
         .catch(() => {});
@@ -299,7 +273,7 @@ describe('live React Query cache → shared reducer integration', () => {
       await client.fetchQuery({
         queryKey: backendInfoKey,
         queryFn: async () => ({ ok: true }),
-        meta: { backendReachability: 'neutral' },
+        meta: { backendReachability: "neutral" },
       });
       expect(state.visible).toBe(true);
     } finally {
@@ -307,7 +281,7 @@ describe('live React Query cache → shared reducer integration', () => {
     }
   });
 
-  it('CINDY P1 REGRESSION BAIT: retry() → setVisible(false) followed by an IMMEDIATE backend_unreachable refetch flips visible back to true', async () => {
+  it("CINDY P1 REGRESSION BAIT: retry() → setVisible(false) followed by an IMMEDIATE backend_unreachable refetch flips visible back to true", async () => {
     // The prior `visibleRef.current` guard would observe `true`
     // (because `setVisible(false)` had been queued but not yet
     // committed in React's scheduler) and SKIP `setVisible(true)`,
@@ -327,14 +301,9 @@ describe('live React Query cache → shared reducer integration', () => {
       // Step 1: a query fails as backend_unreachable. visible=true.
       await client
         .fetchQuery({
-          queryKey: ['retry-1'],
+          queryKey: ["retry-1"],
           queryFn: async () => {
-            throw new ApiError(
-              0,
-              'Network Error',
-              '',
-              'backend_unreachable',
-            );
+            throw new ApiError(0, "Network Error", "", "backend_unreachable");
           },
         })
         .catch(() => {});
@@ -352,14 +321,9 @@ describe('live React Query cache → shared reducer integration', () => {
       // observe the error AND set visible back to true.
       await client
         .fetchQuery({
-          queryKey: ['retry-2'],
+          queryKey: ["retry-2"],
           queryFn: async () => {
-            throw new ApiError(
-              0,
-              'Network Error',
-              '',
-              'backend_unreachable',
-            );
+            throw new ApiError(0, "Network Error", "", "backend_unreachable");
           },
         })
         .catch(() => {});
@@ -370,12 +334,12 @@ describe('live React Query cache → shared reducer integration', () => {
   });
 });
 
-describe('retry() contract — invalidateQueries + hide', () => {
-  it('retry calls queryClient.invalidateQueries() with no filter and resets visible', () => {
+describe("retry() contract — invalidateQueries + hide", () => {
+  it("retry calls queryClient.invalidateQueries() with no filter and resets visible", () => {
     // Mirrors the hook body exactly:
     //   () => { setVisible(false); void client.invalidateQueries(); }
     const client = new QueryClient();
-    const spy = vi.spyOn(client, 'invalidateQueries');
+    const spy = vi.spyOn(client, "invalidateQueries");
     let visible = true;
     const setVisible = (v: boolean): void => {
       visible = v;

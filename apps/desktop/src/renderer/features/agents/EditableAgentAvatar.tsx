@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
-import { Camera } from 'lucide-react';
-import { validateAvatarFile, type RuntimeKind } from '@silverhand/shared';
-import { ApiError } from '@/lib/api';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { AvatarPickerButton } from '@/components/AvatarPickerButton';
-import { useUploadAgentAvatar } from './hooks';
+import { useEffect, useState } from "react";
+import { Camera } from "lucide-react";
+import { validateAvatarFile, type RuntimeKind } from "@silverhand/shared";
+import { ApiError } from "@/lib/api";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { AvatarPickerButton } from "@/components/AvatarPickerButton";
+import { useUploadAgentAvatar } from "./hooks";
 
 interface EditableAgentAvatarProps {
   agentId: string;
@@ -78,7 +78,7 @@ export function EditableAgentAvatar({
   // 56px frame clip. ariaLabel carries the verbose screen-reader
   // text. Cindy review #task:314: "Change photo" overflowed and was
   // cut horizontally even at 56px once uppercase tracking was applied.
-  const pickerLabel = hasAvatar ? 'Edit' : 'Add';
+  const pickerLabel = hasAvatar ? "Edit" : "Add";
   const pickerAriaLabel = hasAvatar ? `Change avatar for @${alt}` : `Add avatar for @${alt}`;
 
   return (
@@ -144,37 +144,37 @@ export function formatAvatarMutationError(err: unknown): string {
     // Try to surface the structured code first.
     const code = parseErrorCode(err.body);
     switch (code) {
-      case 'avatar_too_large':
-        return 'Avatar must be 5 MB or smaller.';
-      case 'avatar_unsupported_type':
-        return 'Avatar must be a PNG, JPEG, GIF, or WEBP image.';
-      case 'avatar_missing':
-        return 'Avatar file is empty.';
-      case 'avatar_storage_failed':
-        return 'Storage backend failed to write the avatar. Try again.';
+      case "avatar_too_large":
+        return "Avatar must be 5 MB or smaller.";
+      case "avatar_unsupported_type":
+        return "Avatar must be a PNG, JPEG, GIF, or WEBP image.";
+      case "avatar_missing":
+        return "Avatar file is empty.";
+      case "avatar_storage_failed":
+        return "Storage backend failed to write the avatar. Try again.";
       default:
         // Fall through to status-based messages.
         break;
     }
     switch (err.status) {
       case 401:
-        return 'Sign-in expired. Reload the app and try again.';
+        return "Sign-in expired. Reload the app and try again.";
       case 403:
         return "You no longer have permission to edit this agent's avatar.";
       case 404:
-        return 'This agent no longer exists.';
+        return "This agent no longer exists.";
       default:
         return `Failed to update avatar (HTTP ${err.status}).`;
     }
   }
-  return 'Failed to update avatar.';
+  return "Failed to update avatar.";
 }
 
 function parseErrorCode(body: string): string | null {
   if (!body) return null;
   try {
     const parsed = JSON.parse(body) as { code?: unknown };
-    return typeof parsed.code === 'string' ? parsed.code : null;
+    return typeof parsed.code === "string" ? parsed.code : null;
   } catch {
     return null;
   }

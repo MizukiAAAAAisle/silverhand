@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef } from "react";
 
 /**
  * Recent-mode visible-order read model (#task:1161).
@@ -95,8 +95,8 @@ export function recentSnapshotToken(
   recentScopes: Iterable<string>,
   loaded: boolean,
 ): string {
-  if (!loaded) return '__loading__';
-  return `${listKey ?? ''}::${[...recentScopes].sort().join(',')}`;
+  if (!loaded) return "__loading__";
+  return `${listKey ?? ""}::${[...recentScopes].sort().join(",")}`;
 }
 
 /**

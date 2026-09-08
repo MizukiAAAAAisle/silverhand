@@ -67,12 +67,12 @@
 export const CHANNEL_WORKSPACE_ATTRIBUTION_SOURCES = [
   // The selected workspace's two authoritative lists + channel-detail + the
   // cross-workspace archived index.
-  'workspaces/hooks.ts',
+  "workspaces/hooks.ts",
   // THE conversation-ref read point: `?side` panes and inline `#conv:` chips.
-  'conversations/conversation-ref-query.ts',
+  "conversations/conversation-ref-query.ts",
   // Notification jumps, including the reply-cluster branch that never fetches a
   // ref — the notification's own `(workspace_id, conversation_id)` is the carrier.
-  'notifications/hooks.ts',
+  "notifications/hooks.ts",
 ] as const;
 
 const channelWorkspace = new Map<string, string>();
@@ -100,10 +100,7 @@ const conflicted = new Map<string, { first: string; second: string }>();
  *  every caller already treats as "skip this id" — and the disagreement is left
  *  observable rather than swallowed. Being unable to attribute a cache is
  *  harmless (it expires by gc); attributing it wrongly is not. */
-export function recordChannelWorkspace(
-  channelId: string,
-  workspaceId: string | null,
-): void {
+export function recordChannelWorkspace(channelId: string, workspaceId: string | null): void {
   if (!channelId || !workspaceId) return;
   if (conflicted.has(channelId)) return;
   const existing = channelWorkspace.get(channelId);

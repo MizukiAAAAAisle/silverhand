@@ -2,7 +2,7 @@
    Theme: Iris
    ================================================================ */
 
-[data-theme='iris'] {
+[data-theme="iris"] {
   /* Task references: prose and system activity retain distinct emphasis. */
   --task-ref-font: initial;
   --task-ref-weight: 500;
@@ -271,10 +271,10 @@
   --shadow-button: none;
 
   /* ── Fonts ── */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   --font-serif: var(--font-sans);
   --font-display: var(--font-sans);
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
   /* ── Markdown body defaults ── */
   --md-prose-size: 14px;
@@ -292,15 +292,15 @@
 }
 
 /* ── 白纸：一张纸装下 sidebar + main ── */
-[data-theme='iris'] [data-section-sheet] {
+[data-theme="iris"] [data-section-sheet] {
   background-color: var(--bg-base);
   border-radius: var(--card-radius);
   box-shadow: var(--iris-shadow-sheet);
   overflow: hidden;
 }
 
-[data-theme='iris'] [role='separator'][aria-orientation='vertical']::after {
-  content: '';
+[data-theme="iris"] [role="separator"][aria-orientation="vertical"]::after {
+  content: "";
   position: absolute;
   inset-block: 0;
   left: 50%;
@@ -310,71 +310,71 @@
   pointer-events: none;
 }
 
-[data-theme='iris'] [data-section-layer] > aside[data-sidebar='members'],
-[data-theme='iris'] [data-section-layer] > aside[data-sidebar='computers'],
-[data-theme='iris'] aside[data-sidebar='settings'] {
+[data-theme="iris"] [data-section-layer] > aside[data-sidebar="members"],
+[data-theme="iris"] [data-section-layer] > aside[data-sidebar="computers"],
+[data-theme="iris"] aside[data-sidebar="settings"] {
   border-right: 1px solid var(--border);
 }
 
-[data-theme='iris'] [data-workspace-icon] {
+[data-theme="iris"] [data-workspace-icon] {
   background-color: var(--text-secondary);
   color: var(--text-on-structure);
   border-radius: var(--chip-radius);
   font-size: 11px;
 }
 
-[data-theme='iris'] [data-conversation-hash-icon] {
+[data-theme="iris"] [data-conversation-hash-icon] {
   display: inline-block;
   margin-right: 0.1em;
 }
 
-[data-theme='iris'] [data-modal-shell] {
+[data-theme="iris"] [data-modal-shell] {
   border-width: 0;
 }
 
-[data-theme='iris'] .system-activity-cluster {
+[data-theme="iris"] .system-activity-cluster {
   border-inline-start: none;
   padding-inline-start: 10px;
 }
 
-[data-theme='iris'] .system-activity-cluster [data-task-event-status] {
+[data-theme="iris"] .system-activity-cluster [data-task-event-status] {
   opacity: 1;
 }
 
-[data-theme='iris'] [data-message-row] {
+[data-theme="iris"] [data-message-row] {
   border-width: 1px;
 }
-[data-theme='iris'] [data-message-row].border-accent {
+[data-theme="iris"] [data-message-row].border-accent {
   border-color: rgba(var(--shadow-base), 0.14);
   background-color: var(--iris-bg-message-framed);
 }
 
-[data-theme='iris'] [data-collection-card]:hover {
+[data-theme="iris"] [data-collection-card]:hover {
   background-color: var(--bg-hover);
   box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.12);
   transform: translateY(-1px);
 }
 
-[data-theme='iris'] [data-composer-shell]:focus-within {
+[data-theme="iris"] [data-composer-shell]:focus-within {
   border-color: color-mix(in oklab, var(--accent) 45%, transparent);
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
-[data-theme='iris'] [data-tasks-column] {
+[data-theme="iris"] [data-tasks-column] {
   background-color: var(--bg-elevated);
   border-color: var(--border);
 }
-[data-theme='iris'] [data-tasks-board] [data-task-number] {
+[data-theme="iris"] [data-tasks-board] [data-task-number] {
   background: var(--bg-floating);
   border-color: var(--border);
   box-shadow: var(--card-shadow);
 }
-[data-theme='iris'] [data-tasks-board] [data-task-number]:hover {
+[data-theme="iris"] [data-tasks-board] [data-task-number]:hover {
   border-color: var(--border-control-hover);
   box-shadow: var(--shadow-popover);
 }
 
-[data-theme='iris'] {
+[data-theme="iris"] {
   --message-activity-color: var(--accent);
   --message-activity-radius: 4px;
 }

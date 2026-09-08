@@ -1,8 +1,8 @@
-import { Bot } from 'lucide-react';
-import { cn } from '@/lib/cn';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
-import type { AuthorAvatar, AuthorPresentation } from './author-presentation';
+import { Bot } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import type { AuthorAvatar, AuthorPresentation } from "./author-presentation";
 
 /**
  * The ONE avatar renderer for a resolved {@link AuthorAvatar} (#task:1792), so
@@ -46,7 +46,7 @@ export function AuthorAvatarView({
   objectUrlOverride?: string | null;
 }): JSX.Element {
   switch (avatar.variant) {
-    case 'agent':
+    case "agent":
       return (
         <AgentAvatar
           runtime={avatar.runtime}
@@ -57,7 +57,7 @@ export function AuthorAvatarView({
           title={label}
         />
       );
-    case 'user':
+    case "user":
       return (
         <UserAvatar
           size={size}
@@ -67,9 +67,9 @@ export function AuthorAvatarView({
           title={label}
         />
       );
-    case 'neutral-user':
+    case "neutral-user":
       return <UserAvatar size={size} className={className} title={label} />;
-    case 'neutral-agent':
+    case "neutral-agent":
       return <NeutralAgentAvatar size={size} className={className} title={label} />;
   }
 }
@@ -120,9 +120,7 @@ export function AuthorName({
 }): JSX.Element {
   return (
     <span className="inline-flex min-w-0 items-baseline gap-1.5">
-      <span className={cn('min-w-0 truncate', className)}>
-        {presentation.label}
-      </span>
+      <span className={cn("min-w-0 truncate", className)}>{presentation.label}</span>
       {presentation.isDeleted ? <DeletedActorMarker /> : null}
     </span>
   );
@@ -146,7 +144,7 @@ function NeutralAgentAvatar({
     <span
       data-avatar-ground
       className={cn(
-        'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle text-text-muted',
+        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle text-text-muted",
         className,
       )}
       style={{ width: size, height: size }}

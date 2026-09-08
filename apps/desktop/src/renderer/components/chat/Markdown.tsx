@@ -6,40 +6,40 @@ import {
   useMemo,
   useRef,
   useState,
-} from 'react';
-import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
-import remarkBreaks from 'remark-breaks';
-import remarkGfm from 'remark-gfm';
-import rehypeHighlight from 'rehype-highlight';
-import { Check, ChevronDown, ChevronUp, Copy, Hash } from 'lucide-react';
-import { rehypeHighlightTerm } from './rehypeHighlightTerm';
-import type { AgentDto, UserDto } from '@silverhand/shared';
-import { ADDRESSABLE_ID_PATTERN } from '@silverhand/shared';
-import { isAutolink } from '@silverhand/shared/reference-markdown';
+} from "react";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import { Check, ChevronDown, ChevronUp, Copy, Hash } from "lucide-react";
+import { rehypeHighlightTerm } from "./rehypeHighlightTerm";
+import type { AgentDto, UserDto } from "@silverhand/shared";
+import { ADDRESSABLE_ID_PATTERN } from "@silverhand/shared";
+import { isAutolink } from "@silverhand/shared/reference-markdown";
 import {
   exceedsRenderBudget,
   markdownByteLength,
   MESSAGE_RENDER_BUDGET_BYTES,
-} from './markdown-render-budget';
-import { Mention } from './Mention';
-import { MermaidDiagram } from './MermaidDiagram';
-import { ChannelRef, type ChannelReference } from './ChannelRef';
-import { LocatorRef, LocatorRefStaticChip } from './LocatorRef';
+} from "./markdown-render-budget";
+import { Mention } from "./Mention";
+import { MermaidDiagram } from "./MermaidDiagram";
+import { ChannelRef, type ChannelReference } from "./ChannelRef";
+import { LocatorRef, LocatorRefStaticChip } from "./LocatorRef";
 import {
   ConversationRef,
   conversationIcon,
   faceLabel,
   shortConversationId,
   type WorkspaceChannelReference,
-} from './ConversationRef';
-import { TaskRef, TaskRefStaticChip, type StaticTaskRefSummary } from './TaskRef';
+} from "./ConversationRef";
+import { TaskRef, TaskRefStaticChip, type StaticTaskRefSummary } from "./TaskRef";
 import {
   AUTHORED_HREF_PROP,
   classifyReferenceHref,
   isPluginLink,
   isReferenceScheme,
   PLUGIN_LINK_PROP,
-} from './reference-href';
+} from "./reference-href";
 
 interface MarkdownProps {
   content: string;
@@ -84,7 +84,7 @@ interface MarkdownProps {
    *  without mounting query/popover components. */
   taskRefsByNumber?: Map<number, StaticTaskRefSummary>;
   /** Task descriptions and message excerpts keep task-number text literal. */
-  taskReferences?: 'resolve' | 'raw';
+  taskReferences?: "resolve" | "raw";
   /** Set to `false` for export / screenshot rendering. When false:
    *  - fenced code blocks render as a bare `<pre>` (no copy / expand
    *    buttons, no overflow useEffect)
@@ -118,13 +118,13 @@ interface MarkdownProps {
    *  message content cap and falls back to a plain-text preview above it;
    *  `'unbounded'` renders whatever it is handed — for callers already bounded
    *  upstream, i.e. the workspace file preview. */
-  renderBudget?: 'message' | 'unbounded';
+  renderBudget?: "message" | "unbounded";
 }
 
-const MENTION_PREFIX = 'silverhand-mention:';
-const CHANNEL_PREFIX = 'silverhand-channel:';
-const CONVERSATION_PREFIX = 'silverhand-conversation:';
-const TASK_PREFIX = 'silverhand-task:';
+const MENTION_PREFIX = "silverhand-mention:";
+const CHANNEL_PREFIX = "silverhand-channel:";
+const CONVERSATION_PREFIX = "silverhand-conversation:";
+const TASK_PREFIX = "silverhand-task:";
 // Bare `#<n>` task reference (no `#task:` sigil). Agents habitually write
 // `#123` for a task; we resolve it against the workspace's task numbers and
 // render a chip ONLY when a matching task exists. Unlike the explicit
@@ -132,7 +132,7 @@ const TASK_PREFIX = 'silverhand-task:';
 // `#<n>` is ambiguous (issue numbers, quantities, versions), so an unresolved
 // one demotes to its literal text and leaves no chrome. The distinct scheme is
 // what lets the `a` override pick the demote-to-text fallback for bare refs.
-const BARE_TASK_PREFIX = 'silverhand-task-bare:';
+const BARE_TASK_PREFIX = "silverhand-task-bare:";
 
 /**
  * Renders message body as Markdown.
@@ -168,11 +168,11 @@ function MarkdownInner({
   conversationRefsById,
   onOpenConversationRef,
   taskRefsByNumber,
-  taskReferences = 'resolve',
+  taskReferences = "resolve",
   interactive = true,
   mermaidSvgByCode,
   searchQuery,
-  renderBudget = 'message',
+  renderBudget = "message",
 }: MarkdownProps): JSX.Element {
   // Oversized guard: a multi-MB body (legacy DB rows predating the send-side
   // byte cap) pins the renderer process in remark/rehype, so anything over this
@@ -180,7 +180,7 @@ function MarkdownInner({
   // per consumer (`markdown-render-budget.ts`): a chat body is bounded by the
   // message cap, the workspace file preview is bounded by the daemon's read cap
   // and so opts out here rather than inheriting a chat limit.
-  const budget = renderBudget === 'unbounded' ? null : MESSAGE_RENDER_BUDGET_BYTES;
+  const budget = renderBudget === "unbounded" ? null : MESSAGE_RENDER_BUDGET_BYTES;
   const oversizedBytes = useMemo(
     () => (exceedsRenderBudget(content, budget) ? markdownByteLength(content) : null),
     [content, budget],
@@ -191,7 +191,7 @@ function MarkdownInner({
   // the cost is negligible. Memoizing it doesn't help because react-
   // markdown also memoizes the pipeline by reference equality of the
   // plugins array.
-  const plugins = useMemo<NonNullable<ComponentProps<typeof ReactMarkdown>['remarkPlugins']>>(
+  const plugins = useMemo<NonNullable<ComponentProps<typeof ReactMarkdown>["remarkPlugins"]>>(
     () => [remarkGfm, remarkBreaks, [remarkRefs, { taskReferences }]],
     [taskReferences],
   );
@@ -201,8 +201,8 @@ function MarkdownInner({
   // term changes so react-markdown re-processes (that's the point — the marks
   // must track the query); when there's no term we return the stable
   // highlight-only array so ordinary rendering is byte-identical to before.
-  const trimmedTerm = searchQuery?.trim() ?? '';
-  const rehypePlugins = useMemo<NonNullable<ComponentProps<typeof ReactMarkdown>['rehypePlugins']>>(
+  const trimmedTerm = searchQuery?.trim() ?? "";
+  const rehypePlugins = useMemo<NonNullable<ComponentProps<typeof ReactMarkdown>["rehypePlugins"]>>(
     () =>
       trimmedTerm
         ? [rehypeHighlight, [rehypeHighlightTerm, { term: trimmedTerm }]]
@@ -243,7 +243,7 @@ function MarkdownInner({
           url.startsWith(CONVERSATION_PREFIX) ||
           url.startsWith(TASK_PREFIX) ||
           url.startsWith(BARE_TASK_PREFIX) ||
-          (key === 'href' && isReferenceScheme(url))
+          (key === "href" && isReferenceScheme(url))
             ? url
             : defaultUrlTransform(url)
         }
@@ -256,7 +256,7 @@ function MarkdownInner({
             // same spoof ruling C removed from the reference family. Inert text,
             // and above all never the plain-link arm, which would hand an
             // internal scheme to the OS opener.
-            if (typeof href === 'string' && isInternalChipScheme(href) && !isPluginLink(node)) {
+            if (typeof href === "string" && isInternalChipScheme(href) && !isPluginLink(node)) {
               return <span className="text-text-muted">{children}</span>;
             }
             // Export / screenshot path: every reachable href shape
@@ -266,7 +266,7 @@ function MarkdownInner({
             // own hooks / queries). Plain links lose `href` entirely
             // — no clickable handler, no `target=_blank`, no role.
             if (!interactive) {
-              if (typeof href === 'string') {
+              if (typeof href === "string") {
                 if (href.startsWith(MENTION_PREFIX)) {
                   const name = href.slice(MENTION_PREFIX.length);
                   const mentionAgent = agentsByName?.get(name);
@@ -290,10 +290,10 @@ function MarkdownInner({
                 // label and would drop text the author wrote from the export
                 // while the raw body keeps it.
                 const staticRef = classifyReferenceHref(href, node);
-                if (staticRef.arm === 'reference') {
+                if (staticRef.arm === "reference") {
                   const { kind, handle } = staticRef.reference;
-                  const refAgent = kind === 'agent' ? agentsByName?.get(handle) : undefined;
-                  const refHuman = kind === 'human' ? humansByName?.get(handle) : undefined;
+                  const refAgent = kind === "agent" ? agentsByName?.get(handle) : undefined;
+                  const refHuman = kind === "human" ? humansByName?.get(handle) : undefined;
                   return (
                     <StaticMentionRef
                       name={handle}
@@ -303,12 +303,12 @@ function MarkdownInner({
                     />
                   );
                 }
-                if (staticRef.arm === 'locator') {
+                if (staticRef.arm === "locator") {
                   // A locator in an export is a coordinate, never a control —
                   // see `LocatorRefStaticChip`.
                   return <LocatorRefStaticChip locator={staticRef.locator} />;
                 }
-                if (staticRef.arm !== 'other') {
+                if (staticRef.arm !== "other") {
                   // Either malformed, or written in a spelling display refuses.
                   // Both show the authored text and nothing else — never a
                   // fall-through to the link arm.
@@ -361,7 +361,7 @@ function MarkdownInner({
                 </span>
               );
             }
-            if (typeof href === 'string' && href.startsWith(MENTION_PREFIX)) {
+            if (typeof href === "string" && href.startsWith(MENTION_PREFIX)) {
               const name = href.slice(MENTION_PREFIX.length);
               const mentionAgent = agentsByName?.get(name);
               // `undefined` = parent didn't thread the map (no batch
@@ -391,10 +391,10 @@ function MarkdownInner({
             // labelled form would show as addressed something the addressing
             // side does not record as a reference.
             const liveRef = classifyReferenceHref(href, node);
-            if (liveRef.arm === 'reference') {
+            if (liveRef.arm === "reference") {
               const { kind, handle } = liveRef.reference;
-              const refAgent = kind === 'agent' ? agentsByName?.get(handle) : undefined;
-              const refHuman = kind === 'human' ? humansByName?.get(handle) : undefined;
+              const refAgent = kind === "agent" ? agentsByName?.get(handle) : undefined;
+              const refHuman = kind === "human" ? humansByName?.get(handle) : undefined;
               const refAvatarObjectUrl =
                 agentAvatarUrls && refAgent
                   ? (agentAvatarUrls.get(refAgent.id) ?? null)
@@ -409,13 +409,13 @@ function MarkdownInner({
                 />
               );
             }
-            if (liveRef.arm === 'locator') {
+            if (liveRef.arm === "locator") {
               // A container coordinate (#task:2120). It resolves itself — no map
               // is threaded in, because a locator can name ANY workspace and the
               // render context's maps are scoped to this message's one.
               return <LocatorRef locator={liveRef.locator} />;
             }
-            if (liveRef.arm !== 'other') {
+            if (liveRef.arm !== "other") {
               // Our scheme, but either a malformed destination or a spelling
               // display refuses: show the authored text and nothing else.
               // Falling through to the plain-link arm would hand an internal
@@ -423,7 +423,7 @@ function MarkdownInner({
               // claim an addressee this body never names to the addressing side.
               return <span className="text-text-muted">{children}</span>;
             }
-            if (typeof href === 'string' && href.startsWith(CHANNEL_PREFIX)) {
+            if (typeof href === "string" && href.startsWith(CHANNEL_PREFIX)) {
               const name = href.slice(CHANNEL_PREFIX.length);
               return (
                 <ChannelRef
@@ -433,7 +433,7 @@ function MarkdownInner({
                 />
               );
             }
-            if (typeof href === 'string' && href.startsWith(CONVERSATION_PREFIX)) {
+            if (typeof href === "string" && href.startsWith(CONVERSATION_PREFIX)) {
               const id = href.slice(CONVERSATION_PREFIX.length);
               return (
                 <ConversationRef
@@ -443,7 +443,7 @@ function MarkdownInner({
                 />
               );
             }
-            if (typeof href === 'string' && href.startsWith(TASK_PREFIX)) {
+            if (typeof href === "string" && href.startsWith(TASK_PREFIX)) {
               // The tokenizer guarantees the slice is `[1-9]\d*` —
               // positive integer with no leading zero. parseInt + finite
               // check is defensive belt-and-suspenders for the case
@@ -463,7 +463,7 @@ function MarkdownInner({
               // to the OS handler.
               return <span>{children}</span>;
             }
-            if (typeof href === 'string' && href.startsWith(BARE_TASK_PREFIX)) {
+            if (typeof href === "string" && href.startsWith(BARE_TASK_PREFIX)) {
               // Bare `#<n>`: same resolve path as `#task:<n>`, but the
               // `bare` flag makes TaskRef demote to its literal text
               // (no chip) for the no-context / loading / missing states.
@@ -498,7 +498,7 @@ function MarkdownInner({
             // Case-insensitive: `mermaid` is a proper noun (capital M) and
             // agents commonly write ```Mermaid — a stray capital shouldn't
             // silently demote the diagram to a plain code block.
-            if (extractLang(children)?.toLowerCase() === 'mermaid') {
+            if (extractLang(children)?.toLowerCase() === "mermaid") {
               if (interactive) {
                 return <MermaidDiagram code={extractText(children)} />;
               }
@@ -584,7 +584,7 @@ function StaticMentionRef({
     <span
       className="rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent"
       aria-label={`@${name}`}
-      data-mention-kind={humanId ? 'human' : 'agent'}
+      data-mention-kind={humanId ? "human" : "agent"}
       data-mention-id={humanId}
     >
       @{label ?? name}
@@ -603,7 +603,7 @@ function StaticChannelRef({
     return (
       <span
         className="font-mono text-text-muted"
-        data-channel-ref-state={channel === null ? 'ambiguous' : 'unresolved'}
+        data-channel-ref-state={channel === null ? "ambiguous" : "unresolved"}
       >
         #{name}
       </span>
@@ -612,8 +612,8 @@ function StaticChannelRef({
   return (
     <span
       className={
-        'inline-flex items-baseline gap-0.5 rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent' +
-        (channel.closed_at != null ? ' opacity-60' : '')
+        "inline-flex items-baseline gap-0.5 rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent" +
+        (channel.closed_at != null ? " opacity-60" : "")
       }
       title={`#${channel.title}`}
       data-channel-ref-state="resolved-no-handler"
@@ -639,15 +639,15 @@ function StaticConversationRef({
   // workspace-scoped list ({@link WorkspaceChannelReference} carries the
   // argument), so a direct pair never reaches it. Same face, same word, same
   // glyph as the live chip — one authority (#task:1373).
-  const icon = conversationIcon(conversation ? 'channel' : undefined);
+  const icon = conversationIcon(conversation ? "channel" : undefined);
   return (
     <span
       className="inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent"
-      aria-label={conversation ? `${faceLabel('channel')} · ${label}` : `Conversation #conv:${id}`}
+      aria-label={conversation ? `${faceLabel("channel")} · ${label}` : `Conversation #conv:${id}`}
       data-conversation-ref={id}
     >
       {icon}
-      <span className={conversation ? 'truncate' : 'truncate font-mono'}>{label}</span>
+      <span className={conversation ? "truncate" : "truncate font-mono"}>{label}</span>
     </span>
   );
 }
@@ -671,7 +671,7 @@ function conversationDisplayName(conversation: WorkspaceChannelReference): strin
 // point where the source is in hand — the `a` override downstream sees a hast
 // property. Hence the second parameter, and hence `markReferenceAutolink`
 // stamping the destinations it admits.
-function remarkRefs({ taskReferences = 'resolve' }: { taskReferences?: 'resolve' | 'raw' } = {}) {
+function remarkRefs({ taskReferences = "resolve" }: { taskReferences?: "resolve" | "raw" } = {}) {
   return (tree: unknown, file: { toString(): string }): void => {
     walk(tree as MdastNode, file.toString(), taskReferences);
   };
@@ -719,9 +719,9 @@ function pluginLink(url: string, text: string): MdastNode {
   return stampPluginLink({
     // mdast `link` uses `url`, not `href`. mdast-util-to-hast maps
     // it to the `href` attribute on the rendered `<a>`.
-    type: 'link',
+    type: "link",
     url,
-    children: [{ type: 'text', value: text }],
+    children: [{ type: "text", value: text }],
   });
 }
 
@@ -743,23 +743,23 @@ function stampAuthoredHref(node: MdastNode, url: string): void {
   };
 }
 
-function walk(node: MdastNode, source: string, taskReferences: 'resolve' | 'raw'): void {
+function walk(node: MdastNode, source: string, taskReferences: "resolve" | "raw"): void {
   if (!node.children || node.children.length === 0) return;
   const next: MdastNode[] = [];
   for (const child of node.children) {
-    if (child.type === 'link') {
+    if (child.type === "link") {
       markReferenceAutolink(child, source);
       next.push(child);
       continue;
     }
-    if (child.type === 'inlineCode' || child.type === 'code') {
+    if (child.type === "inlineCode" || child.type === "code") {
       next.push(child);
       continue;
     }
     if (
-      child.type === 'text' &&
-      typeof child.value === 'string' &&
-      (child.value.includes('@') || child.value.includes('#'))
+      child.type === "text" &&
+      typeof child.value === "string" &&
+      (child.value.includes("@") || child.value.includes("#"))
     ) {
       pushSplit(child.value, next, taskReferences);
       continue;
@@ -793,7 +793,7 @@ function walk(node: MdastNode, source: string, taskReferences: 'resolve' | 'raw'
  * (#task:2120).
  */
 function markReferenceAutolink(node: MdastNode, source: string): void {
-  if (typeof node.url !== 'string' || !isReferenceScheme(node.url)) return;
+  if (typeof node.url !== "string" || !isReferenceScheme(node.url)) return;
   if (!isAutolink(node, source)) return;
   stampPluginLink(node);
   stampAuthoredHref(node, node.url);
@@ -846,10 +846,10 @@ const REF_RE = new RegExp(
     `|@([a-zA-Z][a-zA-Z0-9_-]*)` +
     `|#(?!conv:|task:)([a-zA-Z][a-zA-Z0-9_-]*)` +
     `|#((?:1[1-9]|[2-9]\\d|[1-9]\\d{2,}))(?!\\w))`,
-  'g',
+  "g",
 );
 
-function pushSplit(text: string, out: MdastNode[], taskReferences: 'resolve' | 'raw'): void {
+function pushSplit(text: string, out: MdastNode[], taskReferences: "resolve" | "raw"): void {
   let last = 0;
   let lastRefEnd = -1;
   let m: RegExpExecArray | null;
@@ -860,7 +860,7 @@ function pushSplit(text: string, out: MdastNode[], taskReferences: 'resolve' | '
     }
     any = true;
     if (m.index > last) {
-      out.push({ type: 'text', value: text.slice(last, m.index) });
+      out.push({ type: "text", value: text.slice(last, m.index) });
     }
     const refEnd = m.index + m[0].length;
     const conversationId = m[1];
@@ -873,8 +873,8 @@ function pushSplit(text: string, out: MdastNode[], taskReferences: 'resolve' | '
     const taskNumber = m[2];
     if (taskNumber) {
       out.push(
-        taskReferences === 'raw'
-          ? { type: 'text', value: m[0] }
+        taskReferences === "raw"
+          ? { type: "text", value: m[0] }
           : pluginLink(`${TASK_PREFIX}${taskNumber}`, `#task:${taskNumber}`),
       );
       last = refEnd;
@@ -900,26 +900,26 @@ function pushSplit(text: string, out: MdastNode[], taskReferences: 'resolve' | '
     // reproduces the original prose verbatim.
     const bareTaskNumber = m[5]!;
     out.push(
-      taskReferences === 'raw'
-        ? { type: 'text', value: m[0] }
+      taskReferences === "raw"
+        ? { type: "text", value: m[0] }
         : pluginLink(`${BARE_TASK_PREFIX}${bareTaskNumber}`, `#${bareTaskNumber}`),
     );
     last = refEnd;
     lastRefEnd = refEnd;
   }
   if (!any) {
-    out.push({ type: 'text', value: text });
+    out.push({ type: "text", value: text });
     return;
   }
   if (last < text.length) {
-    out.push({ type: 'text', value: text.slice(last) });
+    out.push({ type: "text", value: text.slice(last) });
   }
 }
 
 function canStartRef(text: string, index: number, lastRefEnd: number): boolean {
   if (index === 0) return true;
   const prev = text[index - 1]!;
-  if (prev === '/') {
+  if (prev === "/") {
     // Let slash act as a compact separator between already-live refs:
     // `#task:317/#task:318`, `#conv:<id>/#task:318`, etc. Without a
     // live ref immediately before the slash, keep treating `/@x` and
@@ -954,12 +954,12 @@ function OversizedContent({ content, bytes }: { content: string; bytes: number }
       <div className="flex items-center gap-2 text-xs opacity-60">
         <span>{label} · too large to render as Markdown</span>
         <button type="button" onClick={onCopy} className="underline hover:opacity-80">
-          {copied ? 'Copied' : 'Copy full text'}
+          {copied ? "Copied" : "Copy full text"}
         </button>
       </div>
       <pre className="whitespace-pre-wrap break-words">
         {content.slice(0, OVERSIZED_PREVIEW_CHARS)}
-        {'\n…'}
+        {"\n…"}
       </pre>
     </div>
   );
@@ -996,14 +996,14 @@ function CodeBlock({ children }: { children: React.ReactNode }): JSX.Element {
   }, [children, expanded]);
 
   return (
-    <div className={'code-block' + (expanded ? ' code-block--expanded' : '')}>
+    <div className={"code-block" + (expanded ? " code-block--expanded" : "")}>
       <div className="code-block__header">
-        <span className="code-block__lang">{lang ?? 'text'}</span>
+        <span className="code-block__lang">{lang ?? "text"}</span>
         <button
           type="button"
           onClick={onCopy}
           className="code-block__copy"
-          title={copied ? 'Copied' : 'Copy code'}
+          title={copied ? "Copied" : "Copy code"}
           aria-label="Copy code"
         >
           {/* Icon only — the header strip is chrome, and a word next to a
@@ -1021,9 +1021,9 @@ function CodeBlock({ children }: { children: React.ReactNode }): JSX.Element {
           type="button"
           onClick={() => setExpanded((value) => !value)}
           className="code-block__expand"
-          aria-label={expanded ? 'Collapse code' : 'Expand code'}
+          aria-label={expanded ? "Collapse code" : "Expand code"}
           aria-expanded={expanded}
-          title={expanded ? 'Collapse code' : 'Expand code'}
+          title={expanded ? "Collapse code" : "Expand code"}
         >
           {expanded ? (
             <ChevronUp size={16} aria-hidden="true" />
@@ -1042,9 +1042,9 @@ function CodeBlock({ children }: { children: React.ReactNode }): JSX.Element {
 function extractLang(children: React.ReactNode): string | null {
   if (
     children &&
-    typeof children === 'object' &&
-    'props' in children &&
-    typeof (children as { props?: { className?: unknown } }).props?.className === 'string'
+    typeof children === "object" &&
+    "props" in children &&
+    typeof (children as { props?: { className?: unknown } }).props?.className === "string"
   ) {
     const cls = (children as { props: { className: string } }).props.className;
     const m = /language-([\w+-]+)/.exec(cls);
@@ -1054,16 +1054,16 @@ function extractLang(children: React.ReactNode): string | null {
 }
 
 function extractText(node: React.ReactNode): string {
-  if (typeof node === 'string') return node;
-  if (typeof node === 'number') return String(node);
-  if (Array.isArray(node)) return node.map(extractText).join('');
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(extractText).join("");
   if (
     node &&
-    typeof node === 'object' &&
-    'props' in node &&
+    typeof node === "object" &&
+    "props" in node &&
     (node as { props?: { children?: React.ReactNode } }).props?.children !== undefined
   ) {
     return extractText((node as { props: { children: React.ReactNode } }).props.children);
   }
-  return '';
+  return "";
 }

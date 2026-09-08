@@ -11,20 +11,20 @@
 //      workspace scope is truncated and no later notice arrives. Every other
 //      failure (5xx, timeout, unreachable backend) must leave the caches alone: a
 //      failed read is not evidence of a removal.
-import { describe, expect, it } from 'vitest';
-import { ApiError } from '@/lib/api';
+import { describe, expect, it } from "vitest";
+import { ApiError } from "@/lib/api";
 import {
   createForeignWorkspaceReconciler,
   mergeReconcileScope,
-} from './foreign-workspace-reconcile';
-import type { ChannelMembershipLoss, ChannelMembershipRow } from './viewer-channel-removal';
+} from "./foreign-workspace-reconcile";
+import type { ChannelMembershipLoss, ChannelMembershipRow } from "./viewer-channel-removal";
 
-const WS = 'ws-b';
+const WS = "ws-b";
 
 const member = (id: string): ChannelMembershipRow => ({
   id,
   is_member: true,
-  visibility: 'private',
+  visibility: "private",
 });
 
 /** A fetcher whose every call can be resolved by hand, so a notice can be proven
@@ -41,14 +41,14 @@ function gatedFetcher(tablesFor: (call: number) => readonly ChannelMembershipRow
       return new Promise<{
         active: readonly ChannelMembershipRow[];
         archived: readonly ChannelMembershipRow[];
-      }>(resolve => {
+      }>((resolve) => {
         pending.push(() => resolve({ active: tablesFor(call), archived: [] }));
       });
     },
     /** Release the oldest in-flight read and let its continuation run. */
     async release() {
       const next = pending.shift();
-      expect(next, 'expected a read to be in flight').toBeDefined();
+      expect(next, "expected a read to be in flight").toBeDefined();
       next?.();
       await Promise.resolve();
       await Promise.resolve();
@@ -59,27 +59,27 @@ function gatedFetcher(tablesFor: (call: number) => readonly ChannelMembershipRow
   };
 }
 
-describe('mergeReconcileScope', () => {
+describe("mergeReconcileScope", () => {
   const set = (...ids: string[]) => new Set(ids);
 
-  it('the first notice is taken as-is', () => {
-    expect(mergeReconcileScope(undefined, set('c1'))).toEqual(set('c1'));
+  it("the first notice is taken as-is", () => {
+    expect(mergeReconcileScope(undefined, set("c1"))).toEqual(set("c1"));
     expect(mergeReconcileScope(undefined, null)).toBeNull();
   });
 
-  it('two narrow notices UNION — neither channel may be dropped', () => {
-    expect(mergeReconcileScope(set('c2'), set('c3'))).toEqual(set('c2', 'c3'));
+  it("two narrow notices UNION — neither channel may be dropped", () => {
+    expect(mergeReconcileScope(set("c2"), set("c3"))).toEqual(set("c2", "c3"));
   });
 
-  it('`null` (unknown extent) absorbs everything, in both directions', () => {
+  it("`null` (unknown extent) absorbs everything, in both directions", () => {
     // `snapshot_required` is already the widest question, so narrowing it would
     // lose the events the gap swallowed.
-    expect(mergeReconcileScope(null, set('c3'))).toBeNull();
-    expect(mergeReconcileScope(set('c2'), null)).toBeNull();
+    expect(mergeReconcileScope(null, set("c3"))).toBeNull();
+    expect(mergeReconcileScope(set("c2"), null)).toBeNull();
   });
 });
 
-describe('foreign-workspace reconciler (#task:1689 blocker 1)', () => {
+describe("foreign-workspace reconciler (#task:1689 blocker 1)", () => {
   function harness(input: {
     held: string[];
     tablesFor: (call: number) => readonly ChannelMembershipRow[];
@@ -96,21 +96,21 @@ describe('foreign-workspace reconciler (#task:1689 blocker 1)', () => {
     return { fetcher, losses, unreadable, reconciler };
   }
 
-  it('a notice arriving DURING a probe is answered, and so is the one after it', async () => {
+  it("a notice arriving DURING a probe is answered, and so is the one after it", async () => {
     // The first read still sees c2 and c3; by the coalesced second read all three
     // are gone. So c2 can only be reported if its notice survived the merge —
     // which is exactly what a last-write-wins slot loses.
-    const survivors: Record<number, string[]> = { 1: ['c2', 'c3'], 2: [] };
+    const survivors: Record<number, string[]> = { 1: ["c2", "c3"], 2: [] };
     const h = harness({
-      held: ['c1', 'c2', 'c3'],
-      tablesFor: call => (survivors[call] ?? []).map(member),
+      held: ["c1", "c2", "c3"],
+      tablesFor: (call) => (survivors[call] ?? []).map(member),
     });
 
-    h.reconciler.request(WS, new Set(['c1'])); // starts a probe immediately
+    h.reconciler.request(WS, new Set(["c1"])); // starts a probe immediately
     expect(h.fetcher.calls).toBe(1);
     // Both arrive while probe 1 is frozen.
-    h.reconciler.request(WS, new Set(['c2']));
-    h.reconciler.request(WS, new Set(['c3']));
+    h.reconciler.request(WS, new Set(["c2"]));
+    h.reconciler.request(WS, new Set(["c3"]));
     expect(h.fetcher.calls).toBe(1); // never two probes at once for one workspace
 
     await h.fetcher.release(); // probe 1 completes → the coalesced follow-up starts
@@ -119,32 +119,30 @@ describe('foreign-workspace reconciler (#task:1689 blocker 1)', () => {
     await h.reconciler.settled();
 
     // FALSIFIER: with a last-write-wins slot, c2 is absent here.
-    expect(h.losses.map(l => l.loss.channelId).sort()).toEqual(['c1', 'c2', 'c3']);
-    expect(h.losses.every(l => l.workspaceId === WS)).toBe(true);
+    expect(h.losses.map((l) => l.loss.channelId).sort()).toEqual(["c1", "c2", "c3"]);
+    expect(h.losses.every((l) => l.workspaceId === WS)).toBe(true);
   });
 
-  it('a narrow notice for a channel the client holds nothing for costs no request', async () => {
-    const h = harness({ held: ['c1'], tablesFor: () => [] });
-    h.reconciler.request(WS, new Set(['c9']));
+  it("a narrow notice for a channel the client holds nothing for costs no request", async () => {
+    const h = harness({ held: ["c1"], tablesFor: () => [] });
+    h.reconciler.request(WS, new Set(["c9"]));
     await h.reconciler.settled();
     expect(h.fetcher.calls).toBe(0);
     expect(h.losses).toEqual([]);
   });
 
-  it('a `null` scope asks about every held channel (the gap-recovery arm)', async () => {
-    const h = harness({ held: ['c1', 'c2'], tablesFor: () => [member('c2')] });
+  it("a `null` scope asks about every held channel (the gap-recovery arm)", async () => {
+    const h = harness({ held: ["c1", "c2"], tablesFor: () => [member("c2")] });
     h.reconciler.request(WS, null);
     await h.fetcher.release();
     await h.reconciler.settled();
-    expect(h.losses.map(l => l.loss)).toEqual([
-      { channelId: 'c1', mode: 'visibility-loss' },
-    ]);
+    expect(h.losses.map((l) => l.loss)).toEqual([{ channelId: "c1", mode: "visibility-loss" }]);
   });
 
-  it('dispose stops the queued follow-up and ignores a late completion', async () => {
-    const h = harness({ held: ['c1', 'c2'], tablesFor: () => [] });
-    h.reconciler.request(WS, new Set(['c1']));
-    h.reconciler.request(WS, new Set(['c2']));
+  it("dispose stops the queued follow-up and ignores a late completion", async () => {
+    const h = harness({ held: ["c1", "c2"], tablesFor: () => [] });
+    h.reconciler.request(WS, new Set(["c1"]));
+    h.reconciler.request(WS, new Set(["c2"]));
     h.reconciler.dispose();
     await h.fetcher.release();
     expect(h.fetcher.calls).toBe(1); // the queued notice never starts
@@ -152,7 +150,7 @@ describe('foreign-workspace reconciler (#task:1689 blocker 1)', () => {
   });
 });
 
-describe('failure classification (#task:1689 blocker 4)', () => {
+describe("failure classification (#task:1689 blocker 4)", () => {
   function rejecting(error: unknown, held: string[]) {
     const losses: ChannelMembershipLoss[] = [];
     const unreadable: Array<{ workspaceId: string; held: readonly string[] }> = [];
@@ -169,10 +167,10 @@ describe('failure classification (#task:1689 blocker 4)', () => {
     it(`${status} means the WORKSPACE is gone: every held channel is handed over at once`, async () => {
       // Both list routes gate on `canViewWorkspace`, so losing the workspace
       // surfaces as a refused read on both — never as "absent from both tables".
-      const h = rejecting(new ApiError(status, 'no', ''), ['c1', 'c2']);
-      h.reconciler.request(WS, new Set(['c1']));
+      const h = rejecting(new ApiError(status, "no", ""), ["c1", "c2"]);
+      h.reconciler.request(WS, new Set(["c1"]));
       await h.reconciler.settled();
-      expect(h.unreadable).toEqual([{ workspaceId: WS, held: ['c1', 'c2'] }]);
+      expect(h.unreadable).toEqual([{ workspaceId: WS, held: ["c1", "c2"] }]);
       // Not resolved per channel: a narrow notice must not shrink a whole-workspace
       // fact down to the one channel it happened to name.
       expect(h.losses).toEqual([]);
@@ -180,12 +178,12 @@ describe('failure classification (#task:1689 blocker 4)', () => {
   }
 
   for (const [label, error] of [
-    ['5xx', new ApiError(500, 'boom', '')],
-    ['backend unreachable', new ApiError(0, 'unreachable', '', 'backend_unreachable')],
-    ['a non-API throw', new TypeError('fetch failed')],
+    ["5xx", new ApiError(500, "boom", "")],
+    ["backend unreachable", new ApiError(0, "unreachable", "", "backend_unreachable")],
+    ["a non-API throw", new TypeError("fetch failed")],
   ] as const) {
     it(`${label} converges NOTHING — a failed read is not evidence of a removal`, async () => {
-      const h = rejecting(error, ['c1', 'c2']);
+      const h = rejecting(error, ["c1", "c2"]);
       h.reconciler.request(WS, null);
       await h.reconciler.settled();
       expect(h.unreadable).toEqual([]);
@@ -193,15 +191,15 @@ describe('failure classification (#task:1689 blocker 4)', () => {
     });
   }
 
-  it('after a failure the NEXT notice still probes (no latched-off state)', async () => {
+  it("after a failure the NEXT notice still probes (no latched-off state)", async () => {
     let call = 0;
     const losses: ChannelMembershipLoss[] = [];
     const reconciler = createForeignWorkspaceReconciler({
       fetchTables: () =>
         ++call === 1
-          ? Promise.reject(new ApiError(500, 'boom', ''))
+          ? Promise.reject(new ApiError(500, "boom", ""))
           : Promise.resolve({ active: [], archived: [] }),
-      heldChannelIds: () => new Set(['c1']),
+      heldChannelIds: () => new Set(["c1"]),
       onLoss: (_ws, loss) => losses.push(loss),
       onWorkspaceUnreadable: () => {},
     });
@@ -210,6 +208,6 @@ describe('failure classification (#task:1689 blocker 4)', () => {
     expect(losses).toEqual([]);
     reconciler.request(WS, null);
     await reconciler.settled();
-    expect(losses).toEqual([{ channelId: 'c1', mode: 'visibility-loss' }]);
+    expect(losses).toEqual([{ channelId: "c1", mode: "visibility-loss" }]);
   });
 });

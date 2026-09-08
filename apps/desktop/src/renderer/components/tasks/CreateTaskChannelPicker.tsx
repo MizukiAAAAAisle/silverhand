@@ -1,11 +1,11 @@
-import { useId, useMemo, useState } from 'react';
-import * as Popover from '@radix-ui/react-popover';
-import { ChevronDown, Search } from 'lucide-react';
-import { cn } from '@/lib/cn';
-import { ChannelIcon } from '@/components/ChannelIcon';
-import { FILTER_SELECT_TRIGGER_CLASS } from '@/components/ui/filter-select';
-import { useRovingList, isImeComposing } from '@/features/tasks/taskFilterKeyboard';
-import { OptionRow, type ChannelOption } from '@/components/tasks/TaskFilterBar';
+import { useId, useMemo, useState } from "react";
+import * as Popover from "@radix-ui/react-popover";
+import { ChevronDown, Search } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { ChannelIcon } from "@/components/ChannelIcon";
+import { FILTER_SELECT_TRIGGER_CLASS } from "@/components/ui/filter-select";
+import { useRovingList, isImeComposing } from "@/features/tasks/taskFilterKeyboard";
+import { OptionRow, type ChannelOption } from "@/components/tasks/TaskFilterBar";
 
 /**
  * The create dialog's channel picker — a searchable combobox, NOT the plain
@@ -33,16 +33,14 @@ export function CreateTaskChannelPicker({
   onChange: (id: string) => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const selected = value ? channelOptions.find(o => o.id === value) ?? null : null;
+  const [query, setQuery] = useState("");
+  const selected = value ? (channelOptions.find((o) => o.id === value) ?? null) : null;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return channelOptions;
     return channelOptions.filter(
-      o =>
-        o.label.toLowerCase().includes(q) ||
-        (o.sublabel?.toLowerCase().includes(q) ?? false),
+      (o) => o.label.toLowerCase().includes(q) || (o.sublabel?.toLowerCase().includes(q) ?? false),
     );
   }, [channelOptions, query]);
 
@@ -54,7 +52,7 @@ export function CreateTaskChannelPicker({
   const groups = useMemo(() => {
     const byWorkspace = new Map<
       string,
-      { title: string | null; group: ChannelOption['group']; items: ChannelOption[] }
+      { title: string | null; group: ChannelOption["group"]; items: ChannelOption[] }
     >();
     for (const o of filtered) {
       let g = byWorkspace.get(o.workspaceId);
@@ -65,13 +63,13 @@ export function CreateTaskChannelPicker({
       g.items.push(o);
     }
     return [...byWorkspace.values()].sort((a, b) =>
-      a.group === b.group ? 0 : a.group === 'workspace' ? -1 : 1,
+      a.group === b.group ? 0 : a.group === "workspace" ? -1 : 1,
     );
   }, [filtered]);
 
   // Flat, in-render-order list for roving keyboard nav — matches the visual
   // order (group by group) so arrows walk the list as it reads.
-  const flatOptions = useMemo(() => groups.flatMap(g => g.items), [groups]);
+  const flatOptions = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const optionIndex = useMemo(() => {
     const m = new Map<string, number>();
     flatOptions.forEach((o, i) => m.set(o.id, i));
@@ -83,7 +81,7 @@ export function CreateTaskChannelPicker({
     count: flatOptions.length,
     open,
     resetKey: query,
-    onSelect: index => {
+    onSelect: (index) => {
       const o = flatOptions[index];
       if (o) {
         onChange(o.id);
@@ -95,9 +93,9 @@ export function CreateTaskChannelPicker({
   return (
     <Popover.Root
       open={open}
-      onOpenChange={next => {
+      onOpenChange={(next) => {
         setOpen(next);
-        if (!next) setQuery('');
+        if (!next) setQuery("");
       }}
     >
       <Popover.Trigger asChild>
@@ -110,7 +108,7 @@ export function CreateTaskChannelPicker({
           // input already carries that role, and a second combobox on the trigger
           // would confuse AT. Other themes leave `[data-input]` flat.
           data-input=""
-          className={cn(FILTER_SELECT_TRIGGER_CLASS, 'h-9')}
+          className={cn(FILTER_SELECT_TRIGGER_CLASS, "h-9")}
         >
           <span className="flex min-w-0 items-center gap-1.5">
             {selected ? (
@@ -146,8 +144,8 @@ export function CreateTaskChannelPicker({
           <input
             autoFocus
             value={query}
-            onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => {
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
               // Rendered inline (see above), so the search box is inside the host
               // <form>: a bare Enter would submit it. Swallow Enter here — except
               // while an IME composition is committing a candidate, where the key
@@ -156,7 +154,7 @@ export function CreateTaskChannelPicker({
               // keyCode===229 Enter must NOT be prevented here, matching the
               // reducer's bypass). Row selection is driven by the roving helper,
               // never by form submit.
-              if (e.key === 'Enter' && !isImeComposing(e.nativeEvent)) {
+              if (e.key === "Enter" && !isImeComposing(e.nativeEvent)) {
                 e.preventDefault();
               }
               roving.onKeyDown(e);
@@ -171,11 +169,7 @@ export function CreateTaskChannelPicker({
             className="w-full bg-transparent text-xs text-text-primary outline-none placeholder:text-text-muted"
           />
         </div>
-        <div
-          role="listbox"
-          id={listId}
-          className="mt-1 min-h-0 flex-1 overflow-y-auto"
-        >
+        <div role="listbox" id={listId} className="mt-1 min-h-0 flex-1 overflow-y-auto">
           {groups.map((g, gi) => (
             <div key={g.items[0]?.workspaceId ?? gi}>
               {g.title ? (
@@ -183,7 +177,7 @@ export function CreateTaskChannelPicker({
                   {g.title}
                 </div>
               ) : null}
-              {g.items.map(o => {
+              {g.items.map((o) => {
                 const index = optionIndex.get(o.id) ?? -1;
                 return (
                   <OptionRow
@@ -191,7 +185,7 @@ export function CreateTaskChannelPicker({
                     selected={value === o.id}
                     active={roving.activeIndex === index}
                     id={optionId(index)}
-                    optionRef={el => roving.registerItem(index, el)}
+                    optionRef={(el) => roving.registerItem(index, el)}
                     onHover={() => roving.setActiveIndex(index)}
                     onSelect={() => {
                       onChange(o.id);

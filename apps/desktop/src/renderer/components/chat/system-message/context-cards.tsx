@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ChevronRight, Quote, Sprout } from 'lucide-react';
+import { useState } from "react";
+import { ChevronRight, Quote, Sprout } from "lucide-react";
 import {
   type ChannelContextMetadata,
   type ChildContextMetadata,
@@ -9,17 +9,17 @@ import {
   readChannelContextMetadata,
   readChildContextMetadata,
   readThreadAnchorMetadata,
-} from '@silverhand/shared';
-import { makeUserNameResolver } from '@/features/users/hooks';
-import { formatUserDisplayName } from '@/lib/current-user';
-import { Markdown } from '@/components/chat/Markdown';
-import { ConversationRef } from '@/components/chat/ConversationRef';
-import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
-import type { ChannelReference } from '@/components/chat/ChannelRef';
-import { useRelativeTime } from '@/components/chat/useRelativeTime';
-import { type RendererProps, useUserResolver, firstLine } from './shared';
+} from "@silverhand/shared";
+import { makeUserNameResolver } from "@/features/users/hooks";
+import { formatUserDisplayName } from "@/lib/current-user";
+import { Markdown } from "@/components/chat/Markdown";
+import { ConversationRef } from "@/components/chat/ConversationRef";
+import type { WorkspaceChannelReference } from "@/components/chat/ConversationRef";
+import type { ChannelReference } from "@/components/chat/ChannelRef";
+import { useRelativeTime } from "@/components/chat/useRelativeTime";
+import { type RendererProps, useUserResolver, firstLine } from "./shared";
 
-type ContextCardKind = 'quoted' | 'inherited' | 'spawned';
+type ContextCardKind = "quoted" | "inherited" | "spawned";
 
 interface ContextCardModel {
   kind: ContextCardKind;
@@ -52,15 +52,15 @@ interface ContextCardModel {
 }
 
 const CONTEXT_KIND_BORDER: Record<ContextCardKind, string> = {
-  quoted: 'border-l-accent',
-  inherited: 'border-l-success',
-  spawned: 'border-l-warning',
+  quoted: "border-l-accent",
+  inherited: "border-l-success",
+  spawned: "border-l-warning",
 };
 
 const CONTEXT_KIND_TAG_BG: Record<ContextCardKind, string> = {
-  quoted: 'bg-accent text-text-on-accent',
-  inherited: 'bg-success text-white',
-  spawned: 'bg-warning text-white',
+  quoted: "bg-accent text-text-on-accent",
+  inherited: "bg-success text-white",
+  spawned: "bg-warning text-white",
 };
 
 const CONTEXT_KIND_TAG_ICON: Record<ContextCardKind, JSX.Element> = {
@@ -110,15 +110,12 @@ function ContextCardShell({
   return (
     <div
       data-context-card={model.kind}
-      className={
-        'my-1 border-l-2 bg-bg-floating px-2 py-2 ' +
-        CONTEXT_KIND_BORDER[model.kind]
-      }
+      className={"my-1 border-l-2 bg-bg-floating px-2 py-2 " + CONTEXT_KIND_BORDER[model.kind]}
     >
       <div className="mb-1 flex items-center gap-1.5 text-xs text-text-muted">
         <span
           className={
-            'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[length:var(--text-badge)] font-semibold uppercase tracking-wider ' +
+            "inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[length:var(--text-badge)] font-semibold uppercase tracking-wider " +
             CONTEXT_KIND_TAG_BG[model.kind]
           }
         >
@@ -134,36 +131,26 @@ function ContextCardShell({
           onOpen={onOpenConversationRef}
         />
         {model.sourceAuthorLabel ? (
-          <span className="text-text-secondary">
-            · {model.sourceAuthorLabel}
-          </span>
+          <span className="text-text-secondary">· {model.sourceAuthorLabel}</span>
         ) : null}
-        {model.timestamp !== null ? (
-          <ContextCardRelativeTime epochMs={model.timestamp} />
-        ) : null}
+        {model.timestamp !== null ? <ContextCardRelativeTime epochMs={model.timestamp} /> : null}
         {collapsible ? (
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
             className="ml-auto flex size-6 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-secondary"
             aria-expanded={expanded}
-            aria-label={expanded ? 'Collapse context' : 'Expand context'}
-            title={expanded ? 'Collapse' : 'Expand'}
-            data-context-toggle={expanded ? 'collapse' : 'expand'}
+            aria-label={expanded ? "Collapse context" : "Expand context"}
+            title={expanded ? "Collapse" : "Expand"}
+            data-context-toggle={expanded ? "collapse" : "expand"}
           >
             <ChevronRight
-              className={
-                'size-3.5 transition-transform ' + (expanded ? 'rotate-90' : '')
-              }
+              className={"size-3.5 transition-transform " + (expanded ? "rotate-90" : "")}
             />
           </button>
         ) : null}
       </div>
-      <div
-        className={
-          (expanded ? 'text-text-primary' : 'truncate text-text-secondary')
-        }
-      >
+      <div className={expanded ? "text-text-primary" : "truncate text-text-secondary"}>
         {expanded ? (
           model.blockquote ? (
             <blockquote className="border-l-2 border-border pl-2 text-text-secondary">
@@ -206,14 +193,13 @@ function ContextCardLegacyFallback({
       data-context-card={kind}
       data-context-card-legacy="1"
       className={
-        'mx-4 my-1 border-l-2 bg-bg-floating px-3 py-2 text-text-muted ' +
-        CONTEXT_KIND_BORDER[kind]
+        "mx-4 my-1 border-l-2 bg-bg-floating px-3 py-2 text-text-muted " + CONTEXT_KIND_BORDER[kind]
       }
     >
       <div className="mb-1">
         <span
           className={
-            'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[length:var(--text-badge)] font-semibold uppercase tracking-wider ' +
+            "inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[length:var(--text-badge)] font-semibold uppercase tracking-wider " +
             CONTEXT_KIND_TAG_BG[kind]
           }
         >
@@ -240,13 +226,7 @@ export function ThreadAnchorCard(props: RendererProps): JSX.Element {
   );
   const userResolver = useUserResolver();
   if (!meta) {
-    return (
-      <ContextCardLegacyFallback
-        kind="quoted"
-        tagLabel="Quoted"
-        {...props}
-      />
-    );
+    return <ContextCardLegacyFallback kind="quoted" tagLabel="Quoted" {...props} />;
   }
   return (
     <ContextCardShell
@@ -265,17 +245,17 @@ function threadAnchorModel(
   userResolver?: ReturnType<typeof makeUserNameResolver>,
 ): ContextCardModel {
   let authorLabel: string;
-  if (meta.quoted_from_kind === 'agent') {
-    authorLabel = meta.quoted_agent_name || 'agent';
-  } else if (meta.quoted_from_kind === 'user') {
+  if (meta.quoted_from_kind === "agent") {
+    authorLabel = meta.quoted_agent_name || "agent";
+  } else if (meta.quoted_from_kind === "user") {
     authorLabel = formatUserDisplayName(meta.quoted_from_user_id, userResolver);
   } else {
-    authorLabel = 'system';
+    authorLabel = "system";
   }
   return {
-    kind: 'quoted',
-    tagLabel: 'Quoted',
-    sourcePrefix: '',
+    kind: "quoted",
+    tagLabel: "Quoted",
+    sourcePrefix: "",
     sourceConversationId: meta.quoted_conversation_id,
     sourceAuthorLabel: authorLabel,
     body: meta.quoted_content,
@@ -290,13 +270,7 @@ export function ChildContextCard(props: RendererProps): JSX.Element {
     (props.message.metadata ?? null) as Record<string, unknown> | null,
   );
   if (!meta) {
-    return (
-      <ContextCardLegacyFallback
-        kind="inherited"
-        tagLabel="Inherited"
-        {...props}
-      />
-    );
+    return <ContextCardLegacyFallback kind="inherited" tagLabel="Inherited" {...props} />;
   }
   return (
     <ContextCardShell
@@ -312,11 +286,11 @@ export function ChildContextCard(props: RendererProps): JSX.Element {
 
 function childContextModel(meta: ChildContextMetadata): ContextCardModel {
   return {
-    kind: 'inherited',
-    tagLabel: 'Inherited',
-    sourcePrefix: 'from ',
+    kind: "inherited",
+    tagLabel: "Inherited",
+    sourcePrefix: "from ",
     sourceConversationId: meta.parent_conversation_id,
-    sourceAuthorLabel: '',
+    sourceAuthorLabel: "",
     body: meta.summary,
     timestamp: null,
     defaultExpanded: false,
@@ -329,13 +303,7 @@ export function ChannelContextCard(props: RendererProps): JSX.Element {
     (props.message.metadata ?? null) as Record<string, unknown> | null,
   );
   if (!meta) {
-    return (
-      <ContextCardLegacyFallback
-        kind="spawned"
-        tagLabel="Spawned-from"
-        {...props}
-      />
-    );
+    return <ContextCardLegacyFallback kind="spawned" tagLabel="Spawned-from" {...props} />;
   }
   return (
     <ContextCardShell
@@ -349,17 +317,14 @@ export function ChannelContextCard(props: RendererProps): JSX.Element {
   );
 }
 
-function channelContextModel(
-  meta: ChannelContextMetadata,
-  content: string,
-): ContextCardModel {
+function channelContextModel(meta: ChannelContextMetadata, content: string): ContextCardModel {
   const agentLabel = meta.created_by_agent_name
     ? `by ${meta.created_by_agent_name}`
-    : 'by an agent';
+    : "by an agent";
   return {
-    kind: 'spawned',
-    tagLabel: 'Spawned-from',
-    sourcePrefix: '',
+    kind: "spawned",
+    tagLabel: "Spawned-from",
+    sourcePrefix: "",
     sourceConversationId: meta.source_conversation_id,
     sourceAuthorLabel: agentLabel,
     body: content,

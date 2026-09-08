@@ -35,16 +35,12 @@ const path = require("node:path");
 
 function loadAsar(projectDir) {
   const projectRequire = createRequire(path.join(projectDir, "package.json"));
-  const builderRequire = createRequire(
-    projectRequire.resolve("electron-builder/package.json"),
-  );
+  const builderRequire = createRequire(projectRequire.resolve("electron-builder/package.json"));
   return builderRequire("@electron/asar");
 }
 
 function asarHeaderSha256Hex(asar, filePath) {
-  return createHash("sha256")
-    .update(asar.getRawHeader(filePath).headerString)
-    .digest("hex");
+  return createHash("sha256").update(asar.getRawHeader(filePath).headerString).digest("hex");
 }
 
 function updateElectronAsarIntegrity(appPath, asarPath, asar) {
@@ -56,11 +52,7 @@ function updateElectronAsarIntegrity(appPath, asarPath, asar) {
   try {
     execFileSync(
       "/usr/libexec/PlistBuddy",
-      [
-        "-c",
-        "Print :ElectronAsarIntegrity:Resources/app.asar:hash",
-        infoPlistPath,
-      ],
+      ["-c", "Print :ElectronAsarIntegrity:Resources/app.asar:hash", infoPlistPath],
       { stdio: "ignore" },
     );
   } catch {
@@ -70,16 +62,10 @@ function updateElectronAsarIntegrity(appPath, asarPath, asar) {
   const nextHash = asarHeaderSha256Hex(asar, asarPath);
   execFileSync(
     "/usr/libexec/PlistBuddy",
-    [
-      "-c",
-      `Set :ElectronAsarIntegrity:Resources/app.asar:hash ${nextHash}`,
-      infoPlistPath,
-    ],
+    ["-c", `Set :ElectronAsarIntegrity:Resources/app.asar:hash ${nextHash}`, infoPlistPath],
     { stdio: "inherit" },
   );
-  console.log(
-    `[afterPack] ElectronAsarIntegrity header hash updated to ${nextHash}`,
-  );
+  console.log(`[afterPack] ElectronAsarIntegrity header hash updated to ${nextHash}`);
 }
 
 async function rewriteRemoteOnlyAsar(context, appPath) {
@@ -100,9 +86,7 @@ async function rewriteRemoteOnlyAsar(context, appPath) {
     throw new Error(`[afterPack] remote-only asar not found: ${asarPath}`);
   }
   if (!fs.existsSync(remoteOnlyPackagePath)) {
-    throw new Error(
-      `[afterPack] remote-only package metadata not found: ${remoteOnlyPackagePath}`,
-    );
+    throw new Error(`[afterPack] remote-only package metadata not found: ${remoteOnlyPackagePath}`);
   }
 
   const asar = loadAsar(context.packager.projectDir);
@@ -158,15 +142,7 @@ exports.default = async function afterPack(context) {
   console.log(`[afterPack] ad-hoc deep-signing ${appPath}`);
   execFileSync(
     "codesign",
-    [
-      "--deep",
-      "--force",
-      "--sign",
-      "-",
-      "--entitlements",
-      entitlementsPath,
-      appPath,
-    ],
+    ["--deep", "--force", "--sign", "-", "--entitlements", entitlementsPath, appPath],
     { stdio: "inherit" },
   );
   execFileSync("codesign", ["--verify", "--deep", "--strict", appPath], {
@@ -176,15 +152,26 @@ exports.default = async function afterPack(context) {
     const dir = path.join(appPath, "Contents", "Resources", "silverhand-backend");
     const manifestPath = path.join(dir, "silverhand-backend.manifest.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    if (manifest.executable !== "silverhand-backend") throw new Error("unexpected sidecar executable");
+    if (manifest.executable !== "silverhand-backend")
+      throw new Error("unexpected sidecar executable");
     const binary = path.join(dir, manifest.executable);
     const hash = () => createHash("sha256").update(fs.readFileSync(binary)).digest("hex");
     const signedHash = hash();
-    fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, sha256: signedHash }, null, 2) + "\n");
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({ ...manifest, sha256: signedHash }, null, 2) + "\n",
+    );
     // Reseal the changed manifest resource without rewriting nested code signatures.
-    execFileSync("codesign", ["--force", "--sign", "-", "--entitlements", entitlementsPath, appPath], { stdio: "inherit" });
+    execFileSync(
+      "codesign",
+      ["--force", "--sign", "-", "--entitlements", entitlementsPath, appPath],
+      { stdio: "inherit" },
+    );
     execFileSync("codesign", ["--verify", "--deep", "--strict", appPath], { stdio: "inherit" });
-    if (hash() !== signedHash || JSON.parse(fs.readFileSync(manifestPath, "utf8")).sha256 !== hash()) {
+    if (
+      hash() !== signedHash ||
+      JSON.parse(fs.readFileSync(manifestPath, "utf8")).sha256 !== hash()
+    ) {
       throw new Error("packaged sidecar bytes changed after manifest sealing");
     }
   }

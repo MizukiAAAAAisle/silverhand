@@ -1,5 +1,5 @@
-import { Users } from 'lucide-react';
-import { useConversationMembers } from '@/features/conversations/useConversationMembers';
+import { Users } from "lucide-react";
+import { useConversationMembers } from "@/features/conversations/useConversationMembers";
 
 /**
  * The channel header's Members action, carrying the current member count
@@ -35,8 +35,7 @@ export function MembersButton({
   onOpen: () => void;
 }): JSX.Element {
   const membersResult = useConversationMembers(channelId);
-  const count =
-    membersResult.status === 'resolved' ? membersResult.members.length : null;
+  const count = membersResult.status === "resolved" ? membersResult.members.length : null;
 
   return (
     <button
@@ -45,7 +44,7 @@ export function MembersButton({
       data-sticker-size="md"
       data-sticker-tone="neutral"
       onClick={onOpen}
-      aria-label={count === null ? 'Members' : `Members (${count})`}
+      aria-label={count === null ? "Members" : `Members (${count})`}
       title="Members"
       data-member-count={count ?? undefined}
       className="flex h-7 min-w-7 shrink-0 items-center justify-center gap-1 rounded-[var(--control-radius)] px-1.5 text-text-muted hover:bg-bg-hover hover:text-text-primary"

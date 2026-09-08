@@ -1,4 +1,4 @@
-import { isAgentSpace, type WorkspaceOwnership } from '../workspaces/workspace-ownership';
+import { isAgentSpace, type WorkspaceOwnership } from "../workspaces/workspace-ownership";
 
 /** A workspace row as the locator PRODUCER reads it: the display name it would
  *  spell, plus the ownership fact that decides whether spelling it is even legal. */

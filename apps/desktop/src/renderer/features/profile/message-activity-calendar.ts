@@ -7,8 +7,8 @@ export interface MessageActivityCell extends MessageActivityDay {
   visible: boolean;
 }
 
-export function messageActivityRange(selection: number | 'recent', today: string) {
-  if (selection !== 'recent') {
+export function messageActivityRange(selection: number | "recent", today: string) {
+  if (selection !== "recent") {
     return { start: `${selection}-01-01`, end: `${selection}-12-31` };
   }
 
@@ -34,7 +34,7 @@ export function messageActivityYears(range: { start: string; end: string }): num
 
 /** Date keys are calendar coordinates from the server's reporting timezone. */
 export function messageActivityCalendar(
-  year: number | 'recent',
+  year: number | "recent",
   days: readonly MessageActivityDay[],
   today: string,
 ): MessageActivityCell[] {

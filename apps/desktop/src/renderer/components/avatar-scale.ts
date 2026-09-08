@@ -32,8 +32,8 @@ export const AVATAR_PX = {
   md: 28,
   lg: 32,
   xl: 36,
-  '2xl': 48,
-  '3xl': 56,
+  "2xl": 48,
+  "3xl": 56,
   profileCompact: 72,
   profile: 80,
 } as const;

@@ -1,7 +1,7 @@
-import { type JSX, type ReactNode } from 'react';
-import { Activity, MessagesSquare, Monitor, Settings, Users } from 'lucide-react';
-import { TaskIcon } from '@/components/tasks/TaskIcon';
-import { PANE_RADIUS, paneChrome } from './pane-chrome';
+import { type JSX, type ReactNode } from "react";
+import { Activity, MessagesSquare, Monitor, Settings, Users } from "lucide-react";
+import { TaskIcon } from "@/components/tasks/TaskIcon";
+import { PANE_RADIUS, paneChrome } from "./pane-chrome";
 
 /**
  * Top-level app sections. Outer to the channels/sessions sidebars —
@@ -11,7 +11,7 @@ import { PANE_RADIUS, paneChrome } from './pane-chrome';
  * than the main rail, but it still participates in section selection
  * so the bottom button can highlight when its route is active.
  */
-export type AppSection = 'chat' | 'activity' | 'tasks' | 'members' | 'computers' | 'settings';
+export type AppSection = "chat" | "activity" | "tasks" | "members" | "computers" | "settings";
 
 interface NavRailProps {
   current: AppSection;
@@ -39,11 +39,11 @@ interface NavItem {
 }
 
 const ITEMS: NavItem[] = [
-  { id: 'chat', label: 'Chat', icon: <MessagesSquare className="size-4" />, shortcut: 1 },
-  { id: 'activity', label: 'Activity', icon: <Activity className="size-4" />, shortcut: 2 },
-  { id: 'tasks', label: 'Tasks', icon: <TaskIcon className="size-4" />, shortcut: 3 },
-  { id: 'members', label: 'Members', icon: <Users className="size-4" />, shortcut: 4 },
-  { id: 'computers', label: 'Computers', icon: <Monitor className="size-4" />, shortcut: 5 },
+  { id: "chat", label: "Chat", icon: <MessagesSquare className="size-4" />, shortcut: 1 },
+  { id: "activity", label: "Activity", icon: <Activity className="size-4" />, shortcut: 2 },
+  { id: "tasks", label: "Tasks", icon: <TaskIcon className="size-4" />, shortcut: 3 },
+  { id: "members", label: "Members", icon: <Users className="size-4" />, shortcut: 4 },
+  { id: "computers", label: "Computers", icon: <Monitor className="size-4" />, shortcut: 5 },
 ];
 
 /**
@@ -72,14 +72,14 @@ export function deriveNavRailDots(input: {
 }
 
 export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element {
-  const settingsSelected = current === 'settings';
+  const settingsSelected = current === "settings";
   return (
     <nav
       aria-label="App sections"
       className="nav-rail flex h-full w-[var(--nav-rail-width)] shrink-0 flex-col items-center gap-1 bg-[var(--bg-nav-rail)] py-2"
       style={{
         ...paneChrome,
-        overflow: 'hidden',
+        overflow: "hidden",
         // The rail is unconditionally the frame's first item, so its
         // bottom-left corner IS the app window's bottom-left corner. At a
         // 2px tile radius that corner reads as a chip inside the arc the
@@ -103,7 +103,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
             type="button"
             title={`${item.label}  ⌘${item.shortcut}`}
             aria-label={item.label}
-            aria-current={selected ? 'page' : undefined}
+            aria-current={selected ? "page" : undefined}
             onClick={() => onChange(item.id)}
             className="nav-rail__item flex size-9 items-center justify-center transition-colors"
           >
@@ -127,8 +127,8 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
         type="button"
         title="Settings"
         aria-label="Settings"
-        aria-current={settingsSelected ? 'page' : undefined}
-        onClick={() => onChange('settings')}
+        aria-current={settingsSelected ? "page" : undefined}
+        onClick={() => onChange("settings")}
         className="nav-rail__item mt-auto flex size-9 items-center justify-center transition-colors"
       >
         <Settings className="size-4" />

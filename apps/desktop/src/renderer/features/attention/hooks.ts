@@ -3,10 +3,10 @@
 // folder (not `features/channels`) to respect the bounded-context boundary —
 // Attention is the read-side projection of the human's "queue waiting on me",
 // distinct from messaging/channels. Canonical: docs/activity-lifecycle-v1.md.
-import { useEffect } from 'react';
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { QueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
+import { useEffect } from "react";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import type {
   ActivityItemDto,
   AttentionBadgeRollupDto,
@@ -20,27 +20,23 @@ import type {
   ServerFrame,
   WorkspaceAttentionModesDto,
   WorkspaceAttentionPreferenceDto,
-} from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
-import { api } from '@/lib/api';
-import { resolveEffectiveAttentionMode } from '@/lib/attention-mode';
-import { activityItemSource, postObserve } from './observe';
+} from "@silverhand/shared";
+import { apiPaths } from "@silverhand/shared";
+import { api } from "@/lib/api";
+import { resolveEffectiveAttentionMode } from "@/lib/attention-mode";
+import { activityItemSource, postObserve } from "./observe";
 import {
   reconcileUnreadAfterObserveIfRealtimeUnavailable,
   settleStreamUnreadAfterObserve,
-} from './observe-cache-fallback';
-import {
-  onWsFrame,
-  subscribeViewerScope,
-  isCurrentViewerScope,
-} from '@/lib/ws-client';
+} from "./observe-cache-fallback";
+import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from "@/lib/ws-client";
 
 /** Query key for the viewer's mute SUPPRESSOR on one workspace. Workspace-KEYED
  *  in the `['workspaces', id, …]` form on purpose: that is the form layer 1 of the
  *  viewer-removal contract sweeps, so losing the workspace drops this with no
  *  registration of its own (see `features/workspaces/viewer-removal-contract.ts`). */
 export const workspaceAttentionPreferenceKey = (workspaceId: string) =>
-  ['workspaces', workspaceId, 'attention-preference'] as const;
+  ["workspaces", workspaceId, "attention-preference"] as const;
 
 /** Query key for ONE workspace's batch of channel tiers. Kept under the
  *  `['attention','modes']` prefix — unlike the suppressor above — because the
@@ -48,11 +44,11 @@ export const workspaceAttentionPreferenceKey = (workspaceId: string) =>
  *  scanning that prefix. The cost is that layer 1's `['workspaces', …]` sweep does
  *  NOT cover it, so {@link removeWorkspaceFromAttentionBadges} drops it explicitly. */
 export const attentionModesKey = (workspaceId: string) =>
-  ['attention', 'modes', workspaceId] as const;
+  ["attention", "modes", workspaceId] as const;
 
 /** Query key for the viewer's cross-workspace badge roll-up. A single global
  *  entry — the roll-up itself spans every workspace. */
-export const attentionBadgesKey = () => ['attention', 'badges'] as const;
+export const attentionBadgesKey = () => ["attention", "badges"] as const;
 
 /**
  * Write one channel's new tier into every loaded tier batch, re-resolving
@@ -71,23 +67,20 @@ function patchChannelModeInLoadedBatches(
   conversationId: string,
   mode: ChannelAttentionMode,
 ): void {
-  qc.setQueriesData<WorkspaceAttentionModesDto>(
-    { queryKey: ['attention', 'modes'] },
-    prev => {
-      if (!prev) return prev;
-      let hit = false;
-      const channels = prev.channels.map(c => {
-        if (c.conversation_id !== conversationId) return c;
-        hit = true;
-        return {
-          ...c,
-          mode,
-          effective_mode: resolveEffectiveAttentionMode(mode, prev.muted),
-        };
-      });
-      return hit ? { ...prev, channels } : prev;
-    },
-  );
+  qc.setQueriesData<WorkspaceAttentionModesDto>({ queryKey: ["attention", "modes"] }, (prev) => {
+    if (!prev) return prev;
+    let hit = false;
+    const channels = prev.channels.map((c) => {
+      if (c.conversation_id !== conversationId) return c;
+      hit = true;
+      return {
+        ...c,
+        mode,
+        effective_mode: resolveEffectiveAttentionMode(mode, prev.muted),
+      };
+    });
+    return hit ? { ...prev, channels } : prev;
+  });
 }
 
 /**
@@ -106,31 +99,31 @@ export function useSetChannelAttentionPreference(channelId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (mode: ChannelAttentionMode) => {
-      if (!channelId) throw new Error('no channel');
+      if (!channelId) throw new Error("no channel");
       return api<ChannelAttentionPreferenceDto>(
         apiPaths.conversationAttentionPreference(channelId),
-        { method: 'PUT', body: JSON.stringify({ mode }) },
+        { method: "PUT", body: JSON.stringify({ mode }) },
       );
     },
     onMutate: async (mode): Promise<void> => {
       if (!channelId) return;
-      await qc.cancelQueries({ queryKey: ['attention', 'modes'] });
+      await qc.cancelQueries({ queryKey: ["attention", "modes"] });
       patchChannelModeInLoadedBatches(qc, channelId, mode);
     },
     onError: () => {
       // The optimistic re-tier must not survive the failure, and its pre-write
       // value isn't reconstructable from a snapshot of one row — re-read.
-      void qc.invalidateQueries({ queryKey: ['attention', 'modes'] });
-      toast.error('Failed to update, please retry');
+      void qc.invalidateQueries({ queryKey: ["attention", "modes"] });
+      toast.error("Failed to update, please retry");
     },
-    onSuccess: dto => {
+    onSuccess: (dto) => {
       patchChannelModeInLoadedBatches(qc, dto.conversation_id, dto.mode);
       // The tier is an `enter()` input, so flipping it adds/removes this
       // channel's ambient items from the Activity list — invalidate the (global)
       // activity query so the list reflects the new eligibility immediately, not
       // on the next unrelated unread/notification/task event. Backend treats this
       // as client-driven invalidation (no `unread_updated` for a pref change).
-      void qc.invalidateQueries({ queryKey: ['activity'] });
+      void qc.invalidateQueries({ queryKey: ["activity"] });
       // The tier is a badge input too. The badge has its own absolute event, but
       // this writer must not depend on that frame arriving to stop showing a
       // stale count, so re-read the roll-up as well.
@@ -153,13 +146,12 @@ export function useSetChannelAttentionPreference(channelId: string | null) {
  */
 export function useWorkspaceAttentionPreference(workspaceId: string | null) {
   return useQuery<WorkspaceAttentionPreferenceDto>({
-    queryKey: workspaceAttentionPreferenceKey(workspaceId ?? 'none'),
+    queryKey: workspaceAttentionPreferenceKey(workspaceId ?? "none"),
     enabled: !!workspaceId,
     queryFn: ({ signal }) =>
-      api<WorkspaceAttentionPreferenceDto>(
-        apiPaths.workspaceAttentionPreference(workspaceId!),
-        { signal },
-      ),
+      api<WorkspaceAttentionPreferenceDto>(apiPaths.workspaceAttentionPreference(workspaceId!), {
+        signal,
+      }),
   });
 }
 
@@ -178,15 +170,13 @@ export function useSetWorkspaceAttentionPreference(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (muted: boolean) => {
-      if (!workspaceId) throw new Error('no workspace');
+      if (!workspaceId) throw new Error("no workspace");
       return api<WorkspaceAttentionPreferenceDto>(
         apiPaths.workspaceAttentionPreference(workspaceId),
-        { method: 'PUT', body: JSON.stringify({ muted }) },
+        { method: "PUT", body: JSON.stringify({ muted }) },
       );
     },
-    onMutate: async (
-      muted,
-    ): Promise<{ prev?: WorkspaceAttentionPreferenceDto }> => {
+    onMutate: async (muted): Promise<{ prev?: WorkspaceAttentionPreferenceDto }> => {
       if (!workspaceId) return {};
       const key = workspaceAttentionPreferenceKey(workspaceId);
       await qc.cancelQueries({ queryKey: key });
@@ -207,14 +197,14 @@ export function useSetWorkspaceAttentionPreference(workspaceId: string | null) {
         void qc.invalidateQueries({ queryKey: key });
         void qc.invalidateQueries({ queryKey: attentionModesKey(workspaceId) });
       }
-      toast.error('Failed to update, please retry');
+      toast.error("Failed to update, please retry");
     },
-    onSuccess: dto => {
+    onSuccess: (dto) => {
       qc.setQueryData(workspaceAttentionPreferenceKey(dto.workspace_id), dto);
       patchWorkspaceMutedInLoadedBatch(qc, dto.workspace_id, dto.muted);
       // The suppressor is an `enter()` input for every channel in the workspace,
       // and a badge input for the workspace itself.
-      void qc.invalidateQueries({ queryKey: ['activity'] });
+      void qc.invalidateQueries({ queryKey: ["activity"] });
       void qc.invalidateQueries({ queryKey: attentionBadgesKey() });
     },
   });
@@ -228,19 +218,17 @@ function patchWorkspaceMutedInLoadedBatch(
   workspaceId: string,
   muted: boolean,
 ): void {
-  qc.setQueryData<WorkspaceAttentionModesDto>(
-    attentionModesKey(workspaceId),
-    prev =>
-      prev
-        ? {
-            ...prev,
-            muted,
-            channels: prev.channels.map(c => ({
-              ...c,
-              effective_mode: resolveEffectiveAttentionMode(c.mode, muted),
-            })),
-          }
-        : prev,
+  qc.setQueryData<WorkspaceAttentionModesDto>(attentionModesKey(workspaceId), (prev) =>
+    prev
+      ? {
+          ...prev,
+          muted,
+          channels: prev.channels.map((c) => ({
+            ...c,
+            effective_mode: resolveEffectiveAttentionMode(c.mode, muted),
+          })),
+        }
+      : prev,
   );
 }
 
@@ -275,7 +263,7 @@ function attentionModesQuery(workspaceId: string): {
  */
 export function useWorkspaceAttentionModes(workspaceId: string | null) {
   return useQuery<WorkspaceAttentionModesDto>({
-    ...attentionModesQuery(workspaceId ?? 'none'),
+    ...attentionModesQuery(workspaceId ?? "none"),
     enabled: !!workspaceId,
   });
 }
@@ -306,14 +294,12 @@ export function useWorkspaceAttentionModes(workspaceId: string | null) {
  * and a `dm_channel` are absent BY DESIGN, exactly as they are in the channel
  * sidebar today (a `dm_channel`'s rule is the DM row's own: always `'all'`).
  */
-export function useAttentionModesAcrossWorkspaces(
-  workspaceIds: readonly string[],
-): {
+export function useAttentionModesAcrossWorkspaces(workspaceIds: readonly string[]): {
   byChannel: Map<string, ChannelAttentionModeRowDto>;
   mutedByWorkspace: Map<string, boolean>;
 } {
   const results = useQueries({
-    queries: workspaceIds.map(id => attentionModesQuery(id)),
+    queries: workspaceIds.map((id) => attentionModesQuery(id)),
   });
   const byChannel = new Map<string, ChannelAttentionModeRowDto>();
   const mutedByWorkspace = new Map<string, boolean>();
@@ -352,8 +338,7 @@ export function useAttentionModesAcrossWorkspaces(
 export function useAttentionBadges() {
   return useQuery<AttentionBadgeRollupDto>({
     queryKey: attentionBadgesKey(),
-    queryFn: ({ signal }) =>
-      api<AttentionBadgeRollupDto>(apiPaths.attentionBadges, { signal }),
+    queryFn: ({ signal }) => api<AttentionBadgeRollupDto>(apiPaths.attentionBadges, { signal }),
   });
 }
 
@@ -363,7 +348,7 @@ export function useAttentionBadges() {
  *  subscribes with. Deliberately exact-prefix (never `includes`), so no other
  *  scope family can masquerade as a workspace. */
 function parseWorkspaceScope(scope: string): string | null {
-  return scope.startsWith('workspace:') ? scope.slice('workspace:'.length) : null;
+  return scope.startsWith("workspace:") ? scope.slice("workspace:".length) : null;
 }
 
 /**
@@ -382,7 +367,7 @@ export function applyAttentionFrame(
   frame: ServerFrame,
   isViewerScope: boolean,
 ): void {
-  if (frame.type === 'snapshot_required') {
+  if (frame.type === "snapshot_required") {
     // Reconnect / gap catch-all: "an unknown amount happened in this scope".
     // BOTH scope families that carry an attention input must re-read, because
     // either can swallow the event that would otherwise settle the caches:
@@ -398,7 +383,7 @@ export function applyAttentionFrame(
     // into an attention refetch.
     if (isViewerScope) {
       void qc.invalidateQueries({ queryKey: attentionBadgesKey() });
-      void qc.invalidateQueries({ queryKey: ['attention', 'modes'] });
+      void qc.invalidateQueries({ queryKey: ["attention", "modes"] });
       return;
     }
     const workspaceId = parseWorkspaceScope(frame.scope);
@@ -408,7 +393,7 @@ export function applyAttentionFrame(
     }
     return;
   }
-  if (frame.type !== 'event') return;
+  if (frame.type !== "event") return;
   // Channel membership is a badge input the badge has no event for: both arms
   // of the projection join `conversation_users`, so a self-leave or a
   // third-party removal changes the absolute value.
@@ -423,17 +408,17 @@ export function applyAttentionFrame(
   // set is therefore load-bearing for the badge; the fence in
   // `attention-badge-scope-coverage.test.ts` keeps a later subscription
   // optimization from narrowing it silently.
-  if (frame.kind === 'workspace_channels_changed') {
+  if (frame.kind === "workspace_channels_changed") {
     void qc.invalidateQueries({ queryKey: attentionBadgesKey() });
-    void qc.invalidateQueries({ queryKey: ['attention', 'modes'] });
+    void qc.invalidateQueries({ queryKey: ["attention", "modes"] });
     return;
   }
   if (!isViewerScope) return;
-  if (frame.kind === 'attention_badge_updated') {
+  if (frame.kind === "attention_badge_updated") {
     applyBadgeUpdate(qc, frame.payload as AttentionBadgeUpdatedPayload);
     return;
   }
-  if (frame.kind === 'attention_pref_changed') {
+  if (frame.kind === "attention_pref_changed") {
     // Identity only, by design — the tier read face is the single authority,
     // so re-read rather than patch. A null `conversation_id` means the
     // workspace suppressor moved (which re-resolves every channel in it), so
@@ -457,10 +442,10 @@ export function applyAttentionFrame(
     }
     return;
   }
-  if (frame.kind === 'notification' || frame.kind === 'unread_updated') {
+  if (frame.kind === "notification" || frame.kind === "unread_updated") {
     // `directed_unread_count` on the tier batch moves with both, so the modes batch
     // always needs the re-read.
-    void qc.invalidateQueries({ queryKey: ['attention', 'modes'] });
+    void qc.invalidateQueries({ queryKey: ["attention", "modes"] });
     // The two `unread_updated` variants are discriminated by `conversation_id`
     // presence (the canonical `isMessageUnreadUpdatedPayload` discriminator). The
     // ENRICHED message variant (has `conversation_id`) rides its own absolute
@@ -475,9 +460,9 @@ export function applyAttentionFrame(
     // converge on it. A bare `notification` insert frame likewise carries no absolute
     // count and needs the refetch. (See scope_events.rs NotificationUnreadCleared.)
     const isEnrichedMessageVariant =
-      frame.kind === 'unread_updated' &&
-      typeof (frame.payload as { conversation_id?: unknown } | undefined)
-        ?.conversation_id === 'string';
+      frame.kind === "unread_updated" &&
+      typeof (frame.payload as { conversation_id?: unknown } | undefined)?.conversation_id ===
+        "string";
     if (!isEnrichedMessageVariant) {
       void qc.invalidateQueries({ queryKey: attentionBadgesKey() });
     }
@@ -485,8 +470,10 @@ export function applyAttentionFrame(
 }
 
 export function isViewerAttentionFrame(frame: ServerFrame): boolean {
-  return (frame.type === 'event' || frame.type === 'snapshot_required')
-    && isCurrentViewerScope(frame.scope);
+  return (
+    (frame.type === "event" || frame.type === "snapshot_required") &&
+    isCurrentViewerScope(frame.scope)
+  );
 }
 
 /**
@@ -510,7 +497,7 @@ export function useAttentionRealtime(): void {
 
   useEffect(() => {
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
+    const unsub = onWsFrame((frame) => {
       applyAttentionFrame(qc, frame, isViewerAttentionFrame(frame));
     });
     return () => {
@@ -534,10 +521,7 @@ export function useAttentionRealtime(): void {
  * Roll-up not loaded → no-op: the GET is the authority, and inventing a
  * one-entry map would claim every OTHER workspace is at zero.
  */
-export function applyBadgeUpdate(
-  qc: QueryClient,
-  payload: AttentionBadgeUpdatedPayload,
-): void {
+export function applyBadgeUpdate(qc: QueryClient, payload: AttentionBadgeUpdatedPayload): void {
   const prev = qc.getQueryData<AttentionBadgeRollupDto>(attentionBadgesKey());
   if (!prev) return;
   const by_workspace = { ...prev.by_workspace };
@@ -576,15 +560,11 @@ export function applyBadgeUpdate(
  * whole (it is per-workspace and can simply go). PRESENT-ONLY and idempotent, like
  * its siblings.
  */
-export function removeWorkspaceFromAttentionBadges(
-  qc: QueryClient,
-  workspaceId: string,
-): void {
+export function removeWorkspaceFromAttentionBadges(qc: QueryClient, workspaceId: string): void {
   const prev = qc.getQueryData<AttentionBadgeRollupDto>(attentionBadgesKey());
   if (
     prev &&
-    (workspaceId in prev.by_workspace ||
-      prev.muted_workspace_ids.includes(workspaceId))
+    (workspaceId in prev.by_workspace || prev.muted_workspace_ids.includes(workspaceId))
   ) {
     const by_workspace = { ...prev.by_workspace };
     delete by_workspace[workspaceId];
@@ -594,9 +574,7 @@ export function removeWorkspaceFromAttentionBadges(
       // A lost workspace's mute marker goes with its count, for the same reason
       // (#task:1877): nothing refetches this entry, so a leftover id would keep
       // marking a workspace the viewer can no longer open.
-      muted_workspace_ids: prev.muted_workspace_ids.filter(
-        id => id !== workspaceId,
-      ),
+      muted_workspace_ids: prev.muted_workspace_ids.filter((id) => id !== workspaceId),
     });
   }
   qc.removeQueries({ queryKey: attentionModesKey(workspaceId) });
@@ -607,7 +585,7 @@ export function removeWorkspaceFromAttentionBadges(
 /** Query key for the viewer's Activity list. v1 is a single GLOBAL list (the
  *  human's whole "queue waiting on me" across every workspace), so there is one
  *  cache entry; `['activity']` is its prefix for broad invalidation. */
-export const activityKey = () => ['activity', 'all'] as const;
+export const activityKey = () => ["activity", "all"] as const;
 
 /** Whether an Activity item is attributed to ONE workspace — the single reading
  *  of the `location` union that both the removal filter and the held-channel scan
@@ -621,10 +599,7 @@ export const activityKey = () => ['activity', 'all'] as const;
  *  for the wrong reason, and would flip the moment a DM row's coordinate were
  *  defaulted. */
 function isInWorkspace(item: ActivityItemDto, workspaceId: string): boolean {
-  return (
-    item.location.kind === 'workspace_channel' &&
-    item.location.workspace_id === workspaceId
-  );
+  return item.location.kind === "workspace_channel" && item.location.workspace_id === workspaceId;
 }
 
 /** Drop every Activity item for a workspace the viewer lost access to — removed
@@ -649,13 +624,10 @@ function isInWorkspace(item: ActivityItemDto, workspaceId: string): boolean {
  *  archived (#task:1409 axis 1). Only workspace REMOVAL (a visibility-loss fact
  *  the Activity subscription does not otherwise observe) needs this local
  *  settle. */
-export function removeWorkspaceFromActivity(
-  qc: QueryClient,
-  workspaceId: string,
-): void {
+export function removeWorkspaceFromActivity(qc: QueryClient, workspaceId: string): void {
   const prev = qc.getQueryData<ListActivityDto>(activityKey());
   if (!prev) return; // list not loaded → no-op
-  const items = prev.items.filter(it => !isInWorkspace(it, workspaceId));
+  const items = prev.items.filter((it) => !isInWorkspace(it, workspaceId));
   if (items.length === prev.items.length) return; // no matching item → no write
   qc.setQueryData<ListActivityDto>(activityKey(), { ...prev, items });
 }
@@ -675,13 +647,10 @@ export function removeWorkspaceFromActivity(
  * rides `thread_root_id`), so one match drops the channel's mainline and thread
  * items together.
  */
-export function removeConversationFromActivity(
-  qc: QueryClient,
-  conversationId: string,
-): void {
+export function removeConversationFromActivity(qc: QueryClient, conversationId: string): void {
   const prev = qc.getQueryData<ListActivityDto>(activityKey());
   if (!prev) return; // list not loaded → no-op
-  const items = prev.items.filter(it => it.conversation_id !== conversationId);
+  const items = prev.items.filter((it) => it.conversation_id !== conversationId);
   if (items.length === prev.items.length) return; // no matching item → no write
   qc.setQueryData<ListActivityDto>(activityKey(), { ...prev, items });
 }
@@ -693,15 +662,10 @@ export function removeConversationFromActivity(
  *  contributes no channel here. Feeds the foreign-workspace convergence path: only
  *  a channel the viewer actually holds state for is worth an authoritative
  *  re-read. */
-export function activityHeldChannelIds(
-  qc: QueryClient,
-  workspaceId: string,
-): string[] {
+export function activityHeldChannelIds(qc: QueryClient, workspaceId: string): string[] {
   const data = qc.getQueryData<ListActivityDto>(activityKey());
   if (!data) return [];
-  return data.items
-    .filter(it => isInWorkspace(it, workspaceId))
-    .map(it => it.conversation_id);
+  return data.items.filter((it) => isInWorkspace(it, workspaceId)).map((it) => it.conversation_id);
 }
 
 /**
@@ -737,9 +701,9 @@ export function activityHeldChannelIds(
  * recorded here.
  */
 export const ACTIVITY_INVALIDATING_EVENT_KINDS = [
-  'unread_updated',
-  'notification',
-  'direct_pairs_changed',
+  "unread_updated",
+  "notification",
+  "direct_pairs_changed",
 ] as const;
 
 /**
@@ -757,14 +721,14 @@ export function applyActivityFrame(
   frame: ServerFrame,
   isViewerScope: boolean,
 ): void {
-  if (frame.type === 'snapshot_required') {
+  if (frame.type === "snapshot_required") {
     // A gap on the viewer scope may have swallowed any of the three carriers, so
     // the only honest answer is a re-read — the list is app-lifetime and the
     // client disables `refetchOnWindowFocus`, so nothing else would.
     if (isViewerScope) void qc.invalidateQueries({ queryKey: activityKey() });
     return;
   }
-  if (frame.type !== 'event') return;
+  if (frame.type !== "event") return;
   if (!isViewerScope) return;
   if ((ACTIVITY_INVALIDATING_EVENT_KINDS as readonly string[]).includes(frame.kind)) {
     void qc.invalidateQueries({ queryKey: activityKey() });
@@ -799,7 +763,7 @@ export function useActivity() {
 
   useEffect(() => {
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
+    const unsub = onWsFrame((frame) => {
       applyActivityFrame(qc, frame, isViewerAttentionFrame(frame));
     });
     return () => {
@@ -835,11 +799,11 @@ export function useClearActivityItem() {
       // the Activity entry point). Notification-kind sources are ignored by the
       // seam. #task:1284 global maps are untouched.
       settleStreamUnreadAfterObserve(qc, [source], result);
-      void qc.invalidateQueries({ queryKey: ['activity'] });
-      void qc.invalidateQueries({ queryKey: ['notifications'] });
+      void qc.invalidateQueries({ queryKey: ["activity"] });
+      void qc.invalidateQueries({ queryKey: ["notifications"] });
     },
     onError: () => {
-      toast.error('Failed to mark as read, please retry');
+      toast.error("Failed to mark as read, please retry");
     },
   });
 }
@@ -861,9 +825,7 @@ export function useMarkActivityAllRead() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (items: ActivityItemDto[]) => {
-      const sources = items
-        .map(activityItemSource)
-        .filter((s): s is ObserveSource => s != null);
+      const sources = items.map(activityItemSource).filter((s): s is ObserveSource => s != null);
       if (sources.length === 0) return { changed: false };
       return postObserve(sources);
     },
@@ -873,15 +835,13 @@ export function useMarkActivityAllRead() {
       // single seam (#task:1402) — dedup + `changed`-gated inside it. Rebuild the
       // sources from `items` (pure routing) since onSuccess gets the variables,
       // not the mutationFn's local sources. #task:1284 global maps untouched.
-      const sources = items
-        .map(activityItemSource)
-        .filter((s): s is ObserveSource => s != null);
+      const sources = items.map(activityItemSource).filter((s): s is ObserveSource => s != null);
       settleStreamUnreadAfterObserve(qc, sources, result);
-      void qc.invalidateQueries({ queryKey: ['activity'] });
-      void qc.invalidateQueries({ queryKey: ['notifications'] });
+      void qc.invalidateQueries({ queryKey: ["activity"] });
+      void qc.invalidateQueries({ queryKey: ["notifications"] });
     },
     onError: () => {
-      toast.error('Failed to mark all as read, please retry');
+      toast.error("Failed to mark all as read, please retry");
     },
   });
 }

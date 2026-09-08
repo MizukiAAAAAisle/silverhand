@@ -1,8 +1,8 @@
-import { app, BrowserWindow, dialog, Notification, shell } from 'electron';
-import type { GuardedIpcRegistrar } from './guarded-ipc.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { materializeAndOpenAttachment } from './attachment-open.js';
-import { handleAttachmentSave } from './attachment-save.js';
+import { app, BrowserWindow, dialog, Notification, shell } from "electron";
+import type { GuardedIpcRegistrar } from "./guarded-ipc.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { materializeAndOpenAttachment } from "./attachment-open.js";
+import { handleAttachmentSave } from "./attachment-save.js";
 
 export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
   // Live OS notifications keyed by the renderer-supplied notification id (the
@@ -11,18 +11,18 @@ export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
   // Entries self-evict on the Notification's own `close` event.
   const shownNotifications = new Map<string, Notification>();
 
-  ipc.handle('dialog:pickDirectory', async (event, options?: { defaultPath?: string }) => {
+  ipc.handle("dialog:pickDirectory", async (event, options?: { defaultPath?: string }) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     const result = await dialog.showOpenDialog(win ?? undefined!, {
-      properties: ['openDirectory', 'createDirectory'],
+      properties: ["openDirectory", "createDirectory"],
       defaultPath: options?.defaultPath,
     });
     if (result.canceled || result.filePaths.length === 0) return null;
     return result.filePaths[0] ?? null;
   });
 
-  ipc.handle('shell:openExternal', async (_event, url: string) => {
-    if (typeof url !== 'string') return;
+  ipc.handle("shell:openExternal", async (_event, url: string) => {
+    if (typeof url !== "string") return;
     // Refuse anything that isn't an http(s) link — preload is a security
     // boundary; agent-rendered content can hand us arbitrary strings.
     if (!/^https?:\/\//i.test(url)) return;
@@ -52,22 +52,22 @@ export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
    * isolation and CSP.
    */
   ipc.handle(
-    'attachment:openExternal',
+    "attachment:openExternal",
     async (
       _event,
       input: { attachmentId?: unknown; filename?: unknown; bytes?: unknown },
     ): Promise<{ ok: true } | { ok: false; reason: string }> => {
       const bytesRaw = input?.bytes;
       if (!(bytesRaw instanceof Uint8Array) && !Buffer.isBuffer(bytesRaw)) {
-        return { ok: false, reason: 'invalid_payload' };
+        return { ok: false, reason: "invalid_payload" };
       }
       const bytes = Buffer.isBuffer(bytesRaw) ? bytesRaw : Buffer.from(bytesRaw);
       return materializeAndOpenAttachment(
         { attachmentId: input?.attachmentId, filename: input?.filename, bytes },
         {
-          ensureDir: dir => mkdirSync(dir, { recursive: true }),
+          ensureDir: (dir) => mkdirSync(dir, { recursive: true }),
           writeFile: (path, data) => writeFileSync(path, data, { mode: 0o600 }),
-          openPath: path => shell.openPath(path),
+          openPath: (path) => shell.openPath(path),
         },
       );
     },
@@ -89,41 +89,31 @@ export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
    * and control chars stripped) and pre-fills the dialog; the user has
    * final say over the destination path and extension.
    */
-  ipc.handle(
-    'attachment:save',
-    async (
-      event,
-      input: { filename?: unknown; bytes?: unknown },
-    ) => {
-      const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
-      return handleAttachmentSave(input, {
-        showSaveDialog: options => dialog.showSaveDialog(win!, options),
-        writeFile: async (path, data) => {
-          const { writeFile } = await import('node:fs/promises');
-          await writeFile(path, data);
-        },
-      });
-    },
-  );
+  ipc.handle("attachment:save", async (event, input: { filename?: unknown; bytes?: unknown }) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    return handleAttachmentSave(input, {
+      showSaveDialog: (options) => dialog.showSaveDialog(win!, options),
+      writeFile: async (path, data) => {
+        const { writeFile } = await import("node:fs/promises");
+        await writeFile(path, data);
+      },
+    });
+  });
 
-  ipc.handle('badge:setCount', (_event, value: unknown) => {
+  ipc.handle("badge:setCount", (_event, value: unknown) => {
     // macOS dock badge. n=0 clears it; non-finite / negative values are
     // coerced to 0 so a buggy renderer can't paint nonsense on the icon.
     // Renderer drives this from `useMessageUnreadSummary` (sum across
     // workspaces) — no other source feeds the badge.
     const count =
-      typeof value === 'number' && Number.isFinite(value) && value >= 0
-        ? Math.floor(value)
-        : 0;
+      typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
     app.setBadgeCount(count);
   });
 
-  ipc.handle('notification:show', (event, opts: unknown) => {
-    if (!opts || typeof opts !== 'object') return;
-    const { title, body, force, notificationId } = opts as Partial<
-      Record<string, unknown>
-    >;
-    if (typeof title !== 'string' || typeof body !== 'string') return;
+  ipc.handle("notification:show", (event, opts: unknown) => {
+    if (!opts || typeof opts !== "object") return;
+    const { title, body, force, notificationId } = opts as Partial<Record<string, unknown>>;
+    if (typeof title !== "string" || typeof body !== "string") return;
     // Fire ordinary system notifications only when no Electron window is
     // focused. Direct human mentions opt into `force` so an active-but-
     // different channel still produces an OS notification instead of only
@@ -135,24 +125,22 @@ export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
     // the intent) and forward the id back so the renderer can navigate
     // to the right conversation. Without an id this is just an alert and
     // we keep the legacy "show only" behavior.
-    if (typeof notificationId === 'string' && notificationId.length > 0) {
+    if (typeof notificationId === "string" && notificationId.length > 0) {
       // Retain so a later `notification:dismiss` (backend reported it read) can
       // close this exact alert; self-evict when the OS closes it.
       shownNotifications.set(notificationId, n);
-      n.on('close', () => {
+      n.on("close", () => {
         if (shownNotifications.get(notificationId) === n) {
           shownNotifications.delete(notificationId);
         }
       });
-      n.on('click', () => {
+      n.on("click", () => {
         // Prefer the sender's window (the renderer that called us); fall
         // back to any visible window. macOS keeps windows around in the
         // dock even when minimized, so showing the first one is safe.
         const senderWindow = BrowserWindow.fromWebContents(event.sender);
         const target =
-          senderWindow ??
-          BrowserWindow.getAllWindows().find(w => !w.isDestroyed()) ??
-          null;
+          senderWindow ?? BrowserWindow.getAllWindows().find((w) => !w.isDestroyed()) ?? null;
         if (target) {
           if (target.isMinimized()) target.restore();
           target.show();
@@ -160,23 +148,23 @@ export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
         }
         // Best-effort focus the app itself (e.g. when another app is
         // frontmost). On macOS this nudges Silverhand to the foreground.
-        if (process.platform === 'darwin') app.focus({ steal: true });
+        if (process.platform === "darwin") app.focus({ steal: true });
         if (!event.sender.isDestroyed()) {
-          event.sender.send('notification:clicked', notificationId);
+          event.sender.send("notification:clicked", notificationId);
         }
       });
     }
     n.show();
   });
 
-  ipc.handle('notification:dismiss', (_event, notificationIds: unknown) => {
+  ipc.handle("notification:dismiss", (_event, notificationIds: unknown) => {
     // Close OS notifications the backend reported as read (#task:1431). The
     // renderer forwards the exact ids from the viewer-scoped "notification read"
     // fact — main never re-derives read state. Unknown / already-closed ids are
     // silently ignored (best-effort: OS alerts are transient).
     if (!Array.isArray(notificationIds)) return;
     for (const id of notificationIds) {
-      if (typeof id !== 'string') continue;
+      if (typeof id !== "string") continue;
       const n = shownNotifications.get(id);
       if (n) {
         n.close();

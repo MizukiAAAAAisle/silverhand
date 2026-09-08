@@ -1,13 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
-import {
-  DESKTOP_SERVER_API_EPOCH,
-  type DesktopApiAdvertisement,
-} from '@silverhand/shared';
-import { createRuntimeUpgradeMonitor } from './runtime-upgrade-monitor.js';
+import { describe, expect, it, vi } from "vitest";
+import { DESKTOP_SERVER_API_EPOCH, type DesktopApiAdvertisement } from "@silverhand/shared";
+import { createRuntimeUpgradeMonitor } from "./runtime-upgrade-monitor.js";
 
 const UPGRADE_BODY = JSON.stringify({
-  error: 'upgrade_required',
-  reason: 'client_too_old',
+  error: "upgrade_required",
+  reason: "client_too_old",
   server_api_epoch: DESKTOP_SERVER_API_EPOCH + 1,
   minimum_client_epoch: DESKTOP_SERVER_API_EPOCH + 1,
 });
@@ -26,10 +23,10 @@ function compatibleAdvertisement(): DesktopApiAdvertisement {
   };
 }
 
-const flush = () => new Promise<void>(r => setTimeout(r, 0));
+const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
-describe('runtime upgrade monitor (#task:1763)', () => {
-  it('REST 426 with a valid body probes, confirms, notifies once, and latches', async () => {
+describe("runtime upgrade monitor (#task:1763)", () => {
+  it("REST 426 with a valid body probes, confirms, notifies once, and latches", async () => {
     const probe = vi.fn(async () => tooOldAdvertisement());
     const notify = vi.fn();
     const m = createRuntimeUpgradeMonitor({ probe, notify });
@@ -46,7 +43,7 @@ describe('runtime upgrade monitor (#task:1763)', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
-  it('an authoritative advertisement below minimum promotes directly (no probe)', () => {
+  it("an authoritative advertisement below minimum promotes directly (no probe)", () => {
     const probe = vi.fn(async () => tooOldAdvertisement());
     const notify = vi.fn();
     const m = createRuntimeUpgradeMonitor({ probe, notify });
@@ -61,7 +58,7 @@ describe('runtime upgrade monitor (#task:1763)', () => {
     expect(m2.isLatched()).toBe(false);
   });
 
-  it('unrelated signals never probe: non-426 status, malformed body, foreign 426 body, WS non-426', async () => {
+  it("unrelated signals never probe: non-426 status, malformed body, foreign 426 body, WS non-426", async () => {
     const probe = vi.fn(async () => tooOldAdvertisement());
     const notify = vi.fn();
     const m = createRuntimeUpgradeMonitor({ probe, notify });
@@ -69,17 +66,17 @@ describe('runtime upgrade monitor (#task:1763)', () => {
     m.onRestResponse(403, UPGRADE_BODY);
     m.onRestResponse(0, undefined);
     m.onRestResponse(426, undefined);
-    m.onRestResponse(426, 'not json');
-    m.onRestResponse(426, JSON.stringify({ error: 'something_else' }));
+    m.onRestResponse(426, "not json");
+    m.onRestResponse(426, JSON.stringify({ error: "something_else" }));
     // a business route could theoretically return 426 with a foreign shape
-    m.onRestResponse(426, JSON.stringify({ error: 'upgrade_required', reason: 'other' }));
+    m.onRestResponse(426, JSON.stringify({ error: "upgrade_required", reason: "other" }));
     await flush();
     expect(probe).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
     expect(m.isLatched()).toBe(false);
   });
 
-  it('a spoofed 426 against a compatible server probes but does NOT notify', async () => {
+  it("a spoofed 426 against a compatible server probes but does NOT notify", async () => {
     const probe = vi.fn(async () => compatibleAdvertisement());
     const notify = vi.fn();
     const m = createRuntimeUpgradeMonitor({ probe, notify });
@@ -90,10 +87,10 @@ describe('runtime upgrade monitor (#task:1763)', () => {
     expect(m.isLatched()).toBe(false);
   });
 
-  it('probe failure is inert (unreachable != upgrade) and the next suspect re-probes', async () => {
+  it("probe failure is inert (unreachable != upgrade) and the next suspect re-probes", async () => {
     const probe = vi
       .fn<() => Promise<DesktopApiAdvertisement | undefined>>()
-      .mockRejectedValueOnce(new Error('down'))
+      .mockRejectedValueOnce(new Error("down"))
       .mockResolvedValueOnce(tooOldAdvertisement());
     const notify = vi.fn();
     const m = createRuntimeUpgradeMonitor({ probe, notify });
@@ -106,11 +103,11 @@ describe('runtime upgrade monitor (#task:1763)', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
-  it('concurrent REST suspects coalesce into one in-flight probe', async () => {
+  it("concurrent REST suspects coalesce into one in-flight probe", async () => {
     let resolveProbe: (a: DesktopApiAdvertisement) => void = () => {};
     const probe = vi.fn(
       () =>
-        new Promise<DesktopApiAdvertisement>(r => {
+        new Promise<DesktopApiAdvertisement>((r) => {
           resolveProbe = r;
         }),
     );
@@ -125,7 +122,7 @@ describe('runtime upgrade monitor (#task:1763)', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
-  it('reset() re-arms after a compatible cycle', async () => {
+  it("reset() re-arms after a compatible cycle", async () => {
     const probe = vi.fn(async () => tooOldAdvertisement());
     const notify = vi.fn();
     const m = createRuntimeUpgradeMonitor({ probe, notify });
@@ -139,7 +136,7 @@ describe('runtime upgrade monitor (#task:1763)', () => {
     expect(notify).toHaveBeenCalledTimes(2);
   });
 
-  it('pre-epoch missing advertisement (undefined) never confirms client_too_old', async () => {
+  it("pre-epoch missing advertisement (undefined) never confirms client_too_old", async () => {
     const probe = vi.fn(async () => undefined);
     const notify = vi.fn();
     const m = createRuntimeUpgradeMonitor({ probe, notify });

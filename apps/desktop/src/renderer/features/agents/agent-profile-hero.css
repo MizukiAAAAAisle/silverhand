@@ -15,20 +15,20 @@
   line-height: 26px;
 }
 
-.agent-profile-hero[data-compact='true'] {
+.agent-profile-hero[data-compact="true"] {
   gap: 12px;
 }
 
-.agent-profile-hero[data-compact='true'] .agent-profile-hero-fields {
+.agent-profile-hero[data-compact="true"] .agent-profile-hero-fields {
   gap: 8px;
 }
 
-.agent-profile-hero[data-compact='true'] .agent-profile-hero-name {
+.agent-profile-hero[data-compact="true"] .agent-profile-hero-name {
   font-size: 16px;
   line-height: 22px;
 }
 
-.agent-profile-hero[data-compact='true'] .agent-profile-hero-description > div:not(.flex) {
+.agent-profile-hero[data-compact="true"] .agent-profile-hero-description > div:not(.flex) {
   font-size: 12px;
   line-height: 18px;
 }

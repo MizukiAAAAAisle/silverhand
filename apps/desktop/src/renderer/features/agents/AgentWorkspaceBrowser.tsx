@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from "react";
 import {
   ChevronRight,
   Copy,
@@ -7,16 +7,16 @@ import {
   Folder,
   FolderOpen,
   RefreshCcw,
-} from 'lucide-react';
-import dayjs from 'dayjs';
-import { toast } from 'sonner';
+} from "lucide-react";
+import dayjs from "dayjs";
+import { toast } from "sonner";
 import type {
   AgentWorkspaceFileRead,
   AgentWorkspaceTree,
   AgentWorkspaceTreeNode,
-} from '@silverhand/shared';
-import { Markdown } from '@/components/chat/Markdown';
-import { cn } from '@/lib/cn';
+} from "@silverhand/shared";
+import { Markdown } from "@/components/chat/Markdown";
+import { cn } from "@/lib/cn";
 
 /**
  * The read-only file browser for an agent's own files, factored out of
@@ -58,7 +58,7 @@ export interface WorkspaceFileQuery {
   error: unknown;
 }
 
-export type AgentWorkspaceLayout = 'full' | 'compact';
+export type AgentWorkspaceLayout = "full" | "compact";
 
 interface AgentWorkspaceBrowserProps {
   treeQuery: WorkspaceTreeQuery;
@@ -100,7 +100,7 @@ export function useWorkspaceSelection(
   useEffect(() => {
     if (!autoSelectFirstFile) return;
     if (selectedPath !== null) return;
-    const firstFile = tree?.nodes.find(n => n.kind === 'file');
+    const firstFile = tree?.nodes.find((n) => n.kind === "file");
     if (firstFile) setSelectedPath(firstFile.path);
   }, [tree, selectedPath, autoSelectFirstFile]);
 
@@ -109,9 +109,7 @@ export function useWorkspaceSelection(
   // to the placeholder; the auto-select effect re-runs next render.
   useEffect(() => {
     if (selectedPath === null) return;
-    const stillExists = tree?.nodes.some(
-      n => n.kind === 'file' && n.path === selectedPath,
-    );
+    const stillExists = tree?.nodes.some((n) => n.kind === "file" && n.path === selectedPath);
     if (tree && !stillExists) setSelectedPath(null);
   }, [tree, selectedPath]);
 
@@ -124,9 +122,9 @@ export function AgentWorkspaceBrowser({
   selectedPath,
   onSelect,
   onRefresh,
-  layout = 'full',
+  layout = "full",
 }: AgentWorkspaceBrowserProps): JSX.Element {
-  return layout === 'compact' ? (
+  return layout === "compact" ? (
     <CompactBrowser
       treeQuery={treeQuery}
       fileQuery={fileQuery}
@@ -145,7 +143,7 @@ export function AgentWorkspaceBrowser({
   );
 }
 
-type LayoutBrowserProps = Omit<AgentWorkspaceBrowserProps, 'layout'>;
+type LayoutBrowserProps = Omit<AgentWorkspaceBrowserProps, "layout">;
 
 /**
  * Wide two-column layout for the members page: a 280px file tree on the left,
@@ -178,17 +176,10 @@ function FullBrowser({
           <span className="text-[length:var(--text-meta)] uppercase tracking-[0.08em] text-text-muted">
             Files
           </span>
-          <RefreshButton
-            onRefresh={onRefresh}
-            isFetching={treeQuery.isFetching}
-          />
+          <RefreshButton onRefresh={onRefresh} isFetching={treeQuery.isFetching} />
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <TreeColumn
-            treeQuery={treeQuery}
-            selectedPath={selectedPath}
-            onSelect={onSelect}
-          />
+          <TreeColumn treeQuery={treeQuery} selectedPath={selectedPath} onSelect={onSelect} />
         </div>
       </aside>
 
@@ -219,11 +210,7 @@ function CompactBrowser({
         // refresh rides query staleness + remount-on-reopen. The full members
         // page keeps its refresh.
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <TreeColumn
-            treeQuery={treeQuery}
-            selectedPath={selectedPath}
-            onSelect={onSelect}
-          />
+          <TreeColumn treeQuery={treeQuery} selectedPath={selectedPath} onSelect={onSelect} />
         </div>
       ) : (
         <>
@@ -245,11 +232,7 @@ function CompactBrowser({
             </span>
           </header>
           <div className="min-h-0 flex-1 overflow-hidden">
-            <WorkspaceFilePreview
-              path={selectedPath}
-              fileQuery={fileQuery}
-              variant="compact"
-            />
+            <WorkspaceFilePreview path={selectedPath} fileQuery={fileQuery} variant="compact" />
           </div>
         </>
       )}
@@ -279,7 +262,7 @@ function RefreshButton({
       aria-label="Refresh workspace files"
       title="Refresh"
     >
-      <RefreshCcw className={cn('size-3.5', isFetching && 'animate-spin')} />
+      <RefreshCcw className={cn("size-3.5", isFetching && "animate-spin")} />
     </button>
   );
 }
@@ -298,24 +281,14 @@ function TreeColumn({
     return <div className="px-3 py-3 text-xs text-text-muted">Loading…</div>;
   }
   if (treeQuery.isError) {
-    return (
-      <div className="px-3 py-3 text-xs text-error">
-        Failed to load workspace files.
-      </div>
-    );
+    return <div className="px-3 py-3 text-xs text-error">Failed to load workspace files.</div>;
   }
   if (treeQuery.data && treeQuery.data.nodes.length === 0) {
-    return (
-      <div className="px-3 py-3 text-xs text-text-muted">No files here yet.</div>
-    );
+    return <div className="px-3 py-3 text-xs text-text-muted">No files here yet.</div>;
   }
   if (treeQuery.data) {
     return (
-      <WorkspaceFileTree
-        tree={treeQuery.data}
-        selectedPath={selectedPath}
-        onSelect={onSelect}
-      />
+      <WorkspaceFileTree tree={treeQuery.data} selectedPath={selectedPath} onSelect={onSelect} />
     );
   }
   return <></>;
@@ -344,14 +317,14 @@ function WorkspaceFileTree({
   // still collapse them; for the common case (top-level files + one `notes/`
   // dir) the tree should read as "everything visible" out of the box.
   const allDirs = useMemo(
-    () => tree.nodes.filter(n => n.kind === 'directory').map(n => n.path),
+    () => tree.nodes.filter((n) => n.kind === "directory").map((n) => n.path),
     [tree],
   );
   const [openDirs, setOpenDirs] = useState<Set<string>>(() => new Set(allDirs));
   // Newly-discovered dirs (after a refresh) auto-open so the user doesn't have
   // to chase the new entries down.
   useEffect(() => {
-    setOpenDirs(prev => {
+    setOpenDirs((prev) => {
       const next = new Set(prev);
       for (const dir of allDirs) next.add(dir);
       return next;
@@ -359,7 +332,7 @@ function WorkspaceFileTree({
   }, [allDirs]);
 
   const toggleDir = (path: string) =>
-    setOpenDirs(prev => {
+    setOpenDirs((prev) => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
@@ -368,9 +341,9 @@ function WorkspaceFileTree({
 
   const isHidden = (path: string): boolean => {
     // A node is hidden if any of its parent dirs is closed.
-    const parts = path.split('/');
+    const parts = path.split("/");
     for (let i = 1; i < parts.length; i += 1) {
-      const ancestor = parts.slice(0, i).join('/');
+      const ancestor = parts.slice(0, i).join("/");
       if (!openDirs.has(ancestor)) return true;
     }
     return false;
@@ -378,16 +351,16 @@ function WorkspaceFileTree({
 
   return (
     <ul className="flex flex-col py-1 text-xs">
-      {tree.nodes.map(node => {
+      {tree.nodes.map((node) => {
         if (isHidden(node.path)) return null;
-        const depth = node.path.split('/').length - 1;
+        const depth = node.path.split("/").length - 1;
         return (
           <li key={`${node.kind}:${node.path}`}>
             <TreeRow
               node={node}
               depth={depth}
-              selected={node.kind === 'file' && node.path === selectedPath}
-              isOpen={node.kind === 'directory' && openDirs.has(node.path)}
+              selected={node.kind === "file" && node.path === selectedPath}
+              isOpen={node.kind === "directory" && openDirs.has(node.path)}
               onSelect={onSelect}
               onToggle={toggleDir}
             />
@@ -415,7 +388,7 @@ function TreeRow({
 }): JSX.Element {
   const name = leafName(node.path);
   const indent = 8 + depth * 14;
-  if (node.kind === 'directory') {
+  if (node.kind === "directory") {
     return (
       <button
         type="button"
@@ -424,15 +397,15 @@ function TreeRow({
           // Row vocabulary — picks up theme `--row-radius` (warm/forza6 = 0 for
           // scan-line, slack-dark = 6px for Slack-style soft list rows).
           // #task:912 review round 4.
-          'flex w-full items-center gap-1.5 rounded-[var(--row-radius)] py-1 pr-2 text-left text-text-secondary hover:bg-bg-hover',
+          "flex w-full items-center gap-1.5 rounded-[var(--row-radius)] py-1 pr-2 text-left text-text-secondary hover:bg-bg-hover",
         )}
         style={{ paddingLeft: indent }}
         title={node.path}
       >
         <ChevronRight
           className={cn(
-            'size-3 shrink-0 text-text-muted transition-transform duration-150',
-            isOpen && 'rotate-90',
+            "size-3 shrink-0 text-text-muted transition-transform duration-150",
+            isOpen && "rotate-90",
           )}
         />
         {isOpen ? (
@@ -452,10 +425,8 @@ function TreeRow({
         // Row vocabulary — see DirNode comment above; same `--row-radius` token
         // covers folder + file rows so the tree reads as a single surface.
         // #task:912 review round 4.
-        'flex w-full items-center gap-1.5 rounded-[var(--row-radius)] py-1 pr-2 text-left',
-        selected
-          ? 'bg-accent-2 text-text-on-accent-2'
-          : 'text-text-primary hover:bg-bg-hover',
+        "flex w-full items-center gap-1.5 rounded-[var(--row-radius)] py-1 pr-2 text-left",
+        selected ? "bg-accent-2 text-text-on-accent-2" : "text-text-primary hover:bg-bg-hover",
       )}
       style={{ paddingLeft: indent + 14 /* align with dir name col */ }}
       title={node.path}
@@ -470,25 +441,16 @@ function TreeRow({
  *  (richer affordance — the preview will render it), everything else gets the
  *  generic file glyph. We deliberately don't drive a wider glyph palette here;
  *  the goal is "this is a text file you can read", not full file-type theming. */
-function FileGlyph({
-  name,
-  selected,
-}: {
-  name: string;
-  selected: boolean;
-}): JSX.Element {
-  const cls = cn(
-    'size-3.5 shrink-0',
-    selected ? 'text-text-on-accent-2' : 'text-text-muted',
-  );
-  if (name.endsWith('.md') || name.endsWith('.markdown')) {
+function FileGlyph({ name, selected }: { name: string; selected: boolean }): JSX.Element {
+  const cls = cn("size-3.5 shrink-0", selected ? "text-text-on-accent-2" : "text-text-muted");
+  if (name.endsWith(".md") || name.endsWith(".markdown")) {
     return <FileText className={cls} />;
   }
   return <FileIcon className={cls} />;
 }
 
 function leafName(path: string): string {
-  const idx = path.lastIndexOf('/');
+  const idx = path.lastIndexOf("/");
   return idx === -1 ? path : path.slice(idx + 1);
 }
 
@@ -502,7 +464,7 @@ function leafName(path: string): string {
 function WorkspaceFilePreview({
   path,
   fileQuery,
-  variant = 'full',
+  variant = "full",
 }: {
   path: string | null;
   fileQuery: WorkspaceFileQuery;
@@ -532,10 +494,10 @@ function WorkspaceFilePreview({
   }
   if (!fileQuery.data) return <div />;
   const file = fileQuery.data;
-  const isMarkdown = path.endsWith('.md') || path.endsWith('.markdown');
+  const isMarkdown = path.endsWith(".md") || path.endsWith(".markdown");
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {variant === 'full' ? (
+      {variant === "full" ? (
         <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle bg-bg-base px-4 py-2">
           <FileText className="size-3.5 shrink-0 text-text-muted" />
           <span
@@ -545,8 +507,7 @@ function WorkspaceFilePreview({
             {path}
           </span>
           <span className="shrink-0 text-[length:var(--text-meta)] text-text-muted">
-            {formatBytes(file.size)} ·{' '}
-            {dayjs(file.mtime).format('YYYY-MM-DD HH:mm')}
+            {formatBytes(file.size)} · {dayjs(file.mtime).format("YYYY-MM-DD HH:mm")}
           </span>
           <button
             type="button"
@@ -565,8 +526,8 @@ function WorkspaceFilePreview({
           data-panel-card="placeholder"
           className="shrink-0 border-b border-warning/40 bg-warning/10 px-4 py-2 text-[length:var(--text-meta)] text-text-on-warning"
         >
-          Preview truncated at 512 KB. The full file lives on the agent's host —
-          not all of it is shown here.
+          Preview truncated at 512 KB. The full file lives on the agent's host — not all of it is
+          shown here.
         </div>
       ) : null}
       <div className="min-h-0 flex-1 overflow-auto bg-bg-floating px-4 py-3 text-sm text-text-primary">
@@ -576,9 +537,7 @@ function WorkspaceFilePreview({
           // daemon's read cap (the banner above says so when it bit).
           <Markdown content={file.content} renderBudget="unbounded" />
         ) : (
-          <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-            {file.content}
-          </pre>
+          <pre className="whitespace-pre-wrap break-words font-mono text-xs">{file.content}</pre>
         )}
       </div>
     </div>
@@ -600,13 +559,9 @@ function WorkspaceFilePreview({
 async function copyFileContent(file: AgentWorkspaceFileRead): Promise<void> {
   try {
     await navigator.clipboard.writeText(file.content);
-    toast.success(
-      file.truncated ? 'Copied the truncated preview' : 'Copied to clipboard',
-    );
+    toast.success(file.truncated ? "Copied the truncated preview" : "Copied to clipboard");
   } catch (err) {
-    toast.error(
-      "Couldn't copy: " + (err instanceof Error ? err.message : String(err)),
-    );
+    toast.error("Couldn't copy: " + (err instanceof Error ? err.message : String(err)));
   }
 }
 

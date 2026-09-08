@@ -1,5 +1,5 @@
-import { MessageItem, type MessageItemProps } from './MessageItem';
-import { useThreadFollowers, useUnfollowThread } from '@/features/channels/hooks';
+import { MessageItem, type MessageItemProps } from "./MessageItem";
+import { useThreadFollowers, useUnfollowThread } from "@/features/channels/hooks";
 
 export function ChannelMessageItem(props: MessageItemProps): JSX.Element {
   const canParticipate = props.canParticipate ?? true;

@@ -3,7 +3,7 @@ import type {
   BackendProxyResponse,
   BackendUploadField,
   BackendUploadFile,
-} from '../../preload/api';
+} from "../../preload/api";
 
 let cachedInfo: BackendInfo | null = null;
 
@@ -31,7 +31,7 @@ let cachedInfo: BackendInfo | null = null;
  * `err instanceof ApiError && err.status === 404` instead.
  */
 export class ApiError extends Error {
-  readonly kind: 'http' | 'backend_unreachable';
+  readonly kind: "http" | "backend_unreachable";
   readonly status: number;
   readonly statusText: string;
   readonly body: string;
@@ -39,10 +39,10 @@ export class ApiError extends Error {
     status: number,
     statusText: string,
     body: string,
-    kind: 'http' | 'backend_unreachable' = 'http',
+    kind: "http" | "backend_unreachable" = "http",
   ) {
     super(`${status} ${statusText}: ${body}`);
-    this.name = 'ApiError';
+    this.name = "ApiError";
     this.kind = kind;
     this.status = status;
     this.statusText = statusText;
@@ -75,33 +75,33 @@ export class ApiError extends Error {
  */
 export function toPathSegment(raw: string): string | null {
   const encoded = encodeURIComponent(raw);
-  if (encoded === '' || encoded === '.' || encoded === '..') return null;
+  if (encoded === "" || encoded === "." || encoded === "..") return null;
   return encoded;
 }
 
 async function getInfo(forceRefresh = false): Promise<BackendInfo> {
   if (cachedInfo && !forceRefresh) return cachedInfo;
   const info = await window.silverhand.getBackendInfo();
-  if (!info) throw new Error('backend not ready');
+  if (!info) throw new Error("backend not ready");
   cachedInfo = info;
   return info;
 }
 
 function bodyTextFromInit(init: RequestInit): string | undefined {
   if (init.body === undefined || init.body === null) return undefined;
-  if (typeof init.body === 'string') return init.body;
+  if (typeof init.body === "string") return init.body;
   if (init.body instanceof URLSearchParams) return init.body.toString();
-  throw new Error('api() only supports string or URLSearchParams request bodies');
+  throw new Error("api() only supports string or URLSearchParams request bodies");
 }
 
 function headersFromInit(init: RequestInit): Record<string, string> {
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has('Content-Type')) {
+  if (init.body && !headers.has("Content-Type")) {
     headers.set(
-      'Content-Type',
+      "Content-Type",
       init.body instanceof URLSearchParams
-        ? 'application/x-www-form-urlencoded;charset=UTF-8'
-        : 'application/json',
+        ? "application/x-www-form-urlencoded;charset=UTF-8"
+        : "application/json",
     );
   }
   const out: Record<string, string> = {};
@@ -113,11 +113,11 @@ function headersFromInit(init: RequestInit): Record<string, string> {
 
 function throwIfAborted(signal: AbortSignal | null | undefined): void {
   if (!signal?.aborted) return;
-  throw new DOMException('The operation was aborted.', 'AbortError');
+  throw new DOMException("The operation was aborted.", "AbortError");
 }
 
 function textResponseBody(res: BackendProxyResponse): string {
-  return res.bodyText ?? '';
+  return res.bodyText ?? "";
 }
 
 function headerValue(headers: Record<string, string>, name: string): string | null {
@@ -140,18 +140,15 @@ function assertOk(res: BackendProxyResponse): void {
   if (res.status === 0) {
     throw new ApiError(
       0,
-      res.statusText || 'Network Error',
+      res.statusText || "Network Error",
       textResponseBody(res),
-      'backend_unreachable',
+      "backend_unreachable",
     );
   }
   throw new ApiError(res.status, res.statusText, textResponseBody(res));
 }
 
-export async function api<T = unknown>(
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
+export async function api<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   throwIfAborted(init.signal);
   const res = await window.silverhand.backendRequest({
     path,
@@ -171,22 +168,19 @@ export async function getBackendInfo(): Promise<BackendInfo> {
 
 /** Multipart upload helper. The renderer serializes FormData over IPC;
  *  main reconstructs it and injects the user session bearer. */
-export async function apiUpload<T = unknown>(
-  path: string,
-  formData: FormData,
-): Promise<T> {
+export async function apiUpload<T = unknown>(path: string, formData: FormData): Promise<T> {
   const fields: BackendUploadField[] = [];
   const files: BackendUploadFile[] = [];
   for (const [name, value] of formData.entries()) {
-    if (typeof value === 'string') {
+    if (typeof value === "string") {
       fields.push({ name, value });
       continue;
     }
     const bytes = new Uint8Array(await value.arrayBuffer());
     files.push({
       fieldName: name,
-      filename: value instanceof File ? value.name : 'blob',
-      contentType: value.type || 'application/octet-stream',
+      filename: value instanceof File ? value.name : "blob",
+      contentType: value.type || "application/octet-stream",
       bytes,
     });
   }
@@ -206,11 +200,11 @@ export async function fetchBackendBlob(path: string): Promise<{
 }> {
   const res = await window.silverhand.backendRequest({
     path,
-    responseType: 'arrayBuffer',
+    responseType: "arrayBuffer",
   });
   assertOk(res);
-  const contentType = headerValue(res.headers, 'content-type') ?? 'application/octet-stream';
-  const disposition = headerValue(res.headers, 'content-disposition');
+  const contentType = headerValue(res.headers, "content-type") ?? "application/octet-stream";
+  const disposition = headerValue(res.headers, "content-disposition");
   const filename = disposition ? extractDispositionFilename(disposition) : null;
   const bytes = res.bodyBytes ?? new Uint8Array();
   const copy = new Uint8Array(bytes.byteLength);
@@ -244,12 +238,11 @@ export async function fetchBackendBytes(path: string): Promise<{
 }> {
   const res = await window.silverhand.backendRequest({
     path,
-    responseType: 'arrayBuffer',
+    responseType: "arrayBuffer",
   });
   assertOk(res);
-  const contentType =
-    headerValue(res.headers, 'content-type') ?? 'application/octet-stream';
-  const disposition = headerValue(res.headers, 'content-disposition');
+  const contentType = headerValue(res.headers, "content-type") ?? "application/octet-stream";
+  const disposition = headerValue(res.headers, "content-disposition");
   const filename = disposition ? extractDispositionFilename(disposition) : null;
   const source = res.bodyBytes ?? new Uint8Array();
   // Copy defensively — `bodyBytes` may reuse an underlying buffer
@@ -271,7 +264,7 @@ export async function fetchAttachmentBytes(attachmentId: string): Promise<{
 function extractDispositionFilename(value: string): string | null {
   const match = /filename\*?=(?:UTF-8'')?([^;]+)/i.exec(value);
   if (!match || !match[1]) return null;
-  const raw = match[1].trim().replace(/^"|"$/g, '');
+  const raw = match[1].trim().replace(/^"|"$/g, "");
   try {
     return decodeURIComponent(raw);
   } catch {
@@ -286,7 +279,7 @@ function extractDispositionFilename(value: string): string | null {
  *  "stop trying"; the renderer doesn't need to distinguish. */
 export async function deleteAttachmentBestEffort(attachmentId: string): Promise<boolean> {
   try {
-    await api(`/api/attachments/${encodeURIComponent(attachmentId)}`, { method: 'DELETE' });
+    await api(`/api/attachments/${encodeURIComponent(attachmentId)}`, { method: "DELETE" });
     return true;
   } catch {
     return false;

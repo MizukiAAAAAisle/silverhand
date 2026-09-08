@@ -1,5 +1,5 @@
-import { RangeInput } from '@/components/ui/range-input';
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { RangeInput } from "@/components/ui/range-input";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
   AlignLeft,
   AlignRight,
@@ -13,46 +13,46 @@ import {
   Settings,
   Type,
   User,
-} from 'lucide-react';
-import { Input, Label } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { SidebarRow, SidebarSection } from '@/components/layout/sidebar-shared';
-import { CONTROL_HOVER_LIFT } from '@/features/common/ControlInkBorder';
-import { destructiveAction, DESTRUCTIVE_TRIGGER } from '@/features/common/DestructiveAction';
-import { cn } from '@/lib/cn';
-import { useAppearance } from '@/hooks/useAppearance';
+} from "lucide-react";
+import { Input, Label } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
+import { CONTROL_HOVER_LIFT } from "@/features/common/ControlInkBorder";
+import { destructiveAction, DESTRUCTIVE_TRIGGER } from "@/features/common/DestructiveAction";
+import { cn } from "@/lib/cn";
+import { useAppearance } from "@/hooks/useAppearance";
 import {
   MESSAGE_LAYOUT_MODES,
   setMessageLayoutMode,
   useMessageLayoutMode,
   type MessageLayoutMode,
-} from '@/components/chat/useMessageLayoutMode';
+} from "@/components/chat/useMessageLayoutMode";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useLogout,
   useViewerUser,
-} from '@/features/me/hooks';
-import { ViewerProfileEditor } from '@/features/me/ViewerProfileEditor';
-import { SettingsHeading } from './SettingsHeading';
+} from "@/features/me/hooks";
+import { ViewerProfileEditor } from "@/features/me/ViewerProfileEditor";
+import { SettingsHeading } from "./SettingsHeading";
 import {
   DEFAULT_MARKDOWN_FONT_SIZE,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
   THEME_IDS,
   type ThemeId,
-} from '@/settings/types';
-import { CODE_FONT_PRESETS, PROSE_FONT_PRESETS, type FontPreset } from '@/settings/font-presets';
+} from "@/settings/types";
+import { CODE_FONT_PRESETS, PROSE_FONT_PRESETS, type FontPreset } from "@/settings/font-presets";
 import {
   SETTINGS_SECTIONS,
   persistSettingsSection,
   readSettingsSection,
   type SettingsSection,
-} from './settings-section';
-import { ConnectionPane } from './ConnectionPane';
-import { paneChrome } from '@/components/layout/pane-chrome';
-import { SectionShell } from '@/components/layout/SectionShell';
+} from "./settings-section";
+import { ConnectionPane } from "./ConnectionPane";
+import { paneChrome } from "@/components/layout/pane-chrome";
+import { SectionShell } from "@/components/layout/SectionShell";
 
 /** 4-color swatch preview and display name for each theme. */
 const THEME_META: Record<
@@ -66,37 +66,37 @@ const THEME_META: Record<
     border: string;
   }
 > = {
-  'studio-light': {
-    label: 'Studio Light',
-    bg: '#F2F5F9',
-    surface: '#DEE3EB',
-    text: '#111725',
-    accent: '#2F5AD0',
-    border: 'rgba(17, 23, 37, 0.12)',
+  "studio-light": {
+    label: "Studio Light",
+    bg: "#F2F5F9",
+    surface: "#DEE3EB",
+    text: "#111725",
+    accent: "#2F5AD0",
+    border: "rgba(17, 23, 37, 0.12)",
   },
   forza6: {
-    label: 'Forza6',
-    bg: '#F4F8E8',
-    surface: '#FF2C7A',
-    text: '#0A0A0A',
-    accent: '#D4F523',
-    border: '#FF2C7A',
+    label: "Forza6",
+    bg: "#F4F8E8",
+    surface: "#FF2C7A",
+    text: "#0A0A0A",
+    accent: "#D4F523",
+    border: "#FF2C7A",
   },
-  'slack-dark': {
-    label: 'Slack Dark',
-    bg: '#19171D',
-    surface: '#350D36',
-    text: '#E2E3E3',
-    accent: '#1D9BD1',
-    border: '#350D36',
+  "slack-dark": {
+    label: "Slack Dark",
+    bg: "#19171D",
+    surface: "#350D36",
+    text: "#E2E3E3",
+    accent: "#1D9BD1",
+    border: "#350D36",
   },
   iris: {
-    label: 'Iris',
-    bg: '#E6E6B6',
-    surface: '#C4D0DA',
-    text: '#1F1A12',
-    accent: '#6D28C9',
-    border: 'rgba(31, 26, 18, 0.18)',
+    label: "Iris",
+    bg: "#E6E6B6",
+    surface: "#C4D0DA",
+    text: "#1F1A12",
+    accent: "#6D28C9",
+    border: "rgba(31, 26, 18, 0.18)",
   },
 };
 
@@ -137,7 +137,7 @@ export function SettingsPage(): JSX.Element {
 
         <div className="flex min-h-0 min-w-0 flex-1 justify-center">
           <div className="flex min-h-0 w-full min-w-0 max-w-[49rem] flex-col">
-            {section === 'appearance' ? (
+            {section === "appearance" ? (
               <AppearancePane
                 appearance={appearance}
                 setTheme={setTheme}
@@ -146,7 +146,7 @@ export function SettingsPage(): JSX.Element {
                 resetMarkdownText={resetMarkdownText}
                 resetMarkdownFontSize={resetMarkdownFontSize}
               />
-            ) : section === 'account' ? (
+            ) : section === "account" ? (
               <AccountPane />
             ) : (
               <ConnectionPane />
@@ -159,9 +159,9 @@ export function SettingsPage(): JSX.Element {
 }
 
 const SECTION_CHROME: Record<SettingsSection, { label: string; icon: ReactNode }> = {
-  account: { label: 'Account', icon: <User className="size-3.5" /> },
-  appearance: { label: 'Appearance', icon: <Palette className="size-3.5" /> },
-  connection: { label: 'Connection', icon: <Server className="size-3.5" /> },
+  account: { label: "Account", icon: <User className="size-3.5" /> },
+  appearance: { label: "Appearance", icon: <Palette className="size-3.5" /> },
+  connection: { label: "Connection", icon: <Server className="size-3.5" /> },
 };
 
 function SettingsRailNav({
@@ -183,7 +183,7 @@ function SettingsRailNav({
               icon={icon}
               title={label}
               selected={selected}
-              aria-current={selected ? 'page' : undefined}
+              aria-current={selected ? "page" : undefined}
               onClick={() => onSelect(id)}
             />
           );
@@ -204,12 +204,12 @@ function AppearancePane({
   resetMarkdownText,
   resetMarkdownFontSize,
 }: {
-  appearance: ReturnType<typeof useAppearance>['appearance'];
-  setTheme: ReturnType<typeof useAppearance>['setTheme'];
-  setMarkdownFont: ReturnType<typeof useAppearance>['setMarkdownFont'];
-  setMarkdownFontSize: ReturnType<typeof useAppearance>['setMarkdownFontSize'];
-  resetMarkdownText: ReturnType<typeof useAppearance>['resetMarkdownText'];
-  resetMarkdownFontSize: ReturnType<typeof useAppearance>['resetMarkdownFontSize'];
+  appearance: ReturnType<typeof useAppearance>["appearance"];
+  setTheme: ReturnType<typeof useAppearance>["setTheme"];
+  setMarkdownFont: ReturnType<typeof useAppearance>["setMarkdownFont"];
+  setMarkdownFontSize: ReturnType<typeof useAppearance>["setMarkdownFontSize"];
+  resetMarkdownText: ReturnType<typeof useAppearance>["resetMarkdownText"];
+  resetMarkdownFontSize: ReturnType<typeof useAppearance>["resetMarkdownFontSize"];
 }): JSX.Element {
   return (
     <section className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
@@ -231,9 +231,9 @@ function AppearancePane({
                       type="button"
                       onClick={() => setTheme(id)}
                       className={cn(
-                        'group relative flex min-h-[92px] flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left focus-outline',
+                        "group relative flex min-h-[92px] flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left focus-outline",
                         CONTROL_HOVER_LIFT,
-                        active ? 'border-accent' : 'border-border-subtle',
+                        active ? "border-accent" : "border-border-subtle",
                       )}
                       style={{
                         background: `linear-gradient(135deg, ${meta.bg}, ${meta.surface})`,
@@ -295,8 +295,8 @@ function AppearancePane({
                 fontSize={appearance.fontSize}
                 presets={PROSE_FONT_PRESETS}
                 sample="正文预览 / Markdown body text"
-                onFontChange={(value) => setMarkdownFont('prose', value || undefined)}
-                onReset={() => resetMarkdownText('prose')}
+                onFontChange={(value) => setMarkdownFont("prose", value || undefined)}
+                onReset={() => resetMarkdownText("prose")}
               />
               <MarkdownFontControl
                 title="Code"
@@ -305,8 +305,8 @@ function AppearancePane({
                 fontSize={appearance.fontSize}
                 presets={CODE_FONT_PRESETS}
                 sample="const size = 12"
-                onFontChange={(value) => setMarkdownFont('code', value || undefined)}
-                onReset={() => resetMarkdownText('code')}
+                onFontChange={(value) => setMarkdownFont("code", value || undefined)}
+                onReset={() => resetMarkdownText("code")}
                 code
               />
             </div>
@@ -318,8 +318,8 @@ function AppearancePane({
 }
 
 const MESSAGE_LAYOUT_META: Record<MessageLayoutMode, { label: string; icon: typeof AlignLeft }> = {
-  'all-left': { label: 'All left', icon: AlignLeft },
-  'user-right': { label: 'Mine right', icon: AlignRight },
+  "all-left": { label: "All left", icon: AlignLeft },
+  "user-right": { label: "Mine right", icon: AlignRight },
 };
 
 function MessageAlignmentControl(): JSX.Element {
@@ -344,10 +344,10 @@ function MessageAlignmentControl(): JSX.Element {
                 aria-checked={selected}
                 onClick={() => setMessageLayoutMode(id)}
                 className={cn(
-                  'flex items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs font-medium transition-colors focus-outline',
+                  "flex items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs font-medium transition-colors focus-outline",
                   selected
-                    ? 'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-text-on-selected'
-                    : 'border-border-subtle bg-bg-base text-text-secondary hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
+                    ? "border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-text-on-selected"
+                    : "border-border-subtle bg-bg-base text-text-secondary hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)] hover:text-text-primary",
                 )}
               >
                 <Icon className="size-3.5" />
@@ -454,7 +454,7 @@ function SharedFontSizeControl({
   onReset: () => void;
 }): JSX.Element {
   const sizeValue = value ?? DEFAULT_MARKDOWN_FONT_SIZE;
-  const isOverride = typeof value === 'number';
+  const isOverride = typeof value === "number";
   const [dragRaw, setDragRaw] = useState<number | null>(null);
   const thumbValue = dragRaw ?? sizeValue;
   const settleDrag = (): void => setDragRaw(null);
@@ -471,15 +471,15 @@ function SharedFontSizeControl({
           <h3 className="text-sm font-semibold text-text-primary">Font size</h3>
           <p className="truncate text-xs text-text-muted">
             Shared by prose and code
-            {isOverride ? '' : ' · theme default'}
+            {isOverride ? "" : " · theme default"}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <span
             aria-live="polite"
             className={cn(
-              'font-mono text-lg font-semibold leading-none tabular-nums',
-              isOverride ? 'text-accent' : 'text-text-secondary',
+              "font-mono text-lg font-semibold leading-none tabular-nums",
+              isOverride ? "text-accent" : "text-text-secondary",
             )}
           >
             {sizeValue}
@@ -520,30 +520,30 @@ function SharedFontSizeControl({
           onBlur={settleDrag}
           onKeyDown={(e) => {
             switch (e.key) {
-              case 'ArrowLeft':
-              case 'ArrowDown':
+              case "ArrowLeft":
+              case "ArrowDown":
                 e.preventDefault();
                 stepBy(-1);
                 break;
-              case 'ArrowRight':
-              case 'ArrowUp':
+              case "ArrowRight":
+              case "ArrowUp":
                 e.preventDefault();
                 stepBy(1);
                 break;
-              case 'PageDown':
+              case "PageDown":
                 e.preventDefault();
                 stepBy(-2);
                 break;
-              case 'PageUp':
+              case "PageUp":
                 e.preventDefault();
                 stepBy(2);
                 break;
-              case 'Home':
+              case "Home":
                 e.preventDefault();
                 if (sizeValue !== FONT_SIZE_MIN) onChange(FONT_SIZE_MIN);
                 setDragRaw(null);
                 break;
-              case 'End':
+              case "End":
                 e.preventDefault();
                 if (sizeValue !== FONT_SIZE_MAX) onChange(FONT_SIZE_MAX);
                 setDragRaw(null);
@@ -586,14 +586,14 @@ function MarkdownFontControl({
   onReset: () => void;
   code?: boolean;
 }): JSX.Element {
-  const fontValue = fontFamily ?? '';
+  const fontValue = fontFamily ?? "";
   const previewSize = fontSize ?? DEFAULT_MARKDOWN_FONT_SIZE;
   const sampleStyle: CSSProperties = {
     fontFamily:
       fontValue ||
       (code
-        ? 'var(--appearance-code-font, var(--font-mono))'
-        : 'var(--appearance-prose-font, var(--font-sans))'),
+        ? "var(--appearance-code-font, var(--font-mono))"
+        : "var(--appearance-prose-font, var(--font-sans))"),
     fontSize: `${previewSize}px`,
   };
 
@@ -609,7 +609,7 @@ function MarkdownFontControl({
           </span>
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
-            <p className="truncate text-xs text-text-muted">{fontValue || 'Theme default font'}</p>
+            <p className="truncate text-xs text-text-muted">{fontValue || "Theme default font"}</p>
           </div>
         </div>
         <button
@@ -643,10 +643,10 @@ function MarkdownFontControl({
                 data-selected={isSelected || undefined}
                 onClick={() => onFontChange(preset.value)}
                 className={cn(
-                  'rounded-[var(--pill-radius)] border px-2 py-1 text-[length:var(--text-meta)] font-medium transition-colors focus-outline',
+                  "rounded-[var(--pill-radius)] border px-2 py-1 text-[length:var(--text-meta)] font-medium transition-colors focus-outline",
                   isSelected
-                    ? 'border-accent bg-accent text-text-on-accent'
-                    : 'border-border-subtle bg-bg-primary text-text-secondary hover:border-[color:var(--border-control-hover)] hover:text-text-primary',
+                    ? "border-accent bg-accent text-text-on-accent"
+                    : "border-border-subtle bg-bg-primary text-text-secondary hover:border-[color:var(--border-control-hover)] hover:text-text-primary",
                 )}
               >
                 {preset.label}
@@ -658,8 +658,8 @@ function MarkdownFontControl({
 
       <div
         className={cn(
-          'rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-3 py-2 text-text-primary',
-          code ? 'font-mono' : '',
+          "rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-3 py-2 text-text-primary",
+          code ? "font-mono" : "",
         )}
         style={sampleStyle}
       >

@@ -1,4 +1,4 @@
-import type { AgentDto } from '@silverhand/shared';
+import type { AgentDto } from "@silverhand/shared";
 import {
   Dialog,
   DialogContent,
@@ -6,14 +6,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import {
-  destructiveAction,
-  destructiveCancel,
-} from '@/features/common/DestructiveAction';
-import { friendlyDeleteAgentError } from './delete-agent-error';
-import { useDeleteAgent } from './hooks';
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { destructiveAction, destructiveCancel } from "@/features/common/DestructiveAction";
+import { friendlyDeleteAgentError } from "./delete-agent-error";
+import { useDeleteAgent } from "./hooks";
 
 interface DeleteAgentDialogProps {
   open: boolean;
@@ -51,9 +48,7 @@ export function DeleteAgentDialog({
         </DialogHeader>
 
         {del.isError ? (
-          <div className="text-xs text-error">
-            {friendlyDeleteAgentError(del.error)}
-          </div>
+          <div className="text-xs text-error">{friendlyDeleteAgentError(del.error)}</div>
         ) : null}
 
         <DialogFooter>
@@ -73,7 +68,7 @@ export function DeleteAgentDialog({
             disabled={del.isPending}
             {...destructiveAction()}
           >
-            {del.isPending ? 'Deleting…' : 'Delete'}
+            {del.isPending ? "Deleting…" : "Delete"}
           </Button>
         </DialogFooter>
       </DialogContent>

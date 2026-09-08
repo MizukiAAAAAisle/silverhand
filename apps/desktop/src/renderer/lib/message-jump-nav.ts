@@ -1,6 +1,6 @@
-import type { DirectPairAuthority } from '@/lib/chat-place-restore';
-import type { AppSection } from '@/components/layout/NavRail';
-import { routes } from '@/router';
+import type { DirectPairAuthority } from "@/lib/chat-place-restore";
+import type { AppSection } from "@/components/layout/NavRail";
+import { routes } from "@/router";
 
 /**
  * How `handleJumpToMessage` should route a jump target whose only coordinates
@@ -35,7 +35,7 @@ import { routes } from '@/router';
  *                           id is not in the last answer — possibly a pair the
  *                           in-flight read is about to introduce.
  */
-export type JumpNavDecision = 'to-direct' | 'workspace-resolve' | 'fail-closed';
+export type JumpNavDecision = "to-direct" | "workspace-resolve" | "fail-closed";
 
 /**
  * Where an ACCEPTED jump lands: which primary pane, and the reply cluster to
@@ -55,13 +55,13 @@ export type JumpNavDecision = 'to-direct' | 'workspace-resolve' | 'fail-closed';
  */
 export type JumpRoute =
   | {
-      kind: 'direct';
+      kind: "direct";
       conversationId: string;
       /** Root of the reply cluster to open, or null for the main line. */
       threadRootId: string | null;
     }
   | {
-      kind: 'channel';
+      kind: "channel";
       workspaceId: string;
       channelId: string;
       threadRootId: string | null;
@@ -70,7 +70,7 @@ export type JumpRoute =
 export function resolveJumpRoute(inputs: {
   /** The accepted decision from {@link resolveJumpNav}. `fail-closed` never
    *  reaches here — it must return before any side effect. */
-  decision: Exclude<JumpNavDecision, 'fail-closed'>;
+  decision: Exclude<JumpNavDecision, "fail-closed">;
   channelId: string;
   /** The workspace the channel arm resolved (`resolveNavWorkspaceId`). Null
    *  means unresolvable, and a channel URL cannot be built without it. The
@@ -83,12 +83,12 @@ export function resolveJumpRoute(inputs: {
 }): JumpRoute | null {
   // One normalization for every arm — the whole point of this function.
   const threadRootId = inputs.threadRootId ?? null;
-  if (inputs.decision === 'to-direct') {
-    return { kind: 'direct', conversationId: inputs.channelId, threadRootId };
+  if (inputs.decision === "to-direct") {
+    return { kind: "direct", conversationId: inputs.channelId, threadRootId };
   }
   if (!inputs.navWorkspaceId) return null;
   return {
-    kind: 'channel',
+    kind: "channel",
     workspaceId: inputs.navWorkspaceId,
     channelId: inputs.channelId,
     threadRootId,
@@ -115,8 +115,8 @@ export function resolveJumpRoute(inputs: {
  * contract is pinned without mounting the app.
  */
 export function jumpBasePath(section: AppSection, route: JumpRoute): string {
-  const inActivity = section === 'activity';
-  if (route.kind === 'direct') {
+  const inActivity = section === "activity";
+  if (route.kind === "direct") {
     return inActivity
       ? routes.activityDirect(route.conversationId)
       : routes.chatDirect(route.conversationId);
@@ -139,19 +139,17 @@ export function resolveJumpNav(inputs: {
   // Carries a workspace coordinate ⇒ a channel jump. It never needs the pair
   // list, so it is never blocked on the list being ready. Straight to the
   // workspace arm.
-  if (inputs.hasWorkspaceCoordinate) return 'workspace-resolve';
+  if (inputs.hasWorkspaceCoordinate) return "workspace-resolve";
 
   // Workspace-less: only the direct-pair authority can classify this id.
   switch (inputs.pairs.status) {
-    case 'ready':
+    case "ready":
       // Answered and settled. A hit is the viewer's own direct line. A miss is a
       // normal workspace-channel target that arrived without its workspace id —
       // it falls through to the workspace arm (the pre-existing "use the selected
       // workspace" path), unchanged. Only the workspace-less path is touched.
-      return inputs.pairs.conversationIds.has(inputs.channelId)
-        ? 'to-direct'
-        : 'workspace-resolve';
-    case 'refetching':
+      return inputs.pairs.conversationIds.has(inputs.channelId) ? "to-direct" : "workspace-resolve";
+    case "refetching":
       // Answered before, a refetch in flight now. This is NOT a rare cold window:
       // `['direct-pairs']` is a viewer-global single cache that every incoming DM
       // invalidates, so the gesture (a one-shot click with no replay) routinely
@@ -162,11 +160,9 @@ export function resolveJumpNav(inputs: {
       // may be exactly the freshly minted pair this refetch is about to bring
       // back, and guessing the workspace arm is the wrong-place jump this seam
       // prevents. (Restore reads the same state as `wait`; only this seam acts.)
-      return inputs.pairs.conversationIds.has(inputs.channelId)
-        ? 'to-direct'
-        : 'fail-closed';
-    case 'pending':
-    case 'failed':
+      return inputs.pairs.conversationIds.has(inputs.channelId) ? "to-direct" : "fail-closed";
+    case "pending":
+    case "failed":
       // Never answered (cold `?task=` deep-link, first refetch with nothing
       // cached) or a failed read. The list is the sole authority that
       // distinguishes a DM from a channel here, and it has not spoken. Falling to
@@ -174,6 +170,6 @@ export function resolveJumpNav(inputs: {
       // `selectedWorkspaceId` and build a channel URL under a workspace the
       // conversation isn't in — the exact wrong-place jump this seam warns about.
       // Fail closed: do not navigate.
-      return 'fail-closed';
+      return "fail-closed";
   }
 }

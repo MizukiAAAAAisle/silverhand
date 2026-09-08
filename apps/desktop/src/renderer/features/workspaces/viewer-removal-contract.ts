@@ -55,22 +55,19 @@
 // (#task:1412 consensus): layer-3 smoke + the whole-cache invariant test (the
 // form-agnostic behavioural backstop that scans the entire cache for any
 // surviving wsId) already cover the off-registry residue for the current files.
-import type { QueryClient, QueryKey } from '@tanstack/react-query';
-import type {
-  ListActivityDto,
-  ListFavoritesDto,
-} from '@silverhand/shared';
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import type { ListActivityDto, ListFavoritesDto } from "@silverhand/shared";
 import {
   activityKey,
   attentionBadgesKey,
   removeWorkspaceFromActivity,
   removeWorkspaceFromAttentionBadges,
-} from '@/features/attention/hooks';
-import { favoritesKey, removeWorkspaceFromFavorites } from '@/features/favorites/hooks';
+} from "@/features/attention/hooks";
+import { favoritesKey, removeWorkspaceFromFavorites } from "@/features/favorites/hooks";
 import {
   messageUnreadSummaryKey,
   removeWorkspaceFromMessageUnread,
-} from '@/features/channels/message-unread';
+} from "@/features/channels/message-unread";
 
 /** A value that carries its workspace as a REQUIRED top-level `workspace_id` —
  *  the shape a favorites row has. Renderer-local BY DESIGN: TS is structural, so
@@ -92,35 +89,30 @@ type TopLevelWorkspaceAttributed = { workspace_id: string };
  *  fact says nothing about it and must leave it untouched. Both halves are pinned by
  *  the type-test's negative fixtures. */
 type LocationAttributed = {
-  location:
-    | { kind: 'workspace_channel'; workspace_id: string }
-    | { kind: 'direct_pair' };
+  location: { kind: "workspace_channel"; workspace_id: string } | { kind: "direct_pair" };
 };
 
 /** What a `viewer_workspaces_changed(removed)` fact can ADDRESS in an item: either
  *  carrier above. Two carriers, ONE question — "which workspace, if any, is this
  *  item in" — so a list qualifies for {@link itemScopedList} by answering it in
  *  either spelling, and cannot qualify by leaving it unanswerable. */
-export type WorkspaceRemovalAddressable =
-  | TopLevelWorkspaceAttributed
-  | LocationAttributed;
+export type WorkspaceRemovalAddressable = TopLevelWorkspaceAttributed | LocationAttributed;
 
 /** The one payload shape whose attribution TS can PROVE: a list of items a removal
  *  fact can address. Drives the mandatory-cleanup constraint in
  *  {@link itemScopedList}. */
 export type ItemScopedListData = { items: WorkspaceRemovalAddressable[] };
 
-
 /** How a viewer-local cache carries a workspace — each settles differently on
  *  removal. Exhaustive: a 4th member must also gain a dispatch branch in
  *  {@link handleViewerWorkspaceRemoved} or the `never` check fails to compile. */
 export type ProjectionForm =
   /** key = `['workspaces', wsId, …]` → predicate sweep (layer 1). */
-  | 'workspace-keyed'
+  | "workspace-keyed"
   /** global key, data = `{ by_workspace: Record<wsId, …> }` → delete map entry. */
-  | 'record-keyed-summary'
+  | "record-keyed-summary"
   /** global key, data = `{ items: WorkspaceRemovalAddressable[] }` → filter items. */
-  | 'item-scoped-list';
+  | "item-scoped-list";
 
 type CleanupFn = (qc: QueryClient, workspaceId: string) => void;
 
@@ -159,7 +151,7 @@ export function itemScopedList<TData>(
 ): RegisteredReadModel {
   // The conditional param proved attribution; narrow back for the runtime value
   // (TData is compile-time only — nothing to read at runtime).
-  return { ...(entry as ItemScopedListEntry), form: 'item-scoped-list' };
+  return { ...(entry as ItemScopedListEntry), form: "item-scoped-list" };
 }
 
 /**
@@ -168,7 +160,7 @@ export function itemScopedList<TData>(
  * type-detectable — the form is explicit and `cleanup` is required by signature.
  */
 export function recordKeyedSummary(entry: ItemScopedListEntry): RegisteredReadModel {
-  return { ...entry, form: 'record-keyed-summary' };
+  return { ...entry, form: "record-keyed-summary" };
 }
 
 /**
@@ -178,17 +170,17 @@ export function recordKeyedSummary(entry: ItemScopedListEntry): RegisteredReadMo
  */
 export const VIEWER_LOCAL_READ_MODELS: readonly RegisteredReadModel[] = [
   itemScopedList<ListActivityDto>({
-    id: 'activity',
+    id: "activity",
     key: activityKey(),
     cleanup: removeWorkspaceFromActivity,
   }),
   itemScopedList<ListFavoritesDto>({
-    id: 'favorites',
+    id: "favorites",
     key: favoritesKey,
     cleanup: removeWorkspaceFromFavorites,
   }),
   recordKeyedSummary({
-    id: 'message-unread-summary',
+    id: "message-unread-summary",
     key: messageUnreadSummaryKey,
     // Also drops the workspace-keyed `by_conversation` map (belt-and-suspenders
     // with the layer-1 sweep, both idempotent); the summary map delete is the
@@ -196,7 +188,7 @@ export const VIEWER_LOCAL_READ_MODELS: readonly RegisteredReadModel[] = [
     cleanup: removeWorkspaceFromMessageUnread,
   }),
   recordKeyedSummary({
-    id: 'attention-badges',
+    id: "attention-badges",
     key: attentionBadgesKey(),
     // The tiered badge roll-up (#task:1870). Same form as the unread summary and a
     // separate read model, not a duplicate: it answers "how loudly should this
@@ -217,20 +209,20 @@ export const VIEWER_LOCAL_READ_MODELS: readonly RegisteredReadModel[] = [
 export const VIEWER_LOCAL_KEY_CLASSIFICATION = {
   /** Workspace-attributed global-key caches — each maps to a registry entry. */
   cleaned: [
-    'messageUnreadSummaryKey',
-    'favoritesKey',
-    'activityKey',
-    'attentionBadgesKey',
+    "messageUnreadSummaryKey",
+    "favoritesKey",
+    "activityKey",
+    "attentionBadgesKey",
   ] as const,
   exempt: {
     messageUnreadByConversationKey:
       'workspace-keyed (["workspaces", wsId, …]) → layer-1 predicate sweep',
     conversationUnreadKey:
-      'conversation-scoped, not workspace-attributed (per-stream unread; conversation removal is a different fact)',
+      "conversation-scoped, not workspace-attributed (per-stream unread; conversation removal is a different fact)",
     workspaceAttentionPreferenceKey:
       'workspace-keyed (["workspaces", wsId, …]) → layer-1 predicate sweep',
     attentionModesKey:
-      'workspace-scoped but under the `attention` root, so layer 1 does not match it → dropped by removeWorkspaceFromAttentionBadges',
+      "workspace-scoped but under the `attention` root, so layer 1 does not match it → dropped by removeWorkspaceFromAttentionBadges",
   } as const,
 };
 
@@ -241,11 +233,7 @@ export const VIEWER_LOCAL_KEY_CLASSIFICATION = {
  *  by prose: an exempt key claims this sweep covers it, and only calling the
  *  production predicate proves that claim still holds (#task:2078). */
 export function isWorkspaceKeyed(queryKey: unknown, workspaceId: string): boolean {
-  return (
-    Array.isArray(queryKey) &&
-    queryKey[0] === 'workspaces' &&
-    queryKey[1] === workspaceId
-  );
+  return Array.isArray(queryKey) && queryKey[0] === "workspaces" && queryKey[1] === workspaceId;
 }
 
 function assertNever(x: never): never {
@@ -262,24 +250,21 @@ function assertNever(x: never): never {
  * root list is settled separately (refetch-authoritative) by the general
  * invalidation loop in `useViewerWorkspacesSync`.
  */
-export function handleViewerWorkspaceRemoved(
-  qc: QueryClient,
-  workspaceId: string,
-): void {
+export function handleViewerWorkspaceRemoved(qc: QueryClient, workspaceId: string): void {
   // Layer 1 — workspace-keyed family, by form. A deleted workspace's scoped
   // query would 404 on refetch, so drop the entries outright.
   qc.removeQueries({
-    predicate: query => isWorkspaceKeyed(query.queryKey, workspaceId),
+    predicate: (query) => isWorkspaceKeyed(query.queryKey, workspaceId),
   });
   // Layer 2 — registered global-key read models, dispatched by form.
   for (const rm of VIEWER_LOCAL_READ_MODELS) {
     switch (rm.form) {
-      case 'workspace-keyed':
+      case "workspace-keyed":
         // Covered by the layer-1 sweep; no registered entry uses this form
         // today, but the branch keeps the dispatch exhaustive + documents it.
         break;
-      case 'record-keyed-summary':
-      case 'item-scoped-list':
+      case "record-keyed-summary":
+      case "item-scoped-list":
         rm.cleanup(qc, workspaceId);
         break;
       default:

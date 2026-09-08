@@ -1,9 +1,4 @@
-import {
-  useEffect,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -11,8 +6,8 @@ import {
   closestCenter,
   useSensor,
   useSensors,
-} from '@dnd-kit/core';
-import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers';
+} from "@dnd-kit/core";
+import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import {
   SortableContext,
   arrayMove,
@@ -20,16 +15,15 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
   type AnimateLayoutChanges,
-} from '@dnd-kit/sortable';
-import type { SortGroup, ViewerSortStateDto } from '@silverhand/shared';
-import { useApplySortOrder, useReorderSort } from '@/features/workspaces/hooks';
+} from "@dnd-kit/sortable";
+import type { SortGroup, ViewerSortStateDto } from "@silverhand/shared";
+import { useApplySortOrder, useReorderSort } from "@/features/workspaces/hooks";
+import { sortEntryLookup, sortGroup, sortModeOf, type SortEntryLookup } from "@/lib/viewer-sort";
 import {
-  sortEntryLookup,
-  sortGroup,
-  sortModeOf,
-  type SortEntryLookup,
-} from '@/lib/viewer-sort';
-import { recentKeyForAndAdmit, recentSnapshotToken, useRecentKeySnapshot } from '@/lib/recent-order-snapshot';
+  recentKeyForAndAdmit,
+  recentSnapshotToken,
+  useRecentKeySnapshot,
+} from "@/lib/recent-order-snapshot";
 
 /**
  * Shared drag-reorder LOGIC for the per-user sortable lists (#task:1146) —
@@ -96,8 +90,7 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
 
   // The mode that orders ONE group — read through `modeScopeOf` (omitted ⇒
   // list-wide scope ''). Single source shared with the optimistic write below.
-  const modeFor = (group: GroupKey) =>
-    sortModeOf(viewerSort, modeScopeOf?.(group));
+  const modeFor = (group: GroupKey) => sortModeOf(viewerSort, modeScopeOf?.(group));
 
   // Recent-mode visible order is a FROZEN read model (#task:1161): freeze each
   // id's recent key (`last_accessed_at`) at entry so opening a row can't reflow
@@ -114,13 +107,13 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
   // enter at their natural recent slot.
   const recentScopes = new Set<string>();
   for (const group of Object.keys(groups) as GroupKey[]) {
-    if (modeFor(group) === 'recent') recentScopes.add(modeScopeOf?.(group) ?? '');
+    if (modeFor(group) === "recent") recentScopes.add(modeScopeOf?.(group) ?? "");
   }
   const snapshotToken = recentSnapshotToken(listKey, recentScopes, viewerSort !== undefined);
   const recentSnapshot = useRecentKeySnapshot(snapshotToken, () => {
     const keyById = new Map<string, number | null>();
     for (const group of Object.keys(groups) as GroupKey[]) {
-      if (modeFor(group) !== 'recent') continue;
+      if (modeFor(group) !== "recent") continue;
       for (const item of groups[group]) {
         keyById.set(getId(item), lookup(getId(item)).lastAccessedAt);
       }
@@ -160,8 +153,8 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
     // yet in the snapshot is admitted at its live key and frozen from then on
     // (admit-and-freeze). Manual groups bypass the snapshot (rank-ordered).
     const groupLookup: SortEntryLookup =
-      mode === 'recent'
-        ? id => {
+      mode === "recent"
+        ? (id) => {
             const e = lookup(id);
             return {
               rank: e.rank,
@@ -187,9 +180,13 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
     const settled = (group: GroupKey): boolean => {
       const override = pendingDrop.byGroup[group];
       if (!override) return true;
-      const derived = sortGroup(groups[group] ?? [], modeFor(group), getId, getCreatedAt, lookup).map(
+      const derived = sortGroup(
+        groups[group] ?? [],
+        modeFor(group),
         getId,
-      );
+        getCreatedAt,
+        lookup,
+      ).map(getId);
       return derived.length === override.length && derived.every((id, i) => id === override[i]);
     };
     if ((Object.keys(pendingDrop.byGroup) as GroupKey[]).every(settled)) {
@@ -203,7 +200,7 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
     if (!listKey) return;
     // INVARIANT #1: synchronous local state set inside the drop event so it
     // batches with dnd's reset into one commit.
-    setPendingDrop(prev => ({
+    setPendingDrop((prev) => ({
       listKey,
       byGroup: {
         ...(prev && prev.listKey === listKey ? prev.byGroup : {}),
@@ -241,7 +238,7 @@ export function sortableItemStyle(args: {
     transition: args.transition,
     opacity: args.isDragging ? 0.6 : undefined,
     zIndex: args.isDragging ? 1 : undefined,
-    position: args.isDragging ? 'relative' : undefined,
+    position: args.isDragging ? "relative" : undefined,
   };
 }
 
@@ -250,7 +247,7 @@ export function sortableItemStyle(args: {
  *  synchronously on drop (INVARIANT #1), so the row is already in its final DOM
  *  slot — a settle would then animate a leftover transform→0, the visible
  *  "jump". Pass to every `useSortable`. */
-export const animateLayoutChanges: AnimateLayoutChanges = args =>
+export const animateLayoutChanges: AnimateLayoutChanges = (args) =>
   args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
 /** Generic per-group DnD context: vertical-only, in-place (no DragOverlay),

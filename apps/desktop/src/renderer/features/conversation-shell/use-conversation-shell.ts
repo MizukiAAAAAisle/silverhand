@@ -1,31 +1,31 @@
-import { buildConversationPanes } from './build-conversation-panes';
-import { senderFilterToParam } from '@/components/ui/sender-filter-select';
-import { useAgents } from '@/features/agents/hooks';
-import { useLayoutKeyboardShortcuts } from '@/features/app-shell/effects';
-import { useMessageUnreadCounts } from '@/features/channels/hooks';
-import { useChatRouteRecovery } from '@/features/chat-shell/use-chat-route-recovery';
-import { findAgentDirectPair } from '@/features/direct-pairs/hooks';
-import { useNotificationToasts } from '@/features/notifications/hooks';
-import { useSavedMessages } from '@/features/saved/hooks';
-import type { AdvancedSearchSeed } from '@/features/search/advanced-search-seed';
-import { isAgentSpace } from '@/features/workspaces/workspace-ownership';
-import { useLayoutSettings } from '@/hooks/useLayoutSettings';
-import { resolveChannelOpen } from '@/lib/channel-open';
-import { getChannelLayout, getCloseWatermark } from '@/lib/place-memory';
-import { agentSpaceRecognitionName } from '@/lib/workspace-name';
+import { buildConversationPanes } from "./build-conversation-panes";
+import { senderFilterToParam } from "@/components/ui/sender-filter-select";
+import { useAgents } from "@/features/agents/hooks";
+import { useLayoutKeyboardShortcuts } from "@/features/app-shell/effects";
+import { useMessageUnreadCounts } from "@/features/channels/hooks";
+import { useChatRouteRecovery } from "@/features/chat-shell/use-chat-route-recovery";
+import { findAgentDirectPair } from "@/features/direct-pairs/hooks";
+import { useNotificationToasts } from "@/features/notifications/hooks";
+import { useSavedMessages } from "@/features/saved/hooks";
+import type { AdvancedSearchSeed } from "@/features/search/advanced-search-seed";
+import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
+import { useLayoutSettings } from "@/hooks/useLayoutSettings";
+import { resolveChannelOpen } from "@/lib/channel-open";
+import { getChannelLayout, getCloseWatermark } from "@/lib/place-memory";
+import { agentSpaceRecognitionName } from "@/lib/workspace-name";
 import {
   buildChannelLayoutUrl,
   buildChannelPathPreservingAgent,
   routes,
   useNav,
   useRouteState,
-} from '@/router';
-import { useCallback, useDeferredValue, useMemo } from 'react';
-import type { ConversationShellModel, ConversationShellSignals } from './conversation-shell-models';
-import { useConversationInvalidation } from './use-conversation-invalidation';
-import { useConversationJump } from './use-conversation-jump';
-import { useConversationPanes } from './use-conversation-panes';
-import { useConversationReadModel } from './use-conversation-read-model';
+} from "@/router";
+import { useCallback, useDeferredValue, useMemo } from "react";
+import type { ConversationShellModel, ConversationShellSignals } from "./conversation-shell-models";
+import { useConversationInvalidation } from "./use-conversation-invalidation";
+import { useConversationJump } from "./use-conversation-jump";
+import { useConversationPanes } from "./use-conversation-panes";
+import { useConversationReadModel } from "./use-conversation-read-model";
 
 /** Session-lived assembly: directory reads, pane effects and section-specific entry actions. */
 export function useConversationShell({
@@ -67,7 +67,7 @@ export function useConversationShell({
 
   const workspaceSidebarVisible = workspaceSidebarPane.visible;
 
-  useLayoutKeyboardShortcuts(toggleWorkspaceSidebar, appSection === 'chat');
+  useLayoutKeyboardShortcuts(toggleWorkspaceSidebar, appSection === "chat");
 
   const { data: agents = [] } = useAgents();
 
@@ -198,7 +198,7 @@ export function useConversationShell({
       getCloseWatermark(id),
       getChannelLayout(id),
     );
-    if (intent.kind === 'unread-thread') {
+    if (intent.kind === "unread-thread") {
       handleJumpToMessage({
         channelId: id,
         messageId: intent.messageId,

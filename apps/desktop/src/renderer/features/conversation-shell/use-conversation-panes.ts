@@ -1,19 +1,19 @@
-import { useContextualCloseResponder } from '@/features/app-shell/keyboard-shortcuts';
-import { useSecondaryPaneModel } from '@/features/app-shell/secondary-pane-model';
-import { useMarkMessageChannelRead } from '@/features/channels/hooks';
-import { mountsMemberOnlyPanel } from '@/features/channels/membership';
-import { resolveTaskDetailSurface } from '@/features/tasks/task-detail-surface';
+import { useContextualCloseResponder } from "@/features/app-shell/keyboard-shortcuts";
+import { useSecondaryPaneModel } from "@/features/app-shell/secondary-pane-model";
+import { useMarkMessageChannelRead } from "@/features/channels/hooks";
+import { mountsMemberOnlyPanel } from "@/features/channels/membership";
+import { resolveTaskDetailSurface } from "@/features/tasks/task-detail-surface";
 import {
   selectSecondaryViewInputs,
   selectSidebarSelectedConversationId,
-} from '@/lib/secondary-pane';
-import { useNav, useRouteState } from '@/router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+} from "@/lib/secondary-pane";
+import { useNav, useRouteState } from "@/router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PaneAttachmentRequest,
   PaneJumpModel,
   PaneReadModel,
-} from './conversation-shell-models';
+} from "./conversation-shell-models";
 
 /** Owns pane-local state and visible-conversation effects across Chat/Activity presentations. */
 export function useConversationPanes(read: PaneReadModel, jump: PaneJumpModel) {
@@ -91,7 +91,7 @@ export function useConversationPanes(read: PaneReadModel, jump: PaneJumpModel) {
 
   const openTaskInPane = useCallback((taskId: string) => openTaskRef.current(taskId), []);
 
-  const taskPaneId = resolveTaskDetailSurface(route) === 'pane' ? taskDetailId : null;
+  const taskPaneId = resolveTaskDetailSurface(route) === "pane" ? taskDetailId : null;
 
   const taskPaneEditingRef = useRef(false);
 

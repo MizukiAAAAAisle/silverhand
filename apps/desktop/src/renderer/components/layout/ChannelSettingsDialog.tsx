@@ -67,27 +67,19 @@
  * a local `border-error/40` + `hover:bg-error/10`, the alpha-thinned recipe shiki
  * had already rejected elsewhere for reading as washed.
  */
-import { Fragment, useEffect, useState, type FormEvent } from 'react';
-import { Archive, ArchiveRestore, Loader2, Lock, LockOpen, LogOut } from 'lucide-react';
-import type {
-  ChannelLeaveBlockedReason,
-  ConversationVisibility,
-} from '@silverhand/shared';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Input, Label } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { primaryAction } from '@/features/common/PrimaryAction';
-import { neutralAction } from '@/features/common/ControlInkBorder';
+import { Fragment, useEffect, useState, type FormEvent } from "react";
+import { Archive, ArchiveRestore, Loader2, Lock, LockOpen, LogOut } from "lucide-react";
+import type { ChannelLeaveBlockedReason, ConversationVisibility } from "@silverhand/shared";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input, Label } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { primaryAction } from "@/features/common/PrimaryAction";
+import { neutralAction } from "@/features/common/ControlInkBorder";
 import {
   destructiveAction,
   destructiveCancel,
   DESTRUCTIVE_TRIGGER,
-} from '@/features/common/DestructiveAction';
+} from "@/features/common/DestructiveAction";
 
 /** Client-side cap. Keep in sync with the backend rename schema. */
 const MAX_TITLE_LENGTH = 128;
@@ -126,16 +118,14 @@ interface ChannelSettingsDialogProps {
 /** Human copy for a leave-blocked reason. The backend emits only the stable
  *  code; UI text is never outsourced to the backend. `null` → no line (either
  *  leave is allowed, or a code that shouldn't reach a member, e.g. not_member). */
-function leaveBlockedCopy(
-  reason: ChannelLeaveBlockedReason | null | undefined,
-): string | null {
+function leaveBlockedCopy(reason: ChannelLeaveBlockedReason | null | undefined): string | null {
   switch (reason) {
-    case 'channel_owner':
+    case "channel_owner":
       return "As the owner, you can't leave this channel.";
-    case 'last_human_member':
+    case "last_human_member":
       return "As the last member, you can't leave this channel.";
-    case 'channel_archived':
-      return 'Restore the channel before leaving.';
+    case "channel_archived":
+      return "Restore the channel before leaving.";
     default:
       return null;
   }
@@ -188,7 +178,7 @@ export function ChannelSettingsDialog({
 
   const trimmed = title.trim();
   const dirty = trimmed !== currentTitle.trim();
-  const saveDisabled = !onRename || saving || trimmed === '' || !dirty;
+  const saveDisabled = !onRename || saving || trimmed === "" || !dirty;
 
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
@@ -213,10 +203,9 @@ export function ChannelSettingsDialog({
     onOpenChange(false);
   };
 
-  const isPrivate = visibility === 'private';
-  const nextVisibility: ConversationVisibility = isPrivate ? 'public' : 'private';
-  const showVisibility =
-    !!onSetVisibility && canUpdateVisibility && visibility !== undefined;
+  const isPrivate = visibility === "private";
+  const nextVisibility: ConversationVisibility = isPrivate ? "public" : "private";
+  const showVisibility = !!onSetVisibility && canUpdateVisibility && visibility !== undefined;
 
   const handleToggleVisibility = async (): Promise<void> => {
     if (!onSetVisibility || visSaving) return;
@@ -255,7 +244,7 @@ export function ChannelSettingsDialog({
   // Leave are one ACTION GROUP — stacked tight with NO divider between them.
   // Only Rename ↔ group gets a separator.
   const renameNode = onRename ? (
-    <form className="flex flex-col gap-2" onSubmit={e => void handleSubmit(e)}>
+    <form className="flex flex-col gap-2" onSubmit={(e) => void handleSubmit(e)}>
       <Label htmlFor="channel-settings-name">Channel name</Label>
       <div className="flex items-center gap-2">
         <Input
@@ -265,13 +254,9 @@ export function ChannelSettingsDialog({
           maxLength={MAX_TITLE_LENGTH}
           spellCheck={false}
           disabled={saving}
-          onChange={e => setTitle(e.target.value)}
+          onChange={(e) => setTitle(e.target.value)}
         />
-        <Button
-          type="submit"
-          disabled={saveDisabled}
-          {...primaryAction('shrink-0')}
-        >
+        <Button type="submit" disabled={saveDisabled} {...primaryAction("shrink-0")}>
           {saving ? <Loader2 className="size-3.5 animate-spin" /> : null}
           Save
         </Button>
@@ -284,13 +269,13 @@ export function ChannelSettingsDialog({
 
   if (showVisibility) {
     actions.push({
-      key: 'visibility',
+      key: "visibility",
       node: (
         <div className="flex flex-col gap-2">
           <Button
             type="button"
             variant="outline"
-            {...neutralAction('w-full')}
+            {...neutralAction("w-full")}
             disabled={visSaving}
             onClick={() => void handleToggleVisibility()}
           >
@@ -301,7 +286,7 @@ export function ChannelSettingsDialog({
             ) : (
               <Lock className="size-3.5" />
             )}
-            {isPrivate ? 'Make public' : 'Make private'}
+            {isPrivate ? "Make public" : "Make private"}
           </Button>
           {visError ? <p className="text-xs text-error">{visError}</p> : null}
         </div>
@@ -311,21 +296,17 @@ export function ChannelSettingsDialog({
 
   if (onToggleArchive) {
     actions.push({
-      key: 'archive',
+      key: "archive",
       node: (
         <Button
           type="button"
           variant="outline"
           disabled={archivePending}
           onClick={handleToggleArchive}
-          {...neutralAction('w-full')}
+          {...neutralAction("w-full")}
         >
-          {isArchived ? (
-            <ArchiveRestore className="size-3.5" />
-          ) : (
-            <Archive className="size-3.5" />
-          )}
-          {isArchived ? 'Restore channel' : 'Archive channel'}
+          {isArchived ? <ArchiveRestore className="size-3.5" /> : <Archive className="size-3.5" />}
+          {isArchived ? "Restore channel" : "Archive channel"}
         </Button>
       ),
     });
@@ -333,7 +314,7 @@ export function ChannelSettingsDialog({
 
   if (onLeave) {
     actions.push({
-      key: 'leave',
+      key: "leave",
       // The Leave button stays put; clicking it APPENDS a warning tip below it
       // (never replaces the row) carrying the consequence + Cancel/confirm.
       node: canLeave ? (
@@ -341,7 +322,7 @@ export function ChannelSettingsDialog({
           <Button
             type="button"
             variant="outline"
-            {...neutralAction('w-full')}
+            {...neutralAction("w-full")}
             disabled={leaving}
             onClick={() => setLeaveConfirm(true)}
           >
@@ -354,7 +335,7 @@ export function ChannelSettingsDialog({
                 <p className="text-sm leading-relaxed text-text-primary">
                   {isPrivate
                     ? "You won't be able to rejoin unless you're added back."
-                    : 'You can rejoin this channel anytime.'}
+                    : "You can rejoin this channel anytime."}
                 </p>
               </div>
               <div className="flex items-center justify-end gap-2">
@@ -382,26 +363,17 @@ export function ChannelSettingsDialog({
                   Leave
                 </Button>
               </div>
-              {leaveError ? (
-                <p className="text-xs text-error">{leaveError}</p>
-              ) : null}
+              {leaveError ? <p className="text-xs text-error">{leaveError}</p> : null}
             </div>
           ) : null}
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            disabled
-            {...neutralAction('w-full')}
-          >
+          <Button type="button" variant="outline" disabled {...neutralAction("w-full")}>
             <LogOut className="size-3.5" />
             Leave channel
           </Button>
-          {blockedCopy ? (
-            <p className="text-xs text-text-secondary">{blockedCopy}</p>
-          ) : null}
+          {blockedCopy ? <p className="text-xs text-text-secondary">{blockedCopy}</p> : null}
         </div>
       ),
     });
@@ -420,7 +392,7 @@ export function ChannelSettingsDialog({
           ) : null}
           {actions.length > 0 ? (
             <div className="flex flex-col gap-2">
-              {actions.map(action => (
+              {actions.map((action) => (
                 <Fragment key={action.key}>{action.node}</Fragment>
               ))}
             </div>

@@ -1,22 +1,22 @@
-import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import { type ConversationRef } from '@silverhand/shared';
-import { ApiError } from '@/lib/api';
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { type ConversationRef } from "@silverhand/shared";
+import { ApiError } from "@/lib/api";
 import {
   conversationRefQueryOptions,
   type ConversationRefResponse,
-} from './conversation-ref-query';
+} from "./conversation-ref-query";
 
 export type ConversationByIdStatus =
-  | 'loading'
-  | 'resolved'
-  | 'unauthorized'
-  | 'not_found'
+  | "loading"
+  | "resolved"
+  | "unauthorized"
+  | "not_found"
   /** The read settled in a failure that proves NOTHING about the id — a 5xx, a
    *  transport failure, an unparseable body — with the bounded retry budget
    *  spent. Terminal until something re-triggers the read. Distinct from
    *  `not_found` (a claim about existence this failure cannot support) and from
    *  `loading` (which would be a skeleton with nothing behind it). */
-  | 'unresolved';
+  | "unresolved";
 
 export interface ConversationByIdResult {
   status: ConversationByIdStatus;
@@ -27,7 +27,7 @@ export interface ConversationByIdResult {
 /** The id passed to the shared read point while the hook is disabled. Kept
  *  inside the factory (rather than a hand-written key) so this module never
  *  restates the conversation-ref key shape. */
-const NO_ID = 'none';
+const NO_ID = "none";
 
 /**
  * Pure mapping from a React Query result for the conversation-ref fetch into the
@@ -66,28 +66,25 @@ const NO_ID = 'none';
  */
 export function mapConversationByIdResult(
   id: string | null,
-  query: Pick<
-    UseQueryResult<ConversationRefResponse, Error>,
-    'data' | 'error' | 'isError'
-  >,
+  query: Pick<UseQueryResult<ConversationRefResponse, Error>, "data" | "error" | "isError">,
 ): ConversationByIdResult {
-  if (!id) return { status: 'loading', ref: null };
+  if (!id) return { status: "loading", ref: null };
   if (query.isError) {
     const err = query.error;
     if (err instanceof ApiError) {
-      if (err.status === 404) return { status: 'not_found', ref: null };
-      if (err.status === 403) return { status: 'unauthorized', ref: null };
+      if (err.status === 404) return { status: "not_found", ref: null };
+      if (err.status === 403) return { status: "unauthorized", ref: null };
     }
     // A failed refetch on top of a ref WE ALREADY HOLD proves nothing about the
     // id, so it must not throw the answer away. `isError` and `data` are not
     // mutually exclusive: a background refetch failure settles as
     // `isError: true, data: <held>` (@Cindy, #task:2038 — measured on a real
     // QueryObserver, see the reachability cases in the test).
-    if (query.data) return { status: 'resolved', ref: query.data.ref };
-    return { status: 'unresolved', ref: null };
+    if (query.data) return { status: "resolved", ref: query.data.ref };
+    return { status: "unresolved", ref: null };
   }
-  if (query.data) return { status: 'resolved', ref: query.data.ref };
-  return { status: 'loading', ref: null };
+  if (query.data) return { status: "resolved", ref: query.data.ref };
+  return { status: "loading", ref: null };
 }
 
 /**
@@ -113,9 +110,7 @@ export function mapConversationByIdResult(
  *                       AND no ref in hand. Nothing was proven; consumers that
  *                       gate on `resolved` stay fail-closed by construction.
  */
-export function useConversationById(
-  id: string | null,
-): ConversationByIdResult {
+export function useConversationById(id: string | null): ConversationByIdResult {
   const query = useQuery<ConversationRefResponse, Error>({
     ...conversationRefQueryOptions(id ?? NO_ID),
     enabled: !!id,

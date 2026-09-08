@@ -1,5 +1,5 @@
-import type { SortGroup } from '@silverhand/shared';
-import { isAgentSpace, type WorkspaceOwnership } from './workspace-ownership';
+import type { SortGroup } from "@silverhand/shared";
+import { isAgentSpace, type WorkspaceOwnership } from "./workspace-ownership";
 
 /**
  * The workspace rail's persisted sort scope — the renderer's ONLY remaining
@@ -42,7 +42,7 @@ import { isAgentSpace, type WorkspaceOwnership } from './workspace-ownership';
  * identity, deliberately NOT renamed by Delta 4). Neither is a container word.
  */
 export function railSortGroupOf(workspace: WorkspaceOwnership): RailSortGroup {
-  return isAgentSpace(workspace) ? 'agent_space' : 'regular';
+  return isAgentSpace(workspace) ? "agent_space" : "regular";
 }
 
 /** The rail's two group keys, as the SUBSET of `SortGroup` they must remain. Via
@@ -51,4 +51,4 @@ export function railSortGroupOf(workspace: WorkspaceOwnership): RailSortGroup {
  *  containing it ⇒ `railSortGroupOf`'s body no longer typechecks) instead of as a
  *  silent divergence between the renderer and the stored rows. That tripwire is
  *  what turned Delta 4 into a compiler-enumerated change. */
-export type RailSortGroup = Extract<SortGroup, 'agent_space' | 'regular'>;
+export type RailSortGroup = Extract<SortGroup, "agent_space" | "regular">;

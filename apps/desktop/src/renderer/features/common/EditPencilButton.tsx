@@ -1,6 +1,6 @@
-import { Pencil } from 'lucide-react';
-import type { JSX } from 'react';
-import { cn } from '@/lib/cn';
+import { Pencil } from "lucide-react";
+import type { JSX } from "react";
+import { cn } from "@/lib/cn";
 
 /**
  * Shared pencil affordance for section-level "enter edit" triggers on
@@ -35,8 +35,8 @@ export function EditPencilButton({
       tabIndex={hidden ? -1 : undefined}
       aria-hidden={hidden || undefined}
       className={cn(
-        'rounded-[var(--control-radius)] p-1 text-text-muted transition-colors hover:text-text-primary disabled:opacity-50',
-        hidden && 'invisible',
+        "rounded-[var(--control-radius)] p-1 text-text-muted transition-colors hover:text-text-primary disabled:opacity-50",
+        hidden && "invisible",
       )}
       title={hidden ? undefined : ariaLabel}
       aria-label={ariaLabel}

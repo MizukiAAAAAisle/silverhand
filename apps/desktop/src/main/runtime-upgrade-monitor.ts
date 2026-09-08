@@ -4,7 +4,7 @@ import {
   MINIMUM_SERVER_API_EPOCH,
   UpgradeRequiredBodySchema,
   type DesktopApiAdvertisement,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 
 export interface RuntimeUpgradeMonitorDeps {
   /** Fetch the current `desktop_api` advertisement (server-info, exempt path). */
@@ -45,7 +45,7 @@ export function createRuntimeUpgradeMonitor(
   let latched = false;
   let probing = false;
 
-  const suspect = (source: 'rest'): void => {
+  const suspect = (source: "rest"): void => {
     if (latched || probing) return;
     probing = true;
     void (async () => {
@@ -57,11 +57,11 @@ export function createRuntimeUpgradeMonitor(
           serverEpoch: advertised?.current_epoch ?? 0,
           minimumServerEpoch: MINIMUM_SERVER_API_EPOCH,
         });
-        if (compatibility === 'client_too_old' && !latched) {
+        if (compatibility === "client_too_old" && !latched) {
           latched = true;
           deps.log?.info(
             { source, minimum_client_epoch: advertised?.minimum_client_epoch },
-            'runtime upgrade requirement confirmed by server-info probe',
+            "runtime upgrade requirement confirmed by server-info probe",
           );
           deps.notify();
         }
@@ -69,7 +69,7 @@ export function createRuntimeUpgradeMonitor(
         // Probe unreachable: do nothing — an unreachable server is the
         // backend_unreachable story, not an upgrade requirement. The next
         // suspect re-probes.
-        deps.log?.warn({ err, source }, 'runtime upgrade probe failed');
+        deps.log?.warn({ err, source }, "runtime upgrade probe failed");
       } finally {
         probing = false;
       }
@@ -86,7 +86,7 @@ export function createRuntimeUpgradeMonitor(
         return;
       }
       if (!UpgradeRequiredBodySchema.safeParse(parsed).success) return;
-      suspect('rest');
+      suspect("rest");
     },
     onAdvertisement(advertised) {
       if (latched) return;
@@ -96,14 +96,14 @@ export function createRuntimeUpgradeMonitor(
         serverEpoch: advertised?.current_epoch ?? 0,
         minimumServerEpoch: MINIMUM_SERVER_API_EPOCH,
       });
-      if (compatibility !== 'client_too_old') return;
+      if (compatibility !== "client_too_old") return;
       latched = true;
       deps.log?.info(
         {
-          source: 'backend_info',
+          source: "backend_info",
           minimum_client_epoch: advertised?.minimum_client_epoch,
         },
-        'runtime upgrade requirement observed in server advertisement',
+        "runtime upgrade requirement observed in server advertisement",
       );
       deps.notify();
     },

@@ -3,7 +3,7 @@
    ================================================================ */
 
 :root,
-[data-theme='forza6'] {
+[data-theme="forza6"] {
   /* Task references: prose and system activity retain distinct emphasis. */
   --task-ref-font: var(--appearance-prose-font, var(--font-sans));
   --task-ref-weight: 400;
@@ -285,12 +285,12 @@
   --radius-xl: 14px;
 
   --font-display:
-    'Rajdhani', 'Impact', 'Helvetica Neue Condensed', 'Arial Narrow', system-ui, sans-serif;
+    "Rajdhani", "Impact", "Helvetica Neue Condensed", "Arial Narrow", system-ui, sans-serif;
   --font-sans:
-    'Space Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue',
-    'PingFang SC', 'Hiragino Sans GB', sans-serif;
+    "Space Grotesk", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+    "PingFang SC", "Hiragino Sans GB", sans-serif;
   --font-serif: var(--font-sans);
-  --font-mono: 'Space Mono', ui-monospace, monospace;
+  --font-mono: "Space Mono", ui-monospace, monospace;
 
   /* ── Markdown body ──
      Theme defaults live in `--font-sans` / `--font-mono` above and the
@@ -333,7 +333,7 @@
   --text-on-dark-pop: var(--forza6-yellow);
 }
 
-[data-theme='forza6'] {
+[data-theme="forza6"] {
   --message-activity-color: var(--bg-control-primary);
   --message-activity-radius: 3px;
 }

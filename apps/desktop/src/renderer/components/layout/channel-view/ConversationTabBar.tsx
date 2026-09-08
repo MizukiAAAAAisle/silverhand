@@ -1,5 +1,5 @@
-import { FileText, MessagesSquare, Paperclip, Plus, Users, X } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
+import { FileText, MessagesSquare, Paperclip, Plus, Users, X } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   DndContext,
   KeyboardSensor,
@@ -7,30 +7,25 @@ import {
   closestCenter,
   useSensor,
   useSensors,
-} from '@dnd-kit/core';
-import { restrictToHorizontalAxis } from '@dnd-kit/modifiers';
+} from "@dnd-kit/core";
+import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
 import {
   SortableContext,
   horizontalListSortingStrategy,
   sortableKeyboardCoordinates,
   useSortable,
-} from '@dnd-kit/sortable';
-import { cn } from '@/lib/cn';
-import { animateLayoutChanges } from '@/components/layout/list-drag-sort';
+} from "@dnd-kit/sortable";
+import { cn } from "@/lib/cn";
+import { animateLayoutChanges } from "@/components/layout/list-drag-sort";
 import {
   AppContextMenu,
   AppContextMenuItem,
   AppDropdownMenu,
   AppDropdownMenuItem,
-} from '@/components/menus/AppContextMenu';
-import {
-  isRemovable,
-  tabKey,
-  type PanelTabKind,
-  type Tab,
-} from '@/lib/conversation-tabs';
-import { TaskIcon } from '@/components/tasks/TaskIcon';
-import { ThreadIcon } from '@/components/icons/conversation-icons';
+} from "@/components/menus/AppContextMenu";
+import { isRemovable, tabKey, type PanelTabKind, type Tab } from "@/lib/conversation-tabs";
+import { TaskIcon } from "@/components/tasks/TaskIcon";
+import { ThreadIcon } from "@/components/icons/conversation-icons";
 
 /**
  * Per-conversation view tab strip — a horizontal bar under the conversation
@@ -84,9 +79,9 @@ interface TabPresentation {
  *  presented, shared by the strip chip and the `＋` menu row so the two can't
  *  disagree. Threads takes the `ThreadIcon` SSOT, never a raw bubble glyph. */
 const PANEL_PRESENTATION: Record<PanelTabKind, TabPresentation> = {
-  attachments: { icon: Paperclip, label: 'Attachments' },
-  threads: { icon: ThreadIcon, label: 'Threads' },
-  members: { icon: Users, label: 'Members' },
+  attachments: { icon: Paperclip, label: "Attachments" },
+  threads: { icon: ThreadIcon, label: "Threads" },
+  members: { icon: Users, label: "Members" },
 };
 
 /** A tab's icon + label. Exhaustive over the {@link Tab} union so a new custom
@@ -94,16 +89,16 @@ const PANEL_PRESENTATION: Record<PanelTabKind, TabPresentation> = {
  *  chip. */
 function tabPresentation(tab: Tab): TabPresentation {
   switch (tab.kind) {
-    case 'chat':
+    case "chat":
       // The chat-stream glyph (NavRail's Chats tab uses the same one), NOT the
       // single bubble: that one is the ThreadIcon SSOT, and the Threads panel tab
       // below carries it — two tabs must not share one glyph.
-      return { icon: MessagesSquare, label: 'Chat' };
-    case 'tasks':
-      return { icon: TaskIcon, label: 'Tasks' };
-    case 'attachment':
+      return { icon: MessagesSquare, label: "Chat" };
+    case "tasks":
+      return { icon: TaskIcon, label: "Tasks" };
+    case "attachment":
       return { icon: FileText, label: tab.filename };
-    case 'panel':
+    case "panel":
       return PANEL_PRESENTATION[tab.panel];
   }
 }
@@ -145,7 +140,7 @@ export function ConversationTabBar({
         }}
       >
         <SortableContext items={ids} strategy={horizontalListSortingStrategy}>
-          {tabs.map(tab => {
+          {tabs.map((tab) => {
             const key = tabKey(tab);
             return (
               <SortableTab
@@ -160,9 +155,9 @@ export function ConversationTabBar({
                 onClose={isRemovable(tab) ? () => onClose(key) : undefined}
                 // Only attachment previews carry the inline close; panel tabs
                 // stay right-click-only.
-                closable={tab.kind === 'attachment'}
+                closable={tab.kind === "attachment"}
                 // Same followed-thread unread dot the header Threads entry wears.
-                unread={tab.kind === 'panel' && tab.panel === 'threads' && !!threadsUnread}
+                unread={tab.kind === "panel" && tab.panel === "threads" && !!threadsUnread}
               />
             );
           })}
@@ -183,7 +178,7 @@ export function ConversationTabBar({
             </button>
           }
         >
-          {producers.map(panel => {
+          {producers.map((panel) => {
             const { icon: Icon, label } = PANEL_PRESENTATION[panel];
             return (
               <AppDropdownMenuItem
@@ -224,14 +219,10 @@ function SortableTab({
    *  active, matching the header entry. */
   unread?: boolean;
 }): JSX.Element {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id, animateLayoutChanges });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+    animateLayoutChanges,
+  });
   const { icon: Icon, label } = presentation;
   const showInlineClose = closable && onClose;
   // The sortable node is the OUTER wrapper: it owns the ref, drag transform and
@@ -245,17 +236,15 @@ function SortableTab({
     <div
       ref={setNodeRef}
       style={{
-        transform: transform
-          ? `translate3d(${transform.x}px, 0, 0)`
-          : undefined,
+        transform: transform ? `translate3d(${transform.x}px, 0, 0)` : undefined,
         transition,
         opacity: isDragging ? 0.6 : undefined,
         zIndex: isDragging ? 1 : undefined,
-        position: isDragging ? 'relative' : undefined,
+        position: isDragging ? "relative" : undefined,
       }}
       className={cn(
-        'flex shrink-0 items-center border-b-2 transition-colors',
-        active ? 'border-text-primary' : 'border-transparent',
+        "flex shrink-0 items-center border-b-2 transition-colors",
+        active ? "border-text-primary" : "border-transparent",
       )}
     >
       <button
@@ -270,20 +259,17 @@ function SortableTab({
         // entry: "Threads (unread)"); the dot itself stays decorative.
         aria-label={unread ? `${label} (unread)` : undefined}
         className={cn(
-          'flex shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap pl-2.5 text-xs transition-colors',
-          showInlineClose ? 'pr-1' : 'pr-2.5',
+          "flex shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap pl-2.5 text-xs transition-colors",
+          showInlineClose ? "pr-1" : "pr-2.5",
           active
-            ? 'font-semibold text-text-primary'
-            : 'font-medium text-text-secondary hover:text-text-primary',
+            ? "font-semibold text-text-primary"
+            : "font-medium text-text-secondary hover:text-text-primary",
         )}
       >
         <Icon className="size-3.5 shrink-0" aria-hidden />
         {label}
         {unread ? (
-          <span
-            aria-hidden
-            className="size-1.5 shrink-0 rounded-full bg-[var(--unread)]"
-          />
+          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--unread)]" />
         ) : null}
       </button>
       {showInlineClose ? (
@@ -294,7 +280,7 @@ function SortableTab({
           // Sibling of the activation button, so its click never activates the
           // tab; stopPropagation guards against any future ancestor handler and
           // the right-click menu that wraps the whole chip.
-          onClick={event => {
+          onClick={(event) => {
             event.stopPropagation();
             onClose();
           }}

@@ -6,7 +6,7 @@ import {
   type ServerInfo,
   type ServerUrlRejectionReason,
   type TlsErrorCode,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 
 /**
  * Discriminated outcome the renderer branches on.
@@ -39,7 +39,7 @@ import {
 export type ProbeServerInfoResult =
   | {
       ok: true;
-      kind: 'system_ca_verified' | 'loopback_ok' | 'insecure_dev_remote';
+      kind: "system_ca_verified" | "loopback_ok" | "insecure_dev_remote";
       info: ServerInfo;
       /**
        * Examples (post-classification — values that PASS the probe):
@@ -52,25 +52,25 @@ export type ProbeServerInfoResult =
     }
   | {
       ok: false;
-      kind: 'classify_rejected';
+      kind: "classify_rejected";
       reason: ServerUrlRejectionReason;
       message: string;
     }
   | {
       ok: false;
-      kind: 'tls_failed';
+      kind: "tls_failed";
       code: TlsErrorCode;
       message: string;
     }
   | {
       ok: false;
-      kind: 'http_failed';
+      kind: "http_failed";
       status: number;
       statusText: string;
       bodyText: string;
     }
-  | { ok: false; kind: 'network_failed'; message: string }
-  | { ok: false; kind: 'invalid_response'; message: string };
+  | { ok: false; kind: "network_failed"; message: string }
+  | { ok: false; kind: "invalid_response"; message: string };
 
 /**
  * Minimal fetch surface. Production callers pass `globalThis.fetch`;
@@ -140,12 +140,12 @@ function describeTlsCodeShort(code: TlsErrorCode): string {
   // Caller wraps for log lines; the renderer keys i18n off the
   // typed `code` directly.
   switch (code) {
-    case 'host_tls_chain_invalid':
-      return 'TLS chain not trusted';
-    case 'host_tls_hostname_mismatch':
-      return 'TLS hostname mismatch';
-    case 'host_tls_expired':
-      return 'TLS certificate expired or not yet valid';
+    case "host_tls_chain_invalid":
+      return "TLS chain not trusted";
+    case "host_tls_hostname_mismatch":
+      return "TLS hostname mismatch";
+    case "host_tls_expired":
+      return "TLS certificate expired or not yet valid";
   }
 }
 
@@ -158,7 +158,7 @@ export async function probeServerInfo(
   if (!classification.ok) {
     return {
       ok: false,
-      kind: 'classify_rejected',
+      kind: "classify_rejected",
       reason: classification.reason,
       message: classification.message,
     };
@@ -174,31 +174,30 @@ export async function probeServerInfo(
   // the cause (timeout vs caller cancel vs network), and we always
   // clear the timer and detach the caller listener via `finally` so
   // there are no lingering timers / listeners after a fast response.
-  const timeoutMs =
-    opts.timeoutMs === undefined ? DEFAULT_PROBE_TIMEOUT_MS : opts.timeoutMs;
+  const timeoutMs = opts.timeoutMs === undefined ? DEFAULT_PROBE_TIMEOUT_MS : opts.timeoutMs;
   const controller = new AbortController();
   // Mutable cell so TypeScript does NOT narrow based on the visible
   // synchronous assignments — the `setTimeout` closure writes
   // `value = 'timeout'` asynchronously which TS can't track through
   // control flow, and a plain `let abortedBy` would get narrowed away
   // by the time we read it after `await`.
-  const abortedBy: { value: 'timeout' | 'caller' | null } = { value: null };
+  const abortedBy: { value: "timeout" | "caller" | null } = { value: null };
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const onCallerAbort = (): void => {
-    if (abortedBy.value === null) abortedBy.value = 'caller';
+    if (abortedBy.value === null) abortedBy.value = "caller";
     controller.abort();
   };
   if (opts.signal) {
     if (opts.signal.aborted) {
-      abortedBy.value = 'caller';
+      abortedBy.value = "caller";
       controller.abort();
     } else {
-      opts.signal.addEventListener('abort', onCallerAbort, { once: true });
+      opts.signal.addEventListener("abort", onCallerAbort, { once: true });
     }
   }
   if (timeoutMs !== null && abortedBy.value === null) {
     timeoutHandle = setTimeout(() => {
-      if (abortedBy.value === null) abortedBy.value = 'timeout';
+      if (abortedBy.value === null) abortedBy.value = "timeout";
       controller.abort();
     }, timeoutMs);
   }
@@ -210,7 +209,7 @@ export async function probeServerInfo(
     if (tls !== null) {
       return {
         ok: false,
-        kind: 'tls_failed',
+        kind: "tls_failed",
         code: tls,
         message: describeTlsCodeShort(tls),
       };
@@ -225,36 +224,36 @@ export async function probeServerInfo(
     // arms for what's structurally the same failure (no HTTP
     // round-trip completed) would make the UI surface noisier without
     // adding remediation value.
-    if (abortedBy.value === 'timeout') {
+    if (abortedBy.value === "timeout") {
       return {
         ok: false,
-        kind: 'network_failed',
+        kind: "network_failed",
         message: `Request to ${url} timed out after ${timeoutMs} ms.`,
       };
     }
-    if (abortedBy.value === 'caller') {
+    if (abortedBy.value === "caller") {
       return {
         ok: false,
-        kind: 'network_failed',
-        message: 'Connection test canceled.',
+        kind: "network_failed",
+        message: "Connection test canceled.",
       };
     }
     return {
       ok: false,
-      kind: 'network_failed',
+      kind: "network_failed",
       message: err instanceof Error ? err.message : String(err),
     };
   } finally {
     if (timeoutHandle !== null) clearTimeout(timeoutHandle);
     if (opts.signal) {
-      opts.signal.removeEventListener('abort', onCallerAbort);
+      opts.signal.removeEventListener("abort", onCallerAbort);
     }
   }
   if (!res.ok) {
     const bodyText = await safeReadText(res);
     return {
       ok: false,
-      kind: 'http_failed',
+      kind: "http_failed",
       status: res.status,
       statusText: res.statusText,
       bodyText,
@@ -266,11 +265,11 @@ export async function probeServerInfo(
   } catch (err) {
     return {
       ok: false,
-      kind: 'invalid_response',
+      kind: "invalid_response",
       message:
         err instanceof Error
           ? `Failed to read response body: ${err.message}`
-          : 'Failed to read response body',
+          : "Failed to read response body",
     };
   }
   let parsed: unknown;
@@ -279,30 +278,30 @@ export async function probeServerInfo(
   } catch (err) {
     return {
       ok: false,
-      kind: 'invalid_response',
+      kind: "invalid_response",
       message:
         err instanceof Error
           ? `Response body is not valid JSON: ${err.message}`
-          : 'Response body is not valid JSON',
+          : "Response body is not valid JSON",
     };
   }
   const schema = ServerInfoSchema.safeParse(parsed);
   if (!schema.success) {
     return {
       ok: false,
-      kind: 'invalid_response',
+      kind: "invalid_response",
       message: `/api/server/info response did not match schema: ${schema.error.message}`,
     };
   }
   // Pick the success arm based on the classification — keep this
   // mapping in one place so the renderer can rely on the
   // discriminator.
-  const successKind: 'loopback_ok' | 'insecure_dev_remote' | 'system_ca_verified' =
-    classification.kind === 'loopback'
-      ? 'loopback_ok'
+  const successKind: "loopback_ok" | "insecure_dev_remote" | "system_ca_verified" =
+    classification.kind === "loopback"
+      ? "loopback_ok"
       : classification.insecure
-        ? 'insecure_dev_remote'
-        : 'system_ca_verified';
+        ? "insecure_dev_remote"
+        : "system_ca_verified";
   return {
     ok: true,
     kind: successKind,
@@ -314,12 +313,10 @@ export async function probeServerInfo(
   };
 }
 
-async function safeReadText(res: {
-  text(): Promise<string>;
-}): Promise<string> {
+async function safeReadText(res: { text(): Promise<string> }): Promise<string> {
   try {
     return await res.text();
   } catch {
-    return '';
+    return "";
   }
 }

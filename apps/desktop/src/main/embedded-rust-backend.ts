@@ -1,9 +1,9 @@
-import type { ChildProcess } from 'node:child_process';
+import type { ChildProcess } from "node:child_process";
 
-import { classifyDesktopServerApiCompatibility } from '@silverhand/shared';
+import { classifyDesktopServerApiCompatibility } from "@silverhand/shared";
 
-import { BoundFrameReader } from './rust-backend-frame.js';
-import type { VerifiedSidecar } from './rust-backend-sidecar.js';
+import { BoundFrameReader } from "./rust-backend-frame.js";
+import type { VerifiedSidecar } from "./rust-backend-sidecar.js";
 
 /** The launcher-owned explicit configuration boundary handed to the child as env. The
  * backend never self-derives any of these (no app-data root, no profile guess). */
@@ -45,12 +45,12 @@ export interface EmbeddedRustBackendConfig {
  * `onTerminal`. Distinct from a startup failure (which throws before publish). */
 export type EmbeddedRustBackendTerminalReason =
   /** The child process exited on its own after publish (crash / unexpected exit). */
-  | { kind: 'child-exited'; code: number | null; signal: NodeJS.Signals | null }
+  | { kind: "child-exited"; code: number | null; signal: NodeJS.Signals | null }
   /** The child emitted a stray/duplicate non-blank stdout line after publish — stdout
    * carries ONLY the one bound frame, so this is a fatal protocol violation. */
-  | { kind: 'protocol-violation'; detail: string }
+  | { kind: "protocol-violation"; detail: string }
   /** The child's stdout stream errored/closed unexpectedly after publish. */
-  | { kind: 'stream-fatal'; detail: string };
+  | { kind: "stream-fatal"; detail: string };
 
 /** The published handle for a running embedded Rust backend. Deliberately narrower than
  * the in-process `RunningBackend` (no `context`): the launcher owns the config it wrote,
@@ -67,18 +67,18 @@ export interface EmbeddedRustBackendHandle {
 /** The verified sidecar artifact (its resolved executable path), produced by
  * `verifySidecar` in `./rust-backend-sidecar` BEFORE this module spawns. Re-exported
  * type for callers threading it in. */
-export type { VerifiedSidecar } from './rust-backend-sidecar.js';
+export type { VerifiedSidecar } from "./rust-backend-sidecar.js";
 
 export type EmbeddedRustBackendFailureKind =
-  | 'spawn-failed'
-  | 'eof-before-frame'
-  | 'invalid-frame'
-  | 'duplicate-frame'
-  | 'readiness-timeout'
-  | 'child-exited-early'
-  | 'server-info-unavailable'
-  | 'epoch-incompatible'
-  | 'shutdown-during-startup';
+  | "spawn-failed"
+  | "eof-before-frame"
+  | "invalid-frame"
+  | "duplicate-frame"
+  | "readiness-timeout"
+  | "child-exited-early"
+  | "server-info-unavailable"
+  | "epoch-incompatible"
+  | "shutdown-during-startup";
 
 export class EmbeddedRustBackendStartError extends Error {
   constructor(
@@ -87,7 +87,7 @@ export class EmbeddedRustBackendStartError extends Error {
     readonly detail?: unknown,
   ) {
     super(message);
-    this.name = 'EmbeddedRustBackendStartError';
+    this.name = "EmbeddedRustBackendStartError";
   }
 }
 
@@ -95,10 +95,7 @@ export class EmbeddedRustBackendStartError extends Error {
 export interface EmbeddedRustBackendDeps {
   /** Spawn the child; the default binds `node:child_process.spawn`. stdout is piped for
    * the frame; stderr is the child's log stream (inherited or piped by the caller). */
-  spawn: (
-    executablePath: string,
-    env: Record<string, string>,
-  ) => ChildProcess;
+  spawn: (executablePath: string, env: Record<string, string>) => ChildProcess;
   /** Probe `${url}/readyz` under the supplied AbortSignal; resolves `true` iff HTTP 200.
    * Never throws (a transport error or abort resolves `false`). Default uses `fetch`
    * with the signal so a hung socket is cancelled by the launcher's deadline. */
@@ -158,7 +155,7 @@ export async function startEmbeddedRustBackend(
 ): Promise<EmbeddedRustBackendHandle> {
   await deps.removeBootstrapToken(config.bootstrapTokenPath);
   if (config.signal?.aborted) {
-    throw new EmbeddedRustBackendStartError('shutdown-during-startup', 'startup cancelled');
+    throw new EmbeddedRustBackendStartError("shutdown-during-startup", "startup cancelled");
   }
   const generation = deps.mintGeneration();
   const env = buildChildEnv(config, generation);
@@ -169,12 +166,10 @@ export async function startEmbeddedRustBackend(
   } catch (err) {
     // A synchronous spawn throw means the child never existed; only the token could be
     // stale from a prior run, so best-effort clean it and fail loud.
-    await deps
-      .removeBootstrapToken(config.bootstrapTokenPath)
-      .catch(() => undefined);
+    await deps.removeBootstrapToken(config.bootstrapTokenPath).catch(() => undefined);
     throw new EmbeddedRustBackendStartError(
-      'spawn-failed',
-      'failed to spawn the embedded Rust backend',
+      "spawn-failed",
+      "failed to spawn the embedded Rust backend",
       err,
     );
   }
@@ -191,7 +186,7 @@ export async function startEmbeddedRustBackend(
       .catch((err) =>
         deps.logger?.warn(
           { err },
-          'embedded Rust backend: bootstrap token cleanup failed on reclaim',
+          "embedded Rust backend: bootstrap token cleanup failed on reclaim",
         ),
       );
   };
@@ -199,17 +194,27 @@ export async function startEmbeddedRustBackend(
   try {
     const controller = new AbortController();
     const abort = (): void => controller.abort();
-    config.signal?.addEventListener('abort', abort, { once: true });
+    config.signal?.addEventListener("abort", abort, { once: true });
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     let bound = false;
     const cancelled = new Promise<never>((_, reject) => {
-      controller.signal.addEventListener('abort', () => reject(
-        new EmbeddedRustBackendStartError('shutdown-during-startup', 'startup cancelled'),
-      ), { once: true });
+      controller.signal.addEventListener(
+        "abort",
+        () =>
+          reject(new EmbeddedRustBackendStartError("shutdown-during-startup", "startup cancelled")),
+        { once: true },
+      );
       monitor.onPrepared = () => {
-        deadlineTimer = setTimeout(() => reject(new EmbeddedRustBackendStartError(
-          bound ? 'readiness-timeout' : 'eof-before-frame', 'embedded backend exceeded the service startup deadline',
-        )), timings.readyTimeoutMs);
+        deadlineTimer = setTimeout(
+          () =>
+            reject(
+              new EmbeddedRustBackendStartError(
+                bound ? "readiness-timeout" : "eof-before-frame",
+                "embedded backend exceeded the service startup deadline",
+              ),
+            ),
+          timings.readyTimeoutMs,
+        );
       };
     });
     try {
@@ -222,13 +227,13 @@ export async function startEmbeddedRustBackend(
       ]);
       monitor.assertLive();
       if (config.signal?.aborted) {
-        throw new EmbeddedRustBackendStartError('shutdown-during-startup', 'startup cancelled');
+        throw new EmbeddedRustBackendStartError("shutdown-during-startup", "startup cancelled");
       }
       return buildHandle(child, frame, config, timings, deps, monitor);
     } finally {
       clearTimeout(deadlineTimer);
       controller.abort();
-      config.signal?.removeEventListener('abort', abort);
+      config.signal?.removeEventListener("abort", abort);
     }
   } catch (err) {
     await reclaim();
@@ -248,12 +253,12 @@ function buildChildEnv(
     SILVERHAND_LOG_DIR: config.logDir,
     SILVERHAND_BOOTSTRAP_TOKEN_PATH: config.bootstrapTokenPath,
     SILVERHAND_LISTEN_ADDR: `${config.listen.hostname}:${config.listen.port}`,
-    SILVERHAND_ALLOWED_ORIGINS: config.allowedOrigins.join(','),
-    SILVERHAND_DEPLOYMENT_PROFILE: 'embedded',
+    SILVERHAND_ALLOWED_ORIGINS: config.allowedOrigins.join(","),
+    SILVERHAND_DEPLOYMENT_PROFILE: "embedded",
     SILVERHAND_STARTUP_GENERATION: generation,
   };
   if (config.daemonNpmSpec) env.SILVERHAND_DAEMON_NPM_SPEC = config.daemonNpmSpec;
-  if (config.disableSignup) env.SILVERHAND_DISABLE_SIGNUP = '1';
+  if (config.disableSignup) env.SILVERHAND_DISABLE_SIGNUP = "1";
   if (config.migrationPermission !== undefined) env.SILVERHAND_MIGRATE = config.migrationPermission;
   return env;
 }
@@ -261,10 +266,9 @@ function buildChildEnv(
 class StartupProtocolMonitor {
   onPrepared: () => void = () => {};
   private readonly reader: BoundFrameReader;
-  private phase: 'awaiting' | 'bound' | 'published' | 'disposed' = 'awaiting';
+  private phase: "awaiting" | "bound" | "published" | "disposed" = "awaiting";
   private onData: ((chunk: Buffer | string) => void) | null = null;
-  private onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | null =
-    null;
+  private onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | null = null;
   private onError: ((err: Error) => void) | null = null;
   private onStdoutError: ((err: Error) => void) | null = null;
   private onStdoutEnd: (() => void) | null = null;
@@ -275,9 +279,7 @@ class StartupProtocolMonitor {
   } | null = null;
 
   private terminalReason: EmbeddedRustBackendTerminalReason | null = null;
-  private terminalListener:
-    | ((reason: EmbeddedRustBackendTerminalReason) => void)
-    | null = null;
+  private terminalListener: ((reason: EmbeddedRustBackendTerminalReason) => void) | null = null;
 
   constructor(
     private readonly child: ChildProcess,
@@ -285,7 +287,7 @@ class StartupProtocolMonitor {
   ) {
     this.reader = new BoundFrameReader(generation, (phase) => {
       this.boundTimer?.clear();
-      if (phase === 'prepared') this.onPrepared();
+      if (phase === "prepared") this.onPrepared();
     });
   }
 
@@ -305,80 +307,83 @@ class StartupProtocolMonitor {
         if (done) return;
         done = true;
         timeout.clear();
-        this.phase = 'bound';
+        this.phase = "bound";
         resolve(frame);
       };
       const onData = (chunk: Buffer | string): void => {
         const outcome = this.reader.push(chunk);
         if (outcome === null) return;
-        if (outcome.status === 'preparing' || outcome.status === 'prepared') return;
-        if (this.phase === 'awaiting') {
-          if (outcome.status === 'bound') {
+        if (outcome.status === "preparing" || outcome.status === "prepared") return;
+        if (this.phase === "awaiting") {
+          if (outcome.status === "bound") {
             settleResolve(outcome.frame);
-          } else if (outcome.status === 'duplicate') {
+          } else if (outcome.status === "duplicate") {
             settleReject(
               new EmbeddedRustBackendStartError(
-                'duplicate-frame',
-                'embedded Rust backend emitted more than one stdout frame before bound',
+                "duplicate-frame",
+                "embedded Rust backend emitted more than one stdout frame before bound",
               ),
             );
           } else {
             settleReject(
               new EmbeddedRustBackendStartError(
-                'invalid-frame',
+                "invalid-frame",
                 `embedded Rust backend startup frame invalid: ${outcome.reason}`,
                 outcome.reason,
               ),
             );
           }
         } else {
-          if (outcome.status !== 'bound') {
-            this.fireViolation('a second stdout line after the bound frame');
+          if (outcome.status !== "bound") {
+            this.fireViolation("a second stdout line after the bound frame");
           }
         }
       };
       const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
-        if (this.phase === 'awaiting') {
+        if (this.phase === "awaiting") {
           settleReject(
             new EmbeddedRustBackendStartError(
-              'child-exited-early',
+              "child-exited-early",
               `embedded Rust backend exited before its bound frame (code=${code}, signal=${signal})`,
             ),
           );
         } else {
-          this.fireTerminal({ kind: 'child-exited', code, signal });
+          this.fireTerminal({ kind: "child-exited", code, signal });
         }
       };
       const onError = (err: Error): void => {
-        if (this.phase === 'awaiting') {
+        if (this.phase === "awaiting") {
           settleReject(
             new EmbeddedRustBackendStartError(
-              'spawn-failed',
-              'embedded Rust backend process error before its bound frame',
+              "spawn-failed",
+              "embedded Rust backend process error before its bound frame",
               err,
             ),
           );
         } else {
-          this.fireTerminal({ kind: 'stream-fatal', detail: `process error: ${err.message}` });
+          this.fireTerminal({ kind: "stream-fatal", detail: `process error: ${err.message}` });
         }
       };
       const onStdoutError = (err: Error): void => {
-        if (this.phase === 'awaiting') {
+        if (this.phase === "awaiting") {
           settleReject(
             new EmbeddedRustBackendStartError(
-              'eof-before-frame',
+              "eof-before-frame",
               `embedded Rust backend stdout errored before its bound frame: ${err.message}`,
               err,
             ),
           );
         } else {
-          this.fireTerminal({ kind: 'stream-fatal', detail: `stdout stream error: ${err.message}` });
+          this.fireTerminal({
+            kind: "stream-fatal",
+            detail: `stdout stream error: ${err.message}`,
+          });
         }
       };
       const timeout = setTimeoutHandle(deps.clock, timings.frameTimeoutMs, () => {
         settleReject(
           new EmbeddedRustBackendStartError(
-            'eof-before-frame',
+            "eof-before-frame",
             `embedded Rust backend did not enter preparation within ${timings.frameTimeoutMs}ms`,
           ),
         );
@@ -388,18 +393,21 @@ class StartupProtocolMonitor {
       this.onExit = onExit;
       this.onError = onError;
       this.onStdoutError = onStdoutError;
-      this.onStdoutEnd = () => onStdoutError(new Error('stdout EOF'));
-      this.child.stdout?.on('data', onData);
-      this.child.stdout?.on('error', onStdoutError);
-      this.child.stdout?.on('end', this.onStdoutEnd);
-      this.child.on('exit', onExit);
-      this.child.on('error', onError);
+      this.onStdoutEnd = () => onStdoutError(new Error("stdout EOF"));
+      this.child.stdout?.on("data", onData);
+      this.child.stdout?.on("error", onStdoutError);
+      this.child.stdout?.on("end", this.onStdoutEnd);
+      this.child.on("exit", onExit);
+      this.child.on("error", onError);
     });
   }
 
   awaitPrepublishTerminal(): Promise<EmbeddedRustBackendTerminalReason> {
     return new Promise((resolve) => {
-      if (this.terminalReason) { resolve(this.terminalReason); return; }
+      if (this.terminalReason) {
+        resolve(this.terminalReason);
+        return;
+      }
       this.prepublishWaiter = { resolve };
     });
   }
@@ -408,8 +416,13 @@ class StartupProtocolMonitor {
     if (!this.terminalReason) return;
     const reason = this.terminalReason;
     throw new EmbeddedRustBackendStartError(
-      reason.kind === 'child-exited' ? 'child-exited-early' : reason.kind === 'protocol-violation' ? 'duplicate-frame' : 'eof-before-frame',
-      'embedded backend terminated before publication', reason,
+      reason.kind === "child-exited"
+        ? "child-exited-early"
+        : reason.kind === "protocol-violation"
+          ? "duplicate-frame"
+          : "eof-before-frame",
+      "embedded backend terminated before publication",
+      reason,
     );
   }
 
@@ -417,7 +430,7 @@ class StartupProtocolMonitor {
    * already terminated between resolve and publish, the reason is delivered on the next
    * microtask. */
   publish(listener: (reason: EmbeddedRustBackendTerminalReason) => void): void {
-    this.phase = 'published';
+    this.phase = "published";
     this.terminalListener = listener;
     this.prepublishWaiter = null;
     if (this.terminalReason) {
@@ -432,7 +445,7 @@ class StartupProtocolMonitor {
   }
 
   private fireViolation(detail: string): void {
-    this.deliverTerminal({ kind: 'protocol-violation', detail });
+    this.deliverTerminal({ kind: "protocol-violation", detail });
   }
 
   private fireTerminal(reason: EmbeddedRustBackendTerminalReason): void {
@@ -440,7 +453,7 @@ class StartupProtocolMonitor {
   }
 
   private deliverTerminal(reason: EmbeddedRustBackendTerminalReason): void {
-    if (this.phase === 'bound') {
+    if (this.phase === "bound") {
       if (this.terminalReason) return;
       this.terminalReason = reason;
       // Pre-publish: reject the in-flight startup through the readiness-gate race.
@@ -454,7 +467,7 @@ class StartupProtocolMonitor {
       }
       return;
     }
-    if (this.phase === 'published') {
+    if (this.phase === "published") {
       if (this.terminalReason) return; // fire once
       this.terminalReason = reason;
       const listener = this.terminalListener;
@@ -466,14 +479,14 @@ class StartupProtocolMonitor {
   }
 
   dispose(): void {
-    this.phase = 'disposed';
+    this.phase = "disposed";
     this.boundTimer?.clear();
     this.boundTimer = null;
-    if (this.onData) this.child.stdout?.off('data', this.onData);
-    if (this.onStdoutError) this.child.stdout?.off('error', this.onStdoutError);
-    if (this.onStdoutEnd) this.child.stdout?.off('end', this.onStdoutEnd);
-    if (this.onExit) this.child.off('exit', this.onExit);
-    if (this.onError) this.child.off('error', this.onError);
+    if (this.onData) this.child.stdout?.off("data", this.onData);
+    if (this.onStdoutError) this.child.stdout?.off("error", this.onStdoutError);
+    if (this.onStdoutEnd) this.child.stdout?.off("end", this.onStdoutEnd);
+    if (this.onExit) this.child.off("exit", this.onExit);
+    if (this.onError) this.child.off("error", this.onError);
     this.onData = null;
     this.onStdoutError = null;
     this.onExit = null;
@@ -494,26 +507,26 @@ async function runReadyAndEpochGate(
 ): Promise<void> {
   const controller = new AbortController();
   const abort = (): void => controller.abort();
-  signal.addEventListener('abort', abort, { once: true });
+  signal.addEventListener("abort", abort, { once: true });
   if (signal.aborted) controller.abort();
   // The pre-publish terminal race: if the child dies or violates the protocol during the
   // probe, reject the whole gate (and abort any in-flight fetch).
   const violation = monitor.awaitPrepublishTerminal().then((reason) => {
     controller.abort();
-    if (reason.kind === 'child-exited') {
+    if (reason.kind === "child-exited") {
       throw new EmbeddedRustBackendStartError(
-        'child-exited-early',
+        "child-exited-early",
         `embedded Rust backend exited during startup readiness (code=${reason.code}, signal=${reason.signal})`,
       );
     }
-    if (reason.kind === 'protocol-violation') {
+    if (reason.kind === "protocol-violation") {
       throw new EmbeddedRustBackendStartError(
-        'duplicate-frame',
+        "duplicate-frame",
         `embedded Rust backend protocol violation during startup: ${reason.detail}`,
       );
     }
     throw new EmbeddedRustBackendStartError(
-      'eof-before-frame',
+      "eof-before-frame",
       `embedded Rust backend stdout fatal during startup: ${reason.detail}`,
     );
   });
@@ -527,7 +540,7 @@ async function runReadyAndEpochGate(
     await Promise.race([work, violation]);
   } finally {
     controller.abort();
-    signal.removeEventListener('abort', abort);
+    signal.removeEventListener("abort", abort);
   }
 }
 
@@ -544,13 +557,13 @@ async function awaitReadyz(
   for (;;) {
     if (signal.aborted) {
       throw new EmbeddedRustBackendStartError(
-        'shutdown-during-startup',
-        'embedded Rust backend readiness aborted',
+        "shutdown-during-startup",
+        "embedded Rust backend readiness aborted",
       );
     }
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new EmbeddedRustBackendStartError(
-        'child-exited-early',
+        "child-exited-early",
         `embedded Rust backend exited before /readyz (code=${child.exitCode}, signal=${child.signalCode})`,
       );
     }
@@ -559,7 +572,7 @@ async function awaitReadyz(
     }
     if (deps.clock.now() >= deadline) {
       throw new EmbeddedRustBackendStartError(
-        'readiness-timeout',
+        "readiness-timeout",
         `embedded Rust backend /readyz not 200 within ${timings.readyTimeoutMs}ms`,
       );
     }
@@ -577,13 +590,13 @@ async function awaitEpochCheck(
 ): Promise<void> {
   if (signal.aborted) {
     throw new EmbeddedRustBackendStartError(
-      'shutdown-during-startup',
-      'embedded Rust backend epoch check aborted',
+      "shutdown-during-startup",
+      "embedded Rust backend epoch check aborted",
     );
   }
   if (child.exitCode !== null || child.signalCode !== null) {
     throw new EmbeddedRustBackendStartError(
-      'child-exited-early',
+      "child-exited-early",
       `embedded Rust backend exited before the epoch check (code=${child.exitCode}, signal=${child.signalCode})`,
     );
   }
@@ -596,8 +609,8 @@ async function awaitEpochCheck(
   );
   if (advertised === null) {
     throw new EmbeddedRustBackendStartError(
-      'server-info-unavailable',
-      'embedded Rust backend /api/server/info was unreachable or malformed for the epoch check',
+      "server-info-unavailable",
+      "embedded Rust backend /api/server/info was unreachable or malformed for the epoch check",
     );
   }
   const compatibility = classifyDesktopServerApiCompatibility({
@@ -606,12 +619,12 @@ async function awaitEpochCheck(
     serverEpoch: advertised.currentEpoch,
     minimumServerEpoch: config.apiEpoch.minimumServerEpoch,
   });
-  if (compatibility !== 'compatible') {
+  if (compatibility !== "compatible") {
     throw new EmbeddedRustBackendStartError(
-      'epoch-incompatible',
-      `embedded Rust backend API epoch incompatible (${compatibility}): `
-        + `client=${config.apiEpoch.clientEpoch} server=${advertised.currentEpoch} `
-        + `minClient=${advertised.minimumClientEpoch} minServer=${config.apiEpoch.minimumServerEpoch}`,
+      "epoch-incompatible",
+      `embedded Rust backend API epoch incompatible (${compatibility}): ` +
+        `client=${config.apiEpoch.clientEpoch} server=${advertised.currentEpoch} ` +
+        `minClient=${advertised.minimumClientEpoch} minServer=${config.apiEpoch.minimumServerEpoch}`,
       compatibility,
     );
   }
@@ -641,19 +654,27 @@ async function probeAttempt<T>(
 ): Promise<T> {
   const attemptController = new AbortController();
   let resolveAbort!: (value: T) => void;
-  const aborted = new Promise<T>(resolve => { resolveAbort = resolve; });
-  const onSharedAbort = (): void => { attemptController.abort(); resolveAbort(fallback); };
+  const aborted = new Promise<T>((resolve) => {
+    resolveAbort = resolve;
+  });
+  const onSharedAbort = (): void => {
+    attemptController.abort();
+    resolveAbort(fallback);
+  };
   if (shared.aborted) onSharedAbort();
-  else shared.addEventListener('abort', onSharedAbort, { once: true });
+  else shared.addEventListener("abort", onSharedAbort, { once: true });
   let timerId: ReturnType<typeof setTimeout> | undefined;
-  const timer = new Promise<T>(resolve => {
-    timerId = setTimeout(() => { attemptController.abort(); resolve(fallback); }, timings.httpAttemptTimeoutMs);
+  const timer = new Promise<T>((resolve) => {
+    timerId = setTimeout(() => {
+      attemptController.abort();
+      resolve(fallback);
+    }, timings.httpAttemptTimeoutMs);
   });
   try {
     return await Promise.race([attempt(attemptController.signal), timer, aborted]);
   } finally {
     clearTimeout(timerId);
-    shared.removeEventListener('abort', onSharedAbort);
+    shared.removeEventListener("abort", onSharedAbort);
     attemptController.abort();
   }
 }
@@ -667,28 +688,27 @@ function buildHandle(
   monitor: StartupProtocolMonitor,
 ): EmbeddedRustBackendHandle {
   let closing: Promise<void> | undefined;
-  const close = (): Promise<void> => closing ??= (async () => {
-    monitor.dispose();
-    await terminateChild(child, timings.shutdownGraceMs, deps.clock);
-    await deps
-      .removeBootstrapToken(config.bootstrapTokenPath)
-      .catch((err) =>
-        deps.logger?.warn(
-          { err },
-          'embedded Rust backend: bootstrap token cleanup failed on close',
-        ),
-      );
-  })();
+  const close = (): Promise<void> =>
+    (closing ??= (async () => {
+      monitor.dispose();
+      await terminateChild(child, timings.shutdownGraceMs, deps.clock);
+      await deps
+        .removeBootstrapToken(config.bootstrapTokenPath)
+        .catch((err) =>
+          deps.logger?.warn(
+            { err },
+            "embedded Rust backend: bootstrap token cleanup failed on close",
+          ),
+        );
+    })());
 
-  let externalListener:
-    | ((reason: EmbeddedRustBackendTerminalReason) => void)
-    | null = null;
+  let externalListener: ((reason: EmbeddedRustBackendTerminalReason) => void) | null = null;
   let terminal: EmbeddedRustBackendTerminalReason | null = null;
   monitor.publish((reason) => {
     terminal = reason;
     deps.logger?.warn(
       { url: frame.url, reason },
-      'embedded Rust backend terminated after publish — surfacing typed terminal reason',
+      "embedded Rust backend terminated after publish — surfacing typed terminal reason",
     );
     externalListener?.(reason);
   });
@@ -710,11 +730,14 @@ function buildHandle(
 async function terminateChild(
   child: ChildProcess,
   graceMs: number,
-  clock: EmbeddedRustBackendDeps['clock'],
+  clock: EmbeddedRustBackendDeps["clock"],
 ): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const timers: ReturnType<typeof setTimeout>[] = [];
-  const wait = (ms: number): Promise<void> => new Promise(resolve => { timers.push(setTimeout(resolve, ms)); });
+  const wait = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+      timers.push(setTimeout(resolve, ms));
+    });
   let finish = (): void => {};
   const gone = (): Promise<void> =>
     new Promise<void>((resolve) => {
@@ -724,33 +747,30 @@ async function terminateChild(
         settled = true;
         resolve();
       };
-      child.once('exit', finish);
-      child.once('error', finish);
+      child.once("exit", finish);
+      child.once("error", finish);
     });
   const exited = gone();
   try {
-  child.kill('SIGTERM');
-  const first = await Promise.race([
-    exited.then(() => 'exited' as const),
-    wait(graceMs).then(() => 'timeout' as const),
-  ]);
-  if (first === 'exited') return;
-  child.kill('SIGKILL');
-  // Bounded final wait — do not hang forever on a child that will never emit `exit`.
-  await Promise.race([
-    exited,
-    wait(graceMs),
-  ]);
+    child.kill("SIGTERM");
+    const first = await Promise.race([
+      exited.then(() => "exited" as const),
+      wait(graceMs).then(() => "timeout" as const),
+    ]);
+    if (first === "exited") return;
+    child.kill("SIGKILL");
+    // Bounded final wait — do not hang forever on a child that will never emit `exit`.
+    await Promise.race([exited, wait(graceMs)]);
   } finally {
     timers.forEach(clearTimeout);
-    child.off('exit', finish);
-    child.off('error', finish);
+    child.off("exit", finish);
+    child.off("error", finish);
   }
 }
 
 /** Bridge the module's minimal clock to a clearable timeout. */
 function setTimeoutHandle(
-  clock: EmbeddedRustBackendDeps['clock'],
+  clock: EmbeddedRustBackendDeps["clock"],
   ms: number,
   fn: () => void,
 ): { clear(): void } {
@@ -782,20 +802,20 @@ export function composeRustBackendChildEnv(
  * process/loader essentials + locale + temp/home; NOTHING that could carry a credential,
  * a launcher secret, an unmodelled `SILVERHAND_*` input, or a code-injection vector. */
 const INHERITED_ENV_ALLOWLIST: readonly string[] = [
-  'PATH',
-  'HOME',
-  'TMPDIR',
-  'TMP',
-  'TEMP',
-  'LANG',
-  'LC_ALL',
-  'LC_CTYPE',
-  'TZ',
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ",
   // Windows process essentials (harmless no-ops on POSIX).
-  'SystemRoot',
-  'SystemDrive',
-  'windir',
-  'USERPROFILE',
-  'PATHEXT',
-  'COMSPEC',
+  "SystemRoot",
+  "SystemDrive",
+  "windir",
+  "USERPROFILE",
+  "PATHEXT",
+  "COMSPEC",
 ];

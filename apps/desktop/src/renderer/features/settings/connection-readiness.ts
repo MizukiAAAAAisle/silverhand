@@ -1,14 +1,10 @@
-import type { WsClientStatus } from '@/lib/ws-client';
-import type { BackendInfoSnapshot } from '@/features/hosts/hooks';
-import type { LocalHostWsAttachment } from '../../../preload/api';
+import type { WsClientStatus } from "@/lib/ws-client";
+import type { BackendInfoSnapshot } from "@/features/hosts/hooks";
+import type { LocalHostWsAttachment } from "../../../preload/api";
 
-export type DesktopServerMode = 'embedded' | 'remote';
+export type DesktopServerMode = "embedded" | "remote";
 
-export type DesktopServerConnectionStatus =
-  | 'connected'
-  | 'connecting'
-  | 'offline'
-  | 'unknown';
+export type DesktopServerConnectionStatus = "connected" | "connecting" | "offline" | "unknown";
 
 /**
  * The subset of `BackendInfoSnapshot.local_host_status` this projection
@@ -16,7 +12,7 @@ export type DesktopServerConnectionStatus =
  * extension fails loud at every call site (which is what we want)
  * instead of silently drifting past a duplicated union.
  */
-export type LocalHostStatus = BackendInfoSnapshot['local_host_status'];
+export type LocalHostStatus = BackendInfoSnapshot["local_host_status"];
 
 export interface DesktopServerObservation {
   attachment: LocalHostWsAttachment;
@@ -69,22 +65,22 @@ export function desktopServerConnectionStatus(input: {
   observation: DesktopServerObservation | null;
   wsStatus: WsClientStatus;
 }): DesktopServerConnectionStatus {
-  if (input.observation === null) return 'unknown';
+  if (input.observation === null) return "unknown";
   const { attachment, localHostStatus } = input.observation;
   if (!attachment.observable) {
     switch (input.wsStatus) {
-      case 'connected':
-        return 'connected';
-      case 'connecting':
-      case 'authenticating':
-        return 'connecting';
-      case 'idle':
-      case 'disconnected':
-        return 'offline';
+      case "connected":
+        return "connected";
+      case "connecting":
+      case "authenticating":
+        return "connecting";
+      case "idle":
+      case "disconnected":
+        return "offline";
     }
   }
-  if (localHostStatus !== 'claimed') return 'offline';
-  return attachment.attached_at !== null ? 'connected' : 'connecting';
+  if (localHostStatus !== "claimed") return "offline";
+  return attachment.attached_at !== null ? "connected" : "connecting";
 }
 
 /**
@@ -110,20 +106,18 @@ export function desktopServerConnectionStatus(input: {
  * `revoked`/`error`/`failed` row (or an `unclaimed` row that never
  * attached) is not proof of reachability for the freshly-saved URL.
  */
-export function isDesktopServerReadyAfterSave(
-  input: DesktopServerReadinessInput,
-): boolean {
+export function isDesktopServerReadyAfterSave(input: DesktopServerReadinessInput): boolean {
   if (input.savedAt === null) return false;
   if (input.observation === null) return false;
   const { attachment, localHostStatus } = input.observation;
   if (!attachment.observable) {
     return (
-      input.wsStatus === 'connected' &&
+      input.wsStatus === "connected" &&
       input.wsConnectedAt !== null &&
       input.wsConnectedAt >= input.savedAt
     );
   }
-  if (localHostStatus !== 'claimed') return false;
+  if (localHostStatus !== "claimed") return false;
   const attachedAt = attachment.attached_at;
   return attachedAt !== null && attachedAt >= input.savedAt;
 }

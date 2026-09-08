@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
-import { getAvatarBlobUrl, loadAvatarBlobUrl } from '@/lib/avatar-blob-cache';
-import { useUsersById } from './hooks';
+import { useEffect, useMemo, useState } from "react";
+import { getAvatarBlobUrl, loadAvatarBlobUrl } from "@/lib/avatar-blob-cache";
+import { useUsersById } from "./hooks";
 
 /**
  * Avatar fetch hooks for human users. Mirror the agent hooks
@@ -40,14 +40,14 @@ export function useUserAvatarObjectUrl(
 ): string | null {
   const usersById = useUsersById();
   const avatarUrl =
-    'avatarUrl' in input
-      ? input.avatarUrl ?? null
+    "avatarUrl" in input
+      ? (input.avatarUrl ?? null)
       : input.userId
         ? (usersById.get(input.userId)?.avatar_url ?? null)
         : null;
 
   const [objectUrl, setObjectUrl] = useState<string | null>(() =>
-    avatarUrl ? getAvatarBlobUrl(avatarUrl) ?? null : null,
+    avatarUrl ? (getAvatarBlobUrl(avatarUrl) ?? null) : null,
   );
   useEffect(() => {
     if (!avatarUrl) {
@@ -60,7 +60,7 @@ export function useUserAvatarObjectUrl(
       return;
     }
     let cancelled = false;
-    void loadAvatarBlobUrl(avatarUrl).then(url => {
+    void loadAvatarBlobUrl(avatarUrl).then((url) => {
       if (!cancelled) setObjectUrl(url);
     });
     return () => {
@@ -93,15 +93,13 @@ export function useUserAvatarObjectUrls(
   // Deduped + sorted so the key depends only on the SET of pairs, not order.
   const cacheKey = useMemo(
     () =>
-      Array.from(new Set(users.map(u => `${u.id}:${u.avatar_url ?? ''}`)))
+      Array.from(new Set(users.map((u) => `${u.id}:${u.avatar_url ?? ""}`)))
         .sort()
-        .join('|'),
+        .join("|"),
     [users],
   );
 
-  const [byId, setById] = useState<Map<string, string | null>>(
-    () => new Map(),
-  );
+  const [byId, setById] = useState<Map<string, string | null>>(() => new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -120,9 +118,9 @@ export function useUserAvatarObjectUrls(
     setById(next);
 
     for (const { id, url } of toLoad) {
-      void loadAvatarBlobUrl(url).then(resolved => {
+      void loadAvatarBlobUrl(url).then((resolved) => {
         if (cancelled || !resolved) return;
-        setById(prev => {
+        setById((prev) => {
           const out = new Map(prev);
           out.set(id, resolved);
           return out;

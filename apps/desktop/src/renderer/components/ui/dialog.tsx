@@ -1,7 +1,7 @@
-import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { X } from 'lucide-react';
-import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from 'react';
-import { cn } from '@/lib/cn';
+import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { X } from "lucide-react";
+import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from "react";
+import { cn } from "@/lib/cn";
 
 export const Dialog = DialogPrimitive.Root;
 export const DialogTrigger = DialogPrimitive.Trigger;
@@ -18,7 +18,7 @@ export const DialogPortal = DialogPrimitive.Portal;
  *  opacity step: dropping opacity on an already-muted multi-stroke glyph reads
  *  as smudged, not quiet. `opacity` is left to `disabled:` alone. */
 export const dialogCornerButtonClass =
-  'cursor-pointer rounded-[var(--control-radius)] p-1 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus:outline-none';
+  "cursor-pointer rounded-[var(--control-radius)] p-1 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus:outline-none";
 
 /**
  * A corner-cluster action — the close ✕'s twin. Use this instead of hand-rolling
@@ -27,22 +27,21 @@ export const dialogCornerButtonClass =
  * ghost next to the poster-sticker close. The consumer owns behaviour and glyph;
  * identity comes from the theme.
  */
-export const DialogCornerButton = forwardRef<
-  HTMLButtonElement,
-  ComponentPropsWithoutRef<'button'>
->(({ className, ...props }, ref) => (
-  <button
-    ref={ref}
-    type="button"
-    data-dialog-corner-action
-    data-sticker
-    data-sticker-size="md"
-    data-sticker-tone="neutral"
-    className={cn(dialogCornerButtonClass, className)}
-    {...props}
-  />
-));
-DialogCornerButton.displayName = 'DialogCornerButton';
+export const DialogCornerButton = forwardRef<HTMLButtonElement, ComponentPropsWithoutRef<"button">>(
+  ({ className, ...props }, ref) => (
+    <button
+      ref={ref}
+      type="button"
+      data-dialog-corner-action
+      data-sticker
+      data-sticker-size="md"
+      data-sticker-tone="neutral"
+      className={cn(dialogCornerButtonClass, className)}
+      {...props}
+    />
+  ),
+);
+DialogCornerButton.displayName = "DialogCornerButton";
 
 export const DialogOverlay = forwardRef<
   ElementRef<typeof DialogPrimitive.Overlay>,
@@ -51,13 +50,13 @@ export const DialogOverlay = forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      'fixed inset-0 z-[var(--z-dialog)] bg-overlay-backdrop data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+      "fixed inset-0 z-[var(--z-dialog)] bg-overlay-backdrop data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className,
     )}
     {...props}
   />
 ));
-DialogOverlay.displayName = 'DialogOverlay';
+DialogOverlay.displayName = "DialogOverlay";
 
 export const DialogContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,
@@ -76,9 +75,9 @@ export const DialogContent = forwardRef<
      *    growth (forza6's bordered stickers) stays centred on that same line.
      *  - `top`: hugs the content's top-right corner — for a dialog that owns its
      *    own padding (`p-0`) and whose first band is not a `p-6` title line. */
-    cornerBand?: 'title' | 'top';
+    cornerBand?: "title" | "top";
   }
->(({ className, children, cornerActions, cornerBand = 'title', ...props }, ref) => (
+>(({ className, children, cornerActions, cornerBand = "title", ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
@@ -106,7 +105,7 @@ export const DialogContent = forwardRef<
         // removes that floor, and the items' own `truncate` / `min-w-0` do the
         // rest. Non-overflowing dialogs are unaffected: a stretched auto track
         // and a `1fr` track both resolve to the content box.
-        'fixed left-1/2 top-[15vh] z-[var(--z-dialog)] grid w-full max-w-md grid-cols-[minmax(0,1fr)] -translate-x-1/2 gap-4 bg-bg-floating p-6 shadow-modal focus:outline-none',
+        "fixed left-1/2 top-[15vh] z-[var(--z-dialog)] grid w-full max-w-md grid-cols-[minmax(0,1fr)] -translate-x-1/2 gap-4 bg-bg-floating p-6 shadow-modal focus:outline-none",
         className,
       )}
       {...props}
@@ -120,12 +119,18 @@ export const DialogContent = forwardRef<
           math per theme. */}
       <div
         className={cn(
-          'absolute right-3 flex h-6 items-center gap-1.5',
-          cornerBand === 'title' ? 'top-6' : 'top-3',
+          "absolute right-3 flex h-6 items-center gap-1.5",
+          cornerBand === "title" ? "top-6" : "top-3",
         )}
       >
         {cornerActions}
-        <DialogPrimitive.Close data-sticker-close data-sticker data-sticker-size="md" data-sticker-tone="neutral" className={dialogCornerButtonClass}>
+        <DialogPrimitive.Close
+          data-sticker-close
+          data-sticker
+          data-sticker-size="md"
+          data-sticker-tone="neutral"
+          className={dialogCornerButtonClass}
+        >
           <X className="size-4" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>
@@ -133,16 +138,16 @@ export const DialogContent = forwardRef<
     </DialogPrimitive.Content>
   </DialogPortal>
 ));
-DialogContent.displayName = 'DialogContent';
+DialogContent.displayName = "DialogContent";
 
 export function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('flex flex-col gap-1.5', className)} {...props} />;
+  return <div className={cn("flex flex-col gap-1.5", className)} {...props} />;
 }
 
 export function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn('flex flex-col-reverse gap-2 sm:flex-row sm:justify-end', className)}
+      className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:justify-end", className)}
       {...props}
     />
   );
@@ -154,11 +159,11 @@ export const DialogTitle = forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn('text-base font-semibold text-text-primary', className)}
+    className={cn("text-base font-semibold text-text-primary", className)}
     {...props}
   />
 ));
-DialogTitle.displayName = 'DialogTitle';
+DialogTitle.displayName = "DialogTitle";
 
 export const DialogDescription = forwardRef<
   ElementRef<typeof DialogPrimitive.Description>,
@@ -166,8 +171,8 @@ export const DialogDescription = forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn('text-sm text-text-muted', className)}
+    className={cn("text-sm text-text-muted", className)}
     {...props}
   />
 ));
-DialogDescription.displayName = 'DialogDescription';
+DialogDescription.displayName = "DialogDescription";

@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react';
-import { cn } from '@/lib/cn';
-import { paneChrome } from './pane-chrome';
+import type { ReactNode } from "react";
+import { cn } from "@/lib/cn";
+import { paneChrome } from "./pane-chrome";
 
 interface SectionShellProps {
   /** `data-sidebar` value. The per-theme sidebar painting (carrier ground,
@@ -43,11 +43,8 @@ export function SectionShell({
       <aside
         data-sidebar={name}
         aria-label={label}
-        className={cn(
-          'flex h-full flex-col bg-bg-base',
-          fill ? 'min-w-0 flex-1' : 'shrink-0',
-        )}
-        style={{ ...paneChrome, overflow: 'hidden', width: fill ? undefined : width }}
+        className={cn("flex h-full flex-col bg-bg-base", fill ? "min-w-0 flex-1" : "shrink-0")}
+        style={{ ...paneChrome, overflow: "hidden", width: fill ? undefined : width }}
       >
         {sidebar}
       </aside>

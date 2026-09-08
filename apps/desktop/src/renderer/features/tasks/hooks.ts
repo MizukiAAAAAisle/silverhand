@@ -1,13 +1,13 @@
-import { taskWorkspaceId } from './taskPlace.js';
+import { taskWorkspaceId } from "./taskPlace.js";
 import {
   useMutation,
   useQuery,
   useQueryClient,
   type InfiniteData,
   type QueryClient,
-} from '@tanstack/react-query';
-import { useEffect } from 'react';
-import { toast } from 'sonner';
+} from "@tanstack/react-query";
+import { useEffect } from "react";
+import { toast } from "sonner";
 import {
   type CreatedTaskIdentity,
   type HumanCreateTaskInput,
@@ -18,20 +18,16 @@ import {
   type TaskEditResult,
   type TaskStatus,
   type TaskSummaryDto,
-} from '@silverhand/shared';
-import { api, ApiError, toPathSegment } from '@/lib/api';
-import {
-  isCurrentViewerScope,
-  onWsFrame,
-  subscribeViewerScope,
-} from '@/lib/ws-client';
-import { classifyTasksCacheKey } from './boardQuery';
+} from "@silverhand/shared";
+import { api, ApiError, toPathSegment } from "@/lib/api";
+import { isCurrentViewerScope, onWsFrame, subscribeViewerScope } from "@/lib/ws-client";
+import { classifyTasksCacheKey } from "./boardQuery";
 import {
   shouldRefreshTaskDetail,
   shouldRetryTaskDetail,
   taskDetailKey,
   type TaskDetailFrame,
-} from './taskDetail';
+} from "./taskDetail";
 import {
   beginOptimisticStatusWrite,
   closeOptimisticStatusWrite,
@@ -40,7 +36,7 @@ import {
   restartRacingTaskReads,
   revertOptimisticStatusWrite,
   type OptimisticStatusWrite,
-} from './taskProjection';
+} from "./taskProjection";
 
 /** A board column's cached value: pages of rows keyed by opaque cursors. */
 type BoardColumnPages = InfiniteData<TaskBoardColumnDto, string | null>;
@@ -71,14 +67,14 @@ type BoardColumnPages = InfiniteData<TaskBoardColumnDto, string | null>;
  * untouched, so an unrelated channel loss never disturbs an open task board.
  */
 export function removeChannelFromTasks(qc: QueryClient, channelId: string): void {
-  for (const q of qc.getQueryCache().findAll({ queryKey: ['tasks'] })) {
+  for (const q of qc.getQueryCache().findAll({ queryKey: ["tasks"] })) {
     switch (classifyTasksCacheKey(q.queryKey)) {
-      case 'board-column': {
+      case "board-column": {
         const prev = qc.getQueryData<BoardColumnPages>(q.queryKey);
         if (!prev) break;
         let changed = false;
-        const pages = prev.pages.map(page => {
-          const items = page.items.filter(t => t.place.conversation_id !== channelId);
+        const pages = prev.pages.map((page) => {
+          const items = page.items.filter((t) => t.place.conversation_id !== channelId);
           if (items.length === page.items.length) return page;
           changed = true;
           return { ...page, items };
@@ -87,15 +83,15 @@ export function removeChannelFromTasks(qc: QueryClient, channelId: string): void
         qc.setQueryData<BoardColumnPages>(q.queryKey, { ...prev, pages });
         break;
       }
-      case 'board-counts':
-      case 'board-facets':
+      case "board-counts":
+      case "board-facets":
         void qc.invalidateQueries({ queryKey: q.queryKey, exact: true });
         break;
-      case 'unknown':
+      case "unknown":
         break;
     }
   }
-  for (const root of [['task-detail'], ['task-by-number']] as const) {
+  for (const root of [["task-detail"], ["task-by-number"]] as const) {
     for (const q of qc.getQueryCache().findAll({ queryKey: root })) {
       const data = qc.getQueryData<TaskSummaryDto | TaskDetailDto | null>(q.queryKey);
       if (!data || data.place.conversation_id !== channelId) continue;
@@ -108,21 +104,17 @@ export function removeChannelFromTasks(qc: QueryClient, channelId: string): void
  *  (#task:1689). Read off `workspace_id` + `channel_id` on the row: the board's
  *  default variant spans every workspace, so the key alone cannot answer it.
  *  Only the column pages carry rows; the two aggregates carry none. */
-export function tasksHeldChannelIds(
-  qc: QueryClient,
-  workspaceId: string,
-): string[] {
+export function tasksHeldChannelIds(qc: QueryClient, workspaceId: string): string[] {
   const ids = new Set<string>();
   const hold = (rows: readonly TaskSummaryDto[]) => {
     for (const t of rows) {
       if (taskWorkspaceId(t) === workspaceId) ids.add(t.place.conversation_id);
     }
   };
-  for (const q of qc.getQueryCache().findAll({ queryKey: ['tasks'] })) {
+  for (const q of qc.getQueryCache().findAll({ queryKey: ["tasks"] })) {
     switch (classifyTasksCacheKey(q.queryKey)) {
-      case 'board-column':
-        for (const page of qc.getQueryData<BoardColumnPages>(q.queryKey)?.pages ??
-          []) {
+      case "board-column":
+        for (const page of qc.getQueryData<BoardColumnPages>(q.queryKey)?.pages ?? []) {
           hold(page.items);
         }
         break;
@@ -130,7 +122,7 @@ export function tasksHeldChannelIds(
         break;
     }
   }
-  for (const root of [['task-detail'], ['task-by-number']] as const) {
+  for (const root of [["task-detail"], ["task-by-number"]] as const) {
     for (const q of qc.getQueryCache().findAll({ queryKey: root })) {
       const data = qc.getQueryData<TaskSummaryDto | TaskDetailDto | null>(q.queryKey);
       if (data && taskWorkspaceId(data) === workspaceId) ids.add(data.place.conversation_id);
@@ -171,12 +163,12 @@ export function useUpdateTaskStatus() {
     mutationFn: async (args: { taskId: string; status: TaskStatus }) => {
       const res = await api<{ success: boolean; reason?: string }>(
         `/api/tasks/${args.taskId}/status`,
-        { method: 'POST', body: JSON.stringify({ status: args.status }) },
+        { method: "POST", body: JSON.stringify({ status: args.status }) },
       );
-      if (!res.success) throw new Error(res.reason ?? 'update failed');
+      if (!res.success) throw new Error(res.reason ?? "update failed");
       return res;
     },
-    onMutate: vars => beginOptimisticStatusWrite(qc, vars),
+    onMutate: (vars) => beginOptimisticStatusWrite(qc, vars),
     onError: (_err, _vars, write) => {
       if (write) {
         revertOptimisticStatusWrite(qc, write);
@@ -196,7 +188,7 @@ export function useUpdateTaskStatus() {
       // The card has just moved back on its own. Four of the five surfaces that
       // drive this mutation render no failure state, so without this the revert
       // reads as the app undoing the user's click for no reason.
-      toast.error('Couldn’t update status.');
+      toast.error("Couldn’t update status.");
     },
     onSuccess: (_res, _vars, write) => {
       restartRacingTaskReads(qc, write.taskId);
@@ -244,13 +236,11 @@ export function useAssignTask() {
           ? `/api/tasks/${args.taskId}/unclaim`
           : `/api/tasks/${args.taskId}/claim`,
         {
-          method: 'POST',
-          ...(args.agentId === null
-            ? {}
-            : { body: JSON.stringify({ agent_id: args.agentId }) }),
+          method: "POST",
+          ...(args.agentId === null ? {} : { body: JSON.stringify({ agent_id: args.agentId }) }),
         },
       );
-      if (!res.success) throw new Error(res.reason ?? 'assign failed');
+      if (!res.success) throw new Error(res.reason ?? "assign failed");
       return res;
     },
     onSuccess: (_res, vars) => {
@@ -262,7 +252,7 @@ export function useAssignTask() {
       // in the same write; and a scope that narrows the assignee axis
       // (`filterKeyConstrainsAssignee`) can GAIN the row in a column this client
       // never held it in, which no content scan can locate.
-      void qc.invalidateQueries({ queryKey: ['tasks'] });
+      void qc.invalidateQueries({ queryKey: ["tasks"] });
       void qc.invalidateQueries({
         queryKey: taskDetailKey(vars.taskId),
         exact: true,
@@ -309,36 +299,33 @@ export function useAssignTask() {
  * conversation membership — so anything the modal is allowed to show, the viewer
  * scope delivers.
  */
-export function useTaskDetail(
-  taskId: string | null | undefined,
-  opts?: { enabled?: boolean },
-) {
+export function useTaskDetail(taskId: string | null | undefined, opts?: { enabled?: boolean }) {
   const qc = useQueryClient();
   const gate = opts?.enabled ?? true;
-  const enabled = gate && typeof taskId === 'string' && taskId.length > 0;
+  const enabled = gate && typeof taskId === "string" && taskId.length > 0;
 
   useEffect(() => {
-    if (!enabled || typeof taskId !== 'string') return;
+    if (!enabled || typeof taskId !== "string") return;
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
+    const unsub = onWsFrame((frame) => {
       // The decision itself is `shouldRefreshTaskDetail` (a pure, exhaustive
       // contract): this listener only projects the wire frame onto it, so the
       // scope/kind/id rules are testable without a React tree.
       const projected: TaskDetailFrame =
-        frame.type === 'snapshot_required'
+        frame.type === "snapshot_required"
           ? {
-              type: 'snapshot_required',
+              type: "snapshot_required",
               viewerScope: isCurrentViewerScope(frame.scope),
             }
-          : frame.type === 'event'
+          : frame.type === "event"
             ? {
-                type: 'event',
+                type: "event",
                 viewerScope: isCurrentViewerScope(frame.scope),
                 kind: frame.kind,
                 taskId: (frame.payload as TaskChangedEvent)?.task_id ?? null,
                 taskKind: (frame.payload as TaskChangedEvent)?.kind ?? null,
               }
-            : { type: 'other' };
+            : { type: "other" };
       if (!shouldRefreshTaskDetail(projected, taskId)) return;
       void qc.invalidateQueries({ queryKey: taskDetailKey(taskId), exact: true });
     });
@@ -359,7 +346,7 @@ export function useTaskDetail(
       // `new URL(path, base)` (Cindy / Alice review).
       const segment = toPathSegment(taskId as string);
       if (segment === null) {
-        throw new ApiError(404, 'Not Found', 'malformed task pointer');
+        throw new ApiError(404, "Not Found", "malformed task pointer");
       }
       const res = await api<{ task: TaskDetailDto }>(`/api/tasks/${segment}`);
       return res.task;
@@ -395,11 +382,11 @@ export function useEditTask() {
       if (input.body !== undefined) payload.body = input.body;
       const res = await api<Extract<TaskEditResult, { success: true }>>(
         `/api/tasks/${input.taskId}/edit`,
-        { method: 'POST', body: JSON.stringify(payload) },
+        { method: "POST", body: JSON.stringify(payload) },
       );
       return res.task;
     },
-    onSuccess: task => {
+    onSuccess: (task) => {
       // In-place cache update from the authoritative post-edit snapshot;
       // title may have changed so refresh the board list + inline sigils.
       // The list root is the wide one on purpose (a retitled row belongs on
@@ -407,7 +394,7 @@ export function useEditTask() {
       // reaches ONE task, so only the entries holding it can have changed
       // (#task:2091).
       qc.setQueryData(taskDetailKey(task.id), task);
-      void qc.invalidateQueries({ queryKey: ['tasks'] });
+      void qc.invalidateQueries({ queryKey: ["tasks"] });
       invalidateTaskPointCaches(qc, task.id);
     },
   });
@@ -436,14 +423,14 @@ export function useCreateTask() {
   const qc = useQueryClient();
   return useMutation<CreatedTaskIdentity, Error, HumanCreateTaskInput>({
     mutationFn: async (input): Promise<CreatedTaskIdentity> => {
-      const res = await api<Extract<HumanCreateTaskResult, { success: true }>>(
-        '/api/tasks',
-        { method: 'POST', body: JSON.stringify(input) },
-      );
+      const res = await api<Extract<HumanCreateTaskResult, { success: true }>>("/api/tasks", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
       return res.task;
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['tasks'] });
+      void qc.invalidateQueries({ queryKey: ["tasks"] });
     },
   });
 }

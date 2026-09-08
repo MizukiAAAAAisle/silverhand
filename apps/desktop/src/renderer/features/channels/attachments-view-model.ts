@@ -3,7 +3,7 @@ import type {
   AttachmentListItem,
   AttachmentListItemSource,
   UserDto,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 
 /**
  * Pure helpers for the channel Attachments panel: sender resolution and
@@ -25,7 +25,7 @@ export interface AttachmentSenderIdentity {
    *  (a system-authored row: no identity axis, callers render `System`). */
   label: string | null;
   /** Raw kind of the sender axis — drives avatar branch. */
-  kind: AttachmentListItemSource['from_kind'];
+  kind: AttachmentListItemSource["from_kind"];
   /** Agent id for kind='agent', else null. Passed to avatar lookups. */
   agentId: string | null;
   /** User id for kind='user', else null. Passed to avatar lookups. */
@@ -38,7 +38,7 @@ export interface AttachmentSenderIdentity {
  *  dropdown resolves a sender identically to the row it filters. */
 export type AttachmentSenderActor = Pick<
   AttachmentListItemSource,
-  'from_kind' | 'from_user_id' | 'from_agent_id'
+  "from_kind" | "from_user_id" | "from_agent_id"
 >;
 
 /** Resolve a sender actor into a stable display identity.
@@ -56,24 +56,24 @@ export function resolveSenderIdentity(
   actor: AttachmentSenderActor,
   maps: { agentsById: Map<string, AgentDto>; humansById: Map<string, UserDto> },
 ): AttachmentSenderIdentity {
-  if (actor.from_kind === 'agent' && actor.from_agent_id) {
+  if (actor.from_kind === "agent" && actor.from_agent_id) {
     const a = maps.agentsById.get(actor.from_agent_id);
     const display = a?.display_name?.trim();
     const label = display || a?.name || actor.from_agent_id;
     return {
       label,
-      kind: 'agent',
+      kind: "agent",
       agentId: actor.from_agent_id,
       userId: null,
     };
   }
-  if (actor.from_kind === 'user' && actor.from_user_id) {
+  if (actor.from_kind === "user" && actor.from_user_id) {
     const u = maps.humansById.get(actor.from_user_id);
     const display = u?.display_name?.trim();
     const label = display || u?.name || actor.from_user_id;
     return {
       label,
-      kind: 'user',
+      kind: "user",
       agentId: null,
       userId: actor.from_user_id,
     };
@@ -139,8 +139,8 @@ export function groupAttachmentsByDay(
 function localDayKey(msSinceEpoch: number): string {
   const d = new Date(msSinceEpoch);
   const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
 
@@ -161,13 +161,13 @@ function dayLabel(
   appearedAt: number,
   locale: string | undefined,
 ): string {
-  if (key === todayKey) return 'Today';
-  if (key === yesterdayKey) return 'Yesterday';
+  if (key === todayKey) return "Today";
+  if (key === yesterdayKey) return "Yesterday";
   // Full date for older rows — the panel is a reference index, so a
   // localized `Jul 12, 2026` reads faster than an ISO string.
   return new Date(appearedAt).toLocaleDateString(locale, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
+    year: "numeric",
+    month: "short",
+    day: "numeric",
   });
 }

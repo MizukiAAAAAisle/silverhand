@@ -5,16 +5,16 @@
 // renderer never owns any read/eliminate state of its own (answerability,
 // §5.3). Lives in the Attention bounded context because eliminate is an
 // Attention concern; messaging hooks (channel/thread mark-read) delegate here.
-import type { ActivityItemDto, ObserveSource, ObserveDto, MessageSeq } from '@silverhand/shared';
-import { apiPaths, asReadSeq } from '@silverhand/shared';
-import { api } from '@/lib/api';
+import type { ActivityItemDto, ObserveSource, ObserveDto, MessageSeq } from "@silverhand/shared";
+import { apiPaths, asReadSeq } from "@silverhand/shared";
+import { api } from "@/lib/api";
 
 /** POST the eliminate primitive. One source = a single clear; many = a Mark-all
  *  batch (one transaction server-side — any illegal source fails the WHOLE
  *  request, so callers build sources only from server-validated DTO fields). */
 export function postObserve(sources: ObserveSource[]): Promise<ObserveDto> {
   return api<ObserveDto>(apiPaths.attentionObserve, {
-    method: 'POST',
+    method: "POST",
     body: JSON.stringify({ sources }),
   });
 }
@@ -48,10 +48,10 @@ export function streamSourceAtSeq(
   seq: MessageSeq,
 ): ObserveSource {
   return {
-    kind: 'stream',
+    kind: "stream",
     conversation_id: conversationId,
     thread_root_id: threadRootId,
-    position: { kind: 'at_seq', seq: asReadSeq(seq) },
+    position: { kind: "at_seq", seq: asReadSeq(seq) },
   };
 }
 
@@ -61,17 +61,17 @@ export function streamSourceAtSeq(
  *  `thread_root_id: null` — a thread can never reach this builder. */
 export function mainlineStreamSourceHead(conversationId: string): ObserveSource {
   return {
-    kind: 'stream',
+    kind: "stream",
     conversation_id: conversationId,
     thread_root_id: null,
-    position: { kind: 'stream_head' },
+    position: { kind: "stream_head" },
   };
 }
 
 /** A directed dismiss by explicit `notification_id` (§5.3 source_ref-out) —
  *  NEVER reverse-advances a cursor, NEVER parses an item's render `id`. */
 export function notificationSource(notificationId: string): ObserveSource {
-  return { kind: 'notification', notification_id: notificationId };
+  return { kind: "notification", notification_id: notificationId };
 }
 
 /** EXPLICIT-path stream clear to the stream's current head — the phase-B
@@ -89,10 +89,10 @@ export function explicitStreamClearHead(
   threadRootId: string | null,
 ): ObserveSource {
   return {
-    kind: 'stream',
+    kind: "stream",
     conversation_id: conversationId,
     thread_root_id: threadRootId,
-    position: { kind: 'stream_head' },
+    position: { kind: "stream_head" },
   };
 }
 
@@ -127,13 +127,11 @@ export function explicitStreamClearHead(
  */
 export function activityItemSource(item: ActivityItemDto): ObserveSource | null {
   switch (item.kind) {
-    case 'mention':
-    case 'agent_failed':
+    case "mention":
+    case "agent_failed":
       // Directed: by notification_id; a directed dismiss never moves a cursor.
-      return item.notification_id != null
-        ? notificationSource(item.notification_id)
-        : null;
-    case 'unread':
+      return item.notification_id != null ? notificationSource(item.notification_id) : null;
+    case "unread":
       // Stream-backed (mainline / thread / DM positional — keyed on kind, not
       // salience: a DM unread is salience:'directed' but still clears here).
       return explicitStreamClearHead(item.conversation_id, item.thread_root_id);

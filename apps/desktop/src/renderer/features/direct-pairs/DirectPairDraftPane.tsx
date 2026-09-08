@@ -1,19 +1,19 @@
-import { getCurrentUserId } from '@/lib/current-user';
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { Button } from '@/components/ui/button';
-import { resizeTextarea } from '@/components/chat/Composer';
-import { EmptyConversation } from '@/components/layout/channel-view/empty-conversation';
-import { ConversationHeaderIdentity } from '@/components/layout/channel-view/conversation-header-identity';
-import { paneChrome } from '@/components/layout/pane-chrome';
-import { ApiError } from '@/lib/api';
-import { useAgent } from '@/features/agents/hooks';
-import { counterpartFromAgent } from './counterpart-presentation';
+import { getCurrentUserId } from "@/lib/current-user";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Button } from "@/components/ui/button";
+import { resizeTextarea } from "@/components/chat/Composer";
+import { EmptyConversation } from "@/components/layout/channel-view/empty-conversation";
+import { ConversationHeaderIdentity } from "@/components/layout/channel-view/conversation-header-identity";
+import { paneChrome } from "@/components/layout/pane-chrome";
+import { ApiError } from "@/lib/api";
+import { useAgent } from "@/features/agents/hooks";
+import { counterpartFromAgent } from "./counterpart-presentation";
 import {
   decideDraftHandoff,
   findAgentDirectPair,
   useDirectPairs,
   useInitiateDirectMessage,
-} from './hooks';
+} from "./hooks";
 
 interface DirectPairDraftPaneProps {
   agentId: string;
@@ -27,7 +27,7 @@ export function DirectPairDraftPane({
   const agentQuery = useAgent(agentId);
   const agent = agentQuery.data;
   const initiate = useInitiateDirectMessage(agentId);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState("");
   const attemptRef = useRef<{ id: string; userId: string; agentId: string }>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pairs = useDirectPairs();
@@ -47,7 +47,7 @@ export function DirectPairDraftPane({
     sendPending: initiate.isPending,
     sendFailed: initiate.isError,
   });
-  const handoffTo = handoff.kind === 'handoff' ? handoff.conversationId : null;
+  const handoffTo = handoff.kind === "handoff" ? handoff.conversationId : null;
   useEffect(() => {
     if (handoffTo === null) return;
     onOpenPair(handoffTo);
@@ -61,21 +61,25 @@ export function DirectPairDraftPane({
   // Same label rule the pair's own header will use once it exists
   // (`presentCounterpart`): the display name when the agent set one, the handle
   // otherwise — so the title does not change under the user on convergence.
-  const title = agent ? agent.display_name.trim() || agent.name : '';
+  const title = agent ? agent.display_name.trim() || agent.name : "";
 
   const submit = (): void => {
     if (sendDisabled) return;
     const userId = getCurrentUserId();
     if (!userId) return;
-    if (!attemptRef.current || attemptRef.current.userId !== userId || attemptRef.current.agentId !== agentId) {
+    if (
+      !attemptRef.current ||
+      attemptRef.current.userId !== userId ||
+      attemptRef.current.agentId !== agentId
+    ) {
       attemptRef.current = { id: crypto.randomUUID(), userId, agentId };
     }
     void initiate
       .mutateAsync({ content: trimmed, client_message_id: attemptRef.current.id })
-      .then(ack => {
+      .then((ack) => {
         if (getCurrentUserId() !== userId) return;
         attemptRef.current = undefined;
-        setDraft('');
+        setDraft("");
         onOpenPair(ack.message.conversation_id);
       })
       .catch(() => {
@@ -96,7 +100,7 @@ export function DirectPairDraftPane({
   // `isComposing` alone is unreliable on some Chinese/Japanese IMEs.
   const [composing, setComposing] = useState(false);
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (e.key !== 'Enter') return;
+    if (e.key !== "Enter") return;
     if (e.shiftKey) return;
     if (composing || e.nativeEvent.isComposing) return;
     e.preventDefault();
@@ -162,7 +166,10 @@ export function DirectPairDraftPane({
             value={draft}
             data-composer-input
             disabled={initiate.isPending}
-            onChange={e => { attemptRef.current = undefined; setDraft(e.target.value); }}
+            onChange={(e) => {
+              attemptRef.current = undefined;
+              setDraft(e.target.value);
+            }}
             onKeyDown={onKeyDown}
             onCompositionStart={() => setComposing(true)}
             onCompositionEnd={() => setComposing(false)}
@@ -180,7 +187,7 @@ export function DirectPairDraftPane({
               data-composer-action="send"
               className="h-7"
             >
-              {initiate.isPending ? 'Sending…' : 'Send'}
+              {initiate.isPending ? "Sending…" : "Send"}
             </Button>
           </div>
         </div>
@@ -194,13 +201,13 @@ export function DirectPairDraftPane({
  *  named capability, not this entry's visibility) — surface it, don't hide it. */
 function friendlyInitiateError(error: Error, target: string): string {
   if (error instanceof ApiError) {
-    if (error.kind === 'backend_unreachable') {
-      return 'Can’t reach the server. Check your connection and try again.';
+    if (error.kind === "backend_unreachable") {
+      return "Can’t reach the server. Check your connection and try again.";
     }
     if (error.status === 403) return `You can’t start a direct message with ${target}.`;
     if (error.status === 404) return `${target} is no longer available.`;
-    if (error.status === 413) return 'That message is too long to send.';
-    if (error.status === 400) return 'That message can’t be sent as a direct message.';
+    if (error.status === 413) return "That message is too long to send.";
+    if (error.status === 400) return "That message can’t be sent as a direct message.";
   }
-  return 'Could not send. Please try again.';
+  return "Could not send. Please try again.";
 }

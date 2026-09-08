@@ -1,7 +1,6 @@
-import type { BackendInfoSnapshot } from '@/features/hosts/hooks';
+import type { BackendInfoSnapshot } from "@/features/hosts/hooks";
 
-type OutboundProtocolCompatibility =
-  BackendInfoSnapshot['outbound_protocol_compatibility'];
+type OutboundProtocolCompatibility = BackendInfoSnapshot["outbound_protocol_compatibility"];
 
 export interface ProtocolSkewView {
   /** Primary, action-forward line rendered in the banner. */
@@ -23,20 +22,20 @@ export function describeProtocolSkew(
 ): ProtocolSkewView | null {
   if (!compat) return null;
   switch (compat.status) {
-    case 'app_update_required':
+    case "app_update_required":
       return {
-        title: 'Silverhand update required',
+        title: "Silverhand update required",
         detail:
-          'This version is incompatible with the server. Update Silverhand to restore agent connectivity.',
+          "This version is incompatible with the server. Update Silverhand to restore agent connectivity.",
       };
-    case 'server_update_required':
+    case "server_update_required":
       return {
-        title: 'Server update required',
+        title: "Server update required",
         detail:
-          'The server uses an incompatible protocol version. Agent operations are unavailable until the server is updated.',
+          "The server uses an incompatible protocol version. Agent operations are unavailable until the server is updated.",
       };
-    case 'compatible':
-    case 'unknown':
+    case "compatible":
+    case "unknown":
       return null;
     default: {
       const _exhaustive: never = compat;

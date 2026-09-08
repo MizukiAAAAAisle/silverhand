@@ -20,12 +20,12 @@
  * App-level `useBackendInfoSnapshot({ pollProtocolCompatibility: true })`
  * observer and read here from the shared cache.
  */
-import { AlertTriangle, RefreshCw } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { useBackendInfoSnapshot } from '@/features/hosts/hooks';
-import { useBackendUnreachableSnitch } from './useBackendUnreachableSnitch';
-import { describeProtocolSkew } from './protocol-skew-presentation';
-import { selectAppStatusBanner } from './app-status-banner-model';
+import { AlertTriangle, RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useBackendInfoSnapshot } from "@/features/hosts/hooks";
+import { useBackendUnreachableSnitch } from "./useBackendUnreachableSnitch";
+import { describeProtocolSkew } from "./protocol-skew-presentation";
+import { selectAppStatusBanner } from "./app-status-banner-model";
 
 interface BannerShellProps {
   title: string;
@@ -36,11 +36,7 @@ interface BannerShellProps {
   action?: { label: string; onClick: () => void } | null;
 }
 
-function BannerShell({
-  title,
-  detail,
-  action,
-}: BannerShellProps): JSX.Element {
+function BannerShell({ title, detail, action }: BannerShellProps): JSX.Element {
   return (
     <div
       role="alert"
@@ -48,14 +44,12 @@ function BannerShell({
       className="pointer-events-auto fixed left-1/2 top-3 z-[var(--z-in-dialog)] -translate-x-1/2 transform"
       // The titlebar's drag region sits right above this; the banner owns
       // its own click target so it never gets swallowed by window drag.
-      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
     >
       <div className="flex items-center gap-3 rounded-[var(--floating-radius)] [border:var(--floating-border)] bg-bg-floating px-3 py-2 shadow-modal">
         <AlertTriangle className="size-5 text-warning" />
         <div className="min-w-0">
-          <p className="text-xs font-medium leading-snug text-text-primary">
-            {title}
-          </p>
+          <p className="text-xs font-medium leading-snug text-text-primary">{title}</p>
           {detail ? (
             <p className="text-[length:var(--text-meta)] leading-snug text-text-muted">{detail}</p>
           ) : null}
@@ -79,19 +73,17 @@ function BannerShell({
 export function AppStatusBanner(): JSX.Element | null {
   const unreachable = useBackendUnreachableSnitch();
   const { data } = useBackendInfoSnapshot();
-  const skew = describeProtocolSkew(
-    data?.outbound_protocol_compatibility ?? null,
-  );
+  const skew = describeProtocolSkew(data?.outbound_protocol_compatibility ?? null);
   const model = selectAppStatusBanner({
     unreachableVisible: unreachable.visible,
     skew,
   });
   if (!model) return null;
-  if (model.kind === 'backend_unreachable') {
+  if (model.kind === "backend_unreachable") {
     return (
       <BannerShell
         title="Server unreachable"
-        action={{ label: 'Retry', onClick: unreachable.retry }}
+        action={{ label: "Retry", onClick: unreachable.retry }}
       />
     );
   }

@@ -1,10 +1,7 @@
-import { ArrowDownUp, Check, Clock, GripVertical } from 'lucide-react';
-import type { SortMode } from '@silverhand/shared';
-import { Button } from '@/components/ui/button';
-import {
-  AppDropdownMenu,
-  AppDropdownMenuItem,
-} from '@/components/menus/AppContextMenu';
+import { ArrowDownUp, Check, Clock, GripVertical } from "lucide-react";
+import type { SortMode } from "@silverhand/shared";
+import { Button } from "@/components/ui/button";
+import { AppDropdownMenu, AppDropdownMenuItem } from "@/components/menus/AppContextMenu";
 
 /**
  * Per-list sort-mode entry (#task:1146). A small icon button in a list's
@@ -39,15 +36,15 @@ export function SortModeMenu({
     >
       <AppDropdownMenuItem
         icon={<Clock className="size-3.5" />}
-        trailing={mode === 'recent' ? <Check className="size-3.5 text-accent" /> : undefined}
-        onSelect={() => onChange('recent')}
+        trailing={mode === "recent" ? <Check className="size-3.5 text-accent" /> : undefined}
+        onSelect={() => onChange("recent")}
       >
         Recent
       </AppDropdownMenuItem>
       <AppDropdownMenuItem
         icon={<GripVertical className="size-3.5" />}
-        trailing={mode === 'manual' ? <Check className="size-3.5 text-accent" /> : undefined}
-        onSelect={() => onChange('manual')}
+        trailing={mode === "manual" ? <Check className="size-3.5 text-accent" /> : undefined}
+        onSelect={() => onChange("manual")}
       >
         Manual
       </AppDropdownMenuItem>

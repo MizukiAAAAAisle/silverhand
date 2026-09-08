@@ -1,6 +1,6 @@
-import { useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from "react";
 
-import { fetchAttachmentBlob } from './api';
+import { fetchAttachmentBlob } from "./api";
 
 /**
  * Renderer-side LRU cache of attachment blob object URLs keyed by
@@ -105,11 +105,7 @@ function evictIfOverCap(): void {
  * token matches what the server will report and a redelivered
  * `attachment_changed` for the same revision is a no-op.
  */
-export function setAttachmentBlobUrl(
-  id: string,
-  url: string,
-  revision?: number,
-): void {
+export function setAttachmentBlobUrl(id: string, url: string, revision?: number): void {
   if (revision != null && revision > (revById.get(id) ?? 0)) {
     revById.set(id, revision);
     emitGenerationChange();
@@ -160,7 +156,7 @@ export async function loadAttachmentBlobUrl(id: string): Promise<string> {
   const pending = inflight.get(id);
   if (pending && pending.token === token) return pending.promise;
   const promise = fetchAttachmentBlob(id)
-    .then(res => {
+    .then((res) => {
       if (currentToken(id) === token) {
         setAttachmentBlobUrl(id, res.url);
         return res.url;
@@ -209,7 +205,7 @@ export function bumpAttachmentBlobEpoch(): void {
  */
 export function useAttachmentBlobToken(id: string): string {
   return useSyncExternalStore(
-    listener => {
+    (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },

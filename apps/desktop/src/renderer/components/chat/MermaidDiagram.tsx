@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Check, Code, Copy, Maximize2, Workflow, ZoomIn, ZoomOut } from 'lucide-react';
-import { MermaidLightbox } from './MermaidLightbox';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Check, Code, Copy, Maximize2, Workflow, ZoomIn, ZoomOut } from "lucide-react";
+import { MermaidLightbox } from "./MermaidLightbox";
 
 /**
  * Renders a ```mermaid fenced block as an actual diagram (#task:1322), inside its
@@ -56,19 +56,16 @@ let diagramSeq = 0;
  * so both paths follow the active theme. Throws on empty/invalid source — the
  * caller decides the fallback (live: source code block; export: same).
  */
-export async function renderMermaidSvg(
-  code: string,
-  dark: boolean,
-): Promise<string> {
+export async function renderMermaidSvg(code: string, dark: boolean): Promise<string> {
   const source = code.trim();
-  if (!source) throw new Error('empty diagram');
-  const mermaid = (await import('mermaid')).default;
+  if (!source) throw new Error("empty diagram");
+  const mermaid = (await import("mermaid")).default;
   mermaid.initialize({
     startOnLoad: false,
-    securityLevel: 'strict',
+    securityLevel: "strict",
     htmlLabels: false,
-    theme: dark ? 'dark' : 'default',
-    fontFamily: 'inherit',
+    theme: dark ? "dark" : "default",
+    fontFamily: "inherit",
   });
   // A parse pass first gives a clean diagnostic without leaving a
   // half-injected error SVG in the DOM (mermaid.render on a syntax
@@ -78,17 +75,17 @@ export async function renderMermaidSvg(
   // Mermaid otherwise renders its temporary measuring SVG directly under
   // <body>. Keep that connected for SVG text measurement but invisible and
   // outside page layout; transient renders must never paint over the app.
-  const renderHost = document.createElement('div');
-  renderHost.setAttribute('aria-hidden', 'true');
+  const renderHost = document.createElement("div");
+  renderHost.setAttribute("aria-hidden", "true");
   Object.assign(renderHost.style, {
-    position: 'fixed',
-    left: '-100000px',
-    top: '0',
+    position: "fixed",
+    left: "-100000px",
+    top: "0",
     width: `${document.documentElement.clientWidth}px`,
-    height: '0',
-    overflow: 'hidden',
-    visibility: 'hidden',
-    pointerEvents: 'none',
+    height: "0",
+    overflow: "hidden",
+    visibility: "hidden",
+    pointerEvents: "none",
   });
   document.body.append(renderHost);
   try {
@@ -116,9 +113,9 @@ export function extractMermaidSources(markdown: string): string[] {
 }
 
 type RenderState =
-  | { status: 'pending' }
-  | { status: 'ok'; svg: string }
-  | { status: 'error'; message: string };
+  | { status: "pending" }
+  | { status: "ok"; svg: string }
+  | { status: "error"; message: string };
 
 /**
  * Zoom steps, not a continuous factor: a diagram is read at a few useful sizes
@@ -140,7 +137,7 @@ const MAX_CACHED_VIEWPORTS = 64;
 const viewportGeometryByDiagram = new Map<string, MermaidViewportGeometry>();
 
 function geometryKey(code: string, dark: boolean): string {
-  return `${dark ? 'dark' : 'light'}\u0000${code.trim()}`;
+  return `${dark ? "dark" : "light"}\u0000${code.trim()}`;
 }
 
 function cachedViewportHeight(key: string, width: number): number | null {
@@ -151,10 +148,7 @@ function cachedViewportHeight(key: string, width: number): number | null {
   return geometry.height;
 }
 
-function rememberViewportGeometry(
-  key: string,
-  geometry: MermaidViewportGeometry,
-): void {
+function rememberViewportGeometry(key: string, geometry: MermaidViewportGeometry): void {
   viewportGeometryByDiagram.delete(key);
   viewportGeometryByDiagram.set(key, geometry);
   if (viewportGeometryByDiagram.size <= MAX_CACHED_VIEWPORTS) return;
@@ -166,20 +160,18 @@ function rememberViewportGeometry(
  * The message stream is the only inline vertical scroll owner. Zoom participates
  * in layout; fullscreen owns bounded pan/zoom for detailed inspection.
  */
-export function mermaidScrollOwnerForZoom(
-  _zoom: number,
-): 'document' {
-  return 'document';
+export function mermaidScrollOwnerForZoom(_zoom: number): "document" {
+  return "document";
 }
 
 export function MermaidDiagram({ code }: { code: string }): JSX.Element {
-  const [state, setState] = useState<RenderState>({ status: 'pending' });
+  const [state, setState] = useState<RenderState>({ status: "pending" });
   // Bumped whenever the app theme changes so the render effect re-fires.
   const [themeTick, setThemeTick] = useState(0);
   // View + zoom are per-block session state, deliberately NOT reset when `code`
   // changes: a streaming edit re-renders the same diagram, and yanking the
   // reader back to fit-width mid-read would read as the block fighting them.
-  const [view, setView] = useState<'diagram' | 'code'>('diagram');
+  const [view, setView] = useState<"diagram" | "code">("diagram");
   const [zoomIndex, setZoomIndex] = useState(ZOOM_BASE_INDEX);
   const [copied, setCopied] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -196,7 +188,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
   const viewportRef = useRef<HTMLDivElement>(null);
 
   const zoom = ZOOM_STEPS[zoomIndex] ?? 1;
-  const diagramReady = state.status === 'ok';
+  const diagramReady = state.status === "ok";
   const scrollOwner = mermaidScrollOwnerForZoom(zoom);
   const viewportGeometryKey = geometryKey(code, isDarkTheme());
 
@@ -204,18 +196,13 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
     const viewport = viewportRef.current;
     if (!viewport) return;
 
-    if (state.status === 'pending') {
-      const cachedHeight = cachedViewportHeight(
-        viewportGeometryKey,
-        viewport.offsetWidth,
-      );
-      setPendingHeight(current =>
-        current === cachedHeight ? current : cachedHeight,
-      );
+    if (state.status === "pending") {
+      const cachedHeight = cachedViewportHeight(viewportGeometryKey, viewport.offsetWidth);
+      setPendingHeight((current) => (current === cachedHeight ? current : cachedHeight));
       return;
     }
 
-    if (state.status === 'ok' && zoom === 1) {
+    if (state.status === "ok" && zoom === 1) {
       rememberViewportGeometry(viewportGeometryKey, {
         width: viewport.offsetWidth,
         height: viewport.offsetHeight,
@@ -232,10 +219,10 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
   // Re-render on app theme switch so diagram colors track the UI.
   useEffect(() => {
     const el = document.documentElement;
-    const observer = new MutationObserver(() => setThemeTick(t => t + 1));
+    const observer = new MutationObserver(() => setThemeTick((t) => t + 1));
     observer.observe(el, {
       attributes: true,
-      attributeFilter: ['data-theme'],
+      attributeFilter: ["data-theme"],
     });
     return () => observer.disconnect();
   }, []);
@@ -244,22 +231,22 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
     let cancelled = false;
     const source = code.trim();
     if (!source) {
-      setState({ status: 'error', message: 'empty diagram' });
+      setState({ status: "error", message: "empty diagram" });
       return;
     }
-    setState({ status: 'pending' });
+    setState({ status: "pending" });
 
     void (async () => {
       try {
         const svg = await renderMermaidSvg(source, isDarkTheme());
-        if (!cancelled) setState({ status: 'ok', svg });
+        if (!cancelled) setState({ status: "ok", svg });
       } catch (err) {
         // Dev-visible diagnostic (Cindy boundary: failures must stay
         // diagnosable), but the user just sees the source fall-back.
         const message = err instanceof Error ? err.message : String(err);
         // eslint-disable-next-line no-console
-        console.error('[mermaid] render failed, showing source:', message);
-        if (!cancelled) setState({ status: 'error', message });
+        console.error("[mermaid] render failed, showing source:", message);
+        if (!cancelled) setState({ status: "error", message });
       }
     })();
 
@@ -280,7 +267,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
     }
   }, [code]);
 
-  if (state.status === 'error') {
+  if (state.status === "error") {
     // Fall back to the raw source so no information is lost. Same block chrome,
     // and NO view toggle: there is no diagram to switch to, so the source is
     // not a "view" here — it is all there is. The note says why.
@@ -315,11 +302,11 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
           <button
             type="button"
             className="mermaid-block__seg"
-            data-active={view === 'diagram'}
+            data-active={view === "diagram"}
             data-sticker
             data-sticker-size="md"
-            aria-pressed={view === 'diagram'}
-            onClick={() => setView('diagram')}
+            aria-pressed={view === "diagram"}
+            onClick={() => setView("diagram")}
           >
             <Workflow className="size-3" />
             Mermaid
@@ -327,11 +314,11 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
           <button
             type="button"
             className="mermaid-block__seg"
-            data-active={view === 'code'}
+            data-active={view === "code"}
             data-sticker
             data-sticker-size="md"
-            aria-pressed={view === 'code'}
-            onClick={() => setView('code')}
+            aria-pressed={view === "code"}
+            onClick={() => setView("code")}
           >
             <Code className="size-3" />
             Code
@@ -342,7 +329,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
             answer than their absence. The code view answers with Copy in the same
             slot, matching `CodeBlock`'s header. */}
         <div className="mermaid-block__controls">
-          {view === 'diagram' ? (
+          {view === "diagram" ? (
             <>
               {/* Order `100% − +`: the readout sits to the LEFT so the two
                   steppers are adjacent and read as one pair. The zoom level is a
@@ -358,7 +345,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 className="mermaid-block__icon"
                 data-sticker
                 data-sticker-size="md"
-                onClick={() => setZoomIndex(i => Math.max(0, i - 1))}
+                onClick={() => setZoomIndex((i) => Math.max(0, i - 1))}
                 disabled={!diagramReady || zoomIndex === 0}
                 aria-label="Zoom out"
                 title="Zoom out"
@@ -370,9 +357,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 className="mermaid-block__icon"
                 data-sticker
                 data-sticker-size="md"
-                onClick={() =>
-                  setZoomIndex(i => Math.min(ZOOM_STEPS.length - 1, i + 1))
-                }
+                onClick={() => setZoomIndex((i) => Math.min(ZOOM_STEPS.length - 1, i + 1))}
                 disabled={!diagramReady || zoomIndex === ZOOM_STEPS.length - 1}
                 aria-label="Zoom in"
                 title="Zoom in"
@@ -402,7 +387,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
               data-sticker
               data-sticker-size="md"
               onClick={onCopy}
-              title={copied ? 'Copied' : 'Copy source'}
+              title={copied ? "Copied" : "Copy source"}
               aria-label="Copy source"
             >
               {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
@@ -410,7 +395,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
           )}
         </div>
       </div>
-      {view === 'code' ? (
+      {view === "code" ? (
         <pre>
           <code className="language-mermaid">{code}</code>
         </pre>
@@ -420,7 +405,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
           className="mermaid-block__viewport"
           data-mermaid-scroll={scrollOwner}
           style={
-            state.status === 'pending' && pendingHeight !== null
+            state.status === "pending" && pendingHeight !== null
               ? { height: pendingHeight }
               : undefined
           }
@@ -451,11 +436,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
       {/* Fullscreen viewer, mounted only with a rendered diagram to show — it
           replays the SAME sanitized SVG string, never a re-render. */}
       {diagramReady ? (
-        <MermaidLightbox
-          open={fullscreen}
-          onOpenChange={setFullscreen}
-          svg={state.svg}
-        />
+        <MermaidLightbox open={fullscreen} onOpenChange={setFullscreen} svg={state.svg} />
       ) : null}
     </div>
   );
@@ -470,7 +451,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
 export function isDarkTheme(): boolean {
   try {
     const root = document.documentElement;
-    const raw = getComputedStyle(root).getPropertyValue('--bg-base').trim();
+    const raw = getComputedStyle(root).getPropertyValue("--bg-base").trim();
     const lum = raw ? luminance(raw) : null;
     if (lum != null) return lum < 0.5;
     const bodyBg = getComputedStyle(document.body).backgroundColor;
@@ -497,12 +478,12 @@ function parseColor(color: string): [number, number, number] | null {
   const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c);
   if (hex) {
     let h = hex[1]!;
-    if (h.length === 3) h = h.split('').map(ch => ch + ch).join('');
-    return [
-      parseInt(h.slice(0, 2), 16),
-      parseInt(h.slice(2, 4), 16),
-      parseInt(h.slice(4, 6), 16),
-    ];
+    if (h.length === 3)
+      h = h
+        .split("")
+        .map((ch) => ch + ch)
+        .join("");
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
   }
   const rgb = /^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i.exec(c);
   if (rgb) {

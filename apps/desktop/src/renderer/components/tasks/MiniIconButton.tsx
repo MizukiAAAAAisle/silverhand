@@ -1,5 +1,5 @@
-import type { LucideIcon } from 'lucide-react';
-import { cn } from '@/lib/cn';
+import type { LucideIcon } from "lucide-react";
+import { cn } from "@/lib/cn";
 
 /** Small flat icon-only control (18px) for the task detail modal's inline
  *  affordances — the per-field edit pencils and the Assignee row's clear: no
@@ -28,7 +28,7 @@ export function MiniIconButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'inline-flex size-[18px] shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:text-text-primary focus-outline disabled:pointer-events-none disabled:opacity-40',
+        "inline-flex size-[18px] shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:text-text-primary focus-outline disabled:pointer-events-none disabled:opacity-40",
         className,
       )}
     >

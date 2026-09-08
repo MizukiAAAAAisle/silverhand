@@ -36,8 +36,8 @@ import type {
   AgentDto,
   ConversationPlacementKind,
   DirectPairCounterpart,
-} from '@silverhand/shared';
-import type { ConversationPaneDescriptor } from './pane-descriptor';
+} from "@silverhand/shared";
+import type { ConversationPaneDescriptor } from "./pane-descriptor";
 
 /**
  * The mentionable identity of an agent — what the composer's `@` picker, avatar
@@ -47,7 +47,7 @@ import type { ConversationPaneDescriptor } from './pane-descriptor';
  */
 export type MentionAgent = Pick<
   AgentDto,
-  'id' | 'name' | 'display_name' | 'avatar_url' | 'runtime'
+  "id" | "name" | "display_name" | "avatar_url" | "runtime"
 >;
 
 export type ConversationPaneMode =
@@ -55,14 +55,14 @@ export type ConversationPaneMode =
    *  because the descriptor's is: the pane paints what it was handed rather than
    *  asserting a coordinate, and the workspace-scoped affordances are gated on
    *  {@link ConversationPaneCapabilities.workspaceScope} being non-null. */
-  | { kind: 'workspace_channel'; workspaceId: string | null }
+  | { kind: "workspace_channel"; workspaceId: string | null }
   /** A `direct_pair`. `counterpart` is absent on carriers that don't resolve one
    *  (a deep link that only knows the conversation id), which the header answers
    *  with the title alone rather than with channel chrome. */
-  | { kind: 'direct_message'; counterpart: DirectPairCounterpart | null }
+  | { kind: "direct_message"; counterpart: DirectPairCounterpart | null }
   /** A placement this pane has no mode for. Carries the placement so a future
    *  arm is named by whoever adds it, not silently absorbed. */
-  | { kind: 'unsupported'; placement: ConversationPlacementKind };
+  | { kind: "unsupported"; placement: ConversationPlacementKind };
 
 /** Project the pane's conversation onto its mode. The ONE place placement is
  *  read for UI shape. */
@@ -70,30 +70,28 @@ export function projectConversationPaneMode(
   conversation: ConversationPaneDescriptor,
 ): ConversationPaneMode {
   switch (conversation.placement_kind) {
-    case 'workspace':
-      return { kind: 'workspace_channel', workspaceId: conversation.workspace_id };
-    case 'direct_pair':
+    case "workspace":
+      return { kind: "workspace_channel", workspaceId: conversation.workspace_id };
+    case "direct_pair":
       return {
-        kind: 'direct_message',
+        kind: "direct_message",
         counterpart: conversation.counterpart ?? null,
       };
     default:
-      return { kind: 'unsupported', placement: conversation.placement_kind };
+      return { kind: "unsupported", placement: conversation.placement_kind };
   }
 }
 
 /** The placement a mode stands for — the inverse of the projection, so the two
  *  directions can be checked against each other and a mode can look up any
  *  placement-keyed rule without a second copy of the mapping. */
-export function placementOfPaneMode(
-  mode: ConversationPaneMode,
-): ConversationPlacementKind {
+export function placementOfPaneMode(mode: ConversationPaneMode): ConversationPlacementKind {
   switch (mode.kind) {
-    case 'workspace_channel':
-      return 'workspace';
-    case 'direct_message':
-      return 'direct_pair';
-    case 'unsupported':
+    case "workspace_channel":
+      return "workspace";
+    case "direct_message":
+      return "direct_pair";
+    case "unsupported":
       return mode.placement;
   }
 }
@@ -115,7 +113,7 @@ export function placementOfPaneMode(
 export interface ConversationPaneCapabilities {
   /** The identity primitive the header wears: the channel `#`, the counterpart's
    *  face, or the title alone when the placement has neither. */
-  headerIdentity: 'channel_hash' | 'counterpart' | 'title_only';
+  headerIdentity: "channel_hash" | "counterpart" | "title_only";
   /** Whether this placement HAS a roster — the member strip, the members button
    *  and its dialog, the add-member picker, the per-conversation agent
    *  management controls, AND the `conversation_agents` / runtime reads that feed
@@ -147,28 +145,26 @@ export interface ConversationPaneCapabilities {
  * point of that answer is that it cannot drift into "channel by default".
  */
 const WITHHELD_PANE_CAPABILITIES: ConversationPaneCapabilities = {
-  headerIdentity: 'title_only',
+  headerIdentity: "title_only",
   hasRoster: false,
   workspaceScope: null,
 };
 
-export function paneCapabilities(
-  mode: ConversationPaneMode,
-): ConversationPaneCapabilities {
+export function paneCapabilities(mode: ConversationPaneMode): ConversationPaneCapabilities {
   switch (mode.kind) {
-    case 'workspace_channel':
+    case "workspace_channel":
       return {
-        headerIdentity: 'channel_hash',
+        headerIdentity: "channel_hash",
         hasRoster: true,
         workspaceScope: mode.workspaceId,
       };
-    case 'direct_message':
+    case "direct_message":
       return {
-        headerIdentity: 'counterpart',
+        headerIdentity: "counterpart",
         hasRoster: false,
         workspaceScope: null,
       };
-    case 'unsupported':
+    case "unsupported":
       return WITHHELD_PANE_CAPABILITIES;
   }
 }
@@ -203,8 +199,10 @@ export function inheritedPaneCapabilities(
  *
  * `workspaceScope` is null because a coordinate must be carried, never assumed.
  */
-export const DEFAULT_PANE_CAPABILITIES: ConversationPaneCapabilities =
-  paneCapabilities({ kind: 'workspace_channel', workspaceId: null });
+export const DEFAULT_PANE_CAPABILITIES: ConversationPaneCapabilities = paneCapabilities({
+  kind: "workspace_channel",
+  workspaceId: null,
+});
 
 /**
  * The conversation a roster read should target, or `null` for "do not read".
@@ -252,7 +250,7 @@ export function rosterQueryTarget(
  */
 export type ComposerDirectory =
   | {
-      kind: 'workspace';
+      kind: "workspace";
       /** Always resolved: a `workspace_channel` mode whose `workspaceId` is still
        *  null projects to `withheld`, not here, so the workspace-scoped queries
        *  never run without their coordinate. */
@@ -261,7 +259,7 @@ export type ComposerDirectory =
       hasChannelNamespace: boolean;
     }
   | {
-      kind: 'viewer';
+      kind: "viewer";
       /** The DM's counterpart when it is an active agent — a conversation fact, not
        *  gated on viewer ownership, so a counterpart the viewer does not own is still
        *  a candidate (filed under "In this channel"). null for a human / deleted /
@@ -270,7 +268,7 @@ export type ComposerDirectory =
        *  counterpart still resolves on send. */
       counterpartAgent: MentionAgent | null;
     }
-  | { kind: 'withheld' };
+  | { kind: "withheld" };
 
 /** Workspace-derived facts the `workspace` arm carries — resolved by the pane
  *  owner from the workspace list it already holds, never re-derived in the leaf
@@ -288,26 +286,26 @@ export function composerDirectory(
   workspace: ComposerWorkspaceCoordinate,
 ): ComposerDirectory {
   switch (mode.kind) {
-    case 'workspace_channel':
+    case "workspace_channel":
       // A workspace_channel whose workspace has not resolved yet carries no
       // coordinate; it is unresolved, not resolved-empty, so it withholds
       // rather than settling the workspace arm without an id.
-      if (mode.workspaceId === null) return { kind: 'withheld' };
+      if (mode.workspaceId === null) return { kind: "withheld" };
       return {
-        kind: 'workspace',
+        kind: "workspace",
         workspaceId: mode.workspaceId,
         workspaceName: workspace.workspaceName,
         hasChannelNamespace: workspace.hasChannelNamespace,
       };
-    case 'direct_message': {
+    case "direct_message": {
       // The counterpart is a candidate only when it is an active agent: the deleted
       // arm carries no name/runtime to mention and a human has no `@`-agent identity,
       // so both project to null.
       const c = mode.counterpart;
       return {
-        kind: 'viewer',
+        kind: "viewer",
         counterpartAgent:
-          c && c.status === 'active' && c.kind === 'agent'
+          c && c.status === "active" && c.kind === "agent"
             ? {
                 id: c.id,
                 name: c.name,
@@ -318,8 +316,8 @@ export function composerDirectory(
             : null,
       };
     }
-    case 'unsupported':
-      return { kind: 'withheld' };
+    case "unsupported":
+      return { kind: "withheld" };
   }
 }
 
@@ -333,6 +331,6 @@ export function inheritedComposerDirectory(
   parent: ConversationPaneDescriptor | null,
   workspace: ComposerWorkspaceCoordinate,
 ): ComposerDirectory {
-  if (!parent) return { kind: 'withheld' };
+  if (!parent) return { kind: "withheld" };
   return composerDirectory(projectConversationPaneMode(parent), workspace);
 }

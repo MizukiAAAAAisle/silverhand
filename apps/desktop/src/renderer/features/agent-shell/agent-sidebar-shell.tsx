@@ -1,29 +1,29 @@
-import { DirectorySidebar } from '@/components/layout/directory-shell';
-import { Monitor, Plus, User, Users } from 'lucide-react';
-import { Fragment, useMemo, useState } from 'react';
-import type { AgentDto, HostDto } from '@silverhand/shared';
-import { useAgents, useAgentPresence } from '@/features/agents/hooks';
-import { projectPresence } from '@/features/agents/presence-projection';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { CreateAgentDialog } from '@/features/agents/CreateAgentDialog';
-import { useHostsQuery } from '@/features/hosts/hooks';
-import { hostDisplayName, UNKNOWN_COMPUTER_LABEL } from '@/features/hosts/host-display';
+import { DirectorySidebar } from "@/components/layout/directory-shell";
+import { Monitor, Plus, User, Users } from "lucide-react";
+import { Fragment, useMemo, useState } from "react";
+import type { AgentDto, HostDto } from "@silverhand/shared";
+import { useAgents, useAgentPresence } from "@/features/agents/hooks";
+import { projectPresence } from "@/features/agents/presence-projection";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { CreateAgentDialog } from "@/features/agents/CreateAgentDialog";
+import { useHostsQuery } from "@/features/hosts/hooks";
+import { hostDisplayName, UNKNOWN_COMPUTER_LABEL } from "@/features/hosts/host-display";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useViewerAvatarObjectUrl,
   useViewerUser,
-} from '@/features/me/hooks';
-import { useUsers } from '@/features/users/hooks';
-import { usePresenceById, presenceDotStatus } from '@/features/presence/hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { Button } from '@/components/ui/button';
-import { CURRENT_USER_SUBTITLE } from '@/lib/current-user';
-import { SidebarRow, SidebarSection } from '@/components/layout/sidebar-shared';
+} from "@/features/me/hooks";
+import { useUsers } from "@/features/users/hooks";
+import { usePresenceById, presenceDotStatus } from "@/features/presence/hooks";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { Button } from "@/components/ui/button";
+import { CURRENT_USER_SUBTITLE } from "@/lib/current-user";
+import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
 
 interface AgentSidebarShellProps {
   selectedAgentId?: string | null;
@@ -43,7 +43,7 @@ export function AgentSidebarShell({
   // option A). The narrowing is defined by the backend `?scope=owned` contract
   // — we pass the flag and never re-filter here, so "my agents" has one
   // definition shared with the CLI and every other consumer.
-  const { data: agents = [] } = useAgents({ scope: 'owned' });
+  const { data: agents = [] } = useAgents({ scope: "owned" });
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   // Rail groups agents by the computer they run on (`agent.host_id`). The
   // name comes from the host DTO via the shared resolver — never from `kind`
@@ -74,7 +74,7 @@ export function AgentSidebarShell({
       .map((g) => ({ key: g.host.id, name: hostDisplayName(g.host), agents: g.agents }))
       .sort((a, b) => a.name.localeCompare(b.name));
     if (unknown.length > 0) {
-      groups.push({ key: '__unknown__', name: UNKNOWN_COMPUTER_LABEL, agents: unknown });
+      groups.push({ key: "__unknown__", name: UNKNOWN_COMPUTER_LABEL, agents: unknown });
     }
     return groups;
   }, [agents, hostsById]);
@@ -205,7 +205,7 @@ function AgentRow({
 }): JSX.Element {
   const presence = useAgentPresence(agent.id);
 
-  const display = presence === null ? null : projectPresence({ scope: 'global', presence });
+  const display = presence === null ? null : projectPresence({ scope: "global", presence });
   return (
     <SidebarRow
       className="h-[32px]"
@@ -219,7 +219,7 @@ function AgentRow({
       }
       title={agent.display_name || agent.name}
       subtitle={<span data-agent-runtime>{agent.runtime}</span>}
-      status={display === null ? null : display.tone === 'online' ? 'active' : 'idle'}
+      status={display === null ? null : display.tone === "online" ? "active" : "idle"}
       selected={selected}
       onClick={onSelect ? () => onSelect(agent.id) : undefined}
     />

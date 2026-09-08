@@ -1,4 +1,4 @@
-import type { MessageAuthorDto } from '@silverhand/shared';
+import type { MessageAuthorDto } from "@silverhand/shared";
 
 /**
  * The ONE author-presentation seam (#task:1792). Every surface that renders a
@@ -41,30 +41,27 @@ import type { MessageAuthorDto } from '@silverhand/shared';
  * claim. A hand-typed copy would let the two drift while the borrowed-word
  * justification silently stayed in the comment, so the sharing is structural.
  */
-export const UNRESOLVED_AGENT_LABEL = 'Unknown agent';
-export const UNRESOLVED_USER_LABEL = 'Unknown user';
+export const UNRESOLVED_AGENT_LABEL = "Unknown agent";
+export const UNRESOLVED_USER_LABEL = "Unknown user";
 
-type ActiveAgentAuthor = Extract<
-  MessageAuthorDto,
-  { status: 'active'; kind: 'agent' }
->;
+type ActiveAgentAuthor = Extract<MessageAuthorDto, { status: "active"; kind: "agent" }>;
 
 /** How the byline avatar should render. `active` arms resolve the image bytes
  *  from the author's own id (fed into a same-session object-url batch keyed by
  *  that id — never the roster). `deleted`/`unresolved` get a kind-generic
  *  neutral glyph: no runtime, no fetch. */
 export type AuthorAvatar =
-  | { variant: 'agent'; id: string; runtime: ActiveAgentAuthor['runtime'] }
-  | { variant: 'user'; id: string }
-  | { variant: 'neutral-agent' }
-  | { variant: 'neutral-user' };
+  | { variant: "agent"; id: string; runtime: ActiveAgentAuthor["runtime"] }
+  | { variant: "user"; id: string }
+  | { variant: "neutral-agent" }
+  | { variant: "neutral-user" };
 
 export interface AuthorPresentation {
   /** The name to render. NEVER derived from a `.trim()` on a possibly-null
    *  field — `unresolved` has no name, so it is branched off first. */
   label: string;
-  kind: 'agent' | 'user';
-  status: 'active' | 'deleted' | 'unresolved';
+  kind: "agent" | "user";
+  status: "active" | "deleted" | "unresolved";
   /** Only `deleted` shows the quiet "deleted" marker. `unresolved` does NOT —
    *  an unrecoverable identity is not the same claim as a deleted one. */
   isDeleted: boolean;
@@ -82,44 +79,38 @@ export interface AuthorPresentation {
  * error; this ordering keeps it a runtime impossibility too).
  */
 export function presentAuthor(author: MessageAuthorDto): AuthorPresentation {
-  if (author.status === 'unresolved') {
+  if (author.status === "unresolved") {
     return {
-      label: author.kind === 'agent' ? UNRESOLVED_AGENT_LABEL : UNRESOLVED_USER_LABEL,
+      label: author.kind === "agent" ? UNRESOLVED_AGENT_LABEL : UNRESOLVED_USER_LABEL,
       kind: author.kind,
-      status: 'unresolved',
+      status: "unresolved",
       isDeleted: false,
       navigableId: null,
-      avatar:
-        author.kind === 'agent'
-          ? { variant: 'neutral-agent' }
-          : { variant: 'neutral-user' },
+      avatar: author.kind === "agent" ? { variant: "neutral-agent" } : { variant: "neutral-user" },
     };
   }
   // `active` | `deleted` — both carry a non-null id + name.
   const label = author.display_name.trim() || author.name;
-  if (author.status === 'deleted') {
+  if (author.status === "deleted") {
     return {
       label,
       kind: author.kind,
-      status: 'deleted',
+      status: "deleted",
       isDeleted: true,
       navigableId: null,
-      avatar:
-        author.kind === 'agent'
-          ? { variant: 'neutral-agent' }
-          : { variant: 'neutral-user' },
+      avatar: author.kind === "agent" ? { variant: "neutral-agent" } : { variant: "neutral-user" },
     };
   }
   return {
     label,
     kind: author.kind,
-    status: 'active',
+    status: "active",
     isDeleted: false,
     navigableId: author.id,
     avatar:
-      author.kind === 'agent'
-        ? { variant: 'agent', id: author.id, runtime: author.runtime }
-        : { variant: 'user', id: author.id },
+      author.kind === "agent"
+        ? { variant: "agent", id: author.id, runtime: author.runtime }
+        : { variant: "user", id: author.id },
   };
 }
 
@@ -145,18 +136,18 @@ export function presentAuthor(author: MessageAuthorDto): AuthorPresentation {
  * rather than papering over it with a fabricated identity.
  */
 export type RowAuthor =
-  | { kind: 'system' }
-  | { kind: 'actor'; author: MessageAuthorDto }
-  | { kind: 'missing'; reason: 'absent' | 'kind-mismatch' };
+  | { kind: "system" }
+  | { kind: "actor"; author: MessageAuthorDto }
+  | { kind: "missing"; reason: "absent" | "kind-mismatch" };
 
 export function classifyRowAuthor(
-  fromKind: 'agent' | 'user' | 'system',
+  fromKind: "agent" | "user" | "system",
   author: MessageAuthorDto | null,
 ): RowAuthor {
-  if (fromKind === 'system') return { kind: 'system' };
-  if (author === null) return { kind: 'missing', reason: 'absent' };
-  if (author.kind !== fromKind) return { kind: 'missing', reason: 'kind-mismatch' };
-  return { kind: 'actor', author };
+  if (fromKind === "system") return { kind: "system" };
+  if (author === null) return { kind: "missing", reason: "absent" };
+  if (author.kind !== fromKind) return { kind: "missing", reason: "kind-mismatch" };
+  return { kind: "actor", author };
 }
 
 /**
@@ -172,9 +163,7 @@ export function classifyRowAuthor(
  * hand-assemble the deleted suffix and can never diverge on it.
  */
 export function authorStateLabel(presentation: AuthorPresentation): string {
-  return presentation.isDeleted
-    ? `${presentation.label} (deleted account)`
-    : presentation.label;
+  return presentation.isDeleted ? `${presentation.label} (deleted account)` : presentation.label;
 }
 
 /**
@@ -200,8 +189,8 @@ export function collectAuthorAvatarSources(
   for (const author of authors) {
     // Only the active arm carries bytes; deleted/unresolved/system never enter
     // the batch (they render a neutral glyph, no fetch).
-    if (author === null || author.status !== 'active') continue;
-    if (author.kind === 'agent') agents.set(author.id, author.avatar_url);
+    if (author === null || author.status !== "active") continue;
+    if (author.kind === "agent") agents.set(author.id, author.avatar_url);
     else users.set(author.id, author.avatar_url);
   }
   return {
@@ -222,7 +211,7 @@ export function collectAuthorAvatarSources(
  * {@link isSameAuthorGroup}, which treats a null key as "always a fresh group".
  */
 export function authorGroupKey(author: MessageAuthorDto | null): string | null {
-  if (author === null || author.status === 'unresolved') return null;
+  if (author === null || author.status === "unresolved") return null;
   return `${author.kind}:${author.id}`;
 }
 
@@ -231,10 +220,7 @@ export function authorGroupKey(author: MessageAuthorDto | null): string | null {
  * "unresolved / system never merges" rule in one tested place so no consumer
  * accidentally merges two null-keyed rows into a single byline.
  */
-export function isSameAuthorGroup(
-  a: MessageAuthorDto | null,
-  b: MessageAuthorDto | null,
-): boolean {
+export function isSameAuthorGroup(a: MessageAuthorDto | null, b: MessageAuthorDto | null): boolean {
   const keyA = authorGroupKey(a);
   return keyA !== null && keyA === authorGroupKey(b);
 }

@@ -1,17 +1,17 @@
-import { RangeInput } from '@/components/ui/range-input';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { toast } from 'sonner';
-import { Download, ExternalLink, ZoomIn, ZoomOut } from 'lucide-react';
-import { cn } from '@/lib/cn';
-import { fetchAttachmentBytes } from '@/lib/api';
-import { useAttachmentBlobToken } from '@/lib/attachment-blob-cache';
-import { attachmentPreviewKind } from '@/lib/attachment-preview';
-import { usePinchZoomLease } from '@/lib/pinch-zoom-lease';
-import { toastIcon } from '@/lib/toast-icons';
-import { Markdown } from '@/components/chat/Markdown';
-import { AttachmentHtmlPreview } from '@/components/chat/AttachmentHtmlPreview';
-import { openAttachmentExternally } from '@/components/chat/open-attachment';
-import { saveAttachmentToDisk } from '@/components/chat/save-attachment';
+import { RangeInput } from "@/components/ui/range-input";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { Download, ExternalLink, ZoomIn, ZoomOut } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { fetchAttachmentBytes } from "@/lib/api";
+import { useAttachmentBlobToken } from "@/lib/attachment-blob-cache";
+import { attachmentPreviewKind } from "@/lib/attachment-preview";
+import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
+import { toastIcon } from "@/lib/toast-icons";
+import { Markdown } from "@/components/chat/Markdown";
+import { AttachmentHtmlPreview } from "@/components/chat/AttachmentHtmlPreview";
+import { openAttachmentExternally } from "@/components/chat/open-attachment";
+import { saveAttachmentToDisk } from "@/components/chat/save-attachment";
 
 /**
  * The in-app previewer tab for a `.md` / `.html` attachment, keyed on the
@@ -38,9 +38,9 @@ export interface ChannelAttachmentTabProps {
 }
 
 type LoadState =
-  | { status: 'loading' }
-  | { status: 'ready'; text: string; contentType: string }
-  | { status: 'error'; message: string };
+  | { status: "loading" }
+  | { status: "ready"; text: string; contentType: string }
+  | { status: "error"; message: string };
 
 // Continuous host zoom for the HTML preview. Min below 100% so a fixed-size
 // author page can shrink into the pane; the slider and pinch move it
@@ -68,8 +68,8 @@ export function ChannelAttachmentTab({
   contentType,
 }: ChannelAttachmentTabProps): JSX.Element {
   const token = useAttachmentBlobToken(attachmentId);
-  const revision = Number(token.split(':')[1] ?? 0);
-  const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const revision = Number(token.split(":")[1] ?? 0);
+  const [state, setState] = useState<LoadState>({ status: "loading" });
   const [htmlZoom, setHtmlZoom] = useState(() => storedHtmlZoom(attachmentId));
   const shownRef = useRef<{ attachmentId: string; revision: number } | null>(null);
   // Read during render so a zoom committed in the same tick keys off the
@@ -107,20 +107,20 @@ export function ChannelAttachmentTab({
     // First mount (or a switch to a different attachment) shows the loader; a
     // same-attachment refetch keeps the shown content, so an in-place revision
     // never flashes a spinner.
-    if (!isRefresh) setState({ status: 'loading' });
+    if (!isRefresh) setState({ status: "loading" });
     fetchAttachmentBytes(attachmentId)
       .then(({ bytes, contentType: fetchedType }) => {
         if (cancelled) return;
         // Not `fatal` — a stray non-UTF-8 byte degrades to U+FFFD rather than
         // blanking the whole preview.
-        const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+        const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
         // Toast only on a genuine content revision — the revision segment rising,
         // not the reconnect epoch — so a bare reconnect never claims an update.
         const isRevisionBump =
           isRefresh && shown !== null && Number.isFinite(revision) && revision > shown.revision;
         shownRef.current = { attachmentId, revision };
-        setState({ status: 'ready', text, contentType: fetchedType });
-        if (isRevisionBump) toast('Attachment auto-updated', { icon: toastIcon('attachment') });
+        setState({ status: "ready", text, contentType: fetchedType });
+        if (isRevisionBump) toast("Attachment auto-updated", { icon: toastIcon("attachment") });
       })
       .catch((err) => {
         if (cancelled) return;
@@ -128,7 +128,7 @@ export function ChannelAttachmentTab({
         // has nothing to fall back to, so only it surfaces the error.
         if (isRefresh) return;
         setState({
-          status: 'error',
+          status: "error",
           message: err instanceof Error ? err.message : String(err),
         });
       });
@@ -138,12 +138,12 @@ export function ChannelAttachmentTab({
   }, [attachmentId, token]);
 
   const readyKind =
-    state.status === 'ready'
+    state.status === "ready"
       ? attachmentPreviewKind(state.contentType || contentType, filename)
       : null;
   const atMinZoom = htmlZoom <= HTML_ZOOM_MIN + 1e-3;
   const atMaxZoom = htmlZoom >= HTML_ZOOM_MAX - 1e-3;
-  usePinchZoomLease(readyKind === 'html');
+  usePinchZoomLease(readyKind === "html");
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg-base">
@@ -151,7 +151,7 @@ export function ChannelAttachmentTab({
         <span className="min-w-0 flex-1 truncate text-sm text-text-primary" title={filename}>
           {filename}
         </span>
-        {readyKind === 'html' ? (
+        {readyKind === "html" ? (
           <div className="flex shrink-0 items-center gap-1.5" role="group" aria-label="Zoom">
             <button
               type="button"
@@ -243,14 +243,14 @@ function AttachmentTabBody({
   htmlZoom: number;
   onPinch: (deltaY: number) => void;
 }): JSX.Element {
-  if (state.status === 'loading') {
+  if (state.status === "loading") {
     return <TabStatus>Loading…</TabStatus>;
   }
-  if (state.status === 'error') {
+  if (state.status === "error") {
     return <TabStatus>{state.message}</TabStatus>;
   }
   const kind = attachmentPreviewKind(state.contentType || fallbackContentType, filename);
-  if (kind === 'html') {
+  if (kind === "html") {
     return (
       <div className="min-h-0 flex-1">
         <AttachmentHtmlPreview
@@ -262,7 +262,7 @@ function AttachmentTabBody({
       </div>
     );
   }
-  if (kind === 'markdown') {
+  if (kind === "markdown") {
     return (
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
         <Markdown content={state.text} />
@@ -278,7 +278,7 @@ function AttachmentTabBody({
 function TabStatus({ children }: { children: React.ReactNode }): JSX.Element {
   return (
     <div
-      className={cn('flex min-h-0 flex-1 items-center justify-center p-6 text-xs text-text-muted')}
+      className={cn("flex min-h-0 flex-1 items-center justify-center p-6 text-xs text-text-muted")}
     >
       {children}
     </div>

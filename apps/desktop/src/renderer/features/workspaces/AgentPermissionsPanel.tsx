@@ -1,24 +1,20 @@
-import { useState } from 'react';
-import * as Select from '@radix-ui/react-select';
-import { AlertCircle, ChevronDown } from 'lucide-react';
-import { toast } from 'sonner';
-import type { AgentCapability, AgentDto } from '@silverhand/shared';
-import { ApiError } from '@/lib/api';
-import { getCurrentUserId } from '@/lib/current-user';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { Button } from '@/components/ui/button';
-import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
-import { Checkbox } from '@/components/ui/checkbox';
-import { cn } from '@/lib/cn';
-import { buildCapabilityGroups, CAPABILITY_COUNT } from './capability-meta';
-import { canEditAgentCapabilities } from './agent-permissions';
-import {
-  useAgentCapabilities,
-  useUpdateAgentCapabilities,
-  useWorkspaceMemberLists,
-} from './hooks';
+import { useState } from "react";
+import * as Select from "@radix-ui/react-select";
+import { AlertCircle, ChevronDown } from "lucide-react";
+import { toast } from "sonner";
+import type { AgentCapability, AgentDto } from "@silverhand/shared";
+import { ApiError } from "@/lib/api";
+import { getCurrentUserId } from "@/lib/current-user";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { Button } from "@/components/ui/button";
+import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
+import { Checkbox } from "@/components/ui/checkbox";
+import { cn } from "@/lib/cn";
+import { buildCapabilityGroups, CAPABILITY_COUNT } from "./capability-meta";
+import { canEditAgentCapabilities } from "./agent-permissions";
+import { useAgentCapabilities, useUpdateAgentCapabilities, useWorkspaceMemberLists } from "./hooks";
 
 const GROUPS = buildCapabilityGroups();
 
@@ -37,12 +33,12 @@ function setEq(a: Set<string>, b: Set<string>): boolean {
  *  (400) — both must be visible even though the front-end also gates. */
 function describeSaveError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.kind === 'backend_unreachable') return 'Save failed: cannot reach backend';
+    if (err.kind === "backend_unreachable") return "Save failed: cannot reach backend";
     if (err.status === 403) return "You don't have edit permission for this agent";
-    if (err.status === 400) return 'Save failed: submitted an unknown capability';
+    if (err.status === 400) return "Save failed: submitted an unknown capability";
     return `Save failed (${err.status})`;
   }
-  return 'Save failed';
+  return "Save failed";
 }
 
 export interface AgentPermissionsPanelProps {
@@ -68,8 +64,8 @@ export function AgentPermissionsPanel({
   const avatarUrls = useAgentAvatarObjectUrls(agents);
   // Resolve to a valid selection once members load; default to the first.
   const selectedId =
-    picked && agents.some(a => a.id === picked) ? picked : agents[0]?.id ?? null;
-  const selectedAgent = agents.find(a => a.id === selectedId) ?? null;
+    picked && agents.some((a) => a.id === picked) ? picked : (agents[0]?.id ?? null);
+  const selectedAgent = agents.find((a) => a.id === selectedId) ?? null;
 
   // Per-agent edit gate (#task:1778): a workspace governor (owner|admin) edits
   // any agent; everyone else edits ONLY the agent they created. Derived from
@@ -100,8 +96,8 @@ export function AgentPermissionsPanel({
   if (agents.length === 0) {
     return (
       <PanelMessage>
-        This workspace has no agent members yet. Add an agent first, then manage
-        its permissions here.
+        This workspace has no agent members yet. Add an agent first, then manage its permissions
+        here.
       </PanelMessage>
     );
   }
@@ -124,8 +120,8 @@ export function AgentPermissionsPanel({
             <div className="flex items-start gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border-subtle bg-bg-elevated/40 p-2.5 text-xs text-text-muted">
               <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
               <span>
-                You can view this agent's permissions; editing requires owner /
-                admin, or being the agent's creator.
+                You can view this agent's permissions; editing requires owner / admin, or being the
+                agent's creator.
               </span>
             </div>
           ) : null}
@@ -153,15 +149,15 @@ function AgentSelect({
   avatarUrls: Map<string, string | null>;
   onChange: (id: string) => void;
 }): JSX.Element {
-  const selected = agents.find(a => a.id === value) ?? null;
+  const selected = agents.find((a) => a.id === value) ?? null;
   return (
     <Select.Root value={value ?? undefined} onValueChange={onChange}>
       <Select.Trigger
         className={cn(
-          'flex h-9 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] bg-bg-floating px-3 text-sm',
-          'border-[length:var(--control-border-width)] border-border transition-colors',
-          'hover:border-[color:var(--border-control-hover)]',
-          'data-[state=open]:border-border-focus focus-visible:outline-none focus-visible:border-border-focus',
+          "flex h-9 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] bg-bg-floating px-3 text-sm",
+          "border-[length:var(--control-border-width)] border-border transition-colors",
+          "hover:border-[color:var(--border-control-hover)]",
+          "data-[state=open]:border-border-focus focus-visible:outline-none focus-visible:border-border-focus",
         )}
       >
         {selected ? (
@@ -190,7 +186,7 @@ function AgentSelect({
           className="z-[var(--z-dialog)] min-w-[var(--radix-select-trigger-width)] rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating p-1 text-sm shadow-popover"
         >
           <Select.Viewport>
-            {agents.map(agent => (
+            {agents.map((agent) => (
               <Select.Item
                 key={agent.id}
                 value={agent.id}
@@ -292,33 +288,33 @@ function AgentCapabilityEditor({
           wide (max-w-4xl) dialog. `break-inside-avoid` keeps a group whole;
           multicol can't use flex `gap`, so groups carry their own `mb-4`. */}
       <div className="columns-2 gap-x-6">
-        {GROUPS.map(group => (
+        {GROUPS.map((group) => (
           <div key={group.id} className="mb-4 flex break-inside-avoid flex-col gap-1.5 last:mb-0">
             <div className="text-[length:var(--text-meta)] font-semibold uppercase tracking-wide text-text-muted">
               {group.label}
             </div>
-            {group.items.map(item => {
+            {group.items.map((item) => {
               const checked = effective.has(item.key);
               const highlight = highlightCapability === item.key;
               return (
                 <div
                   key={item.key}
                   className={cn(
-                    'flex items-start gap-2 rounded-[var(--control-radius)] px-1.5 py-1',
-                    highlight ? '[outline:2px_solid_var(--border-focus)] [outline-offset:-2px]' : null,
+                    "flex items-start gap-2 rounded-[var(--control-radius)] px-1.5 py-1",
+                    highlight
+                      ? "[outline:2px_solid_var(--border-focus)] [outline-offset:-2px]"
+                      : null,
                   )}
                 >
                   <Checkbox
                     checked={checked}
                     disabled={!canEdit || update.isPending}
-                    onCheckedChange={c => toggle(item.key, c)}
+                    onCheckedChange={(c) => toggle(item.key, c)}
                     className="mt-0.5"
                     aria-label={item.label}
                   />
                   <span className="flex flex-col">
-                    <span className="text-xs font-medium text-text-primary">
-                      {item.label}
-                    </span>
+                    <span className="text-xs font-medium text-text-primary">{item.label}</span>
                     <span className="text-[length:var(--text-meta)] leading-tight text-text-muted">
                       {item.hint}
                     </span>
@@ -343,7 +339,7 @@ function AgentCapabilityEditor({
             disabled={!dirty || update.isPending}
             {...primaryAction()}
           >
-            {update.isPending ? 'Saving…' : 'Save'}
+            {update.isPending ? "Saving…" : "Save"}
           </Button>
           <Button
             variant="outline"
@@ -371,16 +367,16 @@ function PanelSkeleton(): JSX.Element {
 
 function PanelMessage({
   children,
-  tone = 'muted',
+  tone = "muted",
 }: {
   children: React.ReactNode;
-  tone?: 'muted' | 'error';
+  tone?: "muted" | "error";
 }): JSX.Element {
   return (
     <div
       className={cn(
-        'flex items-center gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated/40 p-4 text-sm',
-        tone === 'error' ? 'text-error' : 'text-text-muted',
+        "flex items-center gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated/40 p-4 text-sm",
+        tone === "error" ? "text-error" : "text-text-muted",
       )}
     >
       <span className="flex flex-1 items-center gap-2">{children}</span>

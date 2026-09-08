@@ -32,13 +32,13 @@
  * deliberately omits the hook — a loading placeholder must stay hover-inert.
  */
 
-import type { ComponentPropsWithoutRef, ElementType, ReactNode } from 'react';
+import type { ComponentPropsWithoutRef, ElementType, ReactNode } from "react";
 
 /** Frame-only class: corner + border + ground + transition. Exported for the
  *  loading skeleton, which needs the frame WITHOUT the hover hook. Live cards
  *  should render `<CollectionItemCard>` rather than spread this by hand. */
 export const COLLECTION_CARD_CLASS =
-  'rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating transition';
+  "rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating transition";
 
 type CollectionItemCardProps<T extends ElementType> = {
   /** Rendered element. Defaults to `div`; interactive consumers pass `button`
@@ -46,20 +46,18 @@ type CollectionItemCardProps<T extends ElementType> = {
   as?: T;
   className?: string;
   children?: ReactNode;
-} & Omit<ComponentPropsWithoutRef<T>, 'as' | 'className' | 'children'>;
+} & Omit<ComponentPropsWithoutRef<T>, "as" | "className" | "children">;
 
-export function CollectionItemCard<T extends ElementType = 'div'>({
+export function CollectionItemCard<T extends ElementType = "div">({
   as,
   className,
   children,
   ...rest
 }: CollectionItemCardProps<T>): JSX.Element {
-  const Tag = (as ?? 'div') as ElementType;
+  const Tag = (as ?? "div") as ElementType;
   return (
     <Tag
-      className={
-        className ? `${COLLECTION_CARD_CLASS} ${className}` : COLLECTION_CARD_CLASS
-      }
+      className={className ? `${COLLECTION_CARD_CLASS} ${className}` : COLLECTION_CARD_CLASS}
       {...rest}
       // The theme-paint marker is spread LAST so a consumer's passthrough props
       // can never override or drop it — the shell always owns the hook, which is

@@ -2,7 +2,7 @@
    Theme: Slack Dark
    ================================================================ */
 
-[data-theme='slack-dark'] {
+[data-theme="slack-dark"] {
   /* Task references: prose and system activity retain distinct emphasis. */
   --task-ref-font: initial;
   --task-ref-weight: 500;
@@ -255,10 +255,10 @@
 
   /* ── Fonts ── */
   --font-sans:
-    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'Lato', 'PingFang SC',
-    'Hiragino Sans GB', sans-serif;
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Lato", "PingFang SC",
+    "Hiragino Sans GB", sans-serif;
   --font-serif: var(--font-sans);
-  --font-mono: 'Hack', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  --font-mono: "Hack", "JetBrains Mono", "SF Mono", ui-monospace, monospace;
 
   /* ── Markdown body sizes (cross-theme baseline) ── */
   --md-prose-size: 14px;
@@ -277,31 +277,31 @@
   --text-on-dark-pop: var(--accent);
 }
 
-[data-theme='slack-dark'] [data-workspace-icon] {
+[data-theme="slack-dark"] [data-workspace-icon] {
   background-color: var(--text-secondary);
   color: var(--bg-base);
   border-radius: 0;
   font-size: 11px;
 }
 
-[data-theme='slack-dark'] [data-message-task-tag] {
+[data-theme="slack-dark"] [data-message-task-tag] {
   border: none;
 }
 
-[data-theme='slack-dark'] [data-collection-card]:hover {
+[data-theme="slack-dark"] [data-collection-card]:hover {
   background-color: var(--bg-hover);
   box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.45);
   transform: translateY(-1px);
 }
 
-[data-theme='slack-dark'] [data-message-row] {
+[data-theme="slack-dark"] [data-message-row] {
   border-width: 1px;
 }
-[data-theme='slack-dark'] [data-message-row].border-accent {
+[data-theme="slack-dark"] [data-message-row].border-accent {
   border-color: rgba(255, 255, 255, 0.26);
 }
 
-[data-theme='slack-dark'] [data-composer-shell]:focus-within {
+[data-theme="slack-dark"] [data-composer-shell]:focus-within {
   border-color: var(--border-subtle);
   box-shadow: 0 0 0 2px
     color-mix(
@@ -311,37 +311,37 @@
     );
 }
 
-[data-theme='slack-dark'] [data-channel-icon] {
+[data-theme="slack-dark"] [data-channel-icon] {
   color: var(--text-muted);
 }
 
-[data-theme='slack-dark'] [data-row-selected] [data-channel-icon] {
+[data-theme="slack-dark"] [data-row-selected] [data-channel-icon] {
   color: var(--text-on-selected);
 }
 
-[data-theme='slack-dark'] [data-conversation-hash-icon] {
+[data-theme="slack-dark"] [data-conversation-hash-icon] {
   display: inline-block;
   color: var(--accent);
   stroke-width: 2.5;
   margin-right: 0.1em;
 }
 
-[data-theme='slack-dark'] [data-tasks-board] [data-task-number] {
+[data-theme="slack-dark"] [data-tasks-board] [data-task-number] {
   background: var(--bg-floating);
   border-color: var(--border);
   box-shadow: var(--card-shadow);
 }
-[data-theme='slack-dark'] [data-tasks-board] [data-task-number]:hover {
+[data-theme="slack-dark"] [data-tasks-board] [data-task-number]:hover {
   border-color: var(--accent);
   box-shadow: var(--shadow-popover);
 }
 
-[data-theme='slack-dark'] [data-tasks-column] {
+[data-theme="slack-dark"] [data-tasks-column] {
   background-color: var(--bg-elevated);
   border-color: var(--border);
 }
 
-[data-theme='slack-dark'] {
+[data-theme="slack-dark"] {
   --message-activity-color: var(--accent);
   --message-activity-radius: 3px;
 }

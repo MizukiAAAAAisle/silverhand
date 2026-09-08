@@ -12,41 +12,41 @@
 //      key exempted BECAUSE the layer-1 sweep covers it is checked against the
 //      production sweep predicate (the whole-cache invariant cannot falsify that
 //      claim — those seeds have redundant, unattributable coverage).
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import { QueryClient } from '@tanstack/react-query';
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
 import {
   activityKey,
   attentionBadgesKey,
   attentionModesKey,
   workspaceAttentionPreferenceKey,
-} from '../attention/hooks';
-import { favoritesKey } from '../favorites/hooks';
+} from "../attention/hooks";
+import { favoritesKey } from "../favorites/hooks";
 import {
   messageUnreadByConversationKey,
   messageUnreadSummaryKey,
-} from '../channels/message-unread';
+} from "../channels/message-unread";
 import {
   handleViewerWorkspaceRemoved,
   isWorkspaceKeyed,
   VIEWER_LOCAL_KEY_CLASSIFICATION,
   VIEWER_LOCAL_READ_MODELS,
-} from './viewer-removal-contract';
+} from "./viewer-removal-contract";
 
-const REMOVED = 'ws-removed';
-const SURVIVOR = 'ws-survivor';
+const REMOVED = "ws-removed";
+const SURVIVOR = "ws-survivor";
 
 // Seed each registered read model with the removed + a survivor workspace, keyed
 // by registry id. A runtime lockstep test asserts this set equals the registry,
 // so a new read model with no seed here is caught.
 const SEEDS: Record<string, (qc: QueryClient) => void> = {
-  activity: qc => {
+  activity: (qc) => {
     const item = (id: string, workspaceId: string) => ({
       id,
-      kind: 'unread' as const,
-      salience: 'ambient' as const,
+      kind: "unread" as const,
+      salience: "ambient" as const,
       location: {
-        kind: 'workspace_channel' as const,
+        kind: "workspace_channel" as const,
         workspace_id: workspaceId,
         title: `#${id}`,
       },
@@ -67,24 +67,24 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
     // now covers an item that is a survivor for a STRUCTURAL reason rather than
     // because its id happens not to match.
     const dm = {
-      id: 'dm',
-      kind: 'unread' as const,
-      salience: 'directed' as const,
+      id: "dm",
+      kind: "unread" as const,
+      salience: "directed" as const,
       location: {
-        kind: 'direct_pair' as const,
+        kind: "direct_pair" as const,
         counterpart: {
-          status: 'active' as const,
-          kind: 'agent' as const,
-          id: 'agent-dm',
-          name: 'agent-dm',
-          display_name: 'Agent DM',
+          status: "active" as const,
+          kind: "agent" as const,
+          id: "agent-dm",
+          name: "agent-dm",
+          display_name: "Agent DM",
           avatar_url: null,
-          runtime: 'claude' as const,
+          runtime: "claude" as const,
         },
       },
-      conversation_id: 'c-dm',
+      conversation_id: "c-dm",
       thread_root_id: null,
-      message_id: 'm-dm',
+      message_id: "m-dm",
       notification_id: null,
       thread_root_preview: null,
       preview: null,
@@ -93,15 +93,15 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       unread_count: 1,
     };
     qc.setQueryData(activityKey(), {
-      items: [item('gone', REMOVED), item('keep', SURVIVOR), dm],
+      items: [item("gone", REMOVED), item("keep", SURVIVOR), dm],
     });
   },
-  favorites: qc => {
+  favorites: (qc) => {
     // A favorite row is a CONVERSATION since #task:1888; `workspace_id` is its
     // PARENT — which is what makes the removed workspace present here, and what the
     // cleanup filters on (one lost workspace can drop SEVERAL rows).
     const row = (conversationId: string, workspaceId: string) => ({
-      roster_policy: 'open' as const,
+      roster_policy: "open" as const,
       favorite_key: `conversation:${conversationId}`,
       entity_id: conversationId,
       workspace_id: workspaceId,
@@ -112,7 +112,7 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       unread_count: 0,
     });
     qc.setQueryData(favoritesKey, {
-      items: [row('c-gone', REMOVED), row('c-keep', SURVIVOR)],
+      items: [row("c-gone", REMOVED), row("c-keep", SURVIVOR)],
       // The real DTO carries sort entries whose `entity_id` is the row's
       // `favorite_key`. An empty `entries` here was the false-green Cindy flagged,
       // so seed the removed row's entry plus the survivor's. Note the entry key can
@@ -120,33 +120,33 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       // whole-cache invariant went vacuous with #task:1888 — the orphan-entry drop
       // is asserted directly in `features/favorites` instead.
       viewer_sort: {
-        list_key: 'favorites',
+        list_key: "favorites",
         modes: {},
         entries: [
-          { entity_id: 'conversation:c-gone', rank: 1, last_accessed_at: 1, starred_at: 1 },
-          { entity_id: 'conversation:c-keep', rank: 2, last_accessed_at: 1, starred_at: 1 },
+          { entity_id: "conversation:c-gone", rank: 1, last_accessed_at: 1, starred_at: 1 },
+          { entity_id: "conversation:c-keep", rank: 2, last_accessed_at: 1, starred_at: 1 },
         ],
       },
     });
   },
-  'message-unread-summary': qc => {
+  "message-unread-summary": (qc) => {
     qc.setQueryData(messageUnreadSummaryKey, {
       by_workspace: { [REMOVED]: 3, [SURVIVOR]: 5 },
     });
     // by_conversation is workspace-KEYED — dropped by the layer-1 sweep (and, for
     // belt-and-suspenders, by this read model's cleanup).
     qc.setQueryData(messageUnreadByConversationKey(REMOVED), {
-      by_conversation: { 'c-gone': 3 },
+      by_conversation: { "c-gone": 3 },
       latest_by_conversation: {},
       total: 3,
     });
     qc.setQueryData(messageUnreadByConversationKey(SURVIVOR), {
-      by_conversation: { 'c-keep': 5 },
+      by_conversation: { "c-keep": 5 },
       latest_by_conversation: {},
       total: 5,
     });
   },
-  'attention-badges': qc => {
+  "attention-badges": (qc) => {
     qc.setQueryData(attentionBadgesKey(), {
       by_workspace: { [REMOVED]: 4, [SURVIVOR]: 6 },
       total: 10,
@@ -163,14 +163,19 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       workspace_id: REMOVED,
       muted: false,
       channels: [
-        { conversation_id: 'c-gone', mode: 'all', effective_mode: 'all', directed_unread_count: 0 },
+        { conversation_id: "c-gone", mode: "all", effective_mode: "all", directed_unread_count: 0 },
       ],
     });
     qc.setQueryData(attentionModesKey(SURVIVOR), {
       workspace_id: SURVIVOR,
       muted: true,
       channels: [
-        { conversation_id: 'c-keep', mode: 'all', effective_mode: 'mute', directed_unread_count: 1 },
+        {
+          conversation_id: "c-keep",
+          mode: "all",
+          effective_mode: "mute",
+          directed_unread_count: 1,
+        },
       ],
     });
   },
@@ -180,8 +185,8 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
 // workspaces/hooks.ts as `['workspaces', wsId, 'channels']`). Seeding it proves
 // the layer-1 sweep covers the whole family by FORM, with no registration.
 function seedWorkspaceKeyedSiblings(qc: QueryClient): void {
-  qc.setQueryData(['workspaces', REMOVED, 'channels'], { items: [REMOVED] });
-  qc.setQueryData(['workspaces', SURVIVOR, 'channels'], { items: [SURVIVOR] });
+  qc.setQueryData(["workspaces", REMOVED, "channels"], { items: [REMOVED] });
+  qc.setQueryData(["workspaces", SURVIVOR, "channels"], { items: [SURVIVOR] });
 }
 
 /** Structured reference check (no `JSON.stringify().includes()` — that
@@ -197,11 +202,11 @@ function stringReferences(value: string, workspaceId: string): boolean {
 }
 
 function valueReferences(value: unknown, workspaceId: string): boolean {
-  if (typeof value === 'string') return stringReferences(value, workspaceId);
+  if (typeof value === "string") return stringReferences(value, workspaceId);
   if (Array.isArray(value)) {
-    return value.some(v => valueReferences(v, workspaceId));
+    return value.some((v) => valueReferences(v, workspaceId));
   }
-  if (value && typeof value === 'object') {
+  if (value && typeof value === "object") {
     return Object.entries(value).some(
       ([k, v]) => stringReferences(k, workspaceId) || valueReferences(v, workspaceId),
     );
@@ -213,25 +218,23 @@ function cacheMentions(qc: QueryClient, workspaceId: string): boolean {
   return qc
     .getQueryCache()
     .getAll()
-    .some(q => {
+    .some((q) => {
       const inKey =
         Array.isArray(q.queryKey) &&
-        q.queryKey.some(
-          seg => typeof seg === 'string' && stringReferences(seg, workspaceId),
-        );
+        q.queryKey.some((seg) => typeof seg === "string" && stringReferences(seg, workspaceId));
       const inData = valueReferences(q.state.data ?? null, workspaceId);
       return inKey || inData;
     });
 }
 
-describe('viewer-local projection removal contract (#task:1412)', () => {
-  it('registry & seed set stay in lockstep (every read model is exercised)', () => {
-    const registered = VIEWER_LOCAL_READ_MODELS.map(m => m.id).sort();
+describe("viewer-local projection removal contract (#task:1412)", () => {
+  it("registry & seed set stay in lockstep (every read model is exercised)", () => {
+    const registered = VIEWER_LOCAL_READ_MODELS.map((m) => m.id).sort();
     const seeded = Object.keys(SEEDS).sort();
     expect(seeded).toEqual(registered);
   });
 
-  it('after removal the workspace appears NOWHERE in the cache; survivor intact', () => {
+  it("after removal the workspace appears NOWHERE in the cache; survivor intact", () => {
     const qc = new QueryClient();
     for (const seed of Object.values(SEEDS)) seed(qc);
     seedWorkspaceKeyedSiblings(qc);
@@ -250,10 +253,10 @@ describe('viewer-local projection removal contract (#task:1412)', () => {
     // speak for: it mentions no workspace at all, so only a direct read proves the
     // chokepoint dropped by ATTRIBUTION rather than by list position (#task:2115).
     const activity = qc.getQueryData<{ items: { id: string }[] }>(activityKey());
-    expect(activity?.items.map(i => i.id)).toEqual(['keep', 'dm']);
+    expect(activity?.items.map((i) => i.id)).toEqual(["keep", "dm"]);
   });
 
-  it('is idempotent and cold-safe: a second run / empty cache never throws', () => {
+  it("is idempotent and cold-safe: a second run / empty cache never throws", () => {
     const qc = new QueryClient();
     // Cold cache → no-op, no throw.
     expect(() => handleViewerWorkspaceRemoved(qc, REMOVED)).not.toThrow();
@@ -265,8 +268,8 @@ describe('viewer-local projection removal contract (#task:1412)', () => {
     expect(cacheMentions(qc, REMOVED)).toBe(false);
   });
 
-  describe('classification is registry-anchored (layer 3, not a drifting hand-list)', () => {
-    it('the `cleaned` set corresponds 1:1 to the registry keys', () => {
+  describe("classification is registry-anchored (layer 3, not a drifting hand-list)", () => {
+    it("the `cleaned` set corresponds 1:1 to the registry keys", () => {
       // Map each cleaned symbol name to its actual key value.
       const keyBySymbol: Record<string, unknown> = {
         activityKey: activityKey(),
@@ -280,18 +283,16 @@ describe('viewer-local projection removal contract (#task:1412)', () => {
       }
       // …and every registry entry's key is one of the cleaned symbols' keys, and
       // the counts match — so `cleaned` cannot drift from the registry.
-      const cleanedKeys = VIEWER_LOCAL_KEY_CLASSIFICATION.cleaned.map(n =>
+      const cleanedKeys = VIEWER_LOCAL_KEY_CLASSIFICATION.cleaned.map((n) =>
         JSON.stringify(keyBySymbol[n]),
       );
       for (const rm of VIEWER_LOCAL_READ_MODELS) {
         expect(cleanedKeys).toContain(JSON.stringify(rm.key));
       }
-      expect(VIEWER_LOCAL_KEY_CLASSIFICATION.cleaned.length).toBe(
-        VIEWER_LOCAL_READ_MODELS.length,
-      );
+      expect(VIEWER_LOCAL_KEY_CLASSIFICATION.cleaned.length).toBe(VIEWER_LOCAL_READ_MODELS.length);
     });
 
-    it('cleaned ∩ exempt = ∅ and every exempt has a reason', () => {
+    it("cleaned ∩ exempt = ∅ and every exempt has a reason", () => {
       const cleaned = new Set<string>(VIEWER_LOCAL_KEY_CLASSIFICATION.cleaned);
       for (const name of Object.keys(VIEWER_LOCAL_KEY_CLASSIFICATION.exempt)) {
         expect(cleaned.has(name)).toBe(false);
@@ -308,13 +309,13 @@ describe('viewer-local projection removal contract (#task:1412)', () => {
     // the prefix alone still passes. Call the PRODUCTION predicate on the
     // PRODUCTION key builder — a re-shaped key that drops the `['workspaces',
     // wsId, …]` prefix goes red here and nowhere else (#task:2078).
-    it('every sweep-exempt key really is matched by the production sweep predicate', () => {
+    it("every sweep-exempt key really is matched by the production sweep predicate", () => {
       const SWEEP_KEYS: Record<string, (workspaceId: string) => readonly unknown[]> = {
         messageUnreadByConversationKey,
         workspaceAttentionPreferenceKey,
       };
       const sweepExempt = Object.entries(VIEWER_LOCAL_KEY_CLASSIFICATION.exempt)
-        .filter(([, reason]) => reason.includes('layer-1 predicate sweep'))
+        .filter(([, reason]) => reason.includes("layer-1 predicate sweep"))
         .map(([name]) => name);
       expect(sweepExempt.sort()).toEqual(Object.keys(SWEEP_KEYS).sort());
       for (const [name, build] of Object.entries(SWEEP_KEYS)) {
@@ -326,11 +327,11 @@ describe('viewer-local projection removal contract (#task:1412)', () => {
 
   // Layer 3 smoke: a viewer-local cache added to a read-model file without a
   // removal decision must not slip through unclassified.
-  describe('source smoke: every exported read-model key is classified', () => {
+  describe("source smoke: every exported read-model key is classified", () => {
     const READ_MODEL_FILES = [
-      '../attention/hooks.ts',
-      '../favorites/hooks.ts',
-      '../channels/message-unread.ts',
+      "../attention/hooks.ts",
+      "../favorites/hooks.ts",
+      "../channels/message-unread.ts",
     ];
     const EXPORTED_KEY = /export const (\w*Key)\b/g;
 
@@ -339,9 +340,9 @@ describe('viewer-local projection removal contract (#task:1412)', () => {
       ...Object.keys(VIEWER_LOCAL_KEY_CLASSIFICATION.exempt),
     ]);
 
-    it('finds keys to check (smoke is not vacuous)', () => {
+    it("finds keys to check (smoke is not vacuous)", () => {
       const total = READ_MODEL_FILES.reduce((n, rel) => {
-        const src = readFileSync(new URL(rel, import.meta.url), 'utf8');
+        const src = readFileSync(new URL(rel, import.meta.url), "utf8");
         return n + [...src.matchAll(EXPORTED_KEY)].length;
       }, 0);
       expect(total).toBeGreaterThanOrEqual(6);
@@ -349,9 +350,9 @@ describe('viewer-local projection removal contract (#task:1412)', () => {
 
     for (const rel of READ_MODEL_FILES) {
       it(`every exported *Key in ${rel} is cleaned or exempt`, () => {
-        const src = readFileSync(new URL(rel, import.meta.url), 'utf8');
+        const src = readFileSync(new URL(rel, import.meta.url), "utf8");
         const names = [...src.matchAll(EXPORTED_KEY)]
-          .map(m => m[1])
+          .map((m) => m[1])
           .filter((n): n is string => Boolean(n));
         for (const name of names) {
           expect(

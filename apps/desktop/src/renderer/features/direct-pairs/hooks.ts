@@ -1,21 +1,17 @@
-import { useEffect } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   DirectPairListItem,
   DirectPairListResponse,
   MessageSendAck,
-} from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
-import { api } from '@/lib/api';
-import {
-  isCurrentViewerScope,
-  onWsFrame,
-  subscribeViewerScope,
-} from '@/lib/ws-client';
+} from "@silverhand/shared";
+import { apiPaths } from "@silverhand/shared";
+import { api } from "@/lib/api";
+import { isCurrentViewerScope, onWsFrame, subscribeViewerScope } from "@/lib/ws-client";
 
 /** Query key for the viewer's direct-pair list. ONE cache entry: the list is
  *  viewer-global (like Activity and favorites) and takes no other coordinate. */
-export const directPairsKey = ['direct-pairs'] as const;
+export const directPairsKey = ["direct-pairs"] as const;
 
 export const DIRECT_PAIRS_QUERY_POLICY = {
   staleMs: Infinity,
@@ -64,11 +60,7 @@ export function findAgentDirectPair(
   pairs: readonly DirectPairListItem[],
   agentId: string,
 ): DirectPairListItem | null {
-  return (
-    pairs.find(
-      p => p.counterpart.kind === 'agent' && p.counterpart.id === agentId,
-    ) ?? null
-  );
+  return pairs.find((p) => p.counterpart.kind === "agent" && p.counterpart.id === agentId) ?? null;
 }
 
 /**
@@ -90,18 +82,14 @@ export interface DraftHandoffFacts {
 }
 
 /** Handoff verdict: leave the draft route for the real pair, or stay. */
-export type DraftHandoffDecision =
-  | { kind: 'stay' }
-  | { kind: 'handoff'; conversationId: string };
+export type DraftHandoffDecision = { kind: "stay" } | { kind: "handoff"; conversationId: string };
 
-export function decideDraftHandoff(
-  facts: DraftHandoffFacts,
-): DraftHandoffDecision {
-  if (facts.existingPairId === null) return { kind: 'stay' };
+export function decideDraftHandoff(facts: DraftHandoffFacts): DraftHandoffDecision {
+  if (facts.existingPairId === null) return { kind: "stay" };
   if (facts.sendPending || facts.sendFailed || facts.draftDirty) {
-    return { kind: 'stay' };
+    return { kind: "stay" };
   }
-  return { kind: 'handoff', conversationId: facts.existingPairId };
+  return { kind: "handoff", conversationId: facts.existingPairId };
 }
 
 /**
@@ -132,11 +120,11 @@ export function decideDraftHandoff(
  * successful read may claim absence.
  */
 export type DirectPairPaneState =
-  | { kind: 'idle' }
-  | { kind: 'resolving' }
-  | { kind: 'ready'; pair: DirectPairListItem }
-  | { kind: 'error' }
-  | { kind: 'absent' };
+  | { kind: "idle" }
+  | { kind: "resolving" }
+  | { kind: "ready"; pair: DirectPairListItem }
+  | { kind: "error" }
+  | { kind: "absent" };
 
 /** The query facts {@link projectDirectPairPane} needs, named so the projection
  *  is a pure function of them and can be exercised without React or a socket.
@@ -157,12 +145,12 @@ export function projectDirectPairPane(
   conversationId: string | null,
   facts: DirectPairListQueryFacts,
 ): DirectPairPaneState {
-  if (conversationId === null) return { kind: 'idle' };
-  const pair = facts.rows?.find(p => p.conversation_id === conversationId);
-  if (pair) return { kind: 'ready', pair };
-  if (facts.isPending || facts.isFetching) return { kind: 'resolving' };
-  if (facts.isError) return { kind: 'error' };
-  return { kind: 'absent' };
+  if (conversationId === null) return { kind: "idle" };
+  const pair = facts.rows?.find((p) => p.conversation_id === conversationId);
+  if (pair) return { kind: "ready", pair };
+  if (facts.isPending || facts.isFetching) return { kind: "resolving" };
+  if (facts.isError) return { kind: "error" };
+  return { kind: "absent" };
 }
 
 /**
@@ -194,14 +182,12 @@ export interface DirectPairPaneProps {
  * into `idle`) changes an assertable value instead of silently changing only the
  * shipped UI.
  */
-export function directPairPaneProps(
-  state: DirectPairPaneState,
-): DirectPairPaneProps {
+export function directPairPaneProps(state: DirectPairPaneState): DirectPairPaneProps {
   return {
-    pair: state.kind === 'ready' ? state.pair : null,
-    resolving: state.kind === 'resolving',
-    loadFailed: state.kind === 'error',
-    notFound: state.kind === 'absent',
+    pair: state.kind === "ready" ? state.pair : null,
+    resolving: state.kind === "resolving",
+    loadFailed: state.kind === "error",
+    notFound: state.kind === "absent",
   };
 }
 
@@ -210,9 +196,7 @@ export function directPairPaneProps(
  * over {@link projectDirectPairPane} — the decision lives in the pure function so
  * the state machine is testable and every consumer reads the same one.
  */
-export function useDirectPairPane(
-  conversationId: string | null,
-): DirectPairPaneState {
+export function useDirectPairPane(conversationId: string | null): DirectPairPaneState {
   const { data, isPending, isFetching, isError } = useDirectPairsList();
   return projectDirectPairPane(conversationId, {
     rows: data?.direct_pairs,
@@ -241,30 +225,30 @@ export interface DirectPairAssigneeCandidate {
  *  non-answers that must NOT read as "no agent to assign"; only `ready` with an
  *  empty list is an authoritative "nobody assignable here". */
 export type DirectPairAssigneeView =
-  | { status: 'loading'; candidates: readonly DirectPairAssigneeCandidate[] }
-  | { status: 'error'; candidates: readonly DirectPairAssigneeCandidate[] }
-  | { status: 'ready'; candidates: readonly DirectPairAssigneeCandidate[] };
+  | { status: "loading"; candidates: readonly DirectPairAssigneeCandidate[] }
+  | { status: "error"; candidates: readonly DirectPairAssigneeCandidate[] }
+  | { status: "ready"; candidates: readonly DirectPairAssigneeCandidate[] };
 
 export function projectDirectPairAssignee(
   pane: DirectPairPaneState,
   currentAgentId: string | null,
 ): DirectPairAssigneeView {
   switch (pane.kind) {
-    case 'idle':
-    case 'resolving':
-      return { status: 'loading', candidates: [] };
-    case 'error':
-      return { status: 'error', candidates: [] };
-    case 'absent':
-      return { status: 'ready', candidates: [] };
-    case 'ready': {
+    case "idle":
+    case "resolving":
+      return { status: "loading", candidates: [] };
+    case "error":
+      return { status: "error", candidates: [] };
+    case "absent":
+      return { status: "ready", candidates: [] };
+    case "ready": {
       const cp = pane.pair.counterpart;
-      if (cp.status !== 'active' || cp.kind !== 'agent') {
+      if (cp.status !== "active" || cp.kind !== "agent") {
         // A human counterpart is never assignable; a `deleted` one is gone.
-        return { status: 'ready', candidates: [] };
+        return { status: "ready", candidates: [] };
       }
       return {
-        status: 'ready',
+        status: "ready",
         candidates: [
           {
             id: cp.id,
@@ -298,12 +282,10 @@ export interface DirectPairsSyncFrame {
  * the decision stays dependency-free (same split as
  * `decideViewerSyncInvalidations`).
  */
-export function decideDirectPairsInvalidation(
-  frame: DirectPairsSyncFrame,
-): boolean {
-  if (frame.type === 'snapshot_required') return true;
-  if (frame.type !== 'event') return false;
-  return frame.kind === 'direct_pairs_changed';
+export function decideDirectPairsInvalidation(frame: DirectPairsSyncFrame): boolean {
+  if (frame.type === "snapshot_required") return true;
+  if (frame.type !== "event") return false;
+  return frame.kind === "direct_pairs_changed";
 }
 
 /**
@@ -324,9 +306,9 @@ export function useDirectPairsSync(): void {
   const qc = useQueryClient();
   useEffect(() => {
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
+    const unsub = onWsFrame((frame) => {
       if (
-        (frame.type !== 'event' && frame.type !== 'snapshot_required') ||
+        (frame.type !== "event" && frame.type !== "snapshot_required") ||
         !isCurrentViewerScope(frame.scope)
       ) {
         return;
@@ -367,7 +349,7 @@ export function useInitiateDirectMessage(agentId: string) {
   return useMutation<MessageSendAck, Error, { content: string; client_message_id: string }>({
     mutationFn: async ({ content, client_message_id }) =>
       api<MessageSendAck>(apiPaths.agentDirectMessages(agentId), {
-        method: 'POST',
+        method: "POST",
         body: JSON.stringify({ content, client_message_id }),
       }),
     onSuccess: () => {

@@ -1,27 +1,19 @@
-import { useEffect } from 'react';
-import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useEffect } from "react";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   HOST_AGENT_LIVENESS_CHANGED_EVENT,
   HOST_CONNECTION_CHANGED_EVENT,
   HostAgentLivenessChangedEventSchema,
   HostConnectionChangedEventSchema,
   type ServerFrame,
-} from '@silverhand/shared';
-import {
-  isCurrentViewerScope,
-  onWsFrame,
-  subscribeViewerScope,
-} from '@/lib/ws-client';
-import {
-  backendInfoKey,
-  hostsKey,
-  hostStatusKey,
-} from './hooks';
+} from "@silverhand/shared";
+import { isCurrentViewerScope, onWsFrame, subscribeViewerScope } from "@/lib/ws-client";
+import { backendInfoKey, hostsKey, hostStatusKey } from "./hooks";
 
 export type HostConnectionSyncAction =
-  | { kind: 'invalidate-all' }
-  | { kind: 'invalidate-host'; hostId: string }
-  | { kind: 'invalidate-host-status'; hostId: string };
+  | { kind: "invalidate-all" }
+  | { kind: "invalidate-host"; hostId: string }
+  | { kind: "invalidate-host-status"; hostId: string };
 
 /**
  * Host presence is the backend connection registry's projection. WS frames are
@@ -38,34 +30,31 @@ export function decideHostConnectionSyncAction(
   frame: ServerFrame,
   isViewerScope: (scope: string) => boolean = isCurrentViewerScope,
 ): HostConnectionSyncAction | null {
-  if (frame.type === 'snapshot_required') {
-    return isViewerScope(frame.scope) ? { kind: 'invalidate-all' } : null;
+  if (frame.type === "snapshot_required") {
+    return isViewerScope(frame.scope) ? { kind: "invalidate-all" } : null;
   }
 
-  if (frame.type !== 'event' || !isViewerScope(frame.scope)) {
+  if (frame.type !== "event" || !isViewerScope(frame.scope)) {
     return null;
   }
 
   if (frame.kind === HOST_CONNECTION_CHANGED_EVENT) {
     const parsed = HostConnectionChangedEventSchema.safeParse(frame.payload);
     if (!parsed.success) return null;
-    return { kind: 'invalidate-host', hostId: parsed.data.host_id };
+    return { kind: "invalidate-host", hostId: parsed.data.host_id };
   }
 
   if (frame.kind === HOST_AGENT_LIVENESS_CHANGED_EVENT) {
     const parsed = HostAgentLivenessChangedEventSchema.safeParse(frame.payload);
     if (!parsed.success) return null;
-    return { kind: 'invalidate-host-status', hostId: parsed.data.host_id };
+    return { kind: "invalidate-host-status", hostId: parsed.data.host_id };
   }
 
   return null;
 }
 
-function invalidateHostConnectionQueries(
-  qc: QueryClient,
-  action: HostConnectionSyncAction,
-): void {
-  if (action.kind === 'invalidate-host-status') {
+function invalidateHostConnectionQueries(qc: QueryClient, action: HostConnectionSyncAction): void {
+  if (action.kind === "invalidate-host-status") {
     void qc.invalidateQueries({ queryKey: hostStatusKey(action.hostId) });
     return;
   }
@@ -73,13 +62,13 @@ function invalidateHostConnectionQueries(
   void qc.invalidateQueries({ queryKey: hostsKey });
   void qc.invalidateQueries({ queryKey: backendInfoKey });
 
-  if (action.kind === 'invalidate-all') {
-    void qc.invalidateQueries({ queryKey: ['host'] });
-    void qc.invalidateQueries({ queryKey: ['host-status'] });
+  if (action.kind === "invalidate-all") {
+    void qc.invalidateQueries({ queryKey: ["host"] });
+    void qc.invalidateQueries({ queryKey: ["host-status"] });
     return;
   }
 
-  void qc.invalidateQueries({ queryKey: ['host', action.hostId] });
+  void qc.invalidateQueries({ queryKey: ["host", action.hostId] });
   void qc.invalidateQueries({ queryKey: hostStatusKey(action.hostId) });
 }
 
@@ -93,7 +82,7 @@ export function useHostConnectionSync(): void {
   const qc = useQueryClient();
   useEffect(() => {
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
+    const unsub = onWsFrame((frame) => {
       const action = decideHostConnectionSyncAction(frame);
       if (!action) return;
       invalidateHostConnectionQueries(qc, action);

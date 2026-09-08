@@ -1,41 +1,36 @@
-import { useMemo } from 'react';
-import { Star } from 'lucide-react';
+import { useMemo } from "react";
+import { Star } from "lucide-react";
 import type {
   ChannelAttentionMode,
   ChannelAttentionModeRowDto,
   FavoriteRowDto,
-} from '@silverhand/shared';
-import { useSortable } from '@dnd-kit/sortable';
-import { ChannelIcon } from '@/components/ChannelIcon';
-import { AppContextMenu } from '@/components/menus/AppContextMenu';
-import { ChannelRowMenuItems } from './ChannelRowMenuItems';
-import { useFavorites, useUnstarFavorite } from '@/features/favorites/hooks';
-import { useAttentionModesAcrossWorkspaces } from '@/features/attention/hooks';
-import type { FavoritesWatchScope } from '@/lib/home-grouping';
-import { useArchiveChannel, useChannelDetail, useSetSortMode } from '@/features/workspaces/hooks';
-import { channelRowBadge } from '@/lib/attention-mode';
-import { conversationSelectionTier } from '@/lib/rail-selection';
-import { sortModeOf } from '@/lib/viewer-sort';
-import { SortModeMenu } from '@/components/layout/SortModeMenu';
+} from "@silverhand/shared";
+import { useSortable } from "@dnd-kit/sortable";
+import { ChannelIcon } from "@/components/ChannelIcon";
+import { AppContextMenu } from "@/components/menus/AppContextMenu";
+import { ChannelRowMenuItems } from "./ChannelRowMenuItems";
+import { useFavorites, useUnstarFavorite } from "@/features/favorites/hooks";
+import { useAttentionModesAcrossWorkspaces } from "@/features/attention/hooks";
+import type { FavoritesWatchScope } from "@/lib/home-grouping";
+import { useArchiveChannel, useChannelDetail, useSetSortMode } from "@/features/workspaces/hooks";
+import { channelRowBadge } from "@/lib/attention-mode";
+import { conversationSelectionTier } from "@/lib/rail-selection";
+import { sortModeOf } from "@/lib/viewer-sort";
+import { SortModeMenu } from "@/components/layout/SortModeMenu";
 import {
   SortableGroup,
   animateLayoutChanges,
   sortableItemStyle,
   useListDragSort,
-} from '@/components/layout/list-drag-sort';
-import {
-  ConversationRowLayout,
-  MutedMarker,
-  SidebarSection,
-  UnreadBadge,
-} from './sidebar-shared';
+} from "@/components/layout/list-drag-sort";
+import { ConversationRowLayout, MutedMarker, SidebarSection, UnreadBadge } from "./sidebar-shared";
 
 /** The favorites list's own sort namespace. A single FLAT group (`favorites`),
  *  list-wide [recent|manual] toggle — the wire group name must equal the backend
  *  `legalGroups('favorites') = ['favorites']`, and the scope is list-wide (no
  *  per-group axis), exactly like the channel sidebar (#task:1252 / #task:1254). */
-const FAVORITES_LIST_KEY = 'favorites';
-const FAVORITES_GROUP = 'favorites';
+const FAVORITES_LIST_KEY = "favorites";
+const FAVORITES_GROUP = "favorites";
 
 /**
  * The sidebar's STARRED section — the viewer's GLOBAL favorites list (#task:1253),
@@ -113,12 +108,11 @@ export function FavoritesGroup(props: {
   const channelParentIds = useMemo(
     () =>
       Array.from(
-        new Set(items.filter(i => i.roster_policy === 'open').map(i => i.workspace_id)),
+        new Set(items.filter((i) => i.roster_policy === "open").map((i) => i.workspace_id)),
       ).sort(),
     [items],
   );
-  const { byChannel, mutedByWorkspace } =
-    useAttentionModesAcrossWorkspaces(channelParentIds);
+  const { byChannel, mutedByWorkspace } = useAttentionModesAcrossWorkspaces(channelParentIds);
 
   // Compose the live order from the favorites `viewer_sort` (recent → home
   // last_accessed_at, manual → rank), reusing the shared drag-sort machine. A single
@@ -130,8 +124,8 @@ export function FavoritesGroup(props: {
     listKey: FAVORITES_LIST_KEY,
     groups: { [FAVORITES_GROUP]: items },
     viewerSort,
-    getId: r => r.favorite_key,
-    getCreatedAt: r => r.created_at,
+    getId: (r) => r.favorite_key,
+    getCreatedAt: (r) => r.created_at,
   });
   const ordered = orderedGroups[FAVORITES_GROUP];
   const mode = sortModeOf(viewerSort, undefined);
@@ -142,7 +136,7 @@ export function FavoritesGroup(props: {
   // `SidebarSection.collapsedContent`). Not the sortable wrapper — a single row has
   // nothing to reorder — but the row itself is unchanged, menu included.
   const selectedFavorite = props.selectedChannelId
-    ? ordered.find(i => i.entity_id === props.selectedChannelId)
+    ? ordered.find((i) => i.entity_id === props.selectedChannelId)
     : undefined;
 
   return (
@@ -170,15 +164,15 @@ export function FavoritesGroup(props: {
       action={
         <SortModeMenu
           mode={mode}
-          onChange={m => setSortMode.mutate({ list_key: FAVORITES_LIST_KEY, mode: m })}
+          onChange={(m) => setSortMode.mutate({ list_key: FAVORITES_LIST_KEY, mode: m })}
         />
       }
     >
       <SortableGroup
-        ids={ordered.map(i => i.favorite_key)}
-        onReorder={o => onReorder(FAVORITES_GROUP, o)}
+        ids={ordered.map((i) => i.favorite_key)}
+        onReorder={(o) => onReorder(FAVORITES_GROUP, o)}
       >
-        {ordered.map(item => (
+        {ordered.map((item) => (
           <SortableFavoriteRow
             key={item.favorite_key}
             item={item}
@@ -217,9 +211,11 @@ interface FavoriteRowProps {
  *  `SortableChannelItem`. Drag listeners sit on the `<li>`; the row's own click
  *  (navigate) and context menu (unstar) still fire — dnd-kit's activation constraint
  *  separates a drag from a click. */
-function SortableFavoriteRow(props: Omit<FavoriteRowProps, 'draggable'>): JSX.Element {
-  const { setNodeRef, transform, transition, isDragging, attributes, listeners } =
-    useSortable({ id: props.item.favorite_key, animateLayoutChanges });
+function SortableFavoriteRow(props: Omit<FavoriteRowProps, "draggable">): JSX.Element {
+  const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({
+    id: props.item.favorite_key,
+    animateLayoutChanges,
+  });
   return (
     <li
       ref={setNodeRef}
@@ -242,7 +238,7 @@ function FavoriteRow({
   onUnstar,
   draggable,
 }: FavoriteRowProps): JSX.Element {
-  const isPrimary = conversationSelectionTier(item.entity_id, selectedChannelId) === 'primary';
+  const isPrimary = conversationSelectionTier(item.entity_id, selectedChannelId) === "primary";
   const archive = useArchiveChannel(item.workspace_id);
 
   // Byte-identical to the parent list's `ChannelRow`, which is the acceptance
@@ -255,7 +251,7 @@ function FavoriteRow({
   // subsumes the parent list's `isMember` gate — the batch joins `conversation_users`,
   // so a browse-only public row has no tier and therefore no badge.
   const effectiveMode: ChannelAttentionMode | undefined =
-    item.roster_policy === 'open' ? attention?.effective_mode : 'all';
+    item.roster_policy === "open" ? attention?.effective_mode : "all";
   const badge = channelRowBadge({
     effectiveMode,
     positionalUnread: item.unread_count ?? 0,
@@ -273,7 +269,7 @@ function FavoriteRow({
   // feeding the badge — swapping that shared variable to the stored tier would
   // make a muted workspace's `all`-tier rows count positional unread as `loud`
   // again (a behaviour regression, not one fewer icon). Same split as `ChannelRow`.
-  const isSilenced = attention?.mode === 'mute';
+  const isSilenced = attention?.mode === "mute";
 
   const row = (
     <ConversationRowLayout
@@ -296,7 +292,7 @@ function FavoriteRow({
         // identity. Kind-gated exactly as the parent list does it: a
         // `dm_channel` is stored `private` but is not a private channel, so it
         // keeps the canonical `#`.
-        visibility={item.roster_policy === 'open' ? item.visibility : undefined}
+        visibility={item.roster_policy === "open" ? item.visibility : undefined}
         className="text-text-muted"
       />
       <span className="min-w-0 truncate">{item.title}</span>
@@ -308,9 +304,7 @@ function FavoriteRow({
           <MutedMarker />
         </span>
       ) : null}
-      {badge ? (
-        <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" />
-      ) : null}
+      {badge ? <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" /> : null}
     </ConversationRowLayout>
   );
 
@@ -322,14 +316,23 @@ function FavoriteRow({
         workspaceMuted={workspaceMuted}
         onUnstar={onUnstar}
         archivePending={archive.isPending}
-        onArchive={archived => archive.mutate({ channelId: item.entity_id, archived, workspaceId: item.workspace_id })}
+        onArchive={(archived) =>
+          archive.mutate({ channelId: item.entity_id, archived, workspaceId: item.workspace_id })
+        }
       />
     </AppContextMenu>
   );
 }
 
 /** Mounted by the menu portal: resolve membership only when actions are requested. */
-function FavoriteMenuItems({ item, attention, workspaceMuted, onUnstar, onArchive, archivePending }: Pick<FavoriteRowProps, 'item' | 'attention' | 'workspaceMuted' | 'onUnstar'> & {
+function FavoriteMenuItems({
+  item,
+  attention,
+  workspaceMuted,
+  onUnstar,
+  onArchive,
+  archivePending,
+}: Pick<FavoriteRowProps, "item" | "attention" | "workspaceMuted" | "onUnstar"> & {
   onArchive: (archived: boolean) => void;
   archivePending: boolean;
 }): JSX.Element {

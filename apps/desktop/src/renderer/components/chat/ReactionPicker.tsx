@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import * as Popover from '@radix-ui/react-popover';
+import { useState } from "react";
+import * as Popover from "@radix-ui/react-popover";
 
 /**
  * Curated quick-reaction set for v1. Rendered with the OS-native emoji font
@@ -7,10 +7,7 @@ import * as Popover from '@radix-ui/react-popover';
  * the bundle stays lean and the picker stays simple
  * (docs/reactions-design.md; shiki 2026-06-14 拍板 native Apple + 这 8 个).
  */
-export const QUICK_REACTIONS = [
-  '👍', '🎉', '👀', '💯',
-  '🔥', '🚀', '😄', '🤣',
-] as const;
+export const QUICK_REACTIONS = ["👍", "🎉", "👀", "💯", "🔥", "🚀", "😄", "🤣"] as const;
 
 export interface ReactionPickerProps {
   /** The popover anchor. Must be a single ref-forwarding element (a native
@@ -26,7 +23,7 @@ export interface ReactionPickerProps {
    *  leftward. Callers whose trigger is mirrored for own (`user-right`)
    *  messages must mirror this too, so the grid always opens into the message
    *  row rather than out of it (#task:1840). */
-  align?: 'start' | 'center' | 'end';
+  align?: "start" | "center" | "end";
 }
 
 /**
@@ -39,7 +36,7 @@ export function ReactionPicker({
   trigger,
   onPick,
   onOpenChange,
-  align = 'start',
+  align = "start",
 }: ReactionPickerProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const handleOpen = (next: boolean): void => {
@@ -58,7 +55,7 @@ export function ReactionPicker({
           className="z-[var(--z-popover-nested)] rounded-[var(--floating-radius)] border border-border bg-bg-floating p-1.5 shadow-popover outline-none"
         >
           <div className="grid grid-cols-8 gap-0.5">
-            {QUICK_REACTIONS.map(emoji => (
+            {QUICK_REACTIONS.map((emoji) => (
               <button
                 key={emoji}
                 type="button"

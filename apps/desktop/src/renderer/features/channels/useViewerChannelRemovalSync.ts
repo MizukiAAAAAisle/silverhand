@@ -11,16 +11,16 @@
 //   * every OTHER member workspace reconciles from an authoritative re-read when
 //     its scope reports a change — cache-only, no navigation, no waiting for the
 //     viewer to walk over there.
-import { useEffect, useRef } from 'react';
-import { useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query';
+import { useEffect, useRef } from "react";
+import { useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import {
   fetchWorkspaceChannelTables,
   workspaceArchivedChannelsQueryKey,
   workspaceChannelsQueryKey,
-} from '@/features/workspaces/hooks';
-import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
-import { handleViewerWorkspaceRemoved } from '@/features/workspaces/viewer-removal-contract';
-import { createForeignWorkspaceReconciler } from './foreign-workspace-reconcile';
+} from "@/features/workspaces/hooks";
+import { onWsFrame, subscribeWsScope } from "@/lib/ws-client";
+import { handleViewerWorkspaceRemoved } from "@/features/workspaces/viewer-removal-contract";
+import { createForeignWorkspaceReconciler } from "./foreign-workspace-reconcile";
 import {
   handleViewerChannelRemoved,
   heldChannelIdsInWorkspace,
@@ -29,7 +29,7 @@ import {
   resolveWorkspaceVisibilityLosses,
   type ChannelMembershipRow,
   type ChannelRemovalBaseline,
-} from './viewer-channel-removal';
+} from "./viewer-channel-removal";
 
 /**
  * Converge every viewer-local projection when a THIRD PARTY removes the viewer
@@ -87,8 +87,7 @@ export function useViewerChannelRemovalSync(input: {
   archivedSettled: boolean;
   onVisibilityLoss: (channelId: string) => void;
 }): void {
-  const { workspaceId, active, archived, activeSettled, archivedSettled, onVisibilityLoss } =
-    input;
+  const { workspaceId, active, archived, activeSettled, archivedSettled, onVisibilityLoss } = input;
   const qc = useQueryClient();
   const baselineRef = useRef<ChannelRemovalBaseline | null>(null);
 
@@ -98,13 +97,10 @@ export function useViewerChannelRemovalSync(input: {
       isConvergedListTick({
         activeSettled,
         archivedSettled,
-        activeAwaitingRefetch: isAwaitingRefetch(
-          qc,
-          workspaceChannelsQueryKey(workspaceId ?? ''),
-        ),
+        activeAwaitingRefetch: isAwaitingRefetch(qc, workspaceChannelsQueryKey(workspaceId ?? "")),
         archivedAwaitingRefetch: isAwaitingRefetch(
           qc,
-          workspaceArchivedChannelsQueryKey(workspaceId ?? ''),
+          workspaceArchivedChannelsQueryKey(workspaceId ?? ""),
         ),
       });
     const decision = reduceChannelRemoval(baselineRef.current, {
@@ -121,7 +117,7 @@ export function useViewerChannelRemovalSync(input: {
         channelId: loss.channelId,
         mode: loss.mode,
       });
-      if (loss.mode === 'visibility-loss') onVisibilityLoss(loss.channelId);
+      if (loss.mode === "visibility-loss") onVisibilityLoss(loss.channelId);
     }
   }, [qc, workspaceId, active, archived, activeSettled, archivedSettled, onVisibilityLoss]);
 }
@@ -188,17 +184,17 @@ export function useForeignWorkspaceChannelRemovalSync(input: {
   const qc = useQueryClient();
   // Sorted join: a stable dep, so a re-ordered array does not tear down and
   // re-establish every workspace subscription.
-  const scopeIdsKey = [...input.workspaceIds].sort().join(',');
+  const scopeIdsKey = [...input.workspaceIds].sort().join(",");
   const selectedRef = useRef(input.selectedWorkspaceId);
   selectedRef.current = input.selectedWorkspaceId;
 
   useEffect(() => {
-    const ids = scopeIdsKey ? scopeIdsKey.split(',') : [];
+    const ids = scopeIdsKey ? scopeIdsKey.split(",") : [];
     if (ids.length === 0) return;
 
     const reconciler = createForeignWorkspaceReconciler({
       fetchTables: fetchWorkspaceChannelTables,
-      heldChannelIds: workspaceId => heldChannelIdsInWorkspace(qc, workspaceId),
+      heldChannelIds: (workspaceId) => heldChannelIdsInWorkspace(qc, workspaceId),
       onLoss: (workspaceId, loss) => {
         handleViewerChannelRemoved(qc, {
           workspaceId,
@@ -220,23 +216,22 @@ export function useForeignWorkspaceChannelRemovalSync(input: {
             mode: loss.mode,
           });
         }
-        void qc.invalidateQueries({ queryKey: ['workspaces'] });
+        void qc.invalidateQueries({ queryKey: ["workspaces"] });
       },
     });
 
-    const subscriptions = ids.map(id => subscribeWsScope(`workspace:${id}`));
-    const unsub = onWsFrame(frame => {
-      if (frame.type !== 'event' && frame.type !== 'snapshot_required') return;
-      const workspaceId = ids.find(id => frame.scope === `workspace:${id}`);
+    const subscriptions = ids.map((id) => subscribeWsScope(`workspace:${id}`));
+    const unsub = onWsFrame((frame) => {
+      if (frame.type !== "event" && frame.type !== "snapshot_required") return;
+      const workspaceId = ids.find((id) => frame.scope === `workspace:${id}`);
       if (!workspaceId || workspaceId === selectedRef.current) return;
-      if (frame.type === 'event' && frame.kind !== 'workspace_channels_changed') return;
+      if (frame.type === "event" && frame.kind !== "workspace_channels_changed") return;
       void qc.invalidateQueries({ queryKey: workspaceChannelsQueryKey(workspaceId) });
       void qc.invalidateQueries({
         queryKey: workspaceArchivedChannelsQueryKey(workspaceId),
       });
-      void qc.invalidateQueries({ queryKey: ['archived-channels'] });
-      const channelId =
-        frame.type === 'event' ? channelIdFromPayload(frame.payload) : null;
+      void qc.invalidateQueries({ queryKey: ["archived-channels"] });
+      const channelId = frame.type === "event" ? channelIdFromPayload(frame.payload) : null;
       reconciler.request(workspaceId, channelId ? new Set([channelId]) : null);
     });
     return () => {
@@ -251,7 +246,7 @@ export function useForeignWorkspaceChannelRemovalSync(input: {
  *  payload does not name one. Null degrades to the full held-set reconcile, which
  *  is the fail-safe direction: a narrower probe would be the one that misses. */
 function channelIdFromPayload(payload: unknown): string | null {
-  if (!payload || typeof payload !== 'object') return null;
+  if (!payload || typeof payload !== "object") return null;
   const channelId = (payload as { channel_id?: unknown }).channel_id;
-  return typeof channelId === 'string' && channelId.length > 0 ? channelId : null;
+  return typeof channelId === "string" && channelId.length > 0 ? channelId : null;
 }

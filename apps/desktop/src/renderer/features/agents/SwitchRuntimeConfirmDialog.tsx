@@ -1,6 +1,6 @@
-import type { JSX, RefObject } from 'react';
-import type { RuntimeKind } from '@silverhand/shared';
-import { runtimeCliLabel } from '@silverhand/shared';
+import type { JSX, RefObject } from "react";
+import type { RuntimeKind } from "@silverhand/shared";
+import { runtimeCliLabel } from "@silverhand/shared";
 import {
   Dialog,
   DialogContent,
@@ -8,9 +8,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
 
 /**
  * Confirmation required because switching resets session continuity for
@@ -49,7 +49,7 @@ export function SwitchRuntimeConfirmDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="max-w-md"
-        onCloseAutoFocus={e => {
+        onCloseAutoFocus={(e) => {
           const el = returnFocusRef?.current;
           if (el) {
             e.preventDefault();
@@ -85,7 +85,7 @@ export function SwitchRuntimeConfirmDialog({
             Cancel
           </Button>
           <Button onClick={onConfirm} disabled={pending} {...primaryAction()}>
-            {pending ? 'Switching…' : 'Switch runtime'}
+            {pending ? "Switching…" : "Switch runtime"}
           </Button>
         </DialogFooter>
       </DialogContent>

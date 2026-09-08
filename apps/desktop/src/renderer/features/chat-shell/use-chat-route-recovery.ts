@@ -1,11 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from "react";
 
-import { useSelectionPersistenceEffects } from '@/features/app-shell/selection-persistence';
-import { type ChannelListItem } from '@/features/workspaces/hooks';
+import { useSelectionPersistenceEffects } from "@/features/app-shell/selection-persistence";
+import { type ChannelListItem } from "@/features/workspaces/hooks";
 
-import { useMessageUnreadCounts } from '@/features/channels/hooks';
+import { useMessageUnreadCounts } from "@/features/channels/hooks";
 
-import { type MessageJumpTarget } from '@/features/channels/useMessageJumpController';
+import { type MessageJumpTarget } from "@/features/channels/useMessageJumpController";
 
 import {
   buildChannelLayoutUrl,
@@ -14,7 +14,7 @@ import {
   useNav,
   useRouteState,
   type ChannelLayout,
-} from '@/router';
+} from "@/router";
 import {
   getChannelLayout,
   getCloseWatermark,
@@ -23,15 +23,15 @@ import {
   lastChannelByWorkspace,
   recordChannelLayout,
   recordCloseWatermark,
-} from '@/lib/place-memory';
-import { resolveChatPlaceRestore, type DirectPairAuthority } from '@/lib/chat-place-restore';
+} from "@/lib/place-memory";
+import { resolveChatPlaceRestore, type DirectPairAuthority } from "@/lib/chat-place-restore";
 
-import { pickWorkspaceToRestore } from '@/lib/workspace-restore';
-import { resolveRestoreNavigation } from '@/lib/restore-navigation';
+import { pickWorkspaceToRestore } from "@/lib/workspace-restore";
+import { resolveRestoreNavigation } from "@/lib/restore-navigation";
 
-import type { RefObject } from 'react';
-import type { WorkspaceListItem } from '@/features/workspaces/hooks';
-import type { RemovedPrimary } from '@/features/conversation-shell/use-conversation-invalidation';
+import type { RefObject } from "react";
+import type { WorkspaceListItem } from "@/features/workspaces/hooks";
+import type { RemovedPrimary } from "@/features/conversation-shell/use-conversation-invalidation";
 export function useChatRouteRecovery({
   workspaces,
   channels,
@@ -45,7 +45,7 @@ export function useChatRouteRecovery({
   workspaces: WorkspaceListItem[];
   channels: ChannelListItem[];
   memberActiveChannels: ChannelListItem[];
-  messageUnreadData: ReturnType<typeof useMessageUnreadCounts>['data'];
+  messageUnreadData: ReturnType<typeof useMessageUnreadCounts>["data"];
   directPairAuthority: DirectPairAuthority;
   jumpTarget: MessageJumpTarget | null;
   onJump: (target: MessageJumpTarget) => boolean;
@@ -67,7 +67,7 @@ export function useChatRouteRecovery({
   const handleJumpToMessage = onJump;
   const lastSelectedWorkspaceId = useRef<string | null>(getLastWorkspaceId());
   useEffect(() => {
-    if (appSection !== 'chat' || view !== 'channel') {
+    if (appSection !== "chat" || view !== "channel") {
       return;
     }
     // `/chat/d/:id` is a chat-channel URL with NO workspace on purpose
@@ -93,10 +93,10 @@ export function useChatRouteRecovery({
     // Hold the bare route: the pair list is still answering whether that line is
     // still the viewer's. One extra render of `/chat` is cheaper than a
     // navigation that has to be taken back.
-    if (restore.kind === 'wait') {
+    if (restore.kind === "wait") {
       return;
     }
-    if (restore.kind === 'open-direct') {
+    if (restore.kind === "open-direct") {
       nav.go(routes.chatDirect(restore.conversationId), { replace: true });
       return;
     }
@@ -123,7 +123,7 @@ export function useChatRouteRecovery({
       return;
     }
     if (!workspaces.some((w) => w.id === selectedWorkspaceId)) {
-      nav.go('/chat', { replace: true });
+      nav.go("/chat", { replace: true });
     }
   }, [selectedWorkspaceId, workspaces, nav.go]);
 
@@ -132,7 +132,7 @@ export function useChatRouteRecovery({
     // section is a peer navigator whose right pane stays empty until the user
     // picks a row (no auto-select) — restoring a channel here would hijack
     // `/activity/...` back into chat (#task:1394).
-    if (appSection !== 'chat') {
+    if (appSection !== "chat") {
       return;
     }
     if (!selectedWorkspaceId) {
@@ -170,19 +170,19 @@ export function useChatRouteRecovery({
       rememberedLayout: rememberedChannelId ? getChannelLayout(rememberedChannelId) : null,
     });
     switch (action.kind) {
-      case 'none':
+      case "none":
         return;
-      case 'open-channel':
+      case "open-channel":
         nav.go(`/chat/w/${selectedWorkspaceId}/c/${action.channelId}`, {
           replace: true,
         });
         return;
-      case 'open-remembered':
+      case "open-remembered":
         nav.go(buildChannelLayoutUrl(selectedWorkspaceId, action.channelId, action.layout), {
           replace: true,
         });
         return;
-      case 'jump-unread':
+      case "jump-unread":
         handleJumpToMessage({
           channelId: action.channelId,
           messageId: action.messageId,
@@ -204,7 +204,7 @@ export function useChatRouteRecovery({
   useSelectionPersistenceEffects({
     selectedWorkspaceId,
     selectedChannelId,
-    chatSectionActive: appSection === 'chat',
+    chatSectionActive: appSection === "chat",
     directConversationId,
     directDraftAgentId,
     activeChannels: memberActiveChannels,
@@ -214,7 +214,7 @@ export function useChatRouteRecovery({
 
   const prevLayoutRef = useRef<{
     channelId: string;
-    kind: ChannelLayout['kind'];
+    kind: ChannelLayout["kind"];
   } | null>(null);
 
   useEffect(() => {
@@ -232,8 +232,8 @@ export function useChatRouteRecovery({
     if (
       prev &&
       prev.channelId === selectedChannelId &&
-      prev.kind !== 'none' &&
-      layout.kind === 'none'
+      prev.kind !== "none" &&
+      layout.kind === "none"
     ) {
       const seq = messageUnreadData?.latest_by_conversation?.[selectedChannelId]?.seq;
       if (seq != null) {

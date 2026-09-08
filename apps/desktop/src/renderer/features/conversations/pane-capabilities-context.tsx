@@ -21,11 +21,8 @@
  * no pane around it (a dialog, the agent page) is unchanged, and only a pane whose
  * placement differs overrides it, from its projection rather than by choosing.
  */
-import { createContext, useContext, type ReactNode } from 'react';
-import {
-  DEFAULT_PANE_CAPABILITIES,
-  type ConversationPaneCapabilities,
-} from './pane-mode';
+import { createContext, useContext, type ReactNode } from "react";
+import { DEFAULT_PANE_CAPABILITIES, type ConversationPaneCapabilities } from "./pane-mode";
 
 const ConversationPaneCapabilitiesContext =
   createContext<ConversationPaneCapabilities>(DEFAULT_PANE_CAPABILITIES);

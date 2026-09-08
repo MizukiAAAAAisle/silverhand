@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { QueryClient, QueryObserver } from '@tanstack/react-query';
-import type { DirectPairListItem } from '@silverhand/shared';
-import { api } from '@/lib/api';
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import type { DirectPairListItem } from "@silverhand/shared";
+import { api } from "@/lib/api";
 import {
   DIRECT_PAIRS_QUERY_POLICY,
   decideDirectPairsInvalidation,
@@ -17,13 +17,13 @@ import {
   type DirectPairListQueryFacts,
   type DirectPairPaneState,
   type DraftHandoffFacts,
-} from './hooks';
+} from "./hooks";
 
 // Only `api` is replaced so the query policy's cost can be COUNTED; everything
 // else in `@/lib/api` stays real (nothing here depends on the rest, but a bare
 // `vi.mock` would auto-mock `ApiError` too).
-vi.mock('@/lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api')>();
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: vi.fn() };
 });
 
@@ -33,13 +33,13 @@ function pair(conversationId: string): DirectPairListItem {
   return {
     conversation_id: conversationId,
     counterpart: {
-      status: 'active',
-      kind: 'agent',
-      id: 'a-1',
-      name: 'alice',
-      display_name: 'Alice',
+      status: "active",
+      kind: "agent",
+      id: "a-1",
+      name: "alice",
+      display_name: "Alice",
       avatar_url: null,
-      runtime: 'claude',
+      runtime: "claude",
     },
     unread_count: 1,
     read_only: false,
@@ -58,25 +58,25 @@ function settled(rows: readonly DirectPairListItem[]): DirectPairListQueryFacts 
  *  comment and stay green. (Only `//` that does not follow a `:` is stripped, so a
  *  `scheme://` literal survives.) */
 function code(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 function read(relative: string): string {
-  return code(readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8'));
+  return code(readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8"));
 }
 
-describe('findAgentDirectPair — existing line, or a draft', () => {
+describe("findAgentDirectPair — existing line, or a draft", () => {
   /** A pair whose counterpart is a named agent. */
   function agentPair(conversationId: string, agentId: string): DirectPairListItem {
     return {
       ...pair(conversationId),
       counterpart: {
-        status: 'active',
-        kind: 'agent',
+        status: "active",
+        kind: "agent",
         id: agentId,
         name: agentId,
-        display_name: '',
+        display_name: "",
         avatar_url: null,
-        runtime: 'claude',
+        runtime: "claude",
       },
     };
   }
@@ -84,92 +84,92 @@ describe('findAgentDirectPair — existing line, or a draft', () => {
   function deletedPair(conversationId: string, agentId: string): DirectPairListItem {
     return {
       ...pair(conversationId),
-      counterpart: { status: 'deleted', kind: 'agent', id: agentId },
+      counterpart: { status: "deleted", kind: "agent", id: agentId },
     };
   }
 
-  it('finds the line the viewer already has with that agent', () => {
-    const mine = agentPair('c-mine', 'a-target');
-    expect(findAgentDirectPair([agentPair('c-other', 'a-other'), mine], 'a-target')).toEqual(mine);
+  it("finds the line the viewer already has with that agent", () => {
+    const mine = agentPair("c-mine", "a-target");
+    expect(findAgentDirectPair([agentPair("c-other", "a-other"), mine], "a-target")).toEqual(mine);
   });
 
-  it('finds it even when the agent is gone — history beats a door that answers 404', () => {
+  it("finds it even when the agent is gone — history beats a door that answers 404", () => {
     // The `deleted` arm still NAMES the endpoint. Falling through to the draft
     // route would offer to start a line that cannot be started, while hiding the
     // one that exists.
-    const gone = deletedPair('c-gone', 'a-target');
-    expect(findAgentDirectPair([gone], 'a-target')).toEqual(gone);
+    const gone = deletedPair("c-gone", "a-target");
+    expect(findAgentDirectPair([gone], "a-target")).toEqual(gone);
   });
 
-  it('never matches a human counterpart that happens to share the id', () => {
+  it("never matches a human counterpart that happens to share the id", () => {
     // Ids are per-kind, so `agent:a-1` and `human:a-1` can coexist; the caller
     // asks about an AGENT and a human row is a different line entirely.
     const human: DirectPairListItem = {
-      ...pair('c-human'),
+      ...pair("c-human"),
       counterpart: {
-        status: 'active',
-        kind: 'human',
-        id: 'a-target',
-        name: 'shiki',
-        display_name: 'shiki',
+        status: "active",
+        kind: "human",
+        id: "a-target",
+        name: "shiki",
+        display_name: "shiki",
         avatar_url: null,
         runtime: null,
       },
     };
-    expect(findAgentDirectPair([human], 'a-target')).toBeNull();
+    expect(findAgentDirectPair([human], "a-target")).toBeNull();
   });
 
-  it('returns null for an agent with no line, and for a cold list', () => {
+  it("returns null for an agent with no line, and for a cold list", () => {
     // Both read as "no pair" on purpose: the caller's fallback is the draft
     // route, whose first send is get-or-create — a stale miss costs a
     // converge-on-send, never a duplicate line.
-    expect(findAgentDirectPair([agentPair('c-other', 'a-other')], 'a-target')).toBeNull();
-    expect(findAgentDirectPair([], 'a-target')).toBeNull();
+    expect(findAgentDirectPair([agentPair("c-other", "a-other")], "a-target")).toBeNull();
+    expect(findAgentDirectPair([], "a-target")).toBeNull();
   });
 });
 
-describe('decideDirectPairsInvalidation — which viewer frame re-reads the list', () => {
-  it('re-reads on direct_pairs_changed', () => {
+describe("decideDirectPairsInvalidation — which viewer frame re-reads the list", () => {
+  it("re-reads on direct_pairs_changed", () => {
     expect(
       decideDirectPairsInvalidation({
-        type: 'event',
-        kind: 'direct_pairs_changed',
+        type: "event",
+        kind: "direct_pairs_changed",
       }),
     ).toBe(true);
   });
 
-  it('re-reads on snapshot_required — a replay gap can swallow the only announcement', () => {
+  it("re-reads on snapshot_required — a replay gap can swallow the only announcement", () => {
     // The frame carries no `kind`. A brand-new pair is a row the client has no
     // other way to learn about, so a gap must re-read rather than wait.
-    expect(decideDirectPairsInvalidation({ type: 'snapshot_required' })).toBe(true);
+    expect(decideDirectPairsInvalidation({ type: "snapshot_required" })).toBe(true);
   });
 
-  it('ignores every OTHER viewer-scoped event kind', () => {
+  it("ignores every OTHER viewer-scoped event kind", () => {
     // The viewer scope is shared with the workspace list, unread, presence and
     // the task board; this list must not refetch on their traffic.
     for (const kind of [
-      'viewer_workspaces_changed',
-      'workspace_channels_changed',
-      'unread_updated',
-      'task_changed',
-      'message',
-      'presence_updated',
+      "viewer_workspaces_changed",
+      "workspace_channels_changed",
+      "unread_updated",
+      "task_changed",
+      "message",
+      "presence_updated",
     ]) {
-      expect(decideDirectPairsInvalidation({ type: 'event', kind })).toBe(false);
+      expect(decideDirectPairsInvalidation({ type: "event", kind })).toBe(false);
     }
   });
 
-  it('ignores non-event frames and an event with no kind', () => {
-    for (const type of ['ack', 'subscribed', 'pong', 'error']) {
-      expect(decideDirectPairsInvalidation({ type, kind: 'direct_pairs_changed' })).toBe(false);
+  it("ignores non-event frames and an event with no kind", () => {
+    for (const type of ["ack", "subscribed", "pong", "error"]) {
+      expect(decideDirectPairsInvalidation({ type, kind: "direct_pairs_changed" })).toBe(false);
     }
-    expect(decideDirectPairsInvalidation({ type: 'event' })).toBe(false);
+    expect(decideDirectPairsInvalidation({ type: "event" })).toBe(false);
   });
 });
 
-describe('projectDirectPairPane — what the pane may claim about the pair', () => {
-  it('is idle when the route names no pair', () => {
-    expect(projectDirectPairPane(null, settled([]))).toEqual({ kind: 'idle' });
+describe("projectDirectPairPane — what the pane may claim about the pair", () => {
+  it("is idle when the route names no pair", () => {
+    expect(projectDirectPairPane(null, settled([]))).toEqual({ kind: "idle" });
     // Idle even mid-fetch: nothing is being awaited ON BEHALF of a pane.
     expect(
       projectDirectPairPane(null, {
@@ -178,33 +178,33 @@ describe('projectDirectPairPane — what the pane may claim about the pair', () 
         isFetching: true,
         isError: false,
       }),
-    ).toEqual({ kind: 'idle' });
+    ).toEqual({ kind: "idle" });
   });
 
-  it('resolves a row the current answer contains', () => {
-    expect(projectDirectPairPane('c-pair', settled([pair('c-pair')]))).toEqual({
-      kind: 'ready',
-      pair: pair('c-pair'),
+  it("resolves a row the current answer contains", () => {
+    expect(projectDirectPairPane("c-pair", settled([pair("c-pair")]))).toEqual({
+      kind: "ready",
+      pair: pair("c-pair"),
     });
   });
 
-  it('waits on the cold read instead of flashing the empty state', () => {
+  it("waits on the cold read instead of flashing the empty state", () => {
     expect(
-      projectDirectPairPane('c-pair', {
+      projectDirectPairPane("c-pair", {
         rows: undefined,
         isPending: true,
         isFetching: true,
         isError: false,
       }),
-    ).toEqual({ kind: 'resolving' });
+    ).toEqual({ kind: "resolving" });
   });
 
-  it('THE ACCEPTANCE SEQUENCE: cached-empty → invalidated refetch → new row', () => {
+  it("THE ACCEPTANCE SEQUENCE: cached-empty → invalidated refetch → new row", () => {
     // A viewer whose list was fetched before the stranger's first DM. The
     // invalidation arrives; React Query RETAINS the empty rows and raises
     // `isFetching` while `isPending` stays false.
     const cachedEmpty = settled([]);
-    expect(projectDirectPairPane('c-new', cachedEmpty)).toEqual({ kind: 'absent' });
+    expect(projectDirectPairPane("c-new", cachedEmpty)).toEqual({ kind: "absent" });
 
     const refetching: DirectPairListQueryFacts = {
       rows: [],
@@ -215,99 +215,99 @@ describe('projectDirectPairPane — what the pane may claim about the pair', () 
     // The step that an `isPending`-only projection gets WRONG: it would report a
     // settled absence here and the pane would flash "Select a channel" before
     // the row lands.
-    expect(projectDirectPairPane('c-new', refetching)).toEqual({
-      kind: 'resolving',
+    expect(projectDirectPairPane("c-new", refetching)).toEqual({
+      kind: "resolving",
     });
 
-    expect(projectDirectPairPane('c-new', settled([pair('c-new')]))).toEqual({
-      kind: 'ready',
-      pair: pair('c-new'),
-    });
-  });
-
-  it('calls a cold bad id absent once the read has answered — not a loader that never ends', () => {
-    expect(projectDirectPairPane('c-nope', settled([pair('c-other')]))).toEqual({
-      kind: 'absent',
+    expect(projectDirectPairPane("c-new", settled([pair("c-new")]))).toEqual({
+      kind: "ready",
+      pair: pair("c-new"),
     });
   });
 
-  it('reports a failed read as error, never as absence', () => {
+  it("calls a cold bad id absent once the read has answered — not a loader that never ends", () => {
+    expect(projectDirectPairPane("c-nope", settled([pair("c-other")]))).toEqual({
+      kind: "absent",
+    });
+  });
+
+  it("reports a failed read as error, never as absence", () => {
     // Nothing was proven about the pair, and with `retry: 1` the client is not
     // going to keep trying: a terminal empty state would be a lie.
     expect(
-      projectDirectPairPane('c-pair', {
+      projectDirectPairPane("c-pair", {
         rows: undefined,
         isPending: false,
         isFetching: false,
         isError: true,
       }),
-    ).toEqual({ kind: 'error' });
+    ).toEqual({ kind: "error" });
     // Same when a refetch fails over rows that don't contain the id: retained
     // rows are the PREVIOUS answer, so absence is still unproven.
     expect(
-      projectDirectPairPane('c-pair', {
-        rows: [pair('c-other')],
+      projectDirectPairPane("c-pair", {
+        rows: [pair("c-other")],
         isPending: false,
         isFetching: false,
         isError: true,
       }),
-    ).toEqual({ kind: 'error' });
+    ).toEqual({ kind: "error" });
   });
 
-  it('prefers a row we hold over both an in-flight refetch and a failed one', () => {
+  it("prefers a row we hold over both an in-flight refetch and a failed one", () => {
     // Precedence `ready > resolving > error`: the pane can render, so it must
     // not blank out just because the list is being revalidated or failed to be.
     expect(
-      projectDirectPairPane('c-pair', {
-        rows: [pair('c-pair')],
+      projectDirectPairPane("c-pair", {
+        rows: [pair("c-pair")],
         isPending: false,
         isFetching: true,
         isError: false,
       }),
-    ).toMatchObject({ kind: 'ready' });
+    ).toMatchObject({ kind: "ready" });
     expect(
-      projectDirectPairPane('c-pair', {
-        rows: [pair('c-pair')],
+      projectDirectPairPane("c-pair", {
+        rows: [pair("c-pair")],
         isPending: false,
         isFetching: false,
         isError: true,
       }),
-    ).toMatchObject({ kind: 'ready' });
+    ).toMatchObject({ kind: "ready" });
   });
 
-  it('treats an in-flight retry as resolving, so a stale error never overrides a live attempt', () => {
+  it("treats an in-flight retry as resolving, so a stale error never overrides a live attempt", () => {
     // Reachable shape: the query errored with no data, then something (an
     // invalidation, a remount) refetched it. The error is RETAINED while the new
     // fetch runs, so `isError` and `isFetching` are true together and
     // `isPending` is false.
     expect(
-      projectDirectPairPane('c-pair', {
+      projectDirectPairPane("c-pair", {
         rows: undefined,
         isPending: false,
         isFetching: true,
         isError: true,
       }),
-    ).toEqual({ kind: 'resolving' });
+    ).toEqual({ kind: "resolving" });
   });
 });
 
-describe('projectDirectPairAssignee — the DM task-assignee domain (#task:2041, @Cindy)', () => {
+describe("projectDirectPairAssignee — the DM task-assignee domain (#task:2041, @Cindy)", () => {
   // The counterpart the picker offers, over the five pane states × the counterpart
   // kinds. The load-bearing property is P1: the active counterpart is in the domain
   // even when it IS the current assignee (`isCurrent`), never dropped — dropping it
   // was the reported empty-dropdown bug for a DM assigned to its one agent.
-  const activeAgentPane = (id: string, name = id, displayName = ''): DirectPairPaneState => ({
-    kind: 'ready',
+  const activeAgentPane = (id: string, name = id, displayName = ""): DirectPairPaneState => ({
+    kind: "ready",
     pair: {
-      conversation_id: 'c-pair',
+      conversation_id: "c-pair",
       counterpart: {
-        status: 'active',
-        kind: 'agent',
+        status: "active",
+        kind: "agent",
         id,
         name,
         display_name: displayName,
         avatar_url: null,
-        runtime: 'claude',
+        runtime: "claude",
       },
       unread_count: 0,
       read_only: false,
@@ -315,41 +315,41 @@ describe('projectDirectPairAssignee — the DM task-assignee domain (#task:2041,
     },
   });
 
-  it('offers the active counterpart when it is NOT the current assignee', () => {
+  it("offers the active counterpart when it is NOT the current assignee", () => {
     expect(
-      projectDirectPairAssignee(activeAgentPane('a-1', 'alice', 'Alice'), 'someone-else'),
+      projectDirectPairAssignee(activeAgentPane("a-1", "alice", "Alice"), "someone-else"),
     ).toEqual({
-      status: 'ready',
-      candidates: [{ id: 'a-1', name: 'alice', displayName: 'Alice', isCurrent: false }],
+      status: "ready",
+      candidates: [{ id: "a-1", name: "alice", displayName: "Alice", isCurrent: false }],
     });
   });
 
-  it('P1: STILL offers the counterpart when it is already the assignee, marked isCurrent', () => {
+  it("P1: STILL offers the counterpart when it is already the assignee, marked isCurrent", () => {
     // The empty-dropdown regression: excluding the current agent left a DM assigned
     // to its one counterpart with no candidate at all.
-    expect(projectDirectPairAssignee(activeAgentPane('a-1', 'alice', 'Alice'), 'a-1')).toEqual({
-      status: 'ready',
-      candidates: [{ id: 'a-1', name: 'alice', displayName: 'Alice', isCurrent: true }],
+    expect(projectDirectPairAssignee(activeAgentPane("a-1", "alice", "Alice"), "a-1")).toEqual({
+      status: "ready",
+      candidates: [{ id: "a-1", name: "alice", displayName: "Alice", isCurrent: true }],
     });
   });
 
-  it('falls back to the handle when the counterpart has no display name', () => {
+  it("falls back to the handle when the counterpart has no display name", () => {
     expect(
-      projectDirectPairAssignee(activeAgentPane('a-1', 'alice', ''), null).candidates[0],
-    ).toMatchObject({ displayName: 'alice' });
+      projectDirectPairAssignee(activeAgentPane("a-1", "alice", ""), null).candidates[0],
+    ).toMatchObject({ displayName: "alice" });
   });
 
-  it('offers nothing for a HUMAN counterpart (the write path takes agent_id only)', () => {
+  it("offers nothing for a HUMAN counterpart (the write path takes agent_id only)", () => {
     const humanPane: DirectPairPaneState = {
-      kind: 'ready',
+      kind: "ready",
       pair: {
-        conversation_id: 'c-pair',
+        conversation_id: "c-pair",
         counterpart: {
-          status: 'active',
-          kind: 'human',
-          id: 'u-1',
-          name: 'shiki',
-          display_name: 'shiki',
+          status: "active",
+          kind: "human",
+          id: "u-1",
+          name: "shiki",
+          display_name: "shiki",
           avatar_url: null,
           runtime: null,
         },
@@ -358,53 +358,53 @@ describe('projectDirectPairAssignee — the DM task-assignee domain (#task:2041,
         created_at: 1,
       },
     };
-    expect(projectDirectPairAssignee(humanPane, null)).toEqual({ status: 'ready', candidates: [] });
+    expect(projectDirectPairAssignee(humanPane, null)).toEqual({ status: "ready", candidates: [] });
   });
 
-  it('offers nothing for a DELETED counterpart', () => {
+  it("offers nothing for a DELETED counterpart", () => {
     const deletedPane: DirectPairPaneState = {
-      kind: 'ready',
+      kind: "ready",
       pair: {
-        conversation_id: 'c-pair',
-        counterpart: { status: 'deleted', kind: 'agent', id: 'a-1' },
+        conversation_id: "c-pair",
+        counterpart: { status: "deleted", kind: "agent", id: "a-1" },
         unread_count: 0,
         read_only: false,
         created_at: 1,
       },
     };
     expect(projectDirectPairAssignee(deletedPane, null)).toEqual({
-      status: 'ready',
+      status: "ready",
       candidates: [],
     });
   });
 
   it('reports loading for the non-answers (resolving / idle), never "no agent"', () => {
-    expect(projectDirectPairAssignee({ kind: 'resolving' }, null)).toEqual({
-      status: 'loading',
+    expect(projectDirectPairAssignee({ kind: "resolving" }, null)).toEqual({
+      status: "loading",
       candidates: [],
     });
-    expect(projectDirectPairAssignee({ kind: 'idle' }, null)).toEqual({
-      status: 'loading',
+    expect(projectDirectPairAssignee({ kind: "idle" }, null)).toEqual({
+      status: "loading",
       candidates: [],
     });
   });
 
   it('reports error for a failed read, never "no agent"', () => {
-    expect(projectDirectPairAssignee({ kind: 'error' }, null)).toEqual({
-      status: 'error',
+    expect(projectDirectPairAssignee({ kind: "error" }, null)).toEqual({
+      status: "error",
       candidates: [],
     });
   });
 
   it('reports a settled-absent pair as ready-empty (an authoritative "nobody here")', () => {
-    expect(projectDirectPairAssignee({ kind: 'absent' }, null)).toEqual({
-      status: 'ready',
+    expect(projectDirectPairAssignee({ kind: "absent" }, null)).toEqual({
+      status: "ready",
       candidates: [],
     });
   });
 });
 
-describe('directPairPaneProps — every state has a rendering (the consumer half)', () => {
+describe("directPairPaneProps — every state has a rendering (the consumer half)", () => {
   // @Cindy's B8 second round: the five-state projection is only worth having if
   // the shell can express five renderings. It could not — `absent` and `idle`
   // both fell through to "Select a channel", so turning `absent` into `idle`
@@ -412,8 +412,8 @@ describe('directPairPaneProps — every state has a rendering (the consumer half
   // classification. This mapping is where that is now falsifiable.
   const props = (state: DirectPairPaneState) => directPairPaneProps(state);
 
-  it('renders nothing and waits for nothing when the route names no pair', () => {
-    expect(props({ kind: 'idle' })).toEqual({
+  it("renders nothing and waits for nothing when the route names no pair", () => {
+    expect(props({ kind: "idle" })).toEqual({
       pair: null,
       resolving: false,
       loadFailed: false,
@@ -421,9 +421,9 @@ describe('directPairPaneProps — every state has a rendering (the consumer half
     });
   });
 
-  it('carries the row through untouched', () => {
-    const row = pair('c-pair');
-    expect(props({ kind: 'ready', pair: row })).toEqual({
+  it("carries the row through untouched", () => {
+    const row = pair("c-pair");
+    expect(props({ kind: "ready", pair: row })).toEqual({
       pair: row,
       resolving: false,
       loadFailed: false,
@@ -431,8 +431,8 @@ describe('directPairPaneProps — every state has a rendering (the consumer half
     });
   });
 
-  it('asks the pane to wait, without claiming a failure or an absence', () => {
-    expect(props({ kind: 'resolving' })).toEqual({
+  it("asks the pane to wait, without claiming a failure or an absence", () => {
+    expect(props({ kind: "resolving" })).toEqual({
       pair: null,
       resolving: true,
       loadFailed: false,
@@ -440,8 +440,8 @@ describe('directPairPaneProps — every state has a rendering (the consumer half
     });
   });
 
-  it('reports a failed read as a failure only', () => {
-    expect(props({ kind: 'error' })).toEqual({
+  it("reports a failed read as a failure only", () => {
+    expect(props({ kind: "error" })).toEqual({
       pair: null,
       resolving: false,
       loadFailed: true,
@@ -449,11 +449,11 @@ describe('directPairPaneProps — every state has a rendering (the consumer half
     });
   });
 
-  it('gives a SETTLED absence its own flag — not idle, not error', () => {
+  it("gives a SETTLED absence its own flag — not idle, not error", () => {
     // `/chat/d/<bad or no-longer-visible id>`: the route names a conversation
     // and the authority answered "not yours". Sharing `idle`'s rendering would
     // tell the viewer they chose nothing.
-    expect(props({ kind: 'absent' })).toEqual({
+    expect(props({ kind: "absent" })).toEqual({
       pair: null,
       resolving: false,
       loadFailed: false,
@@ -461,37 +461,37 @@ describe('directPairPaneProps — every state has a rendering (the consumer half
     });
   });
 
-  it('maps the five states to five DISTINCT props — no two collapse', () => {
+  it("maps the five states to five DISTINCT props — no two collapse", () => {
     // The property that makes the projection load-bearing rather than
     // decorative: if any two states rendered the same, one of them could be
     // deleted with no observable effect.
     const states: DirectPairPaneState[] = [
-      { kind: 'idle' },
-      { kind: 'resolving' },
-      { kind: 'ready', pair: pair('c-pair') },
-      { kind: 'error' },
-      { kind: 'absent' },
+      { kind: "idle" },
+      { kind: "resolving" },
+      { kind: "ready", pair: pair("c-pair") },
+      { kind: "error" },
+      { kind: "absent" },
     ];
     const rendered = states.map((s) => JSON.stringify(props(s)));
     expect(new Set(rendered).size).toBe(states.length);
   });
 });
 
-describe('decideDraftHandoff — when the draft pane may leave for the real pair', () => {
+describe("decideDraftHandoff — when the draft pane may leave for the real pair", () => {
   // @Cindy's #task:2039 review, finding 2: the pane holds the only copy of two
   // things — the unsent text and the unread failure — so an automatic handoff is
   // a data-loss path, not a navigation detail. Four cells, all reachable.
   const facts = (over: Partial<DraftHandoffFacts> = {}): DraftHandoffFacts => ({
-    existingPairId: 'c-pair',
+    existingPairId: "c-pair",
     draftDirty: false,
     sendPending: false,
     sendFailed: false,
     ...over,
   });
 
-  it('stays while the viewer has no pair with this agent — that is the whole route', () => {
+  it("stays while the viewer has no pair with this agent — that is the whole route", () => {
     expect(decideDraftHandoff(facts({ existingPairId: null }))).toEqual({
-      kind: 'stay',
+      kind: "stay",
     });
     // Including while typing, sending and after a failure: with no pair there is
     // nowhere to hand over to.
@@ -502,87 +502,87 @@ describe('decideDraftHandoff — when the draft pane may leave for the real pair
         sendPending: true,
         sendFailed: true,
       }),
-    ).toEqual({ kind: 'stay' });
+    ).toEqual({ kind: "stay" });
   });
 
-  it('EMPTY: hands over to the pair that appeared underneath an untouched pane', () => {
+  it("EMPTY: hands over to the pair that appeared underneath an untouched pane", () => {
     // The agent opened the line from its side. Nothing is lost, and the pair's
     // own route is the same interface with the history.
     expect(decideDraftHandoff(facts())).toEqual({
-      kind: 'handoff',
-      conversationId: 'c-pair',
+      kind: "handoff",
+      conversationId: "c-pair",
     });
   });
 
-  it('DIRTY: keeps unsent text instead of navigating away from it', () => {
+  it("DIRTY: keeps unsent text instead of navigating away from it", () => {
     // The send is get-or-create, so staying costs nothing: their retry converges
     // on the very same pair.
     expect(decideDraftHandoff(facts({ draftDirty: true }))).toEqual({
-      kind: 'stay',
+      kind: "stay",
     });
   });
 
-  it('PENDING: never moves the pane out from under an unsettled send', () => {
+  it("PENDING: never moves the pane out from under an unsettled send", () => {
     // That send's own ack navigates with the conversation id the backend chose.
     expect(decideDraftHandoff(facts({ sendPending: true }))).toEqual({
-      kind: 'stay',
+      kind: "stay",
     });
   });
 
-  it('POST-MINT ERROR: a pair exists AND the send failed → stay, so the reason is readable', () => {
+  it("POST-MINT ERROR: a pair exists AND the send failed → stay, so the reason is readable", () => {
     // The window #task:2036 accepts: initiation minted and announced the pair,
     // then message persistence failed. The pair now exists, so an
     // `existingPairId`-only rule would jump to an empty line and take the failure
     // off screen. Also with the draft cleared — `sendFailed` alone must hold.
     expect(decideDraftHandoff(facts({ sendFailed: true }))).toEqual({
-      kind: 'stay',
+      kind: "stay",
     });
     expect(decideDraftHandoff(facts({ sendFailed: true, draftDirty: true }))).toEqual({
-      kind: 'stay',
+      kind: "stay",
     });
   });
 
-  it('carries the pair id through untouched — the pane never invents a destination', () => {
-    expect(decideDraftHandoff(facts({ existingPairId: 'c-other' }))).toEqual({
-      kind: 'handoff',
-      conversationId: 'c-other',
+  it("carries the pair id through untouched — the pane never invents a destination", () => {
+    expect(decideDraftHandoff(facts({ existingPairId: "c-other" }))).toEqual({
+      kind: "handoff",
+      conversationId: "c-other",
     });
   });
 });
 
-describe('the draft pane is per-agent, and defers to the pure handoff rule', () => {
-  const paneSource = read('./DirectPairDraftPane.tsx');
-  const appSource = read('../../App.tsx');
+describe("the draft pane is per-agent, and defers to the pure handoff rule", () => {
+  const paneSource = read("./DirectPairDraftPane.tsx");
+  const appSource = read("../../App.tsx");
   const contentSource =
-    read('../conversation-shell/primary-pane-content.tsx') +
-    read('../conversation-shell/build-conversation-panes.ts');
-  const controllerSource = read('../conversation-shell/use-conversation-read-model.ts');
-  const signalsSource = read('../app-shell/application-signals.ts');
+    read("../conversation-shell/primary-pane-content.tsx") +
+    read("../conversation-shell/build-conversation-panes.ts");
+  const controllerSource = read("../conversation-shell/use-conversation-read-model.ts");
+  const signalsSource = read("../app-shell/application-signals.ts");
 
-  it('remounts on agent identity — a draft written to A can never be sent to B', () => {
+  it("remounts on agent identity — a draft written to A can never be sent to B", () => {
     // @Cindy's finding 1: without the key, `/chat/d/new/A → /new/B` re-uses the
     // instance and carries `draft` plus the mutation state across agents.
-    expect(contentSource).toContain('key={model.props.agentId}');
+    expect(contentSource).toContain("key={model.props.agentId}");
   });
 
-  it('takes the handoff decision from the seam, not from its own conditions', () => {
-    expect(paneSource).toContain('decideDraftHandoff({');
+  it("takes the handoff decision from the seam, not from its own conditions", () => {
+    expect(paneSource).toContain("decideDraftHandoff({");
     // The shape the review rejected: an effect that navigates on the pair's
     // existence, gated only by whether a send is in flight.
-    expect(paneSource).not.toContain('initiate.isPending) return');
+    expect(paneSource).not.toContain("initiate.isPending) return");
   });
 });
 
-describe('the live-discovery subscription is mounted once, by the session', () => {
-  const hooksSource = read('./hooks.ts');
-  const appSource = read('../../App.tsx');
+describe("the live-discovery subscription is mounted once, by the session", () => {
+  const hooksSource = read("./hooks.ts");
+  const appSource = read("../../App.tsx");
   const contentSource =
-    read('../conversation-shell/primary-pane-content.tsx') +
-    read('../conversation-shell/build-conversation-panes.ts');
-  const controllerSource = read('../conversation-shell/use-conversation-read-model.ts');
-  const signalsSource = read('../app-shell/application-signals.ts');
-  const shellSource = read('../app-shell/effects.ts');
-  const panelSource = read('../../components/layout/DirectMessagesPanel.tsx');
+    read("../conversation-shell/primary-pane-content.tsx") +
+    read("../conversation-shell/build-conversation-panes.ts");
+  const controllerSource = read("../conversation-shell/use-conversation-read-model.ts");
+  const signalsSource = read("../app-shell/application-signals.ts");
+  const shellSource = read("../app-shell/effects.ts");
+  const panelSource = read("../../components/layout/DirectMessagesPanel.tsx");
 
   /** The body of a top-level `function <name>(`, up to the next top-level
    *  declaration. Lets a count be attributed to ONE component instead of to a
@@ -595,15 +595,15 @@ describe('the live-discovery subscription is mounted once, by the session', () =
     return end === -1 ? rest : rest.slice(0, end);
   }
 
-  it('the comment stripper actually strips — otherwise the counts below prove nothing', () => {
-    expect(code('a\n// useDirectPairsSync();\nb')).not.toContain('useDirectPairsSync');
-    expect(code('/* useDirectPairsSync(); */')).not.toContain('useDirectPairsSync');
-    expect(code("const u = 'silverhand://agent/alice';")).toContain('silverhand://agent/alice');
+  it("the comment stripper actually strips — otherwise the counts below prove nothing", () => {
+    expect(code("a\n// useDirectPairsSync();\nb")).not.toContain("useDirectPairsSync");
+    expect(code("/* useDirectPairsSync(); */")).not.toContain("useDirectPairsSync");
+    expect(code("const u = 'silverhand://agent/alice';")).toContain("silverhand://agent/alice");
   });
 
   it("the function slicer actually slices — a neighbour's body must not count", () => {
-    const src = 'function A() {\n  mount();\n}\nfunction B() {\n  mount();\n}\n';
-    expect(topLevelFunction(src, 'A').split('mount()').length - 1).toBe(1);
+    const src = "function A() {\n  mount();\n}\nfunction B() {\n  mount();\n}\n";
+    expect(topLevelFunction(src, "A").split("mount()").length - 1).toBe(1);
   });
 
   // @Cindy's B6 second round: the chain is only as strong as its weakest link.
@@ -612,53 +612,53 @@ describe('the live-discovery subscription is mounted once, by the session', () =
   // `useAppShellGlobalSync()` in App — which deletes every viewer-scoped
   // subscription from the shipped tree, so a stranger's first DM can never be
   // discovered — and the suite stayed green. All three links are pinned now.
-  it('link 1: the post-auth shell calls the global-sync helper exactly once', () => {
+  it("link 1: the post-auth shell calls the global-sync helper exactly once", () => {
     // `RegisteredAppShell` is the post-auth component by construction: `App`
     // returns it only after the loading, unreachable, epoch and registration
     // gates have each returned first.
-    const shellComponent = topLevelFunction(appSource, 'RegisteredAppShell');
-    expect(shellComponent.split('useApplicationSignals()').length - 1).toBe(1);
+    const shellComponent = topLevelFunction(appSource, "RegisteredAppShell");
+    expect(shellComponent.split("useApplicationSignals()").length - 1).toBe(1);
     expect(
-      topLevelFunction(signalsSource, 'useApplicationSignals').split('useAppShellGlobalSync()')
+      topLevelFunction(signalsSource, "useApplicationSignals").split("useAppShellGlobalSync()")
         .length - 1,
     ).toBe(1);
     // And nowhere else in App — a second call would double every invalidation,
     // and a call in a pre-auth branch would subscribe with no viewer.
-    expect(appSource.split('useApplicationSignals()').length - 1).toBe(1);
-    expect(signalsSource.split('useAppShellGlobalSync()').length - 1).toBe(1);
+    expect(appSource.split("useApplicationSignals()").length - 1).toBe(1);
+    expect(signalsSource.split("useAppShellGlobalSync()").length - 1).toBe(1);
     // The shell has to actually be mounted for any of this to run.
-    expect(appSource.split('<RegisteredAppShell').length - 1).toBe(1);
+    expect(appSource.split("<RegisteredAppShell").length - 1).toBe(1);
   });
 
-  it('link 2: the helper arms the direct-pair sync exactly once', () => {
+  it("link 2: the helper arms the direct-pair sync exactly once", () => {
     // The row must appear while the viewer is looking at ANY section, so the
     // obligation belongs to the session, not to the surface that renders the
     // list. Exactly once, because every mount invalidates the same key per
     // frame.
-    expect(shellSource.split('useDirectPairsSync()').length - 1).toBe(1);
+    expect(shellSource.split("useDirectPairsSync()").length - 1).toBe(1);
   });
 
-  it('link 3: the section that renders the list arms NOTHING', () => {
+  it("link 3: the section that renders the list arms NOTHING", () => {
     // A stranger's first DM has to arrive when DIRECT MESSAGES is absent from
     // the tree (it renders nothing when the viewer has no pairs) — a
     // subscription owned by that section could not discover the first row.
-    expect(panelSource).not.toContain('useDirectPairsSync');
+    expect(panelSource).not.toContain("useDirectPairsSync");
   });
 
-  it('gates the viewer scope and routes the decision at the one key', () => {
-    expect(hooksSource).toContain('subscribeViewerScope()');
-    expect(hooksSource).toContain('isCurrentViewerScope(frame.scope)');
-    expect(hooksSource).toContain('decideDirectPairsInvalidation(frame)');
-    expect(hooksSource).toContain('queryKey: directPairsKey');
+  it("gates the viewer scope and routes the decision at the one key", () => {
+    expect(hooksSource).toContain("subscribeViewerScope()");
+    expect(hooksSource).toContain("isCurrentViewerScope(frame.scope)");
+    expect(hooksSource).toContain("decideDirectPairsInvalidation(frame)");
+    expect(hooksSource).toContain("queryKey: directPairsKey");
   });
 
-  it('the pane consumes the pure mapping, and its settled absence reaches the view', () => {
+  it("the pane consumes the pure mapping, and its settled absence reaches the view", () => {
     // The consumer direction for B8: the shell must not re-derive the states
     // (that is how `absent` got flattened), and the flag it derives has to be
     // handed to the pane rather than dropped.
-    expect(controllerSource).toContain('directPairPaneProps(');
-    expect(contentSource).toContain('notFound: read.directPairNotFound');
-    expect(read('../../components/layout/ChannelView.tsx')).toContain('props.notFound');
+    expect(controllerSource).toContain("directPairPaneProps(");
+    expect(contentSource).toContain("notFound: read.directPairNotFound");
+    expect(read("../../components/layout/ChannelView.tsx")).toContain("props.notFound");
   });
 });
 
@@ -682,7 +682,7 @@ describe('the live-discovery subscription is mounted once, by the session', () =
  * FALSIFIER: set `DIRECT_PAIRS_QUERY_POLICY.staleMs` to `0` — the two
  * observer-mount cases go red and the invalidation case stays green.
  */
-describe('DIRECT_PAIRS_QUERY_POLICY — one more reader costs no request', () => {
+describe("DIRECT_PAIRS_QUERY_POLICY — one more reader costs no request", () => {
   function client(): QueryClient {
     return new QueryClient({ defaultOptions: { queries: { retry: false } } });
   }
@@ -697,7 +697,7 @@ describe('DIRECT_PAIRS_QUERY_POLICY — one more reader costs no request', () =>
     mockApi.mockResolvedValue({ direct_pairs: [] });
   });
 
-  it('the first read fetches once; two more readers mounting fetch nothing', async () => {
+  it("the first read fetches once; two more readers mounting fetch nothing", async () => {
     const qc = client();
     await qc.fetchQuery(directPairsQueryOptions());
     expect(mockApi).toHaveBeenCalledTimes(1);
@@ -709,7 +709,7 @@ describe('DIRECT_PAIRS_QUERY_POLICY — one more reader costs no request', () =>
     for (const off of readers) off();
   });
 
-  it('a reader that unmounts and mounts again still fetches nothing', async () => {
+  it("a reader that unmounts and mounts again still fetches nothing", async () => {
     // A virtualized stream does exactly this as chips scroll in and out of the
     // window, which is why "one observer is already resident in App" does not
     // bound the cost on its own.
@@ -723,7 +723,7 @@ describe('DIRECT_PAIRS_QUERY_POLICY — one more reader costs no request', () =>
     off();
   });
 
-  it('the invalidation owner still re-reads it', async () => {
+  it("the invalidation owner still re-reads it", async () => {
     // `invalidateQueries` ignores `staleTime`, so `useDirectPairsSync`
     // (`direct_pairs_changed` / `snapshot_required`) and the first-send mutation
     // remain the freshness carriers — this is the half that keeps Infinity honest.
@@ -738,7 +738,7 @@ describe('DIRECT_PAIRS_QUERY_POLICY — one more reader costs no request', () =>
     off();
   });
 
-  it('an invalidation while NOBODY is reading still re-reads on the next mount', async () => {
+  it("an invalidation while NOBODY is reading still re-reads on the next mount", async () => {
     // The composition that makes cache-until-invalidated safe for a row whose
     // freshness comes from someone else's event: with `staleTime: Infinity` a
     // mount never guesses, but an INVALIDATED entry is stale regardless of
@@ -758,14 +758,14 @@ describe('DIRECT_PAIRS_QUERY_POLICY — one more reader costs no request', () =>
     off();
   });
 
-  it('every reader goes through the one options factory', () => {
+  it("every reader goes through the one options factory", () => {
     // A second `useQuery` on this key with its own freshness would restore the
     // mount refetch invisibly: whichever hook mounts first owns the entry, so
     // neither call site would look wrong.
-    const hooksSource = read('./hooks.ts');
-    expect(hooksSource).toContain('useQuery<DirectPairListResponse>(directPairsQueryOptions())');
-    expect(hooksSource.split('staleTime:').length - 1).toBe(1);
-    expect(hooksSource).toContain('staleTime: DIRECT_PAIRS_QUERY_POLICY.staleMs');
+    const hooksSource = read("./hooks.ts");
+    expect(hooksSource).toContain("useQuery<DirectPairListResponse>(directPairsQueryOptions())");
+    expect(hooksSource.split("staleTime:").length - 1).toBe(1);
+    expect(hooksSource).toContain("staleTime: DIRECT_PAIRS_QUERY_POLICY.staleMs");
     // The policy is a value, not a literal buried in the query config.
     expect(DIRECT_PAIRS_QUERY_POLICY.staleMs).toBe(Infinity);
   });

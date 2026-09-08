@@ -19,9 +19,9 @@
  * content-type-only check would miss every legacy file (Cindy's mapping).
  */
 
-import { isGenericMimeHint, mimeFromFilename } from '@silverhand/shared';
+import { isGenericMimeHint, mimeFromFilename } from "@silverhand/shared";
 
-export type AttachmentPreviewKind = 'markdown' | 'html';
+export type AttachmentPreviewKind = "markdown" | "html";
 
 /**
  * The previewer kind for an attachment, or `null` when it has no in-app
@@ -33,8 +33,8 @@ export function attachmentPreviewKind(
   filename: string,
 ): AttachmentPreviewKind | null {
   const mime = effectiveMime(contentType, filename);
-  if (mime === 'text/markdown') return 'markdown';
-  if (mime === 'text/html') return 'html';
+  if (mime === "text/markdown") return "markdown";
+  if (mime === "text/html") return "html";
   return null;
 }
 
@@ -46,7 +46,7 @@ export function attachmentPreviewKind(
  * sandbox-rendered as HTML just because it is named `.html`.
  */
 function effectiveMime(contentType: string, filename: string): string | null {
-  const base = contentType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+  const base = contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   if (!isGenericMimeHint(base)) return base;
   return mimeFromFilename(filename);
 }
@@ -75,7 +75,7 @@ function effectiveMime(contentType: string, filename: string): string | null {
  * PURE. `null`/empty ids never match a real conversation id, so a request with
  * no source and a pane with no conversation both resolve to `'reject'`.
  */
-export type AttachmentOpenRoute = 'preview' | 'os-open' | 'reject';
+export type AttachmentOpenRoute = "preview" | "os-open" | "reject";
 
 export function resolveAttachmentOpenRoute(args: {
   requestConversationId: string;
@@ -85,8 +85,8 @@ export function resolveAttachmentOpenRoute(args: {
 }): AttachmentOpenRoute {
   const { requestConversationId, currentConversationId } = args;
   if (!requestConversationId || requestConversationId !== currentConversationId) {
-    return 'reject';
+    return "reject";
   }
-  if (args.tabStripShown && args.previewKind !== null) return 'preview';
-  return 'os-open';
+  if (args.tabStripShown && args.previewKind !== null) return "preview";
+  return "os-open";
 }

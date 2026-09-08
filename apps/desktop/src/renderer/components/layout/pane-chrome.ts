@@ -22,8 +22,8 @@
  * silently clip or unclip those. Same rule as the shared `data-*` hooks:
  * identity here, layout/spacing with the consumer.
  */
-export const PANE_RADIUS = 'var(--pane-radius, var(--card-radius, 0))';
-export const PANE_SHADOW = 'var(--pane-shadow, var(--card-shadow, none))';
+export const PANE_RADIUS = "var(--pane-radius, var(--card-radius, 0))";
+export const PANE_SHADOW = "var(--pane-shadow, var(--card-shadow, none))";
 
 /** Spread into a pane's inline `style`; add layout/overflow alongside it. */
 export const paneChrome = {

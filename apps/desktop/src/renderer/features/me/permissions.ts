@@ -1,8 +1,4 @@
-import type {
-  MeResponse,
-  RegistrationRequired,
-  UserDto,
-} from '@silverhand/shared';
+import type { MeResponse, RegistrationRequired, UserDto } from "@silverhand/shared";
 
 /**
  * Local copy of the `isRegistrationRequired` type guard. Inlined so
@@ -11,14 +7,12 @@ import type {
  * predicate. The check matches the canonical one verbatim; if the
  * shape ever changes, both copies must move together.
  */
-function isRegistrationRequiredLocal(
-  body: MeResponse,
-): body is RegistrationRequired {
+function isRegistrationRequiredLocal(body: MeResponse): body is RegistrationRequired {
   return (
-    typeof body === 'object'
-    && body !== null
-    && 'registration_required' in body
-    && (body as { registration_required: unknown }).registration_required === true
+    typeof body === "object" &&
+    body !== null &&
+    "registration_required" in body &&
+    (body as { registration_required: unknown }).registration_required === true
   );
 }
 
@@ -45,7 +39,7 @@ function isRegistrationRequiredLocal(
  */
 export function canEditUserProfile(
   viewer: MeResponse | undefined,
-  user: Pick<UserDto, 'id'>,
+  user: Pick<UserDto, "id">,
 ): boolean {
   if (!viewer) return false;
   if (isRegistrationRequiredLocal(viewer)) return false;

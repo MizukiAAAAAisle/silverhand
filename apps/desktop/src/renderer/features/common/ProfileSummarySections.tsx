@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { cn } from '@/lib/cn';
+import type { ReactNode } from "react";
+import { cn } from "@/lib/cn";
 
 /**
  * Profile panel building blocks shared by the agent and human profile
@@ -63,8 +63,8 @@ export function ProfileSection({
         <div className="flex min-w-0 items-center gap-1.5">
           <h3
             className={cn(
-              'font-serif text-[length:var(--text-strong)] font-semibold uppercase tracking-wider',
-              muted ? 'text-text-muted' : 'text-text-secondary',
+              "font-serif text-[length:var(--text-strong)] font-semibold uppercase tracking-wider",
+              muted ? "text-text-muted" : "text-text-secondary",
             )}
           >
             {title}
@@ -78,7 +78,7 @@ export function ProfileSection({
       <div
         data-panel-card="profile-section"
         className={cn(
-          'border border-border-subtle bg-bg-floating/50 p-4',
+          "border border-border-subtle bg-bg-floating/50 p-4",
           // Hover affordance: subtle → stronger border to give the
           // section card a "alive" feel. Forza6 theme amplifies this
           // into the poster-sticker hover (gray → ink near-black) via
@@ -86,7 +86,7 @@ export function ProfileSection({
           // global.css under the `[data-panel-card='profile-section']`
           // hook (drives off `--profile-section-radius`) — do not add
           // a `rounded-*` class or inline `border-radius` here. #task:814.
-          'transition-colors duration-150 hover:border-border',
+          "transition-colors duration-150 hover:border-border",
         )}
       >
         {children}
@@ -97,16 +97,8 @@ export function ProfileSection({
 
 /** Wrap one or more `<ProfileField>` to lay them out as a responsive
  *  2-column grid that wraps to a single column on narrow widths. */
-export function ProfileFieldGrid({
-  children,
-}: {
-  children: ReactNode;
-}): JSX.Element {
-  return (
-    <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
-      {children}
-    </div>
-  );
+export function ProfileFieldGrid({ children }: { children: ReactNode }): JSX.Element {
+  return <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">{children}</div>;
 }
 
 export interface ProfileFieldProps {
@@ -129,7 +121,7 @@ export function ProfileField({
   children,
 }: ProfileFieldProps): JSX.Element {
   return (
-    <div className={cn('flex min-w-0 flex-col gap-1', full ? 'sm:col-span-2' : '')}>
+    <div className={cn("flex min-w-0 flex-col gap-1", full ? "sm:col-span-2" : "")}>
       <div className="text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-muted">
         {label}
       </div>
@@ -161,14 +153,10 @@ export interface MetadataItem {
  * date values most). Labels get a `data-metadata-label` hook for the
  * same reason.
  */
-export function MetadataList({
-  items,
-}: {
-  items: MetadataItem[];
-}): JSX.Element {
+export function MetadataList({ items }: { items: MetadataItem[] }): JSX.Element {
   return (
     <dl data-metadata-list className="divide-y divide-border-subtle/60">
-      {items.map(item => (
+      {items.map((item) => (
         <div
           key={item.label}
           className="flex items-baseline justify-between gap-3 py-1.5 first:pt-0 last:pb-0"
@@ -182,8 +170,8 @@ export function MetadataList({
           </dt>
           <dd
             className={cn(
-              'min-w-0 truncate text-xs text-text-primary tabular-nums',
-              item.mono ? 'font-mono' : '',
+              "min-w-0 truncate text-xs text-text-primary tabular-nums",
+              item.mono ? "font-mono" : "",
             )}
           >
             {item.value}

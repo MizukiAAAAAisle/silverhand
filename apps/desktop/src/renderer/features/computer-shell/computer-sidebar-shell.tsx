@@ -1,12 +1,12 @@
-import type { JSX } from 'react';
-import { DirectorySidebar } from '@/components/layout/directory-shell';
-import { Monitor, Plus } from 'lucide-react';
-import type { HostDto } from '@silverhand/shared';
-import { Button } from '@/components/ui/button';
-import { computerCopy } from '@/features/hosts/computer-copy';
-import { useHostStatusQuery } from '@/features/hosts/hooks';
-import { describeHostStatus, type HostStatusTone } from '@/features/hosts/host-status-presentation';
-import { SidebarRow, SidebarSection } from '@/components/layout/sidebar-shared';
+import type { JSX } from "react";
+import { DirectorySidebar } from "@/components/layout/directory-shell";
+import { Monitor, Plus } from "lucide-react";
+import type { HostDto } from "@silverhand/shared";
+import { Button } from "@/components/ui/button";
+import { computerCopy } from "@/features/hosts/computer-copy";
+import { useHostStatusQuery } from "@/features/hosts/hooks";
+import { describeHostStatus, type HostStatusTone } from "@/features/hosts/host-status-presentation";
+import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
 
 export interface ComputerSidebarShellProps {
   hosts: HostDto[];
@@ -26,7 +26,7 @@ export function ComputerSidebarShell({
   onAddComputer,
 }: ComputerSidebarShellProps): JSX.Element {
   const sorted = sortHostsForSidebar(
-    hosts.filter((host) => host.status === 'active' || host.status === 'revoked'),
+    hosts.filter((host) => host.status === "active" || host.status === "revoked"),
     localHostId,
   );
 
@@ -53,7 +53,7 @@ export function ComputerSidebarShell({
       >
         {sorted.length === 0 ? (
           <li className="px-2 py-1.5 text-xs text-text-muted">
-            {isLoading ? 'Loading…' : 'No computers yet.'}
+            {isLoading ? "Loading…" : "No computers yet."}
           </li>
         ) : (
           sorted.map((host) => (
@@ -78,12 +78,12 @@ export function ComputerSidebarShell({
  * and a connected-but-unreachable/errored host is red (`crashed`) —
  * something is wrong and worth a glance.
  */
-const TONE_TO_PIP: Record<HostStatusTone, 'active' | 'idle' | 'crashed'> = {
-  accent: 'active',
-  success: 'active',
-  warning: 'crashed',
-  error: 'crashed',
-  muted: 'idle',
+const TONE_TO_PIP: Record<HostStatusTone, "active" | "idle" | "crashed"> = {
+  accent: "active",
+  success: "active",
+  warning: "crashed",
+  error: "crashed",
+  muted: "idle",
 };
 
 /**
@@ -105,8 +105,8 @@ function ComputerRow({
   // Lifecycle bucketing reads the backend-owned `status` enum; never
   // re-derive it from raw timestamps. Pending is filtered out upstream
   // (modal-scoped draft), so a row is either `active` or `revoked` here.
-  const isRevoked = host.status === 'revoked';
-  const isAppManaged = host.provisioning_source === 'app_install';
+  const isRevoked = host.status === "revoked";
+  const isAppManaged = host.provisioning_source === "app_install";
 
   // Live availability — one request on mount, then event-driven via
   // host-connection-sync. Disabled for revoked (terminal, nothing live).
@@ -123,7 +123,7 @@ function ComputerRow({
       title={host.display_label ?? host.name}
       subtitle={
         <span className="inline-flex min-w-0 items-center gap-1.5">
-          <span className="truncate">{availabilityLabel ?? ' '}</span>
+          <span className="truncate">{availabilityLabel ?? " "}</span>
           {isAppManaged ? <AppManagedBadge /> : null}
         </span>
       }

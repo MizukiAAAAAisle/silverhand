@@ -1,9 +1,6 @@
-import type { CachedMessage } from '@/features/channels/pending-message';
-import {
-  authorGroupKey as authorDtoGroupKey,
-  isSameAuthorGroup,
-} from './author-presentation';
-import type { StreamItem } from './groupMessages';
+import type { CachedMessage } from "@/features/channels/pending-message";
+import { authorGroupKey as authorDtoGroupKey, isSameAuthorGroup } from "./author-presentation";
+import type { StreamItem } from "./groupMessages";
 
 /** How long after the previous row a message may still join its group.
  *  5 minutes — Slack's observed window (Discord uses ~7min); it absorbs one
@@ -29,10 +26,7 @@ export function authorGroupKey(m: CachedMessage): string | null {
  *  A negative delta (`current` older than `previous`) never groups: a pending
  *  row is stamped with the local wall clock while committed rows carry server
  *  time, so the two can legitimately cross. */
-export function continuesAuthorGroup(
-  current: CachedMessage,
-  previous: CachedMessage,
-): boolean {
+export function continuesAuthorGroup(current: CachedMessage, previous: CachedMessage): boolean {
   // `isSameAuthorGroup` already encodes "unresolved / system never merges".
   if (!isSameAuthorGroup(current.author, previous.author)) return false;
   const delta = current.created_at - previous.created_at;
@@ -47,14 +41,12 @@ export function continuesAuthorGroup(
  *
  *  A message id is absent from the set whenever the row leads its group, which
  *  is also the safe default: an unknown row renders its full header. */
-export function authorGroupContinuations(
-  items: readonly StreamItem[],
-): ReadonlySet<string> {
+export function authorGroupContinuations(items: readonly StreamItem[]): ReadonlySet<string> {
   const continuations = new Set<string>();
   let previous: CachedMessage | null = null;
   for (const item of items) {
     // An activity cluster is a visible block between rows — it ends the run.
-    if (item.kind === 'cluster') {
+    if (item.kind === "cluster") {
       previous = null;
       continue;
     }

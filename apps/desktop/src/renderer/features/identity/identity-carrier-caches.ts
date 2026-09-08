@@ -1,14 +1,14 @@
-import type { QueryClient } from '@tanstack/react-query';
-import { activityKey } from '@/features/attention/hooks';
-import { messageReactorsKeyPrefix } from '@/features/channels/reaction-hooks';
-import { CONVERSATION_MEMBERS_KEY_PREFIX } from '@/features/conversations/useConversationMembers';
-import { directPairsKey } from '@/features/direct-pairs/hooks';
-import { favoritesKey } from '@/features/favorites/hooks';
-import { hostResourcesKeyPrefix, hostStatusKeyPrefix } from '@/features/hosts/hooks';
-import { savedKey } from '@/features/saved/hooks';
-import { searchKey } from '@/features/search/hooks';
-import { usersKey } from '@/features/users/hooks';
-import { isWorkspaceMembersQueryKey } from '@/features/workspaces/hooks';
+import type { QueryClient } from "@tanstack/react-query";
+import { activityKey } from "@/features/attention/hooks";
+import { messageReactorsKeyPrefix } from "@/features/channels/reaction-hooks";
+import { CONVERSATION_MEMBERS_KEY_PREFIX } from "@/features/conversations/useConversationMembers";
+import { directPairsKey } from "@/features/direct-pairs/hooks";
+import { favoritesKey } from "@/features/favorites/hooks";
+import { hostResourcesKeyPrefix, hostStatusKeyPrefix } from "@/features/hosts/hooks";
+import { savedKey } from "@/features/saved/hooks";
+import { searchKey } from "@/features/search/hooks";
+import { usersKey } from "@/features/users/hooks";
+import { isWorkspaceMembersQueryKey } from "@/features/workspaces/hooks";
 
 /**
  * The channel-scoped read models whose cached rows now embed a send-time
@@ -32,17 +32,17 @@ import { isWorkspaceMembersQueryKey } from '@/features/workspaces/hooks';
  * (`agents` / `thread-followers` / mainline `live-gap`) carry no snapshot.
  */
 export function isChannelAuthorCarrierKey(key: readonly unknown[]): boolean {
-  if (key[0] !== 'channels') return false;
+  if (key[0] !== "channels") return false;
   const family = key[2];
   // The cluster window is `['channels', cid, 'cluster', rootId, 'messages']`;
   // its `fetch-epoch` / `live-gap` siblings share the `'cluster'` segment but
   // carry no author, so gate on the trailing `'messages'`.
-  if (family === 'cluster') return key[4] === 'messages';
+  if (family === "cluster") return key[4] === "messages";
   return (
-    family === 'messages' ||
-    family === 'thread-root' ||
-    family === 'threads-list' ||
-    family === 'attachments-list'
+    family === "messages" ||
+    family === "thread-root" ||
+    family === "threads-list" ||
+    family === "attachments-list"
   );
 }
 
@@ -52,7 +52,7 @@ export function isChannelAuthorCarrierKey(key: readonly unknown[]): boolean {
  * status and DM favorites, a human's into the user directory, and both into
  * every roster / Activity / reaction / task read model.
  */
-export type IdentitySubjectKind = 'agent' | 'human';
+export type IdentitySubjectKind = "agent" | "human";
 
 /**
  * WHICH identity a carrier holds — kept separate because the two facets fail in
@@ -71,12 +71,10 @@ export type IdentitySubjectKind = 'agent' | 'human';
  * BOTH) arrived. The field is enforced, not decorative: `carrierIdsWithFacet`
  * exposes it so a test reddens if the DM list ever loses `lifecycle`.
  */
-export type IdentityFacet = 'presentation' | 'lifecycle';
+export type IdentityFacet = "presentation" | "lifecycle";
 
 /** The filter shape `QueryClient.invalidateQueries` accepts. */
-type InvalidateFilter = NonNullable<
-  Parameters<QueryClient['invalidateQueries']>[0]
->;
+type InvalidateFilter = NonNullable<Parameters<QueryClient["invalidateQueries"]>[0]>;
 
 interface IdentityCarrier {
   /** Stable slug — the review handle for "is this carrier covered?". */
@@ -139,18 +137,18 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
   {
     // `AgentMemberDto` / `HumanMemberDto` both embed name + avatar; every
     // cached roster, not just the visible channel's (#task:1701).
-    id: 'conversation-members',
-    kinds: ['agent', 'human'],
-    facets: ['presentation'],
+    id: "conversation-members",
+    kinds: ["agent", "human"],
+    facets: ["presentation"],
     filter: { queryKey: CONVERSATION_MEMBERS_KEY_PREFIX },
   },
   {
     // `WorkspaceMembersResponse` = AgentDto[] + WorkspaceHumanMemberDto[]
     // (a UserDto extension), cached per workspace.
-    id: 'workspace-members',
-    kinds: ['agent', 'human'],
-    facets: ['presentation'],
-    filter: { predicate: q => isWorkspaceMembersQueryKey(q.queryKey) },
+    id: "workspace-members",
+    kinds: ["agent", "human"],
+    facets: ["presentation"],
+    filter: { predicate: (q) => isWorkspaceMembersQueryKey(q.queryKey) },
   },
   {
     // TWO server-resolved faces per list, both invalidated by the one entry (the
@@ -163,9 +161,9 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
     // Resolved server-side by design: the list is cross-workspace AND spans a
     // workspace-less placement, so the renderer has no directory that covers
     // every face it draws.
-    id: 'activity',
-    kinds: ['agent', 'human'],
-    facets: ['presentation'],
+    id: "activity",
+    kinds: ["agent", "human"],
+    facets: ["presentation"],
     filter: { queryKey: activityKey() },
   },
   {
@@ -174,31 +172,31 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
     // clusters, the thread-pane root row, the Threads list, and the attachments
     // list. The snapshot outlives the actor (`author_id` has no FK), so a rename
     // / avatar / hard-delete only reflects on these cached authors by refetch.
-    id: 'channel-author-projections',
-    kinds: ['agent', 'human'],
+    id: "channel-author-projections",
+    kinds: ["agent", "human"],
     // The stored `author_name` outlives a deleted actor (it is a SEND-TIME
     // snapshot, not a live join), so a hard-delete only ever changes the name/
     // avatar these rows show, never turns them into a `deleted` state —
     // presentation-only.
-    facets: ['presentation'],
-    filter: { predicate: q => isChannelAuthorCarrierKey(q.queryKey) },
+    facets: ["presentation"],
+    filter: { predicate: (q) => isChannelAuthorCarrierKey(q.queryKey) },
   },
   {
     // `SavedMessageDto.message.author` — the saved row embeds the whole message,
     // so it carries the same mutable author snapshot as the byline. That
     // snapshot is now the row's ONLY identity carrier (#task:2064 deleted the
     // live-FK `agent_name` that used to sit beside it).
-    id: 'saved',
-    kinds: ['agent', 'human'],
-    facets: ['presentation'],
+    id: "saved",
+    kinds: ["agent", "human"],
+    facets: ["presentation"],
     filter: { queryKey: savedKey },
   },
   {
     // `SearchResultDto.message.author` — a message hit embeds the full message,
     // hence the same author snapshot. Workspace-global key, so a plain prefix.
-    id: 'search',
-    kinds: ['agent', 'human'],
-    facets: ['presentation'],
+    id: "search",
+    kinds: ["agent", "human"],
+    facets: ["presentation"],
     filter: { queryKey: searchKey },
   },
   {
@@ -207,9 +205,9 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
     // name. Not re-resolved by id: reactors can include actors outside the
     // viewer's own directories, and the server join is the only complete
     // source.
-    id: 'message-reactors',
-    kinds: ['agent', 'human'],
-    facets: ['presentation'],
+    id: "message-reactors",
+    kinds: ["agent", "human"],
+    facets: ["presentation"],
     filter: { queryKey: messageReactorsKeyPrefix },
   },
   {
@@ -233,13 +231,13 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
     // (`DIRECT_PAIRS_QUERY_POLICY.staleMs = Infinity`): with no time dimension
     // of staleness left, an unregistered carrier stays stale for the whole
     // session instead of being accidentally reseated on the next mount.
-    id: 'direct-pairs',
-    kinds: ['agent', 'human'],
+    id: "direct-pairs",
+    kinds: ["agent", "human"],
     // The ONLY carrier that holds both today: the active arm's name/avatar/
     // runtime (presentation) AND the `deleted` arm + derived `read_only`
     // (lifecycle). Narrowing this to `['presentation']` is the exact regression
     // the split exists to catch.
-    facets: ['presentation', 'lifecycle'],
+    facets: ["presentation", "lifecycle"],
     filter: { queryKey: directPairsKey },
   },
   // Task DTOs carry THREE identity snapshots — `assignee.name`, `creator.name`
@@ -253,23 +251,33 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
   // the only task read (#task:1885/#task:1892): the person filter options are now
   // a server facet read that carries its own `name` snapshots, where they used to
   // be aggregated client-side off the rows in hand.
-  { id: 'task-lists', kinds: ['agent', 'human'], facets: ['presentation'], filter: { queryKey: ['tasks'] } },
-  { id: 'task-detail', kinds: ['agent', 'human'], facets: ['presentation'], filter: { queryKey: ['task-detail'] } },
   {
-    id: 'task-by-number',
-    kinds: ['agent', 'human'],
-    facets: ['presentation'],
-    filter: { queryKey: ['task-by-number'] },
+    id: "task-lists",
+    kinds: ["agent", "human"],
+    facets: ["presentation"],
+    filter: { queryKey: ["tasks"] },
+  },
+  {
+    id: "task-detail",
+    kinds: ["agent", "human"],
+    facets: ["presentation"],
+    filter: { queryKey: ["task-detail"] },
+  },
+  {
+    id: "task-by-number",
+    kinds: ["agent", "human"],
+    facets: ["presentation"],
+    filter: { queryKey: ["task-by-number"] },
   },
 
   // ── agent-only ────────────────────────────────────────────────────────────
   {
     // The agent directory + every per-agent detail subtree. Avatars come along
     // for free: the object-url effect keys on the `?v=updated_at` url.
-    id: 'agents',
-    kinds: ['agent'],
-    facets: ['presentation'],
-    filter: { queryKey: ['agents'] },
+    id: "agents",
+    kinds: ["agent"],
+    facets: ["presentation"],
+    filter: { queryKey: ["agents"] },
   },
   {
     // A favorite row snapshots its PARENT's identity: `read-model/favorites.ts`
@@ -279,25 +287,25 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
     // the parent avatar/runtime fields deleted once the row led with `#`). Since
     // a STARRED row no longer appears under its parent, this invalidation is the
     // ONLY convergence path for that label — do not drop it.
-    id: 'favorites',
-    kinds: ['agent'],
-    facets: ['presentation'],
+    id: "favorites",
+    kinds: ["agent"],
+    facets: ["presentation"],
     filter: { queryKey: favoritesKey },
   },
   {
     // `AgentOnHostDto.display_name` in each computer's status snapshot.
-    id: 'host-status',
-    kinds: ['agent'],
-    facets: ['presentation'],
+    id: "host-status",
+    kinds: ["agent"],
+    facets: ["presentation"],
     filter: { queryKey: hostStatusKeyPrefix },
   },
   {
     // `HostAgentResource.display_name` in each computer's ownership list.
     // `HostDto` itself carries no agent identity, so `['hosts']` / `['host',id]`
     // are intentionally absent.
-    id: 'host-resources',
-    kinds: ['agent'],
-    facets: ['presentation'],
+    id: "host-resources",
+    kinds: ["agent"],
+    facets: ["presentation"],
     filter: { queryKey: hostResourcesKeyPrefix },
   },
 
@@ -306,29 +314,25 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
     // The global human directory. Also the resolver behind chat authors,
     // mention chips and sender filters, so this one entry converges every
     // surface that resolves humans by id.
-    id: 'users',
-    kinds: ['human'],
-    facets: ['presentation'],
+    id: "users",
+    kinds: ["human"],
+    facets: ["presentation"],
     filter: { queryKey: usersKey },
   },
 ];
 
 /** Carrier slugs that apply to one subject kind. Exported for the boundary
  *  test — the registry's value is its scoping, so that is what gets pinned. */
-export function identityCarrierIdsFor(
-  kind: IdentitySubjectKind,
-): readonly string[] {
-  return IDENTITY_CARRIERS.filter(c => c.kinds.includes(kind)).map(c => c.id);
+export function identityCarrierIdsFor(kind: IdentitySubjectKind): readonly string[] {
+  return IDENTITY_CARRIERS.filter((c) => c.kinds.includes(kind)).map((c) => c.id);
 }
 
 /** Carrier slugs that declare a given identity facet. Exported so a test can
  *  pin that the DM list keeps its `lifecycle` coverage (and that the rest of the
  *  registry stays presentation-only until something else earns lifecycle) —
  *  #task:2046. This is what makes the facet split enforced rather than a label. */
-export function carrierIdsWithFacet(
-  facet: IdentityFacet,
-): readonly string[] {
-  return IDENTITY_CARRIERS.filter(c => c.facets.includes(facet)).map(c => c.id);
+export function carrierIdsWithFacet(facet: IdentityFacet): readonly string[] {
+  return IDENTITY_CARRIERS.filter((c) => c.facets.includes(facet)).map((c) => c.id);
 }
 
 /**
@@ -338,10 +342,7 @@ export function carrierIdsWithFacet(
  * `agent_changed`, and #task:1702's user-profile consumer for the human axis —
  * so both axes share one enumeration and neither pays for the other's caches.
  */
-export function invalidateIdentityCarrierCaches(
-  qc: QueryClient,
-  kind: IdentitySubjectKind,
-): void {
+export function invalidateIdentityCarrierCaches(qc: QueryClient, kind: IdentitySubjectKind): void {
   for (const carrier of IDENTITY_CARRIERS) {
     if (!carrier.kinds.includes(kind)) continue;
     void qc.invalidateQueries(carrier.filter);

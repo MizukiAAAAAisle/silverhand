@@ -1,4 +1,4 @@
-import type { HostWsAttachment } from '@silverhand/backend';
+import type { HostWsAttachment } from "@silverhand/backend";
 
 /** Snapshot taken BEFORE writing daemon-config + sending the
  *  `host_outbound_attach` IPC. The watchdog uses this to distinguish
@@ -93,10 +93,10 @@ export interface AttachWatchdogDeps {
 
 export type AttachWatchdogOutcome =
   | { ok: true; attachment: HostWsAttachment; elapsedMs: number }
-  | { ok: false; reason: 'timeout'; elapsedMs: number }
+  | { ok: false; reason: "timeout"; elapsedMs: number }
   | {
       ok: false;
-      reason: 'aborted';
+      reason: "aborted";
       elapsedMs: number;
     };
 
@@ -127,14 +127,15 @@ export function startAttachWatchdog(
   const interval = deps.pollIntervalMs ?? 250;
   const budget = deps.timeoutMs ?? 10_000;
   const setT = deps.setTimeoutImpl ?? ((cb, ms) => setTimeout(cb, ms));
-  const clearT = deps.clearTimeoutImpl ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
+  const clearT =
+    deps.clearTimeoutImpl ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
   const now = deps.now ?? (() => Date.now());
 
   const startedAt = now();
   let terminated = false;
   let timer: unknown = null;
   let resolveOutcome: (o: AttachWatchdogOutcome) => void = () => {};
-  const promise = new Promise<AttachWatchdogOutcome>(resolve => {
+  const promise = new Promise<AttachWatchdogOutcome>((resolve) => {
     resolveOutcome = resolve;
   });
 
@@ -150,7 +151,7 @@ export function startAttachWatchdog(
     }
     if (elapsed >= budget) {
       terminated = true;
-      resolveOutcome({ ok: false, reason: 'timeout', elapsedMs: elapsed });
+      resolveOutcome({ ok: false, reason: "timeout", elapsedMs: elapsed });
       return;
     }
     timer = setT(tick, interval);
@@ -167,7 +168,7 @@ export function startAttachWatchdog(
       if (terminated) return;
       terminated = true;
       if (timer !== null) clearT(timer);
-      resolveOutcome({ ok: false, reason: 'aborted', elapsedMs: now() - startedAt });
+      resolveOutcome({ ok: false, reason: "aborted", elapsedMs: now() - startedAt });
     },
   };
 }

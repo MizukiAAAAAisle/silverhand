@@ -1,8 +1,4 @@
-import {
-  apiPaths,
-  UserDtoSchema,
-  type UserDto,
-} from '@silverhand/shared';
+import { apiPaths, UserDtoSchema, type UserDto } from "@silverhand/shared";
 
 export interface ProfileSessionSyncRequest {
   path: string;
@@ -46,30 +42,25 @@ export function extractViewerUserFromProxyResponse(
   if (!shape) return null;
 
   const json = parseJson(response.bodyText);
-  const candidate =
-    shape === 'avatar-upload'
-      ? objectUser(json)
-      : json;
+  const candidate = shape === "avatar-upload" ? objectUser(json) : json;
   const parsed = UserDtoSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;
 }
 
-type ViewerDtoResponseShape = 'user-dto' | 'avatar-upload';
+type ViewerDtoResponseShape = "user-dto" | "avatar-upload";
 
-function viewerDtoResponseShape(
-  request: ProfileSessionSyncRequest,
-): ViewerDtoResponseShape | null {
-  const method = (request.method ?? 'GET').toUpperCase();
+function viewerDtoResponseShape(request: ProfileSessionSyncRequest): ViewerDtoResponseShape | null {
+  const method = (request.method ?? "GET").toUpperCase();
   const path = pathnameOf(request.path);
-  if (method === 'GET' && path === apiPaths.me) return 'user-dto';
-  if (method === 'PATCH' && path === apiPaths.me) return 'user-dto';
-  if (method === 'DELETE' && path === apiPaths.meAvatar) return 'user-dto';
-  if (method === 'POST' && path === apiPaths.meAvatar) return 'avatar-upload';
+  if (method === "GET" && path === apiPaths.me) return "user-dto";
+  if (method === "PATCH" && path === apiPaths.me) return "user-dto";
+  if (method === "DELETE" && path === apiPaths.meAvatar) return "user-dto";
+  if (method === "POST" && path === apiPaths.meAvatar) return "avatar-upload";
   return null;
 }
 
 function pathnameOf(path: string): string {
-  return new URL(path, 'http://silverhand.local').pathname;
+  return new URL(path, "http://silverhand.local").pathname;
 }
 
 function parseJson(text: string): unknown {
@@ -81,7 +72,7 @@ function parseJson(text: string): unknown {
 }
 
 function objectUser(value: unknown): unknown {
-  if (typeof value !== 'object' || value === null || !('user' in value)) {
+  if (typeof value !== "object" || value === null || !("user" in value)) {
     return null;
   }
   return (value as { user: unknown }).user;

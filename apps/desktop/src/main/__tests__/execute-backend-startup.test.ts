@@ -20,21 +20,19 @@
  * `RunningBackend` / `RemoteBackendHandle` and observe purely through
  * spy call counts.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from "vitest";
 import {
   executeBackendStartup,
   type BackendStartupPlan,
   type ExecuteBackendStartupDeps,
-} from '../backend-boot-mode.js';
+} from "../backend-boot-mode.js";
 
 // Opaque sentinels used in place of the production types. The seam
 // test cares about WHICH dep was called, not what shape the result has.
-type FakeRunning = { __fake: 'running' };
-type FakeRemote = { __fake: 'remote'; serverUrl: string; insecure: boolean };
+type FakeRunning = { __fake: "running" };
+type FakeRemote = { __fake: "remote"; serverUrl: string; insecure: boolean };
 
-function makeDeps(
-  overrides?: Partial<ExecuteBackendStartupDeps<FakeRunning, FakeRemote>>,
-): {
+function makeDeps(overrides?: Partial<ExecuteBackendStartupDeps<FakeRunning, FakeRemote>>): {
   deps: ExecuteBackendStartupDeps<FakeRunning, FakeRemote>;
   spies: {
     loadOrCreateServerConfig: ReturnType<typeof vi.fn>;
@@ -44,25 +42,23 @@ function makeDeps(
   };
 } {
   const loadOrCreateServerConfig = vi.fn(async () => ({
-    __fake: 'config',
+    __fake: "config",
   }));
-  const startEmbeddedAndPersistConfig = vi.fn(
-    async (_config: unknown): Promise<FakeRunning> => ({ __fake: 'running' }),
-  );
+  const startEmbeddedAndPersistConfig = vi.fn(async (_config: unknown): Promise<FakeRunning> => ({
+    __fake: "running",
+  }));
   const buildRemoteHandle = vi.fn(
     (input: { serverUrl: string; insecure: boolean }): FakeRemote => ({
-      __fake: 'remote',
+      __fake: "remote",
       serverUrl: input.serverUrl,
       insecure: input.insecure,
     }),
   );
-  const refuse = vi.fn(
-    (plan: Extract<BackendStartupPlan, { mode: 'refuse' }>): never => {
-      throw new Error(
-        `refuse() called with profileUrl=${plan.profileUrl} message=${plan.classifyMessage}`,
-      );
-    },
-  );
+  const refuse = vi.fn((plan: Extract<BackendStartupPlan, { mode: "refuse" }>): never => {
+    throw new Error(
+      `refuse() called with profileUrl=${plan.profileUrl} message=${plan.classifyMessage}`,
+    );
+  });
   const deps: ExecuteBackendStartupDeps<FakeRunning, FakeRemote> = {
     loadOrCreateServerConfig,
     startEmbeddedAndPersistConfig,
@@ -81,49 +77,45 @@ function makeDeps(
   };
 }
 
-describe('executeBackendStartup — embedded plan (legacy server-config artifact MAY be touched)', () => {
-  it('embedded plan calls loadOrCreateServerConfig + startEmbeddedAndPersistConfig, NOT buildRemoteHandle / refuse', async () => {
+describe("executeBackendStartup — embedded plan (legacy server-config artifact MAY be touched)", () => {
+  it("embedded plan calls loadOrCreateServerConfig + startEmbeddedAndPersistConfig, NOT buildRemoteHandle / refuse", async () => {
     const { deps, spies } = makeDeps();
     const plan: BackendStartupPlan = {
-      mode: 'embedded',
-      embeddedReason: 'no_profile',
+      mode: "embedded",
+      embeddedReason: "no_profile",
     };
     const handle = await executeBackendStartup(plan, deps);
     expect(spies.loadOrCreateServerConfig).toHaveBeenCalledTimes(1);
     expect(spies.startEmbeddedAndPersistConfig).toHaveBeenCalledTimes(1);
     expect(spies.buildRemoteHandle).not.toHaveBeenCalled();
     expect(spies.refuse).not.toHaveBeenCalled();
-    expect(handle).toEqual({ kind: 'embedded', running: { __fake: 'running' } });
+    expect(handle).toEqual({ kind: "embedded", running: { __fake: "running" } });
   });
 
-  it('embedded plan threads the loaded config through to the start helper', async () => {
+  it("embedded plan threads the loaded config through to the start helper", async () => {
     // Pin the invariant: whatever `loadOrCreateServerConfig` returns
     // is the EXACT object handed to `startEmbeddedAndPersistConfig`.
     // A regression where bootstrap reloads the config inside the
     // start helper (e.g. via a stale module-scoped cache) would
     // break this expectation.
-    const sentinel = { __fake: 'config-sentinel' };
+    const sentinel = { __fake: "config-sentinel" };
     const { deps, spies } = makeDeps({
       loadOrCreateServerConfig: vi.fn(async () => sentinel),
     });
     const plan: BackendStartupPlan = {
-      mode: 'embedded',
-      embeddedReason: 'profile_is_loopback',
+      mode: "embedded",
+      embeddedReason: "profile_is_loopback",
     };
     await executeBackendStartup(plan, deps);
     expect(spies.startEmbeddedAndPersistConfig).toHaveBeenCalledWith(sentinel);
   });
 
-  it.each([
-    'no_profile',
-    'forced_by_env',
-    'profile_is_loopback',
-  ] as const)(
-    'embedded/%s arm always invokes both embedded helpers',
-    async embeddedReason => {
+  it.each(["no_profile", "forced_by_env", "profile_is_loopback"] as const)(
+    "embedded/%s arm always invokes both embedded helpers",
+    async (embeddedReason) => {
       const { deps, spies } = makeDeps();
       const plan: BackendStartupPlan = {
-        mode: 'embedded',
+        mode: "embedded",
         embeddedReason,
       };
       await executeBackendStartup(plan, deps);
@@ -133,8 +125,8 @@ describe('executeBackendStartup — embedded plan (legacy server-config artifact
   );
 });
 
-describe('executeBackendStartup — remote plan (§4.2 hard gate: NO embedded artifact touched)', () => {
-  it('remote plan calls ONLY buildRemoteHandle — loadOrCreateServerConfig / startEmbeddedAndPersistConfig / refuse never run', async () => {
+describe("executeBackendStartup — remote plan (§4.2 hard gate: NO embedded artifact touched)", () => {
+  it("remote plan calls ONLY buildRemoteHandle — loadOrCreateServerConfig / startEmbeddedAndPersistConfig / refuse never run", async () => {
     // This is the load-bearing pin for Cindy's 5d-fixup P1-1: the
     // legacy `~/.silverhand/server-config.json` artifact MUST NOT be
     // created on a remote-profile boot. The boot path passes through
@@ -142,8 +134,8 @@ describe('executeBackendStartup — remote plan (§4.2 hard gate: NO embedded ar
     // helpers fire on a remote plan, the §4.2 hard gate is broken.
     const { deps, spies } = makeDeps();
     const plan: BackendStartupPlan = {
-      mode: 'remote',
-      serverUrl: 'https://backend.example.test',
+      mode: "remote",
+      serverUrl: "https://backend.example.test",
       insecure: false,
     };
     const handle = await executeBackendStartup(plan, deps);
@@ -152,63 +144,60 @@ describe('executeBackendStartup — remote plan (§4.2 hard gate: NO embedded ar
     expect(spies.refuse).not.toHaveBeenCalled();
     expect(spies.buildRemoteHandle).toHaveBeenCalledTimes(1);
     expect(spies.buildRemoteHandle).toHaveBeenCalledWith({
-      serverUrl: 'https://backend.example.test',
+      serverUrl: "https://backend.example.test",
       insecure: false,
     });
     expect(handle).toEqual({
-      __fake: 'remote',
-      serverUrl: 'https://backend.example.test',
+      __fake: "remote",
+      serverUrl: "https://backend.example.test",
       insecure: false,
     });
   });
 
-  it('remote/insecure=true (dev-flag http remote) also keeps embedded artifacts untouched', async () => {
+  it("remote/insecure=true (dev-flag http remote) also keeps embedded artifacts untouched", async () => {
     const { deps, spies } = makeDeps();
     const plan: BackendStartupPlan = {
-      mode: 'remote',
-      serverUrl: 'http://10.0.0.5:8080',
+      mode: "remote",
+      serverUrl: "http://10.0.0.5:8080",
       insecure: true,
     };
     await executeBackendStartup(plan, deps);
     expect(spies.loadOrCreateServerConfig).not.toHaveBeenCalled();
     expect(spies.startEmbeddedAndPersistConfig).not.toHaveBeenCalled();
     expect(spies.buildRemoteHandle).toHaveBeenCalledWith({
-      serverUrl: 'http://10.0.0.5:8080',
+      serverUrl: "http://10.0.0.5:8080",
       insecure: true,
     });
   });
 
-  it('remote plan flows serverUrl + insecure through buildRemoteHandle verbatim (no rewrite)', async () => {
+  it("remote plan flows serverUrl + insecure through buildRemoteHandle verbatim (no rewrite)", async () => {
     // The adapter does NOT re-canonicalize the URL — the planner
     // already did. Pin that the executor preserves the plan values.
     const captured: Array<{ serverUrl: string; insecure: boolean }> = [];
     const { deps } = makeDeps({
-      buildRemoteHandle: vi.fn(input => {
+      buildRemoteHandle: vi.fn((input) => {
         captured.push({ ...input });
-        return { __fake: 'remote', ...input };
+        return { __fake: "remote", ...input };
       }),
     });
     const plan: BackendStartupPlan = {
-      mode: 'remote',
-      serverUrl: 'https://backend.example.test',
+      mode: "remote",
+      serverUrl: "https://backend.example.test",
       insecure: false,
     };
     await executeBackendStartup(plan, deps);
-    expect(captured).toEqual([
-      { serverUrl: 'https://backend.example.test', insecure: false },
-    ]);
+    expect(captured).toEqual([{ serverUrl: "https://backend.example.test", insecure: false }]);
   });
 });
 
-describe('executeBackendStartup — refuse plan (defense-in-depth: production bootstrap intercepts before this point)', () => {
-  it('refuse plan calls ONLY refuse — embedded helpers never run', async () => {
+describe("executeBackendStartup — refuse plan (defense-in-depth: production bootstrap intercepts before this point)", () => {
+  it("refuse plan calls ONLY refuse — embedded helpers never run", async () => {
     const { deps, spies } = makeDeps();
     const plan: BackendStartupPlan = {
-      mode: 'refuse',
-      reason: 'profile_invalid',
-      profileUrl: 'http://10.0.0.5:8080',
-      classifyMessage:
-        'http remote requires SILVERHAND_ALLOW_INSECURE_REMOTE=1',
+      mode: "refuse",
+      reason: "profile_invalid",
+      profileUrl: "http://10.0.0.5:8080",
+      classifyMessage: "http remote requires SILVERHAND_ALLOW_INSECURE_REMOTE=1",
     };
     await expect(executeBackendStartup(plan, deps)).rejects.toThrow();
     expect(spies.loadOrCreateServerConfig).not.toHaveBeenCalled();
@@ -218,41 +207,37 @@ describe('executeBackendStartup — refuse plan (defense-in-depth: production bo
     expect(spies.refuse).toHaveBeenCalledWith(plan);
   });
 
-  it('if a buggy refuse() returns instead of throwing, executeBackendStartup throws an explicit unreachable error (defense in depth)', async () => {
+  it("if a buggy refuse() returns instead of throwing, executeBackendStartup throws an explicit unreachable error (defense in depth)", async () => {
     // Production `refuse` is typed `(plan) => never` and always
     // throws. But TypeScript can't prevent a future refactor from
     // accidentally letting it return; pin that the adapter still
     // fails loudly so a remote-arm boot never silently completes
     // through the refuse branch.
-    const refuseReturnsBuggy = vi.fn(
-      (_plan: Extract<BackendStartupPlan, { mode: 'refuse' }>) => {
-        // Don't throw. This simulates a regression.
-        return undefined as never;
-      },
-    );
+    const refuseReturnsBuggy = vi.fn((_plan: Extract<BackendStartupPlan, { mode: "refuse" }>) => {
+      // Don't throw. This simulates a regression.
+      return undefined as never;
+    });
     const { deps } = makeDeps({ refuse: refuseReturnsBuggy });
     const plan: BackendStartupPlan = {
-      mode: 'refuse',
-      reason: 'profile_invalid',
-      profileUrl: 'http://10.0.0.5:8080',
-      classifyMessage: 'oops',
+      mode: "refuse",
+      reason: "profile_invalid",
+      profileUrl: "http://10.0.0.5:8080",
+      classifyMessage: "oops",
     };
-    await expect(executeBackendStartup(plan, deps)).rejects.toThrow(
-      /refuse\(\) returned/,
-    );
+    await expect(executeBackendStartup(plan, deps)).rejects.toThrow(/refuse\(\) returned/);
   });
 });
 
-describe('executeBackendStartup — cross-arm invariants (regression bait)', () => {
-  it('one call resolves with exactly one arm of the result union — no double dispatch', async () => {
+describe("executeBackendStartup — cross-arm invariants (regression bait)", () => {
+  it("one call resolves with exactly one arm of the result union — no double dispatch", async () => {
     // If a regression accidentally fell-through cases (e.g. by
     // omitting `return`/`break`), we'd see e.g. both `buildRemoteHandle`
     // AND `startEmbeddedAndPersistConfig` get called on a remote plan.
     // Pin that arms are mutually exclusive per call.
     const { deps, spies } = makeDeps();
     const plan: BackendStartupPlan = {
-      mode: 'remote',
-      serverUrl: 'https://backend.example.test',
+      mode: "remote",
+      serverUrl: "https://backend.example.test",
       insecure: false,
     };
     await executeBackendStartup(plan, deps);
@@ -266,11 +251,11 @@ describe('executeBackendStartup — cross-arm invariants (regression bait)', () 
     expect(spies.buildRemoteHandle).toHaveBeenCalledTimes(1);
   });
 
-  it('embedded arm: exactly two dep calls (load + start), no others', async () => {
+  it("embedded arm: exactly two dep calls (load + start), no others", async () => {
     const { deps, spies } = makeDeps();
     const plan: BackendStartupPlan = {
-      mode: 'embedded',
-      embeddedReason: 'no_profile',
+      mode: "embedded",
+      embeddedReason: "no_profile",
     };
     await executeBackendStartup(plan, deps);
     const total =
@@ -281,13 +266,13 @@ describe('executeBackendStartup — cross-arm invariants (regression bait)', () 
     expect(total).toBe(2);
   });
 
-  it('refuse arm: exactly one dep call (refuse), no others', async () => {
+  it("refuse arm: exactly one dep call (refuse), no others", async () => {
     const { deps, spies } = makeDeps();
     const plan: BackendStartupPlan = {
-      mode: 'refuse',
-      reason: 'profile_invalid',
-      profileUrl: 'http://10.0.0.5:8080',
-      classifyMessage: 'oops',
+      mode: "refuse",
+      reason: "profile_invalid",
+      profileUrl: "http://10.0.0.5:8080",
+      classifyMessage: "oops",
     };
     await expect(executeBackendStartup(plan, deps)).rejects.toThrow();
     const total =

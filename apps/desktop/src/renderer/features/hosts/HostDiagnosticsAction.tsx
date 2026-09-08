@@ -1,6 +1,6 @@
-import { useEffect, useState, type JSX } from 'react';
-import { Check, Copy } from 'lucide-react';
-import { toast } from 'sonner';
+import { useEffect, useState, type JSX } from "react";
+import { Check, Copy } from "lucide-react";
+import { toast } from "sonner";
 import {
   buildHostDiagnosticsText,
   type HostDiagnosticsFetchErrorKind,
@@ -8,12 +8,12 @@ import {
   type HostDiagnosticsInput,
   type HostDto,
   type HostStatusResponse,
-} from '@silverhand/shared';
-import { Button } from '@/components/ui/button';
-import { ApiError } from '@/lib/api';
-import { neutralAction } from '@/features/common/ControlInkBorder';
-import { computerCopy } from './computer-copy';
-import { useBackendInfoSnapshot, useHostStatusQuery, type BackendInfoSnapshot } from './hooks';
+} from "@silverhand/shared";
+import { Button } from "@/components/ui/button";
+import { ApiError } from "@/lib/api";
+import { neutralAction } from "@/features/common/ControlInkBorder";
+import { computerCopy } from "./computer-copy";
+import { useBackendInfoSnapshot, useHostStatusQuery, type BackendInfoSnapshot } from "./hooks";
 
 /**
  * #task:1445 — the manual "Copy diagnostics" affordance for a computer.
@@ -64,7 +64,7 @@ export function HostDiagnosticsAction({ host }: { host: HostDto }): JSX.Element 
       app: toAppInput(backendInfo.data),
       fetch: {
         // The computer DTO is a prop on this page — always resolved here.
-        computer: 'success',
+        computer: "success",
         status: toFetchStatus(statusQuery),
         error_kind: toErrorKind(statusQuery.error),
       },
@@ -75,7 +75,7 @@ export function HostDiagnosticsAction({ host }: { host: HostDto }): JSX.Element 
   };
 
   return (
-    <Button variant="outline" onClick={() => void handleCopy()} {...neutralAction('gap-2 w-full')}>
+    <Button variant="outline" onClick={() => void handleCopy()} {...neutralAction("gap-2 w-full")}>
       {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
       {copied ? computerCopy.copied : computerCopy.copyDiagnostics}
     </Button>
@@ -87,7 +87,7 @@ export function HostDiagnosticsAction({ host }: { host: HostDto }): JSX.Element 
 // Exported for unit tests: these are the renderer-side half of the redaction
 // boundary — explicit per-field picks that drop anything not in the narrow
 // input type, even secret-shaped runtime extras on the source DTOs.
-export function toComputerInput(host: HostDto): HostDiagnosticsInput['computer'] {
+export function toComputerInput(host: HostDto): HostDiagnosticsInput["computer"] {
   return {
     id: host.id,
     name: host.name,
@@ -105,7 +105,7 @@ export function toComputerInput(host: HostDto): HostDiagnosticsInput['computer']
   };
 }
 
-type DiagnosticsStatusInput = NonNullable<HostDiagnosticsInput['status']>;
+type DiagnosticsStatusInput = NonNullable<HostDiagnosticsInput["status"]>;
 
 export function toStatusInput(data: HostStatusResponse): DiagnosticsStatusInput {
   // Agents: registration view, safe subset only (drop agent_id / display_name
@@ -115,7 +115,7 @@ export function toStatusInput(data: HostStatusResponse): DiagnosticsStatusInput 
     runtime: agent.runtime,
     online: agent.online,
   }));
-  if (data.availability === 'available') {
+  if (data.availability === "available") {
     return {
       availability: data.availability,
       last_seen_at: data.last_seen_at ?? null,
@@ -130,7 +130,7 @@ export function toStatusInput(data: HostStatusResponse): DiagnosticsStatusInput 
       },
     };
   }
-  if (data.availability === 'unreachable') {
+  if (data.availability === "unreachable") {
     return {
       availability: data.availability,
       reason: data.reason,
@@ -146,7 +146,7 @@ export function toStatusInput(data: HostStatusResponse): DiagnosticsStatusInput 
   };
 }
 
-function toAppInput(info: BackendInfoSnapshot | undefined): HostDiagnosticsInput['app'] {
+function toAppInput(info: BackendInfoSnapshot | undefined): HostDiagnosticsInput["app"] {
   if (!info) return null;
   return {
     server_url: info.url,
@@ -158,9 +158,9 @@ function toFetchStatus(query: {
   isLoading: boolean;
   isError: boolean;
 }): HostDiagnosticsFetchStatus {
-  if (query.isError) return 'error';
-  if (query.isLoading) return 'loading';
-  return 'success';
+  if (query.isError) return "error";
+  if (query.isLoading) return "loading";
+  return "success";
 }
 
 /**
@@ -172,12 +172,12 @@ function toFetchStatus(query: {
 export function toErrorKind(error: unknown): HostDiagnosticsFetchErrorKind | undefined {
   if (!error) return undefined;
   if (error instanceof ApiError) {
-    if (error.kind === 'backend_unreachable' || error.status === 0) {
-      return 'network';
+    if (error.kind === "backend_unreachable" || error.status === 0) {
+      return "network";
     }
-    if (error.status === 403) return 'forbidden';
-    if (error.status === 404) return 'not_found';
-    return 'unknown';
+    if (error.status === 403) return "forbidden";
+    if (error.status === 404) return "not_found";
+    return "unknown";
   }
-  return 'unknown';
+  return "unknown";
 }

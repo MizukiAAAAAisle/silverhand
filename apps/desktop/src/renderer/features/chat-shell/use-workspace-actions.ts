@@ -1,13 +1,13 @@
-import { useState } from 'react';
-import { useNav } from '@/router';
-import type { useWorkspaces } from '@/features/workspaces/hooks';
+import { useState } from "react";
+import { useNav } from "@/router";
+import type { useWorkspaces } from "@/features/workspaces/hooks";
 import {
   resolveWorkspaceSettingsTarget,
   workspaceDeletionDestination,
-} from '@/features/workspaces/workspace-settings-target';
+} from "@/features/workspaces/workspace-settings-target";
 
 export function useWorkspaceActions(
-  workspaces: NonNullable<ReturnType<typeof useWorkspaces>['data']>,
+  workspaces: NonNullable<ReturnType<typeof useWorkspaces>["data"]>,
   selectedWorkspaceId: string | null,
 ) {
   const nav = useNav();
@@ -28,12 +28,12 @@ export function useWorkspaceActions(
   const handleWorkspaceDeleted = (deletedId: string): void => {
     const destination = workspaceDeletionDestination(workspaces, deletedId, selectedWorkspaceId);
     switch (destination.kind) {
-      case 'stay':
+      case "stay":
         return;
-      case 'workspace':
+      case "workspace":
         nav.toWorkspace(destination.workspaceId);
         return;
-      case 'chat':
+      case "chat":
         nav.toChat();
         return;
     }

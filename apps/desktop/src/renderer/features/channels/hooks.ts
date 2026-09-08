@@ -1,4 +1,10 @@
-import { createLogicalSend, executeLogicalSend, matchesLogicalSend, prepareLogicalSend, type LogicalSend } from './logical-send';
+import {
+  createLogicalSend,
+  executeLogicalSend,
+  matchesLogicalSend,
+  prepareLogicalSend,
+  type LogicalSend,
+} from "./logical-send";
 // Channel read-model hooks (#task:1292). After the split this file holds the
 // public reader hooks (useChannelMessages / cluster / thread-root / followers /
 // agents / run-states — all fenced by hooks/realtime-ingestion-read-inert.test.ts
@@ -6,7 +12,7 @@ import { createLogicalSend, executeLogicalSend, matchesLogicalSend, prepareLogic
 // cache primitives, projection seam, agent-status buffer, unread badges, and
 // error formatting moved to sibling modules; re-exported below so the existing
 // import surface (`@/features/channels/hooks`) is unchanged.
-import { agentRuntimeStateKey } from '@/features/agents/hooks';
+import { agentRuntimeStateKey } from "@/features/agents/hooks";
 import {
   useInfiniteQuery,
   useMutation,
@@ -15,10 +21,10 @@ import {
   type InfiniteData,
   type QueryClient,
   type QueryKey,
-} from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo } from 'react';
-import { toast } from 'sonner';
-import { clearAgentSessionPath } from './runtime-control';
+} from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo } from "react";
+import { toast } from "sonner";
+import { clearAgentSessionPath } from "./runtime-control";
 import type {
   AgentDto,
   AgentRunStatesDto,
@@ -38,41 +44,41 @@ import type {
   ThreadFollowerStateDto,
   ThreadFollowMutationDto,
   ThreadReplyPreviewRow,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 import {
   apiPaths,
   MAX_MESSAGE_ATTACHMENTS,
   MAX_MESSAGE_CONTENT_LABEL,
   messageContentExceedsLimit,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 import {
   type PendingMessage,
   isCommittedMessage,
   optimisticSelfAuthor,
-} from '@/features/channels/pending-message';
-import { api, ApiError, apiUpload } from '@/lib/api';
-import { channelThreadsKey } from '@/features/channels/useChannelThreads';
-import { conversationUnreadKey } from '@/features/channels/message-unread';
-import { getCurrentUserId } from '@/lib/current-user';
-import { getHydratedViewer } from '@/features/me/hooks';
-import { useInterest } from '@/features/realtime/interest-registry';
-import { applyCommittedMessage } from '@/features/realtime/conversation-ingestor';
+} from "@/features/channels/pending-message";
+import { api, ApiError, apiUpload } from "@/lib/api";
+import { channelThreadsKey } from "@/features/channels/useChannelThreads";
+import { conversationUnreadKey } from "@/features/channels/message-unread";
+import { getCurrentUserId } from "@/lib/current-user";
+import { getHydratedViewer } from "@/features/me/hooks";
+import { useInterest } from "@/features/realtime/interest-registry";
+import { applyCommittedMessage } from "@/features/realtime/conversation-ingestor";
 import {
   AGENT_RUN_STATES_GC_MS,
   agentRunStatesKey,
   reconcileAgentRunStateSnapshot,
-} from '@/lib/agentRunStateCache';
-import { wsConversationScope, wsConversationSideScope } from '@/hooks/useConversationStream';
-import { clusterInitialFetchEnabled } from '@/components/layout/threadMarkRead';
+} from "@/lib/agentRunStateCache";
+import { wsConversationScope, wsConversationSideScope } from "@/hooks/useConversationStream";
+import { clusterInitialFetchEnabled } from "@/components/layout/threadMarkRead";
 import {
   mainlineStreamSourceHead,
   postObserve,
   streamSourceAtSeq,
-} from '@/features/attention/observe';
+} from "@/features/attention/observe";
 import {
   reconcileUnreadAfterObserveIfRealtimeUnavailable,
   settleStreamUnreadAfterObserve,
-} from '@/features/attention/observe-cache-fallback';
+} from "@/features/attention/observe-cache-fallback";
 
 // ─── Split-module imports (#task:1292) ───────────────────────────────────────
 import {
@@ -93,23 +99,23 @@ import {
   replacePendingMessageInCache,
   rollbackOptimisticSend,
   lastPageIsTail,
-} from '@/features/channels/message-cache-core';
+} from "@/features/channels/message-cache-core";
 import {
   useMainlineLiveGap,
   setMainlineLiveGap,
   useClusterLiveGap,
   setClusterLiveGap,
-} from '@/features/channels/projection-cache';
+} from "@/features/channels/projection-cache";
 import {
   mergePendingAgentStatusPatches,
   retainAgentStatusBuffer,
   releaseAgentStatusBuffer,
-} from '@/features/channels/agent-status-cache';
+} from "@/features/channels/agent-status-cache";
 import {
   formatStartAgentError,
   formatRemoveAgentError,
   formatRemoveHumanError,
-} from '@/features/channels/message-errors';
+} from "@/features/channels/message-errors";
 
 // ─── Barrel re-exports: preserve the pre-#1292 public import surface ──────────
 export {
@@ -119,8 +125,8 @@ export {
   threadRootKey,
   mainlineLiveGapKey,
   clusterLiveGapKey,
-} from '@/features/channels/message-cache-core';
-export type { MessagesPageParam } from '@/features/channels/message-cache-core';
+} from "@/features/channels/message-cache-core";
+export type { MessagesPageParam } from "@/features/channels/message-cache-core";
 export {
   invalidateMessageUnreadQueries,
   messageUnreadByConversationKey,
@@ -133,7 +139,7 @@ export {
   useMessageUnreadSummary,
   conversationUnreadKey,
   useConversationUnread,
-} from '@/features/channels/message-unread';
+} from "@/features/channels/message-unread";
 export {
   clearPendingAgentStatusPatches,
   retainAgentStatusBuffer,
@@ -142,8 +148,8 @@ export {
   hasActiveChannelAgentRuntimeReader,
   applyAgentStatusToCache,
   reconcileChannelRuntimeOnSnapshotRequired,
-} from '@/features/channels/agent-status-cache';
-export type { ConversationAgentStatusPatch } from '@/features/channels/agent-status-cache';
+} from "@/features/channels/agent-status-cache";
+export type { ConversationAgentStatusPatch } from "@/features/channels/agent-status-cache";
 export {
   applyTaskChangedToMessage,
   applyReactionToMessage,
@@ -170,7 +176,7 @@ export {
   mergeMainlineReplyPreview,
   applyThreadFollowersMessage,
   invalidateThreadFollowers,
-} from '@/features/channels/projection-cache';
+} from "@/features/channels/projection-cache";
 
 /** Build a single messages-window page request URL.
  *
@@ -193,16 +199,16 @@ async function fetchMessagesWindow(opts: {
 }): Promise<ConversationMessagesDto> {
   const params = new URLSearchParams({ limit: String(opts.limit) });
   if (opts.aroundMessageId !== undefined) {
-    params.set('around_message_id', opts.aroundMessageId);
+    params.set("around_message_id", opts.aroundMessageId);
   } else if (opts.pageParam) {
-    if (opts.pageParam.kind === 'before') {
-      params.set('before_seq', String(opts.pageParam.seq));
+    if (opts.pageParam.kind === "before") {
+      params.set("before_seq", String(opts.pageParam.seq));
     } else {
-      params.set('after_seq', String(opts.pageParam.seq));
+      params.set("after_seq", String(opts.pageParam.seq));
     }
   }
   if (opts.threadRootId !== undefined) {
-    params.set('thread_root_id', opts.threadRootId);
+    params.set("thread_root_id", opts.threadRootId);
   }
   const path = apiPaths.channelMessages(opts.conversationId);
   return api<ConversationMessagesDto>(`${path}?${params.toString()}`, {
@@ -228,9 +234,7 @@ async function fetchMessagesWindow(opts: {
  *  ingestor SETs and this hook reads/CLEARs — not local hook state — so a
  *  flip drives a rerender via the query subscription.
  */
-export function useChannelMessages(
-  channelId: string | null,
-) {
+export function useChannelMessages(channelId: string | null) {
   const qc = useQueryClient();
 
   // Stage-2 (#task:1255 P1a): the central conversation ingestor is the sole
@@ -259,7 +263,7 @@ export function useChannelMessages(
     ReturnType<typeof messagesKey>,
     MessagesPageParam
   >({
-    queryKey: messagesKey(channelId ?? 'none'),
+    queryKey: messagesKey(channelId ?? "none"),
     enabled: !!channelId,
     initialPageParam: undefined as MessagesPageParam,
     queryFn: async ({ pageParam, signal }) =>
@@ -269,16 +273,16 @@ export function useChannelMessages(
         limit: MESSAGE_PAGE_LIMIT,
         signal,
       }),
-    getPreviousPageParam: firstPage => {
+    getPreviousPageParam: (firstPage) => {
       if (!firstPage.has_more_before) return undefined;
       // Pending optimistic rows have no server seq — feeding one as a
       // `before_seq` cursor would be meaningless. `isCommittedMessage` narrows
       // to a real `MessageSeq`; the common case (no pending at the head) still
       // resolves to `messages[0]` in O(1).
       const firstReal = firstPage.messages.find(isCommittedMessage);
-      return firstReal ? { kind: 'before', seq: firstReal.seq } : undefined;
+      return firstReal ? { kind: "before", seq: firstReal.seq } : undefined;
     },
-    getNextPageParam: lastPage => {
+    getNextPageParam: (lastPage) => {
       if (!lastPage.has_more_after || lastPage.messages.length === 0) {
         return undefined;
       }
@@ -287,7 +291,7 @@ export function useChannelMessages(
       for (let i = lastPage.messages.length - 1; i >= 0; i--) {
         const m = lastPage.messages[i]!;
         if (isCommittedMessage(m)) {
-          return { kind: 'after', seq: m.seq };
+          return { kind: "after", seq: m.seq };
         }
       }
       return undefined;
@@ -297,9 +301,7 @@ export function useChannelMessages(
   // Whether the cached window reaches the conversation tail. This is
   // deliberately separate from `hasNewerLiveGap`: a saved-message jump
   // can land in mid-history even when no new live message has arrived.
-  const isAtTail = query.data
-    ? lastPageIsTail(query.data as MessagesCache)
-    : true;
+  const isAtTail = query.data ? lastPageIsTail(query.data as MessagesCache) : true;
 
   // Whenever the cache shape implies the window is back at tail, clear
   // the live-gap flag. Reaching tail can happen via three paths:
@@ -315,7 +317,7 @@ export function useChannelMessages(
   }, [qc, channelId, isAtTail]);
 
   const messages = useMemo(
-    () => query.data?.pages.flatMap(page => page.messages) ?? [],
+    () => query.data?.pages.flatMap((page) => page.messages) ?? [],
     [query.data],
   );
 
@@ -342,9 +344,7 @@ export function useChannelMessages(
     const merged: Record<string, ReplyBadgeSummary> = {};
     for (const page of query.data?.pages ?? []) {
       if (!page.reply_summaries_by_root) continue;
-      for (const [rootId, summary] of Object.entries(
-        page.reply_summaries_by_root,
-      )) {
+      for (const [rootId, summary] of Object.entries(page.reply_summaries_by_root)) {
         merged[rootId] = summary;
       }
     }
@@ -447,7 +447,7 @@ export function useThreadCluster(
     hasChannelAndRoot: enabledBase,
     jumpWindowLocked: opts?.jumpWindowLocked ?? false,
   });
-  const key = clusterMessagesKey(channelId ?? 'none', rootMessageId ?? 'none');
+  const key = clusterMessagesKey(channelId ?? "none", rootMessageId ?? "none");
 
   // Stage-2 P1b: the central ingestor owns the SET of the cluster live-gap; this
   // hook reads it as a cache fact and keeps only the position-based CLEARs.
@@ -461,10 +461,7 @@ export function useThreadCluster(
   // before a real window response landed. Only a successful window FETCH writes
   // this epoch, so it proves the loaded window is from this open. Read
   // reactively below via `useQuery`.
-  const epochKey = clusterFetchEpochKey(
-    channelId ?? 'none',
-    rootMessageId ?? 'none',
-  );
+  const epochKey = clusterFetchEpochKey(channelId ?? "none", rootMessageId ?? "none");
 
   // Reset the gap when the consumer switches channel or thread — a stale
   // "newer replies below" hint from the previous cluster would be wrong. The
@@ -514,19 +511,19 @@ export function useThreadCluster(
       qc.setQueryData(epochKey, Date.now());
       return dto;
     },
-    getPreviousPageParam: firstPage => {
+    getPreviousPageParam: (firstPage) => {
       if (!firstPage.has_more_before) return undefined;
       const firstReal = firstPage.messages.find(isCommittedMessage);
-      return firstReal ? { kind: 'before', seq: firstReal.seq } : undefined;
+      return firstReal ? { kind: "before", seq: firstReal.seq } : undefined;
     },
-    getNextPageParam: lastPage => {
+    getNextPageParam: (lastPage) => {
       if (!lastPage.has_more_after || lastPage.messages.length === 0) {
         return undefined;
       }
       for (let i = lastPage.messages.length - 1; i >= 0; i--) {
         const m = lastPage.messages[i]!;
         if (isCommittedMessage(m)) {
-          return { kind: 'after', seq: m.seq };
+          return { kind: "after", seq: m.seq };
         }
       }
       return undefined;
@@ -534,7 +531,7 @@ export function useThreadCluster(
   });
 
   const messages = useMemo(
-    () => query.data?.pages.flatMap(page => page.messages) ?? [],
+    () => query.data?.pages.flatMap((page) => page.messages) ?? [],
     [query.data],
   );
 
@@ -542,9 +539,7 @@ export function useThreadCluster(
   // can be mid-history after an around-reply jump: `primeAround` with a
   // `threadRootId` commits an around-window into this SAME cache, so this
   // is NOT always true — it mirrors `useChannelMessages.isAtTail`.
-  const isAtTail = query.data
-    ? lastPageIsTail(query.data as MessagesCache)
-    : true;
+  const isAtTail = query.data ? lastPageIsTail(query.data as MessagesCache) : true;
 
   // Clear the gap whenever the window is back at tail (forward scroll
   // reached it, a jump landed on a tail-inclusive window, or
@@ -627,12 +622,9 @@ export function useThreadCluster(
  *  The reply count is recovered AUTHORITATIVELY (#1263 (c)): a non-system
  *  reply to this exact root invalidates the root cache so the header count
  *  refetches from its own sidecar — never an optimistic +1 (replay-safe). */
-export function useThreadRoot(
-  channelId: string | null,
-  rootMessageId: string | null,
-) {
+export function useThreadRoot(channelId: string | null, rootMessageId: string | null) {
   const enabled = !!channelId && !!rootMessageId;
-  const key = threadRootKey(channelId ?? 'none', rootMessageId ?? 'none');
+  const key = threadRootKey(channelId ?? "none", rootMessageId ?? "none");
 
   const query = useQuery<ConversationMessagesDto>({
     queryKey: key,
@@ -658,11 +650,8 @@ export function useThreadRoot(
   // (#1251), so `enabled` is not a correctness boundary.
   useInterest(enabled && channelId ? wsConversationScope(channelId) : null);
 
-  const root =
-    query.data?.messages.find(m => m.id === rootMessageId) ?? null;
-  const replyCount = rootMessageId
-    ? query.data?.reply_counts_by_root[rootMessageId] ?? 0
-    : 0;
+  const root = query.data?.messages.find((m) => m.id === rootMessageId) ?? null;
+  const replyCount = rootMessageId ? (query.data?.reply_counts_by_root[rootMessageId] ?? 0) : 0;
 
   return {
     root,
@@ -680,20 +669,16 @@ export function useThreadRoot(
  *  Backed by `GET /api/channels/:id/threads/:rootMessageId/followers`. The
  *  root id may be the root message or any reply in the cluster — the
  *  backend normalizes it. */
-export function useThreadFollowers(
-  channelId: string | null,
-  rootMessageId: string | null,
-) {
+export function useThreadFollowers(channelId: string | null, rootMessageId: string | null) {
   const enabled = !!channelId && !!rootMessageId;
-  const key = threadFollowersKey(channelId ?? 'none', rootMessageId ?? 'none');
+  const key = threadFollowersKey(channelId ?? "none", rootMessageId ?? "none");
   const query = useQuery<ThreadFollowerStateDto>({
     queryKey: key,
     enabled,
     queryFn: ({ signal }) =>
-      api<ThreadFollowerStateDto>(
-        apiPaths.channelThreadFollowers(channelId!, rootMessageId!),
-        { signal },
-      ),
+      api<ThreadFollowerStateDto>(apiPaths.channelThreadFollowers(channelId!, rootMessageId!), {
+        signal,
+      }),
   });
 
   // The follower set is mutated as a SIDE EFFECT of thread messages:
@@ -720,18 +705,14 @@ export function useThreadFollowers(
 /** Subscribe the current human viewer to a reply cluster
  *  (`POST .../follow`). Idempotent server-side; we refetch follower state
  *  on success so the toggle + bubble reflect the new membership. */
-export function useFollowThread(
-  channelId: string | null,
-  rootMessageId: string | null,
-) {
+export function useFollowThread(channelId: string | null, rootMessageId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      if (!channelId || !rootMessageId) throw new Error('no thread selected');
-      return api<ThreadFollowMutationDto>(
-        apiPaths.channelThreadFollow(channelId, rootMessageId),
-        { method: 'POST' },
-      );
+      if (!channelId || !rootMessageId) throw new Error("no thread selected");
+      return api<ThreadFollowMutationDto>(apiPaths.channelThreadFollow(channelId, rootMessageId), {
+        method: "POST",
+      });
     },
     onSuccess: () => {
       if (!channelId || !rootMessageId) return;
@@ -758,18 +739,14 @@ export function useFollowThread(
 /** Unsubscribe the current human viewer from a reply cluster
  *  (`DELETE .../follow`). A later reply / mention re-follows automatically
  *  (backend behavior) — unfollow only stops delivery, not visibility. */
-export function useUnfollowThread(
-  channelId: string | null,
-  rootMessageId: string | null,
-) {
+export function useUnfollowThread(channelId: string | null, rootMessageId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      if (!channelId || !rootMessageId) throw new Error('no thread selected');
-      return api<ThreadFollowMutationDto>(
-        apiPaths.channelThreadFollow(channelId, rootMessageId),
-        { method: 'DELETE' },
-      );
+      if (!channelId || !rootMessageId) throw new Error("no thread selected");
+      return api<ThreadFollowMutationDto>(apiPaths.channelThreadFollow(channelId, rootMessageId), {
+        method: "DELETE",
+      });
     },
     onSuccess: () => {
       if (!channelId || !rootMessageId) return;
@@ -826,7 +803,7 @@ export function usePrimeConversationMessages() {
          *  stream (whose anchor requires `thread_root_id IS NULL`). */
         threadRootId?: string;
       },
-    ): Promise<{ committed: boolean; reason?: 'stale' | 'aborted' | 'not_found' }> => {
+    ): Promise<{ committed: boolean; reason?: "stale" | "aborted" | "not_found" }> => {
       // A cluster target writes to the cluster cache; everything else to
       // the main stream cache. Both the fetch scope and the commit key must
       // agree, or we'd prime one window and read another.
@@ -834,7 +811,7 @@ export function usePrimeConversationMessages() {
         ? clusterMessagesKey(conversationId, opts.threadRootId)
         : messagesKey(conversationId);
       try {
-        if (opts?.signal?.aborted) return { committed: false, reason: 'aborted' };
+        if (opts?.signal?.aborted) return { committed: false, reason: "aborted" };
         const page = await fetchMessagesWindow({
           conversationId,
           aroundMessageId: messageId,
@@ -847,9 +824,9 @@ export function usePrimeConversationMessages() {
           // against the network round-trip.
           signal: opts?.signal,
         });
-        if (opts?.signal?.aborted) return { committed: false, reason: 'aborted' };
+        if (opts?.signal?.aborted) return { committed: false, reason: "aborted" };
         if (opts?.shouldCommit && !opts.shouldCommit()) {
-          return { committed: false, reason: 'stale' };
+          return { committed: false, reason: "stale" };
         }
         // Cancel any in-flight latest/before/after fetch so React
         // Query doesn't overwrite our prime with a stale response.
@@ -861,44 +838,35 @@ export function usePrimeConversationMessages() {
         // user may have clicked another saved message. Re-check both
         // guards before committing so we never write a stale window
         // that the App has already moved past.
-        if (opts?.signal?.aborted) return { committed: false, reason: 'aborted' };
+        if (opts?.signal?.aborted) return { committed: false, reason: "aborted" };
         if (opts?.shouldCommit && !opts.shouldCommit()) {
-          return { committed: false, reason: 'stale' };
+          return { committed: false, reason: "stale" };
         }
         // Replace the entire cache with this single window. The
         // around window may not be contiguous with whatever the
         // hook held before, so stitching is unsafe; the hook will
         // page outward from here using before/after cursors.
-        qc.setQueryData<MessagesCache>(
-          cacheKey,
-          makeMessagesCache(page, undefined),
-        );
+        qc.setQueryData<MessagesCache>(cacheKey, makeMessagesCache(page, undefined));
         // §9.10: a jump-open's around-target fetch IS this open's authoritative
         // window fetch. Stamp the shared freshness epoch so `useThreadCluster`'s
         // mark-read gate opens with THIS around-window (not a clobbering latest
         // refetch). Only for the cluster path — main-stream primes don't gate a
         // thread mark-read.
         if (opts?.threadRootId) {
-          qc.setQueryData(
-            clusterFetchEpochKey(conversationId, opts.threadRootId),
-            Date.now(),
-          );
+          qc.setQueryData(clusterFetchEpochKey(conversationId, opts.threadRootId), Date.now());
         }
         return { committed: true };
       } catch (err) {
         // Aborted fetches surface as DOMException 'AbortError'; treat
         // as a non-error stale path so callers don't have to wrap.
-        if (
-          (err as { name?: string } | null)?.name === 'AbortError' ||
-          opts?.signal?.aborted
-        ) {
-          return { committed: false, reason: 'aborted' };
+        if ((err as { name?: string } | null)?.name === "AbortError" || opts?.signal?.aborted) {
+          return { committed: false, reason: "aborted" };
         }
         // 404 from the backend means the message id is not in this
         // conversation. Surface that to App so it can clear the
         // jump target instead of spinning on a phantom.
         if (err instanceof ApiError && err.status === 404) {
-          return { committed: false, reason: 'not_found' };
+          return { committed: false, reason: "not_found" };
         }
         throw err;
       }
@@ -912,16 +880,12 @@ export function usePrimeConversationMessages() {
 /** Pure membership snapshot. Runtime updates belong to
  * {@link useChannelAgentRuntime}; this hook has no realtime interest because
  * process state cannot mutate a membership row. */
-export function useChannelAgents(
-  channelId: string | null,
-) {
+export function useChannelAgents(channelId: string | null) {
   const query = useQuery({
-    queryKey: channelId ? agentsKey(channelId) : ['channels', 'none', 'agents'],
+    queryKey: channelId ? agentsKey(channelId) : ["channels", "none", "agents"],
     enabled: !!channelId,
     queryFn: async () => {
-      const res = await api<{ agents: ConversationAgentDto[] }>(
-        apiPaths.channelAgents(channelId!),
-      );
+      const res = await api<{ agents: ConversationAgentDto[] }>(apiPaths.channelAgents(channelId!));
       return res.agents;
     },
   });
@@ -932,9 +896,7 @@ export function useChannelAgents(
 /** Scoped runtime projection for the channel's independently loaded roster. */
 export function useChannelAgentRuntime(channelId: string | null) {
   const query = useQuery({
-    queryKey: channelId
-      ? agentRuntimeKey(channelId)
-      : ['channels', 'none', 'agent-runtime'],
+    queryKey: channelId ? agentRuntimeKey(channelId) : ["channels", "none", "agent-runtime"],
     enabled: !!channelId,
     queryFn: async () => {
       const res = await api<{ runtime: ConversationAgentRuntimeDto[] }>(
@@ -1021,15 +983,17 @@ export function useSendMessage(
         : null;
   return useMutation({
     mutationFn: async (input: SendMessageInput) => {
-      if (!channelId) throw new Error('no channel selected');
-      const logical = input.logicalSend ??= createLogicalSend(channelId, threadRootId ?? null);
+      if (!channelId) throw new Error("no channel selected");
+      const logical = (input.logicalSend ??= createLogicalSend(channelId, threadRootId ?? null));
       if (logical.conversationId !== channelId || logical.threadRootId !== (threadRootId ?? null)) {
-        throw new Error('Send target changed');
+        throw new Error("Send target changed");
       }
       return executeLogicalSend(qc, logical, async () => {
-        const prepared = await prepareLogicalSend(logical, () => prepareSendMessageBody({ channelId, input, threadRootId }));
+        const prepared = await prepareLogicalSend(logical, () =>
+          prepareSendMessageBody({ channelId, input, threadRootId }),
+        );
         return api<MessageSendAck>(apiPaths.channelMessages(channelId), {
-          method: 'POST',
+          method: "POST",
           body: JSON.stringify({ ...prepared, client_message_id: logical.id }),
         });
       });
@@ -1038,13 +1002,15 @@ export function useSendMessage(
     // the HTTP response arrives. The temp message uses a `pending-` id;
     // onSuccess replaces it with the real row (live de-dupe prevents a
     // second append when the event arrives after onSuccess).
-    onMutate: async (
-      input: SendMessageInput,
-    ): Promise<SendMutationContext | undefined> => {
+    onMutate: async (input: SendMessageInput): Promise<SendMutationContext | undefined> => {
       if (!channelId || !targetKey) return undefined;
-      const logical = input.logicalSend ??= createLogicalSend(channelId, threadRootId ?? null);
-      if (logical.userId !== getCurrentUserId() || logical.conversationId !== channelId || logical.threadRootId !== (threadRootId ?? null)) {
-        throw new Error('Send identity changed');
+      const logical = (input.logicalSend ??= createLogicalSend(channelId, threadRootId ?? null));
+      if (
+        logical.userId !== getCurrentUserId() ||
+        logical.conversationId !== channelId ||
+        logical.threadRootId !== (threadRootId ?? null)
+      ) {
+        throw new Error("Send identity changed");
       }
       // Gate 1 — fail-closed optimistic author. The pending row's author is the
       // current viewer, built COMPLETELY from the hydrated `['me']` carrier (a
@@ -1062,8 +1028,9 @@ export function useSendMessage(
       const key = targetKey;
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<MessagesCache>(key);
-      const known = prev?.pages.flatMap(page => page.messages).find(row =>
-        isCommittedMessage(row) && matchesLogicalSend(logical, row));
+      const known = prev?.pages
+        .flatMap((page) => page.messages)
+        .find((row) => isCommittedMessage(row) && matchesLogicalSend(logical, row));
       if (known && isCommittedMessage(known)) {
         logical.confirmed = known;
         return {};
@@ -1092,8 +1059,7 @@ export function useSendMessage(
               // fabricate one. `prev` is non-empty here (lastPageIsTail false
               // implies at least one page), so its last page's head is the
               // freshest server-observed value.
-              stream_head_seq:
-                prev.pages[prev.pages.length - 1]!.stream_head_seq,
+              stream_head_seq: prev.pages[prev.pages.length - 1]!.stream_head_seq,
             },
           ],
           pageParams: [undefined as MessagesPageParam],
@@ -1102,7 +1068,7 @@ export function useSendMessage(
       const tempId = `pending-${logical.id}`;
       const snapshots: AttachmentSnapshot[] | null =
         input.attachments && input.attachments.length > 0
-          ? input.attachments.map(a => ({
+          ? input.attachments.map((a) => ({
               id: a.id,
               filename: a.filename,
               size: a.size,
@@ -1116,7 +1082,7 @@ export function useSendMessage(
         id: tempId,
         client_message_id: logical.id,
         conversation_id: channelId,
-        from_kind: 'user',
+        from_kind: "user",
         from_agent_id: null,
         from_user_id: getCurrentUserId(),
         // Resolved display projection of the raw provenance above. Built from
@@ -1136,9 +1102,7 @@ export function useSendMessage(
         reactions: null,
         pending: true,
       };
-      qc.setQueryData<MessagesCache>(key, cur =>
-        appendPendingMessage(cur, tempMsg),
-      );
+      qc.setQueryData<MessagesCache>(key, (cur) => appendPendingMessage(cur, tempMsg));
       // Capture the exact post-write cache reference as a mutation-local CAS
       // token. React Query stores our optimistic object by reference; any
       // authoritative WS apply or concurrent write between now and settle
@@ -1199,7 +1163,7 @@ export function applySendSuccess(
   const { message, projections } = committed;
   if (targetKey && ctx?.optimistic) {
     const { tempId } = ctx.optimistic;
-    qc.setQueryData<MessagesCache | undefined>(targetKey, cur =>
+    qc.setQueryData<MessagesCache | undefined>(targetKey, (cur) =>
       replacePendingMessageInCache(cur, tempId, message),
     );
   }
@@ -1212,16 +1176,13 @@ export async function uploadContentAsTextAttachment(
   channelId: string,
   content: string,
 ): Promise<AttachmentDto> {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const file = new File([content], `message-body-${stamp}.txt`, {
-    type: 'text/plain',
+    type: "text/plain",
   });
   const form = new FormData();
-  form.append('file', file, file.name);
-  return await apiUpload<AttachmentDto>(
-    apiPaths.channelAttachments(channelId),
-    form,
-  );
+  form.append("file", file, file.name);
+  return await apiUpload<AttachmentDto>(apiPaths.channelAttachments(channelId), form);
 }
 
 export interface PreparedSendBody {
@@ -1272,9 +1233,7 @@ export async function prepareSendMessageBody(opts: {
     // never recomputes it — so chip / body / payload / suffix stay in sync
     // (#task:1324).
     attachmentRefs.push(
-      ...opts.input.attachments.map(a =>
-        a.label ? { id: a.id, label: a.label } : a.id,
-      ),
+      ...opts.input.attachments.map((a) => (a.label ? { id: a.id, label: a.label } : a.id)),
     );
   }
   if (convertedAttachment) {
@@ -1289,49 +1248,45 @@ export async function prepareSendMessageBody(opts: {
   return body;
 }
 
-export function useStartAgent(
-  channelId: string | null,
-) {
+export function useStartAgent(channelId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (agentId: string) => {
-      if (!channelId) throw new Error('no channel selected');
+      if (!channelId) throw new Error("no channel selected");
       const path = apiPaths.channelAgentStart(channelId, agentId);
       await api(path, {
-        method: 'POST',
+        method: "POST",
       });
     },
     onSuccess: (_, agentId) => {
       void qc.invalidateQueries({ queryKey: agentRuntimeStateKey(agentId) });
     },
-    onError: err => {
+    onError: (err) => {
       toast.error(formatStartAgentError(err));
     },
   });
 }
 
-export function useStopAgent(
-  channelId: string | null,
-) {
+export function useStopAgent(channelId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (params: { agentId: string }) => {
-      if (!channelId) throw new Error('no channel selected');
+      if (!channelId) throw new Error("no channel selected");
       const path = apiPaths.channelAgentStop(channelId, params.agentId);
-      await api(path, { method: 'POST' });
+      await api(path, { method: "POST" });
     },
     onSuccess: (_, { agentId }) => {
       void qc.invalidateQueries({ queryKey: agentRuntimeStateKey(agentId) });
     },
     onError: () => {
-      toast.error('Failed to stop agent');
+      toast.error("Failed to stop agent");
     },
   });
 }
 
 export function useClearAgentSession(
   channelId: string | null,
-  sessionScope: AgentDto['session_scope'],
+  sessionScope: AgentDto["session_scope"],
 ) {
   const qc = useQueryClient();
   return useMutation({
@@ -1341,26 +1296,28 @@ export function useClearAgentSession(
         sessionScope,
         conversationId: channelId,
       });
-      return api<ClearSessionResponse>(path, { method: 'POST' });
+      return api<ClearSessionResponse>(path, { method: "POST" });
     },
     onSuccess: (res, agentId) => {
       void qc.invalidateQueries({ queryKey: agentRuntimeStateKey(agentId) });
       if (!channelId) return;
-      qc.setQueryData<ConversationAgentDto[]>(agentsKey(channelId), prev =>
+      qc.setQueryData<ConversationAgentDto[]>(agentsKey(channelId), (prev) =>
         prev
-          ? prev.map(agent =>
+          ? prev.map((agent) =>
               agent.agent_id === agentId
                 ? {
                     ...agent,
                     cli_session_id: null,
-                    ...(res.was_running ? { status: 'idle' as const, pid: null } : {}),
+                    ...(res.was_running ? { status: "idle" as const, pid: null } : {}),
                   }
                 : agent,
             )
           : prev,
       );
     },
-    onError: (error) => { toast.error(error.message); },
+    onError: (error) => {
+      toast.error(error.message);
+    },
   });
 }
 
@@ -1381,9 +1338,9 @@ export function useRemoveAgentFromChannel(channelId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (agentId: string) => {
-      if (!channelId) throw new Error('no channel selected');
+      if (!channelId) throw new Error("no channel selected");
       await api(apiPaths.conversationAgentMember(channelId, agentId), {
-        method: 'DELETE',
+        method: "DELETE",
       });
     },
     onSuccess: (_res, agentId) => {
@@ -1391,32 +1348,28 @@ export function useRemoveAgentFromChannel(channelId: string | null) {
       // Drop the removed agent from the per-conversation roster cache so
       // the member strip / popover update immediately; the backend's
       // `conversation_members_changed` event reconciles other windows.
-      qc.setQueryData<ConversationAgentDto[]>(agentsKey(channelId), prev =>
-        prev ? prev.filter(a => a.agent_id !== agentId) : prev,
+      qc.setQueryData<ConversationAgentDto[]>(agentsKey(channelId), (prev) =>
+        prev ? prev.filter((a) => a.agent_id !== agentId) : prev,
       );
       // The header member-chip strip reads from a *separate* cache
       // (`['conversation-members', id]` via `useConversationMembers`), so
       // strip the removed agent there too — otherwise the chip lingers
       // until the invalidate refetch lands (visible on slow networks).
       // Invalidate stays as the reconciler against the authoritative list.
-      qc.setQueryData<ConversationMembersResponse>(
-        ['conversation-members', channelId],
-        prev =>
-          prev
-            ? {
-                ...prev,
-                members: prev.members.filter(
-                  m => !(m.kind === 'agent' && m.agent_id === agentId),
-                ),
-              }
-            : prev,
+      qc.setQueryData<ConversationMembersResponse>(["conversation-members", channelId], (prev) =>
+        prev
+          ? {
+              ...prev,
+              members: prev.members.filter((m) => !(m.kind === "agent" && m.agent_id === agentId)),
+            }
+          : prev,
       );
       void qc.invalidateQueries({ queryKey: agentsKey(channelId) });
       void qc.invalidateQueries({
-        queryKey: ['conversation-members', channelId],
+        queryKey: ["conversation-members", channelId],
       });
     },
-    onError: err => {
+    onError: (err) => {
       toast.error(formatRemoveAgentError(err));
     },
   });
@@ -1438,9 +1391,9 @@ export function useRemoveHumanFromChannel(channelId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (userId: string) => {
-      if (!channelId) throw new Error('no channel selected');
+      if (!channelId) throw new Error("no channel selected");
       await api(apiPaths.conversationHumanMember(channelId, userId), {
-        method: 'DELETE',
+        method: "DELETE",
       });
     },
     onSuccess: (_res, userId) => {
@@ -1449,23 +1402,19 @@ export function useRemoveHumanFromChannel(channelId: string | null) {
       // list settles before the invalidate refetch lands. The stale
       // `member_removability` entry for the removed user is harmless: lookups
       // are keyed by `(kind, id)`, never by index.
-      qc.setQueryData<ConversationMembersResponse>(
-        ['conversation-members', channelId],
-        prev =>
-          prev
-            ? {
-                ...prev,
-                members: prev.members.filter(
-                  m => !(m.kind === 'human' && m.user_id === userId),
-                ),
-              }
-            : prev,
+      qc.setQueryData<ConversationMembersResponse>(["conversation-members", channelId], (prev) =>
+        prev
+          ? {
+              ...prev,
+              members: prev.members.filter((m) => !(m.kind === "human" && m.user_id === userId)),
+            }
+          : prev,
       );
       void qc.invalidateQueries({
-        queryKey: ['conversation-members', channelId],
+        queryKey: ["conversation-members", channelId],
       });
     },
-    onError: err => {
+    onError: (err) => {
       toast.error(formatRemoveHumanError(err));
     },
   });
@@ -1480,22 +1429,16 @@ export function useRemoveHumanFromChannel(channelId: string | null) {
  *   ingestor (#task:1255 P1c), gated on this reader being mounted, so the cache
  *   stays warm across quick channel/thread navigation.
  */
-export function useAgentRunStates(
-  channelId: string | null,
-) {
+export function useAgentRunStates(channelId: string | null) {
   const qc = useQueryClient();
-  const key = channelId
-    ? agentRunStatesKey(channelId)
-    : ['channels', 'none', 'agent-run-states'];
+  const key = channelId ? agentRunStatesKey(channelId) : ["channels", "none", "agent-run-states"];
   const query = useQuery({
     queryKey: key,
     enabled: !!channelId,
     queryFn: async () => {
       const requestedAt = Date.now();
       const path = apiPaths.channelAgentRunStates(channelId!);
-      const res = await api<AgentRunStatesDto>(
-        path,
-      );
+      const res = await api<AgentRunStatesDto>(path);
       return reconcileAgentRunStateSnapshot(
         qc.getQueryData(channelId ? agentRunStatesKey(channelId) : key),
         res.states,
@@ -1506,7 +1449,7 @@ export function useAgentRunStates(
     staleTime: Infinity,
     // Returning to a channel/thread after unsubscribing can miss terminal
     // activity events; always reconcile against the backend snapshot on mount.
-    refetchOnMount: 'always',
+    refetchOnMount: "always",
     // Keep recent activity visible across quick channel/thread navigation.
     gcTime: AGENT_RUN_STATES_GC_MS,
   });
@@ -1540,29 +1483,31 @@ export function useAgentRunStates(
 export function useMarkConversationNotificationsRead() {
   return useMutation({
     mutationFn: async (channelId: string) => {
-      await api('/api/notifications/read', {
-        method: 'POST',
+      await api("/api/notifications/read", {
+        method: "POST",
         body: JSON.stringify({ conversation_id: channelId }),
       });
     },
   });
 }
 
- /**
-  * Advance the viewer's read cursor for a channel (mainline) to its latest
-  * message — the §5 `observe(stream)` mainline path (#task:1231). `stream_head`
-  * is server-resolved (channel open / jump knowingly accept concurrent
-  * tail-swallow, §2); a channel carries no thread root. Backed by the
-  * conversation_reads cursor — clears message unread badges.
-  */
+/**
+ * Advance the viewer's read cursor for a channel (mainline) to its latest
+ * message — the §5 `observe(stream)` mainline path (#task:1231). `stream_head`
+ * is server-resolved (channel open / jump knowingly accept concurrent
+ * tail-swallow, §2); a channel carries no thread root. Backed by the
+ * conversation_reads cursor — clears message unread badges.
+ */
 export function useMarkMessageChannelRead() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (params: string | { id: string; snapshotSeq?: MessageSeq }) => {
-      const channelId = typeof params === 'string' ? params : params.id;
-      return postObserve([typeof params !== 'string' && params.snapshotSeq !== undefined
-        ? streamSourceAtSeq(channelId, null, params.snapshotSeq)
-        : mainlineStreamSourceHead(channelId)]);
+      const channelId = typeof params === "string" ? params : params.id;
+      return postObserve([
+        typeof params !== "string" && params.snapshotSeq !== undefined
+          ? streamSourceAtSeq(channelId, null, params.snapshotSeq)
+          : mainlineStreamSourceHead(channelId),
+      ]);
     },
     onSuccess: (result, params) => {
       reconcileUnreadAfterObserveIfRealtimeUnavailable(qc, result);
@@ -1571,10 +1516,16 @@ export function useMarkMessageChannelRead() {
       // surface renders `conversationUnread.mainline`, so this is a narrow no-op
       // settle of the same key, not UI built for mainline; if one ever does, it
       // inherits the immediate settle for free instead of the #task:1400 window.
-      const channelId = typeof params === 'string' ? params : params.id;
-      settleStreamUnreadAfterObserve(qc, [typeof params !== 'string' && params.snapshotSeq !== undefined
-        ? streamSourceAtSeq(channelId, null, params.snapshotSeq)
-        : mainlineStreamSourceHead(channelId)], result);
+      const channelId = typeof params === "string" ? params : params.id;
+      settleStreamUnreadAfterObserve(
+        qc,
+        [
+          typeof params !== "string" && params.snapshotSeq !== undefined
+            ? streamSourceAtSeq(channelId, null, params.snapshotSeq)
+            : mainlineStreamSourceHead(channelId),
+        ],
+        result,
+      );
     },
     // No onSuccess message-unread invalidate while event WS is connected
     // (#task:1284). observe's post-commit enriched `unread_updated` message

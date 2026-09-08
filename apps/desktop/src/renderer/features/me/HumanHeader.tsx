@@ -1,10 +1,10 @@
-import type { UserDto } from '@silverhand/shared';
-import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { SidePanelHeader } from '@/components/layout/SidePanelHeader';
-import { ProfileHeaderContent } from '@/features/common/profile-header-content';
-import { usePresenceById, presenceDotStatus, humanPresenceText } from '@/features/presence/hooks';
-import { useHumanAvatar } from './use-human-avatar';
+import type { UserDto } from "@silverhand/shared";
+import { UserAvatar } from "@/components/UserAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { SidePanelHeader } from "@/components/layout/SidePanelHeader";
+import { ProfileHeaderContent } from "@/features/common/profile-header-content";
+import { usePresenceById, presenceDotStatus, humanPresenceText } from "@/features/presence/hooks";
+import { useHumanAvatar } from "./use-human-avatar";
 
 export function HumanHeader({
   user,
@@ -17,7 +17,7 @@ export function HumanHeader({
 }): JSX.Element {
   const avatarObjectUrl = useHumanAvatar(user.id);
   const presence = usePresenceById().get(user.id);
-  const online = presenceDotStatus(presence?.presence) === 'active';
+  const online = presenceDotStatus(presence?.presence) === "active";
   const content = (
     <ProfileHeaderContent
       compact={compact}
@@ -32,8 +32,8 @@ export function HumanHeader({
       status={
         <span
           data-status-pip
-          className={`size-1.5 shrink-0 self-center rounded-full ${online ? 'bg-success' : 'bg-text-muted/40'}`}
-          title={humanPresenceText(presence?.presence, null, '')}
+          className={`size-1.5 shrink-0 self-center rounded-full ${online ? "bg-success" : "bg-text-muted/40"}`}
+          title={humanPresenceText(presence?.presence, null, "")}
         />
       }
     />

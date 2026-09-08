@@ -1,7 +1,7 @@
-import { useQuery, type QueryClient } from '@tanstack/react-query';
-import type { SearchDto } from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
-import { api } from '@/lib/api';
+import { useQuery, type QueryClient } from "@tanstack/react-query";
+import type { SearchDto } from "@silverhand/shared";
+import { apiPaths } from "@silverhand/shared";
+import { api } from "@/lib/api";
 
 /**
  * The panel's request shape: every field is a CONCRETE coordinate or bound —
@@ -36,21 +36,21 @@ function hasSearchIntent(filters: SearchFilters): boolean {
 function buildSearchParams(filters: SearchFilters): string {
   const params = new URLSearchParams();
   const q = filters.q.trim();
-  if (q) params.set('q', q);
-  if (filters.workspace_id) params.set('workspace_id', filters.workspace_id);
+  if (q) params.set("q", q);
+  if (filters.workspace_id) params.set("workspace_id", filters.workspace_id);
   if (filters.conversation_id) {
-    params.set('conversation_id', filters.conversation_id);
+    params.set("conversation_id", filters.conversation_id);
   }
-  if (filters.user_id) params.set('user_id', filters.user_id);
-  if (filters.agent_id) params.set('agent_id', filters.agent_id);
-  if (filters.from !== undefined) params.set('from', String(filters.from));
-  if (filters.to !== undefined) params.set('to', String(filters.to));
-  if (filters.limit !== undefined) params.set('limit', String(filters.limit));
+  if (filters.user_id) params.set("user_id", filters.user_id);
+  if (filters.agent_id) params.set("agent_id", filters.agent_id);
+  if (filters.from !== undefined) params.set("from", String(filters.from));
+  if (filters.to !== undefined) params.set("to", String(filters.to));
+  if (filters.limit !== undefined) params.set("limit", String(filters.limit));
   return params.toString();
 }
 
 /** Prefix key of every message-search variant (`['search', filters]`). */
-export const searchKey = ['search'] as const;
+export const searchKey = ["search"] as const;
 
 /**
  * Discard every search result set that references ONE channel (#task:1689).
@@ -86,18 +86,15 @@ export function removeChannelFromSearch(qc: QueryClient, channelId: string): voi
  *  reply-cluster, not a separate conversation — `search-repo.ts` joins on
  *  `conv.id = m.conversation_id` — so a thread hit is identified by its
  *  `message.thread_root_id`, never by a distinct conversation id.) */
-export function searchHeldChannelIds(
-  qc: QueryClient,
-  workspaceId: string,
-): string[] {
+export function searchHeldChannelIds(qc: QueryClient, workspaceId: string): string[] {
   const ids = new Set<string>();
   for (const q of qc.getQueryCache().findAll({ queryKey: searchKey })) {
     const data = qc.getQueryData<SearchDto>(q.queryKey);
     if (!data) continue;
     for (const r of data.results) {
-      if (r.type === 'workspace') continue;
+      if (r.type === "workspace") continue;
       if (
-        r.conversation.placement_kind === 'workspace' &&
+        r.conversation.placement_kind === "workspace" &&
         r.conversation.workspace.id === workspaceId
       ) {
         ids.add(r.conversation.channel_id);
@@ -109,7 +106,7 @@ export function searchHeldChannelIds(
 
 function searchDtoReferencesChannel(data: SearchDto, channelId: string): boolean {
   return data.results.some(
-    r => r.type !== 'workspace' && r.conversation.channel_id === channelId,
+    (r) => r.type !== "workspace" && r.conversation.channel_id === channelId,
   );
 }
 

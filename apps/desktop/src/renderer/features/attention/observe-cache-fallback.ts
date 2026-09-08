@@ -1,11 +1,11 @@
-import type { QueryClient } from '@tanstack/react-query';
-import type { ObserveDto, ObserveSource } from '@silverhand/shared';
+import type { QueryClient } from "@tanstack/react-query";
+import type { ObserveDto, ObserveSource } from "@silverhand/shared";
 import {
   invalidateMessageUnreadQueries,
   conversationUnreadKey,
-} from '@/features/channels/message-unread';
-import { favoritesKey } from '@/features/favorites/hooks';
-import { eventWsClient, type WsClientStatus } from '@/lib/ws-client';
+} from "@/features/channels/message-unread";
+import { favoritesKey } from "@/features/favorites/hooks";
+import { eventWsClient, type WsClientStatus } from "@/lib/ws-client";
 
 /**
  * `observe()` normally clears unread badges through the post-commit
@@ -18,7 +18,7 @@ export function shouldRefetchUnreadAfterObserve(
   result: ObserveDto | undefined,
   status: WsClientStatus,
 ): boolean {
-  return result?.changed === true && status !== 'connected';
+  return result?.changed === true && status !== "connected";
 }
 
 export function reconcileUnreadAfterObserveIfRealtimeUnavailable(
@@ -64,7 +64,7 @@ export function settleStreamUnreadAfterObserve(
   if (result?.changed !== true) return;
   const seen = new Set<string>();
   for (const s of sources) {
-    if (s.kind !== 'stream') continue;
+    if (s.kind !== "stream") continue;
     if (seen.has(s.conversation_id)) continue;
     seen.add(s.conversation_id);
     void qc.invalidateQueries({ queryKey: conversationUnreadKey(s.conversation_id) });

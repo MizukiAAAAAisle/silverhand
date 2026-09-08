@@ -1,17 +1,17 @@
-import { useMemo } from 'react';
-import * as Select from '@radix-ui/react-select';
-import { ChevronDown } from 'lucide-react';
-import type { AgentDto } from '@silverhand/shared';
-import { WorkspaceIcon } from '@/components/WorkspaceIcon';
-import { useAgents } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import type { WorkspaceListItem } from '@/features/workspaces/hooks';
-import { isAgentSpace } from '@/features/workspaces/workspace-ownership';
+import { useMemo } from "react";
+import * as Select from "@radix-ui/react-select";
+import { ChevronDown } from "lucide-react";
+import type { AgentDto } from "@silverhand/shared";
+import { WorkspaceIcon } from "@/components/WorkspaceIcon";
+import { useAgents } from "@/features/agents/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import type { WorkspaceListItem } from "@/features/workspaces/hooks";
+import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
 import {
   FilterSelectItem,
   FILTER_SELECT_TRIGGER_CLASS,
   FILTER_SELECT_CONTENT_CLASS,
-} from '@/components/ui/filter-select';
+} from "@/components/ui/filter-select";
 
 /**
  * Shared "filter by workspace" dropdown. One component, one data source
@@ -24,23 +24,21 @@ import {
  * primitive (`filter-select.tsx`), so keyboard nav / focus ring / Esc-Enter and
  * per-theme radius come for free.
  */
-export type WorkspaceFilterValue = 'all' | `workspace:${string}`;
+export type WorkspaceFilterValue = "all" | `workspace:${string}`;
 
 /** The selected workspace id, or `null` for the "all" sentinel. */
 export function workspaceFilterId(value: WorkspaceFilterValue): string | null {
-  return value.startsWith('workspace:')
-    ? value.slice('workspace:'.length)
-    : null;
+  return value.startsWith("workspace:") ? value.slice("workspace:".length) : null;
 }
 
 export function WorkspaceFilterSelect({
   value,
   workspaces,
   onChange,
-  allLabel = 'All workspaces',
+  allLabel = "All workspaces",
   allIcon,
   showArchivedSuffix = false,
-  ariaLabel = 'Workspace filter',
+  ariaLabel = "Workspace filter",
 }: {
   value: WorkspaceFilterValue;
   /** Full list — every workspace the viewer can see is offered. */
@@ -58,12 +56,9 @@ export function WorkspaceFilterSelect({
   // 'agent_space'` pre-filter that used to sit here admitted the whole set (the
   // union WAS the alphabet), so it fenced nothing and went out with the kind
   // (#task:2078).
-  const agentSpaces = workspaces.filter(w => isAgentSpace(w));
-  const peopleOwned = workspaces.filter(w => !isAgentSpace(w));
-  const agentsById = useMemo(
-    () => new Map(agents.map(a => [a.id, a])),
-    [agents],
-  );
+  const agentSpaces = workspaces.filter((w) => isAgentSpace(w));
+  const peopleOwned = workspaces.filter((w) => !isAgentSpace(w));
+  const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const selected = workspaceFilterLabel(
     value,
@@ -75,7 +70,7 @@ export function WorkspaceFilterSelect({
   );
 
   return (
-    <Select.Root value={value} onValueChange={v => onChange(v as WorkspaceFilterValue)}>
+    <Select.Root value={value} onValueChange={(v) => onChange(v as WorkspaceFilterValue)}>
       <Select.Trigger aria-label={ariaLabel} className={FILTER_SELECT_TRIGGER_CLASS}>
         <span className="flex min-w-0 items-center gap-1.5">
           {selected.icon}
@@ -103,7 +98,7 @@ export function WorkspaceFilterSelect({
                 <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                   Agent Spaces
                 </Select.Label>
-                {agentSpaces.map(workspace => (
+                {agentSpaces.map((workspace) => (
                   <FilterSelectItem
                     key={workspace.id}
                     value={`workspace:${workspace.id}`}
@@ -116,7 +111,7 @@ export function WorkspaceFilterSelect({
                     }
                     suffix={
                       showArchivedSuffix && workspace.archived_at !== null
-                        ? 'archived workspace'
+                        ? "archived workspace"
                         : undefined
                     }
                   >
@@ -130,7 +125,7 @@ export function WorkspaceFilterSelect({
                 <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                   Workspaces
                 </Select.Label>
-                {peopleOwned.map(workspace => (
+                {peopleOwned.map((workspace) => (
                   <FilterSelectItem
                     key={workspace.id}
                     value={`workspace:${workspace.id}`}
@@ -142,7 +137,7 @@ export function WorkspaceFilterSelect({
                     }
                     suffix={
                       showArchivedSuffix && workspace.archived_at !== null
-                        ? 'archived workspace'
+                        ? "archived workspace"
                         : undefined
                     }
                   >
@@ -166,19 +161,17 @@ function workspaceFilterLabel(
   allLabel: string,
   allIcon: JSX.Element,
 ): { label: string; icon: JSX.Element } {
-  if (value === 'all') return { label: allLabel, icon: allIcon };
-  const id = value.slice('workspace:'.length);
-  const workspace = workspaces.find(w => w.id === id);
+  if (value === "all") return { label: allLabel, icon: allIcon };
+  const id = value.slice("workspace:".length);
+  const workspace = workspaces.find((w) => w.id === id);
   if (!workspace) {
     // The selected id no longer resolves (the workspace went away while the
     // filter held it). The trigger must still render something, so this is a
     // PLACEHOLDER, not a claim about ownership — a generic word and the neutral
     // badge, never the vanished workspace's identity.
     return {
-      label: 'Workspace',
-      icon: (
-        <WorkspaceIcon ownerAgentId={null} ownerAgentAvatarUrls={agentAvatarUrls} />
-      ),
+      label: "Workspace",
+      icon: <WorkspaceIcon ownerAgentId={null} ownerAgentAvatarUrls={agentAvatarUrls} />,
     };
   }
   // One label either way (the row's own name); only the identity glyph

@@ -1,24 +1,18 @@
-import { useMemo } from 'react';
-import { MessageSquare } from 'lucide-react';
-import { useAgent } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
-import {
-  AuthorAvatarView,
-  DeletedActorMarker,
-} from '@/components/chat/author-avatar-view';
-import { useDirectPairs } from '@/features/direct-pairs/hooks';
+import { useMemo } from "react";
+import { MessageSquare } from "lucide-react";
+import { useAgent } from "@/features/agents/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
+import { AuthorAvatarView, DeletedActorMarker } from "@/components/chat/author-avatar-view";
+import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import {
   collectCounterpartAvatarSources,
   counterpartFromAgent,
   presentCounterpart,
-} from '@/features/direct-pairs/counterpart-presentation';
-import {
-  mergeDirectLineRows,
-  type DirectLineRow,
-} from '@/features/direct-pairs/direct-line-rows';
-import { channelRowBadge } from '@/lib/attention-mode';
-import { ConversationRowLayout, SidebarSection, UnreadBadge } from './sidebar-shared';
+} from "@/features/direct-pairs/counterpart-presentation";
+import { mergeDirectLineRows, type DirectLineRow } from "@/features/direct-pairs/direct-line-rows";
+import { channelRowBadge } from "@/lib/attention-mode";
+import { ConversationRowLayout, SidebarSection, UnreadBadge } from "./sidebar-shared";
 
 /**
  * The sidebar's DIRECT MESSAGES section — the viewer's `direct_pair`
@@ -103,10 +97,7 @@ export function DirectMessagesGroup(props: {
   // are actually rendered — the same discipline every author surface follows (a
   // leaf row never fetches its own blob). Deleted counterparts contribute nothing
   // and fetch nothing.
-  const { agents, users } = useMemo(
-    () => collectCounterpartAvatarSources(rows),
-    [rows],
-  );
+  const { agents, users } = useMemo(() => collectCounterpartAvatarSources(rows), [rows]);
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(users);
 
@@ -116,7 +107,7 @@ export function DirectMessagesGroup(props: {
   // the sidebar with no selection while the pane shows that conversation
   // (`SidebarSection.collapsedContent`, app-layout.md §3). The draft row is the
   // open pane just as much, so it survives collapsing the same way.
-  const selectedRow = rows.find(row => row.selected);
+  const selectedRow = rows.find((row) => row.selected);
 
   return (
     <SidebarSection
@@ -142,7 +133,7 @@ export function DirectMessagesGroup(props: {
         ) : null
       }
     >
-      {rows.map(row => (
+      {rows.map((row) => (
         <li key={row.key}>
           <DirectMessageRow
             row={row}
@@ -183,7 +174,7 @@ function DirectMessageRow({
   const counterpart = presentCounterpart(row.counterpart);
   // A draft has no unread state to have — it has no messages, by construction.
   const badge = channelRowBadge({
-    effectiveMode: 'all',
+    effectiveMode: "all",
     positionalUnread: row.unread,
     directedUnread: 0,
   });
@@ -198,7 +189,7 @@ function DirectMessageRow({
       onSelect={() => {
         // A draft row stays on the draft even when a pair for the same agent
         // exists: that is what makes it one row instead of two.
-        if (row.kind === 'draft') {
+        if (row.kind === "draft") {
           onSelectDirectDraft?.(row.agentId);
           return;
         }
@@ -218,9 +209,7 @@ function DirectMessageRow({
           <DeletedActorMarker />
         </span>
       ) : null}
-      {badge ? (
-        <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" />
-      ) : null}
+      {badge ? <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" /> : null}
     </ConversationRowLayout>
   );
 }

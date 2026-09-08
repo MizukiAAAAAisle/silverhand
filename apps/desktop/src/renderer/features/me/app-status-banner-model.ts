@@ -16,11 +16,11 @@
  * Extracted as a pure function so the priority is pinned by a unit test
  * rather than living implicitly in JSX branch order.
  */
-import type { ProtocolSkewView } from './protocol-skew-presentation';
+import type { ProtocolSkewView } from "./protocol-skew-presentation";
 
 export type AppStatusBannerModel =
-  | { kind: 'backend_unreachable' }
-  | { kind: 'protocol_skew'; view: ProtocolSkewView }
+  | { kind: "backend_unreachable" }
+  | { kind: "protocol_skew"; view: ProtocolSkewView }
   | null;
 
 export function selectAppStatusBanner(input: {
@@ -28,7 +28,7 @@ export function selectAppStatusBanner(input: {
   skew: ProtocolSkewView | null;
 }): AppStatusBannerModel {
   // Priority: backend_unreachable > protocol_skew.
-  if (input.unreachableVisible) return { kind: 'backend_unreachable' };
-  if (input.skew) return { kind: 'protocol_skew', view: input.skew };
+  if (input.unreachableVisible) return { kind: "backend_unreachable" };
+  if (input.skew) return { kind: "protocol_skew", view: input.skew };
   return null;
 }

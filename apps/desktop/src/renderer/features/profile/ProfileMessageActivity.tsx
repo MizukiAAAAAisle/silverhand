@@ -1,22 +1,22 @@
-import { useEffect, useState } from 'react';
-import { useQueries } from '@tanstack/react-query';
-import * as Select from '@radix-ui/react-select';
-import { ChevronDown } from 'lucide-react';
+import { useEffect, useState } from "react";
+import { useQueries } from "@tanstack/react-query";
+import * as Select from "@radix-ui/react-select";
+import { ChevronDown } from "lucide-react";
 import {
   FilterSelectItem,
   FILTER_SELECT_TRIGGER_CLASS,
   FILTER_SELECT_CONTENT_CLASS,
-} from '@/components/ui/filter-select';
-import { cn } from '@/lib/cn';
-import { ProfileSection } from '@/features/common/ProfileSummarySections';
-import { getCurrentUserId } from '@/lib/current-user';
-import { messageActivityRange, messageActivityYears } from './message-activity-calendar';
-import { MessageActivityCalendar } from './MessageActivityCalendar';
+} from "@/components/ui/filter-select";
+import { cn } from "@/lib/cn";
+import { ProfileSection } from "@/features/common/ProfileSummarySections";
+import { getCurrentUserId } from "@/lib/current-user";
+import { messageActivityRange, messageActivityYears } from "./message-activity-calendar";
+import { MessageActivityCalendar } from "./MessageActivityCalendar";
 import {
   shanghaiDate,
   profileMessageCountsOptions,
   type ProfileMessageSubject,
-} from './message-counts';
+} from "./message-counts";
 
 export function ProfileMessageActivity({
   subject,
@@ -32,7 +32,7 @@ export function ProfileMessageActivity({
 }
 
 function MessageActivitySection({ subject }: { subject: ProfileMessageSubject }): JSX.Element {
-  const [year, setYear] = useState<number | 'recent'>('recent');
+  const [year, setYear] = useState<number | "recent">("recent");
   const [availableYears, setAvailableYears] = useState<number[]>([]);
 
   const today = shanghaiDate();
@@ -54,16 +54,16 @@ function MessageActivitySection({ subject }: { subject: ProfileMessageSubject })
   const isError = queries.some((query) => query.isError);
   const isFetching = queries.some((query) => query.isFetching);
 
-  const yearOptions = queries.flatMap((query) => query.data?.available_years ?? []).join(',');
+  const yearOptions = queries.flatMap((query) => query.data?.available_years ?? []).join(",");
 
   useEffect(() => {
     if (yearOptions) {
-      setAvailableYears(yearOptions.split(',').map(Number));
+      setAvailableYears(yearOptions.split(",").map(Number));
     }
   }, [yearOptions]);
 
   const years = [
-    ...new Set([...(year === 'recent' ? [] : [year]), currentYear, ...availableYears]),
+    ...new Set([...(year === "recent" ? [] : [year]), currentYear, ...availableYears]),
   ].sort((a, b) => b - a);
   const total = data?.reduce((sum, day) => sum + day.count, 0) ?? 0;
 
@@ -73,11 +73,11 @@ function MessageActivitySection({ subject }: { subject: ProfileMessageSubject })
       headerSlot={
         <Select.Root
           value={String(year)}
-          onValueChange={(value) => setYear(value === 'recent' ? 'recent' : Number(value))}
+          onValueChange={(value) => setYear(value === "recent" ? "recent" : Number(value))}
         >
           <Select.Trigger
             aria-label="Message activity period"
-            className={cn(FILTER_SELECT_TRIGGER_CLASS, 'w-auto')}
+            className={cn(FILTER_SELECT_TRIGGER_CLASS, "w-auto")}
           >
             <Select.Value />
             <Select.Icon>
@@ -122,8 +122,8 @@ function MessageActivitySection({ subject }: { subject: ProfileMessageSubject })
       ) : data ? (
         <div>
           <p className="mb-5 text-xs text-text-muted">
-            {total.toLocaleString()} {total === 1 ? 'message' : 'messages'}{' '}
-            {year === 'recent' ? 'in the last year' : `in ${year}`}
+            {total.toLocaleString()} {total === 1 ? "message" : "messages"}{" "}
+            {year === "recent" ? "in the last year" : `in ${year}`}
           </p>
           <MessageActivityCalendar year={year} days={data} today={today} />
         </div>

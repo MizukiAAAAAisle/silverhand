@@ -1,4 +1,4 @@
-import type { TaskStatus } from '@silverhand/shared';
+import type { TaskStatus } from "@silverhand/shared";
 
 /**
  * Shared drag-and-drop contract for task cards → status columns
@@ -12,7 +12,7 @@ import type { TaskStatus } from '@silverhand/shared';
  * text or an external item never parses as a task move, and so dragover
  * can cheaply assert "this is one of ours".
  */
-export const TASK_DND_MIME = 'application/x-silverhand-task';
+export const TASK_DND_MIME = "application/x-silverhand-task";
 
 export interface TaskDragPayload {
   taskId: string;
@@ -22,11 +22,8 @@ export interface TaskDragPayload {
   from: TaskStatus;
 }
 
-export function writeTaskDrag(
-  dataTransfer: DataTransfer,
-  payload: TaskDragPayload,
-): void {
-  dataTransfer.effectAllowed = 'move';
+export function writeTaskDrag(dataTransfer: DataTransfer, payload: TaskDragPayload): void {
+  dataTransfer.effectAllowed = "move";
   dataTransfer.setData(TASK_DND_MIME, JSON.stringify(payload));
 }
 
@@ -37,7 +34,7 @@ export function readTaskDrag(dataTransfer: DataTransfer): TaskDragPayload | null
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<TaskDragPayload>;
-    if (typeof parsed.taskId === 'string' && typeof parsed.from === 'string') {
+    if (typeof parsed.taskId === "string" && typeof parsed.from === "string") {
       return { taskId: parsed.taskId, from: parsed.from as TaskStatus };
     }
   } catch {

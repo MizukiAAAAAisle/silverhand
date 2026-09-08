@@ -1,7 +1,7 @@
-import type { ReactNode } from 'react';
-import { SectionLayer } from './SectionLayer';
-import { SectionShell } from './SectionShell';
-import { paneChrome } from './pane-chrome';
+import type { ReactNode } from "react";
+import { SectionLayer } from "./SectionLayer";
+import { SectionShell } from "./SectionShell";
+import { paneChrome } from "./pane-chrome";
 
 export interface DirectoryLifecycle {
   mounted: boolean;
@@ -43,7 +43,7 @@ export function DirectoryPlaceholder({ children }: { children: ReactNode }): JSX
   return (
     <main
       className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-      style={{ ...paneChrome, overflow: 'hidden' }}
+      style={{ ...paneChrome, overflow: "hidden" }}
     >
       {children}
     </main>

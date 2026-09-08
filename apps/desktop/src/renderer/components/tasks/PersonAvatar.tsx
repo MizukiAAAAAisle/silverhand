@@ -1,14 +1,14 @@
-import { useMemo } from 'react';
-import { User } from 'lucide-react';
-import type { AgentDto } from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { useAgents } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useUsersById } from '@/features/users/hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
-import type { PersonRef } from '@/features/tasks/taskFilters';
+import { useMemo } from "react";
+import { User } from "lucide-react";
+import type { AgentDto } from "@silverhand/shared";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { useAgents } from "@/features/agents/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useUsersById } from "@/features/users/hooks";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
+import type { PersonRef } from "@/features/tasks/taskFilters";
 
 /** The directory + resolved object URLs a {@link PersonAvatar} needs. Resolved
  *  ONCE per surface (see {@link usePersonDirectory}) and passed down, so a
@@ -40,7 +40,7 @@ export function PersonAvatar({
   person: PersonRef;
   name: string;
 } & PersonDirectory): JSX.Element {
-  if (person.type === 'agent') {
+  if (person.type === "agent") {
     const runtime = agentsById.get(person.id)?.runtime;
     if (runtime) {
       return (
@@ -73,7 +73,7 @@ export function PersonAvatar({
 export function usePersonDirectory(): PersonDirectory {
   const { data: agents = [] } = useAgents();
   const agentsById = useMemo<ReadonlyMap<string, AgentDto>>(
-    () => new Map(agents.map(a => [a.id, a])),
+    () => new Map(agents.map((a) => [a.id, a])),
     [agents],
   );
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);

@@ -1,24 +1,24 @@
-import { useProfileHeroSize } from '@/features/common/use-profile-hero-size';
-import { ProfileMessageActivity } from '@/features/profile/ProfileMessageActivity';
-import { useState, type JSX } from 'react';
-import './agent-profile-hero.css';
-import dayjs from 'dayjs';
-import type { AgentDto } from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { cn } from '@/lib/cn';
-import { MetadataList, ProfileSection } from '@/features/common/ProfileSummarySections';
-import { useUpdateAgent } from './hooks';
-import { useAgentAvatarObjectUrl } from './avatar-hooks';
-import { canEditAgentProfile } from './permissions';
-import { EditableAgentAvatar } from './EditableAgentAvatar';
-import { EditPencilButton } from '@/features/common/EditPencilButton';
-import { InlineText } from '@/features/common/InlineText';
-import { rejectDisplayName } from '@/features/common/display-name';
-import { InlineTextarea } from './InlineTextarea';
-import { RuntimeConfigEditor } from './RuntimeConfigEditor';
-import { isBackendUnreachable, isUpdateRequired, useViewerUser } from '@/features/me/hooks';
-import { UNKNOWN_COMPUTER_LABEL } from '@/features/hosts/host-display';
+import { useProfileHeroSize } from "@/features/common/use-profile-hero-size";
+import { ProfileMessageActivity } from "@/features/profile/ProfileMessageActivity";
+import { useState, type JSX } from "react";
+import "./agent-profile-hero.css";
+import dayjs from "dayjs";
+import type { AgentDto } from "@silverhand/shared";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { cn } from "@/lib/cn";
+import { MetadataList, ProfileSection } from "@/features/common/ProfileSummarySections";
+import { useUpdateAgent } from "./hooks";
+import { useAgentAvatarObjectUrl } from "./avatar-hooks";
+import { canEditAgentProfile } from "./permissions";
+import { EditableAgentAvatar } from "./EditableAgentAvatar";
+import { EditPencilButton } from "@/features/common/EditPencilButton";
+import { InlineText } from "@/features/common/InlineText";
+import { rejectDisplayName } from "@/features/common/display-name";
+import { InlineTextarea } from "./InlineTextarea";
+import { RuntimeConfigEditor } from "./RuntimeConfigEditor";
+import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/me/hooks";
+import { UNKNOWN_COMPUTER_LABEL } from "@/features/hosts/host-display";
 
 interface AgentProfileCardProps {
   agent: AgentDto;
@@ -70,7 +70,7 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
         <div className="agent-profile-hero-fields min-w-0 flex-1">
           <div>
             <div className="flex items-start gap-1">
-              <div className={cn('min-w-0', nameEditing && 'flex-1')}>
+              <div className={cn("min-w-0", nameEditing && "flex-1")}>
                 {canEdit ? (
                   <InlineText
                     value={agent.display_name}
@@ -104,11 +104,11 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
               @{agent.name}
             </div>
           </div>
-          <div className={cn('flex gap-1', descriptionEditing ? 'items-start' : 'items-center')}>
+          <div className={cn("flex gap-1", descriptionEditing ? "items-start" : "items-center")}>
             <div
               className={cn(
-                'agent-profile-hero-description min-w-0 break-words',
-                descriptionEditing && 'flex-1',
+                "agent-profile-hero-description min-w-0 break-words",
+                descriptionEditing && "flex-1",
               )}
             >
               {canEdit ? (
@@ -137,7 +137,7 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
         </div>
       </section>
 
-      <ProfileMessageActivity subject={{ kind: 'agent', id: agent.id }} />
+      <ProfileMessageActivity subject={{ kind: "agent", id: agent.id }} />
 
       <ProfileSection
         title="Runtime configuration"
@@ -161,22 +161,22 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
       <ProfileSection title="Metadata" muted>
         <MetadataList
           items={[
-            { label: 'Computer', value: computerName },
+            { label: "Computer", value: computerName },
             {
-              label: 'Session model',
-              value: agent.session_scope === 'agent' ? 'Across conversations' : 'Per conversation',
+              label: "Session model",
+              value: agent.session_scope === "agent" ? "Across conversations" : "Per conversation",
             },
             {
-              label: 'Created',
-              value: dayjs(agent.created_at).format('YYYY-MM-DD'),
-              title: dayjs(agent.created_at).format('YYYY-MM-DD HH:mm:ss'),
+              label: "Created",
+              value: dayjs(agent.created_at).format("YYYY-MM-DD"),
+              title: dayjs(agent.created_at).format("YYYY-MM-DD HH:mm:ss"),
             },
             {
-              label: 'Updated',
-              value: dayjs(agent.updated_at).format('YYYY-MM-DD HH:mm'),
-              title: dayjs(agent.updated_at).format('YYYY-MM-DD HH:mm:ss'),
+              label: "Updated",
+              value: dayjs(agent.updated_at).format("YYYY-MM-DD HH:mm"),
+              title: dayjs(agent.updated_at).format("YYYY-MM-DD HH:mm:ss"),
             },
-            { label: 'Agent ID', value: agent.id, mono: true },
+            { label: "Agent ID", value: agent.id, mono: true },
           ]}
         />
       </ProfileSection>
@@ -209,12 +209,12 @@ function ReadOnlyValue({
   return (
     <div
       className={cn(
-        'text-sm',
-        display ? 'text-text-primary' : 'text-text-muted',
-        multiline ? 'whitespace-pre-wrap leading-relaxed' : '',
+        "text-sm",
+        display ? "text-text-primary" : "text-text-muted",
+        multiline ? "whitespace-pre-wrap leading-relaxed" : "",
       )}
     >
-      {display ?? placeholder ?? '—'}
+      {display ?? placeholder ?? "—"}
     </div>
   );
 }

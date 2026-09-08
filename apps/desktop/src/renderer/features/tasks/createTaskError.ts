@@ -1,8 +1,5 @@
-import {
-  HumanCreateTaskErrorCodeSchema,
-  type HumanCreateTaskErrorCode,
-} from '@silverhand/shared';
-import { ApiError } from '@/lib/api';
+import { HumanCreateTaskErrorCodeSchema, type HumanCreateTaskErrorCode } from "@silverhand/shared";
+import { ApiError } from "@/lib/api";
 
 /**
  * Map a create failure to manual-quality copy, classified on the typed `code`
@@ -19,14 +16,14 @@ import { ApiError } from '@/lib/api';
 export function createTaskErrorMessage(err: unknown): string {
   const code = err instanceof ApiError ? readCreateTaskErrorCode(err.body) : null;
   switch (code) {
-    case 'conversation_closed':
-    case 'conversation_archived':
-      return 'This channel no longer accepts new tasks.';
-    case 'not_conversation_member':
-    case 'conversation_not_found':
-      return 'This channel is unavailable.';
+    case "conversation_closed":
+    case "conversation_archived":
+      return "This channel no longer accepts new tasks.";
+    case "not_conversation_member":
+    case "conversation_not_found":
+      return "This channel is unavailable.";
     default:
-      return 'The task could not be created.';
+      return "The task could not be created.";
   }
 }
 

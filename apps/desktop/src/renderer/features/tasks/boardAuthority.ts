@@ -1,5 +1,5 @@
-import { TaskStatusSchema, type TaskStatus } from '@silverhand/shared';
-import type { PersonOption } from './taskFilters';
+import { TaskStatusSchema, type TaskStatus } from "@silverhand/shared";
+import type { PersonOption } from "./taskFilters";
 
 /**
  * The board's aggregate read faces as a surface must consume them (#task:1885,
@@ -20,9 +20,7 @@ import type { PersonOption } from './taskFilters';
  * that fails leaves the last good answer in place instead of dropping the surface
  * back to unknown.
  */
-export type BoardAuthority<T> =
-  | { known: false; failed: boolean }
-  | { known: true; value: T };
+export type BoardAuthority<T> = { known: false; failed: boolean } | { known: true; value: T };
 
 /** Project one query's state onto the authority contract. */
 export function boardAuthority<T>(query: {
@@ -83,7 +81,7 @@ export function boardColumnTotal(
 /** Stands in for a count nobody has been told yet. A dash rather than a blank so
  *  the header keeps its shape while the number is unknown, and rather than `0` so
  *  it never reads as an answer. */
-export const UNKNOWN_COUNT = '–';
+export const UNKNOWN_COUNT = "–";
 
 export function boardCountLabel(value: number | null): string {
   return value === null ? UNKNOWN_COUNT : String(value);
@@ -105,11 +103,9 @@ export interface BoardFacets {
  * only from a successful read. An unknown population reports `loading` / `failed`
  * instead, so a cold failure cannot present itself as an empty workspace.
  */
-export type PersonMenuState = 'ready' | 'empty' | 'loading' | 'failed';
+export type PersonMenuState = "ready" | "empty" | "loading" | "failed";
 
-export function personMenuState(
-  options: BoardAuthority<PersonOption[]>,
-): PersonMenuState {
-  if (!options.known) return options.failed ? 'failed' : 'loading';
-  return options.value.length === 0 ? 'empty' : 'ready';
+export function personMenuState(options: BoardAuthority<PersonOption[]>): PersonMenuState {
+  if (!options.known) return options.failed ? "failed" : "loading";
+  return options.value.length === 0 ? "empty" : "ready";
 }

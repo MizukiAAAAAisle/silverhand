@@ -1,7 +1,7 @@
-import type { MessageDto, UserDto } from '@silverhand/shared';
-import { SystemMessage } from './SystemMessage';
-import type { ChannelReference } from './ChannelRef';
-import type { WorkspaceChannelReference } from './ConversationRef';
+import type { MessageDto, UserDto } from "@silverhand/shared";
+import { SystemMessage } from "./SystemMessage";
+import type { ChannelReference } from "./ChannelRef";
+import type { WorkspaceChannelReference } from "./ConversationRef";
 
 /**
  * Activity cluster — renders a contiguous run of low-priority system
@@ -53,11 +53,8 @@ export function SystemActivityCluster({
   humansByName,
 }: SystemActivityClusterProps): JSX.Element {
   return (
-    <div
-      className="system-activity-cluster"
-      data-system-activity-cluster={String(messages.length)}
-    >
-      {messages.map(m => (
+    <div className="system-activity-cluster" data-system-activity-cluster={String(messages.length)}>
+      {messages.map((m) => (
         <SystemMessage
           key={m.id}
           message={m}

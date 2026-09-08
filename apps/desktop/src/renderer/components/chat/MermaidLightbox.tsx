@@ -1,10 +1,10 @@
-import { RangeInput } from '@/components/ui/range-input';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { X, ZoomIn, ZoomOut } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { neutralAction } from '@/features/common/ControlInkBorder';
-import { usePinchZoomLease } from '@/lib/pinch-zoom-lease';
+import { RangeInput } from "@/components/ui/range-input";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { X, ZoomIn, ZoomOut } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { neutralAction } from "@/features/common/ControlInkBorder";
+import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
 
 interface MermaidLightboxProps {
   open: boolean;
@@ -105,8 +105,8 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
         e.preventDefault();
         setZoom(scaleRef.current * Math.exp(-e.deltaY / 100));
       };
-      node.addEventListener('wheel', onWheel, { passive: false });
-      wheelCleanupRef.current = () => node.removeEventListener('wheel', onWheel);
+      node.addEventListener("wheel", onWheel, { passive: false });
+      wheelCleanupRef.current = () => node.removeEventListener("wheel", onWheel);
     },
     [setZoom],
   );
@@ -147,13 +147,13 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
   };
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (e.key === '+' || e.key === '=') {
+    if (e.key === "+" || e.key === "=") {
       e.preventDefault();
       setZoom(scale * STEP);
-    } else if (e.key === '-' || e.key === '_') {
+    } else if (e.key === "-" || e.key === "_") {
       e.preventDefault();
       setZoom(scale / STEP);
-    } else if (e.key === '0') {
+    } else if (e.key === "0") {
       e.preventDefault();
       setZoom(1);
     }
@@ -170,7 +170,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
           onKeyDown={onKeyDown}
           aria-label="Diagram preview"
           className="fixed inset-0 z-[var(--z-lightbox-chrome)] m-auto flex flex-col overflow-hidden rounded-[var(--floating-radius,var(--radius-md))] bg-bg-floating shadow-xl focus:outline-none"
-          style={{ width: 'min(1100px, 92vw)', height: '86vh' }}
+          style={{ width: "min(1100px, 92vw)", height: "86vh" }}
         >
           <div
             data-modal-divider
@@ -201,7 +201,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
             // The diagram surface reads the theme's diagram ground (forza6 is
             // white, not its dark code island); other themes fall back to the
             // modal's elevated surface.
-            style={{ background: 'var(--mermaid-diagram-bg, var(--bg-elevated))' }}
+            style={{ background: "var(--mermaid-diagram-bg, var(--bg-elevated))" }}
           >
             <div
               className="m-auto shrink-0"
@@ -213,12 +213,12 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
               // once scaled; `width:max-content` stops the pre-transform box from
               // being capped at the well width so the scrollable area grows.
               style={{
-                width: 'max-content',
-                maxWidth: '100%',
-                maxHeight: '100%',
-                transformOrigin: 'top left',
+                width: "max-content",
+                maxWidth: "100%",
+                maxHeight: "100%",
+                transformOrigin: "top left",
                 transform: zoomed ? `scale(${scale})` : undefined,
-                cursor: zoomed ? (dragging ? 'grabbing' : 'grab') : 'default',
+                cursor: zoomed ? (dragging ? "grabbing" : "grab") : "default",
               }}
               // SVG is mermaid's `securityLevel:'strict'` (DOMPurify) output.
               dangerouslySetInnerHTML={{ __html: svg }}
@@ -236,7 +236,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
                 aria-label="Zoom out"
                 disabled={scale <= MIN_SCALE}
                 onClick={() => setZoom(scale / STEP)}
-                {...neutralAction('size-[22px] shrink-0')}
+                {...neutralAction("size-[22px] shrink-0")}
                 data-zoom-stepper
               >
                 <ZoomOut className="size-4" />
@@ -259,7 +259,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
                 aria-label="Zoom in"
                 disabled={scale >= MAX_SCALE}
                 onClick={() => setZoom(scale * STEP)}
-                {...neutralAction('size-[22px] shrink-0')}
+                {...neutralAction("size-[22px] shrink-0")}
                 data-zoom-stepper
               >
                 <ZoomIn className="size-4" />

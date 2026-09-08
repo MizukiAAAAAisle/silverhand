@@ -1,13 +1,6 @@
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type JSX,
-  type KeyboardEvent,
-} from 'react';
-import { cn } from '@/lib/cn';
-import { CancelButton, SaveButton } from '@/features/common/EditToolbarButtons';
+import { useEffect, useId, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { cn } from "@/lib/cn";
+import { CancelButton, SaveButton } from "@/features/common/EditToolbarButtons";
 
 /**
  * Inline edit textarea for a nullable long-form string (agent description,
@@ -41,7 +34,7 @@ export function decideTextareaCommit(
   const trimmed = draft;
   const next: string | null = trimmed.length === 0 ? null : trimmed;
   if (next === value) return { commit: false };
-  if (next === null && (value === null || value === '')) {
+  if (next === null && (value === null || value === "")) {
     // "still empty" — nothing to persist.
     return { commit: false };
   }
@@ -58,7 +51,7 @@ export function InlineTextarea({
   maxLength = 2000,
   onCommit,
 }: InlineTextareaProps): JSX.Element {
-  const [draft, setDraft] = useState(value ?? '');
+  const [draft, setDraft] = useState(value ?? "");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -70,7 +63,7 @@ export function InlineTextarea({
   // first paint after `editing → true` has the correct value already
   // (Cindy round-8 axis B — no blank→value one-frame flash).
   useEffect(() => {
-    if (!editing) setDraft(value ?? '');
+    if (!editing) setDraft(value ?? "");
   }, [value, editing]);
 
   useEffect(() => {
@@ -104,19 +97,19 @@ export function InlineTextarea({
       await onCommit(decision.next);
       onExitEdit();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save.');
+      setError(err instanceof Error ? err.message : "Could not save.");
     } finally {
       setPending(false);
     }
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       void commit();
       return;
     }
-    if (e.key === 'Escape') {
+    if (e.key === "Escape") {
       e.preventDefault();
       cancel();
     }
@@ -132,13 +125,13 @@ export function InlineTextarea({
           disabled={pending}
           rows={rows}
           maxLength={maxLength}
-          onChange={e => setDraft(e.target.value)}
+          onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
           aria-label={ariaLabel}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? errorId : undefined}
           className={cn(
-            'w-full resize-none rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 py-1.5 text-sm leading-relaxed text-text-primary outline-none focus:border-border-focus disabled:opacity-60',
+            "w-full resize-none rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 py-1.5 text-sm leading-relaxed text-text-primary outline-none focus:border-border-focus disabled:opacity-60",
           )}
         />
         <div className="flex items-center justify-end gap-1.5">
@@ -158,8 +151,8 @@ export function InlineTextarea({
   return (
     <div
       className={cn(
-        'whitespace-pre-wrap text-sm leading-relaxed',
-        hasValue ? 'text-text-primary' : 'text-text-muted italic',
+        "whitespace-pre-wrap text-sm leading-relaxed",
+        hasValue ? "text-text-primary" : "text-text-muted italic",
       )}
     >
       {hasValue ? value : placeholder}

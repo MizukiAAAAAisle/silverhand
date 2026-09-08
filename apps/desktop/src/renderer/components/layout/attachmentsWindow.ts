@@ -1,7 +1,7 @@
 import {
   classifyTopShift,
   FIRST_ITEM_INDEX_START,
-} from '@/components/layout/messageListVirtualization';
+} from "@/components/layout/messageListVirtualization";
 
 // ── Attachments grouped-window position tracking ─────────────────────────
 //
@@ -41,7 +41,7 @@ export type AttachmentsWindowState = {
 };
 
 export const INITIAL_ATTACHMENTS_WINDOW: AttachmentsWindowState = {
-  sessionKey: '',
+  sessionKey: "",
   keys: [],
   firstItemIndex: FIRST_ITEM_INDEX_START,
   mountEpoch: 0,
@@ -72,19 +72,19 @@ export function reduceAttachmentsWindow(
   // shift; treat a genuinely disjoint window as a replacement.
   const shift = classifyTopShift(prev.keys, next.keys);
   switch (shift.kind) {
-    case 'prepend':
+    case "prepend":
       return {
         ...prev,
         keys: next.keys,
         firstItemIndex: prev.firstItemIndex - shift.count,
       };
-    case 'head-trim':
+    case "head-trim":
       return {
         ...prev,
         keys: next.keys,
         firstItemIndex: prev.firstItemIndex + shift.count,
       };
-    case 'replace':
+    case "replace":
       // A disjoint window WITHIN the same session — the API/cache layer does NOT
       // guarantee this can't happen: an authoritative cache replacement, a bulk
       // delete / visibility change, or a recovery path can hand back a

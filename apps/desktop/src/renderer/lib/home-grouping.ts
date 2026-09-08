@@ -24,7 +24,7 @@
  * so the channel exclusion must happen BEFORE `useListDragSort` sees the list.
  */
 
-import { isAgentSpace } from '@/features/workspaces/workspace-ownership';
+import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
 
 /** Whether an item is starred — the one predicate the projections turn on. */
 export function isStarredAt(starredAt: number | null | undefined): boolean {
@@ -105,10 +105,8 @@ interface StarrableItem {
  * group; the pre-#1888 `starred | unstarred` hard split is gone. Must run before
  * `useListDragSort` so the drag group matches the server's live member set.
  */
-export function excludeStarredChannels<T extends StarrableItem>(
-  items: readonly T[],
-): T[] {
-  return items.filter(c => !isStarredAt(c.starred_at));
+export function excludeStarredChannels<T extends StarrableItem>(items: readonly T[]): T[] {
+  return items.filter((c) => !isStarredAt(c.starred_at));
 }
 
 /**
@@ -122,7 +120,7 @@ export function excludeStarredChannels<T extends StarrableItem>(
  * parent by the parent's own `starred_at` and STARRED has no data either, so it is
  * absent for as long as the list is down, exactly as before this change.
  */
-export type StarMembership = 'starred' | 'unstarred' | 'unknown';
+export type StarMembership = "starred" | "unstarred" | "unknown";
 
 /** The open conversation, as the sidebar's containers see it. `starred` is the
  *  SAME fact `excludeStarredChannels` filters on (`user_sort_entry.starred_at`),
@@ -161,7 +159,7 @@ export function branchHoldsSelectedRow(
   selected: SelectedConversation,
 ): boolean {
   if (selected.channelId === null) return false;
-  if (selected.starred !== 'unstarred') return false;
+  if (selected.starred !== "unstarred") return false;
   return selected.workspaceId === workspaceId;
 }
 
@@ -200,9 +198,7 @@ export function collapsedRevealRows<T>(
     isLoud: (item: T) => boolean;
   },
 ): T[] {
-  return items.filter(
-    c => opts.isSelected(c) || (opts.pokeUnread && opts.isLoud(c)),
-  );
+  return items.filter((c) => opts.isSelected(c) || (opts.pokeUnread && opts.isLoud(c)));
 }
 
 /**
@@ -228,12 +224,10 @@ export function collapsedGroupRevealBranches<T>(
   workspaces: readonly T[],
   opts: { holdsSelection: (w: T) => boolean; isAwake: (w: T) => boolean },
 ): T[] {
-  const reveal = workspaces.filter(
-    w => opts.holdsSelection(w) || opts.isAwake(w),
-  );
+  const reveal = workspaces.filter((w) => opts.holdsSelection(w) || opts.isAwake(w));
   return [
-    ...reveal.filter(w => opts.holdsSelection(w)),
-    ...reveal.filter(w => !opts.holdsSelection(w)),
+    ...reveal.filter((w) => opts.holdsSelection(w)),
+    ...reveal.filter((w) => !opts.holdsSelection(w)),
   ];
 }
 

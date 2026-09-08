@@ -17,15 +17,14 @@
  * only decides whether the renderer even mounts this. `enabled` keeps a
  * non-owner from firing a request that would just 403.
  */
-import { useQuery } from '@tanstack/react-query';
-import type { AgentAuditChatListResponse } from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
-import { api } from '@/lib/api';
+import { useQuery } from "@tanstack/react-query";
+import type { AgentAuditChatListResponse } from "@silverhand/shared";
+import { apiPaths } from "@silverhand/shared";
+import { api } from "@/lib/api";
 
 /** Query key for one agent's owner-audit chats list. Keyed by the AGENT (the
  *  subject), the only coordinate the list takes. */
-export const agentAuditChatsKey = (agentId: string) =>
-  ['agent-audit-chats', agentId] as const;
+export const agentAuditChatsKey = (agentId: string) => ["agent-audit-chats", agentId] as const;
 
 /**
  * The agent's chats, as its owner may audit them. A plain read — no live sync:
@@ -37,7 +36,6 @@ export function useAgentAuditChats(agentId: string, enabled: boolean) {
   return useQuery({
     queryKey: agentAuditChatsKey(agentId),
     enabled,
-    queryFn: async () =>
-      api<AgentAuditChatListResponse>(apiPaths.agentChats(agentId)),
+    queryFn: async () => api<AgentAuditChatListResponse>(apiPaths.agentChats(agentId)),
   });
 }

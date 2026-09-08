@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from "vitest";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Mechanism-layer fence (#task:1438, Cindy review). The whole point of the
 // ChannelIcon / ConversationGlyph primitives is that the `data-channel-icon`
@@ -15,9 +15,9 @@ import { fileURLToPath } from 'node:url';
 // and intentionally NOT covered here — the literal we match, `data-channel-icon`,
 // is not a substring of it.
 
-const RENDERER_ROOT = fileURLToPath(new URL('..', import.meta.url));
-const HOOK = 'data-channel-icon';
-const ALLOWED = ['components/ChannelIcon.tsx', 'components/ConversationGlyph.tsx'];
+const RENDERER_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const HOOK = "data-channel-icon";
+const ALLOWED = ["components/ChannelIcon.tsx", "components/ConversationGlyph.tsx"];
 
 function walk(dir: string): string[] {
   const out: string[] = [];
@@ -35,14 +35,14 @@ function walk(dir: string): string[] {
 /** Strip block + line comments so a `data-channel-icon` mention inside prose
  *  (there are several, documenting the hook) doesn't count as usage. */
 function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 }
 
-describe('data-channel-icon is a primitive-only hook (#task:1438)', () => {
-  it('only ChannelIcon / ConversationGlyph write the hook — no call-site does', () => {
+describe("data-channel-icon is a primitive-only hook (#task:1438)", () => {
+  it("only ChannelIcon / ConversationGlyph write the hook — no call-site does", () => {
     const offenders = walk(RENDERER_ROOT)
-      .filter(f => stripComments(readFileSync(f, 'utf8')).includes(HOOK))
-      .map(f => relative(RENDERER_ROOT, f).split(sep).join('/'))
+      .filter((f) => stripComments(readFileSync(f, "utf8")).includes(HOOK))
+      .map((f) => relative(RENDERER_ROOT, f).split(sep).join("/"))
       .sort();
     expect(offenders).toEqual(ALLOWED);
   });

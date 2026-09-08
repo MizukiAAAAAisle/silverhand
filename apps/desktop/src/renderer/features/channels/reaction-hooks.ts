@@ -3,38 +3,29 @@
 // authoritative re-read), the viewer's toggle mutation, and the lazy
 // reactor-detail read (docs/reactions-design.md §5.3 / §3.5). The WS ingestor is
 // a CALLER of the seam here, not a second implementation of it.
-import {
-  type QueryClient,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query';
-import type {
-  MessageReactionDetailDto,
-  ReactionMutationAck,
-} from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
+import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { MessageReactionDetailDto, ReactionMutationAck } from "@silverhand/shared";
+import { apiPaths } from "@silverhand/shared";
 import {
   type CommittedReaction,
   applyReactionToMessage,
   invalidateMessageRowInActiveProjections,
   patchMessageInActiveProjections,
-} from '@/features/channels/projection-cache';
-import { api } from '@/lib/api';
+} from "@/features/channels/projection-cache";
+import { api } from "@/lib/api";
 
 /** Cache key for one message's lazy reactor detail (hover "who reacted").
  *  Refreshed by both convergence seams below when a reaction lands — otherwise a
  *  hovered list stays stale for `staleTime` even though the chip count already
  *  moved (#task:1122 review, P1.2). */
-export const messageReactorsKey = (messageId: string) =>
-  ['message-reactions', messageId] as const;
+export const messageReactorsKey = (messageId: string) => ["message-reactions", messageId] as const;
 
 /** Prefix of every message's reactor-detail key. Exported for the one thing a
  *  per-message key can't express: a profile write changes the denormalized
  *  `ReactionReactorDto.display_name` in EVERY cached reactor list, and the
  *  identity-carrier registry has no message id in hand
  *  (`features/identity/identity-carrier-caches.ts`). */
-export const messageReactorsKeyPrefix = ['message-reactions'] as const;
+export const messageReactorsKeyPrefix = ["message-reactions"] as const;
 
 /**
  * Converge a committed reaction carried by the ORDERED plane — the
@@ -64,7 +55,7 @@ export function applyCommittedReactionFromEvent(
   qc: QueryClient,
   delta: CommittedReaction,
 ): boolean {
-  const applied = patchMessageInActiveProjections(qc, delta.target, message =>
+  const applied = patchMessageInActiveProjections(qc, delta.target, (message) =>
     applyReactionToMessage(message, delta),
   );
   // FIRE-AND-FORGET, authoritative-on-open: refresh the open "who reacted"
@@ -80,7 +71,7 @@ export function applyCommittedReactionFromEvent(
  *  `target` is read off the rendered row (its `conversation_id` /
  *  `thread_root_id` / `id`), never re-derived from view state. */
 export type ToggleReactionInput = {
-  target: CommittedReaction['target'];
+  target: CommittedReaction["target"];
   emoji: string;
   remove: boolean;
 };
@@ -105,7 +96,7 @@ export type ToggleReactionInput = {
  */
 export function recoverCommittedReactionsAfterWrite(
   qc: QueryClient,
-  target: CommittedReaction['target'],
+  target: CommittedReaction["target"],
 ): Promise<void> {
   return Promise.all([
     invalidateMessageRowInActiveProjections(qc, target),
@@ -127,13 +118,10 @@ export function useToggleReaction() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: ToggleReactionInput) => {
-      return await api<ReactionMutationAck>(
-        apiPaths.messageReactions(input.target.messageId),
-        {
-          method: input.remove ? 'DELETE' : 'POST',
-          body: JSON.stringify({ emoji: input.emoji }),
-        },
-      );
+      return await api<ReactionMutationAck>(apiPaths.messageReactions(input.target.messageId), {
+        method: input.remove ? "DELETE" : "POST",
+        body: JSON.stringify({ emoji: input.emoji }),
+      });
     },
     onSuccess: (_ack, input) => {
       // RETURNED, not fire-and-forget: the mutation stays pending until the

@@ -3,17 +3,17 @@ declare const __SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE__: boolean | undefined;
 declare const __SILVERHAND_DESKTOP_DEFAULT_SERVER_URL__: string | undefined;
 
 export const DESKTOP_REMOTE_ONLY =
-  typeof __SILVERHAND_DESKTOP_REMOTE_ONLY__ !== 'undefined'
-    && __SILVERHAND_DESKTOP_REMOTE_ONLY__ === true;
+  typeof __SILVERHAND_DESKTOP_REMOTE_ONLY__ !== "undefined" &&
+  __SILVERHAND_DESKTOP_REMOTE_ONLY__ === true;
 
 export const DESKTOP_ALLOW_INSECURE_REMOTE =
-  typeof __SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE__ !== 'undefined'
-    && __SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE__ === true;
+  typeof __SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE__ !== "undefined" &&
+  __SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE__ === true;
 
 export const PACKAGED_DEFAULT_SERVER_URL =
-  typeof __SILVERHAND_DESKTOP_DEFAULT_SERVER_URL__ === 'string'
+  typeof __SILVERHAND_DESKTOP_DEFAULT_SERVER_URL__ === "string"
     ? __SILVERHAND_DESKTOP_DEFAULT_SERVER_URL__.trim()
-    : '';
+    : "";
 
 export interface DesktopBuildConfig {
   remote_only: boolean;

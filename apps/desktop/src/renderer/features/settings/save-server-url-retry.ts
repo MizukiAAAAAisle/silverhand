@@ -1,4 +1,4 @@
-import type { DesktopProfileSaveWithTestResult } from '../../../preload/api';
+import type { DesktopProfileSaveWithTestResult } from "../../../preload/api";
 
 export const SETTINGS_SERVER_URL_SAVE_MAX_ATTEMPTS = 3;
 const SETTINGS_SERVER_URL_SAVE_RETRY_DELAYS_MS = [250, 750] as const;
@@ -38,17 +38,19 @@ export function isRetryableSettingsProfileSaveResult(
 ): boolean {
   return (
     !result.ok &&
-    result.phase === 'test' &&
-    (result.test.kind === 'tls_failed' || result.test.kind === 'network_failed')
+    result.phase === "test" &&
+    (result.test.kind === "tls_failed" || result.test.kind === "network_failed")
   );
 }
 
 function retryDelayMs(attempt: number): number {
-  return SETTINGS_SERVER_URL_SAVE_RETRY_DELAYS_MS[
-    Math.min(attempt - 1, SETTINGS_SERVER_URL_SAVE_RETRY_DELAYS_MS.length - 1)
-  ] ?? SETTINGS_SERVER_URL_SAVE_RETRY_DELAYS_MS[0];
+  return (
+    SETTINGS_SERVER_URL_SAVE_RETRY_DELAYS_MS[
+      Math.min(attempt - 1, SETTINGS_SERVER_URL_SAVE_RETRY_DELAYS_MS.length - 1)
+    ] ?? SETTINGS_SERVER_URL_SAVE_RETRY_DELAYS_MS[0]
+  );
 }
 
 function defaultSleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

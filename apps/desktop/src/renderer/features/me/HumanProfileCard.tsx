@@ -1,12 +1,12 @@
-import { ProfileMessageActivity } from '@/features/profile/ProfileMessageActivity';
-import dayjs from 'dayjs';
-import type { UserDto } from '@silverhand/shared';
-import { MetadataList, ProfileSection } from '@/features/common/ProfileSummarySections';
-import { useHumanAvatar } from './use-human-avatar';
-import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { useProfileHeroSize } from '@/features/common/use-profile-hero-size';
-import '@/features/agents/agent-profile-hero.css';
+import { ProfileMessageActivity } from "@/features/profile/ProfileMessageActivity";
+import dayjs from "dayjs";
+import type { UserDto } from "@silverhand/shared";
+import { MetadataList, ProfileSection } from "@/features/common/ProfileSummarySections";
+import { useHumanAvatar } from "./use-human-avatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { useProfileHeroSize } from "@/features/common/use-profile-hero-size";
+import "@/features/agents/agent-profile-hero.css";
 
 interface HumanProfileCardProps {
   user: UserDto;
@@ -22,7 +22,7 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
         aria-label="Human profile"
         data-compact={compactHero}
         className="agent-profile-hero"
-        style={{ alignItems: 'center' }}
+        style={{ alignItems: "center" }}
       >
         <UserAvatar
           size={compactHero ? AVATAR_PX.profileCompact : AVATAR_PX.profile}
@@ -37,22 +37,22 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
         </div>
       </section>
 
-      <ProfileMessageActivity subject={{ kind: 'user', id: user.id }} />
+      <ProfileMessageActivity subject={{ kind: "user", id: user.id }} />
 
       <ProfileSection title="Metadata" muted>
         <MetadataList
           items={[
             {
-              label: 'Created',
-              value: dayjs(user.created_at).format('YYYY-MM-DD'),
-              title: dayjs(user.created_at).format('YYYY-MM-DD HH:mm:ss'),
+              label: "Created",
+              value: dayjs(user.created_at).format("YYYY-MM-DD"),
+              title: dayjs(user.created_at).format("YYYY-MM-DD HH:mm:ss"),
             },
             {
-              label: 'Updated',
-              value: dayjs(user.updated_at).format('YYYY-MM-DD HH:mm'),
-              title: dayjs(user.updated_at).format('YYYY-MM-DD HH:mm:ss'),
+              label: "Updated",
+              value: dayjs(user.updated_at).format("YYYY-MM-DD HH:mm"),
+              title: dayjs(user.updated_at).format("YYYY-MM-DD HH:mm:ss"),
             },
-            { label: 'User ID', value: user.id, mono: true },
+            { label: "User ID", value: user.id, mono: true },
           ]}
         />
       </ProfileSection>

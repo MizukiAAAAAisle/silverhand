@@ -1,21 +1,21 @@
-import { useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import type { QueryClient } from '@tanstack/react-query';
-import { UnreadUpdatedMessagePayloadSchema } from '@silverhand/shared';
-import type { ServerFrame } from '@silverhand/shared';
-import { isCurrentViewerScope, onWsFrame } from '@/lib/ws-client';
+import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
+import { UnreadUpdatedMessagePayloadSchema } from "@silverhand/shared";
+import type { ServerFrame } from "@silverhand/shared";
+import { isCurrentViewerScope, onWsFrame } from "@/lib/ws-client";
 import {
   invalidateMessageUnreadQueries,
   patchMessageUnreadByConversation,
   patchMessageUnreadSummary,
-} from '@/features/channels/hooks';
-import { favoritesKey, patchFavoritesUnread } from '@/features/favorites/hooks';
+} from "@/features/channels/hooks";
+import { favoritesKey, patchFavoritesUnread } from "@/features/favorites/hooks";
 
 /** Route one realtime frame into the viewer-unread badge caches. Pure (takes the
  *  `QueryClient` explicitly) so it is unit-testable without rendering. */
 export function ingestViewerUnreadFrame(qc: QueryClient, frame: ServerFrame): void {
-  if (frame.type !== 'event') return;
-  if (frame.kind !== 'unread_updated') return;
+  if (frame.type !== "event") return;
+  if (frame.kind !== "unread_updated") return;
   if (!isCurrentViewerScope(frame.scope)) return;
 
   // Discriminate the two `unread_updated` variants by `conversation_id` presence:
@@ -23,7 +23,7 @@ export function ingestViewerUnreadFrame(qc: QueryClient, frame: ServerFrame): vo
   //    (its consumers keep their own handlers — future-convergence TODO).
   //  - MESSAGE variant → parse the enriched absolute payload.
   const payload = frame.payload as { conversation_id?: unknown } | undefined;
-  if (typeof payload?.conversation_id !== 'string') return;
+  if (typeof payload?.conversation_id !== "string") return;
 
   const parsed = UnreadUpdatedMessagePayloadSchema.safeParse(frame.payload);
   if (!parsed.success) {

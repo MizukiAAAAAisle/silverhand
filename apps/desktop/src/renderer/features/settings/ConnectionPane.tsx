@@ -1,38 +1,38 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Save, Server } from 'lucide-react';
-import type { DesktopProfileSaveWithTestResult } from '../../../preload/api';
-import { Button } from '@/components/ui/button';
-import { Input, Label } from '@/components/ui/input';
-import { cn } from '@/lib/cn';
-import { SettingsHeading } from './SettingsHeading';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Loader2, Save, Server } from "lucide-react";
+import type { DesktopProfileSaveWithTestResult } from "../../../preload/api";
+import { Button } from "@/components/ui/button";
+import { Input, Label } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
+import { SettingsHeading } from "./SettingsHeading";
 import {
   backendInfoKey,
   hostsKey,
   hostStatusKey,
   useBackendInfoSnapshot,
-} from '@/features/hosts/hooks';
-import { computerCopy } from '@/features/hosts/computer-copy';
-import { eventWsClient, type WsClientStatus } from '@/lib/ws-client';
-import { describeProbeOutcome } from '@/features/setup/describe-probe-outcome';
+} from "@/features/hosts/hooks";
+import { computerCopy } from "@/features/hosts/computer-copy";
+import { eventWsClient, type WsClientStatus } from "@/lib/ws-client";
+import { describeProbeOutcome } from "@/features/setup/describe-probe-outcome";
 import {
   describeSaveServerUrlOutcome,
   type SaveServerUrlBanner,
-} from './describe-save-server-url-outcome';
+} from "./describe-save-server-url-outcome";
 import {
   planServerUrlSave,
   runServerUrlSave,
   type ServerUrlSaveCommand,
   type ServerUrlSaveResult,
-} from './server-url-save-command';
-import { validateServerUrlDraft } from './server-url-validation';
+} from "./server-url-save-command";
+import { validateServerUrlDraft } from "./server-url-validation";
 import {
   desktopServerConnectionStatus,
   isDesktopServerReadyAfterSave,
   type DesktopServerConnectionStatus,
   type DesktopServerObservation,
-} from './connection-readiness';
-import { primaryAction } from '@/features/common/PrimaryAction';
+} from "./connection-readiness";
+import { primaryAction } from "@/features/common/PrimaryAction";
 
 /**
  * Availability words come from the `computerCopy` single source — the
@@ -42,22 +42,16 @@ import { primaryAction } from '@/features/common/PrimaryAction';
  * `Connecting…` stays literal: it is the Desktop→Server attach window,
  * a state the availability lexicon has no word for.
  */
-const STATUS_LABEL: Record<
-  Exclude<DesktopServerConnectionStatus, 'unknown'>,
-  string
-> = {
+const STATUS_LABEL: Record<Exclude<DesktopServerConnectionStatus, "unknown">, string> = {
   connected: computerCopy.availabilityConnected,
-  connecting: 'Connecting…',
+  connecting: "Connecting…",
   offline: computerCopy.availabilityOffline,
 };
 
-const STATUS_TONE_CLASS: Record<
-  Exclude<DesktopServerConnectionStatus, 'unknown'>,
-  string
-> = {
-  connected: 'border-success text-success',
-  connecting: 'border-border-subtle text-text-secondary',
-  offline: 'border-warning text-warning',
+const STATUS_TONE_CLASS: Record<Exclude<DesktopServerConnectionStatus, "unknown">, string> = {
+  connected: "border-success text-success",
+  connecting: "border-border-subtle text-text-secondary",
+  offline: "border-warning text-warning",
 };
 
 function ServerStatusPill({
@@ -70,13 +64,13 @@ function ServerStatusPill({
   // "Offline") is a claim about a connection nobody has looked at, and a
   // word that later walks backwards reads as a glitch (`#task:1630`
   // review).
-  if (status === 'unknown') return null;
+  if (status === "unknown") return null;
   return (
     <span
       role="status"
       aria-label={`Desktop to server: ${STATUS_LABEL[status]}`}
       className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded-[var(--control-radius)] border bg-bg-floating px-2 py-0.5 text-[length:var(--text-badge)] font-medium',
+        "inline-flex shrink-0 items-center gap-1 rounded-[var(--control-radius)] border bg-bg-floating px-2 py-0.5 text-[length:var(--text-badge)] font-medium",
         STATUS_TONE_CLASS[status],
       )}
     >
@@ -90,31 +84,31 @@ function describeProfileSaveForConnection(
 ): SaveServerUrlBanner {
   if (result.ok) {
     return {
-      tone: 'info',
-      title: 'Saved. Reconnecting…',
+      tone: "info",
+      title: "Saved. Reconnecting…",
       description: `Using ${result.profile.server_url}.`,
       dismissOnReady: true,
     };
   }
-  if (result.phase === 'test') {
+  if (result.phase === "test") {
     const banner = describeProbeOutcome(result.test);
     return {
-      tone: banner.tone === 'success' ? 'success' : 'error',
+      tone: banner.tone === "success" ? "success" : "error",
       title: banner.title,
       description: banner.description,
     };
   }
-  if (result.phase === 'commit_guard') {
+  if (result.phase === "commit_guard") {
     return {
-      tone: 'error',
-      title: 'Cannot save this server URL in this build.',
+      tone: "error",
+      title: "Cannot save this server URL in this build.",
       description: result.message,
     };
   }
   return {
-    tone: 'error',
-    title: 'Could not write the profile.',
-    description: result.detail ?? 'Check that Silverhand can write to its app data folder.',
+    tone: "error",
+    title: "Could not write the profile.",
+    description: result.detail ?? "Check that Silverhand can write to its app data folder.",
   };
 }
 
@@ -137,16 +131,14 @@ export function ConnectionPane(): JSX.Element {
   // Renderer event WS status — authoritative Desktop→Server signal in
   // remote mode (in embedded the WS is against embedded main, so the
   // pip falls back to the daemon attachment via the derivation).
-  const [wsStatus, setWsStatus] = useState<WsClientStatus>(() =>
-    eventWsClient.getStatus(),
-  );
+  const [wsStatus, setWsStatus] = useState<WsClientStatus>(() => eventWsClient.getStatus());
   const wsConnectedAtRef = useRef<number | null>(
-    eventWsClient.getStatus() === 'connected' ? Date.now() : null,
+    eventWsClient.getStatus() === "connected" ? Date.now() : null,
   );
   useEffect(() => {
-    return eventWsClient.onStatus(next => {
+    return eventWsClient.onStatus((next) => {
       setWsStatus(next);
-      if (next === 'connected') {
+      if (next === "connected") {
         wsConnectedAtRef.current = Date.now();
       }
     });
@@ -170,12 +162,12 @@ export function ConnectionPane(): JSX.Element {
   //   empty (and Save stays disabled via `saveCommand === null` below).
   const currentUrl =
     snapshot === null
-      ? ''
-      : snapshot.mode === 'remote'
+      ? ""
+      : snapshot.mode === "remote"
         ? snapshot.url
-        : snapshot.local_host_server_url ?? snapshot.url;
+        : (snapshot.local_host_server_url ?? snapshot.url);
 
-  const [draft, setDraft] = useState<string>('');
+  const [draft, setDraft] = useState<string>("");
   const draftEditedRef = useRef(false);
   useEffect(() => {
     if (draftEditedRef.current) return;
@@ -187,8 +179,9 @@ export function ConnectionPane(): JSX.Element {
   const [allowInsecureRemote, setAllowInsecureRemote] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    window.silverhand.getDesktopBuildConfig()
-      .then(config => {
+    window.silverhand
+      .getDesktopBuildConfig()
+      .then((config) => {
         if (!cancelled) setAllowInsecureRemote(config.allow_insecure_remote);
       })
       .catch(() => {
@@ -209,17 +202,15 @@ export function ConnectionPane(): JSX.Element {
     // The variables ARE the routing decision (`planServerUrlSave`), so
     // this function cannot re-guess which owner should receive the
     // address — there is no `mode` left for it to default.
-    mutationFn: async (
-      command: ServerUrlSaveCommand,
-    ): Promise<ServerUrlSaveResult> =>
+    mutationFn: async (command: ServerUrlSaveCommand): Promise<ServerUrlSaveResult> =>
       runServerUrlSave(command, {
-        saveServerConnectionProfile: input =>
+        saveServerConnectionProfile: (input) =>
           window.silverhand.saveServerConnectionProfile(input),
-        saveServerUrl: input => window.silverhand.saveServerUrl(input),
+        saveServerUrl: (input) => window.silverhand.saveServerUrl(input),
       }),
-    onSuccess: saveResult => {
+    onSuccess: (saveResult) => {
       const nextBanner =
-        saveResult.source === 'profile'
+        saveResult.source === "profile"
           ? describeProfileSaveForConnection(saveResult.result)
           : describeSaveServerUrlOutcome(saveResult.result);
       setBanner(nextBanner);
@@ -227,7 +218,7 @@ export function ConnectionPane(): JSX.Element {
       if (saveResult.result.ok) {
         draftEditedRef.current = false;
 
-        if (saveResult.source === 'profile') {
+        if (saveResult.source === "profile") {
           // Remote-mode Settings edits must retarget the renderer transport too.
           // The profile pipeline updates main's active backend handle; forcing a
           // reconnect makes event WS re-read BackendInfo and dial the new origin
@@ -243,12 +234,12 @@ export function ConnectionPane(): JSX.Element {
         }
       }
     },
-    onError: err => {
+    onError: (err) => {
       setSavedAt(null);
       setBanner({
-        tone: 'error',
-        title: 'Could not save.',
-        description: err instanceof Error ? err.message : 'Unknown error.',
+        tone: "error",
+        title: "Could not save.",
+        description: err instanceof Error ? err.message : "Unknown error.",
       });
     },
   });
@@ -291,10 +282,7 @@ export function ConnectionPane(): JSX.Element {
     serverUrl: draft.trim(),
   });
   const saveDisabled =
-    save.isPending ||
-    classification.kind !== 'ok' ||
-    isUnchanged ||
-    saveCommand === null;
+    save.isPending || classification.kind !== "ok" || isUnchanged || saveCommand === null;
 
   const onSubmit = (e: FormEvent): void => {
     e.preventDefault();
@@ -321,18 +309,16 @@ export function ConnectionPane(): JSX.Element {
               // Width from the theme's control cluster (forza6 = 2px), so this
               // banner stays identical to its twin in BackendUnreachableGate
               // (#task:1833).
-              'rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-2 text-xs',
-              banner.tone === 'error'
-                ? 'border-error bg-bg-inset text-error'
-                : banner.tone === 'success'
-                  ? 'border-success bg-bg-inset text-text-primary'
-                  : 'border-border-subtle bg-bg-inset text-text-secondary',
+              "rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-2 text-xs",
+              banner.tone === "error"
+                ? "border-error bg-bg-inset text-error"
+                : banner.tone === "success"
+                  ? "border-success bg-bg-inset text-text-primary"
+                  : "border-border-subtle bg-bg-inset text-text-secondary",
             )}
           >
             <div className="font-medium">{banner.title}</div>
-            {banner.description && (
-              <div className="mt-1 text-text-muted">{banner.description}</div>
-            )}
+            {banner.description && <div className="mt-1 text-text-muted">{banner.description}</div>}
           </div>
         )}
 
@@ -347,21 +333,21 @@ export function ConnectionPane(): JSX.Element {
               inputMode="url"
               placeholder="http://127.0.0.1:8765"
               value={draft}
-              onChange={e => updateDraft(e.target.value)}
+              onChange={(e) => updateDraft(e.target.value)}
               disabled={save.isPending}
               className="max-w-md font-mono text-xs"
             />
             <Button
               type="submit"
-              {...primaryAction('shrink-0')}
+              {...primaryAction("shrink-0")}
               disabled={saveDisabled}
               title={
-                classification.kind === 'reject'
+                classification.kind === "reject"
                   ? classification.message
                   : isUnchanged
-                    ? 'Already set to this value.'
-                    : classification.kind === 'empty'
-                      ? 'Enter an address to save.'
+                    ? "Already set to this value."
+                    : classification.kind === "empty"
+                      ? "Enter an address to save."
                       : undefined
               }
             >
@@ -373,7 +359,7 @@ export function ConnectionPane(): JSX.Element {
               Save
             </Button>
           </div>
-          {classification.kind === 'reject' && (
+          {classification.kind === "reject" && (
             <p className="text-[length:var(--text-meta)] text-error">{classification.message}</p>
           )}
         </form>

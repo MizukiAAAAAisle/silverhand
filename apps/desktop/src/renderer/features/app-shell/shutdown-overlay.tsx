@@ -1,5 +1,5 @@
-import { Power } from 'lucide-react';
-import { useShutdownProgress } from './effects';
+import { Power } from "lucide-react";
+import { useShutdownProgress } from "./effects";
 
 export function ShutdownOverlay() {
   const shutdownStep = useShutdownProgress();

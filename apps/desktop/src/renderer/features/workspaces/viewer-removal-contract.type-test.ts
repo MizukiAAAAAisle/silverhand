@@ -9,12 +9,12 @@
 //
 // Filename is `.type-test.ts` (not `.test.ts`) so vitest does not treat it as a
 // suite; the desktop `tsc` typecheck is what validates it.
-import type { ListActivityDto, ListFavoritesDto } from '@silverhand/shared';
+import type { ListActivityDto, ListFavoritesDto } from "@silverhand/shared";
 import {
   itemScopedList,
   type ProjectionForm,
   type RegisteredReadModel,
-} from './viewer-removal-contract';
+} from "./viewer-removal-contract";
 
 const noopCleanup = (): void => {};
 
@@ -26,8 +26,8 @@ function _cleanupIsMandatory(): void {
   // being discriminable — this call would fail (list no longer `extends
   // ItemScopedListData`) — Alice ①.
   const ok: RegisteredReadModel = itemScopedList<ListActivityDto>({
-    id: 'activity',
-    key: ['activity', 'all'],
+    id: "activity",
+    key: ["activity", "all"],
     cleanup: noopCleanup,
   });
   void ok;
@@ -36,14 +36,14 @@ function _cleanupIsMandatory(): void {
   // spelling must keep qualifying — the `location` carrier is an ADDITION to the
   // contract, not a migration of it.
   const okTopLevel: RegisteredReadModel = itemScopedList<ListFavoritesDto>({
-    id: 'favorites',
-    key: ['favorites', 'all'],
+    id: "favorites",
+    key: ["favorites", "all"],
     cleanup: noopCleanup,
   });
   void okTopLevel;
 
   // @ts-expect-error — addressable item-scoped read model without `cleanup` must not compile.
-  itemScopedList<ListFavoritesDto>({ id: 'favorites', key: ['favorites', 'all'] });
+  itemScopedList<ListFavoritesDto>({ id: "favorites", key: ["favorites", "all"] });
 }
 
 // ── Layer 2, constraint B: a list whose items cannot ANSWER "which workspace, if
@@ -52,16 +52,16 @@ function _nonAttributedRejected(): void {
   // @ts-expect-error — items carry neither carrier, so TData ⊄ ItemScopedListData and
   // the entry param collapses to `never`.
   itemScopedList<{ items: { foo: string }[] }>({
-    id: 'bogus',
-    key: ['bogus'],
+    id: "bogus",
+    key: ["bogus"],
     cleanup: noopCleanup,
   });
 
   // @ts-expect-error — OPTIONAL workspace_id is NOT addressable (Alice ①): the guard
   // only fires on a required field, so an optional-id list collapses to `never`.
   itemScopedList<{ items: { workspace_id?: string }[] }>({
-    id: 'optional-id',
-    key: ['optional-id'],
+    id: "optional-id",
+    key: ["optional-id"],
     cleanup: noopCleanup,
   });
 
@@ -69,16 +69,16 @@ function _nonAttributedRejected(): void {
   // workspace" and "in one we could not resolve" would be the same value, and a
   // removal filter over it is right only by luck. Not discriminable → `never`.
   itemScopedList<{ items: { location: { workspace_id: string | null } }[] }>({
-    id: 'nullable-id',
-    key: ['nullable-id'],
+    id: "nullable-id",
+    key: ["nullable-id"],
     cleanup: noopCleanup,
   });
 
   // @ts-expect-error — a `workspace_channel` arm with NO id: the placement is stated
   // but the coordinate a removal fact matches on is missing → `never`.
-  itemScopedList<{ items: { location: { kind: 'workspace_channel' } }[] }>({
-    id: 'arm-without-id',
-    key: ['arm-without-id'],
+  itemScopedList<{ items: { location: { kind: "workspace_channel" } }[] }>({
+    id: "arm-without-id",
+    key: ["arm-without-id"],
     cleanup: noopCleanup,
   });
 
@@ -87,14 +87,14 @@ function _nonAttributedRejected(): void {
   // otherwise look like it had been done properly. (Aliased so the rejected
   // ARGUMENT sits on the line the directive guards.)
   itemScopedList<OptionalArmId>({
-    id: 'arm-with-optional-id',
-    key: ['arm-with-optional-id'],
+    id: "arm-with-optional-id",
+    key: ["arm-with-optional-id"],
     cleanup: noopCleanup,
   });
 }
 
 type OptionalArmId = {
-  items: { location: { kind: 'workspace_channel'; workspace_id?: string } }[];
+  items: { location: { kind: "workspace_channel"; workspace_id?: string } }[];
 };
 
 // ── Layer 2, constraint B′: attribution must be DECLARED, never defaulted (Alice
@@ -103,7 +103,7 @@ type OptionalArmId = {
 // that silently skips when the arg is omitted) is closed by construction.
 function _typeParamIsMandatory(): void {
   // @ts-expect-error — no explicit <Dto>: TData defaults to unknown → entry is `never`.
-  itemScopedList({ id: 'unparameterized', key: ['x'], cleanup: noopCleanup });
+  itemScopedList({ id: "unparameterized", key: ["x"], cleanup: noopCleanup });
 }
 
 // ── Layer 2, constraint C: form dispatch is exhaustive (Alice ②) — a form left
@@ -113,9 +113,9 @@ function _localAssertNever(x: never): never {
 }
 function _dispatchMustBeExhaustive(form: ProjectionForm): void {
   switch (form) {
-    case 'workspace-keyed':
+    case "workspace-keyed":
       return;
-    case 'item-scoped-list':
+    case "item-scoped-list":
       return;
     // 'record-keyed-summary' intentionally omitted to prove the mechanism:
     default:

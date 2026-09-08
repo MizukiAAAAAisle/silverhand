@@ -1,5 +1,5 @@
-import { DISPLAY_NAME_MAX_LENGTH, DisplayNameSchema } from '@silverhand/shared';
-import type { ZodError } from 'zod';
+import { DISPLAY_NAME_MAX_LENGTH, DisplayNameSchema } from "@silverhand/shared";
+import type { ZodError } from "zod";
 
 /**
  * Client-side gate for every `display_name` write, human and agent.
@@ -30,32 +30,29 @@ import type { ZodError } from 'zod';
 /** What `Save` would do with the current draft. */
 export type DisplayNameDraft =
   /** Untouched — nothing to save. */
-  | { kind: 'pristine' }
+  | { kind: "pristine" }
   /** Blank. Nothing to say: an empty field says it itself. */
-  | { kind: 'empty' }
+  | { kind: "empty" }
   /** Equal to the persisted value once trimmed — a no-op save. */
-  | { kind: 'unchanged' }
+  | { kind: "unchanged" }
   /** Refused by the schema, with a line the viewer can act on. */
-  | { kind: 'rejected'; message: string }
+  | { kind: "rejected"; message: string }
   /** Submittable, `value` being exactly what to send. */
-  | { kind: 'ready'; value: string };
+  | { kind: "ready"; value: string };
 
 /**
  * Classify a draft against the persisted value. `draft === null` means
  * the field has not been touched this session.
  */
-export function readDisplayNameDraft(
-  draft: string | null,
-  persisted: string,
-): DisplayNameDraft {
-  if (draft === null) return { kind: 'pristine' };
+export function readDisplayNameDraft(draft: string | null, persisted: string): DisplayNameDraft {
+  if (draft === null) return { kind: "pristine" };
   const parsed = DisplayNameSchema.safeParse(draft);
   if (!parsed.success) {
-    if (draft.trim().length === 0) return { kind: 'empty' };
-    return { kind: 'rejected', message: describeRejection(parsed.error) };
+    if (draft.trim().length === 0) return { kind: "empty" };
+    return { kind: "rejected", message: describeRejection(parsed.error) };
   }
-  if (parsed.data === persisted) return { kind: 'unchanged' };
-  return { kind: 'ready', value: parsed.data };
+  if (parsed.data === persisted) return { kind: "unchanged" };
+  return { kind: "ready", value: parsed.data };
 }
 
 /**
@@ -70,11 +67,11 @@ export function rejectDisplayName(candidate: string): string | null {
 
 function describeRejection(error: ZodError<string>): string {
   const code = error.issues[0]?.code;
-  if (code === 'too_big') {
+  if (code === "too_big") {
     return `Display name is limited to ${DISPLAY_NAME_MAX_LENGTH} characters.`;
   }
-  if (code === 'too_small') return 'Display name cannot be empty.';
+  if (code === "too_small") return "Display name cannot be empty.";
   // The remaining issue is the refinement: invisible characters the
   // viewer cannot see in the field, so the message has to name them.
-  return 'Display name cannot contain control characters or line breaks.';
+  return "Display name cannot contain control characters or line breaks.";
 }

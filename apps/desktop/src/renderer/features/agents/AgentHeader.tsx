@@ -1,17 +1,17 @@
-import { ProfileHeaderContent } from '@/features/common/profile-header-content';
-import { useState, type ReactNode } from 'react';
-import { MessageSquare, Power, Trash2 } from 'lucide-react';
-import type { AgentDto, AgentRuntimeStateDto } from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { SidePanelHeader } from '@/components/layout/SidePanelHeader';
-import { Button } from '@/components/ui/button';
-import { neutralAction } from '@/features/common/ControlInkBorder';
-import { destructiveAction, DESTRUCTIVE_TRIGGER } from '@/features/common/DestructiveAction';
-import { useAgentPresence, useStopAgent } from './hooks';
-import { projectPresence, PRESENCE_TONE_DOT } from './presence-projection';
-import { useAgentAvatarObjectUrl } from './avatar-hooks';
-import { DeleteAgentDialog } from './DeleteAgentDialog';
+import { ProfileHeaderContent } from "@/features/common/profile-header-content";
+import { useState, type ReactNode } from "react";
+import { MessageSquare, Power, Trash2 } from "lucide-react";
+import type { AgentDto, AgentRuntimeStateDto } from "@silverhand/shared";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { SidePanelHeader } from "@/components/layout/SidePanelHeader";
+import { Button } from "@/components/ui/button";
+import { neutralAction } from "@/features/common/ControlInkBorder";
+import { destructiveAction, DESTRUCTIVE_TRIGGER } from "@/features/common/DestructiveAction";
+import { useAgentPresence, useStopAgent } from "./hooks";
+import { projectPresence, PRESENCE_TONE_DOT } from "./presence-projection";
+import { useAgentAvatarObjectUrl } from "./avatar-hooks";
+import { DeleteAgentDialog } from "./DeleteAgentDialog";
 
 interface AgentHeaderProps {
   agent: AgentDto;
@@ -38,11 +38,11 @@ export function AgentHeader({
 
   // Availability describes the agent globally; seats only decide whether Stop is actionable.
   const runningCount = (runtimeState?.seats ?? []).filter(
-    (seat) => seat.status === 'starting' || seat.status === 'active',
+    (seat) => seat.status === "starting" || seat.status === "active",
   ).length;
-  const canMessage = Boolean(onMessageAgent) && agent.session_scope === 'agent';
+  const canMessage = Boolean(onMessageAgent) && agent.session_scope === "agent";
   const displayName = agent.display_name || agent.name;
-  const presenceDisplay = presence === null ? null : projectPresence({ scope: 'global', presence });
+  const presenceDisplay = presence === null ? null : projectPresence({ scope: "global", presence });
 
   const statusDot = presenceDisplay ? (
     <span
@@ -79,8 +79,8 @@ export function AgentHeader({
         label="Stop"
         title={
           runningCount === 0
-            ? 'Nothing is running'
-            : `Hard-stop ${runningCount} running session${runningCount === 1 ? '' : 's'}`
+            ? "Nothing is running"
+            : `Hard-stop ${runningCount} running session${runningCount === 1 ? "" : "s"}`
         }
         disabled={runningCount === 0 || stopAgent.isPending}
         onClick={() => stopAgent.mutate()}
@@ -157,7 +157,7 @@ function HeaderAction({
         data-sticker
         data-sticker-size="md"
         data-sticker-tone="neutral"
-        className={`flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] transition-colors hover:bg-bg-hover focus-outline disabled:pointer-events-none disabled:opacity-50 ${destructive ? 'text-error' : 'text-text-muted hover:text-text-primary'}`}
+        className={`flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] transition-colors hover:bg-bg-hover focus-outline disabled:pointer-events-none disabled:opacity-50 ${destructive ? "text-error" : "text-text-muted hover:text-text-primary"}`}
       >
         {children}
       </button>

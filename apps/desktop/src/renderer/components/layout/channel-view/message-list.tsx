@@ -7,32 +7,29 @@ import {
   useRef,
   useState,
   type ReactNode,
-} from 'react';
-import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
-import { ArrowDown } from 'lucide-react';
+} from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import { ArrowDown } from "lucide-react";
 import type {
   AttachmentSnapshot,
   MessageAuthorDto,
   ReplyBadgeSummary,
   StreamUnreadDto,
   ThreadReplyPreviewRow,
-} from '@silverhand/shared';
-import { ChannelMessageItem } from '@/components/chat/ChannelMessageItem';
-import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
-import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
-import { SystemMessage } from '@/components/chat/SystemMessage';
-import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
-import { authorGroupContinuations } from '@/components/chat/authorGrouping';
-import { groupMessages } from '@/components/chat/groupMessages';
-import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
-import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
-import { MessageRowsSkeleton } from '@/components/layout/ConversationViewSkeleton';
-import { EmptyConversation } from './empty-conversation';
-import {
-  type CachedMessage,
-  isCommittedMessage,
-} from '@/features/channels/pending-message';
-import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
+} from "@silverhand/shared";
+import { ChannelMessageItem } from "@/components/chat/ChannelMessageItem";
+import { useMessageRenderContext } from "@/components/chat/useMessageRenderContext";
+import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
+import { SystemMessage } from "@/components/chat/SystemMessage";
+import { SystemActivityCluster } from "@/components/chat/SystemActivityCluster";
+import { authorGroupContinuations } from "@/components/chat/authorGrouping";
+import { groupMessages } from "@/components/chat/groupMessages";
+import { useMessageActionSurface } from "@/components/chat/useMessageActionSurface";
+import { MessageActionChrome } from "@/components/chat/MessageActionChrome";
+import { MessageRowsSkeleton } from "@/components/layout/ConversationViewSkeleton";
+import { EmptyConversation } from "./empty-conversation";
+import { type CachedMessage, isCommittedMessage } from "@/features/channels/pending-message";
+import type { WorkspaceChannelReference } from "@/components/chat/ConversationRef";
 import {
   classifyTopShift,
   FIRST_ITEM_INDEX_START,
@@ -42,7 +39,7 @@ import {
   reduceBottomAnchor,
   resolveTopShiftAction,
   shouldRemountForJump,
-} from '@/components/layout/messageListVirtualization';
+} from "@/components/layout/messageListVirtualization";
 
 // ── Message list ────────────────────────────────────────────────────────
 
@@ -202,10 +199,7 @@ export function MessageList({
     liveChannels,
     archivedChannels,
   } = useMessageRenderContext(workspaceId, channelId, canParticipate);
-  const handleOpenThread = (
-    msg: CachedMessage,
-    jumpToMessageId?: string,
-  ): void => {
+  const handleOpenThread = (msg: CachedMessage, jumpToMessageId?: string): void => {
     // A pending optimistic row has no server id to anchor a thread on.
     if (!isCommittedMessage(msg)) return;
     onOpenThread?.(msg.id, jumpToMessageId);
@@ -259,10 +253,7 @@ export function MessageList({
   // sequence (post-clustering) so an activity strip between two of my messages
   // correctly breaks the run. Same call in the ThreadPanel — one rule, both
   // surfaces.
-  const authorContinuations = useMemo(
-    () => authorGroupContinuations(items),
-    [items],
-  );
+  const authorContinuations = useMemo(() => authorGroupContinuations(items), [items]);
 
   // Byline + stacked-replier avatar bytes come STRICTLY from each rendered row's
   // own author DTO (#task:1792 B2) — committed messages' `author` plus every
@@ -286,10 +277,8 @@ export function MessageList({
     }
     return authors;
   }, [messages, replySummariesByRoot]);
-  const {
-    agentAvatarUrls: authorAgentAvatarUrls,
-    humanAvatarUrls: authorUserAvatarUrls,
-  } = useAuthorAvatarObjectUrls(bylineAuthors);
+  const { agentAvatarUrls: authorAgentAvatarUrls, humanAvatarUrls: authorUserAvatarUrls } =
+    useAuthorAvatarObjectUrls(bylineAuthors);
 
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -341,8 +330,8 @@ export function MessageList({
   // also derive a `kind` from `roster_policy` that nothing read (#task:2077).
   const channelTitle = useMemo(() => {
     const c =
-      liveChannels.find(x => x.id === channelId) ??
-      archivedChannels.find(x => x.id === channelId);
+      liveChannels.find((x) => x.id === channelId) ??
+      archivedChannels.find((x) => x.id === channelId);
     return c ? c.title : null;
   }, [liveChannels, archivedChannels, channelId]);
   const firstItemIndexRef = useRef(FIRST_ITEM_INDEX_START);
@@ -353,7 +342,7 @@ export function MessageList({
   const lastJumpRemountKeyRef = useRef<string | null>(null);
 
   const itemKey = useCallback((item: ReturnType<typeof groupMessages>[number]) => {
-    return item.kind === 'cluster' ? item.id : item.message.id;
+    return item.kind === "cluster" ? item.id : item.message.id;
   }, []);
 
   // Index of the current jump target inside `items`, shared by
@@ -361,9 +350,7 @@ export function MessageList({
   // Returns -1 while App is still priming the around-window.
   const jumpTargetIdx = useMemo(() => {
     if (!jumpToMessageId) return -1;
-    return items.findIndex(
-      it => it.kind === 'message' && it.message.id === jumpToMessageId,
-    );
+    return items.findIndex((it) => it.kind === "message" && it.message.id === jumpToMessageId);
   }, [items, jumpToMessageId]);
 
   // Reset Virtuoso bookkeeping whenever the channel changes — the user is
@@ -379,7 +366,7 @@ export function MessageList({
     // flicker on the hot channel-switch path). It has no cross-channel
     // semantics — a monotonic counter is fine. Cancel any in-flight bottom
     // request instead (not in the key, so this does not remount).
-    dispatchBottomAnchor({ type: 'cancel' });
+    dispatchBottomAnchor({ type: "cancel" });
     lastItemKeysRef.current = [];
     lastJumpRemountKeyRef.current = null;
     setIsAtBottom(true);
@@ -405,7 +392,7 @@ export function MessageList({
     }
     // A fresh jump overrides any prior back-to-bottom request so the mount
     // centers on the target.
-    dispatchBottomAnchor({ type: 'cancel' });
+    dispatchBottomAnchor({ type: "cancel" });
     setFlashedMessageId(null);
   }, [jumpToMessageId, channelId]);
 
@@ -441,18 +428,17 @@ export function MessageList({
     }
     const keys = items.map(itemKey);
     const shift = classifyTopShift(lastItemKeysRef.current, keys);
-    if (shift.kind !== 'none') {
+    if (shift.kind !== "none") {
       const action = resolveTopShiftAction(shift, {
-        userPositioning:
-          jumpToMessageId != null || bottomAnchor.intent === 'bottom',
+        userPositioning: jumpToMessageId != null || bottomAnchor.intent === "bottom",
         hasJumpTarget: jumpToMessageId != null,
         jumpTargetIndex: jumpTargetIdx,
-        preferBottom: bottomAnchor.intent === 'bottom',
+        preferBottom: bottomAnchor.intent === "bottom",
       });
-      if (action.firstItemIndex === 'reset') {
+      if (action.firstItemIndex === "reset") {
         firstItemIndexRef.current = FIRST_ITEM_INDEX_START;
         setFirstItemIndex(FIRST_ITEM_INDEX_START);
-        if (action.remount) setWindowResetVersion(v => v + 1);
+        if (action.remount) setWindowResetVersion((v) => v + 1);
       } else if (action.delta !== 0) {
         firstItemIndexRef.current += action.delta;
         setFirstItemIndex(firstItemIndexRef.current);
@@ -485,7 +471,7 @@ export function MessageList({
     const key = `${channelId}:${jumpToMessageId}:${itemKey(target)}`;
     if (lastJumpRemountKeyRef.current === key) return;
     lastJumpRemountKeyRef.current = key;
-    setWindowResetVersion(v => v + 1);
+    setWindowResetVersion((v) => v + 1);
   }, [channelId, items, itemKey, jumpTargetIdx, jumpToMessageId]);
 
   // ── Back-to-bottom one-shot consumption ──────────────────────────────────
@@ -501,7 +487,7 @@ export function MessageList({
   // during its render; this effect (its commit) then spends it. Bound to the
   // version generation, not `isAtBottom` — a non-tail local bottom lies.
   useLayoutEffect(() => {
-    dispatchBottomAnchor({ type: 'tail-shown' });
+    dispatchBottomAnchor({ type: "tail-shown" });
   }, [bottomAnchorVersion]);
 
   // Reset branch: `resetToLatest()`→`resetQueries` clears the cache to []
@@ -514,7 +500,7 @@ export function MessageList({
   // when Virtuoso is on screen with content.
   const hasRenderedRows = !isLoading && items.length > 0;
   useLayoutEffect(() => {
-    dispatchBottomAnchor({ type: hasRenderedRows ? 'rows-shown' : 'rows-hidden' });
+    dispatchBottomAnchor({ type: hasRenderedRows ? "rows-shown" : "rows-hidden" });
   }, [hasRenderedRows]);
 
   // Bottom button visibility tracks `isAtBottom`. Virtuoso fires
@@ -548,7 +534,7 @@ export function MessageList({
     jumpTargetIndex: jumpTargetIdx,
     hasJumpTarget: jumpToMessageId != null,
     itemCount: items.length,
-    preferBottom: bottomAnchor.intent === 'bottom',
+    preferBottom: bottomAnchor.intent === "bottom",
   });
 
   // Jump-to-message completion gate. Actual positioning is declarative:
@@ -579,14 +565,7 @@ export function MessageList({
 
     setShowScrollBottom(true);
     setFlashedMessageId(jumpToMessageId);
-  }, [
-    jumpToMessageId,
-    jumpPrimePending,
-    jumpTargetIdx,
-    items.length,
-    isFetchingEarlier,
-    onJumped,
-  ]);
+  }, [jumpToMessageId, jumpPrimePending, jumpTargetIdx, items.length, isFetchingEarlier, onJumped]);
 
   // One-shot flash lifecycle. The flash *visual* is declarative — the row
   // renders `.msg-jump-flash` from its `jumpFlash` prop (see `renderItem`),
@@ -629,21 +608,19 @@ export function MessageList({
       return;
     }
     if (id === lastScrolledSearchIdRef.current) return;
-    const idx = items.findIndex(
-      it => it.kind === 'message' && it.message.id === id,
-    );
+    const idx = items.findIndex((it) => it.kind === "message" && it.message.id === id);
     if (idx === -1) return; // not in the loaded window — ChannelView escalates it
     lastScrolledSearchIdRef.current = id;
     virtuosoRef.current?.scrollToIndex({
       index: idx,
-      align: 'center',
-      behavior: 'auto',
+      align: "center",
+      behavior: "auto",
     });
   }, [searchActiveMessageId, items, jumpToMessageId]);
 
   const renderItem = useCallback(
     (item: ReturnType<typeof groupMessages>[number]) => {
-      if (item.kind === 'cluster') {
+      if (item.kind === "cluster") {
         return (
           <SystemActivityCluster
             messages={item.messages}
@@ -659,7 +636,7 @@ export function MessageList({
       // System rows are always committed; narrowing here keeps SystemMessage on
       // the plain MessageDto contract while pending rows fall through to the
       // message item below.
-      if (isCommittedMessage(m) && m.from_kind === 'system') {
+      if (isCommittedMessage(m) && m.from_kind === "system") {
         return (
           <SystemMessage
             message={m}
@@ -690,9 +667,7 @@ export function MessageList({
           {...actions.rowActionProps(m)}
           onStartThread={onOpenThread ? handleOpenThread : undefined}
           threadReplyCount={
-            (replyCountsByRoot?.[m.id] ?? 0) > 0
-              ? replyCountsByRoot?.[m.id]
-              : undefined
+            (replyCountsByRoot?.[m.id] ?? 0) > 0 ? replyCountsByRoot?.[m.id] : undefined
           }
           threadReplySummary={replySummariesByRoot?.[m.id]}
           threadUnread={threadUnreadByRoot?.[m.id]}
@@ -702,16 +677,12 @@ export function MessageList({
           authorAgentAvatarUrls={authorAgentAvatarUrls}
           authorUserAvatarUrls={authorUserAvatarUrls}
           agentAvatarUrls={agentAvatarUrls}
-          highlighted={
-            highlightedMessageId != null && m.id === highlightedMessageId
-          }
+          highlighted={highlightedMessageId != null && m.id === highlightedMessageId}
           jumpFlash={flashedMessageId != null && m.id === flashedMessageId}
           continuesPrevious={authorContinuations.has(m.id)}
           userResolver={userResolver}
           searchQuery={searchQuery}
-          searchActive={
-            searchActiveMessageId != null && m.id === searchActiveMessageId
-          }
+          searchActive={searchActiveMessageId != null && m.id === searchActiveMessageId}
         />
       );
     },
@@ -765,124 +736,118 @@ export function MessageList({
         channelTitle={channelTitle}
       />
       <div className="relative min-h-0 min-w-0 flex-1">
-      {isLoading ? (
-        // Initial window fetch: the message skeleton (shared with the full-view
-        // skeleton) rather than a "加载消息…" line, so entering a channel reads
-        // the same as every other conversation-loading surface. `absolute
-        // inset-0` fills this `relative` box.
-        <MessageRowsSkeleton className="absolute inset-0" />
-      ) : items.length === 0 && !leadingSlot ? (
-        <EmptyConversation />
-      ) : (
-        <Virtuoso<typeof items[number]>
-          // Remount on channel switches and full window replacements
-          // (latest ↔ around-message). Prepends keep the same key so
-          // Virtuoso can preserve scroll position; disjoint windows get
-          // a fresh size/scroll queue and can use `initialTopMostItemIndex`.
-          // `bottomAnchorVersion` also forces a remount for back-to-bottom
-          // (declarative tail re-anchor) without clearing the selection.
-          key={`${channelId}:${windowResetVersion}:${bottomAnchorVersion}`}
-          ref={virtuosoRef}
-          data={items}
-          firstItemIndex={firstItemIndex}
-          // On fresh mount, anchor the list at the jump target when
-          // there is one (and the around-window has already landed in
-          // `items` so we have a real index). Bottom fallback belongs
-          // only to ordinary channel opens. During a jump, `idx === -1`
-          // means "target not in this window yet"; falling back to the
-          // local window bottom is how we ended up stuck on stale
-          // around-window tails.
-          {...(initialTopMostItemIndex !== undefined
-            ? { initialTopMostItemIndex }
-            : {})}
-          // Stick to bottom only for the real tail. During a saved-message
-          // jump, or while browsing an around-message window, the window's
-          // bottom is just "the last row we currently hold" — following it
-          // would override the target-centered jump and land on stale history.
-          followOutput={atBottom =>
-            getFollowOutputBehavior({
-              hasJumpTarget: jumpToMessageId != null,
-              isAtTail,
-              atBottom,
-            })
-          }
-          atBottomStateChange={setIsAtBottom}
-          atBottomThreshold={20}
-          startReached={handleStartReached}
-          increaseViewportBy={{ top: 200, bottom: 200 }}
-          computeItemKey={(_index, item) => itemKey(item)}
-          components={{
-            Header: () => (
-              <>
-                {isFetchingEarlier ? (
-                  <div className="pb-2 text-center text-xs text-text-muted">
-                    Loading earlier messages…
-                  </div>
-                ) : null}
-                {leadingSlot ? (
-                  <div className="mx-auto mb-1 max-w-[1200px] px-4">
-                    {leadingSlot}
-                  </div>
-                ) : null}
-              </>
-            ),
-            // Bottom padding spacer — keeps the last message off the
-            // composer edge without baking the gutter into every item.
-            // The activity status now lives inside the Composer's own
-            // chrome (variant A), so there is no bottom overlay to
-            // reserve space for.
-            Footer: () => <div className="h-3" />,
-          }}
-          itemContent={(_index, item) => (
-            <div className="mx-auto max-w-[1200px] px-4 py-0.5">
-              {renderItem(item)}
-            </div>
-          )}
-          className="h-full min-w-0"
-        />
-      )}
-
-      {surfaceActive && (showScrollBottom || shouldResetToLatest) ? (
-        <button
-          type="button"
-          data-scroll-bottom
-          data-sticker
-          data-sticker-size="lg"
-          data-sticker-tone="neutral"
-          aria-label={shouldResetToLatest ? 'Jump to latest' : 'Scroll to bottom'}
-          title={shouldResetToLatest ? 'Jump to latest' : 'Scroll to bottom'}
-          onClick={() => {
-            // Back-to-bottom is ONE command: cancel the jump + arm the bottom
-            // intent first (both branches), then obtain the tail window. The
-            // two branches differ ONLY in how the tail is produced and which
-            // lifecycle signal spends the intent — never in state ownership.
-            // Not doing this split was the bug: the reset branch used to return
-            // early, so the fresh latest window mounted with no armed intent
-            // and stayed parked at the stale around-window position, far above
-            // the tail.
-            cancelJumpForBottom();
-            if (shouldResetToLatest && onResetToLatest) {
-              // Window is behind the tail. Reset the query to the authoritative
-              // latest window; `resetQueries` empties the cache first, so
-              // Virtuoso re-mounts naturally when rows return and reads the
-              // armed intent. The reset request is spent by that rows-shown
-              // mount (after the transient rows-hidden). Selection clears with
-              // the discarded around-window, as any latest reset does.
-              dispatchBottomAnchor({ type: 'arm-reset' });
-              onResetToLatest();
-            } else {
-              // Tail already loaded: remount in place at the last item. This
-              // version is NOT a selection signal, so the message selection
-              // survives. The tail request is spent once this remount commits.
-              dispatchBottomAnchor({ type: 'arm-tail' });
-              setBottomAnchorVersion(v => v + 1);
+        {isLoading ? (
+          // Initial window fetch: the message skeleton (shared with the full-view
+          // skeleton) rather than a "加载消息…" line, so entering a channel reads
+          // the same as every other conversation-loading surface. `absolute
+          // inset-0` fills this `relative` box.
+          <MessageRowsSkeleton className="absolute inset-0" />
+        ) : items.length === 0 && !leadingSlot ? (
+          <EmptyConversation />
+        ) : (
+          <Virtuoso<(typeof items)[number]>
+            // Remount on channel switches and full window replacements
+            // (latest ↔ around-message). Prepends keep the same key so
+            // Virtuoso can preserve scroll position; disjoint windows get
+            // a fresh size/scroll queue and can use `initialTopMostItemIndex`.
+            // `bottomAnchorVersion` also forces a remount for back-to-bottom
+            // (declarative tail re-anchor) without clearing the selection.
+            key={`${channelId}:${windowResetVersion}:${bottomAnchorVersion}`}
+            ref={virtuosoRef}
+            data={items}
+            firstItemIndex={firstItemIndex}
+            // On fresh mount, anchor the list at the jump target when
+            // there is one (and the around-window has already landed in
+            // `items` so we have a real index). Bottom fallback belongs
+            // only to ordinary channel opens. During a jump, `idx === -1`
+            // means "target not in this window yet"; falling back to the
+            // local window bottom is how we ended up stuck on stale
+            // around-window tails.
+            {...(initialTopMostItemIndex !== undefined ? { initialTopMostItemIndex } : {})}
+            // Stick to bottom only for the real tail. During a saved-message
+            // jump, or while browsing an around-message window, the window's
+            // bottom is just "the last row we currently hold" — following it
+            // would override the target-centered jump and land on stale history.
+            followOutput={(atBottom) =>
+              getFollowOutputBehavior({
+                hasJumpTarget: jumpToMessageId != null,
+                isAtTail,
+                atBottom,
+              })
             }
-          }}
-          className="absolute bottom-4 left-1/2 z-[var(--z-sticky)] flex size-9 -translate-x-1/2 items-center justify-center rounded-[var(--pill-radius)] bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
-        >
-          <ArrowDown className="size-4" />
-        </button>
-      ) : null}
+            atBottomStateChange={setIsAtBottom}
+            atBottomThreshold={20}
+            startReached={handleStartReached}
+            increaseViewportBy={{ top: 200, bottom: 200 }}
+            computeItemKey={(_index, item) => itemKey(item)}
+            components={{
+              Header: () => (
+                <>
+                  {isFetchingEarlier ? (
+                    <div className="pb-2 text-center text-xs text-text-muted">
+                      Loading earlier messages…
+                    </div>
+                  ) : null}
+                  {leadingSlot ? (
+                    <div className="mx-auto mb-1 max-w-[1200px] px-4">{leadingSlot}</div>
+                  ) : null}
+                </>
+              ),
+              // Bottom padding spacer — keeps the last message off the
+              // composer edge without baking the gutter into every item.
+              // The activity status now lives inside the Composer's own
+              // chrome (variant A), so there is no bottom overlay to
+              // reserve space for.
+              Footer: () => <div className="h-3" />,
+            }}
+            itemContent={(_index, item) => (
+              <div className="mx-auto max-w-[1200px] px-4 py-0.5">{renderItem(item)}</div>
+            )}
+            className="h-full min-w-0"
+          />
+        )}
+
+        {surfaceActive && (showScrollBottom || shouldResetToLatest) ? (
+          <button
+            type="button"
+            data-scroll-bottom
+            data-sticker
+            data-sticker-size="lg"
+            data-sticker-tone="neutral"
+            aria-label={shouldResetToLatest ? "Jump to latest" : "Scroll to bottom"}
+            title={shouldResetToLatest ? "Jump to latest" : "Scroll to bottom"}
+            onClick={() => {
+              // Back-to-bottom is ONE command: cancel the jump + arm the bottom
+              // intent first (both branches), then obtain the tail window. The
+              // two branches differ ONLY in how the tail is produced and which
+              // lifecycle signal spends the intent — never in state ownership.
+              // Not doing this split was the bug: the reset branch used to return
+              // early, so the fresh latest window mounted with no armed intent
+              // and stayed parked at the stale around-window position, far above
+              // the tail.
+              cancelJumpForBottom();
+              if (shouldResetToLatest && onResetToLatest) {
+                // Window is behind the tail. Reset the query to the authoritative
+                // latest window; `resetQueries` empties the cache first, so
+                // Virtuoso re-mounts naturally when rows return and reads the
+                // armed intent. The reset request is spent by that rows-shown
+                // mount (after the transient rows-hidden). Selection clears with
+                // the discarded around-window, as any latest reset does.
+                dispatchBottomAnchor({ type: "arm-reset" });
+                onResetToLatest();
+              } else {
+                // Tail already loaded: remount in place at the last item. This
+                // version is NOT a selection signal, so the message selection
+                // survives. The tail request is spent once this remount commits.
+                dispatchBottomAnchor({ type: "arm-tail" });
+                setBottomAnchorVersion((v) => v + 1);
+              }
+            }}
+            className="absolute bottom-4 left-1/2 z-[var(--z-sticky)] flex size-9 -translate-x-1/2 items-center justify-center rounded-[var(--pill-radius)] bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
+          >
+            <ArrowDown className="size-4" />
+          </button>
+        ) : null}
       </div>
     </div>
   );

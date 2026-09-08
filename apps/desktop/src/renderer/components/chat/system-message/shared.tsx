@@ -1,9 +1,9 @@
-import { useMemo, type ComponentType } from 'react';
-import type { MessageDto, UserDto } from '@silverhand/shared';
-import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
-import { Markdown } from '@/components/chat/Markdown';
-import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
-import type { ChannelReference } from '@/components/chat/ChannelRef';
+import { useMemo, type ComponentType } from "react";
+import type { MessageDto, UserDto } from "@silverhand/shared";
+import { useUsersById, makeUserNameResolver } from "@/features/users/hooks";
+import { Markdown } from "@/components/chat/Markdown";
+import type { WorkspaceChannelReference } from "@/components/chat/ConversationRef";
+import type { ChannelReference } from "@/components/chat/ChannelRef";
 
 /**
  * Shared hook: build a resolver that maps `user_id` → display name.
@@ -62,6 +62,6 @@ export function GenericNarrationFallback({
 // ─── Text helpers ──────────────────────────────────────────────────────
 
 export function firstLine(text: string): string {
-  const newline = text.indexOf('\n');
+  const newline = text.indexOf("\n");
   return newline === -1 ? text : text.slice(0, newline);
 }

@@ -1,26 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Clock, Loader2 } from 'lucide-react';
-import { ThreadIcon } from '@/components/icons/conversation-icons';
-import {
-  SidePanelHeader,
-  SidePanelHeaderTitle,
-} from '@/components/layout/SidePanelHeader';
-import { CollectionItemCard } from '@/components/layout/collection-item-card';
-import type { StreamUnreadDto } from '@silverhand/shared';
-import { AuthorAvatarView, AuthorName } from '@/components/chat/author-avatar-view';
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Clock, Loader2 } from "lucide-react";
+import { ThreadIcon } from "@/components/icons/conversation-icons";
+import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/SidePanelHeader";
+import { CollectionItemCard } from "@/components/layout/collection-item-card";
+import type { StreamUnreadDto } from "@silverhand/shared";
+import { AuthorAvatarView, AuthorName } from "@/components/chat/author-avatar-view";
 import {
   authorGroupKey,
   authorStateLabel,
   presentAuthor,
-} from '@/components/chat/author-presentation';
-import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
-import { useRelativeTime } from '@/components/chat/useRelativeTime';
-import { useConversationUnread } from '@/features/channels/hooks';
+} from "@/components/chat/author-presentation";
+import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
+import { useRelativeTime } from "@/components/chat/useRelativeTime";
+import { useConversationUnread } from "@/features/channels/hooks";
 import {
   useChannelThreads,
   type ChannelThreadsFilter,
   type ThreadSummary,
-} from '@/features/channels/useChannelThreads';
+} from "@/features/channels/useChannelThreads";
 
 interface ChannelThreadsPanelProps {
   channelId: string;
@@ -32,14 +29,14 @@ interface ChannelThreadsPanelProps {
   onOpenThread: (rootMessageId: string) => void;
 }
 
-type Author = ThreadSummary['root_author'];
+type Author = ThreadSummary["root_author"];
 
 // Unread-first so a dot-driven open reads left-to-right as "the reason you're
 // here, then everything". Labels stay one word — the panel title already says
 // "Threads".
 const THREAD_TABS: { key: ChannelThreadsFilter; label: string }[] = [
-  { key: 'followed-unread', label: 'Unread' },
-  { key: 'all', label: 'All' },
+  { key: "followed-unread", label: "Unread" },
+  { key: "all", label: "All" },
 ];
 
 /**
@@ -108,7 +105,7 @@ export function ChannelThreadsContent({
   // in-place merge / invalidate keeps firing — and so switching tabs is instant
   // (both stay warm).
   const all = useChannelThreads(channelId);
-  const unread = useChannelThreads(channelId, 'followed-unread');
+  const unread = useChannelThreads(channelId, "followed-unread");
   // The per-stream unread read-model, shared by two consumers here: (1) the
   // `followed_thread_unread` boolean (same predicate the header dot reads — one
   // source, independent reads → eventual convergence; used ONLY for the initial
@@ -125,12 +122,11 @@ export function ChannelThreadsContent({
   // start on All. This is a ONE-TIME initial view choice read from the warm
   // cached boolean — NOT an ongoing derivation of the list from the boolean.
   const [tab, setTab] = useState<ChannelThreadsFilter>(() =>
-    followedThreadUnread ? 'followed-unread' : 'all',
+    followedThreadUnread ? "followed-unread" : "all",
   );
 
-  const active = tab === 'followed-unread' ? unread : all;
-  const { threads, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage } =
-    active;
+  const active = tab === "followed-unread" ? unread : all;
+  const { threads, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage } = active;
 
   // Infinite scroll for the active dataset. The sentinel sits at the tail of the
   // scroll container; when it nears view we pull the next keyset page. Root is the
@@ -151,10 +147,10 @@ export function ChannelThreadsContent({
     const sentinel = sentinelRef.current;
     if (!root || !sentinel) return;
     const io = new IntersectionObserver(
-      entries => {
-        if (entries.some(e => e.isIntersecting)) fetchNextPageRef.current();
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) fetchNextPageRef.current();
       },
-      { root, rootMargin: '120px' },
+      { root, rootMargin: "120px" },
     );
     io.observe(sentinel);
     return () => io.disconnect();
@@ -166,10 +162,7 @@ export function ChannelThreadsContent({
   // (or deleted) still renders its own avatar. This surface renders only DTO
   // authors (no @-mention pills, no sender facets), so the directory is not
   // consulted at all here.
-  const authors = useMemo(
-    () => threads.flatMap(t => [t.root_author, ...t.repliers]),
-    [threads],
-  );
+  const authors = useMemo(() => threads.flatMap((t) => [t.root_author, ...t.repliers]), [threads]);
   const { agentAvatarUrls, humanAvatarUrls } = useAuthorAvatarObjectUrls(authors);
 
   // Author identity flows through the ONE shared seam (#task:1792): the
@@ -185,23 +178,20 @@ export function ChannelThreadsContent({
       // The name carries its deleted state through the ONE shared primitive
       // (#task:1792 B3) — this compact surface can't drift from the stream / saved
       // rows on how a deleted author reads.
-      <AuthorName
-        presentation={presentAuthor(author)}
-        className="font-semibold"
-      />
+      <AuthorName presentation={presentAuthor(author)} className="font-semibold" />
     );
 
   const renderAvatar = (author: Author, size: number): JSX.Element => {
     const p = author ? presentAuthor(author) : null;
     return (
       <AuthorAvatarView
-        avatar={p?.avatar ?? { variant: 'neutral-user' }}
+        avatar={p?.avatar ?? { variant: "neutral-user" }}
         size={size}
         // Avatar-only face: the deleted state has no room for the visual marker,
         // so it rides the `title`/`alt` via the shared `authorStateLabel`
         // (#task:1792 B3) — a deleted replier here reads "(deleted account)" on
         // hover exactly as the byline shows the marker, never a bare name.
-        label={p ? authorStateLabel(p) : 'System'}
+        label={p ? authorStateLabel(p) : "System"}
         agentAvatarUrls={agentAvatarUrls}
         humanAvatarUrls={humanAvatarUrls}
       />
@@ -217,9 +207,9 @@ export function ChannelThreadsContent({
           normal loading state, not a contradiction of the header dot (the two
           are independent reads that converge). */}
       <div className="flex shrink-0 items-center gap-1.5 py-2">
-        {THREAD_TABS.map(t => {
+        {THREAD_TABS.map((t) => {
           const on = t.key === tab;
-          const count = t.key === 'followed-unread' ? unread.threads.length : all.threads.length;
+          const count = t.key === "followed-unread" ? unread.threads.length : all.threads.length;
           return (
             <button
               key={t.key}
@@ -227,14 +217,14 @@ export function ChannelThreadsContent({
               onClick={() => setTab(t.key)}
               aria-pressed={on}
               className={
-                'inline-flex items-center gap-1.5 border-[length:var(--control-border-width)] rounded-[var(--chip-radius)] px-2.5 py-1 text-xs font-medium transition-colors ' +
+                "inline-flex items-center gap-1.5 border-[length:var(--control-border-width)] rounded-[var(--chip-radius)] px-2.5 py-1 text-xs font-medium transition-colors " +
                 (on
-                  ? 'border-[color:var(--border-control-hover)] bg-[var(--bg-row-selected)] text-text-primary'
-                  : 'border-border bg-bg-floating text-text-muted hover:border-[color:var(--border-control-hover)] hover:text-text-primary')
+                  ? "border-[color:var(--border-control-hover)] bg-[var(--bg-row-selected)] text-text-primary"
+                  : "border-border bg-bg-floating text-text-muted hover:border-[color:var(--border-control-hover)] hover:text-text-primary")
               }
             >
               {t.label}
-              <span className={on ? 'opacity-100' : 'opacity-60'}>{count}</span>
+              <span className={on ? "opacity-100" : "opacity-60"}>{count}</span>
             </button>
           );
         })}
@@ -253,13 +243,11 @@ export function ChannelThreadsContent({
             </p>
           </div>
         ) : threads.length === 0 ? (
-          tab === 'followed-unread' ? (
+          tab === "followed-unread" ? (
             <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
               <ThreadIcon className="size-6 text-text-muted/50" />
               <p className="text-sm text-text-primary">All caught up</p>
-              <p className="text-xs text-text-muted">
-                Threads you follow have no unread replies.
-              </p>
+              <p className="text-xs text-text-muted">Threads you follow have no unread replies.</p>
             </div>
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
@@ -272,7 +260,7 @@ export function ChannelThreadsContent({
           )
         ) : (
           <ul className="flex flex-col gap-1.5">
-            {threads.map(t => (
+            {threads.map((t) => (
               <ThreadRow
                 key={t.root_message_id}
                 summary={t}
@@ -319,9 +307,7 @@ function ThreadRow({
   // metadata). The root's own creation time isn't surfaced — in a thread list
   // "latest activity" is the time that matters.
   const lastReplyTime = useRelativeTime(summary.last_reply_at);
-  const replyLabel = `${summary.reply_count} ${
-    summary.reply_count === 1 ? 'reply' : 'replies'
-  }`;
+  const replyLabel = `${summary.reply_count} ${summary.reply_count === 1 ? "reply" : "replies"}`;
   const overflow = summary.replier_total - summary.repliers.length;
   const unreadCount = unread?.unread_count ?? 0;
   const hasUnread = unreadCount > 0;
@@ -339,12 +325,10 @@ function ThreadRow({
             as a bold prefix so the content carries the visual mass — a
             standalone byline row read as disjoint from it. */}
         <span className="flex items-start gap-2 px-2.5 py-2">
-          <span className="mt-px flex shrink-0">
-            {renderAvatar(summary.root_author, 20)}
-          </span>
+          <span className="mt-px flex shrink-0">{renderAvatar(summary.root_author, 20)}</span>
           <span className="line-clamp-2 break-words text-sm text-text-primary">
             {renderAuthorName(summary.root_author)}
-            <span className="font-semibold">{': '}</span>
+            <span className="font-semibold">{": "}</span>
             {summary.root_preview}
           </span>
         </span>
@@ -361,23 +345,21 @@ function ThreadRow({
                   // `unresolved` repliers have no id (never aggregate), so fall
                   // back to a positional key — never collapse two lost actors
                   // onto one React key.
-                  <span
-                    key={authorGroupKey(r) ?? `unresolved:${i}`}
-                    className="flex shrink-0"
-                  >
+                  <span key={authorGroupKey(r) ?? `unresolved:${i}`} className="flex shrink-0">
                     {renderAvatar(r, 18)}
                   </span>
                 ))}
                 {overflow > 0 ? (
-                  <span data-avatar-ground className="flex size-[18px] shrink-0 items-center justify-center rounded-none text-[length:var(--text-badge)] font-medium text-text-muted">
+                  <span
+                    data-avatar-ground
+                    className="flex size-[18px] shrink-0 items-center justify-center rounded-none text-[length:var(--text-badge)] font-medium text-text-muted"
+                  >
                     +{overflow}
                   </span>
                 ) : null}
               </span>
             ) : null}
-            <span className="text-xs font-medium text-text-secondary">
-              {replyLabel}
-            </span>
+            <span className="text-xs font-medium text-text-secondary">{replyLabel}</span>
             {/* Unread hint rides right after the reply count (not right-aligned):
                 followed → filled count sticker, unfollowed → soft dot. forza6
                 squares both via data-thread-unread. */}
@@ -389,7 +371,7 @@ function ThreadRow({
                   title={`${unreadCount} new`}
                   aria-label={`${unreadCount} new`}
                 >
-                  {unreadCount > 99 ? '99+' : unreadCount} new
+                  {unreadCount > 99 ? "99+" : unreadCount} new
                 </span>
               ) : (
                 <span

@@ -1,12 +1,12 @@
-import { AtSign, Hash } from 'lucide-react';
-import { HoverPopover } from './HoverPopover';
-import { INLINE_REF_HOVER_CLASS } from './inline-ref-chip';
+import { AtSign, Hash } from "lucide-react";
+import { HoverPopover } from "./HoverPopover";
+import { INLINE_REF_HOVER_CLASS } from "./inline-ref-chip";
 import {
   useConversationIdentity,
   type ConversationIdentity,
   type ConversationIdentityStatus,
-} from '@/features/conversations/conversation-identity';
-import { presentCounterpart } from '@/features/direct-pairs/counterpart-presentation';
+} from "@/features/conversations/conversation-identity";
+import { presentCounterpart } from "@/features/direct-pairs/counterpart-presentation";
 
 /**
  * A conversation from a WORKSPACE-SCOPED channel list — the synchronous fast
@@ -61,7 +61,7 @@ interface ConversationRefProps {
  *  second derivation keyed on the roster is how the static chip came to draw `@`
  *  for an agent space's fixed-roster channel while this one drew `#` for the same
  *  id (#task:2073). Both chips consume these two functions. */
-export type ConversationRefFace = 'channel' | 'direct_line';
+export type ConversationRefFace = "channel" | "direct_line";
 
 /**
  * Inline rendering of a `#conv:<conversation_id>` reference.
@@ -89,22 +89,17 @@ export type ConversationRefFace = 'channel' | 'direct_line';
  * metadata. Loading shows a skeleton; a decided non-resolution renders an
  * explicit "unavailable" body so we never sit on a forever-skeleton popover.
  */
-export function ConversationRef({
-  id,
-  conversation,
-  onOpen,
-}: ConversationRefProps): JSX.Element {
+export function ConversationRef({ id, conversation, onOpen }: ConversationRefProps): JSX.Element {
   const resolution = useConversationIdentity(id);
   // Prefer the prop (current-workspace fast path) over the resolution; both
   // describe the same conversation, the prop just avoids a loading flash for the
   // common case. It can only ever name a workspace channel — the map it comes
   // from is workspace-scoped.
-  const resolved: { face: ConversationRefFace; title: string } | null =
-    conversation
-      ? { face: 'channel', title: conversation.title }
-      : resolution.status === 'resolved'
-        ? presentIdentity(resolution.identity)
-        : null;
+  const resolved: { face: ConversationRefFace; title: string } | null = conversation
+    ? { face: "channel", title: conversation.title }
+    : resolution.status === "resolved"
+      ? presentIdentity(resolution.identity)
+      : null;
   // Three-state for popover purposes:
   //   - 'resolved'    → render real metadata
   //   - 'unavailable' → a decided non-resolution (403 / 404 / a failed private-
@@ -112,11 +107,11 @@ export function ConversationRef({
   //                     forever-skeleton popover is what Cindy review of
   //                     `45fca42` flagged on cross-workspace ids)
   //   - 'loading'     → skeleton via HoverPopover.isContentReady=false
-  const popoverStatus: 'resolved' | 'unavailable' | 'loading' = resolved
-    ? 'resolved'
-    : resolution.status === 'loading'
-      ? 'loading'
-      : 'unavailable';
+  const popoverStatus: "resolved" | "unavailable" | "loading" = resolved
+    ? "resolved"
+    : resolution.status === "loading"
+      ? "loading"
+      : "unavailable";
 
   const label = resolved ? resolved.title : `#conv:${shortConversationId(id)}`;
   const tooltip = resolved
@@ -131,9 +126,7 @@ export function ConversationRef({
   const chipBody = (
     <>
       {icon}
-      <span className={resolved ? 'truncate' : 'truncate font-mono'}>
-        {label}
-      </span>
+      <span className={resolved ? "truncate" : "truncate font-mono"}>{label}</span>
     </>
   );
 
@@ -159,7 +152,7 @@ export function ConversationRef({
       role="button"
       tabIndex={0}
       className={
-        'inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent focus-outline ' +
+        "inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent focus-outline " +
         // The resting soft fill stays — it is this chip's identity as a BOX
         // (an opaque id, not running text). Only the hover fill is gone: a
         // soft→solid flip plus an ink inversion is a whole new surface for a
@@ -168,13 +161,13 @@ export function ConversationRef({
       }
       aria-label={tooltip}
       data-conversation-ref={id}
-      onClick={event => {
+      onClick={(event) => {
         event.preventDefault();
         event.stopPropagation();
         onOpen?.(id);
       }}
-      onKeyDown={event => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         event.stopPropagation();
         onOpen?.(id);
@@ -185,13 +178,9 @@ export function ConversationRef({
   );
 
   const popoverContent =
-    popoverStatus === 'resolved' && resolved ? (
-      <ConversationPopoverBody
-        id={id}
-        face={resolved.face}
-        title={resolved.title}
-      />
-    ) : popoverStatus === 'unavailable' ? (
+    popoverStatus === "resolved" && resolved ? (
+      <ConversationPopoverBody id={id} face={resolved.face} title={resolved.title} />
+    ) : popoverStatus === "unavailable" ? (
       <UnresolvedConversationPopoverBody id={id} reason={resolution.status} />
     ) : null;
 
@@ -199,7 +188,7 @@ export function ConversationRef({
     <HoverPopover
       trigger={onOpen ? interactiveChip : inertChip}
       content={popoverContent}
-      isContentReady={popoverStatus !== 'loading'}
+      isContentReady={popoverStatus !== "loading"}
     />
   );
 }
@@ -225,9 +214,7 @@ function ConversationPopoverBody({
           {faceLabel(face)}
         </span>
       </div>
-      <p className="line-clamp-2 break-words text-xs font-medium text-text-primary">
-        {title}
-      </p>
+      <p className="line-clamp-2 break-words text-xs font-medium text-text-primary">{title}</p>
       <p
         className="truncate font-mono text-[length:var(--text-badge)] text-text-muted"
         aria-label={id}
@@ -263,11 +250,11 @@ function UnresolvedConversationPopoverBody({
   reason: ConversationIdentityStatus;
 }): JSX.Element {
   const message =
-    reason === 'unauthorized'
+    reason === "unauthorized"
       ? "You don't have access to this conversation."
-      : reason === 'not_found'
-        ? 'Conversation not found — it may have been deleted.'
-        : 'Couldn’t resolve this conversation.';
+      : reason === "not_found"
+        ? "Conversation not found — it may have been deleted."
+        : "Couldn’t resolve this conversation.";
   return (
     <div className="space-y-2">
       <p className="text-xs text-text-muted">{message}</p>
@@ -292,21 +279,21 @@ function presentIdentity(identity: ConversationIdentity): {
   face: ConversationRefFace;
   title: string;
 } {
-  if (identity.placement === 'direct_pair') {
+  if (identity.placement === "direct_pair") {
     return {
-      face: 'direct_line',
+      face: "direct_line",
       title: presentCounterpart(identity.pair.counterpart).label,
     };
   }
-  return { face: 'channel', title: identity.ref.title };
+  return { face: "channel", title: identity.ref.title };
 }
 
 export function faceLabel(face: ConversationRefFace): string {
-  return face === 'direct_line' ? 'Direct message' : 'Channel';
+  return face === "direct_line" ? "Direct message" : "Channel";
 }
 
 export function conversationIcon(face: ConversationRefFace | undefined): JSX.Element {
-  if (face === 'direct_line') {
+  if (face === "direct_line") {
     return <AtSign className="size-3 shrink-0 self-center" />;
   }
   return <Hash className="size-3 shrink-0 self-center" />;

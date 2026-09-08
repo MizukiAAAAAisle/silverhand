@@ -1,37 +1,28 @@
-import { useEffect, useRef, useState } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
-import { useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { X } from 'lucide-react';
-import { toPng } from 'html-to-image';
-import { toast } from 'sonner';
-import type {
-  AgentDto,
-  MessageDto,
-  TaskSummaryDto,
-  UserDto,
-} from '@silverhand/shared';
-import { loadAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
+import { useEffect, useRef, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { X } from "lucide-react";
+import { toPng } from "html-to-image";
+import { toast } from "sonner";
+import type { AgentDto, MessageDto, TaskSummaryDto, UserDto } from "@silverhand/shared";
+import { loadAttachmentBlobUrl } from "@/lib/attachment-blob-cache";
 import {
   taskBoardCacheScope,
   taskByNumberKey,
   type TaskRefCoord,
-} from '@/features/tasks/useTaskByNumber';
-import { MessageScreenshotView } from './MessageScreenshotView';
-import {
-  extractMermaidSources,
-  isDarkTheme,
-  renderMermaidSvg,
-} from './MermaidDiagram';
-import { suggestImageFilename } from './markdownTranscript';
-import { SelectionActionButton } from './SelectionToolbar';
-import type { ChannelReference } from './ChannelRef';
-import type { WorkspaceChannelReference } from './ConversationRef';
-import type { StaticTaskRefSummary } from './TaskRef';
+} from "@/features/tasks/useTaskByNumber";
+import { MessageScreenshotView } from "./MessageScreenshotView";
+import { extractMermaidSources, isDarkTheme, renderMermaidSvg } from "./MermaidDiagram";
+import { suggestImageFilename } from "./markdownTranscript";
+import { SelectionActionButton } from "./SelectionToolbar";
+import type { ChannelReference } from "./ChannelRef";
+import type { WorkspaceChannelReference } from "./ConversationRef";
+import type { StaticTaskRefSummary } from "./TaskRef";
 
 /** 1×1 transparent PNG. Used as html-to-image's `imagePlaceholder` so a
  *  single failed avatar doesn't abort the whole screenshot. */
 const TRANSPARENT_PIXEL_DATA_URL =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=';
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
 
 /** Per-diagram pre-render budget (#task:1322). A diagram that doesn't settle
  *  within this bound is treated as failed → falls back to source, so a single
@@ -49,22 +40,18 @@ const MERMAID_PRERENDER_TIMEOUT_MS = 4000;
  * absent, so the export tree falls back to source for them. Never rejects —
  * the share flow must always reach capture.
  */
-async function prerenderMermaidSvgs(
-  messages: readonly MessageDto[],
-): Promise<Map<string, string>> {
-  const sources = Array.from(
-    new Set(messages.flatMap(m => extractMermaidSources(m.content))),
-  );
+async function prerenderMermaidSvgs(messages: readonly MessageDto[]): Promise<Map<string, string>> {
+  const sources = Array.from(new Set(messages.flatMap((m) => extractMermaidSources(m.content))));
   const map = new Map<string, string>();
   if (sources.length === 0) return map;
   const dark = isDarkTheme();
   const results = await Promise.allSettled(
-    sources.map(src =>
+    sources.map((src) =>
       Promise.race([
         renderMermaidSvg(src, dark),
         new Promise<never>((_, reject) =>
           setTimeout(
-            () => reject(new Error('mermaid pre-render timeout')),
+            () => reject(new Error("mermaid pre-render timeout")),
             MERMAID_PRERENDER_TIMEOUT_MS,
           ),
         ),
@@ -72,7 +59,7 @@ async function prerenderMermaidSvgs(
     ),
   );
   results.forEach((r, i) => {
-    if (r.status === 'fulfilled') map.set(sources[i]!, r.value);
+    if (r.status === "fulfilled") map.set(sources[i]!, r.value);
   });
   return map;
 }
@@ -84,40 +71,38 @@ async function prerenderMermaidSvgs(
  *  back to a stable label rather than the toString shape. */
 function formatCaptureFailure(err: unknown): string {
   if (err instanceof Error) return err.message;
-  if (typeof err === 'string') return err;
-  if (typeof Event !== 'undefined' && err instanceof Event) {
+  if (typeof err === "string") return err;
+  if (typeof Event !== "undefined" && err instanceof Event) {
     const target = err.target as HTMLImageElement | null;
-    const src = target && 'src' in target ? target.src : '';
+    const src = target && "src" in target ? target.src : "";
     if (src) return `The image failed to load: ${truncate(src, 96)}`;
     return `The image failed to load (${err.type})`;
   }
-  if (err && typeof err === 'object') {
+  if (err && typeof err === "object") {
     const e = err as { message?: unknown; type?: unknown };
-    if (typeof e.message === 'string' && e.message.length > 0) return e.message;
-    if (typeof e.type === 'string') return `Event ${e.type}`;
+    if (typeof e.message === "string" && e.message.length > 0) return e.message;
+    if (typeof e.type === "string") return `Event ${e.type}`;
   }
-  return 'unknown_error';
+  return "unknown_error";
 }
 
 function truncate(s: string, n: number): string {
-  return s.length <= n ? s : s.slice(0, n - 1) + '…';
+  return s.length <= n ? s : s.slice(0, n - 1) + "…";
 }
 
 function screenshotCanvasBackground(node: HTMLElement): string {
-  const screenshotRoot =
-    node.querySelector<HTMLElement>('[data-screenshot-root]') ?? node;
-  const foreground = parseRgbColor(
-    window.getComputedStyle(screenshotRoot).backgroundColor,
-  );
-  if (!foreground) return '#ffffff';
-  const base =
-    parseRgbColor(resolveBackgroundColor(screenshotRoot, 'var(--bg-base)')) ??
-    parseRgbColor(window.getComputedStyle(document.body).backgroundColor) ??
-    { r: 255, g: 255, b: 255, a: 1 };
-  const opaqueBase =
-    base.a >= 1 ? base : compositeOver(base, { r: 255, g: 255, b: 255, a: 1 });
-  const out =
-    foreground.a >= 1 ? foreground : compositeOver(foreground, opaqueBase);
+  const screenshotRoot = node.querySelector<HTMLElement>("[data-screenshot-root]") ?? node;
+  const foreground = parseRgbColor(window.getComputedStyle(screenshotRoot).backgroundColor);
+  if (!foreground) return "#ffffff";
+  const base = parseRgbColor(resolveBackgroundColor(screenshotRoot, "var(--bg-base)")) ??
+    parseRgbColor(window.getComputedStyle(document.body).backgroundColor) ?? {
+      r: 255,
+      g: 255,
+      b: 255,
+      a: 1,
+    };
+  const opaqueBase = base.a >= 1 ? base : compositeOver(base, { r: 255, g: 255, b: 255, a: 1 });
+  const out = foreground.a >= 1 ? foreground : compositeOver(foreground, opaqueBase);
   return `rgb(${out.r}, ${out.g}, ${out.b})`;
 }
 
@@ -129,9 +114,9 @@ interface Rgba {
 }
 
 function resolveBackgroundColor(context: HTMLElement, value: string): string {
-  const probe = document.createElement('span');
-  probe.style.position = 'absolute';
-  probe.style.pointerEvents = 'none';
+  const probe = document.createElement("span");
+  probe.style.position = "absolute";
+  probe.style.pointerEvents = "none";
   probe.style.backgroundColor = value;
   context.appendChild(probe);
   const resolved = window.getComputedStyle(probe).backgroundColor;
@@ -141,12 +126,12 @@ function resolveBackgroundColor(context: HTMLElement, value: string): string {
 
 function parseRgbColor(value: string): Rgba | null {
   const s = value.trim();
-  if (!s || s === 'transparent') return null;
+  if (!s || s === "transparent") return null;
   const match = /^rgba?\((.+)\)$/i.exec(s);
   if (!match) return null;
   const parts = match[1]!
     .split(/[,\s/]+/)
-    .map(part => part.trim())
+    .map((part) => part.trim())
     .filter(Boolean);
   const [rRaw, gRaw, bRaw, aRaw] = parts;
   const r = Number(rRaw);
@@ -250,21 +235,19 @@ export function ImagePreviewModal({
   viewerAvatarObjectUrl?: string | null;
 }): JSX.Element {
   const queryClient = useQueryClient();
-  const [phase, setPhase] = useState<'idle' | 'rendering' | 'ready' | 'error'>(
-    'idle',
-  );
+  const [phase, setPhase] = useState<"idle" | "rendering" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [pngBytes, setPngBytes] = useState<Uint8Array | null>(null);
-  const [attachmentImageUrls, setAttachmentImageUrls] = useState<
-    ReadonlyMap<string, string>
-  >(() => new Map());
+  const [attachmentImageUrls, setAttachmentImageUrls] = useState<ReadonlyMap<string, string>>(
+    () => new Map(),
+  );
   const [taskRefsByNumber, setTaskRefsByNumber] = useState<
     ReadonlyMap<number, StaticTaskRefSummary>
   >(() => new Map());
-  const [mermaidSvgByCode, setMermaidSvgByCode] = useState<
-    ReadonlyMap<string, string>
-  >(() => new Map());
+  const [mermaidSvgByCode, setMermaidSvgByCode] = useState<ReadonlyMap<string, string>>(
+    () => new Map(),
+  );
   const [busy, setBusy] = useState(false);
   // Offscreen container ref — html-to-image runs against this DOM
   // subtree. We position it offscreen rather than `display:none` so
@@ -276,7 +259,7 @@ export function ImagePreviewModal({
   // a single open request (selection is frozen at toolbar-click time).
   useEffect(() => {
     if (!open) {
-      setPhase('idle');
+      setPhase("idle");
       setError(null);
       setDataUrl(null);
       setPngBytes(null);
@@ -285,7 +268,7 @@ export function ImagePreviewModal({
       setMermaidSvgByCode(new Map());
       return;
     }
-    setPhase('rendering');
+    setPhase("rendering");
     setError(null);
 
     // Wait one frame so React has actually committed the offscreen
@@ -295,7 +278,7 @@ export function ImagePreviewModal({
     const runCapture = (): void => {
       const node = offscreenRef.current;
       if (!node) {
-        if (!cancelled) setError('screenshot_root_missing');
+        if (!cancelled) setError("screenshot_root_missing");
         return;
       }
       const backgroundColor = screenshotCanvasBackground(node);
@@ -321,12 +304,12 @@ export function ImagePreviewModal({
         // this option only fills transparent canvas edges / gaps.
         backgroundColor,
       })
-        .then(async url => {
+        .then(async (url) => {
           if (cancelled) return;
           // Strip the `data:image/png;base64,` prefix and decode to raw
           // bytes. We keep both forms: dataUrl for the preview <img>,
           // bytes for the IPC save / copy handlers.
-          const base64 = url.split(',', 2)[1] ?? '';
+          const base64 = url.split(",", 2)[1] ?? "";
           const binary = atob(base64);
           const bytes = new Uint8Array(binary.length);
           for (let i = 0; i < binary.length; i++) {
@@ -334,9 +317,9 @@ export function ImagePreviewModal({
           }
           setDataUrl(url);
           setPngBytes(bytes);
-          setPhase('ready');
+          setPhase("ready");
         })
-        .catch(err => {
+        .catch((err) => {
           if (cancelled) return;
           // html-to-image's image-embed phase rejects with the raw DOM
           // `Event` from `<img>.onerror` rather than an `Error`. A
@@ -344,15 +327,11 @@ export function ImagePreviewModal({
           // user (shiki `cKM3NLjAQU-idOWD`). Decode the event so the
           // toast / error banner reports something actionable.
           setError(formatCaptureFailure(err));
-          setPhase('error');
+          setPhase("error");
         });
     };
     const rafs: number[] = [];
-    const taskRefs = snapshotStaticTaskRefs(
-      messages,
-      { workspaceId, conversationId },
-      queryClient,
-    );
+    const taskRefs = snapshotStaticTaskRefs(messages, { workspaceId, conversationId }, queryClient);
     void Promise.all([
       preloadImageAttachments(messages),
       // Pre-render Mermaid diagrams to SVG off-screen and wait for ALL of them
@@ -387,7 +366,7 @@ export function ImagePreviewModal({
     try {
       const result = await window.silverhand.copyPngExport({ pngBytes });
       if (result.ok) {
-        toast.success('Image copied to clipboard');
+        toast.success("Image copied to clipboard");
         onExportComplete?.();
         onOpenChange(false);
       } else {
@@ -407,12 +386,12 @@ export function ImagePreviewModal({
         suggestedName,
       });
       if (result.ok) {
-        toast.success('Saved to ' + result.path);
+        toast.success("Saved to " + result.path);
         onExportComplete?.();
         onOpenChange(false);
-      } else if ('canceled' in result && result.canceled) {
+      } else if ("canceled" in result && result.canceled) {
         // user dismissed dialog — silent, keep selection so they can retry
-      } else if ('error' in result) {
+      } else if ("error" in result) {
         toast.error("Couldn't save: " + result.error);
       }
     } finally {
@@ -424,7 +403,10 @@ export function ImagePreviewModal({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[var(--z-lightbox)] bg-black/40" />
-        <Dialog.Content data-modal-shell className="fixed left-1/2 top-1/2 z-[var(--z-lightbox-chrome)] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--floating-radius,var(--radius-md))] bg-bg-floating p-4 shadow-xl">
+        <Dialog.Content
+          data-modal-shell
+          className="fixed left-1/2 top-1/2 z-[var(--z-lightbox-chrome)] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--floating-radius,var(--radius-md))] bg-bg-floating p-4 shadow-xl"
+        >
           <div className="flex items-center gap-2">
             <Dialog.Title className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
               Image Preview
@@ -441,24 +423,20 @@ export function ImagePreviewModal({
             </Dialog.Close>
           </div>
           <Dialog.Description className="mt-1 text-xs text-text-muted">
-            {messages.length === 0 ? 'Select at least one message' : ''}
+            {messages.length === 0 ? "Select at least one message" : ""}
           </Dialog.Description>
 
           <div className="mt-3 min-h-[200px] flex-1 overflow-auto rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated p-2">
-            {phase === 'rendering' || phase === 'idle' ? (
+            {phase === "rendering" || phase === "idle" ? (
               <div className="flex h-full items-center justify-center text-xs text-text-muted">
                 Rendering…
               </div>
-            ) : phase === 'error' ? (
+            ) : phase === "error" ? (
               <div className="flex h-full items-center justify-center text-xs text-error">
                 Couldn't render: {error}
               </div>
             ) : dataUrl ? (
-              <img
-                src={dataUrl}
-                alt="export preview"
-                className="block max-w-full"
-              />
+              <img src={dataUrl} alt="export preview" className="block max-w-full" />
             ) : null}
           </div>
 
@@ -466,13 +444,13 @@ export function ImagePreviewModal({
             <SelectionActionButton
               rank="secondary"
               label="Copy"
-              disabled={phase !== 'ready' || busy}
+              disabled={phase !== "ready" || busy}
               onClick={onCopy}
             />
             <SelectionActionButton
               rank="primary"
               label="Save"
-              disabled={phase !== 'ready' || busy}
+              disabled={phase !== "ready" || busy}
               onClick={onSave}
             />
           </div>
@@ -484,10 +462,10 @@ export function ImagePreviewModal({
           <div
             aria-hidden
             style={{
-              position: 'fixed',
-              top: '-99999px',
-              left: '-99999px',
-              pointerEvents: 'none',
+              position: "fixed",
+              top: "-99999px",
+              left: "-99999px",
+              pointerEvents: "none",
             }}
           >
             <div ref={offscreenRef}>
@@ -582,12 +560,12 @@ async function preloadImageAttachments(
   const ids = new Set<string>();
   for (const message of messages) {
     for (const attachment of message.attachments ?? []) {
-      if (attachment.content_type.startsWith('image/')) ids.add(attachment.id);
+      if (attachment.content_type.startsWith("image/")) ids.add(attachment.id);
     }
   }
   if (ids.size === 0) return new Map();
   const entries = await Promise.all(
-    Array.from(ids, async id => {
+    Array.from(ids, async (id) => {
       try {
         return [id, await loadAttachmentBlobUrl(id)] as const;
       } catch {
@@ -595,9 +573,5 @@ async function preloadImageAttachments(
       }
     }),
   );
-  return new Map(
-    entries.filter(
-      (entry): entry is readonly [string, string] => entry !== null,
-    ),
-  );
+  return new Map(entries.filter((entry): entry is readonly [string, string] => entry !== null));
 }

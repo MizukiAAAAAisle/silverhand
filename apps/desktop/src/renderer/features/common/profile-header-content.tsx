@@ -1,6 +1,6 @@
-import type { CSSProperties, ReactNode } from 'react';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import '@/features/agents/agent-page.css';
+import type { CSSProperties, ReactNode } from "react";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import "@/features/agents/agent-page.css";
 
 export function ProfileHeaderContent({
   compact,
@@ -23,7 +23,7 @@ export function ProfileHeaderContent({
       data-compact={compact}
       style={
         {
-          '--agent-header-avatar-size': `${compact ? AVATAR_PX.md : AVATAR_PX.xl}px`,
+          "--agent-header-avatar-size": `${compact ? AVATAR_PX.md : AVATAR_PX.xl}px`,
         } as CSSProperties
       }
     >
@@ -42,7 +42,7 @@ export function ProfileHeaderContent({
         ) : null}
       </div>
       {actions ? (
-        <div data-channel-actions={compact ? '' : undefined} className="agent-header-actions">
+        <div data-channel-actions={compact ? "" : undefined} className="agent-header-actions">
           {actions}
         </div>
       ) : null}

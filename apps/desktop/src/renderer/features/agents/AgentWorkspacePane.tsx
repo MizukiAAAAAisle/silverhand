@@ -1,11 +1,11 @@
-import { AGENT_HOME_SOURCE } from './workspace-source';
-import { useQueryClient } from '@tanstack/react-query';
+import { AGENT_HOME_SOURCE } from "./workspace-source";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AgentWorkspaceBrowser,
   useWorkspaceSelection,
   type AgentWorkspaceLayout,
-} from './AgentWorkspaceBrowser';
-import { useAgentWorkspaceFile, useAgentWorkspaceTree, type AgentWorkspaceSource } from './hooks';
+} from "./AgentWorkspaceBrowser";
+import { useAgentWorkspaceFile, useAgentWorkspaceTree, type AgentWorkspaceSource } from "./hooks";
 
 /**
  * The bridge between a data source and the source-blind `AgentWorkspaceBrowser`
@@ -31,11 +31,11 @@ export function AgentWorkspaceContainer({
   // Two-column (full) always wants a file in its ever-present preview pane;
   // the compact drill-in must start at the file list (Cindy #task:1191 P1).
   const { selectedPath, setSelectedPath } = useWorkspaceSelection(treeQuery.data, {
-    autoSelectFirstFile: layout === 'full',
+    autoSelectFirstFile: layout === "full",
   });
   const fileQuery = useAgentWorkspaceFile(agentId, source, selectedPath);
   const qc = useQueryClient();
-  const onRefresh = () => qc.invalidateQueries({ queryKey: ['agents', agentId, 'workspace'] });
+  const onRefresh = () => qc.invalidateQueries({ queryKey: ["agents", agentId, "workspace"] });
 
   return (
     <AgentWorkspaceBrowser

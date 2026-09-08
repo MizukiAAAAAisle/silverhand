@@ -1,6 +1,6 @@
-import { User } from 'lucide-react';
-import type { AgentDto } from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
+import { User } from "lucide-react";
+import type { AgentDto } from "@silverhand/shared";
+import { AgentAvatar } from "@/components/AgentAvatar";
 
 /**
  * Canonical workspace identity icon — the single source of truth shared by the
@@ -46,7 +46,7 @@ export function WorkspaceIcon({
    *  archived panels). */
   size?: number;
 }): JSX.Element {
-  const ownerAgent = ownerAgentId ? agentsById?.get(ownerAgentId) ?? null : null;
+  const ownerAgent = ownerAgentId ? (agentsById?.get(ownerAgentId) ?? null) : null;
   if (ownerAgent) {
     return (
       <AgentAvatar
@@ -57,8 +57,7 @@ export function WorkspaceIcon({
       />
     );
   }
-  if (ownerAgentId)
-    return <User style={{ width: size, height: size }} className="shrink-0" />;
+  if (ownerAgentId) return <User style={{ width: size, height: size }} className="shrink-0" />;
   return (
     <span
       data-workspace-icon

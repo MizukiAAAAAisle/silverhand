@@ -1,21 +1,17 @@
-import { useMemo, type ReactElement } from 'react';
-import { SelectionToolbar } from '@/components/chat/SelectionToolbar';
-import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
-import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
-import type { MessageActionSurface } from '@/components/chat/useMessageActionSurface';
-import type { MessageRenderContext } from '@/components/chat/useMessageRenderContext';
-import type { WorkspaceChannelReference } from './ConversationRef';
+import { useMemo, type ReactElement } from "react";
+import { SelectionToolbar } from "@/components/chat/SelectionToolbar";
+import { ImagePreviewModal } from "@/components/chat/ImagePreviewModal";
+import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
+import type { MessageActionSurface } from "@/components/chat/useMessageActionSurface";
+import type { MessageRenderContext } from "@/components/chat/useMessageRenderContext";
+import type { WorkspaceChannelReference } from "./ConversationRef";
 
 /** Render context the image-export modal needs: a subset of
  *  `MessageRenderContext` plus the agent avatar batch (lifted per surface
  *  so authors / member chips / activity strip share one fetch). */
 export type MessageActionChromeRenderContext = Pick<
   MessageRenderContext,
-  | 'agentsByName'
-  | 'humansByName'
-  | 'channelsByName'
-  | 'viewer'
-  | 'viewerAvatarObjectUrl'
+  "agentsByName" | "humansByName" | "channelsByName" | "viewer" | "viewerAvatarObjectUrl"
 > & {
   agentAvatarUrls: ReadonlyMap<string, string | null>;
   conversationRefsById?: ReadonlyMap<string, WorkspaceChannelReference>;
@@ -53,13 +49,11 @@ export function MessageActionChrome({
   // body's inline @-mention pills, a separate axis. Active authors already
   // resolved in the live view are session-cached by url, so this is a hit.
   const previewAuthors = useMemo(
-    () => surface.previewSnapshots.map(m => m.author),
+    () => surface.previewSnapshots.map((m) => m.author),
     [surface.previewSnapshots],
   );
-  const {
-    agentAvatarUrls: authorAgentAvatarUrls,
-    humanAvatarUrls: authorUserAvatarUrls,
-  } = useAuthorAvatarObjectUrls(previewAuthors);
+  const { agentAvatarUrls: authorAgentAvatarUrls, humanAvatarUrls: authorUserAvatarUrls } =
+    useAuthorAvatarObjectUrls(previewAuthors);
   return (
     <>
       {surface.selection.active ? (

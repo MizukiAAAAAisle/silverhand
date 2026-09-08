@@ -3,12 +3,12 @@ import type {
   ChannelLeaveBlockedReason,
   ConversationAgentRuntimeDto,
   ConversationVisibility,
-} from '@silverhand/shared';
-import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
-import type { PanelTabKind } from '@/lib/conversation-tabs';
-import { ChannelAttachmentsContent } from '@/components/layout/ChannelAttachmentsPanel';
-import { ChannelThreadsContent } from '@/components/layout/ChannelThreadsPanel';
-import { ChannelAddMemberEntry, ChannelMembersContent } from './members-dialog';
+} from "@silverhand/shared";
+import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import type { PanelTabKind } from "@/lib/conversation-tabs";
+import { ChannelAttachmentsContent } from "@/components/layout/ChannelAttachmentsPanel";
+import { ChannelThreadsContent } from "@/components/layout/ChannelThreadsPanel";
+import { ChannelAddMemberEntry, ChannelMembersContent } from "./members-dialog";
 
 /**
  * The custom-tab HOST for a conversation surface. It owns only the tab's
@@ -51,7 +51,7 @@ export function ConversationPanelTab({
   visibility?: ConversationVisibility;
 }): JSX.Element | null {
   switch (panel) {
-    case 'attachments':
+    case "attachments":
       return (
         // This host's inset. Pane-edge gutter is the container's, not the
         // surface's — so the same content sits at a different distance from the
@@ -66,17 +66,14 @@ export function ConversationPanelTab({
           />
         </div>
       );
-    case 'threads':
+    case "threads":
       if (!onOpenThread) return null;
       return (
         <div className="flex h-full min-h-0 flex-col px-3">
-          <ChannelThreadsContent
-            channelId={channelId}
-            onOpenThread={onOpenThread}
-          />
+          <ChannelThreadsContent channelId={channelId} onOpenThread={onOpenThread} />
         </div>
       );
-    case 'members':
+    case "members":
       return (
         <div className="flex h-full min-h-0 flex-col overflow-y-auto px-3 py-3">
           {/* Add member is a natural-width top action — no divider, no restyle:

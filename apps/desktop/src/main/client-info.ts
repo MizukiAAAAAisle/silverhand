@@ -1,14 +1,14 @@
-import { app } from 'electron';
+import { app } from "electron";
 import {
   serializeClientInfoHeader,
   DESKTOP_SERVER_API_EPOCH,
   MINIMUM_SERVER_API_EPOCH,
   type ClientInfo,
   type ClientDeployment,
-} from '@silverhand/shared';
-import { DESKTOP_REMOTE_ONLY } from '../build-flags.js';
-import { loadOrCreateInstallationId } from './local-host-claim.js';
-import { BUILD_COMMIT, BUILD_DIRTY } from './build-metadata.js';
+} from "@silverhand/shared";
+import { DESKTOP_REMOTE_ONLY } from "../build-flags.js";
+import { loadOrCreateInstallationId } from "./local-host-claim.js";
+import { BUILD_COMMIT, BUILD_DIRTY } from "./build-metadata.js";
 
 let cachedHeaderValue: string | null | undefined;
 
@@ -22,9 +22,9 @@ export function desktopClientInfoHeaderValue(
 ): string | null {
   if (cachedHeaderValue !== undefined) return cachedHeaderValue;
   try {
-    const deployment: ClientDeployment = DESKTOP_REMOTE_ONLY ? 'remote-only' : 'embedded';
+    const deployment: ClientDeployment = DESKTOP_REMOTE_ONLY ? "remote-only" : "embedded";
     const info: ClientInfo = {
-      client_surface: 'desktop',
+      client_surface: "desktop",
       deployment,
       app_version: app.getVersion(),
       build_commit: BUILD_COMMIT,
@@ -37,7 +37,7 @@ export function desktopClientInfoHeaderValue(
     };
     cachedHeaderValue = serializeClientInfoHeader(info);
   } catch (err) {
-    logger?.warn({ err }, 'failed to assemble desktop client-info telemetry header');
+    logger?.warn({ err }, "failed to assemble desktop client-info telemetry header");
     cachedHeaderValue = null;
   }
   return cachedHeaderValue;

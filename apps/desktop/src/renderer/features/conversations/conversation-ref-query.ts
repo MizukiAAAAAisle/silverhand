@@ -1,6 +1,6 @@
-import { apiPaths, type ConversationRef } from '@silverhand/shared';
-import { api } from '@/lib/api';
-import { recordChannelWorkspace } from '@/features/channels/channel-workspace-index';
+import { apiPaths, type ConversationRef } from "@silverhand/shared";
+import { api } from "@/lib/api";
+import { recordChannelWorkspace } from "@/features/channels/channel-workspace-index";
 
 export interface ConversationRefResponse {
   ref: ConversationRef;
@@ -14,8 +14,7 @@ const REF_STALE_MS = 30 * 1000;
  *  neither `apiPaths.conversationRef` nor the raw key literal, so it would fill
  *  this cache with no write-through and every scan would stay green. Consumers
  *  take the options; nobody needs the key alone. */
-const conversationRefQueryKey = (id: string) =>
-  ['conversation-ref', id] as const;
+const conversationRefQueryKey = (id: string) => ["conversation-ref", id] as const;
 
 /**
  * THE conversation-ref read point (#task:1689).

@@ -29,12 +29,9 @@
  * a rejected promise would crash the shutdown sequence Cindy
  * explicitly carved out as "best-effort, never blocks SIGTERM".
  */
-import { describe, expect, it } from 'vitest';
-import type { HostClient } from '@silverhand/host';
-import {
-  gracefullyDetachOutbound,
-  type GracefulDetachOutcome,
-} from '../outbound-detach.js';
+import { describe, expect, it } from "vitest";
+import type { HostClient } from "@silverhand/host";
+import { gracefullyDetachOutbound, type GracefulDetachOutcome } from "../outbound-detach.js";
 
 // ── Fake clock (mirrors the spawn-supervisor-backoff pattern) ──────
 
@@ -73,12 +70,12 @@ class FakeClock {
     const target = this.current + ms;
     for (let safety = 0; safety < 1000; safety++) {
       const due = this.timers
-        .filter(t => !t.cleared && t.deadline <= target)
+        .filter((t) => !t.cleared && t.deadline <= target)
         .sort((a, b) => a.deadline - b.deadline || a.id - b.id);
       if (due.length === 0) break;
       const next = due[0]!;
       this.current = next.deadline;
-      this.timers = this.timers.filter(t => t !== next);
+      this.timers = this.timers.filter((t) => t !== next);
       next.fn();
     }
     this.current = target;
@@ -87,20 +84,19 @@ class FakeClock {
 
 // ── Minimal `HostClient`-shaped stub ───────────────────────────────
 
-function mkClientResolving(action: 'detached' | 'noop'): Pick<HostClient, 'hostOutboundDetach'> {
+function mkClientResolving(action: "detached" | "noop"): Pick<HostClient, "hostOutboundDetach"> {
   return {
-    hostOutboundDetach: () =>
-      Promise.resolve({ detached: true as const, action }),
+    hostOutboundDetach: () => Promise.resolve({ detached: true as const, action }),
   };
 }
 
-function mkClientRejecting(err: unknown): Pick<HostClient, 'hostOutboundDetach'> {
+function mkClientRejecting(err: unknown): Pick<HostClient, "hostOutboundDetach"> {
   return {
     hostOutboundDetach: () => Promise.reject(err),
   };
 }
 
-function mkClientHanging(): Pick<HostClient, 'hostOutboundDetach'> {
+function mkClientHanging(): Pick<HostClient, "hostOutboundDetach"> {
   return {
     hostOutboundDetach: () => new Promise(() => {}),
   };
@@ -113,11 +109,9 @@ function mkClientHanging(): Pick<HostClient, 'hostOutboundDetach'> {
 // N polls" naturally. The helper only checks `=== null` so we use
 // opaque sentinel objects for "still attached" snapshots.
 
-const STALE = { _: 'stale-attachment-sentinel' } as const;
+const STALE = { _: "stale-attachment-sentinel" } as const;
 
-function mkGetAttachment(
-  snapshots: ReadonlyArray<unknown>,
-): (hostId: string) => unknown {
+function mkGetAttachment(snapshots: ReadonlyArray<unknown>): (hostId: string) => unknown {
   let i = 0;
   return (_hostId: string) => {
     const idx = Math.min(i, snapshots.length - 1);
@@ -139,7 +133,7 @@ async function flushMicrotasks(): Promise<void> {
 // ── Test harness ───────────────────────────────────────────────────
 
 interface RunArgs {
-  client: Pick<HostClient, 'hostOutboundDetach'>;
+  client: Pick<HostClient, "hostOutboundDetach">;
   hostId: string | null;
   snapshots?: ReadonlyArray<unknown>;
   /** When set to true, omit the `getAttachment` accessor entirely
@@ -157,9 +151,7 @@ function startHelper(args: RunArgs): {
   const promise = gracefullyDetachOutbound({
     client: args.client,
     hostId: args.hostId,
-    getAttachment: args.noAccessor
-      ? undefined
-      : mkGetAttachment(args.snapshots ?? [null]),
+    getAttachment: args.noAccessor ? undefined : mkGetAttachment(args.snapshots ?? [null]),
     budgetMs: args.budgetMs ?? 1500,
     pollIntervalMs: args.pollIntervalMs ?? 100,
     now: clock.now,
@@ -182,37 +174,37 @@ class FakeHostClientError extends Error {
 
 // ── Tests ──────────────────────────────────────────────────────────
 
-describe('gracefullyDetachOutbound — happy paths', () => {
-  it('RPC=detached + registry already cleared (sync fast path) → registryCleared:true, no budget burn', async () => {
+describe("gracefullyDetachOutbound — happy paths", () => {
+  it("RPC=detached + registry already cleared (sync fast path) → registryCleared:true, no budget burn", async () => {
     // The daemon almost always closes the WS before its IPC ack
     // returns, so the registry is often already null by the time the
     // poll loop's synchronous initial probe runs. We assert that the
     // fast path resolves WITHOUT advancing the clock by even one
     // pollInterval.
     const { promise } = startHelper({
-      client: mkClientResolving('detached'),
-      hostId: 'host-x',
+      client: mkClientResolving("detached"),
+      hostId: "host-x",
       snapshots: [null],
     });
     const out = await promise;
-    expect(out.rpc).toEqual({ ok: true, action: 'detached' });
+    expect(out.rpc).toEqual({ ok: true, action: "detached" });
     expect(out.registryCleared).toBe(true);
     expect(out.budgetExhausted).toBe(false);
     // Sync probe + microtask-only RPC → elapsed should be ~0.
     expect(out.elapsedMs).toBe(0);
   });
 
-  it('RPC=noop + registry cleared after one poll → noop path also polls (proves stale-row cleanup)', async () => {
+  it("RPC=noop + registry cleared after one poll → noop path also polls (proves stale-row cleanup)", async () => {
     // The `noop` arm means the daemon had no active client to stop,
     // but the BACKEND registry can still hold a stale attachment row
     // from a prior connection. The helper MUST still poll in that
     // case — that's the whole reason the verification step exists.
     const { promise, clock } = startHelper({
-      client: mkClientResolving('noop'),
-      hostId: 'host-x',
+      client: mkClientResolving("noop"),
+      hostId: "host-x",
       snapshots: [
-        STALE,   // sync initial probe
-        null,    // first scheduled poll → cleared
+        STALE, // sync initial probe
+        null, // first scheduled poll → cleared
       ],
       pollIntervalMs: 100,
     });
@@ -222,21 +214,21 @@ describe('gracefullyDetachOutbound — happy paths', () => {
     clock.advance(100);
     await flushMicrotasks();
     const out = await promise;
-    expect(out.rpc).toEqual({ ok: true, action: 'noop' });
+    expect(out.rpc).toEqual({ ok: true, action: "noop" });
     expect(out.registryCleared).toBe(true);
     expect(out.budgetExhausted).toBe(false);
     expect(out.elapsedMs).toBe(100);
   });
 });
 
-describe('gracefullyDetachOutbound — registry never clears within budget', () => {
-  it('RPC=detached but registry stays attached → registryCleared:false, budgetExhausted:true', async () => {
+describe("gracefullyDetachOutbound — registry never clears within budget", () => {
+  it("RPC=detached but registry stays attached → registryCleared:false, budgetExhausted:true", async () => {
     // Models the "daemon answered our IPC but the backend
     // controller has gone unresponsive" pathology. Helper must
     // give up at the budget without throwing.
     const { promise, clock } = startHelper({
-      client: mkClientResolving('detached'),
-      hostId: 'host-x',
+      client: mkClientResolving("detached"),
+      hostId: "host-x",
       // Infinite supply of "still attached" snapshots — the
       // mkGetAttachment helper keeps returning the last element
       // once the queue is exhausted, so one STALE entry is enough.
@@ -257,7 +249,7 @@ describe('gracefullyDetachOutbound — registry never clears within budget', () 
       await flushMicrotasks();
     }
     const out = await promise;
-    expect(out.rpc).toEqual({ ok: true, action: 'detached' });
+    expect(out.rpc).toEqual({ ok: true, action: "detached" });
     expect(out.registryCleared).toBe(false);
     expect(out.budgetExhausted).toBe(true);
     // Helper should never exceed the budget.
@@ -265,29 +257,29 @@ describe('gracefullyDetachOutbound — registry never clears within budget', () 
   });
 });
 
-describe('gracefullyDetachOutbound — RPC failure paths', () => {
-  it('RPC throws HostClientError-shaped object → rpc.ok:false carries code, poll still runs', async () => {
+describe("gracefullyDetachOutbound — RPC failure paths", () => {
+  it("RPC throws HostClientError-shaped object → rpc.ok:false carries code, poll still runs", async () => {
     // A real IPC failure (socket closed, daemon dead) must not
     // prevent the verification step — the backend may already have
     // dropped the attachment via WS close detection, and observing
     // that is still useful diagnostic data.
-    const err = new FakeHostClientError('closed', 'client is closed');
+    const err = new FakeHostClientError("closed", "client is closed");
     const { promise } = startHelper({
       client: mkClientRejecting(err),
-      hostId: 'host-x',
+      hostId: "host-x",
       snapshots: [null],
     });
     const out = await promise;
     expect(out.rpc).toEqual({
       ok: false,
-      error: 'client is closed',
-      code: 'closed',
+      error: "client is closed",
+      code: "closed",
     });
     expect(out.registryCleared).toBe(true);
     expect(out.budgetExhausted).toBe(false);
   });
 
-  it('RPC hangs forever → synthetic timeout, no poll attempted (budget already gone)', async () => {
+  it("RPC hangs forever → synthetic timeout, no poll attempted (budget already gone)", async () => {
     // Pathological RPC that never settles. The race-against-budget
     // step takes the full 1500ms; by the time it returns the poll
     // step has zero budget. With a stale registry snapshot the
@@ -298,7 +290,7 @@ describe('gracefullyDetachOutbound — RPC failure paths', () => {
     const clock = new FakeClock();
     const promise = gracefullyDetachOutbound({
       client: mkClientHanging(),
-      hostId: 'host-x',
+      hostId: "host-x",
       getAttachment: (_h: string) => {
         pollCalls += 1;
         // Stale snapshot — proves the helper isn't accidentally
@@ -322,7 +314,7 @@ describe('gracefullyDetachOutbound — RPC failure paths', () => {
     const out = await promise;
     expect(out.rpc.ok).toBe(false);
     if (!out.rpc.ok) {
-      expect(out.rpc.code).toBe('synthetic_timeout');
+      expect(out.rpc.code).toBe("synthetic_timeout");
     }
     expect(out.registryCleared).toBe(false);
     expect(out.budgetExhausted).toBe(true);
@@ -332,37 +324,37 @@ describe('gracefullyDetachOutbound — RPC failure paths', () => {
     expect(pollCalls).toBe(1);
   });
 
-  it('RPC throws a non-Error value → helper still resolves cleanly', async () => {
+  it("RPC throws a non-Error value → helper still resolves cleanly", async () => {
     // Defensive case: production code might throw a string or
     // plain object. The helper must not blow up trying to read
     // `.message`.
     const { promise } = startHelper({
-      client: mkClientRejecting('something went wrong'),
-      hostId: 'host-x',
+      client: mkClientRejecting("something went wrong"),
+      hostId: "host-x",
       snapshots: [null],
     });
     const out = await promise;
     expect(out.rpc).toEqual({
       ok: false,
-      error: 'something went wrong',
+      error: "something went wrong",
     });
     expect(out.registryCleared).toBe(true);
   });
 });
 
-describe('gracefullyDetachOutbound — degradation paths', () => {
+describe("gracefullyDetachOutbound — degradation paths", () => {
   it('hostId=null → registryCleared:"skipped", helper resolves on IPC settle', async () => {
     // Pre-login quit, or claim never made. Nothing to verify; the
     // IPC hint alone still helps the daemon (it'll noop). Helper
     // returns the skipped marker so the caller's structured log
     // shows the degradation explicitly.
     const { promise } = startHelper({
-      client: mkClientResolving('noop'),
+      client: mkClientResolving("noop"),
       hostId: null,
     });
     const out = await promise;
-    expect(out.rpc).toEqual({ ok: true, action: 'noop' });
-    expect(out.registryCleared).toBe('skipped');
+    expect(out.rpc).toEqual({ ok: true, action: "noop" });
+    expect(out.registryCleared).toBe("skipped");
     expect(out.budgetExhausted).toBe(false);
   });
 
@@ -371,32 +363,32 @@ describe('gracefullyDetachOutbound — degradation paths', () => {
     // wired in this build. Same skipped marker, distinct cause
     // (the caller knows from `hostId` which side dropped).
     const { promise } = startHelper({
-      client: mkClientResolving('detached'),
-      hostId: 'host-x',
+      client: mkClientResolving("detached"),
+      hostId: "host-x",
       noAccessor: true,
     });
     const out = await promise;
-    expect(out.rpc).toEqual({ ok: true, action: 'detached' });
-    expect(out.registryCleared).toBe('skipped');
+    expect(out.rpc).toEqual({ ok: true, action: "detached" });
+    expect(out.registryCleared).toBe("skipped");
     expect(out.budgetExhausted).toBe(false);
   });
 });
 
-describe('gracefullyDetachOutbound — never-throws contract (Cindy #task:630 P1-B)', () => {
-  it('client.hostOutboundDetach() synchronously throws → helper resolves with rpc.ok:false, never rejects', async () => {
+describe("gracefullyDetachOutbound — never-throws contract (Cindy #task:630 P1-B)", () => {
+  it("client.hostOutboundDetach() synchronously throws → helper resolves with rpc.ok:false, never rejects", async () => {
     // Production HostClient always returns a Promise, but the
     // helper accepts any Pick<HostClient, ...>-shaped object —
     // future remote-client adapters / test seams could throw
     // synchronously. A reject here would terminate the shutdown
     // sequence partway through; we must catch and surface as data.
-    const syncThrowingClient: Pick<HostClient, 'hostOutboundDetach'> = {
+    const syncThrowingClient: Pick<HostClient, "hostOutboundDetach"> = {
       hostOutboundDetach: () => {
-        throw new Error('sync throw from client');
+        throw new Error("sync throw from client");
       },
     };
     const { promise } = startHelper({
       client: syncThrowingClient,
-      hostId: 'host-x',
+      hostId: "host-x",
       snapshots: [null],
     });
     // The test simply awaits the promise; if the contract were
@@ -404,7 +396,7 @@ describe('gracefullyDetachOutbound — never-throws contract (Cindy #task:630 P1
     const out = await promise;
     expect(out.rpc).toEqual({
       ok: false,
-      error: 'sync throw from client',
+      error: "sync throw from client",
     });
     // Poll still ran because budget remained; registry was empty so
     // we got the cleared signal. Demonstrates the sync throw didn't
@@ -419,12 +411,12 @@ describe('gracefullyDetachOutbound — never-throws contract (Cindy #task:630 P1
     // this as data and let shutdown continue — the IPC hint already
     // landed, so the daemon-side cleanup is still on track.
     const throwingAccessor = (_hostId: string): unknown => {
-      throw new Error('registry boom');
+      throw new Error("registry boom");
     };
     const clock = new FakeClock();
     const promise = gracefullyDetachOutbound({
-      client: mkClientResolving('detached'),
-      hostId: 'host-x',
+      client: mkClientResolving("detached"),
+      hostId: "host-x",
       getAttachment: throwingAccessor,
       budgetMs: 1500,
       pollIntervalMs: 100,
@@ -433,15 +425,15 @@ describe('gracefullyDetachOutbound — never-throws contract (Cindy #task:630 P1
       clearTimeoutImpl: clock.clearTimeout,
     });
     const out = await promise;
-    expect(out.rpc).toEqual({ ok: true, action: 'detached' });
-    expect(out.registryCleared).toBe('error');
-    expect(out.registryError).toBe('registry boom');
+    expect(out.rpc).toEqual({ ok: true, action: "detached" });
+    expect(out.registryCleared).toBe("error");
+    expect(out.registryError).toBe("registry boom");
     // Distinct from budget-exhausted: the loop stopped because the
     // accessor failed, not because we ran out of time.
     expect(out.budgetExhausted).toBe(false);
   });
 
-  it('getAttachment throws on a scheduled poll tick (not the sync probe) → same registry-error outcome', async () => {
+  it("getAttachment throws on a scheduled poll tick (not the sync probe) → same registry-error outcome", async () => {
     // Pin both code paths: the helper has two probe sites (sync
     // initial + scheduled tick). A throw on the tick path must
     // resolve the helper just like a throw on the sync path,
@@ -454,12 +446,12 @@ describe('gracefullyDetachOutbound — never-throws contract (Cindy #task:630 P1
         return STALE;
       }
       // First scheduled poll tick throws.
-      throw new Error('registry blew up mid-poll');
+      throw new Error("registry blew up mid-poll");
     };
     const clock = new FakeClock();
     const promise = gracefullyDetachOutbound({
-      client: mkClientResolving('detached'),
-      hostId: 'host-x',
+      client: mkClientResolving("detached"),
+      hostId: "host-x",
       getAttachment: flakyAccessor,
       budgetMs: 1500,
       pollIntervalMs: 100,
@@ -471,9 +463,9 @@ describe('gracefullyDetachOutbound — never-throws contract (Cindy #task:630 P1
     clock.advance(100);
     await flushMicrotasks();
     const out = await promise;
-    expect(out.rpc).toEqual({ ok: true, action: 'detached' });
-    expect(out.registryCleared).toBe('error');
-    expect(out.registryError).toBe('registry blew up mid-poll');
+    expect(out.rpc).toEqual({ ok: true, action: "detached" });
+    expect(out.registryCleared).toBe("error");
+    expect(out.registryError).toBe("registry blew up mid-poll");
     // Sanity: helper stopped on the throw; no further accessor
     // calls happen even if we advance the clock past the budget.
     const callsAtResolve = callCount;
@@ -482,18 +474,18 @@ describe('gracefullyDetachOutbound — never-throws contract (Cindy #task:630 P1
     expect(callCount).toBe(callsAtResolve);
   });
 
-  it('getAttachment throws a non-Error value → still captured as registryError string', async () => {
+  it("getAttachment throws a non-Error value → still captured as registryError string", async () => {
     // Defensive symmetry with the RPC non-Error-throw test: the
     // accessor might throw a string or plain object. Helper must
     // not crash trying to read `.message`.
     const stringThrowAccessor = (_hostId: string): unknown => {
       // eslint-disable-next-line @typescript-eslint/no-throw-literal
-      throw 'a string error, somehow';
+      throw "a string error, somehow";
     };
     const clock = new FakeClock();
     const promise = gracefullyDetachOutbound({
-      client: mkClientResolving('detached'),
-      hostId: 'host-x',
+      client: mkClientResolving("detached"),
+      hostId: "host-x",
       getAttachment: stringThrowAccessor,
       budgetMs: 1500,
       pollIntervalMs: 100,
@@ -502,7 +494,7 @@ describe('gracefullyDetachOutbound — never-throws contract (Cindy #task:630 P1
       clearTimeoutImpl: clock.clearTimeout,
     });
     const out = await promise;
-    expect(out.registryCleared).toBe('error');
-    expect(out.registryError).toBe('a string error, somehow');
+    expect(out.registryCleared).toBe("error");
+    expect(out.registryError).toBe("a string error, somehow");
   });
 });

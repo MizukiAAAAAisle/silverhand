@@ -4,9 +4,9 @@ import {
   type TaskBoardContainer,
   type TaskBoardCreatorFilterType,
   type TaskStatus,
-} from '@silverhand/shared';
-import { COLUMN_PAGE_SIZE } from './columnWindow';
-import { type TaskFilters } from './taskFilters';
+} from "@silverhand/shared";
+import { COLUMN_PAGE_SIZE } from "./columnWindow";
+import { type TaskFilters } from "./taskFilters";
 
 /**
  * Wire mapping for the board read faces (#task:1884) — the pure half of the
@@ -55,13 +55,13 @@ export function boardFilterParams(filters: TaskFilters): BoardFilterParams {
   if (filters.container) params.container = filters.container;
   if (filters.workspaceId) params.workspace_id = filters.workspaceId;
   if (filters.channelId) params.channel_id = filters.channelId;
-  if (filters.assignee.kind === 'unassigned') {
-    params.assignee_type = 'unassigned';
-  } else if (filters.assignee.kind === 'person') {
+  if (filters.assignee.kind === "unassigned") {
+    params.assignee_type = "unassigned";
+  } else if (filters.assignee.kind === "person") {
     params.assignee_type = filters.assignee.person.type;
     params.assignee_id = filters.assignee.person.id;
   }
-  if (filters.creator.kind === 'person') {
+  if (filters.creator.kind === "person") {
     params.creator_type = filters.creator.person.type;
     params.creator_id = filters.creator.person.id;
   }
@@ -84,24 +84,19 @@ export function boardFilterKey(filters: TaskFilters): string {
   const p = boardFilterParams(filters);
   const assignee =
     p.assignee_type === undefined
-      ? 'any'
+      ? "any"
       : p.assignee_id === undefined
         ? p.assignee_type
         : `${p.assignee_type}:${p.assignee_id}`;
   // `creator_type` and `creator_id` are written together above (the wire rejects
   // a half-specified axis), so one branch covers both.
-  const creator =
-    p.creator_type === undefined ? 'any' : `${p.creator_type}:${p.creator_id}`;
+  const creator = p.creator_type === undefined ? "any" : `${p.creator_type}:${p.creator_id}`;
   // Container is APPENDED, not prepended: `filterKeyConstrainsAssignee` reads
   // segment [2], and every other positional reader is anchored the same way, so
   // a new axis must land past the existing ones.
-  return [
-    p.workspace_id ?? '*',
-    p.channel_id ?? '*',
-    assignee,
-    creator,
-    p.container ?? '*',
-  ].join('|');
+  return [p.workspace_id ?? "*", p.channel_id ?? "*", assignee, creator, p.container ?? "*"].join(
+    "|",
+  );
 }
 
 /**
@@ -118,17 +113,17 @@ export function boardFilterKey(filters: TaskFilters): string {
  * that narrows it must re-read the one column holding the row (#task:1975).
  */
 export function filterKeyConstrainsAssignee(filterKey: string): boolean {
-  const assignee = filterKey.split('|')[2];
-  return assignee !== undefined && assignee !== 'any';
+  const assignee = filterKey.split("|")[2];
+  return assignee !== undefined && assignee !== "any";
 }
 
 /** Cache key for ONE status column's page list. Status is its own segment so a
  *  single column can be invalidated without touching its neighbours. */
 export const boardColumnKey = (status: TaskStatus, filterKey: string) =>
-  ['tasks', 'board', 'column', status, filterKey] as const;
+  ["tasks", "board", "column", status, filterKey] as const;
 
 export const boardCountsKey = (filterKey: string) =>
-  ['tasks', 'board', 'counts', filterKey] as const;
+  ["tasks", "board", "counts", filterKey] as const;
 
 /** Facets take EXACTLY ONE axis — the container that selects the board — and no
  *  within-board filters (the option sets must not shrink to the current
@@ -136,7 +131,7 @@ export const boardCountsKey = (filterKey: string) =>
  *  container, and the `create/claim/unclaim` invalidation walks the whole
  *  `['tasks','board','facets']` prefix to refresh every one. */
 export const boardFacetsKey = (container?: TaskBoardContainer | null) =>
-  ['tasks', 'board', 'facets', container ?? '*'] as const;
+  ["tasks", "board", "facets", container ?? "*"] as const;
 
 function toSearchParams(params: BoardFilterParams): URLSearchParams {
   const qs = new URLSearchParams();
@@ -160,9 +155,9 @@ export function boardColumnPath(
   cursor?: string | null,
 ): string {
   const qs = toSearchParams(params);
-  qs.set('status', status);
-  qs.set('limit', String(COLUMN_PAGE_SIZE));
-  if (cursor) qs.set('cursor', cursor);
+  qs.set("status", status);
+  qs.set("limit", String(COLUMN_PAGE_SIZE));
+  if (cursor) qs.set("cursor", cursor);
   return `${apiPaths.taskBoardColumn}?${qs.toString()}`;
 }
 
@@ -199,23 +194,19 @@ export function boardFacetsPath(container?: TaskBoardContainer | null): string {
  * face's author is expected to classify it (see `boardQuery.test.ts`, which
  * asserts every key builder in this module resolves to a known kind).
  */
-export type TasksCacheKind =
-  | 'board-column'
-  | 'board-counts'
-  | 'board-facets'
-  | 'unknown';
+export type TasksCacheKind = "board-column" | "board-counts" | "board-facets" | "unknown";
 
 export function classifyTasksCacheKey(key: readonly unknown[]): TasksCacheKind {
-  if (key[0] !== 'tasks') return 'unknown';
-  if (key[1] !== 'board') return 'unknown';
+  if (key[0] !== "tasks") return "unknown";
+  if (key[1] !== "board") return "unknown";
   switch (key[2]) {
-    case 'column':
-      return 'board-column';
-    case 'counts':
-      return 'board-counts';
-    case 'facets':
-      return 'board-facets';
+    case "column":
+      return "board-column";
+    case "counts":
+      return "board-counts";
+    case "facets":
+      return "board-facets";
     default:
-      return 'unknown';
+      return "unknown";
   }
 }

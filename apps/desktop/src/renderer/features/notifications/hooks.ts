@@ -1,20 +1,20 @@
-import { useCallback, useEffect, useRef } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
-import { toastIcon } from '@/lib/toast-icons';
+import { useCallback, useEffect, useRef } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { toastIcon } from "@/lib/toast-icons";
 import {
   type MarkNotificationsReadInput,
   type NotificationDto,
   type UnreadUpdatedBadgePayload,
-} from '@silverhand/shared';
-import { api } from '@/lib/api';
-import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
-import { conversationRefQueryOptions } from '@/features/conversations/conversation-ref-query';
-import { recordChannelWorkspace } from '@/features/channels/channel-workspace-index';
-import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
+} from "@silverhand/shared";
+import { api } from "@/lib/api";
+import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from "@/lib/ws-client";
+import { conversationRefQueryOptions } from "@/features/conversations/conversation-ref-query";
+import { recordChannelWorkspace } from "@/features/channels/channel-workspace-index";
+import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
 
-const unreadKey = ['notifications', 'unread'] as const;
-const listKey = ['notifications', 'list'] as const;
+const unreadKey = ["notifications", "unread"] as const;
+const listKey = ["notifications", "list"] as const;
 const invalidationTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function invalidateQueryDebounced(
@@ -33,9 +33,9 @@ function invalidateQueryDebounced(
 
 function isMessageUnreadUpdatedPayload(payload: unknown): boolean {
   return (
-    typeof payload === 'object' &&
+    typeof payload === "object" &&
     payload !== null &&
-    typeof (payload as { conversation_id?: unknown }).conversation_id === 'string'
+    typeof (payload as { conversation_id?: unknown }).conversation_id === "string"
   );
 }
 
@@ -63,15 +63,15 @@ export function useUnreadCounts() {
 
   useEffect(() => {
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
-      if (frame.type === 'event' && isCurrentViewerScope(frame.scope)) {
+    const unsub = onWsFrame((frame) => {
+      if (frame.type === "event" && isCurrentViewerScope(frame.scope)) {
         if (
-          frame.kind === 'notification' ||
-          (frame.kind === 'unread_updated' && !isMessageUnreadUpdatedPayload(frame.payload))
+          frame.kind === "notification" ||
+          (frame.kind === "unread_updated" && !isMessageUnreadUpdatedPayload(frame.payload))
         ) {
           invalidateQueryDebounced(qc, unreadKey);
         }
-      } else if (frame.type === 'snapshot_required' && isCurrentViewerScope(frame.scope)) {
+      } else if (frame.type === "snapshot_required" && isCurrentViewerScope(frame.scope)) {
         invalidateQueryDebounced(qc, unreadKey);
       }
     });
@@ -83,7 +83,7 @@ export function useUnreadCounts() {
 
   return useQuery<UnreadCounts>({
     queryKey: unreadKey,
-    queryFn: () => api<UnreadCounts>('/api/notifications/unread'),
+    queryFn: () => api<UnreadCounts>("/api/notifications/unread"),
     staleTime: 2_000,
   });
 }
@@ -94,9 +94,7 @@ export function useNotifications(unread = false) {
   return useQuery<{ notifications: NotificationDto[] }>({
     queryKey: [...listKey, { unread }],
     queryFn: () =>
-      api<{ notifications: NotificationDto[] }>(
-        `/api/notifications${unread ? '?unread=1' : ''}`,
-      ),
+      api<{ notifications: NotificationDto[] }>(`/api/notifications${unread ? "?unread=1" : ""}`),
   });
 }
 
@@ -104,11 +102,11 @@ export function useMarkNotificationsRead() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: MarkNotificationsReadInput) =>
-      api<{ marked: number }>('/api/notifications/read', {
-        method: 'POST',
+      api<{ marked: number }>("/api/notifications/read", {
+        method: "POST",
         body: JSON.stringify(input),
       }),
-    onSuccess: data => {
+    onSuccess: (data) => {
       if (data.marked > 0) {
         qc.invalidateQueries({ queryKey: listKey });
       }
@@ -138,7 +136,7 @@ export function useNotificationToasts(
   const qc = useQueryClient();
   const { data } = useQuery<{ notifications: NotificationDto[] }>({
     queryKey: [...listKey, { unread: true, toasts: true }],
-    queryFn: () => api<{ notifications: NotificationDto[] }>('/api/notifications?unread=1'),
+    queryFn: () => api<{ notifications: NotificationDto[] }>("/api/notifications?unread=1"),
     staleTime: 2_000,
   });
 
@@ -163,7 +161,7 @@ export function useNotificationToasts(
       if (!n) return;
       const handler = onJumpRef.current;
       if (!handler) return;
-      void resolveNotificationJumpTarget(n, qc).then(target => {
+      void resolveNotificationJumpTarget(n, qc).then((target) => {
         if (!target) return;
         handler(target);
       });
@@ -181,26 +179,23 @@ export function useNotificationToasts(
   useEffect(() => {
     const sub = subscribeViewerScope();
     const toastKey = [...listKey, { unread: true, toasts: true }] as const;
-    const unsub = onWsFrame(frame => {
-      if (frame.type === 'event' && isCurrentViewerScope(frame.scope)) {
-        if (frame.kind === 'notification') {
+    const unsub = onWsFrame((frame) => {
+      if (frame.type === "event" && isCurrentViewerScope(frame.scope)) {
+        if (frame.kind === "notification") {
           invalidateQueryDebounced(qc, toastKey);
         } else if (
-          frame.kind === 'unread_updated' &&
+          frame.kind === "unread_updated" &&
           !isMessageUnreadUpdatedPayload(frame.payload)
         ) {
-          const ids = (frame.payload as UnreadUpdatedBadgePayload)
-            .dismissed_notification_ids;
+          const ids = (frame.payload as UnreadUpdatedBadgePayload).dismissed_notification_ids;
           if (Array.isArray(ids)) {
-            const stringIds = ids.filter(
-              (id): id is string => typeof id === 'string',
-            );
+            const stringIds = ids.filter((id): id is string => typeof id === "string");
             if (stringIds.length > 0) {
               void window.silverhand.dismissSystemNotifications(stringIds);
             }
           }
         }
-      } else if (frame.type === 'snapshot_required' && isCurrentViewerScope(frame.scope)) {
+      } else if (frame.type === "snapshot_required" && isCurrentViewerScope(frame.scope)) {
         invalidateQueryDebounced(qc, toastKey);
       }
     });
@@ -237,8 +232,8 @@ export function useNotificationToasts(
       seenIds.current.add(n.id);
       if (isClickableKind(n.kind)) clickableById.current.set(n.id, n);
 
-      const isAgentFailure = n.kind === 'agent_start_failed';
-      const isViewerMention = n.kind === 'mention_self';
+      const isAgentFailure = n.kind === "agent_start_failed";
+      const isViewerMention = n.kind === "mention_self";
 
       // Suppress channel-match notifications unless it's an error.
       if (
@@ -260,7 +255,7 @@ export function useNotificationToasts(
       const toastOptions = isClickableKind(n.kind)
         ? {
             action: {
-              label: 'View',
+              label: "View",
               onClick: () => handleClickById(n.id),
             },
           }
@@ -271,13 +266,13 @@ export function useNotificationToasts(
       } else {
         // Neutral notifications carry the shared "notification" icon so "new
         // activity" reads at a glance; agent failures stay on the error level.
-        toast(label, { ...toastOptions, icon: toastIcon('notification') });
+        toast(label, { ...toastOptions, icon: toastIcon("notification") });
       }
 
       // System notification — main process suppresses ordinary alerts when an
       // Electron window is focused; direct human mentions opt out via `force`.
       void window.silverhand.showSystemNotification({
-        title: 'Silverhand',
+        title: "Silverhand",
         body: buildSystemNotificationBody(n),
         force: isViewerMention,
         notificationId: isClickableKind(n.kind) ? n.id : undefined,
@@ -309,8 +304,8 @@ export function useNotificationToasts(
  * and is intentionally inert (user finds the failed agent via the regular
  * Members panel).
  */
-function isClickableKind(kind: NotificationDto['kind']): boolean {
-  return kind === 'mention_self' || kind === 'mention_external';
+function isClickableKind(kind: NotificationDto["kind"]): boolean {
+  return kind === "mention_self" || kind === "mention_external";
 }
 
 /**
@@ -327,7 +322,7 @@ export async function resolveNotificationJumpTarget(
   n: NotificationDto,
   qc: ReturnType<typeof useQueryClient>,
 ): Promise<MessageJumpTarget | null> {
-  if (n.kind === 'mention_self') {
+  if (n.kind === "mention_self") {
     if (!n.conversation_id || !n.message_id) return null;
     return resolveTargetFromConversationId(
       qc,
@@ -337,7 +332,7 @@ export async function resolveNotificationJumpTarget(
       n.thread_root_id ?? null,
     );
   }
-  if (n.kind === 'mention_external') {
+  if (n.kind === "mention_external") {
     // Jump to the SOURCE message. For this kind the row's own coordinate group
     // already names the source (option A — see `isClickableKind` above), so this
     // branch and the `source_*` one below describe the same message for every row
@@ -361,11 +356,7 @@ export async function resolveNotificationJumpTarget(
         n.thread_root_id ?? null,
       );
     }
-    if (
-      n.source_workspace_id &&
-      n.source_conversation_id &&
-      n.source_message_id
-    ) {
+    if (n.source_workspace_id && n.source_conversation_id && n.source_message_id) {
       return resolveTargetFromConversationId(
         qc,
         n.source_workspace_id,
@@ -423,9 +414,7 @@ async function resolveTargetFromConversationId(
   // `useConversationById`, so a recently-resolved cross-workspace `?side` ref is
   // reused for free AND the attribution write-through happens exactly once,
   // wherever the fetch originates.
-  const data = await qc
-    .fetchQuery(conversationRefQueryOptions(conversationId))
-    .catch(() => null);
+  const data = await qc.fetchQuery(conversationRefQueryOptions(conversationId)).catch(() => null);
   if (!data) {
     // Fetch failed — fall back to treating the id as a top-level
     // channel. Worse case the jump primer reports `not_found` and the
@@ -446,42 +435,40 @@ async function resolveTargetFromConversationId(
 }
 
 function buildToastLabel(n: NotificationDto): string {
-  if (n.kind === 'agent_start_failed') {
-    const name = (n.payload?.['agent_name'] as string | undefined) ?? n.agent_id ?? 'Agent';
-    const reason = n.payload?.['reason'] as string | undefined;
-    if (reason === 'init_timeout') return `@${name} timed out while starting`;
-    if (reason === 'runtime_crash') {
-      const code = n.payload?.['exit_code'];
-      return `@${name} exited unexpectedly${code != null ? ` (exit ${code})` : ''}`;
+  if (n.kind === "agent_start_failed") {
+    const name = (n.payload?.["agent_name"] as string | undefined) ?? n.agent_id ?? "Agent";
+    const reason = n.payload?.["reason"] as string | undefined;
+    if (reason === "init_timeout") return `@${name} timed out while starting`;
+    if (reason === "runtime_crash") {
+      const code = n.payload?.["exit_code"];
+      return `@${name} exited unexpectedly${code != null ? ` (exit ${code})` : ""}`;
     }
-    const error = (n.payload?.['error'] as string | undefined) ?? 'unknown error';
+    const error = (n.payload?.["error"] as string | undefined) ?? "unknown error";
     return `@${name} didn't start: ${error}`;
   }
-  if (n.kind === 'mention_external') {
+  if (n.kind === "mention_external") {
     // `source_workspace_name` is a WORKSPACE name — a free-text label
     // (#task:1827), not `#`-addressable, so it renders bare. The `mention_self`
     // arm below reads `conversation_title` and keeps its `#`.
-    const workspaceName = n.payload?.['source_workspace_name'] as string | undefined;
-    return workspaceName ? `New mention in ${workspaceName}` : 'New mention';
+    const workspaceName = n.payload?.["source_workspace_name"] as string | undefined;
+    return workspaceName ? `New mention in ${workspaceName}` : "New mention";
   }
-  if (n.kind === 'mention_self') {
-    const conversationTitle = n.payload?.['conversation_title'] as string | undefined;
-    return conversationTitle
-      ? `You were mentioned in #${conversationTitle}`
-      : 'You were mentioned';
+  if (n.kind === "mention_self") {
+    const conversationTitle = n.payload?.["conversation_title"] as string | undefined;
+    return conversationTitle ? `You were mentioned in #${conversationTitle}` : "You were mentioned";
   }
-  return 'New notification';
+  return "New notification";
 }
 
 function payloadString(n: NotificationDto, key: string): string | null {
   const value = n.payload?.[key];
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function buildSystemNotificationBody(n: NotificationDto): string {
-  if (n.kind === 'mention_self') {
-    const triggerName = payloadString(n, 'trigger_name') ?? 'Someone';
-    const conversationTitle = payloadString(n, 'conversation_title');
+  if (n.kind === "mention_self") {
+    const triggerName = payloadString(n, "trigger_name") ?? "Someone";
+    const conversationTitle = payloadString(n, "conversation_title");
     return conversationTitle
       ? `${triggerName} mentioned you in #${conversationTitle}.`
       : `${triggerName} mentioned you.`;

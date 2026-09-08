@@ -1,17 +1,17 @@
-import { deriveNavRailDots } from '@/components/layout/NavRail';
-import { useBackendInfoSnapshot } from '@/features/hosts/hooks';
-import { useTaskBoardRealtime } from '@/features/tasks/useBoard';
+import { deriveNavRailDots } from "@/components/layout/NavRail";
+import { useBackendInfoSnapshot } from "@/features/hosts/hooks";
+import { useTaskBoardRealtime } from "@/features/tasks/useBoard";
 import {
   useAppShellGlobalSync,
   useComposerDraftCleanup,
   useDockBadge,
   useSettingsMenuNav,
-} from '@/features/app-shell/effects';
-import { useNavSectionShortcuts } from '@/features/app-shell/keyboard-shortcuts';
-import { useUnreadCounts } from '@/features/notifications/hooks';
-import { useMessageUnreadSummary } from '@/features/channels/hooks';
-import { useActivity, useAttentionBadges, useAttentionRealtime } from '@/features/attention/hooks';
-import { useNav } from '@/router';
+} from "@/features/app-shell/effects";
+import { useNavSectionShortcuts } from "@/features/app-shell/keyboard-shortcuts";
+import { useUnreadCounts } from "@/features/notifications/hooks";
+import { useMessageUnreadSummary } from "@/features/channels/hooks";
+import { useActivity, useAttentionBadges, useAttentionRealtime } from "@/features/attention/hooks";
+import { useNav } from "@/router";
 
 export function useApplicationSignals() {
   const nav = useNav();

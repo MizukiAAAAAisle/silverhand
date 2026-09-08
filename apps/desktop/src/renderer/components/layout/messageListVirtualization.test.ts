@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from "vitest";
 import {
   classifyTopShift,
   getFollowOutputBehavior,
@@ -9,25 +9,25 @@ import {
   shouldRemountForJump,
   shouldRemountForWindowReplacement,
   type BottomAnchorState,
-} from './messageListVirtualization';
+} from "./messageListVirtualization";
 
 // Build the itemKey sequence for a contiguous seq range [from, to].
 const range = (from: number, to: number): string[] =>
   Array.from({ length: to - from + 1 }, (_, i) => String(from + i));
 
-describe('message list virtualization helpers', () => {
-  describe('getInitialTopMostItemIndex', () => {
-    it('centers the jump target when it is present', () => {
+describe("message list virtualization helpers", () => {
+  describe("getInitialTopMostItemIndex", () => {
+    it("centers the jump target when it is present", () => {
       expect(
         getInitialTopMostItemIndex({
           jumpTargetIndex: 42,
           hasJumpTarget: true,
           itemCount: 100,
         }),
-      ).toEqual({ index: 42, align: 'center' });
+      ).toEqual({ index: 42, align: "center" });
     });
 
-    it('omits initial index while a jump target is pending but absent', () => {
+    it("omits initial index while a jump target is pending but absent", () => {
       expect(
         getInitialTopMostItemIndex({
           jumpTargetIndex: -1,
@@ -37,7 +37,7 @@ describe('message list virtualization helpers', () => {
       ).toBeUndefined();
     });
 
-    it('opens ordinary channel mounts at the local bottom', () => {
+    it("opens ordinary channel mounts at the local bottom", () => {
       expect(
         getInitialTopMostItemIndex({
           jumpTargetIndex: -1,
@@ -47,7 +47,7 @@ describe('message list virtualization helpers', () => {
       ).toBe(99);
     });
 
-    it('keeps the ordinary empty-list fallback non-negative', () => {
+    it("keeps the ordinary empty-list fallback non-negative", () => {
       expect(
         getInitialTopMostItemIndex({
           jumpTargetIndex: -1,
@@ -57,7 +57,7 @@ describe('message list virtualization helpers', () => {
       ).toBe(0);
     });
 
-    it('back-to-bottom wins over a still-resolving jump target', () => {
+    it("back-to-bottom wins over a still-resolving jump target", () => {
       // A back-to-bottom click inside a tail window that is still centered on
       // a jump target (the parent has not yet cleared the jump prop). The
       // bottom anchor must take the mount, not the stale jump center —
@@ -72,7 +72,7 @@ describe('message list virtualization helpers', () => {
       ).toBe(99);
     });
 
-    it('back-to-bottom lands at the local bottom with no jump active', () => {
+    it("back-to-bottom lands at the local bottom with no jump active", () => {
       expect(
         getInitialTopMostItemIndex({
           jumpTargetIndex: -1,
@@ -84,8 +84,8 @@ describe('message list virtualization helpers', () => {
     });
   });
 
-  describe('shouldRemountForWindowReplacement', () => {
-    it('remounts ordinary latest/window replacements', () => {
+  describe("shouldRemountForWindowReplacement", () => {
+    it("remounts ordinary latest/window replacements", () => {
       expect(
         shouldRemountForWindowReplacement({
           hasJumpTarget: false,
@@ -94,7 +94,7 @@ describe('message list virtualization helpers', () => {
       ).toBe(true);
     });
 
-    it('remounts jump windows only after the target is present', () => {
+    it("remounts jump windows only after the target is present", () => {
       expect(
         shouldRemountForWindowReplacement({
           hasJumpTarget: true,
@@ -109,7 +109,7 @@ describe('message list virtualization helpers', () => {
       ).toBe(false);
     });
 
-    it('remounts a latest reset that still carries a cancelling jump when a bottom anchor is armed', () => {
+    it("remounts a latest reset that still carries a cancelling jump when a bottom anchor is armed", () => {
       // The reported bug: non-tail + active jump → back-to-bottom resets to
       // latest. The fresh latest window can arrive before the cancelled jump
       // prop clears, so it still reads hasJumpTarget=true with the (early)
@@ -134,7 +134,7 @@ describe('message list virtualization helpers', () => {
       ).toBe(false);
     });
 
-    it('a spent bottom anchor does not force later unrelated replacements to the tail', () => {
+    it("a spent bottom anchor does not force later unrelated replacements to the tail", () => {
       // After a back-to-bottom lands, the one-shot lifecycle resets the intent
       // (`anchorMode → 'default'`), so `preferBottom` is false on any LATER,
       // unrelated window replacement. If the user has since scrolled up and
@@ -159,12 +159,12 @@ describe('message list virtualization helpers', () => {
           itemCount: 100,
           preferBottom: false,
         }),
-      ).toEqual({ index: 37, align: 'center' });
+      ).toEqual({ index: 37, align: "center" });
     });
   });
 
-  describe('shouldRemountForJump', () => {
-    it('remounts only when an active jump target is present in the window', () => {
+  describe("shouldRemountForJump", () => {
+    it("remounts only when an active jump target is present in the window", () => {
       expect(
         shouldRemountForJump({
           hasJumpTarget: true,
@@ -186,18 +186,18 @@ describe('message list virtualization helpers', () => {
     });
   });
 
-  describe('getFollowOutputBehavior', () => {
-    it('follows only when the user is at the real conversation tail', () => {
+  describe("getFollowOutputBehavior", () => {
+    it("follows only when the user is at the real conversation tail", () => {
       expect(
         getFollowOutputBehavior({
           hasJumpTarget: false,
           isAtTail: true,
           atBottom: true,
         }),
-      ).toBe('auto');
+      ).toBe("auto");
     });
 
-    it('does not follow during jumps, non-tail windows, or manual history reads', () => {
+    it("does not follow during jumps, non-tail windows, or manual history reads", () => {
       expect(
         getFollowOutputBehavior({
           hasJumpTarget: true,
@@ -222,149 +222,149 @@ describe('message list virtualization helpers', () => {
     });
   });
 
-  describe('reduceBottomAnchor — back-to-bottom one-shot lifecycle', () => {
+  describe("reduceBottomAnchor — back-to-bottom one-shot lifecycle", () => {
     // Replays the ACTUAL React/cache lifecycle at transition level: the reset
     // branch goes arm → (stale window still shown) →
     // transient empty (resetQueries cleared the cache) → latest rows mount.
     // The intent must survive the stale window AND the empty, then be spent by
     // the real latest mount — never earlier.
-    it('arms bottom on a reset request', () => {
+    it("arms bottom on a reset request", () => {
       const s = reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, {
-        type: 'arm-reset',
+        type: "arm-reset",
       });
-      expect(s.intent).toBe('bottom');
-      expect(s.pending).toEqual({ kind: 'reset', sawEmpty: false });
+      expect(s.intent).toBe("bottom");
+      expect(s.pending).toEqual({ kind: "reset", sawEmpty: false });
     });
 
-    it('does NOT consume on the pre-reset stale window (rows-shown before the empty)', () => {
+    it("does NOT consume on the pre-reset stale window (rows-shown before the empty)", () => {
       let s = reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, {
-        type: 'arm-reset',
+        type: "arm-reset",
       });
       // The stale around-window is still non-empty at click time.
-      s = reduceBottomAnchor(s, { type: 'rows-shown' });
-      expect(s.intent).toBe('bottom');
-      expect(s.pending).toEqual({ kind: 'reset', sawEmpty: false });
+      s = reduceBottomAnchor(s, { type: "rows-shown" });
+      expect(s.intent).toBe("bottom");
+      expect(s.pending).toEqual({ kind: "reset", sawEmpty: false });
     });
 
-    it('consumes only after the reset empty, on the real latest mount', () => {
+    it("consumes only after the reset empty, on the real latest mount", () => {
       let s: BottomAnchorState = reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, {
-        type: 'arm-reset',
+        type: "arm-reset",
       });
       // resetQueries clears the cache → transient empty. Still armed.
-      s = reduceBottomAnchor(s, { type: 'rows-hidden' });
-      expect(s.intent).toBe('bottom');
-      expect(s.pending).toEqual({ kind: 'reset', sawEmpty: true });
+      s = reduceBottomAnchor(s, { type: "rows-hidden" });
+      expect(s.intent).toBe("bottom");
+      expect(s.pending).toEqual({ kind: "reset", sawEmpty: true });
       // Latest rows mount → the mount reads the armed intent, then this spends.
-      s = reduceBottomAnchor(s, { type: 'rows-shown' });
+      s = reduceBottomAnchor(s, { type: "rows-shown" });
       expect(s).toBe(INITIAL_BOTTOM_ANCHOR_STATE);
     });
 
-    it('stays default through LATER unrelated churn after a reset landed', () => {
+    it("stays default through LATER unrelated churn after a reset landed", () => {
       let s: BottomAnchorState = reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, {
-        type: 'arm-reset',
+        type: "arm-reset",
       });
-      s = reduceBottomAnchor(s, { type: 'rows-hidden' });
-      s = reduceBottomAnchor(s, { type: 'rows-shown' }); // consumed
+      s = reduceBottomAnchor(s, { type: "rows-hidden" });
+      s = reduceBottomAnchor(s, { type: "rows-shown" }); // consumed
       // User scrolls up; an unrelated refetch empties + refills. Must NOT
       // re-arm the bottom intent (the sticky-anchor leak).
-      s = reduceBottomAnchor(s, { type: 'rows-hidden' });
-      expect(s.intent).toBe('default');
-      s = reduceBottomAnchor(s, { type: 'rows-shown' });
-      expect(s.intent).toBe('default');
+      s = reduceBottomAnchor(s, { type: "rows-hidden" });
+      expect(s.intent).toBe("default");
+      s = reduceBottomAnchor(s, { type: "rows-shown" });
+      expect(s.intent).toBe("default");
       expect(s.pending).toBeNull();
     });
 
-    it('spends a tail request on its remount commit, not on rows churn', () => {
+    it("spends a tail request on its remount commit, not on rows churn", () => {
       let s: BottomAnchorState = reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, {
-        type: 'arm-tail',
+        type: "arm-tail",
       });
-      expect(s.intent).toBe('bottom');
+      expect(s.intent).toBe("bottom");
       // Rows churn does not spend a tail request (tail window never empties).
-      s = reduceBottomAnchor(s, { type: 'rows-shown' });
-      expect(s.intent).toBe('bottom');
+      s = reduceBottomAnchor(s, { type: "rows-shown" });
+      expect(s.intent).toBe("bottom");
       // The bottomAnchorVersion remount committing spends it.
-      s = reduceBottomAnchor(s, { type: 'tail-shown' });
+      s = reduceBottomAnchor(s, { type: "tail-shown" });
       expect(s).toBe(INITIAL_BOTTOM_ANCHOR_STATE);
     });
 
-    it('keeps the tail and reset consume signals from crossing', () => {
+    it("keeps the tail and reset consume signals from crossing", () => {
       // tail-shown must not consume a reset request…
       const reset = reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, {
-        type: 'arm-reset',
+        type: "arm-reset",
       });
-      expect(reduceBottomAnchor(reset, { type: 'tail-shown' })).toBe(reset);
+      expect(reduceBottomAnchor(reset, { type: "tail-shown" })).toBe(reset);
       // …and the reset rows-shown consume path must not fire for a tail request.
       const tail = reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, {
-        type: 'arm-tail',
+        type: "arm-tail",
       });
-      expect(reduceBottomAnchor(tail, { type: 'rows-hidden' })).toBe(tail);
+      expect(reduceBottomAnchor(tail, { type: "rows-hidden" })).toBe(tail);
     });
 
-    it('a fresh jump / channel switch cancels an in-flight request', () => {
+    it("a fresh jump / channel switch cancels an in-flight request", () => {
       const s = reduceBottomAnchor(
-        reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, { type: 'arm-reset' }),
-        { type: 'cancel' },
+        reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, { type: "arm-reset" }),
+        { type: "cancel" },
       );
       expect(s).toBe(INITIAL_BOTTOM_ANCHOR_STATE);
     });
 
-    it('is a no-op (same reference) for lifecycle events with no live request', () => {
+    it("is a no-op (same reference) for lifecycle events with no live request", () => {
       // These fire on every rows change / channel mount; a no-op must return
       // the SAME reference so useReducer bails without a re-render.
-      expect(
-        reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, { type: 'rows-shown' }),
-      ).toBe(INITIAL_BOTTOM_ANCHOR_STATE);
-      expect(
-        reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, { type: 'rows-hidden' }),
-      ).toBe(INITIAL_BOTTOM_ANCHOR_STATE);
-      expect(
-        reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, { type: 'tail-shown' }),
-      ).toBe(INITIAL_BOTTOM_ANCHOR_STATE);
-      expect(
-        reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, { type: 'cancel' }),
-      ).toBe(INITIAL_BOTTOM_ANCHOR_STATE);
+      expect(reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, { type: "rows-shown" })).toBe(
+        INITIAL_BOTTOM_ANCHOR_STATE,
+      );
+      expect(reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, { type: "rows-hidden" })).toBe(
+        INITIAL_BOTTOM_ANCHOR_STATE,
+      );
+      expect(reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, { type: "tail-shown" })).toBe(
+        INITIAL_BOTTOM_ANCHOR_STATE,
+      );
+      expect(reduceBottomAnchor(INITIAL_BOTTOM_ANCHOR_STATE, { type: "cancel" })).toBe(
+        INITIAL_BOTTOM_ANCHOR_STATE,
+      );
     });
   });
 
-  describe('classifyTopShift', () => {
-    it('reports no shift when the top key is unchanged', () => {
+  describe("classifyTopShift", () => {
+    it("reports no shift when the top key is unchanged", () => {
       expect(classifyTopShift(range(1, 100), range(1, 100))).toEqual({
-        kind: 'none',
+        kind: "none",
       });
     });
 
-    it('detects a prepend by the old top moving down', () => {
+    it("detects a prepend by the old top moving down", () => {
       // Older rows loaded above: old top (4) now sits at index 3.
       expect(classifyTopShift(range(4, 103), range(1, 103))).toEqual({
-        kind: 'prepend',
+        kind: "prepend",
         count: 3,
       });
     });
 
-    it('detects a head-trim: live-appended latest page refetched to fixed size (#1505)', () => {
+    it("detects a head-trim: live-appended latest page refetched to fixed size (#1505)", () => {
       // 100 rows → live-appended to 103 → invalidate re-fetches the latest 100,
       // dropping the first 3 head rows. The new top (4) was at index 3 in the
       // old window; the remaining window is contiguous.
       expect(classifyTopShift(range(1, 103), range(4, 103))).toEqual({
-        kind: 'head-trim',
+        kind: "head-trim",
         count: 3,
       });
     });
 
-    it('treats a disjoint window (latest ↔ around jump) as a replacement', () => {
+    it("treats a disjoint window (latest ↔ around jump) as a replacement", () => {
       expect(classifyTopShift(range(1, 100), range(500, 600))).toEqual({
-        kind: 'replace',
+        kind: "replace",
       });
     });
 
-    it('treats a first-ever window (no previous keys) as a no-op', () => {
+    it("treats a first-ever window (no previous keys) as a no-op", () => {
       // First data arrival / post-channel-switch: nothing to reconcile, and a
       // spurious replace here would remount on every channel's first load.
-      expect(classifyTopShift([], range(1, 100))).toEqual({ kind: 'none' });
+      expect(classifyTopShift([], range(1, 100))).toEqual({ kind: "none" });
     });
   });
 
-  describe('resolveTopShiftAction', () => {
+  describe("resolveTopShiftAction", () => {
     const noPositioning = {
       userPositioning: false,
       hasJumpTarget: false,
@@ -372,27 +372,31 @@ describe('message list virtualization helpers', () => {
       preferBottom: false,
     };
 
-    it('shifts firstItemIndex down on a prepend without remounting', () => {
-      expect(
-        resolveTopShiftAction({ kind: 'prepend', count: 3 }, noPositioning),
-      ).toEqual({ firstItemIndex: 'delta', delta: -3, remount: false });
+    it("shifts firstItemIndex down on a prepend without remounting", () => {
+      expect(resolveTopShiftAction({ kind: "prepend", count: 3 }, noPositioning)).toEqual({
+        firstItemIndex: "delta",
+        delta: -3,
+        remount: false,
+      });
     });
 
-    it('preserves the reader anchor on a non-user head-trim: shift UP, no remount (#1505)', () => {
+    it("preserves the reader anchor on a non-user head-trim: shift UP, no remount (#1505)", () => {
       // The core #1505 guarantee: a head-trim while the reader is scrolled up
       // (no positioning command) must NOT bump windowResetVersion (remount) —
       // that is what yanked the reader to the default bottom.
-      expect(
-        resolveTopShiftAction({ kind: 'head-trim', count: 3 }, noPositioning),
-      ).toEqual({ firstItemIndex: 'delta', delta: 3, remount: false });
+      expect(resolveTopShiftAction({ kind: "head-trim", count: 3 }, noPositioning)).toEqual({
+        firstItemIndex: "delta",
+        delta: 3,
+        remount: false,
+      });
     });
 
-    it('lets a jump own a head-trim: falls through to replacement + remount', () => {
+    it("lets a jump own a head-trim: falls through to replacement + remount", () => {
       // A user positioning command in flight keeps the existing remount
       // semantics (no #1504 regression).
       expect(
         resolveTopShiftAction(
-          { kind: 'head-trim', count: 3 },
+          { kind: "head-trim", count: 3 },
           {
             userPositioning: true,
             hasJumpTarget: true,
@@ -400,22 +404,22 @@ describe('message list virtualization helpers', () => {
             preferBottom: false,
           },
         ),
-      ).toEqual({ firstItemIndex: 'reset', remount: true });
+      ).toEqual({ firstItemIndex: "reset", remount: true });
     });
 
-    it('resets and remounts on a disjoint replacement (no jump target)', () => {
-      expect(resolveTopShiftAction({ kind: 'replace' }, noPositioning)).toEqual({
-        firstItemIndex: 'reset',
+    it("resets and remounts on a disjoint replacement (no jump target)", () => {
+      expect(resolveTopShiftAction({ kind: "replace" }, noPositioning)).toEqual({
+        firstItemIndex: "reset",
         remount: true,
       });
     });
 
-    it('resets without remounting while a jump target is still absent', () => {
+    it("resets without remounting while a jump target is still absent", () => {
       // Matches shouldRemountForWindowReplacement: a pending-but-absent jump
       // must not remount to the current window's local end.
       expect(
         resolveTopShiftAction(
-          { kind: 'replace' },
+          { kind: "replace" },
           {
             userPositioning: true,
             hasJumpTarget: true,
@@ -423,7 +427,7 @@ describe('message list virtualization helpers', () => {
             preferBottom: false,
           },
         ),
-      ).toEqual({ firstItemIndex: 'reset', remount: false });
+      ).toEqual({ firstItemIndex: "reset", remount: false });
     });
   });
 });

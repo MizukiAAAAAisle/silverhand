@@ -1,5 +1,5 @@
-import { getCurrentUserId } from '@/lib/current-user';
-import { createLogicalSend, type LogicalSend } from '@/features/channels/logical-send';
+import { getCurrentUserId } from "@/lib/current-user";
+import { createLogicalSend, type LogicalSend } from "@/features/channels/logical-send";
 import {
   Fragment,
   useEffect,
@@ -10,28 +10,28 @@ import {
   type DragEvent,
   type FormEvent,
   type KeyboardEvent,
-} from 'react';
-import { AtSign, Hash, Paperclip, X } from 'lucide-react';
-import type { AgentDto, ChannelConversationDto, Locator, ReferenceKind } from '@silverhand/shared';
+} from "react";
+import { AtSign, Hash, Paperclip, X } from "lucide-react";
+import type { AgentDto, ChannelConversationDto, Locator, ReferenceKind } from "@silverhand/shared";
 import {
   canonicalizeStoredConversationTitle,
   canonicalizeStoredWorkspaceName,
   formatLocatorToken,
   isGenericMimeHint,
   mimeFromFilename,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 import {
   findShorthandCandidates,
   rewriteShorthandReferences,
   type ShorthandResolver,
-} from '@silverhand/shared/reference-markdown';
-import { MAX_ATTACHMENTS, shouldInterceptOversizedPaste } from './oversize-paste';
-import { Button } from '@/components/ui/button';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
+} from "@silverhand/shared/reference-markdown";
+import { MAX_ATTACHMENTS, shouldInterceptOversizedPaste } from "./oversize-paste";
+import { Button } from "@/components/ui/button";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import {
   useChannelsAcrossWorkspaces,
   useChannelsForWorkspace,
@@ -40,18 +40,18 @@ import {
   type ChannelListItem,
   type WorkspaceHumanMember,
   type WorkspaceMemberLists,
-} from '@/features/workspaces/hooks';
-import { useAgents } from '@/features/agents/hooks';
-import type { ComposerDirectory, MentionAgent } from '@/features/conversations/pane-mode';
+} from "@/features/workspaces/hooks";
+import { useAgents } from "@/features/agents/hooks";
+import type { ComposerDirectory, MentionAgent } from "@/features/conversations/pane-mode";
 
-import { useConversationMembers } from '@/features/conversations/useConversationMembers';
-import { useSendMessage } from '@/features/channels/hooks';
+import { useConversationMembers } from "@/features/conversations/useConversationMembers";
+import { useSendMessage } from "@/features/channels/hooks";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useViewerUser,
-} from '@/features/me/hooks';
+} from "@/features/me/hooks";
 import {
   assignAttachmentLabel,
   clearComposerDraft,
@@ -68,10 +68,10 @@ import {
   writeComposerDraft,
   type CachedPendingAttachment,
   type ComposerDraftSnapshot,
-} from '@/lib/composer-draft-cache';
-import { onQuoteToComposer, spliceQuoteIntoDraft } from '@/lib/quote-to-composer';
-import { Lightbox } from './Lightbox';
-import { ComposerActivityHeader } from './ComposerActivityHeader';
+} from "@/lib/composer-draft-cache";
+import { onQuoteToComposer, spliceQuoteIntoDraft } from "@/lib/quote-to-composer";
+import { Lightbox } from "./Lightbox";
+import { ComposerActivityHeader } from "./ComposerActivityHeader";
 
 interface ComposerProps {
   conversationId: string;
@@ -122,7 +122,7 @@ type PendingAttachment = CachedPendingAttachment;
  *  frame or fill (the composer shell is the frame here, and three framed chips
  *  inside it would be a lift on top of a lift). */
 const COMPOSER_TOOL_CLASS =
-  'inline-flex size-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50';
+  "inline-flex size-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50";
 
 // Stable empty defaults for the workspace-scoped mention sources. While
 // `useWorkspaceMemberLists` has no data (workspaceId null or query loading)
@@ -149,7 +149,7 @@ const EMPTY_PICKER: PickerResult = { items: [], hiddenCount: 0 };
 function effectiveContentType(file: File): string {
   const hint = file.type;
   if (!isGenericMimeHint(hint)) return hint;
-  return mimeFromFilename(file.name) ?? 'application/octet-stream';
+  return mimeFromFilename(file.name) ?? "application/octet-stream";
 }
 
 type SubmittingSnapshot = {
@@ -197,7 +197,7 @@ export function Composer({
   // members, attachment upload path) still use the real `conversationId`.
   const draftKey = threadRootId ? `${conversationId}#cluster#${threadRootId}` : conversationId;
   const [initialDraft] = useState(() => readComposerDraft(draftKey));
-  const [draft, setDraftState] = useState(initialDraft?.text ?? '');
+  const [draft, setDraftState] = useState(initialDraft?.text ?? "");
   const [caret, setCaretState] = useState(initialDraft?.caret ?? 0);
   const [pending, setPendingState] = useState<PendingAttachment[]>(
     () => initialDraft?.pending ?? [],
@@ -234,7 +234,7 @@ export function Composer({
   function setPendingValue(
     next: PendingAttachment[] | ((current: PendingAttachment[]) => PendingAttachment[]),
   ): void {
-    const value = typeof next === 'function' ? next(pendingRef.current) : next;
+    const value = typeof next === "function" ? next(pendingRef.current) : next;
     pendingRef.current = value;
     setPendingState(value);
   }
@@ -271,7 +271,7 @@ export function Composer({
   useEffect(() => {
     for (const item of pendingRef.current) {
       if (
-        item.state === 'uploading' &&
+        item.state === "uploading" &&
         item.file &&
         !hasComposerDraftInFlightUpload(draftKey, item.key)
       ) {
@@ -288,17 +288,17 @@ export function Composer({
 
   useEffect(() => {
     return subscribeComposerDraft(draftKey, (event) => {
-      if (event.type === 'clear') {
+      if (event.type === "clear") {
         retrySendRef.current = undefined;
-        draftRef.current = '';
+        draftRef.current = "";
         caretRef.current = 0;
         pendingRef.current = [];
-        setDraftState('');
+        setDraftState("");
         setCaretState(0);
         setPendingState([]);
         return;
       }
-      if (event.type === 'attachment-remove') {
+      if (event.type === "attachment-remove") {
         setPendingValue((curr) => curr.filter((item) => item.key !== event.attachmentKey));
         return;
       }
@@ -338,16 +338,16 @@ export function Composer({
   // inside the arm, so there is no window in which it is merely UNRESOLVED — the
   // member-list QUERY still has its own loading window, over which everything
   // downstream fails CLOSED to empty rather than to a global directory.
-  const isWorkspaceArm = directory.kind === 'workspace';
-  const isViewerArm = directory.kind === 'viewer';
+  const isWorkspaceArm = directory.kind === "workspace";
+  const isViewerArm = directory.kind === "viewer";
   // The DM counterpart agent (viewer arm only) — a conversation fact, even when the
   // viewer does not own it. null in every other arm and for a human / deleted /
   // unresolved counterpart.
-  const counterpartAgent = directory.kind === 'viewer' ? directory.counterpartAgent : null;
-  const armWorkspaceId = directory.kind === 'workspace' ? directory.workspaceId : null;
-  const armWorkspaceName = directory.kind === 'workspace' ? directory.workspaceName : null;
+  const counterpartAgent = directory.kind === "viewer" ? directory.counterpartAgent : null;
+  const armWorkspaceId = directory.kind === "workspace" ? directory.workspaceId : null;
+  const armWorkspaceName = directory.kind === "workspace" ? directory.workspaceName : null;
   const armHasChannelNamespace =
-    directory.kind === 'workspace' ? directory.hasChannelNamespace : false;
+    directory.kind === "workspace" ? directory.hasChannelNamespace : false;
   // Workspace arm `@` source: ONLY this workspace's members. Null id (any other
   // arm, or an unresolved workspace) disables the query, so the arrays stay empty
   // (fail closed, no global fallback); stable empty-array constants keep the memo
@@ -359,7 +359,7 @@ export function Composer({
   // humans — a `direct_pair` has no workspace roster). `enabled` off in every
   // other arm. The backend narrows `created_by_user_id == viewer` (#task:1256);
   // the renderer never re-filters ownership client-side.
-  const ownedAgentsQuery = useAgents({ scope: 'owned', enabled: isViewerArm });
+  const ownedAgentsQuery = useAgents({ scope: "owned", enabled: isViewerArm });
   const ownedAgents = ownedAgentsQuery.data ?? EMPTY_AGENTS;
   // The viewer arm's `@` candidate set: the counterpart agent (offered even when
   // the viewer does not own it) merged with the owned agents by id. Shared by the
@@ -397,14 +397,14 @@ export function Composer({
       ? viewerQuery.data.id
       : null;
 
-  const rosterResolved = conversationMembers.status === 'resolved';
+  const rosterResolved = conversationMembers.status === "resolved";
   const { agentMemberIds, humanMemberIds } = useMemo(() => {
     const a = new Set<string>();
     const h = new Set<string>();
-    if (conversationMembers.status === 'resolved') {
+    if (conversationMembers.status === "resolved") {
       for (const member of conversationMembers.members) {
-        if (member.kind === 'agent') a.add(member.agent_id);
-        else if (member.kind === 'human') h.add(member.user_id);
+        if (member.kind === "agent") a.add(member.agent_id);
+        else if (member.kind === "human") h.add(member.user_id);
       }
     }
     return { agentMemberIds: a, humanMemberIds: h };
@@ -440,7 +440,7 @@ export function Composer({
   // pending).
   const mentionSource = useMemo<ComposerMentionSource>(() => {
     switch (directory.kind) {
-      case 'workspace':
+      case "workspace":
         return {
           sourceKnown: memberLists.data !== undefined,
           select: (query) =>
@@ -454,7 +454,7 @@ export function Composer({
             ),
           resolveShorthand: buildShorthandResolver(agents, workspaceHumans),
         };
-      case 'viewer':
+      case "viewer":
         return {
           // Only the owned-agents query is async; the counterpart is a synchronous
           // descriptor fact already folded into `viewerMentionAgents`, so it adds no
@@ -464,7 +464,7 @@ export function Composer({
             selectViewerMentionCandidates(viewerMentionAgents, counterpartAgent?.id ?? null, query),
           resolveShorthand: buildViewerShorthandResolver(viewerMentionAgents),
         };
-      case 'withheld':
+      case "withheld":
         return {
           sourceKnown: false,
           select: () => EMPTY_PICKER,
@@ -490,7 +490,7 @@ export function Composer({
   // worse than no control.
   const channelSource = useMemo<ComposerChannelSource>(() => {
     switch (directory.kind) {
-      case 'workspace':
+      case "workspace":
         return {
           offersChannels: armHasChannelNamespace,
           select: (query) => ({
@@ -498,7 +498,7 @@ export function Composer({
             status: channelSourceStatusOf(workspaceChannelsStatus),
           }),
         };
-      case 'viewer':
+      case "viewer":
         return {
           offersChannels: true,
           select: (query) =>
@@ -509,8 +509,8 @@ export function Composer({
               query,
             ),
         };
-      case 'withheld':
-        return { offersChannels: false, select: () => ({ ...EMPTY_PICKER, status: 'complete' }) };
+      case "withheld":
+        return { offersChannels: false, select: () => ({ ...EMPTY_PICKER, status: "complete" }) };
     }
   }, [
     directory.kind,
@@ -523,7 +523,7 @@ export function Composer({
     workspaceNameById,
   ]);
 
-  const offersMentions = directory.kind !== 'withheld';
+  const offersMentions = directory.kind !== "withheld";
   const offersChannels = channelSource.offersChannels;
 
   const trigger = useMemo(
@@ -548,10 +548,10 @@ export function Composer({
   // under "Other channels". Both are `@`-only — the `#` channel lists are flat.
   // `PickerMenu` still renders headers only when there IS an in-channel row, so a
   // DM with no resolved agent counterpart shows one flat, header-less list.
-  const peopleSections = (isWorkspaceArm || isViewerArm) && trigger?.kind === '@';
+  const peopleSections = (isWorkspaceArm || isViewerArm) && trigger?.kind === "@";
   // Viewer-arm `#` candidates span workspaces, so the row names each channel's
   // workspace to keep same-named channels distinguishable (#task:2148).
-  const showChannelWorkspace = isViewerArm && trigger?.kind === '#';
+  const showChannelWorkspace = isViewerArm && trigger?.kind === "#";
 
   const [active, setActive] = useState(0);
   // Keep the highlight in range as the candidate list shrinks/grows.
@@ -566,7 +566,7 @@ export function Composer({
   // The `#` picker opens even with zero rows while its source is not yet complete,
   // so the loading / partial-error marker shows instead of silently nothing (which
   // would read as "no channels"). The `@` picker only opens on real rows.
-  const menuOpen = !!trigger && (items.length > 0 || channelStatus !== 'complete');
+  const menuOpen = !!trigger && (items.length > 0 || channelStatus !== "complete");
 
   const insertPick = (item: PickerItem): void => {
     if (!trigger) return;
@@ -594,7 +594,7 @@ export function Composer({
     disabled ||
     send.isPending ||
     pendingAttachmentsBlockSend(pending) ||
-    (!draft.trim() && pending.filter((p) => p.state === 'done').length === 0);
+    (!draft.trim() && pending.filter((p) => p.state === "done").length === 0);
 
   /** Insert a passage quoted from a message as a Markdown blockquote at
    *  the caret (#task:1544), routed here by the SelectionQuoteToolbar via
@@ -634,7 +634,7 @@ export function Composer({
     const after = text.slice(pos);
     // Pad with a leading space only when the preceding char isn't already
     // whitespace, and a trailing space so typing continues cleanly.
-    const lead = before.length > 0 && !/\s$/.test(before) ? ' ' : '';
+    const lead = before.length > 0 && !/\s$/.test(before) ? " " : "";
     const insertion = `${lead}${label} `;
     const nextDraft = before + insertion + after;
     const nextCaret = (before + insertion).length;
@@ -651,14 +651,14 @@ export function Composer({
   function submit(): void {
     const content = draft.trim();
     const ready = pending
-      .filter((p) => p.state === 'done' && p.attachment)
+      .filter((p) => p.state === "done" && p.attachment)
       // Carry the compose-time label alongside the uploaded dto so the send
       // payload (and the optimistic snapshot) reference the same stable
       // identity the chip showed (#task:1324).
       .map((p) => ({ ...p.attachment!, label: p.label }));
     if ((!content && ready.length === 0) || disabled) return;
     if (pendingAttachmentsBlockSend(pending)) return;
-    const submittedPending = pending.filter((p) => p.state === 'done' && p.attachment);
+    const submittedPending = pending.filter((p) => p.state === "done" && p.attachment);
     const sentAttachmentIds = ready.map((item) => item.id);
     const logicalSend =
       retrySendRef.current ?? createLogicalSend(conversationId, threadRootId ?? null);
@@ -681,10 +681,10 @@ export function Composer({
       editGeneration,
       sentAttachmentIds,
     };
-    draftRef.current = '';
+    draftRef.current = "";
     caretRef.current = 0;
     pendingRef.current = [];
-    setDraftState('');
+    setDraftState("");
     setCaretState(0);
     setPendingState([]);
     /** Put the author's own bytes back in the composer. Generation-guarded, so
@@ -769,11 +769,11 @@ export function Composer({
    *  source at all). Arm-aware so the wait targets the same authority the picker
    *  and the resolver read — never a workspace roster in a DM or vice versa. */
   async function refetchMentionResolver(): Promise<ShorthandResolver | null> {
-    if (directory.kind === 'workspace') {
+    if (directory.kind === "workspace") {
       const roster = (await memberLists.refetch()).data;
       return roster ? buildShorthandResolver(roster.agents, roster.humans) : null;
     }
-    if (directory.kind === 'viewer') {
+    if (directory.kind === "viewer") {
       const owned = (await ownedAgentsQuery.refetch()).data;
       if (!owned) return null;
       // Same merge the picker read, so a picked (or hand-typed) non-owned
@@ -807,7 +807,7 @@ export function Composer({
       // `attachment_label_kind_mismatch` 400. We reuse the same shared helpers
       // the backend's detectContentType uses for its hint→suffix path.
       const contentType = effectiveContentType(file);
-      const isImage = contentType.startsWith('image/');
+      const isImage = contentType.startsWith("image/");
       const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
       // Assign the stable `Image #N` / `File #N` label the instant the file
       // enters the draft, so the chip the user sees IS the reference the agent
@@ -818,7 +818,7 @@ export function Composer({
         filename: file.name,
         size: file.size,
         contentType,
-        state: 'uploading',
+        state: "uploading",
         file,
         previewUrl,
         label,
@@ -861,7 +861,7 @@ export function Composer({
 
   function onDragOver(e: DragEvent<HTMLFormElement>): void {
     if (disabled) return;
-    if (Array.from(e.dataTransfer.types).includes('Files')) {
+    if (Array.from(e.dataTransfer.types).includes("Files")) {
       e.preventDefault();
       setDragOver(true);
     }
@@ -894,12 +894,12 @@ export function Composer({
     // capacity the text falls through to the native paste (draft keeps
     // it) and the submit-time conversion in `useSendMessage` remains
     // the authority.
-    const text = e.clipboardData?.getData('text/plain') ?? '';
+    const text = e.clipboardData?.getData("text/plain") ?? "";
     if (shouldInterceptOversizedPaste(text, pendingRef.current.length)) {
       e.preventDefault();
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const file = new File([text], `pasted-text-${stamp}.txt`, {
-        type: 'text/plain',
+        type: "text/plain",
       });
       addFiles([file]);
     }
@@ -920,12 +920,12 @@ export function Composer({
     }
   }, [trigger, dismissedPos]);
 
-  const insertTriggerAtCaret = (kind: '@' | '#'): void => {
+  const insertTriggerAtCaret = (kind: "@" | "#"): void => {
     const el = ref.current;
     const pos = el?.selectionStart ?? caretRef.current;
     const text = draftRef.current;
     const before = text.slice(0, pos);
-    const lead = /[\w/]$/.test(before) ? ' ' : '';
+    const lead = /[\w/]$/.test(before) ? " " : "";
     const nextDraft = before + lead + kind + text.slice(pos);
     const nextCaret = before.length + lead.length + 1;
     setDismissedPos(null);
@@ -941,23 +941,23 @@ export function Composer({
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
     if (menuOpen && !dismissed) {
-      if (e.key === 'Escape') {
+      if (e.key === "Escape") {
         e.preventDefault();
         if (trigger) setDismissedPos(trigger.pos);
         return;
       }
       if (items.length > 0) {
-        if (e.key === 'ArrowDown') {
+        if (e.key === "ArrowDown") {
           e.preventDefault();
           setActive((i) => (i + 1) % items.length);
           return;
         }
-        if (e.key === 'ArrowUp') {
+        if (e.key === "ArrowUp") {
           e.preventDefault();
           setActive((i) => (i - 1 + items.length) % items.length);
           return;
         }
-        if (e.key === 'Enter' || e.key === 'Tab') {
+        if (e.key === "Enter" || e.key === "Tab") {
           if (composing || e.nativeEvent.isComposing) return; // IME candidate
           e.preventDefault();
           const pick = items[active];
@@ -967,7 +967,7 @@ export function Composer({
       }
     }
 
-    if (e.key !== 'Enter') return;
+    if (e.key !== "Enter") return;
     if (e.shiftKey) return; // newline
     if (composing || e.nativeEvent.isComposing) return; // IME candidate
     e.preventDefault();
@@ -986,8 +986,8 @@ export function Composer({
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       className={
-        'shrink-0 border-t border-border-subtle bg-bg-chat px-3 py-3 ' +
-        (dragOver ? '[outline:2px_solid_var(--border-focus)] [outline-offset:-2px]' : '')
+        "shrink-0 border-t border-border-subtle bg-bg-chat px-3 py-3 " +
+        (dragOver ? "[outline:2px_solid_var(--border-focus)] [outline-offset:-2px]" : "")
       }
     >
       {pending.length > 0 ? (
@@ -998,7 +998,7 @@ export function Composer({
               item={p}
               onRemove={() => removePending(p.key)}
               onInsertLabel={
-                p.label && p.state !== 'error' ? () => insertLabelAtCaret(p.label!) : undefined
+                p.label && p.state !== "error" ? () => insertLabelAtCaret(p.label!) : undefined
               }
               onPreview={
                 p.previewUrl
@@ -1049,20 +1049,20 @@ export function Composer({
             disabled={disabled}
             placeholder={
               archived
-                ? 'This conversation is archived'
+                ? "This conversation is archived"
                 : readOnly
-                  ? 'This conversation is read-only'
+                  ? "This conversation is read-only"
                   : disabled
-                    ? 'This conversation is closed'
+                    ? "This conversation is closed"
                     : // Hints follow the arm: `#channel` only where the arm offers
                       // channels, `@member` only where it offers mentions — naming a
                       // trigger whose picker opens on nothing promises a menu that
                       // never appears (#task:2118). The withheld arm offers neither.
                       offersChannels
-                      ? 'Enter to send · Shift + Enter for a new line · @member · #channel'
+                      ? "Enter to send · Shift + Enter for a new line · @member · #channel"
                       : offersMentions
-                        ? 'Enter to send · Shift + Enter for a new line · @member'
-                        : 'Enter to send · Shift + Enter for a new line'
+                        ? "Enter to send · Shift + Enter for a new line · @member"
+                        : "Enter to send · Shift + Enter for a new line"
             }
             // No bottom/right padding to dodge buttons anymore — they
             // live in the toolbar below. `min-h-[60px]` keeps the
@@ -1080,7 +1080,7 @@ export function Composer({
             onChange={(e) => {
               if (e.target.files) addFiles(e.target.files);
               // Reset so re-selecting the same file fires onChange.
-              e.target.value = '';
+              e.target.value = "";
             }}
           />
           {/* Toolbar row — sibling of the textarea, NOT overlaid. No
@@ -1108,7 +1108,7 @@ export function Composer({
               {offersMentions ? (
                 <button
                   type="button"
-                  onClick={() => insertTriggerAtCaret('@')}
+                  onClick={() => insertTriggerAtCaret("@")}
                   disabled={disabled}
                   title="Mention a member"
                   aria-label="Mention a member"
@@ -1121,7 +1121,7 @@ export function Composer({
               {offersChannels ? (
                 <button
                   type="button"
-                  onClick={() => insertTriggerAtCaret('#')}
+                  onClick={() => insertTriggerAtCaret("#")}
                   disabled={disabled}
                   title="Reference a channel"
                   aria-label="Reference a channel"
@@ -1151,8 +1151,8 @@ export function Composer({
         onOpenChange={(open) => {
           if (!open) setPreviewing(null);
         }}
-        src={previewing?.url ?? ''}
-        alt={previewing?.alt ?? ''}
+        src={previewing?.url ?? ""}
+        alt={previewing?.alt ?? ""}
       />
     </form>
   );
@@ -1180,12 +1180,12 @@ function AttachmentChip({
   // saturation is earned. Full-strength `border-error` on a compact bordered
   // control matches `ConnectionPane`'s failed-endpoint option.
   const stateClass =
-    item.state === 'error'
-      ? 'border-error text-error'
-      : item.state === 'uploading'
-        ? 'border-border-subtle text-text-muted'
-        : 'border-border-subtle text-text-secondary';
-  const isImage = item.contentType.startsWith('image/');
+    item.state === "error"
+      ? "border-error text-error"
+      : item.state === "uploading"
+        ? "border-border-subtle text-text-muted"
+        : "border-border-subtle text-text-secondary";
+  const isImage = item.contentType.startsWith("image/");
 
   // Image chip: small thumbnail + filename + remove. Click thumbnail
   // opens the lightbox. Non-image chip: paperclip icon + filename.
@@ -1232,7 +1232,7 @@ function AttachmentChip({
             )
           ) : null}
           {item.label ? <span aria-hidden>·</span> : null}
-          <span className="shrink-0">{item.state === 'uploading' ? 'Uploading…' : sizeLabel}</span>
+          <span className="shrink-0">{item.state === "uploading" ? "Uploading…" : sizeLabel}</span>
         </div>
       </div>
       <button
@@ -1256,16 +1256,16 @@ function formatBytes(n: number): string {
 
 export function resizeTextarea(el: HTMLTextAreaElement | null): void {
   if (!el) return;
-  el.style.height = 'auto';
+  el.style.height = "auto";
   const nextHeight = Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT);
   el.style.height = `${nextHeight}px`;
-  el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_HEIGHT ? 'auto' : 'hidden';
+  el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
 }
 
 // ── trigger detection ─────────────────────────────────────────────
 
 interface ActiveTrigger {
-  kind: '@' | '#';
+  kind: "@" | "#";
   /** Index in `text` of the trigger character itself. */
   pos: number;
   /** Substring between trigger and caret (the live query). */
@@ -1319,12 +1319,12 @@ export function detectTrigger(text: string, caret: number): ActiveTrigger | null
   if (caret < 1 || caret > text.length) return null;
   for (let i = caret - 1; i >= 0; i--) {
     const ch = text[i]!;
-    if (ch === '@' || ch === '#') {
-      const prev = i === 0 ? '' : text[i - 1]!;
-      const boundary = prev === '' || (!TOKEN_TAIL_CHAR.test(prev) && prev !== '/');
+    if (ch === "@" || ch === "#") {
+      const prev = i === 0 ? "" : text[i - 1]!;
+      const boundary = prev === "" || (!TOKEN_TAIL_CHAR.test(prev) && prev !== "/");
       if (!boundary) return null;
       return {
-        kind: ch as '@' | '#',
+        kind: ch as "@" | "#",
         pos: i,
         query: text.slice(i + 1, caret),
       };
@@ -1344,10 +1344,10 @@ export interface HumanMentionCandidate {
 }
 
 export type PickerItem =
-  | { kind: 'agent'; agent: MentionAgent; inConversation: boolean }
-  | { kind: 'human'; human: HumanMentionCandidate; inConversation: boolean }
+  | { kind: "agent"; agent: MentionAgent; inConversation: boolean }
+  | { kind: "human"; human: HumanMentionCandidate; inConversation: boolean }
   | {
-      kind: 'channel';
+      kind: "channel";
       channel: ChannelConversationDto;
       /** The channel's OWN workspace name, stamped when the candidate is built
        *  from its own `workspace_id` — NEVER the ambient pane workspace. The
@@ -1385,7 +1385,7 @@ interface ComposerChannelSource {
   select: (query: string) => ChannelPickerResult;
 }
 
-export type ChannelSourceStatus = 'complete' | 'loading' | 'partial_error';
+export type ChannelSourceStatus = "complete" | "loading" | "partial_error";
 
 export interface ChannelPickerResult extends PickerResult {
   status: ChannelSourceStatus;
@@ -1420,9 +1420,9 @@ export function buildShorthandResolver(
   humans: WorkspaceHumanMember[],
 ): ShorthandResolver {
   const kinds = new Map<string, ReferenceKind>();
-  for (const human of humans) kinds.set(human.name, 'human');
+  for (const human of humans) kinds.set(human.name, "human");
   // Second, so a collision resolves to the agent.
-  for (const agent of agents) kinds.set(agent.name, 'agent');
+  for (const agent of agents) kinds.set(agent.name, "agent");
   return (handle) => kinds.get(handle) ?? null;
 }
 
@@ -1457,7 +1457,7 @@ export function filterMentionPeople(
   const q = query.toLowerCase();
   const matchedAgents = q
     ? agents.filter(
-        (a) => a.name.toLowerCase().includes(q) || (a.display_name ?? '').toLowerCase().includes(q),
+        (a) => a.name.toLowerCase().includes(q) || (a.display_name ?? "").toLowerCase().includes(q),
       )
     : agents;
   const matchedHumans = q
@@ -1470,16 +1470,16 @@ export function filterMentionPeople(
   // queries) so user-attention lines up across both groups.
   const inHumans: PickerItem[] = matchedHumans
     .filter((h) => humanMemberIds.has(h.id))
-    .map((human) => ({ kind: 'human', human, inConversation: true }));
+    .map((human) => ({ kind: "human", human, inConversation: true }));
   const inAgents: PickerItem[] = matchedAgents
     .filter((a) => agentMemberIds.has(a.id))
-    .map((agent) => ({ kind: 'agent', agent, inConversation: true }));
+    .map((agent) => ({ kind: "agent", agent, inConversation: true }));
   const outHumans: PickerItem[] = matchedHumans
     .filter((h) => !humanMemberIds.has(h.id))
-    .map((human) => ({ kind: 'human', human, inConversation: false }));
+    .map((human) => ({ kind: "human", human, inConversation: false }));
   const outAgents: PickerItem[] = matchedAgents
     .filter((a) => !agentMemberIds.has(a.id))
-    .map((agent) => ({ kind: 'agent', agent, inConversation: false }));
+    .map((agent) => ({ kind: "agent", agent, inConversation: false }));
   const PER_SECTION_CAP = 5;
   const inItems = [...inHumans, ...inAgents];
   const outItems = [...outHumans, ...outAgents];
@@ -1529,7 +1529,7 @@ export function filterChannels(
   const q = query.toLowerCase();
   const onlyLive = channels.filter(
     (c): c is ChannelConversationDto =>
-      c.roster_policy === 'open' && c.archived_at === null && c.closed_at === null,
+      c.roster_policy === "open" && c.archived_at === null && c.closed_at === null,
   );
   const matched = q ? onlyLive.filter((c) => c.title.toLowerCase().includes(q)) : onlyLive;
   const items: PickerItem[] = matched
@@ -1537,7 +1537,7 @@ export function filterChannels(
     // One workspace's list, so every row carries that one ambient name — the
     // viewer arm's cross-workspace list (below) stamps each row's OWN name
     // instead.
-    .map((channel) => ({ kind: 'channel', channel, workspaceName }));
+    .map((channel) => ({ kind: "channel", channel, workspaceName }));
   return { items, hiddenCount: matched.length - items.length };
 }
 
@@ -1573,15 +1573,15 @@ export function selectViewerMentionCandidates(
   const q = query.toLowerCase();
   const matched = q
     ? agents.filter(
-        (a) => a.name.toLowerCase().includes(q) || (a.display_name ?? '').toLowerCase().includes(q),
+        (a) => a.name.toLowerCase().includes(q) || (a.display_name ?? "").toLowerCase().includes(q),
       )
     : agents;
   const inAgents: PickerItem[] = matched
     .filter((a) => a.id === counterpartId)
-    .map((agent) => ({ kind: 'agent', agent, inConversation: true }));
+    .map((agent) => ({ kind: "agent", agent, inConversation: true }));
   const outAgents: PickerItem[] = matched
     .filter((a) => a.id !== counterpartId)
-    .map((agent) => ({ kind: 'agent', agent, inConversation: false }));
+    .map((agent) => ({ kind: "agent", agent, inConversation: false }));
   const VIEWER_MENTION_CAP = 10;
   // The counterpart (at most one) always shows; the rest fill up to the cap.
   const items = [...inAgents, ...outAgents.slice(0, VIEWER_MENTION_CAP)];
@@ -1598,7 +1598,7 @@ export function selectViewerMentionCandidates(
  */
 export function buildViewerShorthandResolver(agents: MentionAgent[]): ShorthandResolver {
   const kinds = new Map<string, ReferenceKind>();
-  for (const agent of agents) kinds.set(agent.name, 'agent');
+  for (const agent of agents) kinds.set(agent.name, "agent");
   return (handle) => kinds.get(handle) ?? null;
 }
 
@@ -1607,7 +1607,7 @@ export function buildViewerShorthandResolver(agents: MentionAgent[]): ShorthandR
  *  real React Query result. Structurally satisfied by one entry of
  *  `useChannelsAcrossWorkspaces`. */
 export interface ChannelSlice {
-  status: 'pending' | 'error' | 'success';
+  status: "pending" | "error" | "success";
   data?: ChannelListItem[];
 }
 
@@ -1620,17 +1620,17 @@ export function filterViewerChannels(
   const items: PickerItem[] = [];
   let matchedCount = 0;
   for (const slice of slices) {
-    if (slice.status !== 'success' || !slice.data) continue;
+    if (slice.status !== "success" || !slice.data) continue;
     for (const c of slice.data) {
       if (c.is_member !== true) continue;
-      if (c.roster_policy !== 'open' || c.archived_at !== null || c.closed_at !== null) {
+      if (c.roster_policy !== "open" || c.archived_at !== null || c.closed_at !== null) {
         continue;
       }
       if (q && !c.title.toLowerCase().includes(q)) continue;
       matchedCount += 1;
       if (items.length >= CHANNEL_PICKER_CAP) continue;
       items.push({
-        kind: 'channel',
+        kind: "channel",
         channel: c,
         workspaceName: c.workspace_id ? (workspaceNameById.get(c.workspace_id) ?? null) : null,
       });
@@ -1642,13 +1642,13 @@ export function filterViewerChannels(
 /** Collapse a single React Query settledness onto a {@link ChannelSourceStatus}
  *  (the workspace arm's one channel query). Pure. */
 export function channelSourceStatusOf(
-  queryStatus: 'pending' | 'error' | 'success',
+  queryStatus: "pending" | "error" | "success",
 ): ChannelSourceStatus {
-  return queryStatus === 'error'
-    ? 'partial_error'
-    : queryStatus === 'success'
-      ? 'complete'
-      : 'loading';
+  return queryStatus === "error"
+    ? "partial_error"
+    : queryStatus === "success"
+      ? "complete"
+      : "loading";
 }
 
 /**
@@ -1665,17 +1665,17 @@ export function channelSourceStatusOf(
  */
 export function viewerChannelPickerResult(
   slices: readonly ChannelSlice[],
-  workspacesStatus: 'pending' | 'error' | 'success',
+  workspacesStatus: "pending" | "error" | "success",
   workspaceNameById: ReadonlyMap<string, string>,
   query: string,
 ): ChannelPickerResult {
   const { items, hiddenCount } = filterViewerChannels(slices, workspaceNameById, query);
   const status: ChannelSourceStatus =
-    workspacesStatus === 'error' || slices.some((s) => s.status === 'error')
-      ? 'partial_error'
-      : workspacesStatus === 'pending' || slices.some((s) => s.status === 'pending')
-        ? 'loading'
-        : 'complete';
+    workspacesStatus === "error" || slices.some((s) => s.status === "error")
+      ? "partial_error"
+      : workspacesStatus === "pending" || slices.some((s) => s.status === "pending")
+        ? "loading"
+        : "complete";
   return { items, hiddenCount, status };
 }
 
@@ -1685,13 +1685,13 @@ export function viewerChannelPickerResult(
  *  `@` is always `complete` — its own completeness drives the SEND gate
  *  (`sourceKnown`), never the render (#task:2147/#task:2148). Pure. */
 export function selectPickerView(
-  trigger: { kind: '@' | '#'; query: string } | null,
-  mentionSource: Pick<ComposerMentionSource, 'select'>,
-  channelSource: Pick<ComposerChannelSource, 'select'>,
+  trigger: { kind: "@" | "#"; query: string } | null,
+  mentionSource: Pick<ComposerMentionSource, "select">,
+  channelSource: Pick<ComposerChannelSource, "select">,
 ): { items: PickerItem[]; hiddenCount: number; channelStatus: ChannelSourceStatus } {
-  if (!trigger) return { ...EMPTY_PICKER, channelStatus: 'complete' };
-  if (trigger.kind === '@') {
-    return { ...mentionSource.select(trigger.query), channelStatus: 'complete' };
+  if (!trigger) return { ...EMPTY_PICKER, channelStatus: "complete" };
+  if (trigger.kind === "@") {
+    return { ...mentionSource.select(trigger.query), channelStatus: "complete" };
   }
   const r = channelSource.select(trigger.query);
   return { items: r.items, hiddenCount: r.hiddenCount, channelStatus: r.status };
@@ -1746,9 +1746,9 @@ function PickerMenu({
   // is "other" and a lone "Other channels" header labels nothing — render it flat
   // instead (#task:2147).
   const hasInSection =
-    peopleSections && items.some((item) => item.kind !== 'channel' && item.inConversation);
+    peopleSections && items.some((item) => item.kind !== "channel" && item.inConversation);
   const headerBoundaryIndex = hasInSection
-    ? items.findIndex((item) => item.kind !== 'channel' && !item.inConversation)
+    ? items.findIndex((item) => item.kind !== "channel" && !item.inConversation)
     : -1;
   return (
     <div
@@ -1774,10 +1774,10 @@ function PickerMenu({
               onHover={() => onHover(i)}
               showChannelWorkspace={showChannelWorkspace}
               agentAvatarUrl={
-                item.kind === 'agent' ? (agentAvatarUrls.get(item.agent.id) ?? null) : null
+                item.kind === "agent" ? (agentAvatarUrls.get(item.agent.id) ?? null) : null
               }
               humanAvatarUrl={
-                item.kind === 'human' ? (humanAvatarUrls.get(item.human.id) ?? null) : null
+                item.kind === "human" ? (humanAvatarUrls.get(item.human.id) ?? null) : null
               }
             />
           </Fragment>
@@ -1800,14 +1800,14 @@ function PickerMenu({
           +{hiddenCount} more
         </div>
       ) : null}
-      {channelStatus === 'loading' ? (
+      {channelStatus === "loading" ? (
         <div
           role="status"
           className="border-t border-border-subtle px-3 py-1.5 text-[length:var(--text-meta)] text-text-muted"
         >
           Loading channels…
         </div>
-      ) : channelStatus === 'partial_error' ? (
+      ) : channelStatus === "partial_error" ? (
         <div
           role="status"
           className="border-t border-border-subtle px-3 py-1.5 text-[length:var(--text-meta)] text-text-muted"
@@ -1847,16 +1847,16 @@ function Row({
   agentAvatarUrl: string | null;
   humanAvatarUrl: string | null;
 }): JSX.Element {
-  const dimmed = (item.kind === 'agent' || item.kind === 'human') && !item.inConversation;
+  const dimmed = (item.kind === "agent" || item.kind === "human") && !item.inConversation;
   const cls =
-    'flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left ' +
-    (active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary') +
-    (dimmed && !active ? ' opacity-60' : '');
+    "flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left " +
+    (active ? "bg-bg-hover text-text-primary" : "text-text-secondary") +
+    (dimmed && !active ? " opacity-60" : "");
 
   const rowRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!active) return;
-    rowRef.current?.scrollIntoView({ block: 'nearest' });
+    rowRef.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
   return (
     <button
@@ -1868,7 +1868,7 @@ function Row({
       onMouseMove={onHover}
       className={cls}
     >
-      {item.kind === 'agent' ? (
+      {item.kind === "agent" ? (
         <>
           <AgentAvatar
             runtime={item.agent.runtime}
@@ -1889,7 +1889,7 @@ function Row({
             </div>
           </div>
         </>
-      ) : item.kind === 'human' ? (
+      ) : item.kind === "human" ? (
         <>
           <UserAvatar
             size={AVATAR_PX.md}
@@ -1933,8 +1933,8 @@ function Row({
 }
 
 function rowKey(item: PickerItem): string {
-  if (item.kind === 'agent') return `a:${item.agent.id}`;
-  if (item.kind === 'human') return `h:${item.human.id}`;
+  if (item.kind === "agent") return `a:${item.agent.id}`;
+  if (item.kind === "human") return `h:${item.human.id}`;
   return `c:${item.channel.id}`;
 }
 
@@ -1974,11 +1974,11 @@ function rowKey(item: PickerItem): string {
  * the readable, reliable form.
  */
 export function formatPickInsertion(item: PickerItem): string {
-  if (item.kind === 'agent') return `@${item.agent.name}`;
-  if (item.kind === 'human') return `@${item.human.name}`;
+  if (item.kind === "agent") return `@${item.agent.name}`;
+  if (item.kind === "human") return `@${item.human.name}`;
   if (item.workspaceName === null) return `#conv:${item.channel.id}`;
   const locator: Locator = {
-    kind: 'channel',
+    kind: "channel",
     workspace: canonicalizeStoredWorkspaceName(item.workspaceName),
     channel: canonicalizeStoredConversationTitle(item.channel.title),
     threadRootId: null,

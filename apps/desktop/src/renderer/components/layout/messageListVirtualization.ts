@@ -1,9 +1,6 @@
 export const FIRST_ITEM_INDEX_START = 1_000_000;
 
-export type InitialTopMostItemIndex =
-  | number
-  | { index: number; align: 'center' }
-  | undefined;
+export type InitialTopMostItemIndex = number | { index: number; align: "center" } | undefined;
 
 // `initialTopMostItemIndex` is consumed only when Virtuoso mounts.
 // Bottom is the right default for ordinary channel opens, but it is
@@ -24,7 +21,7 @@ export function getInitialTopMostItemIndex(args: {
     return Math.max(0, args.itemCount - 1);
   }
   if (args.jumpTargetIndex >= 0) {
-    return { index: args.jumpTargetIndex, align: 'center' };
+    return { index: args.jumpTargetIndex, align: "center" };
   }
   if (args.hasJumpTarget) {
     return undefined;
@@ -74,26 +71,26 @@ export function shouldRemountForWindowReplacement(args: {
 // trimmed; else the windows are disjoint. Classification mirrors the trust level
 // of the existing prepend detection (index lookup, no full contiguity proof).
 export type TopShift =
-  | { kind: 'none' }
-  | { kind: 'prepend'; count: number }
-  | { kind: 'head-trim'; count: number }
-  | { kind: 'replace' };
+  | { kind: "none" }
+  | { kind: "prepend"; count: number }
+  | { kind: "head-trim"; count: number }
+  | { kind: "replace" };
 
 export function classifyTopShift(prevKeys: string[], keys: string[]): TopShift {
   // Nothing observed yet (first data arrival / post-channel-switch): there is no
   // prior anchor to reconcile. The mount itself owns initial positioning, so
   // this must be a no-op — treating it as a replacement would remount spuriously.
-  if (keys.length === 0 || prevKeys.length === 0) return { kind: 'none' };
+  if (keys.length === 0 || prevKeys.length === 0) return { kind: "none" };
   const prevTop = prevKeys[0]!;
   const newTop = keys[0]!;
-  if (prevTop === newTop) return { kind: 'none' };
+  if (prevTop === newTop) return { kind: "none" };
   // Old top still below the new head → rows prepended above it.
   const prevTopInNew = keys.indexOf(prevTop);
-  if (prevTopInNew > 0) return { kind: 'prepend', count: prevTopInNew };
+  if (prevTopInNew > 0) return { kind: "prepend", count: prevTopInNew };
   // New top still inside the old window → the head was trimmed.
   const newTopInPrev = prevKeys.indexOf(newTop);
-  if (newTopInPrev > 0) return { kind: 'head-trim', count: newTopInPrev };
-  return { kind: 'replace' };
+  if (newTopInPrev > 0) return { kind: "head-trim", count: newTopInPrev };
+  return { kind: "replace" };
 }
 
 // The `firstItemIndex` / remount action for a classified top shift.
@@ -107,8 +104,8 @@ export function classifyTopShift(prevKeys: string[], keys: string[]): TopShift {
 //     owning the anchor (no #1504 regression).
 //   • replace  → reset firstItemIndex and remount per `shouldRemountForWindowReplacement`.
 export type TopShiftAction =
-  | { firstItemIndex: 'reset'; remount: boolean }
-  | { firstItemIndex: 'delta'; delta: number; remount: false };
+  | { firstItemIndex: "reset"; remount: boolean }
+  | { firstItemIndex: "delta"; delta: number; remount: false };
 
 export function resolveTopShiftAction(
   shift: TopShift,
@@ -120,7 +117,7 @@ export function resolveTopShiftAction(
   },
 ): TopShiftAction {
   const replace = (): TopShiftAction => ({
-    firstItemIndex: 'reset',
+    firstItemIndex: "reset",
     remount: shouldRemountForWindowReplacement({
       hasJumpTarget: ctx.hasJumpTarget,
       jumpTargetIndex: ctx.jumpTargetIndex,
@@ -128,14 +125,14 @@ export function resolveTopShiftAction(
     }),
   });
   switch (shift.kind) {
-    case 'none':
-      return { firstItemIndex: 'delta', delta: 0, remount: false };
-    case 'prepend':
-      return { firstItemIndex: 'delta', delta: -shift.count, remount: false };
-    case 'head-trim':
+    case "none":
+      return { firstItemIndex: "delta", delta: 0, remount: false };
+    case "prepend":
+      return { firstItemIndex: "delta", delta: -shift.count, remount: false };
+    case "head-trim":
       if (ctx.userPositioning) return replace();
-      return { firstItemIndex: 'delta', delta: shift.count, remount: false };
-    case 'replace':
+      return { firstItemIndex: "delta", delta: shift.count, remount: false };
+    case "replace":
       return replace();
   }
 }
@@ -158,8 +155,8 @@ export function getFollowOutputBehavior(args: {
   hasJumpTarget: boolean;
   isAtTail: boolean;
   atBottom: boolean;
-}): 'auto' | false {
-  return !args.hasJumpTarget && args.isAtTail && args.atBottom ? 'auto' : false;
+}): "auto" | false {
+  return !args.hasJumpTarget && args.isAtTail && args.atBottom ? "auto" : false;
 }
 
 // ── Back-to-bottom anchor lifecycle ──────────────────────────────────────
@@ -183,7 +180,7 @@ export function getFollowOutputBehavior(args: {
 //     around-window is still non-empty at click time. Consumption must wait
 //     for the transient empty (`rows-hidden`) and then the real latest mount
 //     (`rows-shown`).
-export type BottomAnchorIntent = 'default' | 'bottom';
+export type BottomAnchorIntent = "default" | "bottom";
 
 export type BottomAnchorState = {
   intent: BottomAnchorIntent;
@@ -191,23 +188,23 @@ export type BottomAnchorState = {
   // once the reset's transient empty has been observed, so the following
   // non-empty mount is known to be the fresh latest window (not the stale
   // pre-reset one).
-  pending: null | { kind: 'tail' | 'reset'; sawEmpty: boolean };
+  pending: null | { kind: "tail" | "reset"; sawEmpty: boolean };
 };
 
 export type BottomAnchorEvent =
-  | { type: 'arm-tail' }
-  | { type: 'arm-reset' }
+  | { type: "arm-tail" }
+  | { type: "arm-reset" }
   // The tail-branch remount committed (bottomAnchorVersion changed).
-  | { type: 'tail-shown' }
+  | { type: "tail-shown" }
   // Virtuoso is not showing rows (empty cache / loading skeleton).
-  | { type: 'rows-hidden' }
+  | { type: "rows-hidden" }
   // Virtuoso is showing real rows.
-  | { type: 'rows-shown' }
+  | { type: "rows-shown" }
   // A fresh jump or channel switch overrides any in-flight request.
-  | { type: 'cancel' };
+  | { type: "cancel" };
 
 export const INITIAL_BOTTOM_ANCHOR_STATE: BottomAnchorState = {
-  intent: 'default',
+  intent: "default",
   pending: null,
 };
 
@@ -218,27 +215,27 @@ export function reduceBottomAnchor(
   event: BottomAnchorEvent,
 ): BottomAnchorState {
   switch (event.type) {
-    case 'arm-tail':
-      return { intent: 'bottom', pending: { kind: 'tail', sawEmpty: false } };
-    case 'arm-reset':
-      return { intent: 'bottom', pending: { kind: 'reset', sawEmpty: false } };
-    case 'tail-shown':
+    case "arm-tail":
+      return { intent: "bottom", pending: { kind: "tail", sawEmpty: false } };
+    case "arm-reset":
+      return { intent: "bottom", pending: { kind: "reset", sawEmpty: false } };
+    case "tail-shown":
       // Spend a tail request once its remount has committed (the mount already
       // read the armed intent during that render).
-      if (state.pending?.kind !== 'tail') return state;
+      if (state.pending?.kind !== "tail") return state;
       return INITIAL_BOTTOM_ANCHOR_STATE;
-    case 'rows-hidden':
+    case "rows-hidden":
       // The reset's transient empty. Latch it so the next real mount consumes.
-      if (state.pending?.kind !== 'reset' || state.pending.sawEmpty) return state;
-      return { intent: 'bottom', pending: { kind: 'reset', sawEmpty: true } };
-    case 'rows-shown':
+      if (state.pending?.kind !== "reset" || state.pending.sawEmpty) return state;
+      return { intent: "bottom", pending: { kind: "reset", sawEmpty: true } };
+    case "rows-shown":
       // Only the latest mount that FOLLOWS the reset's empty consumes. A
       // request that has not yet seen empty is still looking at the pre-reset
       // stale window — leave it armed.
-      if (state.pending?.kind !== 'reset' || !state.pending.sawEmpty) return state;
+      if (state.pending?.kind !== "reset" || !state.pending.sawEmpty) return state;
       return INITIAL_BOTTOM_ANCHOR_STATE;
-    case 'cancel':
-      if (state.intent === 'default' && state.pending === null) return state;
+    case "cancel":
+      if (state.intent === "default" && state.pending === null) return state;
       return INITIAL_BOTTOM_ANCHOR_STATE;
     default:
       return state;

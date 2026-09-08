@@ -40,15 +40,11 @@
  * on missing globals or require so much mocking that the test
  * stops being a gate-order pin and becomes a shell smoke test.
  */
-import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type {
-  BackendUnreachable,
-  SetupRequired,
-  ViewerState,
-} from './hooks';
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { BackendUnreachable, SetupRequired, ViewerState } from "./hooks";
 
 // Copy-free gate discriminators. Each is a structural or data signal
 // that does NOT depend on user-facing wording or iconography, so copy
@@ -73,11 +69,13 @@ const SIG_REG_LOGIN_AUTOCOMPLETE = 'autoComplete="current-password"';
 // the whole `window` object so any unsolicited access surfaces as
 // `silverhand.<method> is not a function` rather than `undefined`.
 const silverhand = {
-  getDesktopBuildConfig: vi.fn(() => Promise.resolve({
-    remote_only: false,
-    allow_insecure_remote: false,
-    default_server_url: '',
-  })),
+  getDesktopBuildConfig: vi.fn(() =>
+    Promise.resolve({
+      remote_only: false,
+      allow_insecure_remote: false,
+      default_server_url: "",
+    }),
+  ),
   getAuthState: vi.fn(),
   getBackendInfo: vi.fn(),
   backendRequest: vi.fn(),
@@ -90,7 +88,7 @@ const silverhand = {
   onAppearanceUpdated: vi.fn(() => () => {}),
   onNavigateSettings: vi.fn(() => () => {}),
   onBackendInfoUpdated: vi.fn(() => () => {}),
-  getAppearance: vi.fn(() => Promise.resolve({ theme: 'system' })),
+  getAppearance: vi.fn(() => Promise.resolve({ theme: "system" })),
   setAppearance: vi.fn(),
   revokeHost: vi.fn(),
 };
@@ -101,17 +99,13 @@ async function renderApp(viewer: ViewerState | undefined): Promise<string> {
   // module-scope `useQuery` consumers; they call into
   // `window.silverhand.*` lazily, but a bare top-of-file `import` would
   // still evaluate them before `vi.stubGlobal` ran.
-  const { App } = await import('@/App');
+  const { App } = await import("@/App");
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  if (viewer !== undefined) qc.setQueryData(['me'], viewer);
+  if (viewer !== undefined) qc.setQueryData(["me"], viewer);
   return renderToStaticMarkup(
-    React.createElement(
-      QueryClientProvider,
-      { client: qc },
-      React.createElement(App),
-    ),
+    React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
   );
 }
 
@@ -121,11 +115,11 @@ beforeEach(() => {
   // undefined. Individual tests primed via `qc.setQueryData(['me'], ...)`
   // bypass queryFn entirely.
   silverhand.getAuthState.mockReturnValue(new Promise(() => {}));
-  vi.stubGlobal('window', { silverhand });
+  vi.stubGlobal("window", { silverhand });
   // localStorage is touched by App.tsx (last-channel maps). Stub a
   // tiny in-memory shim so module-level hydration doesn't throw.
   const store = new Map<string, string>();
-  vi.stubGlobal('localStorage', {
+  vi.stubGlobal("localStorage", {
     getItem: (k: string) => store.get(k) ?? null,
     setItem: (k: string, v: string) => {
       store.set(k, v);
@@ -143,35 +137,35 @@ afterEach(() => {
   silverhand.getAuthState.mockReset();
 });
 
-describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
-  it('loading branch: viewer.data is undefined → no gate renders', async () => {
+describe("App.tsx gate ordering (D4.a Commit 6 part 2)", () => {
+  it("loading branch: viewer.data is undefined → no gate renders", async () => {
     const html = await renderApp(undefined);
     // Neither gate's structural signal should be present while loading.
     expect(html).not.toContain(SIG_UNREACHABLE_GATE);
     expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
   });
 
-  it('backend_unreachable branch: BackendUnreachableGate renders with serverUrl + message', async () => {
+  it("backend_unreachable branch: BackendUnreachableGate renders with serverUrl + message", async () => {
     const viewer: BackendUnreachable = {
       backend_unreachable: true,
-      server_url: 'https://down.example.test',
-      message: 'connect ECONNREFUSED 127.0.0.1:443',
+      server_url: "https://down.example.test",
+      message: "connect ECONNREFUSED 127.0.0.1:443",
     };
     const html = await renderApp(viewer);
     // Gate identity: the branch-owned data marker unique to this gate.
     expect(html).toContain(SIG_UNREACHABLE_GATE);
     // Data echo: the gate surfaces the server_url + message it is handed.
-    expect(html).toContain('https://down.example.test');
-    expect(html).toContain('ECONNREFUSED');
+    expect(html).toContain("https://down.example.test");
+    expect(html).toContain("ECONNREFUSED");
     // The registration gate must NOT appear when backend is
     // unreachable — that's the P1-2 load-bearing pin.
     expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
   });
 
-  it('registration_required (signup enabled) branch: RegistrationGate renders the signup form', async () => {
+  it("registration_required (signup enabled) branch: RegistrationGate renders the signup form", async () => {
     const viewer: SetupRequired = {
       registration_required: true,
-      suggested_name: '',
+      suggested_name: "",
       signup_enabled: true,
     };
     const html = await renderApp(viewer);
@@ -185,10 +179,10 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
     expect(html).not.toContain(SIG_UNREACHABLE_GATE);
   });
 
-  it('registration_required (signup disabled) branch: RegistrationGate renders the login form (current-password, no new-password)', async () => {
+  it("registration_required (signup disabled) branch: RegistrationGate renders the login form (current-password, no new-password)", async () => {
     const viewer: SetupRequired = {
       registration_required: true,
-      suggested_name: '',
+      suggested_name: "",
       signup_enabled: false,
     };
     const html = await renderApp(viewer);
@@ -199,7 +193,7 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
     expect(html).not.toContain(SIG_UNREACHABLE_GATE);
   });
 
-  it('GATE ORDER (Cindy P1-2): synthetic ViewerState satisfying BOTH backend_unreachable AND registration_required renders the UNREACHABLE gate, not the registration gate', async () => {
+  it("GATE ORDER (Cindy P1-2): synthetic ViewerState satisfying BOTH backend_unreachable AND registration_required renders the UNREACHABLE gate, not the registration gate", async () => {
     // This payload should never appear on the wire — the IPC only
     // emits one arm at a time. The synthetic case here is the
     // load-bearing regression bait: if a future edit flipped the
@@ -208,15 +202,15 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
     // form instead of the unreachable gate.
     const synthetic = {
       backend_unreachable: true,
-      server_url: 'https://down.example.test',
-      message: 'mixed',
+      server_url: "https://down.example.test",
+      message: "mixed",
       registration_required: true,
-      suggested_name: '',
+      suggested_name: "",
       signup_enabled: true,
     } as unknown as ViewerState;
     const html = await renderApp(synthetic);
     expect(html).toContain(SIG_UNREACHABLE_GATE);
-    expect(html).toContain('https://down.example.test');
+    expect(html).toContain("https://down.example.test");
     // The registration form must NOT appear — order proven.
     expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
   });
@@ -225,10 +219,10 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
   // registered shell (and therefore every business query it mounts) from
   // rendering. Structural signals only: the gate's data-gate marker and the
   // absence of registration/shell markup.
-  it('update_required branch: UpdateRequiredGate renders and the registered shell does not mount', async () => {
+  it("update_required branch: UpdateRequiredGate renders and the registered shell does not mount", async () => {
     const viewer = {
       update_required: true,
-      direction: 'app',
+      direction: "app",
       server_api_epoch: 2,
     } as unknown as ViewerState;
     const html = await renderApp(viewer);
@@ -237,13 +231,13 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
     expect(html).not.toContain(SIG_UNREACHABLE_GATE);
   });
 
-  it('GATE ORDER: synthetic ViewerState satisfying BOTH update_required AND registration_required renders the update gate, not the registration form', async () => {
+  it("GATE ORDER: synthetic ViewerState satisfying BOTH update_required AND registration_required renders the update gate, not the registration form", async () => {
     const synthetic = {
       update_required: true,
-      direction: 'server',
+      direction: "server",
       server_api_epoch: 0,
       registration_required: true,
-      suggested_name: '',
+      suggested_name: "",
       signup_enabled: true,
     } as unknown as ViewerState;
     const html = await renderApp(synthetic);
@@ -251,13 +245,13 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
     expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
   });
 
-  it('GATE ORDER: unreachable wins over update_required (connectivity before compatibility)', async () => {
+  it("GATE ORDER: unreachable wins over update_required (connectivity before compatibility)", async () => {
     const synthetic = {
       backend_unreachable: true,
-      server_url: 'https://down.example.test',
-      message: 'mixed',
+      server_url: "https://down.example.test",
+      message: "mixed",
       update_required: true,
-      direction: 'app',
+      direction: "app",
       server_api_epoch: 2,
     } as unknown as ViewerState;
     const html = await renderApp(synthetic);

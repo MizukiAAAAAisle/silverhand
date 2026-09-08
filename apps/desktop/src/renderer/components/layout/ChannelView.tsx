@@ -1,39 +1,21 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
-import {
-  Maximize2,
-  Minimize2,
-  Paperclip,
-  Search,
-  Settings,
-  X,
-} from 'lucide-react';
-import { ThreadIcon } from '@/components/icons/conversation-icons';
-import { Composer } from '@/components/chat/Composer';
-import { SelectionQuoteToolbar } from '@/components/chat/SelectionQuoteToolbar';
-import { ChannelJoinBar } from '@/components/chat/ChannelJoinBar';
-import { QuotedMessagePreview } from '@/components/chat/QuotedMessagePreview';
-import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadAnchor';
-import { openAttachmentExternally } from '@/components/chat/open-attachment';
-import { attachmentPreviewKind, resolveAttachmentOpenRoute } from '@/lib/attachment-preview';
-import { ConversationViewSkeleton } from '@/components/layout/ConversationViewSkeleton';
-import { AddConversationMemberPopover } from '@/features/conversations/AddConversationMemberPopover';
-import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
-import { ChannelSettingsDialog } from './ChannelSettingsDialog';
-import { useAgents } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import {
-  isBackendUnreachable,
-  isUpdateRequired,
-  useViewerUser,
-} from '@/features/me/hooks';
-import { canEditAgentProfile } from '@/features/agents/permissions';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Maximize2, Minimize2, Paperclip, Search, Settings, X } from "lucide-react";
+import { ThreadIcon } from "@/components/icons/conversation-icons";
+import { Composer } from "@/components/chat/Composer";
+import { SelectionQuoteToolbar } from "@/components/chat/SelectionQuoteToolbar";
+import { ChannelJoinBar } from "@/components/chat/ChannelJoinBar";
+import { QuotedMessagePreview } from "@/components/chat/QuotedMessagePreview";
+import { findThreadAnchor, readAnchorMessageId } from "@/components/chat/threadAnchor";
+import { openAttachmentExternally } from "@/components/chat/open-attachment";
+import { attachmentPreviewKind, resolveAttachmentOpenRoute } from "@/lib/attachment-preview";
+import { ConversationViewSkeleton } from "@/components/layout/ConversationViewSkeleton";
+import { AddConversationMemberPopover } from "@/features/conversations/AddConversationMemberPopover";
+import { TaskRefContextProvider } from "@/features/tasks/TaskRefContext";
+import { ChannelSettingsDialog } from "./ChannelSettingsDialog";
+import { useAgents } from "@/features/agents/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/me/hooks";
+import { canEditAgentProfile } from "@/features/agents/permissions";
 import {
   useChannelAgents,
   useChannelAgentRuntime,
@@ -42,47 +24,41 @@ import {
   useMarkMessageChannelRead,
   useStartAgent,
   useStopAgent,
-} from '@/features/channels/hooks';
-import { useChannelMembership } from '@/features/channels/use-channel-membership';
-import { useChannelDetail, useJoinChannel } from '@/features/workspaces/hooks';
-import { lastCommittedSeq } from '@/features/channels/pending-message';
-import { nextTailReadMark, observeVisibleTail, type TailReadMark } from '@/lib/channel-read';
-import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
-import { MemberStrip } from './channel-view/member-strip';
-import { MembersButton } from './channel-view/members-button';
-import { ChannelMembersDialog } from './channel-view/members-dialog';
-import { MessageList } from './channel-view/message-list';
-import { InlineFindBar } from './InlineFindBar';
-import {
-  useInlineFindController,
-  useInlineFindHotkey,
-} from '@/features/search/useInlineFind';
+} from "@/features/channels/hooks";
+import { useChannelMembership } from "@/features/channels/use-channel-membership";
+import { useChannelDetail, useJoinChannel } from "@/features/workspaces/hooks";
+import { lastCommittedSeq } from "@/features/channels/pending-message";
+import { nextTailReadMark, observeVisibleTail, type TailReadMark } from "@/lib/channel-read";
+import type { WorkspaceChannelReference } from "@/components/chat/ConversationRef";
+import { MemberStrip } from "./channel-view/member-strip";
+import { MembersButton } from "./channel-view/members-button";
+import { ChannelMembersDialog } from "./channel-view/members-dialog";
+import { MessageList } from "./channel-view/message-list";
+import { InlineFindBar } from "./InlineFindBar";
+import { useInlineFindController, useInlineFindHotkey } from "@/features/search/useInlineFind";
 import {
   directPairSenderSeed,
   type AdvancedSearchSeed,
-} from '@/features/search/advanced-search-seed';
-import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
-import type { AttachmentSnapshot, ConversationVisibility } from '@silverhand/shared';
-import type { ConversationPaneDescriptor } from '@/features/conversations/pane-descriptor';
+} from "@/features/search/advanced-search-seed";
+import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import type { AttachmentSnapshot, ConversationVisibility } from "@silverhand/shared";
+import type { ConversationPaneDescriptor } from "@/features/conversations/pane-descriptor";
 import {
   composerDirectory,
   paneCapabilities,
   projectConversationPaneMode,
   rosterQueryTarget,
-} from '@/features/conversations/pane-mode';
-import { ConversationPaneCapabilitiesProvider } from '@/features/conversations/pane-capabilities-context';
-import { ConversationHeaderIdentity } from './channel-view/conversation-header-identity';
-import { paneChrome } from './pane-chrome';
-import { ConversationTabBar } from './channel-view/ConversationTabBar';
-import { ChannelTasksTab } from './channel-view/ChannelTasksTab';
-import { ChannelAttachmentTab } from './channel-view/ChannelAttachmentTab';
-import { ConversationPanelTab } from './channel-view/ConversationPanelTab';
-import { useConversationTabs } from '@/features/conversations/useConversationTabs';
-import { tabKey, type PanelTabKind } from '@/lib/conversation-tabs';
-import {
-  taskBoardContainerForPane,
-  type TaskBoardContainer,
-} from '@/features/tasks/taskContainer';
+} from "@/features/conversations/pane-mode";
+import { ConversationPaneCapabilitiesProvider } from "@/features/conversations/pane-capabilities-context";
+import { ConversationHeaderIdentity } from "./channel-view/conversation-header-identity";
+import { paneChrome } from "./pane-chrome";
+import { ConversationTabBar } from "./channel-view/ConversationTabBar";
+import { ChannelTasksTab } from "./channel-view/ChannelTasksTab";
+import { ChannelAttachmentTab } from "./channel-view/ChannelAttachmentTab";
+import { ConversationPanelTab } from "./channel-view/ConversationPanelTab";
+import { useConversationTabs } from "@/features/conversations/useConversationTabs";
+import { tabKey, type PanelTabKind } from "@/lib/conversation-tabs";
+import { taskBoardContainerForPane, type TaskBoardContainer } from "@/features/tasks/taskContainer";
 
 interface ChannelViewProps {
   /** Whether this conversation's container has a `#` channel namespace: true for
@@ -198,10 +174,7 @@ interface ChannelViewProps {
    *  Async (its own exactly-one-field PATCH, never bundled into rename). Only
    *  wired for regular channels; the modal fail-closes the control unless the
    *  carrier also says the viewer administers the workspace. */
-  onSetChannelVisibility?: (
-    channelId: string,
-    visibility: ConversationVisibility,
-  ) => Promise<void>;
+  onSetChannelVisibility?: (channelId: string, visibility: ConversationVisibility) => Promise<void>;
   /** Self-leave a top-level regular channel. Async. The modal disables Leave
    *  and shows a reason when the carrier says the viewer can't (owner / last
    *  human / archived). */
@@ -310,12 +283,9 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
  * also reject with `conversation_closed`, but hiding the trigger keeps
  * the surface intentional.
  */
-function canAddMember(
-  conv: { roster_policy: 'open' | 'fixed' },
-  closed: boolean,
-): boolean {
+function canAddMember(conv: { roster_policy: "open" | "fixed" }, closed: boolean): boolean {
   if (closed) return false;
-  return conv.roster_policy === 'open';
+  return conv.roster_policy === "open";
 }
 
 // Split out so the React-Query hooks below only mount once a channel
@@ -334,7 +304,7 @@ function ActiveChannelView({
   onToggleFilesList,
   filesListActive = false,
   onCloseChild,
-  closeLabel = 'Close thread',
+  closeLabel = "Close thread",
   onJumpToOriginal,
   onThreadAnchorResolved,
   highlightedMessageId,
@@ -398,7 +368,7 @@ function ActiveChannelView({
     workspaceName,
     hasChannelNamespace,
   });
-  const isDirectPair = paneMode.kind === 'direct_message';
+  const isDirectPair = paneMode.kind === "direct_message";
   const { gate } = useChannelMembership(
     conversation,
     conversation.id,
@@ -411,11 +381,7 @@ function ActiveChannelView({
   // drift apart: a pane that shows no member surfaces starts no roster query, and
   // one that starts none shows nothing that would be empty (@Cindy, #task:2039
   // review — capability, not "the response happened to be empty").
-  const rosterTarget = rosterQueryTarget(
-    paneCaps,
-    conversation.id,
-    gate.allowMemberEffects,
-  );
+  const rosterTarget = rosterQueryTarget(paneCaps, conversation.id, gate.allowMemberEffects);
 
   // Per-conversation view tabs (#task:2121). The strip shows only on the primary
   // pane (`viewTabsEnabled`), behind the same member gate the header Tasks entry
@@ -437,26 +403,22 @@ function ActiveChannelView({
       }),
     [paneMode, conversation.id],
   );
-  const viewTabsShown =
-    viewTabsEnabled && gate.allowMemberEffects && taskBoardContainer !== null;
-  const tasksTabActive = viewTabsShown && tabController.activeKey === 'tasks';
+  const viewTabsShown = viewTabsEnabled && gate.allowMemberEffects && taskBoardContainer !== null;
+  const tasksTabActive = viewTabsShown && tabController.activeKey === "tasks";
   // Chat owns the surface when there is no tab strip at all, or its tab is the
   // front one. A front Tasks/attachment tab is an opaque overlay over the still-
   // mounted Chat, so Chat's out-of-flow floating affordances (scroll-to-bottom
   // pill, inline find bar) must go dark while it's covered — they sit above the
   // overlay's z-index otherwise. Gating render (not state) keeps scroll + find
   // intact for the round-trip back.
-  const chatSurfaceActive =
-    !viewTabsShown || tabController.activeKey === 'chat';
+  const chatSurfaceActive = !viewTabsShown || tabController.activeKey === "chat";
   // The attachment previewer tab currently in front, if any (#task:2122). Same
   // gate as the Tasks overlay — no tab strip, no attachment tabs. Resolved from
   // the ordered tabs so a removed/stale active key can't mount a ghost preview.
   const activeAttachmentTab = useMemo(() => {
     if (!viewTabsShown) return null;
-    const active = tabController.tabs.find(
-      t => tabKey(t) === tabController.activeKey,
-    );
-    return active && active.kind === 'attachment' ? active : null;
+    const active = tabController.tabs.find((t) => tabKey(t) === tabController.activeKey);
+    return active && active.kind === "attachment" ? active : null;
   }, [viewTabsShown, tabController.tabs, tabController.activeKey]);
   // The panel surfaces this pane can host, each behind the SAME gate its
   // side-panel / modal entry uses: a jump handler for Attachments (the locate
@@ -465,9 +427,9 @@ function ActiveChannelView({
   // surface this pane can't host is never offered.
   const hostablePanels = useMemo<readonly PanelTabKind[]>(() => {
     const out: PanelTabKind[] = [];
-    if (onJumpToMessage) out.push('attachments');
-    if (onOpenThread) out.push('threads');
-    if (rosterTarget !== null) out.push('members');
+    if (onJumpToMessage) out.push("attachments");
+    if (onOpenThread) out.push("threads");
+    if (rosterTarget !== null) out.push("members");
     return out;
   }, [onJumpToMessage, onOpenThread, rosterTarget]);
   // Already-open surfaces leave the menu: the strip is showing that tab, so
@@ -475,7 +437,7 @@ function ActiveChannelView({
   const addablePanels = useMemo(
     () =>
       hostablePanels.filter(
-        panel => !tabController.tabs.some(t => t.kind === 'panel' && t.panel === panel),
+        (panel) => !tabController.tabs.some((t) => t.kind === "panel" && t.panel === panel),
       ),
     [hostablePanels, tabController.tabs],
   );
@@ -486,16 +448,13 @@ function ActiveChannelView({
   // stream under a tab chip that still reads as selected.
   const activePanelTab = useMemo(() => {
     if (!viewTabsShown) return null;
-    const active = tabController.tabs.find(
-      t => tabKey(t) === tabController.activeKey,
-    );
-    return active && active.kind === 'panel' ? active.panel : null;
+    const active = tabController.tabs.find((t) => tabKey(t) === tabController.activeKey);
+    return active && active.kind === "panel" ? active.panel : null;
   }, [viewTabsShown, tabController.tabs, tabController.activeKey]);
-  const activePanelHostable =
-    activePanelTab !== null && hostablePanels.includes(activePanelTab);
+  const activePanelHostable = activePanelTab !== null && hostablePanels.includes(activePanelTab);
   const handleAddPanel = useCallback(
     (panel: PanelTabKind) => {
-      tabController.openTab({ kind: 'panel', panel });
+      tabController.openTab({ kind: "panel", panel });
     },
     [tabController.openTab],
   );
@@ -505,7 +464,7 @@ function ActiveChannelView({
   const handleOpenAttachment = useCallback(
     (attachment: AttachmentSnapshot) => {
       tabController.openTab({
-        kind: 'attachment',
+        kind: "attachment",
         attachmentId: attachment.id,
         filename: attachment.filename,
         contentType: attachment.content_type,
@@ -534,9 +493,9 @@ function ActiveChannelView({
       previewKind: attachmentPreviewKind(att.content_type, att.filename),
       tabStripShown: viewTabsShown,
     });
-    if (route === 'preview') {
+    if (route === "preview") {
       handleOpenAttachment(att);
-    } else if (route === 'os-open') {
+    } else if (route === "os-open") {
       void openAttachmentExternally(att);
     }
     onAttachmentRequestConsumed?.();
@@ -601,9 +560,13 @@ function ActiveChannelView({
       hasNewerLiveGap,
     );
     if (!next) return;
-    return observeVisibleTail(next,
-      mark => markRead.mutateAsync({ id: mark.channelId, snapshotSeq: mark.seq }),
-      mark => { lastMarkedRef.current = mark; });
+    return observeVisibleTail(
+      next,
+      (mark) => markRead.mutateAsync({ id: mark.channelId, snapshotSeq: mark.seq }),
+      (mark) => {
+        lastMarkedRef.current = mark;
+      },
+    );
     // mutateAsync is stable; cleanup cancels recovery if this tail is no longer visible.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation.id, tailSeq, isAtTail, hasNewerLiveGap, gate.allowMemberEffects]);
@@ -626,15 +589,13 @@ function ActiveChannelView({
   // "does this container have a channel namespace" — a local reading name for the
   // prop, not a second derivation of it (#task:2078).
   const isTopLevelChannelLike = hasChannelNamespace;
-  const canToggleArchive =
-    isTopLevelChannelLike && !!onArchiveChannel && gate.allowMutations;
+  const canToggleArchive = isTopLevelChannelLike && !!onArchiveChannel && gate.allowMutations;
   const canRenameChannel =
     isTopLevelChannelLike && !closed && !!onRenameChannel && gate.allowMutations;
   // Visibility toggle + self-leave are workspace/open-roster only. A
   // fixed-roster conversation has neither a visibility choice nor a leave path.
   const isRegularChannel =
-    paneMode.kind === 'workspace_channel'
-    && conversation.roster_policy === 'open';
+    paneMode.kind === "workspace_channel" && conversation.roster_policy === "open";
   // The "+ add member" target workspace, resolved ONCE for the three surfaces
   // that offer it (both header variants + the members modal). Non-null is the
   // whole permission: an open roster, not closed, mutations allowed, and a
@@ -643,9 +604,7 @@ function ActiveChannelView({
   // candidate search, and a fixed roster already excludes the one placement that
   // has no workspace.
   const addMemberWorkspaceId =
-    canAddMember(conversation, closed) && gate.allowMutations
-      ? paneCaps.workspaceScope
-      : null;
+    canAddMember(conversation, closed) && gate.allowMutations ? paneCaps.workspaceScope : null;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   // The visibility/leave capability carriers (`can_update_visibility`,
@@ -656,7 +615,7 @@ function ActiveChannelView({
   // carries Leave) — for a regular channel; a member hot path fires zero extra
   // network until one opens, and both fail-close (control hidden / Leave
   // disabled) until it resolves.
-  const membersTabMounted = activePanelHostable && activePanelTab === 'members';
+  const membersTabMounted = activePanelHostable && activePanelTab === "members";
   const channelDetailEnabled =
     (settingsOpen || membersOpen || membersTabMounted) && isRegularChannel;
   const { data: channelDetail } = useChannelDetail(
@@ -665,9 +624,7 @@ function ActiveChannelView({
   );
   const detailChannel = channelDetail?.channel;
   const channelVisibility =
-    detailChannel && detailChannel.roster_policy === 'open'
-      ? detailChannel.visibility
-      : undefined;
+    detailChannel && detailChannel.roster_policy === "open" ? detailChannel.visibility : undefined;
   const canUpdateVisibility = channelDetail?.can_update_visibility ?? false;
   const canLeaveChannel = channelDetail?.can_leave ?? false;
   const leaveBlockedReason = channelDetail?.leave_blocked_reason ?? null;
@@ -684,15 +641,12 @@ function ActiveChannelView({
   const { data: channelAgentRuntime } = useChannelAgentRuntime(rosterTarget);
   const startAgent = useStartAgent(conversation.id);
   const stopAgent = useStopAgent(conversation.id);
-  const agentIds = useMemo(
-    () => channelAgents.map(agent => agent.agent_id),
-    [channelAgents],
-  );
+  const agentIds = useMemo(() => channelAgents.map((agent) => agent.agent_id), [channelAgents]);
   const canManageAllChannelAgents = useMemo(() => {
     if (agentIds.length === 0) return false;
     const viewerForPermissions =
       viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
-    const agentsById = new Map(agents.map(agent => [agent.id, agent]));
+    const agentsById = new Map(agents.map((agent) => [agent.id, agent]));
     for (const agentId of agentIds) {
       const agent = agentsById.get(agentId);
       if (!agent || !canEditAgentProfile(viewerForPermissions, agent)) return false;
@@ -710,8 +664,7 @@ function ActiveChannelView({
   // would make the modal's title cluster jitter. Its two persistent
   // impossibilities (a closed channel, a channel with no agents) hide it too:
   // there is nothing to act on, so an icon there would be a dead affordance.
-  const showBulkAgentActions =
-    canManageAllChannelAgents && !closed && agentIds.length > 0;
+  const showBulkAgentActions = canManageAllChannelAgents && !closed && agentIds.length > 0;
   const restartAgents = useCallback(async () => {
     if (agentActionDisabled) return;
     for (const agent of channelAgents) {
@@ -735,14 +688,15 @@ function ActiveChannelView({
   // non-member (channelAgents is also empty there, the fetch being gated off) —
   // and a ROSTER surface: a pair's two endpoints are not a roster, so the mode
   // withholds it outright (shiki, #task:2039).
-  const memberStrip = rosterTarget !== null ? (
-    <MemberStrip
-      channelId={conversation.id}
-      agentRuntime={channelAgentRuntime}
-      agentAvatarUrls={agentAvatarUrls}
-      onOpenMembers={() => setMembersOpen(true)}
-    />
-  ) : null;
+  const memberStrip =
+    rosterTarget !== null ? (
+      <MemberStrip
+        channelId={conversation.id}
+        agentRuntime={channelAgentRuntime}
+        agentAvatarUrls={agentAvatarUrls}
+        onOpenMembers={() => setMembersOpen(true)}
+      />
+    ) : null;
 
   // Thread children carry a single thread_anchor system message — the
   // header surfaces it as "Thread — #parent" + jump-back. The row
@@ -761,7 +715,7 @@ function ActiveChannelView({
   }, [onThreadAnchorResolved, anchorMessageId]);
 
   const visibleMessages = useMemo(
-    () => (anchor ? messages.filter(m => m.id !== anchor.id) : messages),
+    () => (anchor ? messages.filter((m) => m.id !== anchor.id) : messages),
     [messages, anchor],
   );
   const loadEarlierMessages = useCallback(() => {
@@ -774,9 +728,7 @@ function ActiveChannelView({
   // message inside this channel. Cleared by `onJumped` once the
   // message-list scroll completes.
   const effectiveJumpMessageId =
-    jumpTarget && jumpTarget.channelId === conversation.id
-      ? jumpTarget.messageId
-      : null;
+    jumpTarget && jumpTarget.channelId === conversation.id ? jumpTarget.messageId : null;
   const handleMessageJumped = useCallback(() => {
     if (jumpTarget && jumpTarget.channelId === conversation.id) {
       onJumped?.();
@@ -790,7 +742,7 @@ function ActiveChannelView({
   // conversation. One destination rule, not a second reveal state.
   useEffect(() => {
     if (effectiveJumpMessageId === null) return;
-    tabController.setActive('chat');
+    tabController.setActive("chat");
   }, [effectiveJumpMessageId, tabController.setActive]);
 
   // The reply affordance (open thread + per-root reply badge) is
@@ -799,7 +751,6 @@ function ActiveChannelView({
   // so the action is hidden. Per-root reply counts come from the message
   // window's cut3-6 sidecar (`replyCountsByRoot`) — there is no separate
   // threads query anymore.
-
 
   // Bind a TaskRefContext to this pane's conversation. Inline `#task:<n>`
   // chips inside this pane resolve their numeric reference against
@@ -842,7 +793,7 @@ function ActiveChannelView({
   // only on join. Gate the toggle, the ⌘F hotkey, and the overlay together.
   const findAvailable = findEnabled && gate.allowMemberEffects;
   const loadedMessageIds = useMemo(
-    () => new Set(visibleMessages.map(m => m.id)),
+    () => new Set(visibleMessages.map((m) => m.id)),
     [visibleMessages],
   );
   const inlineFindNavigate = useCallback(
@@ -866,7 +817,7 @@ function ActiveChannelView({
   );
   const find = useInlineFindController({
     conversationId: conversation.id,
-    stream: 'mainline',
+    stream: "mainline",
     onNavigate: inlineFindNavigate,
     // Gate the QUERY SOURCE, not just the toggle: a non-member must never reach
     // the member-only /api/search, and a downgrade while open force-clears it.
@@ -887,234 +838,229 @@ function ActiveChannelView({
 
   return (
     <TaskRefContextProvider value={taskRefContext}>
-    <ConversationPaneCapabilitiesProvider value={paneCaps}>
-    <main
-      ref={findRootRef}
-      className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
-      style={paneChrome}
-    >
-      <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
-        {showThreadHeader ? (
-          <>
-            <ThreadIcon className="size-4 shrink-0 text-text-muted" />
-            <span
-              data-conversation-title
-              className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
-            >
-              {/* A thread is a reply-cluster, not a channel: the
+      <ConversationPaneCapabilitiesProvider value={paneCaps}>
+        <main
+          ref={findRootRef}
+          className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
+          style={paneChrome}
+        >
+          <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
+            {showThreadHeader ? (
+              <>
+                <ThreadIcon className="size-4 shrink-0 text-text-muted" />
+                <span
+                  data-conversation-title
+                  className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
+                >
+                  {/* A thread is a reply-cluster, not a channel: the
                   `ThreadIcon` above is its identity glyph, so the
                   channel `#` (`[data-conversation-hash-icon]`) does NOT
                   belong here — only true channel/DM headers carry it
                   (shiki, #task:1373). */}
-              {parentTitle ?? conversation.title}
-            </span>
-            {memberStrip}
-            {addMemberWorkspaceId !== null ? (
-              <AddConversationMemberPopover
-                workspaceId={addMemberWorkspaceId}
-                conversationId={conversation.id}
-              />
-            ) : null}
-            {onJumpToOriginal && anchorMessageId ? (
-              <button
-                type="button"
-                onClick={() => onJumpToOriginal(anchorMessageId)}
-                className="text-xs text-accent hover:underline"
-                title="Jump to the source message"
-              >
-                view in channel
-              </button>
-            ) : null}
-          </>
-        ) : (
-          <>
-            {/* Identity by MODE, resolved in one place (#task:2039): a workspace
+                  {parentTitle ?? conversation.title}
+                </span>
+                {memberStrip}
+                {addMemberWorkspaceId !== null ? (
+                  <AddConversationMemberPopover
+                    workspaceId={addMemberWorkspaceId}
+                    conversationId={conversation.id}
+                  />
+                ) : null}
+                {onJumpToOriginal && anchorMessageId ? (
+                  <button
+                    type="button"
+                    onClick={() => onJumpToOriginal(anchorMessageId)}
+                    className="text-xs text-accent hover:underline"
+                    title="Jump to the source message"
+                  >
+                    view in channel
+                  </button>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {/* Identity by MODE, resolved in one place (#task:2039): a workspace
                 channel wears the `#` (shiki: "只要是 channel 都需要 # icon,逻辑上
                 不需要分支", #task:1373 — that ruling is about channels, and a
                 `direct_pair` is not one), a direct line wears its counterpart's
                 face. Threads take the branch above and wear the `ThreadIcon`. */}
-            <ConversationHeaderIdentity
-              identity={paneCaps.headerIdentity}
-              title={conversation.title}
-              counterpart={
-                paneMode.kind === 'direct_message' ? paneMode.counterpart : null
-              }
-            />
-            {memberStrip}
-            {addMemberWorkspaceId !== null ? (
-              <AddConversationMemberPopover
-                workspaceId={addMemberWorkspaceId}
-                conversationId={conversation.id}
-              />
-            ) : null}
-            {parentTitle ? (
-              <span className="flex min-w-0 items-center gap-1 truncate text-xs text-text-muted">
-                <ThreadIcon className="size-3 shrink-0 text-text-muted/60" />
-                <span className="truncate">thread of {parentTitle}</span>
+                <ConversationHeaderIdentity
+                  identity={paneCaps.headerIdentity}
+                  title={conversation.title}
+                  counterpart={paneMode.kind === "direct_message" ? paneMode.counterpart : null}
+                />
+                {memberStrip}
+                {addMemberWorkspaceId !== null ? (
+                  <AddConversationMemberPopover
+                    workspaceId={addMemberWorkspaceId}
+                    conversationId={conversation.id}
+                  />
+                ) : null}
+                {parentTitle ? (
+                  <span className="flex min-w-0 items-center gap-1 truncate text-xs text-text-muted">
+                    <ThreadIcon className="size-3 shrink-0 text-text-muted/60" />
+                    <span className="truncate">thread of {parentTitle}</span>
+                  </span>
+                ) : null}
+              </>
+            )}
+            {closed ? (
+              <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-[length:var(--text-badge)] uppercase tracking-wider text-text-muted">
+                closed
               </span>
             ) : null}
-          </>
-        )}
-        {closed ? (
-          <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-[length:var(--text-badge)] uppercase tracking-wider text-text-muted">
-            closed
-          </span>
-        ) : null}
-        {isArchived ? (
-          <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[length:var(--text-badge)] uppercase tracking-wider text-accent">
-            archived
-          </span>
-        ) : null}
+            {isArchived ? (
+              <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[length:var(--text-badge)] uppercase tracking-wider text-accent">
+                archived
+              </span>
+            ) : null}
 
-        <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1.5">
-          {findAvailable ? (
-            <button
-              type="button"
-              data-sticker
-              data-sticker-size="md"
-              data-sticker-tone="neutral"
-              onClick={find.open ? find.close : find.openFind}
-              aria-label="Search this channel"
-              aria-pressed={find.open}
-              title="Search this channel"
-              className={
-                'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
-                (find.open
-                  ? 'bg-bg-hover text-text-primary'
-                  : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
-              }
-            >
-              <Search className="size-3.5" />
-            </button>
-          ) : null}
-          {onToggleThreadsList && gate.allowMemberEffects ? (
-            <button
-              type="button"
-              data-sticker
-              data-sticker-size="md"
-              data-sticker-tone="neutral"
-              onClick={onToggleThreadsList}
-              aria-label={hasFollowedThreadUnread ? 'Threads (unread)' : 'Threads'}
-              aria-pressed={threadsListActive}
-              title="Threads"
-              className={
-                'relative flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
-                (threadsListActive
-                  ? 'bg-bg-hover text-text-primary'
-                  : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
-              }
-            >
-              <ThreadIcon className="size-3.5" />
-              {hasFollowedThreadUnread ? (
-                // #task:1773: ambient attention dot (same recipe as the NavRail
-                // unread dot). Decorative — the unread state is already in the
-                // aria-label — so pointer-events-none and aria-hidden.
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-[var(--unread)]"
-                />
+            <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1.5">
+              {findAvailable ? (
+                <button
+                  type="button"
+                  data-sticker
+                  data-sticker-size="md"
+                  data-sticker-tone="neutral"
+                  onClick={find.open ? find.close : find.openFind}
+                  aria-label="Search this channel"
+                  aria-pressed={find.open}
+                  title="Search this channel"
+                  className={
+                    "flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] " +
+                    (find.open
+                      ? "bg-bg-hover text-text-primary"
+                      : "text-text-muted hover:bg-bg-hover hover:text-text-primary")
+                  }
+                >
+                  <Search className="size-3.5" />
+                </button>
               ) : null}
-            </button>
-          ) : null}
-          {onToggleFilesList && gate.allowMemberEffects ? (
-            <button
-              type="button"
-              data-sticker
-              data-sticker-size="md"
-              data-sticker-tone="neutral"
-              onClick={onToggleFilesList}
-              aria-label="Attachments"
-              aria-pressed={filesListActive}
-              title="Attachments"
-              className={
-                'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
-                (filesListActive
-                  ? 'bg-bg-hover text-text-primary'
-                  : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
-              }
-            >
-              <Paperclip className="size-3.5" />
-            </button>
-          ) : null}
-          {rosterTarget !== null ? (
-            // Carries the member count (shiki 2026-07-28). The number is
-            // derived inside from the roster read model the strip already
-            // holds — no count endpoint, no second state — which is also why
-            // the read lives in the component and not here: it must not mount
-            // for a viewer this gate excludes. A pair has no roster to count.
-            <MembersButton
-              channelId={conversation.id}
-              onOpen={() => setMembersOpen(true)}
-            />
-          ) : null}
-          {canRenameChannel || canToggleArchive ? (
-            <button
-              type="button"
-              data-sticker
-              data-sticker-size="md"
-              data-sticker-tone="neutral"
-              onClick={() => setSettingsOpen(true)}
-              aria-label="Channel settings"
-              title="Channel settings"
-              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
-            >
-              <Settings className="size-3.5" />
-            </button>
-          ) : null}
-          {onToggleFullscreen ? (
-            <button
-              type="button"
-              data-sticker
-              data-sticker-size="md"
-              data-sticker-tone="neutral"
-              onClick={onToggleFullscreen}
-              aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
-              title={isFullscreen ? 'Exit full screen' : 'Full screen'}
-              className="flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
-            >
-              {isFullscreen ? (
-                <Minimize2 className="size-3.5" />
-              ) : (
-                <Maximize2 className="size-3.5" />
-              )}
-            </button>
-          ) : null}
-          {onCloseChild ? (
-            <button
-              type="button"
-              data-sticker
-              data-sticker-size="md"
-              data-sticker-tone="neutral"
-              onClick={onCloseChild}
-              aria-label={closeLabel}
-              title={closeLabel}
-              className="flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
-            >
-              <X className="size-3.5" />
-            </button>
-          ) : null}
-        </div>
-      </header>
+              {onToggleThreadsList && gate.allowMemberEffects ? (
+                <button
+                  type="button"
+                  data-sticker
+                  data-sticker-size="md"
+                  data-sticker-tone="neutral"
+                  onClick={onToggleThreadsList}
+                  aria-label={hasFollowedThreadUnread ? "Threads (unread)" : "Threads"}
+                  aria-pressed={threadsListActive}
+                  title="Threads"
+                  className={
+                    "relative flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] " +
+                    (threadsListActive
+                      ? "bg-bg-hover text-text-primary"
+                      : "text-text-muted hover:bg-bg-hover hover:text-text-primary")
+                  }
+                >
+                  <ThreadIcon className="size-3.5" />
+                  {hasFollowedThreadUnread ? (
+                    // #task:1773: ambient attention dot (same recipe as the NavRail
+                    // unread dot). Decorative — the unread state is already in the
+                    // aria-label — so pointer-events-none and aria-hidden.
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-[var(--unread)]"
+                    />
+                  ) : null}
+                </button>
+              ) : null}
+              {onToggleFilesList && gate.allowMemberEffects ? (
+                <button
+                  type="button"
+                  data-sticker
+                  data-sticker-size="md"
+                  data-sticker-tone="neutral"
+                  onClick={onToggleFilesList}
+                  aria-label="Attachments"
+                  aria-pressed={filesListActive}
+                  title="Attachments"
+                  className={
+                    "flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] " +
+                    (filesListActive
+                      ? "bg-bg-hover text-text-primary"
+                      : "text-text-muted hover:bg-bg-hover hover:text-text-primary")
+                  }
+                >
+                  <Paperclip className="size-3.5" />
+                </button>
+              ) : null}
+              {rosterTarget !== null ? (
+                // Carries the member count (shiki 2026-07-28). The number is
+                // derived inside from the roster read model the strip already
+                // holds — no count endpoint, no second state — which is also why
+                // the read lives in the component and not here: it must not mount
+                // for a viewer this gate excludes. A pair has no roster to count.
+                <MembersButton channelId={conversation.id} onOpen={() => setMembersOpen(true)} />
+              ) : null}
+              {canRenameChannel || canToggleArchive ? (
+                <button
+                  type="button"
+                  data-sticker
+                  data-sticker-size="md"
+                  data-sticker-tone="neutral"
+                  onClick={() => setSettingsOpen(true)}
+                  aria-label="Channel settings"
+                  title="Channel settings"
+                  className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                >
+                  <Settings className="size-3.5" />
+                </button>
+              ) : null}
+              {onToggleFullscreen ? (
+                <button
+                  type="button"
+                  data-sticker
+                  data-sticker-size="md"
+                  data-sticker-tone="neutral"
+                  onClick={onToggleFullscreen}
+                  aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
+                  title={isFullscreen ? "Exit full screen" : "Full screen"}
+                  className="flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                >
+                  {isFullscreen ? (
+                    <Minimize2 className="size-3.5" />
+                  ) : (
+                    <Maximize2 className="size-3.5" />
+                  )}
+                </button>
+              ) : null}
+              {onCloseChild ? (
+                <button
+                  type="button"
+                  data-sticker
+                  data-sticker-size="md"
+                  data-sticker-tone="neutral"
+                  onClick={onCloseChild}
+                  aria-label={closeLabel}
+                  title={closeLabel}
+                  className="flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                >
+                  <X className="size-3.5" />
+                </button>
+              ) : null}
+            </div>
+          </header>
 
-      {/* Per-conversation view tabs (#task:2121) — a flex sibling under the
+          {/* Per-conversation view tabs (#task:2121) — a flex sibling under the
           header. When shown it adds the tab strip, so the find-bar overlay below
           drops from `top-12` to clear the h-12 header PLUS the strip. Strip
           height is the single `--conversation-tab-strip-height` authority the bar
           itself reads, so the two never drift. */}
-      {viewTabsShown ? (
-        <ConversationTabBar
-          tabs={tabController.tabs}
-          activeKey={tabController.activeKey}
-          onActivate={tabController.setActive}
-          onReorder={tabController.reorder}
-          onClose={tabController.closeTab}
-          addablePanels={addablePanels}
-          onAddPanel={handleAddPanel}
-          threadsUnread={hasFollowedThreadUnread}
-        />
-      ) : null}
+          {viewTabsShown ? (
+            <ConversationTabBar
+              tabs={tabController.tabs}
+              activeKey={tabController.activeKey}
+              onActivate={tabController.setActive}
+              onReorder={tabController.reorder}
+              onClose={tabController.closeTab}
+              addablePanels={addablePanels}
+              onAddPanel={handleAddPanel}
+              threadsUnread={hasFollowedThreadUnread}
+            />
+          ) : null}
 
-      {/* Inline find bar (#task:1335) — a header OVERLAY, not a flex sibling of
+          {/* Inline find bar (#task:1335) — a header OVERLAY, not a flex sibling of
           the message list. Anchored just below the h-12 header (`top-12`, or
           below the header + tab strip when it shows) and taken out of flow
           (`absolute`) so opening / closing / typing NEVER changes the scroll
@@ -1122,199 +1068,186 @@ function ActiveChannelView({
           对话流、不应触发重渲染). It only drives the search controller + this
           overlay; the message window is untouched until the user navigates to a
           match (ensure-visible below). */}
-      {findAvailable && find.open && chatSurfaceActive ? (
-        <div
-          className={`absolute inset-x-0 z-[var(--z-sticky)] ${
-            viewTabsShown
-              ? 'top-[calc(3rem_+_var(--conversation-tab-strip-height))]'
-              : 'top-12'
-          }`}
-        >
-          <InlineFindBar
-            controller={find}
-            onOpenAdvanced={() =>
-              onOpenAdvancedSearch?.({
-                query: find.query,
-                workspaceId: conversation.workspace_id ?? undefined,
-                // A pair has no workspace to hand over, so it hands over the
-                // counterpart instead — otherwise the advanced panel opened
-                // from a DM carried NO seed at all and kept whatever workspace
-                // filter the session had, which filtered the DM's own results
-                // away (#task:2114).
-                sender:
-                  paneMode.kind === 'direct_message'
-                    ? directPairSenderSeed(paneMode.counterpart)
-                    : undefined,
-              })
-            }
-            placeholder="Search this channel"
-          />
-        </div>
-      ) : null}
+          {findAvailable && find.open && chatSurfaceActive ? (
+            <div
+              className={`absolute inset-x-0 z-[var(--z-sticky)] ${
+                viewTabsShown ? "top-[calc(3rem_+_var(--conversation-tab-strip-height))]" : "top-12"
+              }`}
+            >
+              <InlineFindBar
+                controller={find}
+                onOpenAdvanced={() =>
+                  onOpenAdvancedSearch?.({
+                    query: find.query,
+                    workspaceId: conversation.workspace_id ?? undefined,
+                    // A pair has no workspace to hand over, so it hands over the
+                    // counterpart instead — otherwise the advanced panel opened
+                    // from a DM carried NO seed at all and kept whatever workspace
+                    // filter the session had, which filtered the DM's own results
+                    // away (#task:2114).
+                    sender:
+                      paneMode.kind === "direct_message"
+                        ? directPairSenderSeed(paneMode.counterpart)
+                        : undefined,
+                  })
+                }
+                placeholder="Search this channel"
+              />
+            </div>
+          ) : null}
 
-      {canRenameChannel || canToggleArchive ? (
-        <ChannelSettingsDialog
-          open={settingsOpen}
-          onOpenChange={setSettingsOpen}
-          currentTitle={conversation.title}
-          onRename={
-            canRenameChannel && onRenameChannel
-              ? title => onRenameChannel(conversation.id, title)
-              : undefined
-          }
-          isArchived={isArchived}
-          onToggleArchive={
-            canToggleArchive && onArchiveChannel
-              ? archived => onArchiveChannel(conversation.id, archived)
-              : undefined
-          }
-          archivePending={archivePending}
-          visibility={channelVisibility}
-          canUpdateVisibility={canUpdateVisibility}
-          onSetVisibility={
-            isRegularChannel && onSetChannelVisibility && gate.allowMutations
-              ? nextVisibility =>
-                  onSetChannelVisibility(conversation.id, nextVisibility)
-              : undefined
-          }
-          onLeave={
-            isRegularChannel && onLeaveChannel && gate.allowMutations
-              ? () => onLeaveChannel(conversation.id)
-              : undefined
-          }
-          canLeave={canLeaveChannel}
-          leaveBlockedReason={leaveBlockedReason}
-        />
-      ) : null}
+          {canRenameChannel || canToggleArchive ? (
+            <ChannelSettingsDialog
+              open={settingsOpen}
+              onOpenChange={setSettingsOpen}
+              currentTitle={conversation.title}
+              onRename={
+                canRenameChannel && onRenameChannel
+                  ? (title) => onRenameChannel(conversation.id, title)
+                  : undefined
+              }
+              isArchived={isArchived}
+              onToggleArchive={
+                canToggleArchive && onArchiveChannel
+                  ? (archived) => onArchiveChannel(conversation.id, archived)
+                  : undefined
+              }
+              archivePending={archivePending}
+              visibility={channelVisibility}
+              canUpdateVisibility={canUpdateVisibility}
+              onSetVisibility={
+                isRegularChannel && onSetChannelVisibility && gate.allowMutations
+                  ? (nextVisibility) => onSetChannelVisibility(conversation.id, nextVisibility)
+                  : undefined
+              }
+              onLeave={
+                isRegularChannel && onLeaveChannel && gate.allowMutations
+                  ? () => onLeaveChannel(conversation.id)
+                  : undefined
+              }
+              canLeave={canLeaveChannel}
+              leaveBlockedReason={leaveBlockedReason}
+            />
+          ) : null}
 
-      {rosterTarget !== null ? (
-        <ChannelMembersDialog
-          open={membersOpen}
-          onOpenChange={setMembersOpen}
-          channelId={conversation.id}
-          agentRuntime={channelAgentRuntime}
-          agentAvatarUrls={agentAvatarUrls}
-          onRestartAllAgents={
-            showBulkAgentActions ? () => void restartAgents() : undefined
-          }
-          onStopAllAgents={
-            showBulkAgentActions ? () => void stopAgents() : undefined
-          }
-          bulkAgentPending={startAgent.isPending || stopAgent.isPending}
-          onLeave={
-            isRegularChannel && onLeaveChannel && gate.allowMutations
-              ? () => onLeaveChannel(conversation.id)
-              : undefined
-          }
-          canLeave={canLeaveChannel}
-          leaveBlockedReason={leaveBlockedReason}
-          visibility={channelVisibility}
-          // Same floor as the header `+`: a member of a non-closed regular
-          // channel may open the picker. Who is actually addable stays the
-          // picker's per-candidate answer.
-          addMemberWorkspaceId={addMemberWorkspaceId ?? undefined}
-        />
-      ) : null}
+          {rosterTarget !== null ? (
+            <ChannelMembersDialog
+              open={membersOpen}
+              onOpenChange={setMembersOpen}
+              channelId={conversation.id}
+              agentRuntime={channelAgentRuntime}
+              agentAvatarUrls={agentAvatarUrls}
+              onRestartAllAgents={showBulkAgentActions ? () => void restartAgents() : undefined}
+              onStopAllAgents={showBulkAgentActions ? () => void stopAgents() : undefined}
+              bulkAgentPending={startAgent.isPending || stopAgent.isPending}
+              onLeave={
+                isRegularChannel && onLeaveChannel && gate.allowMutations
+                  ? () => onLeaveChannel(conversation.id)
+                  : undefined
+              }
+              canLeave={canLeaveChannel}
+              leaveBlockedReason={leaveBlockedReason}
+              visibility={channelVisibility}
+              // Same floor as the header `+`: a member of a non-closed regular
+              // channel may open the picker. Who is actually addable stays the
+              // picker's per-candidate answer.
+              addMemberWorkspaceId={addMemberWorkspaceId ?? undefined}
+            />
+          ) : null}
 
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* Message area + activity dock share a relative box so the dock
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+            {/* Message area + activity dock share a relative box so the dock
             can float out-of-flow at the bottom (above the composer). The
             scroller's viewport height never changes when the dock shows /
             hides / grows — no content judder. */}
-        <div
-          ref={messageAreaRef}
-          className="relative flex min-h-0 min-w-0 flex-1 flex-col"
-        >
-          <MessageList
-            channelId={conversation.id}
-            workspaceId={conversation.workspace_id}
-            messages={visibleMessages}
-            canReact={!closed && !isArchived && gate.allowMutations}
-            canSave={gate.allowMutations}
-            canParticipate={gate.allowMemberEffects}
-            canMutateLinkedTask={!closed && !isArchived && gate.allowMutations}
-            isLoading={isLoading}
-            hasMoreBefore={!!hasPreviousPage}
-            isFetchingEarlier={isFetchingPreviousPage}
-            onLoadEarlier={loadEarlierMessages}
-            agentAvatarUrls={agentAvatarUrls}
-            leadingSlot={
-              anchor ? (
-                <QuotedMessagePreview
-                  quoteMessage={anchor}
-                  onJumpToOriginal={
-                    onJumpToOriginal && anchorMessageId
-                      ? () => onJumpToOriginal(anchorMessageId)
-                      : undefined
-                  }
-                />
-              ) : null
-            }
-            highlightedMessageId={highlightedMessageId ?? null}
-            jumpToMessageId={effectiveJumpMessageId}
-            jumpPrimePending={
-              // Only pass `true` when this pane's prop-driven jump
-              // (the App-orchestrated saved/task jump) is the one
-              // App is currently priming. activity-strip jumps stay
-              // local — those messages are by construction recent
-              // and already in cache, so they never go through the
-              // prime path.
-              jumpPrimePending && !!jumpTarget && jumpTarget.channelId === conversation.id
-            }
-            onJumped={handleMessageJumped}
-            isAtTail={isAtTail}
-            hasNewerLiveGap={hasNewerLiveGap}
-            onResetToLatest={resetToLatest}
-            onOpenThread={onOpenThread}
-            replyCountsByRoot={replyCountsByRoot}
-            replySummariesByRoot={replySummariesByRoot}
-            replyPreviewsByRoot={replyPreviewsByRoot}
-            threadUnreadByRoot={threadUnreadByRoot}
-            conversationRefsById={conversationRefsById}
-            onOpenConversationRef={onOpenConversationRef}
-            onOpenAttachment={viewTabsShown ? handleOpenAttachment : undefined}
-            onOpenChannelRef={
-              // A `#channel` chip resolves inside a workspace, so a
-              // workspace-less pane offers no navigation for one (it still
-              // renders as muted text, exactly like an unresolvable ref).
-              onOpenChannelRef && paneCaps.workspaceScope !== null
-                ? handleOpenChannelRef
-                : undefined
-            }
-            searchQuery={find.highlightQuery}
-            searchActiveMessageId={find.activeMessageId}
-            surfaceActive={chatSurfaceActive}
-          />
-          <SelectionQuoteToolbar
-            boundaryRef={messageAreaRef}
-            draftKey={conversation.id}
-          />
-        </div>
+            <div ref={messageAreaRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+              <MessageList
+                channelId={conversation.id}
+                workspaceId={conversation.workspace_id}
+                messages={visibleMessages}
+                canReact={!closed && !isArchived && gate.allowMutations}
+                canSave={gate.allowMutations}
+                canParticipate={gate.allowMemberEffects}
+                canMutateLinkedTask={!closed && !isArchived && gate.allowMutations}
+                isLoading={isLoading}
+                hasMoreBefore={!!hasPreviousPage}
+                isFetchingEarlier={isFetchingPreviousPage}
+                onLoadEarlier={loadEarlierMessages}
+                agentAvatarUrls={agentAvatarUrls}
+                leadingSlot={
+                  anchor ? (
+                    <QuotedMessagePreview
+                      quoteMessage={anchor}
+                      onJumpToOriginal={
+                        onJumpToOriginal && anchorMessageId
+                          ? () => onJumpToOriginal(anchorMessageId)
+                          : undefined
+                      }
+                    />
+                  ) : null
+                }
+                highlightedMessageId={highlightedMessageId ?? null}
+                jumpToMessageId={effectiveJumpMessageId}
+                jumpPrimePending={
+                  // Only pass `true` when this pane's prop-driven jump
+                  // (the App-orchestrated saved/task jump) is the one
+                  // App is currently priming. activity-strip jumps stay
+                  // local — those messages are by construction recent
+                  // and already in cache, so they never go through the
+                  // prime path.
+                  jumpPrimePending && !!jumpTarget && jumpTarget.channelId === conversation.id
+                }
+                onJumped={handleMessageJumped}
+                isAtTail={isAtTail}
+                hasNewerLiveGap={hasNewerLiveGap}
+                onResetToLatest={resetToLatest}
+                onOpenThread={onOpenThread}
+                replyCountsByRoot={replyCountsByRoot}
+                replySummariesByRoot={replySummariesByRoot}
+                replyPreviewsByRoot={replyPreviewsByRoot}
+                threadUnreadByRoot={threadUnreadByRoot}
+                conversationRefsById={conversationRefsById}
+                onOpenConversationRef={onOpenConversationRef}
+                onOpenAttachment={viewTabsShown ? handleOpenAttachment : undefined}
+                onOpenChannelRef={
+                  // A `#channel` chip resolves inside a workspace, so a
+                  // workspace-less pane offers no navigation for one (it still
+                  // renders as muted text, exactly like an unresolvable ref).
+                  onOpenChannelRef && paneCaps.workspaceScope !== null
+                    ? handleOpenChannelRef
+                    : undefined
+                }
+                searchQuery={find.highlightQuery}
+                searchActiveMessageId={find.activeMessageId}
+                surfaceActive={chatSurfaceActive}
+              />
+              <SelectionQuoteToolbar boundaryRef={messageAreaRef} draftKey={conversation.id} />
+            </div>
 
-        {gate.showComposer ? (
-          <Composer
-            key={conversation.id}
-            conversationId={conversation.id}
-            directory={composerDir}
-            disabled={closed}
-            archived={isArchived}
-            // A pair whose counterpart principal is gone: writes can never
-            // succeed again, which is not the same fact as `closed` and must not
-            // borrow its copy.
-            readOnly={conversation.read_only === true}
-          />
-        ) : gate.showJoin ? (
-          // Resolved non-member browsing a public channel: Join replaces the
-          // composer. `unknown` (membership still resolving) shows NEITHER — a
-          // neutral state — so we never flash a Join affordance we might revoke.
-          <ChannelJoinBar
-            onJoin={() => joinChannel.mutate(conversation.id)}
-            joining={joinChannel.isPending}
-            channelTitle={conversation.title}
-          />
-        ) : null}
+            {gate.showComposer ? (
+              <Composer
+                key={conversation.id}
+                conversationId={conversation.id}
+                directory={composerDir}
+                disabled={closed}
+                archived={isArchived}
+                // A pair whose counterpart principal is gone: writes can never
+                // succeed again, which is not the same fact as `closed` and must not
+                // borrow its copy.
+                readOnly={conversation.read_only === true}
+              />
+            ) : gate.showJoin ? (
+              // Resolved non-member browsing a public channel: Join replaces the
+              // composer. `unknown` (membership still resolving) shows NEITHER — a
+              // neutral state — so we never flash a Join affordance we might revoke.
+              <ChannelJoinBar
+                onJoin={() => joinChannel.mutate(conversation.id)}
+                joining={joinChannel.isPending}
+                channelTitle={conversation.title}
+              />
+            ) : null}
 
-        {/* Tasks tab — an opaque overlay over the chat column (message list +
+            {/* Tasks tab — an opaque overlay over the chat column (message list +
             composer) rather than a mount swap, so Chat stays mounted and its
             Virtuoso scroll survives a tab round-trip. Rendered only while the
             Tasks tab is active, a task-open handler exists (the primary pane),
@@ -1322,76 +1255,71 @@ function ActiveChannelView({
             no real workspace id mounts nothing). A card opens detail in the side
             pane via the same `onOpenTask` an inline `#task` chip uses. `inset-0`
             covers the whole column. */}
-        {tasksTabActive && taskBoardContainer && onOpenTask ? (
-          <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
-            <ChannelTasksTab
-              container={taskBoardContainer}
-              onOpenTask={onOpenTask}
-            />
-          </div>
-        ) : null}
+            {tasksTabActive && taskBoardContainer && onOpenTask ? (
+              <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
+                <ChannelTasksTab container={taskBoardContainer} onOpenTask={onOpenTask} />
+              </div>
+            ) : null}
 
-        {/* Attachment previewer tab (#task:2122) — same overlay discipline as
+            {/* Attachment previewer tab (#task:2122) — same overlay discipline as
             Tasks: Chat stays mounted underneath so its scroll survives a tab
             round-trip. Keyed on the attachment id so switching between two
             attachment tabs remounts the fetch/decode rather than reusing stale
             body state. */}
-        {activeAttachmentTab ? (
-          <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
-            <ChannelAttachmentTab
-              key={activeAttachmentTab.attachmentId}
-              attachmentId={activeAttachmentTab.attachmentId}
-              filename={activeAttachmentTab.filename}
-              contentType={activeAttachmentTab.contentType}
-            />
-          </div>
-        ) : null}
+            {activeAttachmentTab ? (
+              <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
+                <ChannelAttachmentTab
+                  key={activeAttachmentTab.attachmentId}
+                  attachmentId={activeAttachmentTab.attachmentId}
+                  filename={activeAttachmentTab.filename}
+                  contentType={activeAttachmentTab.contentType}
+                />
+              </div>
+            ) : null}
 
-        {/* Attachments / Threads / Members as a tab — same overlay discipline as
+            {/* Attachments / Threads / Members as a tab — same overlay discipline as
             Tasks, so Chat keeps its scroll underneath. Keyed on the surface so
             switching between two panel tabs remounts the surface's own
             filter/scroll rather than carrying one list's state into another. */}
-        {activePanelTab ? (
-          <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
-            {activePanelHostable ? (
-              <ConversationPanelTab
-                key={activePanelTab}
-                panel={activePanelTab}
-                channelId={conversation.id}
-                workspaceId={conversation.workspace_id}
-                // Present by construction: `hostablePanels` only offers
-                // Attachments when this handler exists.
-                onJumpToMessage={target => onJumpToMessage?.(target)}
-                // Same pane, so an md/html row opens the previewer tab directly —
-                // no sibling relay (that exists only because the side panel can't
-                // reach this pane's tab controller). Images and other types stay
-                // the row's own business (lightbox / open-with-OS).
-                onOpenAttachment={handleOpenAttachment}
-                onOpenThread={
-                  onOpenThread ? rootId => onOpenThread(rootId) : undefined
-                }
-                agentRuntime={channelAgentRuntime}
-                agentAvatarUrls={agentAvatarUrls}
-                onLeave={
-                  isRegularChannel && onLeaveChannel && gate.allowMutations
-                    ? () => onLeaveChannel(conversation.id)
-                    : undefined
-                }
-                canLeave={canLeaveChannel}
-                leaveBlockedReason={leaveBlockedReason}
-                visibility={channelVisibility}
-                addMemberWorkspaceId={addMemberWorkspaceId ?? undefined}
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center px-6 text-xs text-text-muted">
-                This view is unavailable here.
+            {activePanelTab ? (
+              <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
+                {activePanelHostable ? (
+                  <ConversationPanelTab
+                    key={activePanelTab}
+                    panel={activePanelTab}
+                    channelId={conversation.id}
+                    workspaceId={conversation.workspace_id}
+                    // Present by construction: `hostablePanels` only offers
+                    // Attachments when this handler exists.
+                    onJumpToMessage={(target) => onJumpToMessage?.(target)}
+                    // Same pane, so an md/html row opens the previewer tab directly —
+                    // no sibling relay (that exists only because the side panel can't
+                    // reach this pane's tab controller). Images and other types stay
+                    // the row's own business (lightbox / open-with-OS).
+                    onOpenAttachment={handleOpenAttachment}
+                    onOpenThread={onOpenThread ? (rootId) => onOpenThread(rootId) : undefined}
+                    agentRuntime={channelAgentRuntime}
+                    agentAvatarUrls={agentAvatarUrls}
+                    onLeave={
+                      isRegularChannel && onLeaveChannel && gate.allowMutations
+                        ? () => onLeaveChannel(conversation.id)
+                        : undefined
+                    }
+                    canLeave={canLeaveChannel}
+                    leaveBlockedReason={leaveBlockedReason}
+                    visibility={channelVisibility}
+                    addMemberWorkspaceId={addMemberWorkspaceId ?? undefined}
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center px-6 text-xs text-text-muted">
+                    This view is unavailable here.
+                  </div>
+                )}
               </div>
-            )}
+            ) : null}
           </div>
-        ) : null}
-      </div>
-    </main>
-    </ConversationPaneCapabilitiesProvider>
+        </main>
+      </ConversationPaneCapabilitiesProvider>
     </TaskRefContextProvider>
   );
 }

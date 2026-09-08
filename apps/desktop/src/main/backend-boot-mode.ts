@@ -1,12 +1,9 @@
-import {
-  classifyServerUrl,
-  type ServerConnectionProfileView,
-} from '@silverhand/shared';
+import { classifyServerUrl, type ServerConnectionProfileView } from "@silverhand/shared";
 
 export type BackendBootMode =
   | {
-      mode: 'embedded';
-      reason: 'no_profile' | 'forced_by_env' | 'profile_is_loopback';
+      mode: "embedded";
+      reason: "no_profile" | "forced_by_env" | "profile_is_loopback";
       /**
        * Present on `'profile_is_loopback'`: the raw URL string from
        * the profile (for log lines). Empty string on the other
@@ -18,7 +15,7 @@ export type BackendBootMode =
       profileUrl: string;
     }
   | {
-      mode: 'remote';
+      mode: "remote";
       /**
        * The classifier-validated remote URL. Bootstrap consumers
        * should use this string as the source of truth — do NOT
@@ -41,7 +38,7 @@ export type BackendBootMode =
        * review P1-B). Repair path: user clears the profile in
        * Settings, or sets `SILVERHAND_FORCE_EMBEDDED=1` to override.
        */
-      mode: 'profile_invalid';
+      mode: "profile_invalid";
       /** Raw URL string from the profile (for log lines + UI). */
       profileUrl: string;
       /**
@@ -88,21 +85,19 @@ export interface DecideBackendBootModeInput {
   allowInsecureRemote: boolean;
 }
 
-export function decideBackendBootMode(
-  input: DecideBackendBootModeInput,
-): BackendBootMode {
+export function decideBackendBootMode(input: DecideBackendBootModeInput): BackendBootMode {
   if (input.forceEmbedded) {
     return {
-      mode: 'embedded',
-      reason: 'forced_by_env',
-      profileUrl: input.profileView?.server_url ?? '',
+      mode: "embedded",
+      reason: "forced_by_env",
+      profileUrl: input.profileView?.server_url ?? "",
     };
   }
   if (input.profileView === null) {
     return {
-      mode: 'embedded',
-      reason: 'no_profile',
-      profileUrl: '',
+      mode: "embedded",
+      reason: "no_profile",
+      profileUrl: "",
     };
   }
   const classification = classifyServerUrl(input.profileView.server_url, {
@@ -110,20 +105,20 @@ export function decideBackendBootMode(
   });
   if (!classification.ok) {
     return {
-      mode: 'profile_invalid',
+      mode: "profile_invalid",
       profileUrl: input.profileView.server_url,
       classifyMessage: classification.message,
     };
   }
-  if (classification.kind === 'loopback') {
+  if (classification.kind === "loopback") {
     return {
-      mode: 'embedded',
-      reason: 'profile_is_loopback',
+      mode: "embedded",
+      reason: "profile_is_loopback",
       profileUrl: input.profileView.server_url,
     };
   }
   return {
-    mode: 'remote',
+    mode: "remote",
     serverUrl: classification.url.origin,
     insecure: classification.insecure,
   };
@@ -132,9 +127,7 @@ export function decideBackendBootMode(
 export class ProfileUnusableError extends Error {
   readonly profileUrl: string;
   readonly classifyMessage: string;
-  constructor(
-    decision: Extract<BackendBootMode, { mode: 'profile_invalid' }>,
-  ) {
+  constructor(decision: Extract<BackendBootMode, { mode: "profile_invalid" }>) {
     super(
       `A server connection profile is present but the boot-time URL ` +
         `classifier refused it. ` +
@@ -149,7 +142,7 @@ export class ProfileUnusableError extends Error {
         `is up you can clear the profile via Settings → "Connect to ` +
         `backend" → Clear saved profile, then unset FORCE_EMBEDDED).`,
     );
-    this.name = 'ProfileUnusableError';
+    this.name = "ProfileUnusableError";
     this.profileUrl = decision.profileUrl;
     this.classifyMessage = decision.classifyMessage;
   }
@@ -164,31 +157,26 @@ export class RemoteOnlyServerProfileRequiredError extends Error {
         `Repackage with --server-url <https-origin>, or save a non-loopback ` +
         `remote server profile before launching this build.`,
     );
-    this.name = 'RemoteOnlyServerProfileRequiredError';
+    this.name = "RemoteOnlyServerProfileRequiredError";
     this.reason = reason;
   }
 }
 
-export type ProbeSuccessKind =
-  | 'loopback_ok'
-  | 'system_ca_verified'
-  | 'insecure_dev_remote';
+export type ProbeSuccessKind = "loopback_ok" | "system_ca_verified" | "insecure_dev_remote";
 
 export type ProfileCommitGuardOutcome =
   | { allow: true }
   | {
       allow: false;
-      reason: 'remote_backend_not_yet_supported';
+      reason: "remote_backend_not_yet_supported";
       message: string;
     };
 
-export function evaluateProfileCommitGuard(
-  probeKind: ProbeSuccessKind,
-): ProfileCommitGuardOutcome {
+export function evaluateProfileCommitGuard(probeKind: ProbeSuccessKind): ProfileCommitGuardOutcome {
   switch (probeKind) {
-    case 'loopback_ok':
-    case 'system_ca_verified':
-    case 'insecure_dev_remote':
+    case "loopback_ok":
+    case "system_ca_verified":
+    case "insecure_dev_remote":
       return { allow: true };
     default: {
       const exhaustive: never = probeKind;
@@ -201,16 +189,16 @@ export function evaluateProfileCommitGuard(
 
 export type BackendStartupPlan =
   | {
-      mode: 'embedded';
+      mode: "embedded";
       /**
        * Mirrors `BackendBootMode.embedded.reason` — preserved so the
        * bootstrap site's log line and any future "embedded but for
        * what reason" UI keeps the same discriminator.
        */
-      embeddedReason: 'no_profile' | 'forced_by_env' | 'profile_is_loopback';
+      embeddedReason: "no_profile" | "forced_by_env" | "profile_is_loopback";
     }
   | {
-      mode: 'remote';
+      mode: "remote";
       /** Canonical origin URL (post-classify + origin-normalize). */
       serverUrl: string;
       /** Admitted via explicit insecure-remote opt-in. */
@@ -224,34 +212,32 @@ export type BackendStartupPlan =
        * decides what to do, so all "if I see this plan I do X"
        * branches are visible in one place.
        */
-      mode: 'refuse';
-      reason: 'profile_invalid';
+      mode: "refuse";
+      reason: "profile_invalid";
       profileUrl: string;
       classifyMessage: string;
     };
 
 export function planBackendStartup(decision: BackendBootMode): BackendStartupPlan {
   switch (decision.mode) {
-    case 'embedded':
-      return { mode: 'embedded', embeddedReason: decision.reason };
-    case 'remote':
+    case "embedded":
+      return { mode: "embedded", embeddedReason: decision.reason };
+    case "remote":
       return {
-        mode: 'remote',
+        mode: "remote",
         serverUrl: decision.serverUrl,
         insecure: decision.insecure,
       };
-    case 'profile_invalid':
+    case "profile_invalid":
       return {
-        mode: 'refuse',
-        reason: 'profile_invalid',
+        mode: "refuse",
+        reason: "profile_invalid",
         profileUrl: decision.profileUrl,
         classifyMessage: decision.classifyMessage,
       };
     default: {
       const exhaustive: never = decision;
-      throw new Error(
-        `planBackendStartup: unhandled boot decision: ${JSON.stringify(exhaustive)}`,
-      );
+      throw new Error(`planBackendStartup: unhandled boot decision: ${JSON.stringify(exhaustive)}`);
     }
   }
 }
@@ -276,10 +262,7 @@ export interface ExecuteBackendStartupDeps<RunningBackendT, RemoteBackendHandleT
    * flag. Trivial in production (`buildRemoteBackendHandle`); a fake
    * in tests.
    */
-  buildRemoteHandle: (input: {
-    serverUrl: string;
-    insecure: boolean;
-  }) => RemoteBackendHandleT;
+  buildRemoteHandle: (input: { serverUrl: string; insecure: boolean }) => RemoteBackendHandleT;
   /**
    * Refuse arm — defense-in-depth seam. In production `bootstrap()`
    * intercepts `startupPlan.mode === 'refuse'` BEFORE invoking the
@@ -291,22 +274,19 @@ export interface ExecuteBackendStartupDeps<RunningBackendT, RemoteBackendHandleT
    * cover both the called-and-throws and called-and-buggy-returns
    * cases for that scenario.
    */
-  refuse: (plan: Extract<BackendStartupPlan, { mode: 'refuse' }>) => never;
+  refuse: (plan: Extract<BackendStartupPlan, { mode: "refuse" }>) => never;
 }
 
 export type ExecutedBackendHandle<RunningBackendT, RemoteBackendHandleT> =
-  | { kind: 'embedded'; running: RunningBackendT }
+  | { kind: "embedded"; running: RunningBackendT }
   | RemoteBackendHandleT;
 
-export async function executeBackendStartup<
-  RunningBackendT,
-  RemoteBackendHandleT,
->(
+export async function executeBackendStartup<RunningBackendT, RemoteBackendHandleT>(
   plan: BackendStartupPlan,
   deps: ExecuteBackendStartupDeps<RunningBackendT, RemoteBackendHandleT>,
 ): Promise<ExecutedBackendHandle<RunningBackendT, RemoteBackendHandleT>> {
   switch (plan.mode) {
-    case 'refuse':
+    case "refuse":
       // Defense-in-depth path. Production `bootstrap()` intercepts
       // `mode === 'refuse'` BEFORE calling the adapter (so a profile
       // classifier reject fails loud before any daemon spawn / IPC
@@ -318,24 +298,20 @@ export async function executeBackendStartup<
       // refuse impl that returns instead of throwing (regression
       // bait).
       deps.refuse(plan);
-      throw new Error(
-        'executeBackendStartup: refuse() returned (expected `never`)',
-      );
-    case 'embedded': {
+      throw new Error("executeBackendStartup: refuse() returned (expected `never`)");
+    case "embedded": {
       const config = await deps.loadOrCreateServerConfig();
       const running = await deps.startEmbeddedAndPersistConfig(config);
-      return { kind: 'embedded', running };
+      return { kind: "embedded", running };
     }
-    case 'remote':
+    case "remote":
       return deps.buildRemoteHandle({
         serverUrl: plan.serverUrl,
         insecure: plan.insecure,
       });
     default: {
       const exhaustive: never = plan;
-      throw new Error(
-        `executeBackendStartup: unhandled plan: ${JSON.stringify(exhaustive)}`,
-      );
+      throw new Error(`executeBackendStartup: unhandled plan: ${JSON.stringify(exhaustive)}`);
     }
   }
 }

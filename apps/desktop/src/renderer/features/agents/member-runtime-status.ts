@@ -1,8 +1,5 @@
-import type {
-  ConversationAgentRuntimeDto,
-  ConversationAgentStatus,
-} from '@silverhand/shared';
-import type { RosterMembership } from './hooks';
+import type { ConversationAgentRuntimeDto, ConversationAgentStatus } from "@silverhand/shared";
+import type { RosterMembership } from "./hooks";
 
 /**
  * WHAT A ROSTER PLACEMENT SAYS ABOUT ONE AGENT'S RUN STATE — the single
@@ -38,17 +35,17 @@ import type { RosterMembership } from './hooks';
  *    reports the scope it was told and never re-derives it.
  */
 export type MemberRuntimeStatus =
-  | { kind: 'unknown' }
-  | { kind: 'not_here' }
-  | { kind: 'no_session' }
+  | { kind: "unknown" }
+  | { kind: "not_here" }
+  | { kind: "no_session" }
   | {
-      kind: 'session';
+      kind: "session";
       status: ConversationAgentStatus;
       scope: AgentSlotScopeKind;
     };
 
 /** Which slot answered — the wire's own discriminant, not a renderer guess. */
-export type AgentSlotScopeKind = ConversationAgentRuntimeDto['scope_kind'];
+export type AgentSlotScopeKind = ConversationAgentRuntimeDto["scope_kind"];
 
 /**
  * WHICH AUTHORITY ANSWERS PRESENCE FOR THIS PLACEMENT. Named and pure, because
@@ -69,10 +66,10 @@ export type AgentSlotScopeKind = ConversationAgentRuntimeDto['scope_kind'];
  * roster data would have to start the roster read on a DirectPair to decide it
  * should not have.
  */
-export type PresenceAuthority = 'roster_runtime' | 'global_presence';
+export type PresenceAuthority = "roster_runtime" | "global_presence";
 
 export function presenceAuthorityFor(hasRoster: boolean): PresenceAuthority {
-  return hasRoster ? 'roster_runtime' : 'global_presence';
+  return hasRoster ? "roster_runtime" : "global_presence";
 }
 
 /**
@@ -85,10 +82,10 @@ export function projectMemberRuntimeStatus(input: {
   runtime: readonly ConversationAgentRuntimeDto[] | undefined;
   agentId: string;
 }): MemberRuntimeStatus {
-  if (input.membership === 'unknown') return { kind: 'unknown' };
-  if (input.membership === 'not_here') return { kind: 'not_here' };
-  if (input.runtime === undefined) return { kind: 'unknown' };
-  const row = input.runtime.find(r => r.agent_id === input.agentId);
-  if (row === undefined) return { kind: 'no_session' };
-  return { kind: 'session', status: row.status, scope: row.scope_kind };
+  if (input.membership === "unknown") return { kind: "unknown" };
+  if (input.membership === "not_here") return { kind: "not_here" };
+  if (input.runtime === undefined) return { kind: "unknown" };
+  const row = input.runtime.find((r) => r.agent_id === input.agentId);
+  if (row === undefined) return { kind: "no_session" };
+  return { kind: "session", status: row.status, scope: row.scope_kind };
 }

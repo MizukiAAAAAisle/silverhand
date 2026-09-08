@@ -1,11 +1,11 @@
-import * as Select from '@radix-ui/react-select';
-import { ChevronDown, UserPlus, X } from 'lucide-react';
-import { useMemo } from 'react';
-import type { AgentDto, UserDto } from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
+import * as Select from "@radix-ui/react-select";
+import { ChevronDown, UserPlus, X } from "lucide-react";
+import { useMemo } from "react";
+import type { AgentDto, UserDto } from "@silverhand/shared";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
 
 interface AgentPickerProps {
   candidates: AgentDto[];
@@ -18,8 +18,8 @@ interface AgentPickerProps {
 }
 
 export type MemberPickerCandidate =
-  | { kind: 'agent'; agent: AgentDto }
-  | { kind: 'human'; user: UserDto };
+  | { kind: "agent"; agent: AgentDto }
+  | { kind: "human"; user: UserDto };
 
 interface MemberPickerProps {
   candidates: MemberPickerCandidate[];
@@ -56,26 +56,26 @@ export function AgentPicker({
   candidates,
   value,
   onChange,
-  placeholder = 'Add a member…',
-  emptyText = 'No members available',
-  allSelectedText = 'Everyone is already added',
+  placeholder = "Add a member…",
+  emptyText = "No members available",
+  allSelectedText = "Everyone is already added",
   selectId,
 }: AgentPickerProps): JSX.Element {
   const memberCandidates = useMemo<MemberPickerCandidate[]>(
-    () => candidates.map(agent => ({ kind: 'agent', agent })),
+    () => candidates.map((agent) => ({ kind: "agent", agent })),
     [candidates],
   );
-  const memberValue = useMemo(() => value.map(id => `agent:${id}`), [value]);
+  const memberValue = useMemo(() => value.map((id) => `agent:${id}`), [value]);
   return (
     <MemberPicker
       candidates={memberCandidates}
       value={memberValue}
-      onChange={values =>
+      onChange={(values) =>
         onChange(
           values
-            .map(v => decodeMemberKey(v))
-            .filter((v): v is { kind: 'agent'; id: string } => v?.kind === 'agent')
-            .map(v => v.id),
+            .map((v) => decodeMemberKey(v))
+            .filter((v): v is { kind: "agent"; id: string } => v?.kind === "agent")
+            .map((v) => v.id),
         )
       }
       placeholder={placeholder}
@@ -90,26 +90,26 @@ export function MemberPicker({
   candidates,
   value,
   onChange,
-  placeholder = 'Add a member…',
-  emptyText = 'No members available',
-  allSelectedText = 'Everyone is already added',
+  placeholder = "Add a member…",
+  emptyText = "No members available",
+  allSelectedText = "Everyone is already added",
   selectId,
 }: MemberPickerProps): JSX.Element {
-  const byKey = new Map(candidates.map(c => [memberKey(c), c]));
+  const byKey = new Map(candidates.map((c) => [memberKey(c), c]));
   const selectedKeys = value.filter((id, index) => value.indexOf(id) === index);
   const selectedSet = new Set(selectedKeys);
-  const available = candidates.filter(c => !selectedSet.has(memberKey(c)));
+  const available = candidates.filter((c) => !selectedSet.has(memberKey(c)));
 
   // Resolve avatars for the whole candidate pool — selected rows and
   // dropdown items share the same map. The hook caches by
   // `(id, avatar_url)` so the same member rendered in both surfaces
   // only fetches once.
   const agentCandidates = useMemo(
-    () => candidates.flatMap(c => (c.kind === 'agent' ? [c.agent] : [])),
+    () => candidates.flatMap((c) => (c.kind === "agent" ? [c.agent] : [])),
     [candidates],
   );
   const humanCandidates = useMemo(
-    () => candidates.flatMap(c => (c.kind === 'human' ? [c.user] : [])),
+    () => candidates.flatMap((c) => (c.kind === "human" ? [c.user] : [])),
     [candidates],
   );
   const agentAvatars = useAgentAvatarObjectUrls(agentCandidates);
@@ -121,17 +121,14 @@ export function MemberPicker({
   };
 
   const removeMember = (id: string): void => {
-    onChange(selectedKeys.filter(v => v !== id));
+    onChange(selectedKeys.filter((v) => v !== id));
   };
 
   return (
     <div className="flex flex-col gap-1.5">
       {selectedKeys.length > 0 ? (
-        <ul
-          className="flex flex-wrap gap-1.5"
-          aria-label="Selected members"
-        >
-          {selectedKeys.map(id => {
+        <ul className="flex flex-wrap gap-1.5" aria-label="Selected members">
+          {selectedKeys.map((id) => {
             const candidate = byKey.get(id);
             if (!candidate) {
               // Lost reference (candidates rebuilt without this id) —
@@ -153,7 +150,7 @@ export function MemberPicker({
             const displayName = memberDisplayName(candidate);
             const handle = memberHandle(candidate);
             const avatar =
-              candidate.kind === 'agent' ? (
+              candidate.kind === "agent" ? (
                 <AgentAvatar
                   runtime={candidate.agent.runtime}
                   // 14px avatar inside a 24px chip — see SelectedTag
@@ -162,17 +159,13 @@ export function MemberPicker({
                   // ~5px above/below so the avatar reads as a small
                   // identity icon rather than a tile.
                   size={AVATAR_PX.chip}
-                  avatarObjectUrl={
-                    agentAvatars.get(candidate.agent.id) ?? null
-                  }
+                  avatarObjectUrl={agentAvatars.get(candidate.agent.id) ?? null}
                   alt={displayName}
                 />
               ) : (
                 <UserAvatar
                   size={AVATAR_PX.chip}
-                  avatarObjectUrl={
-                    humanAvatars.get(candidate.user.id) ?? null
-                  }
+                  avatarObjectUrl={humanAvatars.get(candidate.user.id) ?? null}
                   alt={displayName}
                 />
               );
@@ -193,7 +186,7 @@ export function MemberPicker({
 
       <Select.Root
         value=""
-        onValueChange={v => {
+        onValueChange={(v) => {
           if (v) addMember(v);
         }}
         disabled={candidates.length === 0}
@@ -223,7 +216,7 @@ export function MemberPicker({
               ) : available.length === 0 ? (
                 <PickerHint>{allSelectedText}</PickerHint>
               ) : (
-                available.map(candidate => {
+                available.map((candidate) => {
                   const key = memberKey(candidate);
                   const displayName = memberDisplayName(candidate);
                   const handle = memberHandle(candidate);
@@ -233,29 +226,23 @@ export function MemberPicker({
                       value={key}
                       className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-primary outline-none data-[highlighted]:bg-bg-hover"
                     >
-                      {candidate.kind === 'agent' ? (
+                      {candidate.kind === "agent" ? (
                         <AgentAvatar
                           runtime={candidate.agent.runtime}
                           size={AVATAR_PX.sm}
-                          avatarObjectUrl={
-                            agentAvatars.get(candidate.agent.id) ?? null
-                          }
+                          avatarObjectUrl={agentAvatars.get(candidate.agent.id) ?? null}
                           alt={displayName}
                         />
                       ) : (
                         <UserAvatar
                           size={AVATAR_PX.sm}
-                          avatarObjectUrl={
-                            humanAvatars.get(candidate.user.id) ?? null
-                          }
+                          avatarObjectUrl={humanAvatars.get(candidate.user.id) ?? null}
                           alt={displayName}
                         />
                       )}
                       <Select.ItemText>
                         <span className="flex min-w-0 items-baseline gap-1.5">
-                          <span className="truncate font-medium">
-                            {displayName}
-                          </span>
+                          <span className="truncate font-medium">{displayName}</span>
                           <span className="truncate font-mono text-[length:var(--text-meta)] text-text-muted">
                             @{handle}
                           </span>
@@ -313,13 +300,11 @@ function SelectedTag({
   return (
     <span
       className={
-        'inline-flex h-full max-w-full items-center gap-1.5 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base pl-1.5 pr-1 text-xs leading-none '
-        + (muted ? 'text-text-muted' : 'text-text-primary')
+        "inline-flex h-full max-w-full items-center gap-1.5 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base pl-1.5 pr-1 text-xs leading-none " +
+        (muted ? "text-text-muted" : "text-text-primary")
       }
     >
-      {avatar ? (
-        <span className="inline-flex shrink-0 items-center">{avatar}</span>
-      ) : null}
+      {avatar ? <span className="inline-flex shrink-0 items-center">{avatar}</span> : null}
       <span className="flex min-w-0 items-baseline gap-1">
         <span className="truncate font-medium">{displayName}</span>
         {handle ? (
@@ -342,36 +327,28 @@ function SelectedTag({
 }
 
 function memberKey(candidate: MemberPickerCandidate): string {
-  return candidate.kind === 'agent'
-    ? `agent:${candidate.agent.id}`
-    : `human:${candidate.user.id}`;
+  return candidate.kind === "agent" ? `agent:${candidate.agent.id}` : `human:${candidate.user.id}`;
 }
 
-function decodeMemberKey(value: string): { kind: 'agent' | 'human'; id: string } | null {
-  const sep = value.indexOf(':');
+function decodeMemberKey(value: string): { kind: "agent" | "human"; id: string } | null {
+  const sep = value.indexOf(":");
   if (sep <= 0) return null;
   const kind = value.slice(0, sep);
   const id = value.slice(sep + 1);
-  if (kind !== 'agent' && kind !== 'human') return null;
+  if (kind !== "agent" && kind !== "human") return null;
   return { kind, id };
 }
 
 function memberDisplayName(candidate: MemberPickerCandidate): string {
-  return candidate.kind === 'agent'
+  return candidate.kind === "agent"
     ? candidate.agent.display_name || candidate.agent.name
     : candidate.user.display_name || candidate.user.name;
 }
 
 function memberHandle(candidate: MemberPickerCandidate): string {
-  return candidate.kind === 'agent'
-    ? candidate.agent.name
-    : candidate.user.name;
+  return candidate.kind === "agent" ? candidate.agent.name : candidate.user.name;
 }
 
 function PickerHint({ children }: { children: string }): JSX.Element {
-  return (
-    <div className="px-2 py-2 text-center text-xs italic text-text-muted">
-      {children}
-    </div>
-  );
+  return <div className="px-2 py-2 text-center text-xs italic text-text-muted">{children}</div>;
 }

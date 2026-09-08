@@ -7,19 +7,19 @@ import type {
   SubscribeFrame,
   TransportEpoch,
   TransportSeq,
-} from '@silverhand/shared';
-import { advanceTransportSeq, parseConversationScope } from '@silverhand/shared';
-import { getBackendInfo } from './api';
+} from "@silverhand/shared";
+import { advanceTransportSeq, parseConversationScope } from "@silverhand/shared";
+import { getBackendInfo } from "./api";
 
-const EVENT_WS_PATH = '/api/ws/events';
+const EVENT_WS_PATH = "/api/ws/events";
 const RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000, 30_000] as const;
 
 export type WsClientStatus =
-  | 'idle'
-  | 'connecting'
-  | 'authenticating'
-  | 'connected'
-  | 'disconnected';
+  | "idle"
+  | "connecting"
+  | "authenticating"
+  | "connected"
+  | "disconnected";
 
 export type WsClientListener = (frame: ServerFrame) => void;
 export type WsStatusListener = (status: WsClientStatus) => void;
@@ -34,17 +34,17 @@ interface ResumePosition {
 }
 
 type EventWsDiagnosticKind =
-  | 'socket_open'
-  | 'socket_close'
-  | 'authenticated'
-  | 'subscribed'
-  | 'message_event'
-  | 'live_gap'
-  | 'resume_sent'
-  | 'snapshot_required'
-  | 'orphan_frame'
-  | 'markSatisfied_no_floor'
-  | 'satisfied_pending_overflow';
+  | "socket_open"
+  | "socket_close"
+  | "authenticated"
+  | "subscribed"
+  | "message_event"
+  | "live_gap"
+  | "resume_sent"
+  | "snapshot_required"
+  | "orphan_frame"
+  | "markSatisfied_no_floor"
+  | "satisfied_pending_overflow";
 
 interface EventWsDiagnostic {
   kind: EventWsDiagnosticKind;
@@ -99,7 +99,7 @@ const SATISFIED_PENDING_CAP = 200;
  */
 export class EventWsClient {
   private ws: WebSocket | null = null;
-  private status: WsClientStatus = 'idle';
+  private status: WsClientStatus = "idle";
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldReconnect = true;
@@ -171,16 +171,15 @@ export class EventWsClient {
   connect(): void {
     this.shouldReconnect = true;
     if (
-      this.status === 'connecting' ||
-      this.status === 'authenticating' ||
-      this.status === 'connected'
+      this.status === "connecting" ||
+      this.status === "authenticating" ||
+      this.status === "connected"
     ) {
       return;
     }
     if (
       this.ws &&
-      (this.ws.readyState === WebSocket.OPEN ||
-        this.ws.readyState === WebSocket.CONNECTING)
+      (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
     ) {
       return;
     }
@@ -203,19 +202,16 @@ export class EventWsClient {
       sub.detach();
     }
     if (ws && ws.readyState !== WebSocket.CLOSED) {
-      ws.close(1000, 'client_disconnect');
+      ws.close(1000, "client_disconnect");
     }
-    this.setStatus('disconnected');
+    this.setStatus("disconnected");
   }
 
   subscribe(scope: string): WsScopeSubscription {
     const previousCount = this.desiredScopes.get(scope) ?? 0;
     this.desiredScopes.set(scope, previousCount + 1);
     this.connect();
-    if (
-      previousCount === 0 ||
-      (this.status === 'connected' && !this.confirmedScopes.has(scope))
-    ) {
+    if (previousCount === 0 || (this.status === "connected" && !this.confirmedScopes.has(scope))) {
       this.sendSubscribe(scope);
     }
 
@@ -252,7 +248,7 @@ export class EventWsClient {
           // — silently skipping gap traffic). If memory ever forces a bound it
           // must carry a tombstone → forced snapshot, never a bare delete (see
           // docs/event-ws-transport-v1.md §4).
-          this.sendIfConnected({ type: 'unsubscribe', scope });
+          this.sendIfConnected({ type: "unsubscribe", scope });
         } else {
           this.desiredScopes.set(scope, count - 1);
         }
@@ -270,7 +266,7 @@ export class EventWsClient {
    * next `authenticated` frame.
    */
   private sendSubscribe(scope: string): void {
-    if (!this.sendIfConnected({ type: 'subscribe', scope })) return;
+    if (!this.sendIfConnected({ type: "subscribe", scope })) return;
     const floor = this.resumeFloorPositions.get(scope);
     if (floor) this.sendResume({ [scope]: floor });
   }
@@ -350,7 +346,7 @@ export class EventWsClient {
     if (!isContentGated(scope)) return;
     const floor = this.resumeFloorPositions.get(scope);
     if (!floor || floor.epoch !== epoch) {
-      recordEventWsDiagnostic({ kind: 'markSatisfied_no_floor', scope, seq, epoch });
+      recordEventWsDiagnostic({ kind: "markSatisfied_no_floor", scope, seq, epoch });
       return;
     }
     // At-or-below the floor: already covered (a replay re-satisfy) → idempotent.
@@ -374,7 +370,7 @@ export class EventWsClient {
     }
     if (pending.size > SATISFIED_PENDING_CAP) {
       recordEventWsDiagnostic({
-        kind: 'satisfied_pending_overflow',
+        kind: "satisfied_pending_overflow",
         scope,
         seq,
         lastSeq: advancedTo,
@@ -458,7 +454,7 @@ export class EventWsClient {
 
   private async openSocket(): Promise<void> {
     this.clearReconnectTimer();
-    this.setStatus('connecting');
+    this.setStatus("connecting");
     let url: string;
     try {
       const info = await getBackendInfo();
@@ -473,33 +469,33 @@ export class EventWsClient {
     this.ws = ws;
     this.clearConnectionState();
 
-    ws.addEventListener('open', () => {
+    ws.addEventListener("open", () => {
       if (this.ws !== ws) return;
-      recordEventWsDiagnostic({ kind: 'socket_open' });
-      this.setStatus('authenticating');
+      recordEventWsDiagnostic({ kind: "socket_open" });
+      this.setStatus("authenticating");
     });
 
-    ws.addEventListener('message', raw => {
+    ws.addEventListener("message", (raw) => {
       if (this.ws !== ws) return;
       const frame = parseServerFrame(raw.data);
       if (!frame) return;
       this.handleFrame(frame);
     });
 
-    ws.addEventListener('close', ev => {
+    ws.addEventListener("close", (ev) => {
       if (this.ws !== ws) return;
       recordEventWsDiagnostic({
-        kind: 'socket_close',
+        kind: "socket_close",
         code: ev.code,
         wasClean: ev.wasClean,
       });
       this.ws = null;
       this.clearConnectionState();
-      this.setStatus('disconnected');
+      this.setStatus("disconnected");
       if (this.shouldReconnect) this.scheduleReconnect();
     });
 
-    ws.addEventListener('error', () => {
+    ws.addEventListener("error", () => {
       // `close` follows for network errors; keep the state transition in one path.
     });
   }
@@ -535,25 +531,25 @@ export class EventWsClient {
     // seq, so the resubscribe's resume replays the gap. See
     // docs/event-ws-transport-v1.md §4.1.
     if (
-      (frame.type === 'event' ||
-        frame.type === 'subscribed' ||
-        frame.type === 'snapshot_required') &&
+      (frame.type === "event" ||
+        frame.type === "subscribed" ||
+        frame.type === "snapshot_required") &&
       !this.desiredScopes.has(frame.scope)
     ) {
       recordEventWsDiagnostic({
-        kind: 'orphan_frame',
+        kind: "orphan_frame",
         scope: frame.scope,
-        eventKind: frame.type === 'event' ? frame.kind : frame.type,
-        seq: frame.type === 'snapshot_required' ? undefined : frame.seq,
+        eventKind: frame.type === "event" ? frame.kind : frame.type,
+        seq: frame.type === "snapshot_required" ? undefined : frame.seq,
       });
       return;
     }
 
-    if (frame.type === 'authenticated') {
+    if (frame.type === "authenticated") {
       this.reconnectAttempt = 0;
       this.clearConnectionState();
       this.resolvedViewerId = frame.viewerId;
-      recordEventWsDiagnostic({ kind: 'authenticated', epoch: frame.epoch });
+      recordEventWsDiagnostic({ kind: "authenticated", epoch: frame.epoch });
       // Attach viewer wrappers BEFORE status flips to 'connected'.
       // `subscribe()` is then refcount-only (sendIfConnected gated on
       // status==='connected' returns early), so the canonical viewer
@@ -563,11 +559,11 @@ export class EventWsClient {
       for (const sub of Array.from(this.viewerSubscribers)) {
         sub.attach();
       }
-      this.setStatus('connected');
+      this.setStatus("connected");
       this.resubscribeDesiredScopes();
-    } else if (frame.type === 'ping') {
-      this.send({ type: 'pong' });
-    } else if (frame.type === 'subscribed') {
+    } else if (frame.type === "ping") {
+      this.send({ type: "pong" });
+    } else if (frame.type === "subscribed") {
       this.confirmedScopes.add(frame.scope);
       // The ack confirms the listener is registered; any in-flight gap
       // recovery for the scope is moot.
@@ -589,12 +585,12 @@ export class EventWsClient {
       // skip, #task:1251). The replayed frames flow through the normal event path
       // and are accepted by `acceptEventFrame` in seq order.
       recordEventWsDiagnostic({
-        kind: 'subscribed',
+        kind: "subscribed",
         scope: frame.scope,
         seq: frame.seq,
         epoch: frame.epoch,
       });
-    } else if (frame.type === 'event') {
+    } else if (frame.type === "event") {
       // Snapshot re-cold-start in progress on a content-gated scope: buffer
       // frames past the pending baseline (drained on commit), drop frames the
       // upcoming snapshot already covers, and never dispatch during the pending
@@ -620,16 +616,16 @@ export class EventWsClient {
         // redelivers it.
         return;
       }
-      if (frame.kind === 'message') {
+      if (frame.kind === "message") {
         recordEventWsDiagnostic({
-          kind: 'message_event',
+          kind: "message_event",
           scope: frame.scope,
           eventKind: frame.kind,
           seq: frame.seq,
           epoch: frame.epoch,
         });
       }
-    } else if (frame.type === 'snapshot_required') {
+    } else if (frame.type === "snapshot_required") {
       this.recovering.delete(frame.scope);
       if (isContentGated(frame.scope)) {
         // Stage-2 §6: a snapshot_required IS a re-cold-start. Record the
@@ -652,7 +648,7 @@ export class EventWsClient {
         this.receivedPositions.delete(frame.scope);
       }
       recordEventWsDiagnostic({
-        kind: 'snapshot_required',
+        kind: "snapshot_required",
         scope: frame.scope,
         reason: frame.reason,
       });
@@ -669,9 +665,9 @@ export class EventWsClient {
 
   private resubscribeDesiredScopes(): void {
     for (const scope of this.desiredScopes.keys()) {
-      this.send({ type: 'subscribe', scope });
+      this.send({ type: "subscribe", scope });
     }
-    const resumeScopes: ResumeFrame['scopes'] = {};
+    const resumeScopes: ResumeFrame["scopes"] = {};
     for (const [scope, floor] of this.resumeFloorPositions.entries()) {
       if (!this.desiredScopes.has(scope)) continue;
       resumeScopes[scope] = floor;
@@ -728,7 +724,7 @@ export class EventWsClient {
       if (!this.recovering.has(frame.scope)) {
         this.recovering.add(frame.scope);
         recordEventWsDiagnostic({
-          kind: 'live_gap',
+          kind: "live_gap",
           scope: frame.scope,
           eventKind: frame.kind,
           seq: frame.seq,
@@ -758,11 +754,7 @@ export class EventWsClient {
 
   private recordReceived(frame: EventFrame | SubscribedFrame): void {
     const previous = this.receivedPositions.get(frame.scope);
-    if (
-      previous &&
-      previous.epoch === frame.epoch &&
-      previous.lastSeq >= frame.seq
-    ) {
+    if (previous && previous.epoch === frame.epoch && previous.lastSeq >= frame.seq) {
       return;
     }
     this.receivedPositions.set(frame.scope, {
@@ -773,11 +765,7 @@ export class EventWsClient {
 
   private recordApplied(frame: EventFrame | SubscribedFrame): void {
     const previous = this.resumeFloorPositions.get(frame.scope);
-    if (
-      previous &&
-      previous.epoch === frame.epoch &&
-      previous.lastSeq >= frame.seq
-    ) {
+    if (previous && previous.epoch === frame.epoch && previous.lastSeq >= frame.seq) {
       return;
     }
     this.resumeFloorPositions.set(frame.scope, {
@@ -786,12 +774,12 @@ export class EventWsClient {
     });
   }
 
-  private sendResume(scopes: ResumeFrame['scopes']): void {
+  private sendResume(scopes: ResumeFrame["scopes"]): void {
     if (Object.keys(scopes).length === 0) return;
-    if (!this.sendIfConnected({ type: 'resume', scopes })) return;
+    if (!this.sendIfConnected({ type: "resume", scopes })) return;
     for (const [scope, position] of Object.entries(scopes)) {
       recordEventWsDiagnostic({
-        kind: 'resume_sent',
+        kind: "resume_sent",
         scope,
         epoch: position.epoch,
         lastSeq: position.lastSeq,
@@ -800,11 +788,7 @@ export class EventWsClient {
   }
 
   private sendIfConnected(frame: ClientFrame): boolean {
-    if (
-      this.status !== 'connected' ||
-      !this.ws ||
-      this.ws.readyState !== WebSocket.OPEN
-    ) {
+    if (this.status !== "connected" || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return false;
     }
     this.send(frame);
@@ -903,7 +887,7 @@ class ViewerSubscriber {
   }
 }
 
-export function subscribeWsScope(scope: SubscribeFrame['scope']): WsScopeSubscription {
+export function subscribeWsScope(scope: SubscribeFrame["scope"]): WsScopeSubscription {
   return eventWsClient.subscribe(scope);
 }
 
@@ -936,7 +920,7 @@ export function onWsFrame(listener: WsClientListener): () => void {
 }
 
 function recordEventWsDiagnostic(input: EventWsDiagnostic): void {
-  if (typeof window === 'undefined') return;
+  if (typeof window === "undefined") return;
   const recorder = window.silverhand?.recordEventWsDiagnostic;
   if (!recorder) return;
   void recorder(input).catch(() => {
@@ -946,15 +930,15 @@ function recordEventWsDiagnostic(input: EventWsDiagnostic): void {
 
 function eventWsUrl(baseUrl: string): string {
   const url = new URL(EVENT_WS_PATH, baseUrl);
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
 }
 
 function parseServerFrame(data: unknown): ServerFrame | null {
-  if (typeof data !== 'string') return null;
+  if (typeof data !== "string") return null;
   try {
     const parsed = JSON.parse(data) as unknown;
-    if (!isRecord(parsed) || typeof parsed.type !== 'string') return null;
+    if (!isRecord(parsed) || typeof parsed.type !== "string") return null;
     return parsed as unknown as ServerFrame;
   } catch {
     return null;
@@ -962,5 +946,5 @@ function parseServerFrame(data: unknown): ServerFrame | null {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -1,5 +1,5 @@
-import { type SidebarPane, useSidebarPane } from './useSidebarPane';
-import { SIDEBAR_KEEP_MOUNTED } from '@/sidebar-performance-experiment';
+import { type SidebarPane, useSidebarPane } from "./useSidebarPane";
+import { SIDEBAR_KEEP_MOUNTED } from "@/sidebar-performance-experiment";
 
 /**
  * Top-level layout preferences. The sidebar owns an animated visibility state
@@ -15,7 +15,7 @@ import { SIDEBAR_KEEP_MOUNTED } from '@/sidebar-performance-experiment';
  * second column open", and there is no second column to open.
  */
 
-const WORKSPACE_SIDEBAR_KEY = 'silverhand:layout.workspace-sidebar-visible';
+const WORKSPACE_SIDEBAR_KEY = "silverhand:layout.workspace-sidebar-visible";
 
 export interface LayoutSettings {
   workspaceSidebar: SidebarPane;

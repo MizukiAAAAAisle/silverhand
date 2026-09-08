@@ -1,15 +1,15 @@
-import { useCallback, useRef } from 'react';
-import { useNav, useRouteState } from '@/router';
+import { useCallback, useRef } from "react";
+import { useNav, useRouteState } from "@/router";
 import {
   useMessageJumpController,
   type MessageJumpTarget,
-} from '@/features/channels/useMessageJumpController';
-import type { DirectPairAuthority } from '@/lib/chat-place-restore';
-import { executeMessageJump, type MessageJumpEnvironment } from './message-jump';
+} from "@/features/channels/useMessageJumpController";
+import type { DirectPairAuthority } from "@/lib/chat-place-restore";
+import { executeMessageJump, type MessageJumpEnvironment } from "./message-jump";
 
 export function useConversationJump(
   pairs: DirectPairAuthority,
-  resolveWorkspace: MessageJumpEnvironment['resolveWorkspace'],
+  resolveWorkspace: MessageJumpEnvironment["resolveWorkspace"],
 ) {
   const { section } = useRouteState();
   const nav = useNav();

@@ -1,5 +1,5 @@
-import * as HoverCard from '@radix-ui/react-hover-card';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import * as HoverCard from "@radix-ui/react-hover-card";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 /**
  * Hover-triggered popover used by inline reference chips.
@@ -87,7 +87,7 @@ export function HoverPopover({
           data-popover-frame="info"
           className="z-[var(--z-popover)] w-[260px] max-w-[calc(100vw-32px)] bg-bg-floating p-3 text-xs text-text-primary shadow-popover outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
-          {isContentReady ? content : skeleton ?? <DefaultSkeleton />}
+          {isContentReady ? content : (skeleton ?? <DefaultSkeleton />)}
         </HoverCard.Content>
       </HoverCard.Portal>
     </HoverCard.Root>

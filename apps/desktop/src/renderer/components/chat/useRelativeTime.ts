@@ -1,10 +1,10 @@
-import dayjs from 'dayjs';
-import relativeTime from 'dayjs/plugin/relativeTime';
-import 'dayjs/locale/zh-cn';
-import { useEffect, useState } from 'react';
+import dayjs from "dayjs";
+import relativeTime from "dayjs/plugin/relativeTime";
+import "dayjs/locale/zh-cn";
+import { useEffect, useState } from "react";
 
 dayjs.extend(relativeTime);
-dayjs.locale('zh-cn');
+dayjs.locale("zh-cn");
 
 const MINUTE = 60_000;
 
@@ -17,13 +17,13 @@ export function useRelativeTime(epochMs: number): { relative: string; absolute: 
   // version bumps every minute → forces re-derivation across all callers.
   const [, setVersion] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setVersion(v => v + 1), MINUTE);
+    const id = setInterval(() => setVersion((v) => v + 1), MINUTE);
     return () => clearInterval(id);
   }, []);
 
   const m = dayjs(epochMs);
   return {
     relative: m.fromNow(),
-    absolute: m.format('YYYY-MM-DD HH:mm:ss'),
+    absolute: m.format("YYYY-MM-DD HH:mm:ss"),
   };
 }

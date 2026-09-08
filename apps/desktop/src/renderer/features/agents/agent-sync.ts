@@ -1,8 +1,8 @@
-import { useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { AgentChangedEventSchema, type ServerFrame } from '@silverhand/shared';
-import { invalidateIdentityCarrierCaches } from '@/features/identity/identity-carrier-caches';
-import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
+import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { AgentChangedEventSchema, type ServerFrame } from "@silverhand/shared";
+import { invalidateIdentityCarrierCaches } from "@/features/identity/identity-carrier-caches";
+import { onWsFrame, subscribeWsScope } from "@/lib/ws-client";
 
 /**
  * What an incoming WS frame means for the agent-identity caches:
@@ -32,22 +32,16 @@ import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
  * `profile update`) go through `agentService`; the create path is a
  * post-commit effect of provisioning. See #task:1178 / #task:1707.
  */
-export type AgentSyncAction = { kind: 'invalidate' };
+export type AgentSyncAction = { kind: "invalidate" };
 
 export function decideAgentSyncAction(frame: ServerFrame): AgentSyncAction | null {
-  if (frame.type === 'snapshot_required') {
-    return frame.scope === 'app' ? { kind: 'invalidate' } : null;
+  if (frame.type === "snapshot_required") {
+    return frame.scope === "app" ? { kind: "invalidate" } : null;
   }
-  if (
-    frame.type !== 'event' ||
-    frame.scope !== 'app' ||
-    frame.kind !== 'agent_changed'
-  ) {
+  if (frame.type !== "event" || frame.scope !== "app" || frame.kind !== "agent_changed") {
     return null;
   }
-  return AgentChangedEventSchema.safeParse(frame.payload).success
-    ? { kind: 'invalidate' }
-    : null;
+  return AgentChangedEventSchema.safeParse(frame.payload).success ? { kind: "invalidate" } : null;
 }
 
 /**
@@ -78,10 +72,10 @@ export function decideAgentSyncAction(frame: ServerFrame): AgentSyncAction | nul
 export function useAgentSync(): void {
   const qc = useQueryClient();
   useEffect(() => {
-    const sub = subscribeWsScope('app');
-    const unsub = onWsFrame(frame => {
+    const sub = subscribeWsScope("app");
+    const unsub = onWsFrame((frame) => {
       if (!decideAgentSyncAction(frame)) return;
-      invalidateIdentityCarrierCaches(qc, 'agent');
+      invalidateIdentityCarrierCaches(qc, "agent");
     });
     return () => {
       sub.unsubscribe();

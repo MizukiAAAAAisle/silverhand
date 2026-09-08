@@ -1,30 +1,32 @@
-import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { StaticRouter } from 'react-router-dom/server';
-import { describe, expect, it, vi } from 'vitest';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { AgentDto, UserDto } from '@silverhand/shared';
-import { AgentProfileCard } from './AgentProfileCard';
-import { setCurrentUserId } from '@/lib/current-user';
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { StaticRouter } from "react-router-dom/server";
+import { describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { AgentDto, UserDto } from "@silverhand/shared";
+import { AgentProfileCard } from "./AgentProfileCard";
+import { setCurrentUserId } from "@/lib/current-user";
 
-vi.mock('@/features/profile/ProfileMessageActivity', () => ({ ProfileMessageActivity: () => null }));
+vi.mock("@/features/profile/ProfileMessageActivity", () => ({
+  ProfileMessageActivity: () => null,
+}));
 
-setCurrentUserId('u-creator', 'creator');
+setCurrentUserId("u-creator", "creator");
 
 function makeAgent(overrides: Partial<AgentDto> = {}): AgentDto {
   return {
-    id: 'a-1',
-    host_id: 'h-1',
-    name: 'alice',
-    display_name: 'Alice',
-    runtime: 'claude',
-    session_scope: 'conversation',
-    description: 'Helpful assistant',
+    id: "a-1",
+    host_id: "h-1",
+    name: "alice",
+    display_name: "Alice",
+    runtime: "claude",
+    session_scope: "conversation",
+    description: "Helpful assistant",
     model: null,
     reasoning_effort: null,
     fast_mode: null,
     avatar_url: null,
-    created_by_user_id: 'u-creator',
+    created_by_user_id: "u-creator",
     created_at: 0,
     updated_at: 0,
     ...overrides,
@@ -49,14 +51,14 @@ function render(agent: AgentDto, viewerId: string): string {
   // falls into the conservative read-only branch unconditionally
   // (which would make the "creator can edit" assertion pass for the
   // wrong reason).
-  qc.setQueryData(['me'], makeViewer(viewerId));
+  qc.setQueryData(["me"], makeViewer(viewerId));
   return renderToStaticMarkup(
     React.createElement(
       QueryClientProvider,
       { client: qc },
       React.createElement(
         StaticRouter,
-        { location: '/members/a-1' },
+        { location: "/members/a-1" },
         React.createElement(AgentProfileCard, {
           agent,
         }),
@@ -65,15 +67,12 @@ function render(agent: AgentDto, viewerId: string): string {
   );
 }
 
-describe('AgentProfileCard creator/read-only render branches', () => {
-  it('non-creator viewer sees no editable inputs', () => {
-    const html = render(
-      makeAgent({ created_by_user_id: 'u-creator' }),
-      'u-other',
-    );
+describe("AgentProfileCard creator/read-only render branches", () => {
+  it("non-creator viewer sees no editable inputs", () => {
+    const html = render(makeAgent({ created_by_user_id: "u-creator" }), "u-other");
     // Description text appears as static text, not inside a textarea.
-    expect(html).toContain('Helpful assistant');
-    expect(html).not.toContain('<textarea');
+    expect(html).toContain("Helpful assistant");
+    expect(html).not.toContain("<textarea");
     // No editable file input — non-creator never sees the avatar picker.
     expect(html).not.toContain('type="file"');
     // No edit affordances on the non-creator branch (identified by a11y
@@ -81,11 +80,8 @@ describe('AgentProfileCard creator/read-only render branches', () => {
     expect(html).not.toContain('aria-label="Edit display name"');
   });
 
-  it('creator viewer sees editable inputs and the avatar picker', () => {
-    const html = render(
-      makeAgent({ created_by_user_id: 'u-creator' }),
-      'u-creator',
-    );
+  it("creator viewer sees editable inputs and the avatar picker", () => {
+    const html = render(makeAgent({ created_by_user_id: "u-creator" }), "u-creator");
     // #task:1472 refactored the card to a pencil-edit pattern: fields are
     // readonly by default and only mount their input chrome on demand. So
     // an SSR snapshot shows no `<textarea>` for description and no combobox
@@ -109,35 +105,32 @@ describe('AgentProfileCard creator/read-only render branches', () => {
     // only shipped agent-self avatar self-edit on the internal route;
     // profile fields are NOT covered. This assertion locks that
     // guardrail at the render layer.
-    const html = render(
-      makeAgent({ created_by_user_id: 'u-creator' }),
-      'u-other',
-    );
+    const html = render(makeAgent({ created_by_user_id: "u-creator" }), "u-other");
     expect(html).not.toMatch(/agent\s+self/i);
     expect(html).not.toMatch(/sign in as|log in as/i);
   });
 
-  it('runtime configuration is readonly on first mount — combobox only appears after entering edit mode', () => {
+  it("runtime configuration is readonly on first mount — combobox only appears after entering edit mode", () => {
     // #task:1472: model no longer sits in the always-editable Capabilities
     // grid. It lives inside RuntimeConfigEditor which is readonly by
     // default; the SSR pass therefore shows neither a combobox nor a
     // datalist. The Edit trigger is the pencil at the section header.
     const html = render(
-      makeAgent({ runtime: 'qoder', created_by_user_id: 'u-creator' }),
-      'u-creator',
+      makeAgent({ runtime: "qoder", created_by_user_id: "u-creator" }),
+      "u-creator",
     );
     expect(html).not.toContain('role="combobox"');
-    expect(html).not.toContain('<datalist');
+    expect(html).not.toContain("<datalist");
     expect(html).toContain('aria-label="Edit runtime configuration"');
   });
 
-  it('shows the immutable session model as profile metadata', () => {
-    const conversationHtml = render(makeAgent({ session_scope: 'conversation' }), 'u-creator');
-    const agentHtml = render(makeAgent({ session_scope: 'agent' }), 'u-creator');
-    expect(conversationHtml).toContain('Session model');
-    expect(conversationHtml).toContain('Per conversation');
-    expect(agentHtml).toContain('Session model');
-    expect(agentHtml).toContain('Across conversations');
-    expect(agentHtml).not.toContain('Edit session model');
+  it("shows the immutable session model as profile metadata", () => {
+    const conversationHtml = render(makeAgent({ session_scope: "conversation" }), "u-creator");
+    const agentHtml = render(makeAgent({ session_scope: "agent" }), "u-creator");
+    expect(conversationHtml).toContain("Session model");
+    expect(conversationHtml).toContain("Per conversation");
+    expect(agentHtml).toContain("Session model");
+    expect(agentHtml).toContain("Across conversations");
+    expect(agentHtml).not.toContain("Edit session model");
   });
 });

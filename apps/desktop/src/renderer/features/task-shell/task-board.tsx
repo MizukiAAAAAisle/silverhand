@@ -1,23 +1,23 @@
-import { memo, useCallback, useMemo, useState } from 'react';
-import { Plus } from 'lucide-react';
-import { TaskIcon } from '@/components/tasks/TaskIcon';
-import { useUpdateTaskStatus } from '@/features/tasks/hooks';
-import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
-import { useTaskFilterOptions } from '@/features/tasks/useTaskFilterOptions';
-import { activeTaskCount, boardCountLabel, totalTaskCount } from '@/features/tasks/boardAuthority';
-import { useBoardColumns, useBoardCounts, useBoardFacets } from '@/features/tasks/useBoard';
-import { useColumnWindow } from '@/features/tasks/useColumnWindow';
-import { DEFAULT_TASK_FILTERS, type TaskFilters } from '@/features/tasks/taskFilters';
-import { TaskBoardColumns } from '@/components/tasks/TaskBoardColumns';
-import { TaskFilterBar, FILTER_ROW_TRIGGER_BOX } from '@/components/tasks/TaskFilterBar';
+import { memo, useCallback, useMemo, useState } from "react";
+import { Plus } from "lucide-react";
+import { TaskIcon } from "@/components/tasks/TaskIcon";
+import { useUpdateTaskStatus } from "@/features/tasks/hooks";
+import { useKanbanColumnCollapse } from "@/features/tasks/useKanbanColumnCollapse";
+import { useTaskFilterOptions } from "@/features/tasks/useTaskFilterOptions";
+import { activeTaskCount, boardCountLabel, totalTaskCount } from "@/features/tasks/boardAuthority";
+import { useBoardColumns, useBoardCounts, useBoardFacets } from "@/features/tasks/useBoard";
+import { useColumnWindow } from "@/features/tasks/useColumnWindow";
+import { DEFAULT_TASK_FILTERS, type TaskFilters } from "@/features/tasks/taskFilters";
+import { TaskBoardColumns } from "@/components/tasks/TaskBoardColumns";
+import { TaskFilterBar, FILTER_ROW_TRIGGER_BOX } from "@/components/tasks/TaskFilterBar";
 import {
   CreateTaskDialog,
   useCreateTaskSubmit,
   type CreateTaskTarget,
-} from '@/components/tasks/CreateTaskDialog';
-import { Button } from '@/components/ui/button';
-import { primaryAction } from '@/features/common/PrimaryAction';
-import { paneChrome } from '@/components/layout/pane-chrome';
+} from "@/components/tasks/CreateTaskDialog";
+import { Button } from "@/components/ui/button";
+import { primaryAction } from "@/features/common/PrimaryAction";
+import { paneChrome } from "@/components/layout/pane-chrome";
 
 /** Keep the board memoized independently of dialog route changes. */
 export interface TaskBoardProps {
@@ -79,14 +79,14 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
     const defaultChannelId = channelOptions.some((o) => o.id === filters.channelId)
       ? filters.channelId
       : null;
-    return { kind: 'pick', channelOptions, defaultChannelId };
+    return { kind: "pick", channelOptions, defaultChannelId };
   }, [channelOptions, filters.channelId]);
   const submitCreate = useCreateTaskSubmit();
 
   return (
     <main
       className="flex h-full flex-1 flex-col bg-bg-base"
-      style={{ ...paneChrome, overflow: 'hidden' }}
+      style={{ ...paneChrome, overflow: "hidden" }}
     >
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle pl-[6px] pr-4">
         <TaskIcon
@@ -97,7 +97,7 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
           className="size-4 text-text-muted"
         />
         <span className="font-serif text-sm font-semibold text-text-primary">
-          {selectedChannelName ? `Tasks in #${selectedChannelName}` : 'All Tasks'}
+          {selectedChannelName ? `Tasks in #${selectedChannelName}` : "All Tasks"}
         </span>
         <span className="text-xs text-text-muted">· {boardCountLabel(totalTaskCount(counts))}</span>
         <span className="ml-auto text-[length:var(--text-badge)] text-text-muted">

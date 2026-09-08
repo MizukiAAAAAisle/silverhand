@@ -33,21 +33,21 @@ export async function handleAttachmentSave(
   deps: AttachmentSaveDeps,
 ): Promise<AttachmentSaveResult> {
   const filenameRaw = input?.filename;
-  if (typeof filenameRaw !== 'string' || filenameRaw.length === 0) {
-    return { ok: false, reason: 'invalid_filename' };
+  if (typeof filenameRaw !== "string" || filenameRaw.length === 0) {
+    return { ok: false, reason: "invalid_filename" };
   }
   const bytesRaw = input?.bytes;
   if (!(bytesRaw instanceof Uint8Array) && !Buffer.isBuffer(bytesRaw)) {
-    return { ok: false, reason: 'invalid_payload' };
+    return { ok: false, reason: "invalid_payload" };
   }
   const buffer = Buffer.isBuffer(bytesRaw) ? bytesRaw : Buffer.from(bytesRaw);
   if (buffer.length === 0) {
-    return { ok: false, reason: 'empty_payload' };
+    return { ok: false, reason: "empty_payload" };
   }
   const safeName = sanitizeAttachmentFilename(filenameRaw);
-  if (!safeName) return { ok: false, reason: 'invalid_filename' };
+  if (!safeName) return { ok: false, reason: "invalid_filename" };
   const result = await deps.showSaveDialog({
-    title: 'Save attachment',
+    title: "Save attachment",
     defaultPath: safeName,
   });
   if (result.canceled || !result.filePath) {
@@ -69,8 +69,8 @@ export async function handleAttachmentSave(
  *  the pre-filled default. Exported for direct testing. */
 export function sanitizeAttachmentFilename(raw: string): string {
   return raw
-    .replace(/[\\/]/g, '_')
-    .replace(/[\x00-\x1f]+/g, '')
+    .replace(/[\\/]/g, "_")
+    .replace(/[\x00-\x1f]+/g, "")
     .trim()
     .slice(0, 255);
 }

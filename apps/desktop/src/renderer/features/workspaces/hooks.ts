@@ -1,6 +1,12 @@
-import { useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
-import { toast } from 'sonner';
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
+import { useEffect } from "react";
+import { toast } from "sonner";
 import type {
   AddWorkspaceMemberInput,
   AgentCapabilitiesDto,
@@ -25,18 +31,23 @@ import type {
   SetSortModeInput,
   SortGroup,
   ViewerSortStateDto,
-} from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
-import { api } from '@/lib/api';
-import { favoritesKey } from '@/features/favorites/hooks';
-import { attentionBadgesKey } from '@/features/attention/hooks';
+} from "@silverhand/shared";
+import { apiPaths } from "@silverhand/shared";
+import { api } from "@/lib/api";
+import { favoritesKey } from "@/features/favorites/hooks";
+import { attentionBadgesKey } from "@/features/attention/hooks";
 import {
   recordChannelWorkspace,
   recordChannelWorkspaceRows,
-} from '@/features/channels/channel-workspace-index';
-import { handleViewerWorkspaceRemoved } from './viewer-removal-contract';
-import { workspaceScopedQueryEnabled } from './workspace-scoped-query';
-import { onWsFrame, subscribeWsScope, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
+} from "@/features/channels/channel-workspace-index";
+import { handleViewerWorkspaceRemoved } from "./viewer-removal-contract";
+import { workspaceScopedQueryEnabled } from "./workspace-scoped-query";
+import {
+  onWsFrame,
+  subscribeWsScope,
+  subscribeViewerScope,
+  isCurrentViewerScope,
+} from "@/lib/ws-client";
 
 export type WorkspaceListItem = {
   id: string;
@@ -66,11 +77,11 @@ export type ChannelListItem = (ChannelConversationDto | FixedRosterConversationD
   is_member?: boolean;
 };
 
-const workspacesKey = ['workspaces'] as const;
-const channelsKey = (workspaceId: string) => ['workspaces', workspaceId, 'channels'] as const;
-const channelDetailKey = (channelId: string) => ['channel-detail', channelId] as const;
+const workspacesKey = ["workspaces"] as const;
+const channelsKey = (workspaceId: string) => ["workspaces", workspaceId, "channels"] as const;
+const channelDetailKey = (channelId: string) => ["channel-detail", channelId] as const;
 const archivedChannelsKey = (workspaceId: string) =>
-  ['workspaces', workspaceId, 'channels', 'archived'] as const;
+  ["workspaces", workspaceId, "channels", "archived"] as const;
 
 /** The two authoritative channel tables of one workspace, exported for the
  *  §12 removal contract (#task:1689): it must ask React Query whether each list
@@ -81,18 +92,18 @@ const archivedChannelsKey = (workspaceId: string) =>
 export const workspaceChannelsQueryKey = channelsKey;
 export const workspaceArchivedChannelsQueryKey = archivedChannelsKey;
 const archivedChannelsIndexKey = (workspaceId: string | null, since: number | null) =>
-  ['archived-channels', { workspaceId, since }] as const;
-const membersKey = (workspaceId: string) => ['workspaces', workspaceId, 'members'] as const;
+  ["archived-channels", { workspaceId, since }] as const;
+const membersKey = (workspaceId: string) => ["workspaces", workspaceId, "members"] as const;
 /** Matcher for "any workspace's member list", for the one caller that has no
  *  workspace id: the identity-carrier registry reseats every cached roster on a
  *  profile write (`features/identity/identity-carrier-caches.ts`). A plain
  *  `['workspaces']` prefix would also drop the channel / archive lists, which
  *  carry no identity snapshot. */
 export function isWorkspaceMembersQueryKey(key: readonly unknown[]): boolean {
-  return key.length === 3 && key[0] === 'workspaces' && key[2] === 'members';
+  return key.length === 3 && key[0] === "workspaces" && key[2] === "members";
 }
 const capabilitiesKey = (workspaceId: string, agentId: string) =>
-  ['workspaces', workspaceId, 'agents', agentId, 'capabilities'] as const;
+  ["workspaces", workspaceId, "agents", agentId, "capabilities"] as const;
 
 /** Human workspace member (canonical shared shape): `UserDto` display
  *  fields PLUS the graded-permissions membership `role`. */
@@ -106,9 +117,7 @@ export interface WorkspaceMemberLists {
   viewerRole: WorkspaceRole | null;
 }
 
-function normalizeWorkspaceMembers(
-  response: WorkspaceMembersResponse,
-): WorkspaceMemberLists {
+function normalizeWorkspaceMembers(response: WorkspaceMembersResponse): WorkspaceMemberLists {
   return {
     agents: response.members,
     humans: response.human_members,
@@ -174,7 +183,7 @@ export function useWorkspaces(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: workspacesKey,
     queryFn: fetchWorkspaces,
-    select: r => r.items,
+    select: (r) => r.items,
     enabled: options?.enabled ?? true,
   });
 }
@@ -185,7 +194,7 @@ export function useWorkspaceSortState() {
   return useQuery({
     queryKey: workspacesKey,
     queryFn: fetchWorkspaces,
-    select: r => r.viewerSort,
+    select: (r) => r.viewerSort,
   });
 }
 
@@ -198,7 +207,7 @@ export function useWorkspaceSortState() {
  * validates independently. See `docs/viewer-visibility-sync-v1.md`.
  */
 interface ViewerWorkspacesChangedPayload {
-  change: 'added' | 'removed' | 'role_changed' | 'metadata_changed';
+  change: "added" | "removed" | "role_changed" | "metadata_changed";
   workspace_id: string;
   role?: WorkspaceRole;
 }
@@ -206,19 +215,19 @@ interface ViewerWorkspacesChangedPayload {
 export function isViewerWorkspacesChangedPayload(
   payload: unknown,
 ): payload is ViewerWorkspacesChangedPayload {
-  if (typeof payload !== 'object' || payload === null) return false;
+  if (typeof payload !== "object" || payload === null) return false;
   const o = payload as Record<string, unknown>;
   return (
-    (o.change === 'added' ||
-      o.change === 'removed' ||
-      o.change === 'role_changed' ||
+    (o.change === "added" ||
+      o.change === "removed" ||
+      o.change === "role_changed" ||
       // A mutable workspace field the read model projects (today: `name`,
       // #task:2050 §4-B) moved with no membership/role change. Whitelisting it
       // is what makes the producer edge live: without it the frame fails this
       // guard and `['workspaces']` never refetches, so the F1 live-join of the
       // workspace label would inherit the exact staleness the embed had.
-      o.change === 'metadata_changed') &&
-    typeof o.workspace_id === 'string'
+      o.change === "metadata_changed") &&
+    typeof o.workspace_id === "string"
   );
 }
 
@@ -275,14 +284,14 @@ export interface ViewerSyncFrame {
 export function decideViewerSyncInvalidations(
   frame: ViewerSyncFrame,
 ): readonly (readonly string[])[] {
-  if (frame.type === 'snapshot_required') return [workspacesKey];
-  if (frame.type !== 'event') return [];
-  if (frame.kind !== 'viewer_workspaces_changed') return [];
+  if (frame.type === "snapshot_required") return [workspacesKey];
+  if (frame.type !== "event") return [];
+  if (frame.kind !== "viewer_workspaces_changed") return [];
   if (!isViewerWorkspacesChangedPayload(frame.payload)) return [];
-  if (frame.payload.change === 'role_changed') {
+  if (frame.payload.change === "role_changed") {
     return [workspacesKey, membersKey(frame.payload.workspace_id)];
   }
-  if (frame.payload.change === 'added') {
+  if (frame.payload.change === "added") {
     return [workspacesKey, attentionBadgesKey(), favoritesKey];
   }
   return [workspacesKey];
@@ -303,10 +312,10 @@ export function decideViewerSyncInvalidations(
  * gates `isCurrentViewerScope(frame.scope)` first, same as the sibling.
  */
 export function viewerRemovedWorkspaceId(frame: ViewerSyncFrame): string | null {
-  if (frame.type !== 'event') return null;
-  if (frame.kind !== 'viewer_workspaces_changed') return null;
+  if (frame.type !== "event") return null;
+  if (frame.kind !== "viewer_workspaces_changed") return null;
   if (!isViewerWorkspacesChangedPayload(frame.payload)) return null;
-  return frame.payload.change === 'removed' ? frame.payload.workspace_id : null;
+  return frame.payload.change === "removed" ? frame.payload.workspace_id : null;
 }
 
 /**
@@ -344,9 +353,9 @@ export function useViewerWorkspacesSync(): void {
   const qc = useQueryClient();
   useEffect(() => {
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
+    const unsub = onWsFrame((frame) => {
       if (
-        (frame.type !== 'event' && frame.type !== 'snapshot_required') ||
+        (frame.type !== "event" && frame.type !== "snapshot_required") ||
         !isCurrentViewerScope(frame.scope)
       ) {
         return;
@@ -384,19 +393,16 @@ export function useCreateWorkspace() {
       const res = await api<{
         workspace: ViewerWorkspaceDto;
         onboarding_channel_id: string;
-      }>(
-        apiPaths.workspaces,
-        { method: 'POST', body: JSON.stringify(input) },
-      );
+      }>(apiPaths.workspaces, { method: "POST", body: JSON.stringify(input) });
       return res;
     },
-    onSuccess: async res => {
+    onSuccess: async (res) => {
       const workspace = workspaceToListItem(res.workspace);
-      qc.setQueryData<WorkspaceListPayload>(workspacesKey, prev => {
+      qc.setQueryData<WorkspaceListPayload>(workspacesKey, (prev) => {
         if (!prev) return prev;
         const cur = prev.items;
-        const items = cur.some(c => c.id === workspace.id)
-          ? cur.map(c => (c.id === workspace.id ? workspace : c))
+        const items = cur.some((c) => c.id === workspace.id)
+          ? cur.map((c) => (c.id === workspace.id ? workspace : c))
           : [...cur, workspace];
         return { ...prev, items };
       });
@@ -409,7 +415,7 @@ export function useDeleteWorkspace() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      await api(apiPaths.workspace(id), { method: 'DELETE' });
+      await api(apiPaths.workspace(id), { method: "DELETE" });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: workspacesKey });
@@ -435,7 +441,7 @@ export function useLeaveWorkspace() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      await api(apiPaths.workspaceLeave(id), { method: 'POST' });
+      await api(apiPaths.workspaceLeave(id), { method: "POST" });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: workspacesKey });
@@ -449,12 +455,12 @@ export function useRenameWorkspace() {
     mutationFn: async (vars: { id: string } & UpdateWorkspaceInput) => {
       const { id, ...body } = vars;
       const res = await api<{ workspace: ViewerWorkspaceDto }>(apiPaths.workspace(id), {
-        method: 'PATCH',
+        method: "PATCH",
         body: JSON.stringify(body),
       });
       return workspaceToListItem(res.workspace);
     },
-    onSuccess: workspace => {
+    onSuccess: (workspace) => {
       qc.invalidateQueries({ queryKey: workspacesKey });
       // The workspace name shows up inside channel messages too (e.g.
       // the rename system broadcast we just emitted), so refresh
@@ -479,7 +485,7 @@ export function useArchiveWorkspace() {
       const res = await api<{ workspace: ViewerWorkspaceDto }>(
         `/api/workspaces/${vars.id}/archive`,
         {
-          method: 'PATCH',
+          method: "PATCH",
           body: JSON.stringify({ archived: vars.archived }),
         },
       );
@@ -491,7 +497,7 @@ export function useArchiveWorkspace() {
       // (the `archived workspace` marker), so archiving or restoring a
       // workspace changes rows the Archived view renders beside the workspace
       // rows (#task:1890).
-      qc.invalidateQueries({ queryKey: ['archived-channels'] });
+      qc.invalidateQueries({ queryKey: ["archived-channels"] });
       // Favorites membership is the star set INTERSECTED with "not archived"
       // (`read-model/favorites.ts` filters `w.archived_at IS NULL`), so archive
       // and restore both change it — while `useFavorites` only refetches on the
@@ -518,8 +524,8 @@ export function setChannelStarredOptimistic(
   starred: boolean,
 ): ViewerSortStateDto {
   const starredAt = starred ? Date.now() : null;
-  const entries = viewerSort.entries.some(e => e.entity_id === entityId)
-    ? viewerSort.entries.map(e =>
+  const entries = viewerSort.entries.some((e) => e.entity_id === entityId)
+    ? viewerSort.entries.map((e) =>
         e.entity_id === entityId ? { ...e, starred_at: starredAt } : e,
       )
     : [
@@ -562,25 +568,22 @@ async function fetchWorkspaceChannels(workspaceId: string): Promise<ChannelListP
  * (`'regular'` then, `true` now) silently turns "unresolved" into "go ahead".
  * Absence must be a compile error (@Paul, #task:2078).
  */
-export function useChannelsForWorkspace(
-  workspaceId: string | null,
-  workspaceResolved: boolean,
-) {
+export function useChannelsForWorkspace(workspaceId: string | null, workspaceResolved: boolean) {
   const qc = useQueryClient();
   useEffect(() => {
     if (!workspaceScopedQueryEnabled(workspaceId, workspaceResolved)) return;
     const scope = `workspace:${workspaceId}`;
     const sub = subscribeWsScope(scope);
-    const unsub = onWsFrame(frame => {
-      if (frame.type === 'event') {
-        if (frame.scope !== scope || frame.kind !== 'workspace_channels_changed') return;
+    const unsub = onWsFrame((frame) => {
+      if (frame.type === "event") {
+        if (frame.scope !== scope || frame.kind !== "workspace_channels_changed") return;
         void qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
         void qc.invalidateQueries({ queryKey: archivedChannelsKey(workspaceId) });
-        void qc.invalidateQueries({ queryKey: ['archived-channels'] });
-      } else if (frame.type === 'snapshot_required' && frame.scope === scope) {
+        void qc.invalidateQueries({ queryKey: ["archived-channels"] });
+      } else if (frame.type === "snapshot_required" && frame.scope === scope) {
         void qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
         void qc.invalidateQueries({ queryKey: archivedChannelsKey(workspaceId) });
-        void qc.invalidateQueries({ queryKey: ['archived-channels'] });
+        void qc.invalidateQueries({ queryKey: ["archived-channels"] });
       }
     });
     return () => {
@@ -590,10 +593,10 @@ export function useChannelsForWorkspace(
   }, [qc, workspaceId, workspaceResolved]);
 
   return useQuery({
-    queryKey: workspaceId ? channelsKey(workspaceId) : ['workspaces', 'none', 'channels'],
+    queryKey: workspaceId ? channelsKey(workspaceId) : ["workspaces", "none", "channels"],
     enabled: workspaceScopedQueryEnabled(workspaceId, workspaceResolved),
     queryFn: () => fetchWorkspaceChannels(workspaceId!),
-    select: r => r.items,
+    select: (r) => r.items,
   });
 }
 
@@ -607,7 +610,7 @@ export function useChannelsForWorkspace(
  */
 export function useChannelDetail(channelId: string | null, enabled = true) {
   return useQuery<ChannelDetailResponse>({
-    queryKey: channelId ? channelDetailKey(channelId) : ['channel-detail', 'none'],
+    queryKey: channelId ? channelDetailKey(channelId) : ["channel-detail", "none"],
     enabled: !!channelId && enabled,
     queryFn: async () => {
       const res = await api<ChannelDetailResponse>(apiPaths.conversationChannel(channelId!));
@@ -635,7 +638,7 @@ export function useJoinChannel(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (channelId: string) =>
-      api<ChannelDetailResponse>(apiPaths.channelJoin(channelId), { method: 'POST' }),
+      api<ChannelDetailResponse>(apiPaths.channelJoin(channelId), { method: "POST" }),
     onSuccess: (res, channelId) => {
       qc.setQueryData(channelDetailKey(channelId), res);
       if (workspaceId) {
@@ -645,7 +648,7 @@ export function useJoinChannel(workspaceId: string | null) {
         // flip the row (and any ChannelView reading it) would stay `nonmember`
         // until the list refetch lands, and a slow/failed refetch would strand
         // it. The invalidate below still runs for full reconciliation.
-        qc.setQueryData<ChannelListPayload>(channelsKey(workspaceId), prev =>
+        qc.setQueryData<ChannelListPayload>(channelsKey(workspaceId), (prev) =>
           applyChannelJoinToList(prev, channelId),
         );
         void qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
@@ -670,7 +673,7 @@ export function applyChannelJoinToList(
 ): ChannelListPayload | undefined {
   if (!payload) return payload;
   let changed = false;
-  const items = payload.items.map(item => {
+  const items = payload.items.map((item) => {
     if (item.id !== channelId || item.is_member === true) return item;
     changed = true;
     return { ...item, is_member: true };
@@ -682,15 +685,12 @@ export function applyChannelJoinToList(
  *  channel sidebar, read off the same `useChannelsForWorkspace` cache — so it
  *  takes the same `workspaceResolved` gate (see that hook for why there is no
  *  default). */
-export function useChannelSortState(
-  workspaceId: string | null,
-  workspaceResolved: boolean,
-) {
+export function useChannelSortState(workspaceId: string | null, workspaceResolved: boolean) {
   return useQuery({
-    queryKey: workspaceId ? channelsKey(workspaceId) : ['workspaces', 'none', 'channels'],
+    queryKey: workspaceId ? channelsKey(workspaceId) : ["workspaces", "none", "channels"],
     enabled: workspaceScopedQueryEnabled(workspaceId, workspaceResolved),
     queryFn: () => fetchWorkspaceChannels(workspaceId!),
-    select: r => r.viewerSort,
+    select: (r) => r.viewerSort,
   });
 }
 
@@ -713,7 +713,7 @@ export function useArchivedChannelsForWorkspace(
   return useQuery<ChannelListItem[]>({
     queryKey: workspaceId
       ? archivedChannelsKey(workspaceId)
-      : ['workspaces', 'none', 'channels', 'archived'],
+      : ["workspaces", "none", "channels", "archived"],
     enabled: workspaceScopedQueryEnabled(workspaceId, workspaceResolved),
     queryFn: () => fetchWorkspaceArchivedChannels(workspaceId!),
   });
@@ -723,9 +723,7 @@ export function useArchivedChannelsForWorkspace(
  *  returns `WorkspaceChannelListItem` rows — the SAME shape as the active list,
  *  each carrying the viewer-scoped `is_member` — so a consumer never has to know
  *  which of the two tables a row came from to read membership off it. */
-async function fetchWorkspaceArchivedChannels(
-  workspaceId: string,
-): Promise<ChannelListItem[]> {
+async function fetchWorkspaceArchivedChannels(workspaceId: string): Promise<ChannelListItem[]> {
   const res = await api<{ channels: ChannelListItem[] }>(
     apiPaths.workspaceArchivedChannels(workspaceId),
   );
@@ -759,7 +757,7 @@ export async function fetchWorkspaceChannelTables(workspaceId: string): Promise<
  *  this hook is a read fan-out and intentionally adds no extra subscription.) */
 export function useChannelsAcrossWorkspaces(workspaceIds: readonly string[]) {
   return useQueries({
-    queries: workspaceIds.map(id => ({
+    queries: workspaceIds.map((id) => ({
       queryKey: channelsKey(id),
       queryFn: () => fetchWorkspaceChannels(id),
       select: (r: ChannelListPayload) => r.items,
@@ -781,7 +779,7 @@ export function useChannelsAcrossWorkspaces(workspaceIds: readonly string[]) {
  *  for every container kind (see {@link useArchivedChannelsForWorkspace}). */
 export function useArchivedChannelsAcrossWorkspaces(workspaceIds: readonly string[]) {
   return useQueries({
-    queries: workspaceIds.map(id => ({
+    queries: workspaceIds.map((id) => ({
       queryKey: archivedChannelsKey(id),
       queryFn: () => fetchWorkspaceArchivedChannels(id),
     })),
@@ -793,9 +791,9 @@ export function useArchivedChannelsAcrossWorkspaces(workspaceIds: readonly strin
 type SortCachePayload = { items: unknown; viewerSort: ViewerSortStateDto };
 
 function sortListQueryKey(listKey: string): readonly unknown[] | null {
-  if (listKey === 'workspaces') return workspacesKey;
-  if (listKey.startsWith('channels:')) {
-    return channelsKey(listKey.slice('channels:'.length));
+  if (listKey === "workspaces") return workspacesKey;
+  if (listKey.startsWith("channels:")) {
+    return channelsKey(listKey.slice("channels:".length));
   }
   return null;
 }
@@ -820,14 +818,14 @@ export function sortCacheAdapter(listKey: string): SortCacheAdapter | null {
   if (key) {
     return {
       key,
-      read: c => (c as SortCachePayload | undefined)?.viewerSort,
+      read: (c) => (c as SortCachePayload | undefined)?.viewerSort,
       write: (c, next) => (c ? { ...(c as SortCachePayload), viewerSort: next } : c),
     };
   }
-  if (listKey === 'favorites') {
+  if (listKey === "favorites") {
     return {
       key: favoritesKey,
-      read: c => (c as ListFavoritesDto | undefined)?.viewer_sort,
+      read: (c) => (c as ListFavoritesDto | undefined)?.viewer_sort,
       write: (c, next) => (c ? { ...(c as ListFavoritesDto), viewer_sort: next } : c),
     };
   }
@@ -846,19 +844,19 @@ export function useSetSortMode() {
   return useMutation({
     mutationFn: async (input: SetSortModeInput) => {
       const res = await api<{ viewer_sort: ViewerSortStateDto }>(apiPaths.sortMode, {
-        method: 'PUT',
+        method: "PUT",
         body: JSON.stringify(input),
       });
       return res.viewer_sort;
     },
-    onMutate: async input => {
+    onMutate: async (input) => {
       const adapter = sortCacheAdapter(input.list_key);
       if (!adapter) return undefined;
       await qc.cancelQueries({ queryKey: adapter.key });
       const prev = qc.getQueryData(adapter.key);
       const prevVs = adapter.read(prev);
       if (prevVs) {
-        const scope = input.group ?? '';
+        const scope = input.group ?? "";
         qc.setQueryData(
           adapter.key,
           adapter.write(prev, {
@@ -875,7 +873,7 @@ export function useSetSortMode() {
     onSuccess: (viewerSort, input) => {
       const adapter = sortCacheAdapter(input.list_key);
       if (adapter) {
-        qc.setQueryData(adapter.key, prev => (prev ? adapter.write(prev, viewerSort) : prev));
+        qc.setQueryData(adapter.key, (prev) => (prev ? adapter.write(prev, viewerSort) : prev));
       }
     },
   });
@@ -892,15 +890,18 @@ export function applyOrderToViewerSort(
   scope: SortGroup | undefined,
   orderedIds: string[],
 ): ViewerSortStateDto {
-  const byId = new Map(prev.entries.map(e => [e.entity_id, e] as const));
+  const byId = new Map(prev.entries.map((e) => [e.entity_id, e] as const));
   orderedIds.forEach((id, rank) => {
     const e = byId.get(id);
-    byId.set(id, e ? { ...e, rank } : { entity_id: id, rank, last_accessed_at: null, starred_at: null });
+    byId.set(
+      id,
+      e ? { ...e, rank } : { entity_id: id, rank, last_accessed_at: null, starred_at: null },
+    );
   });
-  const scopeKey = scope ?? '';
+  const scopeKey = scope ?? "";
   return {
     ...prev,
-    modes: { ...prev.modes, [scopeKey]: 'manual' },
+    modes: { ...prev.modes, [scopeKey]: "manual" },
     entries: [...byId.values()],
   };
 }
@@ -925,7 +926,10 @@ export function useApplySortOrder() {
     const prev = qc.getQueryData(adapter.key);
     const prevVs = adapter.read(prev);
     if (prevVs) {
-      qc.setQueryData(adapter.key, adapter.write(prev, applyOrderToViewerSort(prevVs, scope, orderedIds)));
+      qc.setQueryData(
+        adapter.key,
+        adapter.write(prev, applyOrderToViewerSort(prevVs, scope, orderedIds)),
+      );
     }
   };
 }
@@ -953,18 +957,14 @@ export function useApplySortOrder() {
 export function useReorderSort() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: {
-      list_key: string;
-      group: SortGroup;
-      ordered_ids: string[];
-    }) => {
+    mutationFn: async (input: { list_key: string; group: SortGroup; ordered_ids: string[] }) => {
       const res = await api<{ viewer_sort: ViewerSortStateDto }>(apiPaths.sortOrder, {
-        method: 'PUT',
+        method: "PUT",
         body: JSON.stringify(input),
       });
       return res.viewer_sort;
     },
-    onMutate: async input => {
+    onMutate: async (input) => {
       // Cancel in-flight list refetches so they can't clobber the
       // already-applied synchronous optimistic order.
       const adapter = sortCacheAdapter(input.list_key);
@@ -985,7 +985,7 @@ export function useReorderSort() {
 export function useTouchSort() {
   return useMutation({
     mutationFn: async (input: { list_key: string; entity_id: string }) => {
-      await api(apiPaths.sortTouch, { method: 'POST', body: JSON.stringify(input) });
+      await api(apiPaths.sortTouch, { method: "POST", body: JSON.stringify(input) });
     },
   });
 }
@@ -1003,17 +1003,17 @@ export function useArchivedChannelsIndex({
   useEffect(() => {
     const scopeIds = workspaceId ? [workspaceId] : workspaceScopeIds;
     if (scopeIds.length === 0) return;
-    const subscriptions = scopeIds.map(id => subscribeWsScope(`workspace:${id}`));
-    const unsub = onWsFrame(frame => {
-      if (frame.type === 'event') {
-        if (frame.kind !== 'workspace_channels_changed') return;
-        if (!scopeIds.some(id => frame.scope === `workspace:${id}`)) return;
-        void qc.invalidateQueries({ queryKey: ['archived-channels'] });
+    const subscriptions = scopeIds.map((id) => subscribeWsScope(`workspace:${id}`));
+    const unsub = onWsFrame((frame) => {
+      if (frame.type === "event") {
+        if (frame.kind !== "workspace_channels_changed") return;
+        if (!scopeIds.some((id) => frame.scope === `workspace:${id}`)) return;
+        void qc.invalidateQueries({ queryKey: ["archived-channels"] });
       } else if (
-        frame.type === 'snapshot_required' &&
-        scopeIds.some(id => frame.scope === `workspace:${id}`)
+        frame.type === "snapshot_required" &&
+        scopeIds.some((id) => frame.scope === `workspace:${id}`)
       ) {
-        void qc.invalidateQueries({ queryKey: ['archived-channels'] });
+        void qc.invalidateQueries({ queryKey: ["archived-channels"] });
       }
     });
     return () => {
@@ -1026,8 +1026,8 @@ export function useArchivedChannelsIndex({
     queryKey: archivedChannelsIndexKey(workspaceId, since),
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (workspaceId) params.set('workspace_id', workspaceId);
-      if (since !== null) params.set('since', String(since));
+      if (workspaceId) params.set("workspace_id", workspaceId);
+      if (since !== null) params.set("since", String(since));
       const suffix = params.toString();
       const res = await api<{ channels: ArchivedChannelListItemDto[] }>(
         suffix ? `${apiPaths.archivedChannels}?${suffix}` : apiPaths.archivedChannels,
@@ -1047,11 +1047,11 @@ export function useCreateChannel(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: CreateConversationChannelInput) => {
-      if (!workspaceId) throw new Error('no workspace selected');
-      const res = await api<{ channel: ChannelLikeDto }>(
-        apiPaths.workspaceChannels(workspaceId),
-        { method: 'POST', body: JSON.stringify(input) },
-      );
+      if (!workspaceId) throw new Error("no workspace selected");
+      const res = await api<{ channel: ChannelLikeDto }>(apiPaths.workspaceChannels(workspaceId), {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
       return res.channel;
     },
     onSuccess: () => {
@@ -1071,10 +1071,9 @@ export function useStarChannel(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ channelId, starred }: { channelId: string; starred: boolean }) => {
-      const res = await api<{ viewer_sort: ViewerSortStateDto }>(
-        apiPaths.channelStar(channelId),
-        { method: starred ? 'POST' : 'DELETE' },
-      );
+      const res = await api<{ viewer_sort: ViewerSortStateDto }>(apiPaths.channelStar(channelId), {
+        method: starred ? "POST" : "DELETE",
+      });
       return res.viewer_sort;
     },
     onMutate: async ({ channelId, starred }) => {
@@ -1095,14 +1094,14 @@ export function useStarChannel(workspaceId: string | null) {
     onError: (_e, _v, ctx) => {
       if (workspaceId && ctx?.prev) qc.setQueryData(channelsKey(workspaceId), ctx.prev);
     },
-    onSuccess: viewerSort => {
+    onSuccess: (viewerSort) => {
       // The moved-to / moved-from surface. Membership of the global list is a
       // projection of `starred_at`, so it can only be refetched — there is no local
       // row to synthesize (the favorites row carries server-resolved parent identity
       // and a server-scored unread this cache doesn't have).
       void qc.invalidateQueries({ queryKey: favoritesKey });
       if (!workspaceId) return;
-      qc.setQueryData<ChannelListPayload>(channelsKey(workspaceId), prev =>
+      qc.setQueryData<ChannelListPayload>(channelsKey(workspaceId), (prev) =>
         prev ? { ...prev, viewerSort } : prev,
       );
     },
@@ -1124,10 +1123,10 @@ export function channelArchiveMutationOptions(qc: QueryClient, workspaceId: stri
       archived: boolean;
       workspaceId?: string;
     }) => {
-      const res = await api<{ channel: ChannelLikeDto }>(
-        apiPaths.channelArchive(channelId),
-        { method: 'PATCH', body: JSON.stringify({ archived }) },
-      );
+      const res = await api<{ channel: ChannelLikeDto }>(apiPaths.channelArchive(channelId), {
+        method: "PATCH",
+        body: JSON.stringify({ archived }),
+      });
       return res.channel;
     },
     onSuccess: (channel: ChannelLikeDto, vars: { workspaceId?: string }) => {
@@ -1135,18 +1134,22 @@ export function channelArchiveMutationOptions(qc: QueryClient, workspaceId: stri
       reconcileChannelArchive(qc, channel.id, targetWorkspaceId);
     },
     onError: () => {
-      toast.error('Failed to update channel archive');
+      toast.error("Failed to update channel archive");
     },
   };
 }
 
 /** Archive ACK invalidates channel lists and the detail used by row menus. */
-export function reconcileChannelArchive(qc: QueryClient, channelId: string, workspaceId: string | null): void {
+export function reconcileChannelArchive(
+  qc: QueryClient,
+  channelId: string,
+  workspaceId: string | null,
+): void {
   if (workspaceId) {
     void qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
     void qc.invalidateQueries({ queryKey: archivedChannelsKey(workspaceId) });
   }
-  void qc.invalidateQueries({ queryKey: ['archived-channels'] });
+  void qc.invalidateQueries({ queryKey: ["archived-channels"] });
   void qc.invalidateQueries({ queryKey: channelDetailKey(channelId) });
 }
 
@@ -1161,15 +1164,14 @@ export function useRenameChannel(workspaceId: string | null) {
       title: string;
       workspaceId?: string;
     }) => {
-      const res = await api<{ channel: ChannelLikeDto }>(
-        apiPaths.conversationChannel(channelId),
-        { method: 'PATCH', body: JSON.stringify({ title }) },
-      );
+      const res = await api<{ channel: ChannelLikeDto }>(apiPaths.conversationChannel(channelId), {
+        method: "PATCH",
+        body: JSON.stringify({ title }),
+      });
       return res.channel;
     },
     onSuccess: (channel, vars) => {
-      const targetWorkspaceId =
-        vars.workspaceId ?? channel.workspace_id ?? workspaceId;
+      const targetWorkspaceId = vars.workspaceId ?? channel.workspace_id ?? workspaceId;
       // Rename keeps the row in place (unlike archive), but the title is
       // mirrored into several read models, so refresh all of them rather
       // than only the active list — a rename on an archived channel (the
@@ -1183,8 +1185,8 @@ export function useRenameChannel(workspaceId: string | null) {
         qc.invalidateQueries({ queryKey: channelsKey(targetWorkspaceId) });
         qc.invalidateQueries({ queryKey: archivedChannelsKey(targetWorkspaceId) });
       }
-      qc.invalidateQueries({ queryKey: ['archived-channels'] });
-      qc.invalidateQueries({ queryKey: ['conversation-ref', channel.id] });
+      qc.invalidateQueries({ queryKey: ["archived-channels"] });
+      qc.invalidateQueries({ queryKey: ["conversation-ref", channel.id] });
     },
   });
 }
@@ -1212,18 +1214,17 @@ export function useLeaveChannel(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (channelId: string) =>
-      api<ChannelDetailResponse>(apiPaths.channelLeave(channelId), { method: 'POST' }),
+      api<ChannelDetailResponse>(apiPaths.channelLeave(channelId), { method: "POST" }),
     onSuccess: (res, channelId) => {
-      const visibility =
-        res.channel.roster_policy === 'open' ? res.channel.visibility : 'public';
-      if (visibility === 'private') {
+      const visibility = res.channel.roster_policy === "open" ? res.channel.visibility : "public";
+      if (visibility === "private") {
         // Private leave = "back to before you joined": the channel is invisible
         // to a non-member and must NOT stay resolvable in any read-path cache
         // (§12 read authority). EVICT the detail + conversation-ref entries
         // rather than caching a `{ is_member:false }` object a detail/ref read
         // could still surface as a non-member-visible channel.
         qc.removeQueries({ queryKey: channelDetailKey(channelId) });
-        qc.removeQueries({ queryKey: ['conversation-ref', channelId] });
+        qc.removeQueries({ queryKey: ["conversation-ref", channelId] });
       } else {
         // Public leave: the channel stays browsable, so backfill the
         // authoritative `is_member:false` detail — the open view collapses to
@@ -1231,7 +1232,7 @@ export function useLeaveChannel(workspaceId: string | null) {
         qc.setQueryData(channelDetailKey(channelId), res);
       }
       if (workspaceId) {
-        qc.setQueryData<ChannelListPayload>(channelsKey(workspaceId), prev =>
+        qc.setQueryData<ChannelListPayload>(channelsKey(workspaceId), (prev) =>
           applyChannelLeaveToList(prev, channelId, visibility),
         );
         void qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
@@ -1254,12 +1255,12 @@ export function applyChannelLeaveToList(
   visibility: ConversationVisibility,
 ): ChannelListPayload | undefined {
   if (!payload) return payload;
-  if (visibility === 'private') {
-    const items = payload.items.filter(item => item.id !== channelId);
+  if (visibility === "private") {
+    const items = payload.items.filter((item) => item.id !== channelId);
     return items.length === payload.items.length ? payload : { ...payload, items };
   }
   let changed = false;
-  const items = payload.items.map(item => {
+  const items = payload.items.map((item) => {
     if (item.id !== channelId || item.is_member === false) return item;
     changed = true;
     return { ...item, is_member: false };
@@ -1290,32 +1291,30 @@ export function useSetChannelVisibility(workspaceId: string | null) {
       visibility: ConversationVisibility;
       workspaceId?: string;
     }) => {
-      const res = await api<{ channel: ChannelLikeDto }>(
-        apiPaths.conversationChannel(channelId),
-        { method: 'PATCH', body: JSON.stringify({ visibility }) },
-      );
+      const res = await api<{ channel: ChannelLikeDto }>(apiPaths.conversationChannel(channelId), {
+        method: "PATCH",
+        body: JSON.stringify({ visibility }),
+      });
       return res.channel;
     },
     onSuccess: (channel, vars) => {
-      const targetWorkspaceId =
-        vars.workspaceId ?? channel.workspace_id ?? workspaceId;
+      const targetWorkspaceId = vars.workspaceId ?? channel.workspace_id ?? workspaceId;
       if (targetWorkspaceId) {
         qc.invalidateQueries({ queryKey: channelsKey(targetWorkspaceId) });
         qc.invalidateQueries({ queryKey: archivedChannelsKey(targetWorkspaceId) });
       }
-      qc.invalidateQueries({ queryKey: ['archived-channels'] });
+      qc.invalidateQueries({ queryKey: ["archived-channels"] });
       qc.invalidateQueries({ queryKey: channelDetailKey(channel.id) });
-      qc.invalidateQueries({ queryKey: ['conversation-ref', channel.id] });
+      qc.invalidateQueries({ queryKey: ["conversation-ref", channel.id] });
     },
   });
 }
 
 export function useWorkspaceMemberLists(workspaceId: string | null) {
   return useQuery({
-    queryKey: workspaceId ? membersKey(workspaceId) : ['workspaces', 'none', 'members'],
+    queryKey: workspaceId ? membersKey(workspaceId) : ["workspaces", "none", "members"],
     enabled: !!workspaceId,
-    queryFn: async () =>
-      api<WorkspaceMembersResponse>(apiPaths.workspaceMembers(workspaceId!)),
+    queryFn: async () => api<WorkspaceMembersResponse>(apiPaths.workspaceMembers(workspaceId!)),
     select: normalizeWorkspaceMembers,
   });
 }
@@ -1324,16 +1323,16 @@ export function useAddWorkspaceMember(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: AddWorkspaceMemberInput) => {
-      if (!workspaceId) throw new Error('no workspace selected');
+      if (!workspaceId) throw new Error("no workspace selected");
       // Backend returns `{member, human_member}` for the human branch
       // and `{member}` for both agent shapes (legacy `{agent_id}` and
       // tagged `{kind:'agent', agent_id}`). Renderer doesn't need the
       // exact response — it invalidates the workspace-members query so
       // the next fetch reseats both `agents` and `humans`.
-      await api<unknown>(
-        apiPaths.workspaceMembers(workspaceId),
-        { method: 'POST', body: JSON.stringify(input) },
-      );
+      await api<unknown>(apiPaths.workspaceMembers(workspaceId), {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
     },
     onSuccess: () => {
       if (workspaceId) qc.invalidateQueries({ queryKey: membersKey(workspaceId) });
@@ -1345,9 +1344,9 @@ export function useRemoveWorkspaceMember(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (agentId: string) => {
-      if (!workspaceId) throw new Error('no workspace selected');
+      if (!workspaceId) throw new Error("no workspace selected");
       await api(apiPaths.workspaceMember(workspaceId, agentId), {
-        method: 'DELETE',
+        method: "DELETE",
       });
     },
     onSuccess: () => {
@@ -1365,7 +1364,7 @@ export function removeHumanMemberFromList(
 ): WorkspaceMembersResponse {
   return {
     ...response,
-    human_members: response.human_members.filter(h => h.user_id !== userId),
+    human_members: response.human_members.filter((h) => h.user_id !== userId),
   };
 }
 
@@ -1379,21 +1378,18 @@ export function useRemoveWorkspaceHumanMember(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (userId: string) => {
-      if (!workspaceId) throw new Error('no workspace selected');
+      if (!workspaceId) throw new Error("no workspace selected");
       await api(apiPaths.workspaceHumanMember(workspaceId, userId), {
-        method: 'DELETE',
+        method: "DELETE",
       });
     },
-    onMutate: async userId => {
+    onMutate: async (userId) => {
       if (!workspaceId) return { previous: undefined };
       const key = membersKey(workspaceId);
       await qc.cancelQueries({ queryKey: key });
       const previous = qc.getQueryData<WorkspaceMembersResponse>(key);
       if (previous) {
-        qc.setQueryData<WorkspaceMembersResponse>(
-          key,
-          removeHumanMemberFromList(previous, userId),
-        );
+        qc.setQueryData<WorkspaceMembersResponse>(key, removeHumanMemberFromList(previous, userId));
       }
       return { previous };
     },
@@ -1419,9 +1415,7 @@ export function patchHumanMemberRole(
 ): WorkspaceMembersResponse {
   return {
     ...response,
-    human_members: response.human_members.map(h =>
-      h.user_id === userId ? { ...h, role } : h,
-    ),
+    human_members: response.human_members.map((h) => (h.user_id === userId ? { ...h, role } : h)),
   };
 }
 
@@ -1435,17 +1429,14 @@ export function patchHumanMemberRole(
 export function useUpdateWorkspaceHumanMemberRole(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (vars: {
-      userId: string;
-      role: Exclude<WorkspaceRole, 'owner'>;
-    }) => {
-      if (!workspaceId) throw new Error('no workspace selected');
+    mutationFn: async (vars: { userId: string; role: Exclude<WorkspaceRole, "owner"> }) => {
+      if (!workspaceId) throw new Error("no workspace selected");
       return api<UpdateWorkspaceHumanMemberRoleResponse>(
         apiPaths.workspaceHumanMemberRole(workspaceId, vars.userId),
-        { method: 'PATCH', body: JSON.stringify({ role: vars.role }) },
+        { method: "PATCH", body: JSON.stringify({ role: vars.role }) },
       );
     },
-    onMutate: async vars => {
+    onMutate: async (vars) => {
       if (!workspaceId) return { previous: undefined };
       const key = membersKey(workspaceId);
       await qc.cancelQueries({ queryKey: key });
@@ -1471,20 +1462,15 @@ export function useUpdateWorkspaceHumanMemberRole(workspaceId: string | null) {
 
 /** The effective capability set of one agent in one workspace (GET).
  *  Any workspace viewer may read; editing is gated on the human role. */
-export function useAgentCapabilities(
-  workspaceId: string | null,
-  agentId: string | null,
-) {
+export function useAgentCapabilities(workspaceId: string | null, agentId: string | null) {
   return useQuery({
     queryKey:
       workspaceId && agentId
         ? capabilitiesKey(workspaceId, agentId)
-        : ['workspaces', 'none', 'agents', 'none', 'capabilities'],
+        : ["workspaces", "none", "agents", "none", "capabilities"],
     enabled: !!workspaceId && !!agentId,
     queryFn: () =>
-      api<AgentCapabilitiesDto>(
-        apiPaths.workspaceAgentCapabilities(workspaceId!, agentId!),
-      ),
+      api<AgentCapabilitiesDto>(apiPaths.workspaceAgentCapabilities(workspaceId!, agentId!)),
   });
 }
 
@@ -1495,17 +1481,14 @@ export function useAgentCapabilities(
 export function useUpdateAgentCapabilities(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (vars: {
-      agentId: string;
-      capabilities: AgentCapability[];
-    }) => {
-      if (!workspaceId) throw new Error('no workspace selected');
+    mutationFn: async (vars: { agentId: string; capabilities: AgentCapability[] }) => {
+      if (!workspaceId) throw new Error("no workspace selected");
       const body: UpdateAgentCapabilitiesInput = {
         capabilities: vars.capabilities,
       };
       return api<AgentCapabilitiesDto>(
         apiPaths.workspaceAgentCapabilities(workspaceId, vars.agentId),
-        { method: 'PUT', body: JSON.stringify(body) },
+        { method: "PUT", body: JSON.stringify(body) },
       );
     },
     onSuccess: (dto, vars) => {

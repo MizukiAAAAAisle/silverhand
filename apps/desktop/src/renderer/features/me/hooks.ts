@@ -1,11 +1,6 @@
-import { agentStreamCache } from '@/features/agents/agent-stream-cache';
-import { useEffect, useState } from 'react';
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-  type QueryClient,
-} from '@tanstack/react-query';
+import { agentStreamCache } from "@/features/agents/agent-stream-cache";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   apiPaths,
   type AuthLoginInput,
@@ -14,19 +9,15 @@ import {
   type RegistrationRequired,
   type UpdateUserProfileInput,
   type UserDto,
-} from '@silverhand/shared';
-import { ApiError, api, apiUpload } from '@/lib/api';
-import { clearCurrentUser, setCurrentUserId } from '@/lib/current-user';
-import { eventWsClient } from '@/lib/ws-client';
-import { clearPlaceMemory } from '@/lib/place-memory';
-import {
-  clearAvatarBlobCache,
-  getAvatarBlobUrl,
-  loadAvatarBlobUrl,
-} from '@/lib/avatar-blob-cache';
-import { CONVERSATION_MEMBERS_KEY_PREFIX } from '@/features/conversations/useConversationMembers';
-import { clearSettingsSection } from '@/features/settings/settings-section';
-import { usersKey } from '@/features/users/hooks';
+} from "@silverhand/shared";
+import { ApiError, api, apiUpload } from "@/lib/api";
+import { clearCurrentUser, setCurrentUserId } from "@/lib/current-user";
+import { eventWsClient } from "@/lib/ws-client";
+import { clearPlaceMemory } from "@/lib/place-memory";
+import { clearAvatarBlobCache, getAvatarBlobUrl, loadAvatarBlobUrl } from "@/lib/avatar-blob-cache";
+import { CONVERSATION_MEMBERS_KEY_PREFIX } from "@/features/conversations/useConversationMembers";
+import { clearSettingsSection } from "@/features/settings/settings-section";
+import { usersKey } from "@/features/users/hooks";
 
 /**
  * Multi-human audit 2026-06-03 #task:857 P0.7 (review-fold by Cindy
@@ -70,7 +61,7 @@ function clearViewerLocalState(): void {
   clearSettingsSection();
 }
 
-const meKey = ['me'] as const;
+const meKey = ["me"] as const;
 
 export type SetupRequired = RegistrationRequired & {
   signup_enabled: boolean;
@@ -102,15 +93,11 @@ export interface BackendUnreachable {
  */
 export interface UpdateRequired {
   update_required: true;
-  direction: 'app' | 'server';
+  direction: "app" | "server";
   server_api_epoch: number;
 }
 
-export type ViewerState =
-  | UserDto
-  | SetupRequired
-  | BackendUnreachable
-  | UpdateRequired;
+export type ViewerState = UserDto | SetupRequired | BackendUnreachable | UpdateRequired;
 
 /**
  * Seat a fresh viewer dto everywhere the renderer keeps a copy of it.
@@ -181,10 +168,10 @@ export function isRegistrationRequired(
   body: MeResponse | ViewerState,
 ): body is RegistrationRequired | SetupRequired {
   return (
-    typeof body === 'object'
-    && body !== null
-    && 'registration_required' in body
-    && (body as { registration_required: unknown }).registration_required === true
+    typeof body === "object" &&
+    body !== null &&
+    "registration_required" in body &&
+    (body as { registration_required: unknown }).registration_required === true
   );
 }
 
@@ -196,20 +183,20 @@ export function isRegistrationRequired(
  */
 export function isBackendUnreachable(body: ViewerState): body is BackendUnreachable {
   return (
-    typeof body === 'object'
-    && body !== null
-    && 'backend_unreachable' in body
-    && (body as { backend_unreachable: unknown }).backend_unreachable === true
+    typeof body === "object" &&
+    body !== null &&
+    "backend_unreachable" in body &&
+    (body as { backend_unreachable: unknown }).backend_unreachable === true
   );
 }
 
 /** #task:1761 — type guard for the epoch update-required arm. */
 export function isUpdateRequired(body: ViewerState): body is UpdateRequired {
   return (
-    typeof body === 'object'
-    && body !== null
-    && 'update_required' in body
-    && (body as { update_required: unknown }).update_required === true
+    typeof body === "object" &&
+    body !== null &&
+    "update_required" in body &&
+    (body as { update_required: unknown }).update_required === true
   );
 }
 
@@ -228,11 +215,7 @@ export function isUpdateRequired(body: ViewerState): body is UpdateRequired {
 export function getHydratedViewer(qc: QueryClient): UserDto | null {
   const state = qc.getQueryData<ViewerState>(meKey);
   if (!state) return null;
-  if (
-    isRegistrationRequired(state)
-    || isBackendUnreachable(state)
-    || isUpdateRequired(state)
-  ) {
+  if (isRegistrationRequired(state) || isBackendUnreachable(state) || isUpdateRequired(state)) {
     return null;
   }
   return state;
@@ -258,8 +241,8 @@ export function getHydratedViewer(qc: QueryClient): UserDto | null {
 export function mapAuthStateToViewer(
   state: Awaited<ReturnType<typeof window.silverhand.getAuthState>>,
 ): ViewerState {
-  if (state.status === 'authenticated') return state.user;
-  if (state.status === 'backend_unreachable') {
+  if (state.status === "authenticated") return state.user;
+  if (state.status === "backend_unreachable") {
     return {
       backend_unreachable: true,
       server_url: state.server_url,
@@ -267,23 +250,23 @@ export function mapAuthStateToViewer(
     };
   }
   // #task:1761 — epoch hard-gate arms map to the UpdateRequired marker.
-  if (state.status === 'app_update_required') {
+  if (state.status === "app_update_required") {
     return {
       update_required: true,
-      direction: 'app',
+      direction: "app",
       server_api_epoch: state.server_api_epoch,
     };
   }
-  if (state.status === 'server_update_required') {
+  if (state.status === "server_update_required") {
     return {
       update_required: true,
-      direction: 'server',
+      direction: "server",
       server_api_epoch: state.server_api_epoch,
     };
   }
   return {
     registration_required: true,
-    suggested_name: '',
+    suggested_name: "",
     signup_enabled: state.signup_enabled,
   };
 }
@@ -303,10 +286,10 @@ export function useViewerUser() {
   });
   useEffect(() => {
     if (
-      query.data
-      && !isRegistrationRequired(query.data)
-      && !isBackendUnreachable(query.data)
-      && !isUpdateRequired(query.data)
+      query.data &&
+      !isRegistrationRequired(query.data) &&
+      !isBackendUnreachable(query.data) &&
+      !isUpdateRequired(query.data)
     ) {
       setCurrentUserId(query.data.id, query.data.display_name);
     }
@@ -344,14 +327,16 @@ export function useRuntimeEpochPromotion(): void {
   const qc = useQueryClient();
   useEffect(
     () =>
-      subscribeRuntimeEpochPromotion(qc, handler =>
+      subscribeRuntimeEpochPromotion(qc, (handler) =>
         window.silverhand.onEpochUpdateRequired(handler),
       ),
     [qc],
   );
 }
 
-export function authResultToUser(result: Awaited<ReturnType<typeof window.silverhand.signup>>): UserDto {
+export function authResultToUser(
+  result: Awaited<ReturnType<typeof window.silverhand.signup>>,
+): UserDto {
   if (result.ok) return result.user;
   // D4.a Commit 5d-fixup (Cindy P1-2): preserve the typed
   // backend-unreachable signal end-to-end. `status: 0` is the
@@ -359,8 +344,7 @@ export function authResultToUser(result: Awaited<ReturnType<typeof window.silver
   // signup/login fetch never reached the server; we tag the
   // ApiError so callers branching on `err.kind` get the typed
   // arm instead of a generic "0 Network Error" HTTP error.
-  const kind: 'http' | 'backend_unreachable' =
-    result.status === 0 ? 'backend_unreachable' : 'http';
+  const kind: "http" | "backend_unreachable" = result.status === 0 ? "backend_unreachable" : "http";
   throw new ApiError(result.status, result.statusText, result.bodyText, kind);
 }
 
@@ -369,7 +353,7 @@ export function useSignupUser() {
   return useMutation({
     mutationFn: async (input: AuthSignupInput) =>
       authResultToUser(await window.silverhand.signup(input)),
-    onSuccess: dto => {
+    onSuccess: (dto) => {
       cacheViewer(qc, dto);
     },
   });
@@ -380,7 +364,7 @@ export function useLoginUser() {
   return useMutation({
     mutationFn: async (input: AuthLoginInput) =>
       authResultToUser(await window.silverhand.login(input)),
-    onSuccess: dto => {
+    onSuccess: (dto) => {
       cacheViewer(qc, dto);
     },
   });
@@ -407,10 +391,10 @@ export function useUpdateProfile() {
   return useMutation({
     mutationFn: (input: UpdateUserProfileInput) =>
       api<UserDto>(apiPaths.me, {
-        method: 'PATCH',
+        method: "PATCH",
         body: JSON.stringify(input),
-    }),
-    onSuccess: dto => {
+      }),
+    onSuccess: (dto) => {
       cacheViewer(qc, dto);
     },
   });
@@ -429,13 +413,10 @@ export function useUploadAvatar() {
   return useMutation({
     mutationFn: async ({ file }: UploadAvatarVars) => {
       const form = new FormData();
-      form.set('file', file);
-      return apiUpload<{ avatar_url: string; user: UserDto }>(
-        apiPaths.meAvatar,
-        form,
-      );
+      form.set("file", file);
+      return apiUpload<{ avatar_url: string; user: UserDto }>(apiPaths.meAvatar, form);
     },
-    onSuccess: result => {
+    onSuccess: (result) => {
       cacheViewer(qc, result.user);
     },
   });
@@ -469,10 +450,7 @@ export function useUploadAvatar() {
 export function useViewerAvatarObjectUrl(): string | null {
   const { data } = useViewerUser();
   const avatarUrl =
-    data
-    && !isRegistrationRequired(data)
-    && !isBackendUnreachable(data)
-    && !isUpdateRequired(data)
+    data && !isRegistrationRequired(data) && !isBackendUnreachable(data) && !isUpdateRequired(data)
       ? data.avatar_url
       : null;
   // Shares the app-session avatar cache (#task:1321): the viewer's blob is
@@ -481,7 +459,7 @@ export function useViewerAvatarObjectUrl(): string | null {
   // cache — not this hook — owns the object URL, so there is no revoke here;
   // logout clears it via `clearAvatarBlobCache` in `clearViewerLocalState`.
   const [objectUrl, setObjectUrl] = useState<string | null>(() =>
-    avatarUrl ? getAvatarBlobUrl(avatarUrl) ?? null : null,
+    avatarUrl ? (getAvatarBlobUrl(avatarUrl) ?? null) : null,
   );
   useEffect(() => {
     if (!avatarUrl) {
@@ -494,7 +472,7 @@ export function useViewerAvatarObjectUrl(): string | null {
       return;
     }
     let cancelled = false;
-    void loadAvatarBlobUrl(avatarUrl).then(url => {
+    void loadAvatarBlobUrl(avatarUrl).then((url) => {
       if (!cancelled) setObjectUrl(url);
     });
     return () => {

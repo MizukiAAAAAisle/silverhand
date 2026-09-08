@@ -1,10 +1,10 @@
-import type { ReactElement } from 'react';
-import { BellOff, Bookmark, BookmarkX, ClipboardCopy, Share2 } from 'lucide-react';
+import type { ReactElement } from "react";
+import { BellOff, Bookmark, BookmarkX, ClipboardCopy, Share2 } from "lucide-react";
 import {
   AppContextMenu,
   AppContextMenuItem,
   AppContextMenuSeparator,
-} from '@/components/menus/AppContextMenu';
+} from "@/components/menus/AppContextMenu";
 
 /**
  * Right-click context menu for a single MessageItem row. Wraps the row
@@ -47,45 +47,28 @@ export function MessageContextMenu({
   onShare?: () => void;
   onUnfollowThread?: () => void;
 }): JSX.Element {
-  const hasAnyAction = !!(
-    onCopyMarkdown ||
-    onToggleSave ||
-    onShare ||
-    onUnfollowThread
-  );
+  const hasAnyAction = !!(onCopyMarkdown || onToggleSave || onShare || onUnfollowThread);
   if (!hasAnyAction) return trigger;
 
   return (
     <AppContextMenu trigger={trigger}>
       {onCopyMarkdown ? (
-        <AppContextMenuItem
-          icon={<ClipboardCopy className="size-3.5" />}
-          onSelect={onCopyMarkdown}
-        >
+        <AppContextMenuItem icon={<ClipboardCopy className="size-3.5" />} onSelect={onCopyMarkdown}>
           Copy markdown
         </AppContextMenuItem>
       ) : null}
       {onToggleSave ? (
         <AppContextMenuItem
-          icon={
-            saved ? (
-              <BookmarkX className="size-3.5" />
-            ) : (
-              <Bookmark className="size-3.5" />
-            )
-          }
+          icon={saved ? <BookmarkX className="size-3.5" /> : <Bookmark className="size-3.5" />}
           onSelect={onToggleSave}
         >
-          {saved ? 'Unsave' : 'Save message'}
+          {saved ? "Unsave" : "Save message"}
         </AppContextMenuItem>
       ) : null}
       {onShare ? (
         <>
           <AppContextMenuSeparator />
-          <AppContextMenuItem
-            icon={<Share2 className="size-3.5" />}
-            onSelect={onShare}
-          >
+          <AppContextMenuItem icon={<Share2 className="size-3.5" />} onSelect={onShare}>
             Share…
           </AppContextMenuItem>
         </>
@@ -93,10 +76,7 @@ export function MessageContextMenu({
       {onUnfollowThread ? (
         <>
           <AppContextMenuSeparator />
-          <AppContextMenuItem
-            icon={<BellOff className="size-3.5" />}
-            onSelect={onUnfollowThread}
-          >
+          <AppContextMenuItem icon={<BellOff className="size-3.5" />} onSelect={onUnfollowThread}>
             Unfollow thread
           </AppContextMenuItem>
         </>

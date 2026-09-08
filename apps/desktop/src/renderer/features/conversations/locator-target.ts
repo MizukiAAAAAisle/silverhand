@@ -3,11 +3,8 @@ import {
   canonicalizeStoredWorkspaceName,
   type DirectPairListItem,
   type Locator,
-} from '@silverhand/shared';
-import {
-  isAgentSpace,
-  type WorkspaceOwnership,
-} from '../workspaces/workspace-ownership';
+} from "@silverhand/shared";
+import { isAgentSpace, type WorkspaceOwnership } from "../workspaces/workspace-ownership";
 
 /**
  * #task:2120 — what a locator chip may NAVIGATE to, decided from the viewer's own
@@ -65,9 +62,9 @@ export interface LocatorChannelRow {
 /** Where a navigable locator points. `null` from {@link resolveLocatorTarget} is
  *  the inert sigil — see this module's docblock for why it is a single outcome. */
 export type LocatorTarget =
-  | { readonly kind: 'workspace'; readonly workspaceId: string }
+  | { readonly kind: "workspace"; readonly workspaceId: string }
   | {
-      readonly kind: 'channel';
+      readonly kind: "channel";
       readonly workspaceId: string;
       readonly conversationId: string;
       readonly threadRootId: string | null;
@@ -75,7 +72,7 @@ export type LocatorTarget =
       readonly closed: boolean;
     }
   | {
-      readonly kind: 'direct_pair';
+      readonly kind: "direct_pair";
       readonly conversationId: string;
       readonly threadRootId: string | null;
     };
@@ -121,7 +118,7 @@ export function resolveLocatorWorkspaceId(
   locator: Locator,
   workspaces: readonly LocatorWorkspaceRow[],
 ): string | null {
-  if (locator.kind === 'direct_pair') return null;
+  if (locator.kind === "direct_pair") return null;
   const key = locator.workspace.key;
   let found: string | null = null;
   for (const row of workspaces) {
@@ -146,7 +143,7 @@ export function locatorChannelListWorkspaceId(
   locator: Locator,
   workspaceId: string | null,
 ): string | null {
-  return locator.kind === 'channel' ? workspaceId : null;
+  return locator.kind === "channel" ? workspaceId : null;
 }
 
 /**
@@ -172,7 +169,7 @@ export function locatorCounterpartHandle(
   locator: Locator,
   viewerHandle: string | null,
 ): string | null {
-  if (locator.kind !== 'direct_pair' || viewerHandle === null) return null;
+  if (locator.kind !== "direct_pair" || viewerHandle === null) return null;
   const [first, second] = locator.endpoints;
   if (first === viewerHandle) return second;
   if (second === viewerHandle) return first;
@@ -203,7 +200,7 @@ export function resolveLocatorPairConversationId(
   if (handle === null) return null;
   for (const pair of pairs) {
     const other = pair.counterpart;
-    if (other.status !== 'active') continue;
+    if (other.status !== "active") continue;
     if (other.name === handle) return pair.conversation_id;
   }
   return null;
@@ -218,7 +215,7 @@ function resolveLocatorChannelRow(
   locator: Locator,
   channels: readonly LocatorChannelRow[],
 ): LocatorChannelRow | null {
-  if (locator.kind !== 'channel') return null;
+  if (locator.kind !== "channel") return null;
   const key = locator.channel.key;
   let found: LocatorChannelRow | null = null;
   for (const row of channels) {
@@ -230,28 +227,25 @@ function resolveLocatorChannelRow(
 }
 
 /** The whole decision: a target to navigate to, or `null` for the inert sigil. */
-export function resolveLocatorTarget(
-  locator: Locator,
-  facts: LocatorFacts,
-): LocatorTarget | null {
+export function resolveLocatorTarget(locator: Locator, facts: LocatorFacts): LocatorTarget | null {
   switch (locator.kind) {
-    case 'workspace':
+    case "workspace":
       return facts.workspaceId === null
         ? null
-        : { kind: 'workspace', workspaceId: facts.workspaceId };
-    case 'channel': {
+        : { kind: "workspace", workspaceId: facts.workspaceId };
+    case "channel": {
       if (facts.workspaceId === null) return null;
       const row = resolveLocatorChannelRow(locator, facts.channels);
       if (row === null) return null;
       return {
-        kind: 'channel',
+        kind: "channel",
         workspaceId: facts.workspaceId,
         conversationId: row.id,
         threadRootId: locator.threadRootId,
         closed: row.closed_at != null || row.archived_at != null,
       };
     }
-    case 'direct_pair': {
+    case "direct_pair": {
       const conversationId = resolveLocatorPairConversationId(
         locator,
         facts.viewerHandle,
@@ -259,7 +253,7 @@ export function resolveLocatorTarget(
       );
       if (conversationId === null) return null;
       return {
-        kind: 'direct_pair',
+        kind: "direct_pair",
         conversationId,
         threadRootId: locator.threadRootId,
       };

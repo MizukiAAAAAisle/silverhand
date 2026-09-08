@@ -11,7 +11,7 @@
  * `backendInfoKey`. The `connectingRefetchIntervalMs` helper now
  * gates polling to exactly that window — and nothing else.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from "vitest";
 import {
   CONNECTING_POLL_MS,
   PROTOCOL_COMPATIBILITY_POLL_MS,
@@ -19,7 +19,7 @@ import {
   backendInfoRefetchIntervalMs,
   connectingRefetchIntervalMs,
   type BackendInfoSnapshot,
-} from './hooks';
+} from "./hooks";
 
 /**
  * The attachment default tracks `mode` because that is what a real
@@ -29,37 +29,37 @@ import {
  * `mode`.
  */
 function snap(over: Partial<BackendInfoSnapshot> = {}): BackendInfoSnapshot {
-  const mode = over.mode ?? 'embedded';
+  const mode = over.mode ?? "embedded";
   return {
     mode,
-    url: 'http://127.0.0.1:1234',
+    url: "http://127.0.0.1:1234",
     outbound_protocol_compatibility: {
-      status: 'compatible',
+      status: "compatible",
       app_protocol_version: 7,
       server_protocol_version: 7,
     },
-    local_host_id: 'host-1',
-    local_host_status: 'claimed',
+    local_host_id: "host-1",
+    local_host_status: "claimed",
     local_host_ws_attachment:
-      mode === 'embedded' ? { observable: true, attached_at: null } : { observable: false },
-    local_host_server_url: 'http://127.0.0.1:1234',
+      mode === "embedded" ? { observable: true, attached_at: null } : { observable: false },
+    local_host_server_url: "http://127.0.0.1:1234",
     ...over,
   };
 }
 
-describe('connectingRefetchIntervalMs — only polls inside the connecting window', () => {
-  it('null snapshot (pre-fetch) → no poll', () => {
+describe("connectingRefetchIntervalMs — only polls inside the connecting window", () => {
+  it("null snapshot (pre-fetch) → no poll", () => {
     expect(connectingRefetchIntervalMs(null)).toBe(false);
   });
 
-  it('embedded + claimed + attached_at===null → polls (this is the connecting window)', () => {
+  it("embedded + claimed + attached_at===null → polls (this is the connecting window)", () => {
     // The whole reason this hook exists. The pill is showing
     // "Connecting…" right now and we need the next snapshot to
     // observe the outbound WS landing.
     expect(connectingRefetchIntervalMs(snap())).toBe(CONNECTING_POLL_MS);
   });
 
-  it('unobservable attachment + claimed → no poll (`#task:1628`: the window has no exit)', () => {
+  it("unobservable attachment + claimed → no poll (`#task:1628`: the window has no exit)", () => {
     // Regression pin. The attach timestamp comes from the in-process
     // embedded attachment registry, so where that registry does not
     // exist there is nothing to wait for — not "null right now" but
@@ -67,19 +67,19 @@ describe('connectingRefetchIntervalMs — only polls inside the connecting windo
     // polled `backend:info` every 1.5s for the whole life of the pane;
     // the user read that endless request loop as "this computer keeps
     // retrying".
-    expect(connectingRefetchIntervalMs(snap({ mode: 'remote' }))).toBe(false);
+    expect(connectingRefetchIntervalMs(snap({ mode: "remote" }))).toBe(false);
     // `#task:1630`: the gate is the attachment discriminant, not the
     // mode string. A snapshot that claims `embedded` but cannot observe
     // attachments must still not poll — the previous mode-derived gate
     // would have polled forever here.
     expect(
       connectingRefetchIntervalMs(
-        snap({ mode: 'embedded', local_host_ws_attachment: { observable: false } }),
+        snap({ mode: "embedded", local_host_ws_attachment: { observable: false } }),
       ),
     ).toBe(false);
   });
 
-  it('claimed + attached_at===number → stops polling (already connected)', () => {
+  it("claimed + attached_at===number → stops polling (already connected)", () => {
     // Anti-spam pin: once the pill flips to "Connected" we MUST
     // stop polling. Otherwise ConnectionPane sits open hammering
     // backend:info every 1.5s indefinitely.
@@ -95,48 +95,40 @@ describe('connectingRefetchIntervalMs — only polls inside the connecting windo
     ).toBe(false);
   });
 
-  it('unclaimed → no poll (nothing to attach yet)', () => {
+  it("unclaimed → no poll (nothing to attach yet)", () => {
     expect(
-      connectingRefetchIntervalMs(
-        snap({ local_host_status: 'unclaimed', local_host_id: null }),
-      ),
+      connectingRefetchIntervalMs(snap({ local_host_status: "unclaimed", local_host_id: null })),
     ).toBe(false);
   });
 
-  it('revoked → no poll (terminal, will never attach)', () => {
-    expect(
-      connectingRefetchIntervalMs(snap({ local_host_status: 'revoked' })),
-    ).toBe(false);
+  it("revoked → no poll (terminal, will never attach)", () => {
+    expect(connectingRefetchIntervalMs(snap({ local_host_status: "revoked" }))).toBe(false);
   });
 
-  it('error → no poll (transient, but caller refresh will retry)', () => {
+  it("error → no poll (transient, but caller refresh will retry)", () => {
     // `error` IS recoverable, but recovery comes from the next user
     // action (refetch on mount, mutation invalidate), not from
     // continuous polling. Polling on `error` would mean every
     // network blip during claim turns into a sustained refetch
     // loop until the user closes the page.
-    expect(
-      connectingRefetchIntervalMs(snap({ local_host_status: 'error' })),
-    ).toBe(false);
+    expect(connectingRefetchIntervalMs(snap({ local_host_status: "error" }))).toBe(false);
   });
 
-  it('failed → no poll (supervisor budget exhausted, needs app relaunch)', () => {
-    expect(
-      connectingRefetchIntervalMs(snap({ local_host_status: 'failed' })),
-    ).toBe(false);
+  it("failed → no poll (supervisor budget exhausted, needs app relaunch)", () => {
+    expect(connectingRefetchIntervalMs(snap({ local_host_status: "failed" }))).toBe(false);
   });
 });
 
-describe('connectingRefetchIntervalMs — terminal arms with stale attached_at also stop polling', () => {
+describe("connectingRefetchIntervalMs — terminal arms with stale attached_at also stop polling", () => {
   // Defensive pin: even if backend snapshot accidentally carries a
   // stale `attached_at` on a terminal status (it shouldn't —
   // `snapshotLocalHostInfo` only reads it on `claimed`), the helper
   // must not start polling on those rows.
-  it('revoked + stale attached_at → no poll', () => {
+  it("revoked + stale attached_at → no poll", () => {
     expect(
       connectingRefetchIntervalMs(
         snap({
-          local_host_status: 'revoked',
+          local_host_status: "revoked",
           local_host_ws_attachment: {
             observable: true,
             attached_at: 1_700_000_000_000,
@@ -146,11 +138,11 @@ describe('connectingRefetchIntervalMs — terminal arms with stale attached_at a
     ).toBe(false);
   });
 
-  it('failed + stale attached_at → no poll', () => {
+  it("failed + stale attached_at → no poll", () => {
     expect(
       connectingRefetchIntervalMs(
         snap({
-          local_host_status: 'failed',
+          local_host_status: "failed",
           local_host_ws_attachment: {
             observable: true,
             attached_at: 1_700_000_000_000,
@@ -161,16 +153,16 @@ describe('connectingRefetchIntervalMs — terminal arms with stale attached_at a
   });
 });
 
-describe('backendInfoRefetchIntervalMs — protocol compatibility', () => {
-  it('periodically rechecks the advertised protocol for remote backends', () => {
+describe("backendInfoRefetchIntervalMs — protocol compatibility", () => {
+  it("periodically rechecks the advertised protocol for remote backends", () => {
     expect(
-      backendInfoRefetchIntervalMs(snap({ mode: 'remote' }), {
+      backendInfoRefetchIntervalMs(snap({ mode: "remote" }), {
         pollProtocolCompatibility: true,
       }),
     ).toBe(PROTOCOL_COMPATIBILITY_POLL_MS);
   });
 
-  it('remote falls back to the 30s protocol poll even with pollWhileConnecting on', () => {
+  it("remote falls back to the 30s protocol poll even with pollWhileConnecting on", () => {
     // This case used to assert the opposite (`CONNECTING_POLL_MS`),
     // which is exactly how the `#task:1628` runaway got codified: a
     // remote snapshot is permanently `claimed + attached_at===null`, so
@@ -178,22 +170,22 @@ describe('backendInfoRefetchIntervalMs — protocol compatibility', () => {
     // connectedness is proven by the event WS, so the only remaining
     // periodic read here is the protocol-compatibility probe.
     expect(
-      backendInfoRefetchIntervalMs(snap({ mode: 'remote' }), {
+      backendInfoRefetchIntervalMs(snap({ mode: "remote" }), {
         pollWhileConnecting: true,
         pollProtocolCompatibility: true,
       }),
     ).toBe(PROTOCOL_COMPATIBILITY_POLL_MS);
   });
 
-  it('remote + pollWhileConnecting alone → no polling at all', () => {
+  it("remote + pollWhileConnecting alone → no polling at all", () => {
     expect(
-      backendInfoRefetchIntervalMs(snap({ mode: 'remote' }), {
+      backendInfoRefetchIntervalMs(snap({ mode: "remote" }), {
         pollWhileConnecting: true,
       }),
     ).toBe(false);
   });
 
-  it('embedded keeps the faster connecting poll when both probes are enabled', () => {
+  it("embedded keeps the faster connecting poll when both probes are enabled", () => {
     expect(
       backendInfoRefetchIntervalMs(snap(), {
         pollWhileConnecting: true,
@@ -202,7 +194,7 @@ describe('backendInfoRefetchIntervalMs — protocol compatibility', () => {
     ).toBe(CONNECTING_POLL_MS);
   });
 
-  it('does not poll an embedded backend for outbound compatibility', () => {
+  it("does not poll an embedded backend for outbound compatibility", () => {
     expect(
       backendInfoRefetchIntervalMs(snap(), {
         pollProtocolCompatibility: true,
@@ -211,7 +203,7 @@ describe('backendInfoRefetchIntervalMs — protocol compatibility', () => {
   });
 });
 
-describe('backendInfoRefetchIntervalMs — no snapshot observed yet (#task:1630)', () => {
+describe("backendInfoRefetchIntervalMs — no snapshot observed yet (#task:1630)", () => {
   // The forward fix's self-heal path. `fetchBackendInfo` now THROWS when
   // `backend:info` answers null (main has no backend handle yet) instead
   // of synthesising `{mode:'embedded', observable:false}`. That
@@ -220,30 +212,30 @@ describe('backendInfoRefetchIntervalMs — no snapshot observed yet (#task:1630)
   // — so one transient null pinned every consumer with no exit path until
   // some unrelated mutation invalidated the key. With no data at all, the
   // query must keep retrying on its own.
-  it('retries while there is no data, with or without any poll opt-in', () => {
+  it("retries while there is no data, with or without any poll opt-in", () => {
     expect(backendInfoRefetchIntervalMs(null)).toBe(UNKNOWN_SNAPSHOT_RETRY_MS);
-    expect(
-      backendInfoRefetchIntervalMs(null, { pollWhileConnecting: true }),
-    ).toBe(UNKNOWN_SNAPSHOT_RETRY_MS);
-    expect(
-      backendInfoRefetchIntervalMs(null, { pollProtocolCompatibility: true }),
-    ).toBe(UNKNOWN_SNAPSHOT_RETRY_MS);
+    expect(backendInfoRefetchIntervalMs(null, { pollWhileConnecting: true })).toBe(
+      UNKNOWN_SNAPSHOT_RETRY_MS,
+    );
+    expect(backendInfoRefetchIntervalMs(null, { pollProtocolCompatibility: true })).toBe(
+      UNKNOWN_SNAPSHOT_RETRY_MS,
+    );
   });
 
-  it('stops the retry the moment a real snapshot lands', () => {
+  it("stops the retry the moment a real snapshot lands", () => {
     // A remote snapshot with no poll opt-in is the strictest case: it
     // must settle on "no polling" rather than inherit the unknown-window
     // retry (that would re-create the `#task:1628` runaway with a new
     // name).
-    expect(backendInfoRefetchIntervalMs(snap({ mode: 'remote' }))).toBe(false);
+    expect(backendInfoRefetchIntervalMs(snap({ mode: "remote" }))).toBe(false);
     expect(
-      backendInfoRefetchIntervalMs(snap({ mode: 'remote' }), {
+      backendInfoRefetchIntervalMs(snap({ mode: "remote" }), {
         pollWhileConnecting: true,
       }),
     ).toBe(false);
   });
 
-  it('is a cheap local-IPC cadence, not a network poll', () => {
+  it("is a cheap local-IPC cadence, not a network poll", () => {
     expect(UNKNOWN_SNAPSHOT_RETRY_MS).toBeGreaterThanOrEqual(500);
     expect(UNKNOWN_SNAPSHOT_RETRY_MS).toBeLessThanOrEqual(3000);
   });
@@ -255,8 +247,8 @@ describe('backendInfoRefetchIntervalMs — no snapshot observed yet (#task:1630)
 // hostStatusKey now shares one fresh-forever + WS-invalidated model, and
 // pollUntilAvailable no longer exists (it had no component consumers).
 
-describe('CONNECTING_POLL_MS — sane bound', () => {
-  it('is in the [500ms, 5000ms] band so we neither spam nor lag the user', () => {
+describe("CONNECTING_POLL_MS — sane bound", () => {
+  it("is in the [500ms, 5000ms] band so we neither spam nor lag the user", () => {
     // 500ms floor: anything below this is just request spam from a
     // human-time perspective. 5000ms ceiling: the attach watchdog
     // budget is 10s, so a single poll inside that window catches

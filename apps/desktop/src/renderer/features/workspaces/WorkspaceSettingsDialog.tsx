@@ -1,45 +1,37 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { Archive, ArchiveRestore, LogOut, Settings2, ShieldCheck, Users } from 'lucide-react';
-import type { AgentCapability } from '@silverhand/shared';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Input, Label } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { primaryAction } from '@/features/common/PrimaryAction';
-import { neutralAction } from '@/features/common/ControlInkBorder';
-import {
-  destructiveAction,
-  destructiveCancel,
-} from '@/features/common/DestructiveAction';
-import { cn } from '@/lib/cn';
-import { nameFormatMessage } from '@/features/naming/useNameAvailability';
-import { AgentPermissionsPanel } from './AgentPermissionsPanel';
-import { WorkspaceMembersPanel } from './ManageMembersPopover';
-import { HumanRolesPanel } from './HumanRolesPanel';
+import { useEffect, useState, type FormEvent } from "react";
+import { Archive, ArchiveRestore, LogOut, Settings2, ShieldCheck, Users } from "lucide-react";
+import type { AgentCapability } from "@silverhand/shared";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input, Label } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { primaryAction } from "@/features/common/PrimaryAction";
+import { neutralAction } from "@/features/common/ControlInkBorder";
+import { destructiveAction, destructiveCancel } from "@/features/common/DestructiveAction";
+import { cn } from "@/lib/cn";
+import { nameFormatMessage } from "@/features/naming/useNameAvailability";
+import { AgentPermissionsPanel } from "./AgentPermissionsPanel";
+import { WorkspaceMembersPanel } from "./ManageMembersPopover";
+import { HumanRolesPanel } from "./HumanRolesPanel";
 import {
   useArchiveWorkspace,
   useDeleteWorkspace,
   useLeaveWorkspace,
   useRenameWorkspace,
   useWorkspaceMemberLists,
-} from './hooks';
+} from "./hooks";
 import {
   canLeaveWorkspace,
   canManageWorkspaceLifecycle,
   canRenameWorkspace,
-} from './workspace-permissions';
-import type { WorkspaceCapabilities } from './workspace-capabilities';
+} from "./workspace-permissions";
+import type { WorkspaceCapabilities } from "./workspace-capabilities";
 
-type SettingsSection = 'general' | 'members' | 'agents';
-type PermissionTab = 'agents' | 'human';
+type SettingsSection = "general" | "members" | "agents";
+type PermissionTab = "agents" | "human";
 
 const PERMISSION_TABS: { id: PermissionTab; label: string }[] = [
-  { id: 'agents', label: 'Agents' },
-  { id: 'human', label: 'Humans' },
+  { id: "agents", label: "Agents" },
+  { id: "human", label: "Humans" },
 ];
 
 interface WorkspaceSettingsDialogProps {
@@ -64,9 +56,9 @@ interface WorkspaceSettingsDialogProps {
 }
 
 const NAV_ITEMS: { id: SettingsSection; label: string; icon: typeof Settings2 }[] = [
-  { id: 'general', label: 'General', icon: Settings2 },
-  { id: 'members', label: 'Members', icon: Users },
-  { id: 'agents', label: 'Permission', icon: ShieldCheck },
+  { id: "general", label: "General", icon: Settings2 },
+  { id: "members", label: "Members", icon: Users },
+  { id: "agents", label: "Permission", icon: ShieldCheck },
 ];
 
 export function WorkspaceSettingsDialog({
@@ -77,7 +69,7 @@ export function WorkspaceSettingsDialog({
   capabilities,
   archivedAt,
   onDeleted,
-  initialSection = 'general',
+  initialSection = "general",
   focusAgentId = null,
   highlightCapability = null,
 }: WorkspaceSettingsDialogProps): JSX.Element {
@@ -86,8 +78,8 @@ export function WorkspaceSettingsDialog({
   // roles are orthogonal permission models, so they live as sibling tabs
   // rather than one merged list. A deep-link that targets an agent
   // (focusAgentId) implies the Agents tab.
-  const [permTab, setPermTab] = useState<PermissionTab>('agents');
-  const [name, setName] = useState('');
+  const [permTab, setPermTab] = useState<PermissionTab>("agents");
+  const [name, setName] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [confirmingLeave, setConfirmingLeave] = useState(false);
@@ -115,16 +107,16 @@ export function WorkspaceSettingsDialog({
   // on General rather than an empty panel.
   const visibleNavItems = hasMembers
     ? NAV_ITEMS
-    : NAV_ITEMS.filter(item => item.id === 'general');
-  const activeSection = !hasMembers && section !== 'general' ? 'general' : section;
+    : NAV_ITEMS.filter((item) => item.id === "general");
+  const activeSection = !hasMembers && section !== "general" ? "general" : section;
 
   // Reset every time the dialog reopens for a (potentially different)
   // workspace.
   useEffect(() => {
     if (open) {
-      setSection(hasMembers ? initialSection : 'general');
-      setPermTab('agents');
-      setName(workspaceName ?? '');
+      setSection(hasMembers ? initialSection : "general");
+      setPermTab("agents");
+      setName(workspaceName ?? "");
       setRenameError(null);
       setConfirmingDelete(false);
       setConfirmingLeave(false);
@@ -137,7 +129,7 @@ export function WorkspaceSettingsDialog({
     if (!workspaceId) return;
     const trimmed = name.trim();
     if (!trimmed) {
-      setRenameError('Please enter a workspace name');
+      setRenameError("Please enter a workspace name");
       return;
     }
     // ONE format rule for both doors (#task:1827): the shared
@@ -145,7 +137,7 @@ export function WorkspaceSettingsDialog({
     // shows. Rename previously kept a local `/^[a-zA-Z0-9_-]+$/`, so a
     // workspace create had just admitted as `设计 评审` could not be renamed at
     // all. Uniqueness stays server-only — the PATCH answers 409.
-    const formatMessage = nameFormatMessage('workspace', trimmed);
+    const formatMessage = nameFormatMessage("workspace", trimmed);
     if (formatMessage) {
       setRenameError(formatMessage);
       return;
@@ -194,9 +186,8 @@ export function WorkspaceSettingsDialog({
     );
   };
 
-  const renameDirty = name.trim() !== (workspaceName ?? '');
-  const renameDisabled =
-    !nameSettable || renameWorkspace.isPending || !renameDirty || !workspaceId;
+  const renameDirty = name.trim() !== (workspaceName ?? "");
+  const renameDisabled = !nameSettable || renameWorkspace.isPending || !renameDirty || !workspaceId;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -223,20 +214,20 @@ export function WorkspaceSettingsDialog({
             usable anyway. */}
         <div className="flex h-[min(32rem,65vh)] gap-5">
           <nav className="flex w-40 shrink-0 flex-col gap-0.5">
-            {visibleNavItems.map(item => {
+            {visibleNavItems.map((item) => {
               const active = activeSection === item.id;
               const Icon = item.icon;
               return (
                 <button
                   key={item.id}
                   type="button"
-                  aria-current={active ? 'page' : undefined}
+                  aria-current={active ? "page" : undefined}
                   onClick={() => setSection(item.id)}
                   className={cn(
-                    'flex items-center gap-2 rounded-[var(--control-radius)] px-2.5 py-1.5 text-left text-sm transition-colors',
+                    "flex items-center gap-2 rounded-[var(--control-radius)] px-2.5 py-1.5 text-left text-sm transition-colors",
                     active
-                      ? 'bg-[var(--bg-row-selected)] font-medium text-text-on-selected'
-                      : 'text-text-secondary hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
+                      ? "bg-[var(--bg-row-selected)] font-medium text-text-on-selected"
+                      : "text-text-secondary hover:bg-[var(--bg-option-hover)] hover:text-text-primary",
                   )}
                 >
                   <Icon className="size-3.5 shrink-0" />
@@ -247,7 +238,7 @@ export function WorkspaceSettingsDialog({
           </nav>
 
           <div className="scrollbar-hide min-w-0 flex-1 overflow-y-auto pr-1">
-            {activeSection === 'general' ? (
+            {activeSection === "general" ? (
               <GeneralSection
                 nameSettable={nameSettable}
                 hasLifecycle={hasLifecycle}
@@ -273,7 +264,7 @@ export function WorkspaceSettingsDialog({
                 onLeave={handleLeave}
                 leavePending={leaveWorkspace.isPending}
               />
-            ) : activeSection === 'members' && workspaceId ? (
+            ) : activeSection === "members" && workspaceId ? (
               <WorkspaceMembersPanel key={workspaceId} workspaceId={workspaceId} />
             ) : (
               <div className="flex flex-col gap-4">
@@ -285,7 +276,7 @@ export function WorkspaceSettingsDialog({
                   aria-label="Permission target"
                   className="flex items-center gap-1 border-b-[length:var(--control-border-width)] border-border-subtle"
                 >
-                  {PERMISSION_TABS.map(tab => {
+                  {PERMISSION_TABS.map((tab) => {
                     const active = permTab === tab.id;
                     return (
                       <button
@@ -295,10 +286,10 @@ export function WorkspaceSettingsDialog({
                         aria-selected={active}
                         onClick={() => setPermTab(tab.id)}
                         className={cn(
-                          '-mb-px border-b-2 px-3 py-1.5 text-sm transition-colors',
+                          "-mb-px border-b-2 px-3 py-1.5 text-sm transition-colors",
                           active
-                            ? 'border-border-focus font-medium text-text-primary'
-                            : 'border-transparent text-text-secondary hover:text-text-primary',
+                            ? "border-border-focus font-medium text-text-primary"
+                            : "border-transparent text-text-secondary hover:text-text-primary",
                         )}
                       >
                         {tab.label}
@@ -307,7 +298,7 @@ export function WorkspaceSettingsDialog({
                   })}
                 </div>
 
-                {permTab === 'agents' ? (
+                {permTab === "agents" ? (
                   <AgentPermissionsPanel
                     workspaceId={workspaceId}
                     focusAgentId={focusAgentId}
@@ -392,9 +383,9 @@ function GeneralSection({
       {!nameSettable ? (
         <p className="text-xs text-text-muted">
           {/* The one producer of a non-settable name today is an agent space, so
-            * this says WHY it is fixed: the name IS its agent's handle, which the
-            * agent cannot change either (#task:2044 — the space reads as its
-            * agent's name). A second producer must carry its own reason. */}
+           * this says WHY it is fixed: the name IS its agent's handle, which the
+           * agent cannot change either (#task:2044 — the space reads as its
+           * agent's name). A second producer must carry its own reason. */}
           An agent space takes its name from its agent and cannot be renamed.
         </p>
       ) : canRename ? (
@@ -410,18 +401,16 @@ function GeneralSection({
             <Input
               id="workspace-settings-name"
               value={name}
-              onChange={e => onNameChange(e.target.value)}
+              onChange={(e) => onNameChange(e.target.value)}
               placeholder="my-frontend"
               autoFocus
               className="transition-colors hover:border-[color:var(--border-control-hover)]"
             />
             <Button type="submit" disabled={renameDisabled} {...primaryAction()}>
-              {renamePending ? 'Saving…' : 'Save'}
+              {renamePending ? "Saving…" : "Save"}
             </Button>
           </div>
-          {renameError ? (
-            <div className="text-xs text-error">{renameError}</div>
-          ) : null}
+          {renameError ? <div className="text-xs text-error">{renameError}</div> : null}
         </form>
       ) : (
         <div className="flex flex-col gap-1.5">
@@ -430,7 +419,7 @@ function GeneralSection({
             id="workspace-settings-name"
             value={name}
             readOnly
-            onFocus={e => e.currentTarget.select()}
+            onFocus={(e) => e.currentTarget.select()}
           />
         </div>
       )}
@@ -453,12 +442,12 @@ function GeneralSection({
           <div className="flex items-center justify-between gap-3 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-elevated/40 p-3">
             <div className="flex flex-col gap-0.5">
               <span className="text-sm font-medium text-text-primary">
-                {isArchived ? 'Archived' : 'Archive workspace'}
+                {isArchived ? "Archived" : "Archive workspace"}
               </span>
               <span className="text-xs text-text-muted">
                 {isArchived
-                  ? 'Collapsed into the sidebar Archived group; still accessible.'
-                  : 'Collapse into the sidebar Archived group, keep all content, restore anytime.'}
+                  ? "Collapsed into the sidebar Archived group; still accessible."
+                  : "Collapse into the sidebar Archived group, keep all content, restore anytime."}
               </span>
             </div>
             <Button
@@ -471,12 +460,12 @@ function GeneralSection({
               {isArchived ? (
                 <>
                   <ArchiveRestore className="mr-1.5 size-3.5" />
-                  {archivePending ? 'Working…' : 'Unarchive'}
+                  {archivePending ? "Working…" : "Unarchive"}
                 </>
               ) : (
                 <>
                   <Archive className="mr-1.5 size-3.5" />
-                  {archivePending ? 'Working…' : 'Archive'}
+                  {archivePending ? "Working…" : "Archive"}
                 </>
               )}
             </Button>
@@ -484,12 +473,9 @@ function GeneralSection({
 
           <div className="flex flex-col gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-error/30 bg-error/5 p-3">
             <div className="flex flex-col gap-0.5">
-              <span className="text-sm font-medium text-text-primary">
-                Delete workspace
-              </span>
+              <span className="text-sm font-medium text-text-primary">Delete workspace</span>
               <span className="text-xs text-text-muted">
-                All channels, threads, and messages are removed permanently and
-                cannot be recovered.
+                All channels, threads, and messages are removed permanently and cannot be recovered.
               </span>
             </div>
             {confirmingDelete ? (
@@ -510,7 +496,7 @@ function GeneralSection({
                   disabled={deletePending}
                   {...destructiveAction()}
                 >
-                  {deletePending ? 'Deleting…' : 'Confirm delete'}
+                  {deletePending ? "Deleting…" : "Confirm delete"}
                 </Button>
               </div>
             ) : (
@@ -543,9 +529,7 @@ function GeneralSection({
       {hasLifecycle && canLeave ? (
         <div className="flex flex-col gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-elevated/40 p-3">
           <div className="flex flex-col gap-0.5">
-            <span className="text-sm font-medium text-text-primary">
-              Leave workspace
-            </span>
+            <span className="text-sm font-medium text-text-primary">Leave workspace</span>
             <span className="text-xs text-text-muted">
               You leave this workspace and all its channels.
             </span>
@@ -568,7 +552,7 @@ function GeneralSection({
                 disabled={leavePending}
                 {...neutralAction()}
               >
-                {leavePending ? 'Leaving…' : 'Leave'}
+                {leavePending ? "Leaving…" : "Leave"}
               </Button>
             </div>
           ) : (

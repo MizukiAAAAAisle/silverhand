@@ -8,13 +8,13 @@
 //
 // `.type-test.ts` (not `.test.ts`) so vitest does not treat it as a suite; the
 // desktop typecheck validates it.
-import type { ListActivityDto, SavedMessageDto } from '@silverhand/shared';
+import type { ListActivityDto, SavedMessageDto } from "@silverhand/shared";
 import {
   attributedRowFamily,
   itemScopedList,
   type ChannelProjectionForm,
   type RegisteredChannelReadModel,
-} from './viewer-channel-removal';
+} from "./viewer-channel-removal";
 
 const noopCleanup = (): void => {};
 const noopHeld = (): string[] => [];
@@ -24,9 +24,9 @@ function _cleanupIsMandatory(): void {
   // Positive control: the real DTO is detected as conversation-attributed. If
   // `ActivityItemDto.conversation_id` regressed to optional this would fail.
   const ok: RegisteredChannelReadModel = itemScopedList<ListActivityDto>({
-    id: 'activity',
-    key: ['activity', 'all'],
-    roots: ['activity'],
+    id: "activity",
+    key: ["activity", "all"],
+    roots: ["activity"],
     cleanup: noopCleanup,
     heldChannelIds: noopHeld,
   });
@@ -34,9 +34,9 @@ function _cleanupIsMandatory(): void {
 
   // @ts-expect-error — attributed item-scoped read model without `cleanup` must not compile.
   itemScopedList<ListActivityDto>({
-    id: 'activity',
-    key: ['activity', 'all'],
-    roots: ['activity'],
+    id: "activity",
+    key: ["activity", "all"],
+    roots: ["activity"],
     heldChannelIds: noopHeld,
   });
 }
@@ -48,9 +48,9 @@ function _cleanupIsMandatory(): void {
 function _heldChannelIdsIsMandatory(): void {
   // @ts-expect-error — registered read model without `heldChannelIds` must not compile.
   itemScopedList<ListActivityDto>({
-    id: 'activity',
-    key: ['activity', 'all'],
-    roots: ['activity'],
+    id: "activity",
+    key: ["activity", "all"],
+    roots: ["activity"],
     cleanup: noopCleanup,
   });
 }
@@ -60,8 +60,8 @@ function _heldChannelIdsIsMandatory(): void {
 function _rootsAreMandatory(): void {
   // @ts-expect-error — registered read model without `roots` must not compile.
   itemScopedList<ListActivityDto>({
-    id: 'activity',
-    key: ['activity', 'all'],
+    id: "activity",
+    key: ["activity", "all"],
     cleanup: noopCleanup,
     heldChannelIds: noopHeld,
   });
@@ -71,9 +71,9 @@ function _rootsAreMandatory(): void {
 function _nonAttributedRejected(): void {
   // @ts-expect-error — items lack `conversation_id`, so TData ⊄ ConversationScopedListData.
   itemScopedList<{ items: { foo: string }[] }>({
-    id: 'bogus',
-    key: ['bogus'],
-    roots: ['bogus'],
+    id: "bogus",
+    key: ["bogus"],
+    roots: ["bogus"],
     cleanup: noopCleanup,
     heldChannelIds: noopHeld,
   });
@@ -81,9 +81,9 @@ function _nonAttributedRejected(): void {
   // @ts-expect-error — an OPTIONAL conversation_id is not attributed: the guard fires
   // only on a required field, so the entry param collapses to `never`.
   itemScopedList<{ items: { conversation_id?: string }[] }>({
-    id: 'optional-id',
-    key: ['optional-id'],
-    roots: ['optional-id'],
+    id: "optional-id",
+    key: ["optional-id"],
+    roots: ["optional-id"],
     cleanup: noopCleanup,
     heldChannelIds: noopHeld,
   });
@@ -94,9 +94,9 @@ function _nonAttributedRejected(): void {
 function _typeParamIsMandatory(): void {
   // @ts-expect-error — no explicit <Dto>: TData defaults to unknown → entry is `never`.
   itemScopedList({
-    id: 'unparameterized',
-    key: ['x'],
-    roots: ['x'],
+    id: "unparameterized",
+    key: ["x"],
+    roots: ["x"],
     cleanup: noopCleanup,
     heldChannelIds: noopHeld,
   });
@@ -110,9 +110,9 @@ function _rowFamilyNeedsBothAxes(): void {
   // discriminated union (workspace_channel arm carries workspace_id +
   // conversation_id), so it satisfies the family constraint (#task:2055).
   const ok: RegisteredChannelReadModel = attributedRowFamily<SavedMessageDto[]>({
-    id: 'saved',
-    key: ['saved'],
-    roots: ['saved'],
+    id: "saved",
+    key: ["saved"],
+    roots: ["saved"],
     cleanup: noopCleanup,
     heldChannelIds: noopHeld,
   });
@@ -120,9 +120,9 @@ function _rowFamilyNeedsBothAxes(): void {
 
   // @ts-expect-error — rows carry no `workspace_id`, so the entry param is `never`.
   attributedRowFamily<{ id: string; channel_id: string }[]>({
-    id: 'channel-only',
-    key: ['channel-only'],
-    roots: ['channel-only'],
+    id: "channel-only",
+    key: ["channel-only"],
+    roots: ["channel-only"],
     cleanup: noopCleanup,
     heldChannelIds: noopHeld,
   });
@@ -130,18 +130,18 @@ function _rowFamilyNeedsBothAxes(): void {
   // @ts-expect-error — rows carry no `channel_id`; a workspace axis alone cannot
   // name the lost channel.
   attributedRowFamily<{ id: string; workspace_id: string }[]>({
-    id: 'workspace-only',
-    key: ['workspace-only'],
-    roots: ['workspace-only'],
+    id: "workspace-only",
+    key: ["workspace-only"],
+    roots: ["workspace-only"],
     cleanup: noopCleanup,
     heldChannelIds: noopHeld,
   });
 
   // @ts-expect-error — no explicit <Dto[]>: TData defaults to unknown → `never`.
   attributedRowFamily({
-    id: 'unparameterized-family',
-    key: ['y'],
-    roots: ['y'],
+    id: "unparameterized-family",
+    key: ["y"],
+    roots: ["y"],
     cleanup: noopCleanup,
     heldChannelIds: noopHeld,
   });
@@ -154,13 +154,13 @@ function _localAssertNever(x: never): never {
 }
 function _dispatchMustBeExhaustive(form: ChannelProjectionForm): void {
   switch (form) {
-    case 'conversation-keyed':
+    case "conversation-keyed":
       return;
-    case 'item-scoped-list':
+    case "item-scoped-list":
       return;
-    case 'attributed-row-family':
+    case "attributed-row-family":
       return;
-    case 'opaque-reference-family':
+    case "opaque-reference-family":
       return;
     // 'record-keyed-map' intentionally omitted to prove the mechanism:
     default:

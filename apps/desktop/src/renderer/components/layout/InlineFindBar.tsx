@@ -1,9 +1,6 @@
-import { type KeyboardEvent, useCallback } from 'react';
-import { ChevronDown, ChevronUp, Search, X } from 'lucide-react';
-import {
-  type InlineFindController,
-  inlineFindKeyAction,
-} from '@/features/search/useInlineFind';
+import { type KeyboardEvent, useCallback } from "react";
+import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
+import { type InlineFindController, inlineFindKeyAction } from "@/features/search/useInlineFind";
 
 /**
  * The fixed search bar for the in-conversation header find (#task:1335).
@@ -19,14 +16,13 @@ import {
 export function InlineFindBar({
   controller,
   onOpenAdvanced,
-  placeholder = 'Search this conversation',
+  placeholder = "Search this conversation",
 }: {
   controller: InlineFindController;
   onOpenAdvanced: () => void;
   placeholder?: string;
 }): JSX.Element {
-  const { query, setQuery, matchCount, truncated, activePosition, next, prev, close } =
-    controller;
+  const { query, setQuery, matchCount, truncated, activePosition, next, prev, close } = controller;
   const hasQuery = query.trim().length > 0;
   const hasMatches = matchCount > 0;
 
@@ -41,8 +37,8 @@ export function InlineFindBar({
       });
       if (!action) return;
       e.preventDefault();
-      if (action === 'next') next();
-      else if (action === 'prev') prev();
+      if (action === "next") next();
+      else if (action === "prev") prev();
       else close();
     },
     [next, prev, close],
@@ -58,7 +54,7 @@ export function InlineFindBar({
         // Bar mounts when the find opens, so autoFocus lands on it directly.
         autoFocus
         value={query}
-        onChange={e => setQuery(e.target.value)}
+        onChange={(e) => setQuery(e.target.value)}
         onKeyDown={onKeyDown}
         placeholder={placeholder}
         aria-label={placeholder}
@@ -70,12 +66,12 @@ export function InlineFindBar({
           {hasMatches ? (
             <>
               <span className="text-text-primary">{activePosition}</span>
-              {' / '}
+              {" / "}
               {matchCount}
-              {truncated ? '+' : ''}
+              {truncated ? "+" : ""}
             </>
           ) : (
-            'No results'
+            "No results"
           )}
         </span>
       ) : null}

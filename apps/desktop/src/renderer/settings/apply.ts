@@ -1,4 +1,4 @@
-import type { AppearanceSettings } from './types';
+import type { AppearanceSettings } from "./types";
 
 /** CSS custom property names that hold user Appearance overrides.
  *
@@ -16,9 +16,9 @@ import type { AppearanceSettings } from './types';
  *  tokens still let each theme set divergent defaults, but the user
  *  override applies to both at once). */
 export const APPEARANCE_TOKENS = {
-  PROSE_FONT: '--appearance-prose-font',
-  CODE_FONT: '--appearance-code-font',
-  MARKDOWN_FONT_SIZE: '--appearance-markdown-font-size',
+  PROSE_FONT: "--appearance-prose-font",
+  CODE_FONT: "--appearance-code-font",
+  MARKDOWN_FONT_SIZE: "--appearance-markdown-font-size",
 } as const;
 
 /** Minimum surface needed to apply / clear CSS custom properties.
@@ -48,15 +48,11 @@ export function applyAppearanceOverrides(
   setOrRemove(target, APPEARANCE_TOKENS.MARKDOWN_FONT_SIZE, sharedSize);
 }
 
-function setOrRemove(
-  target: AppearanceStyleTarget,
-  prop: string,
-  value: string | undefined,
-): void {
+function setOrRemove(target: AppearanceStyleTarget, prop: string, value: string | undefined): void {
   if (value === undefined) target.removeProperty(prop);
   else target.setProperty(prop, value);
 }
 
 function sizePx(n: number | undefined): string | undefined {
-  return typeof n === 'number' ? `${n}px` : undefined;
+  return typeof n === "number" ? `${n}px` : undefined;
 }

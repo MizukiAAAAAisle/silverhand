@@ -45,20 +45,17 @@
  * reference back to `#conv:<id>` on each invalidation of the list. Same
  * `ready > resolving` precedence as `projectDirectPairPane`.
  */
-import type { ConversationRef, DirectPairListItem } from '@silverhand/shared';
+import type { ConversationRef, DirectPairListItem } from "@silverhand/shared";
 import {
   useConversationById,
   type ConversationByIdResult,
-} from '@/features/conversations/useConversationById';
-import {
-  useDirectPairsList,
-  type DirectPairListQueryFacts,
-} from '@/features/direct-pairs/hooks';
-import { presentCounterpart } from '@/features/direct-pairs/counterpart-presentation';
+} from "@/features/conversations/useConversationById";
+import { useDirectPairsList, type DirectPairListQueryFacts } from "@/features/direct-pairs/hooks";
+import { presentCounterpart } from "@/features/direct-pairs/counterpart-presentation";
 import {
   directPairPaneDescriptor,
   type ConversationPaneDescriptor,
-} from '@/features/conversations/pane-descriptor';
+} from "@/features/conversations/pane-descriptor";
 
 /** A resolved conversation id, discriminated by the face that resolved it. Two
  *  arms rather than one widened record: a `direct_pair` has no workspace
@@ -66,8 +63,8 @@ import {
  *  shape would make both halves optional and let an impossible pair through
  *  (the narrowing #task:2038 B1 spent a commit removing from the wire DTO). */
 export type ConversationIdentity =
-  | { placement: 'workspace'; ref: ConversationRef }
-  | { placement: 'direct_pair'; pair: DirectPairListItem };
+  | { placement: "workspace"; ref: ConversationRef }
+  | { placement: "direct_pair"; pair: DirectPairListItem };
 
 /**
  * The FIVE things a conversation id can turn out to be, from the renderer's side.
@@ -87,18 +84,18 @@ export type ConversationIdentity =
  *    false claim about deletion).
  */
 export type ConversationIdentityStatus =
-  | 'loading'
-  | 'resolved'
-  | 'unauthorized'
-  | 'not_found'
-  | 'unresolved';
+  | "loading"
+  | "resolved"
+  | "unauthorized"
+  | "not_found"
+  | "unresolved";
 
 export type ConversationIdentityResolution =
-  | { status: 'resolved'; identity: ConversationIdentity }
-  | { status: 'loading' }
-  | { status: 'unauthorized' }
-  | { status: 'not_found' }
-  | { status: 'unresolved' };
+  | { status: "resolved"; identity: ConversationIdentity }
+  | { status: "loading" }
+  | { status: "unauthorized" }
+  | { status: "not_found" }
+  | { status: "unresolved" };
 
 /** Pure composition of the two faces. `id` is needed because the private-line
  *  face is a LIST: the caller may not pre-look-up the row, or the lookup rule
@@ -108,30 +105,28 @@ export function resolveConversationIdentity(
   workspaceFace: ConversationByIdResult,
   pairFacts: DirectPairListQueryFacts,
 ): ConversationIdentityResolution {
-  const pair = pairFacts.rows?.find(p => p.conversation_id === id);
+  const pair = pairFacts.rows?.find((p) => p.conversation_id === id);
   if (pair) {
-    return { status: 'resolved', identity: { placement: 'direct_pair', pair } };
+    return { status: "resolved", identity: { placement: "direct_pair", pair } };
   }
-  if (workspaceFace.status === 'resolved' && workspaceFace.ref) {
+  if (workspaceFace.status === "resolved" && workspaceFace.ref) {
     return {
-      status: 'resolved',
-      identity: { placement: 'workspace', ref: workspaceFace.ref },
+      status: "resolved",
+      identity: { placement: "workspace", ref: workspaceFace.ref },
     };
   }
-  if (workspaceFace.status === 'unauthorized') return { status: 'unauthorized' };
-  if (workspaceFace.status === 'loading') return { status: 'loading' };
+  if (workspaceFace.status === "unauthorized") return { status: "unauthorized" };
+  if (workspaceFace.status === "loading") return { status: "loading" };
   // The workspace arm has SETTLED without naming it: either a 404 (the correct
   // answer for a private line) or a failed read (`unresolved`). Either way the
   // pair face decides what we are allowed to claim, and absence is decisive only
   // once it has ANSWERED.
-  if (pairFacts.isPending || pairFacts.isFetching) return { status: 'loading' };
-  if (pairFacts.isError) return { status: 'unresolved' };
+  if (pairFacts.isPending || pairFacts.isFetching) return { status: "loading" };
+  if (pairFacts.isError) return { status: "unresolved" };
   // Both faces settled without a row. Only a 404 — an actual answer — licenses
   // the claim about existence; a failed workspace read leaves us with nothing
   // proven, so it must not borrow the pair list's completeness contract.
-  return workspaceFace.status === 'not_found'
-    ? { status: 'not_found' }
-    : { status: 'unresolved' };
+  return workspaceFace.status === "not_found" ? { status: "not_found" } : { status: "unresolved" };
 }
 
 /**
@@ -150,17 +145,13 @@ export function resolveConversationIdentity(
  * `id === null` reads as `loading`, matching {@link useConversationById}: the
  * caller has nothing to resolve yet and no surface renders a state for it.
  */
-export function useConversationIdentity(
-  id: string | null,
-): ConversationIdentityResolution {
+export function useConversationIdentity(id: string | null): ConversationIdentityResolution {
   const pairs = useDirectPairsList();
   const rows = pairs.data?.direct_pairs;
   const heldPair =
-    id !== null && rows !== undefined
-      ? rows.some(p => p.conversation_id === id)
-      : false;
+    id !== null && rows !== undefined ? rows.some((p) => p.conversation_id === id) : false;
   const workspaceFace = useConversationById(heldPair ? null : id);
-  if (id === null) return { status: 'loading' };
+  if (id === null) return { status: "loading" };
   return resolveConversationIdentity(id, workspaceFace, {
     rows,
     isPending: pairs.isPending,
@@ -181,7 +172,7 @@ export function useConversationIdentity(
 export function conversationPaneDescriptorFromIdentity(
   identity: ConversationIdentity,
 ): ConversationPaneDescriptor {
-  if (identity.placement === 'direct_pair') {
+  if (identity.placement === "direct_pair") {
     return directPairPaneDescriptor(
       identity.pair,
       presentCounterpart(identity.pair.counterpart).label,
@@ -191,7 +182,7 @@ export function conversationPaneDescriptorFromIdentity(
   return {
     id: ref.id,
     title: ref.title,
-    placement_kind: 'workspace',
+    placement_kind: "workspace",
     roster_policy: ref.roster_policy,
     closed_at: ref.closed_at,
     archived_at: ref.archived_at,

@@ -1,4 +1,4 @@
-import type { WorkspaceRole } from '@silverhand/shared';
+import type { WorkspaceRole } from "@silverhand/shared";
 
 /**
  * Renderer mirror of the backend workspace-governance gate (`canGovernWorkspace`
@@ -23,13 +23,13 @@ import type { WorkspaceRole } from '@silverhand/shared';
 
 /** Rename is admin-or-owner (the `'admin'` threshold — owner outranks admin). */
 export function canRenameWorkspace(role: WorkspaceRole | null): boolean {
-  return role === 'owner' || role === 'admin';
+  return role === "owner" || role === "admin";
 }
 
 /** Archive and Delete are both owner-only — the two lifecycle writes share one
  *  backend gate, so they share one predicate here. */
 export function canManageWorkspaceLifecycle(role: WorkspaceRole | null): boolean {
-  return role === 'owner';
+  return role === "owner";
 }
 
 /** Leave is SELF-removal: any non-owner member removes themselves (member ∨
@@ -40,5 +40,5 @@ export function canManageWorkspaceLifecycle(role: WorkspaceRole | null): boolean
  *  lifecycle-manage are complementary over any non-null role: owner deletes,
  *  everyone else leaves. */
 export function canLeaveWorkspace(role: WorkspaceRole | null): boolean {
-  return role === 'member' || role === 'admin';
+  return role === "member" || role === "admin";
 }

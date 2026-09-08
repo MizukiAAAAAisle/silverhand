@@ -1,13 +1,13 @@
-import { useEffect, useState } from 'react';
-import { useViewerWorkspacesSync } from '@/features/workspaces/hooks';
-import { useDirectPairsSync } from '@/features/direct-pairs/hooks';
-import { usePresenceSync } from '@/features/presence/hooks';
-import { useAgentSync } from '@/features/agents/agent-sync';
-import { useUserSync } from '@/features/users/user-sync';
-import { useHostConnectionSync } from '@/features/hosts/host-connection-sync';
-import { useConversationIngestor } from '@/features/realtime/conversation-ingestor';
-import { useViewerUnreadIngestor } from '@/features/realtime/viewer-unread-ingestor';
-import { cleanupAllComposerDrafts } from '@/lib/composer-draft-cache';
+import { useEffect, useState } from "react";
+import { useViewerWorkspacesSync } from "@/features/workspaces/hooks";
+import { useDirectPairsSync } from "@/features/direct-pairs/hooks";
+import { usePresenceSync } from "@/features/presence/hooks";
+import { useAgentSync } from "@/features/agents/agent-sync";
+import { useUserSync } from "@/features/users/user-sync";
+import { useHostConnectionSync } from "@/features/hosts/host-connection-sync";
+import { useConversationIngestor } from "@/features/realtime/conversation-ingestor";
+import { useViewerUnreadIngestor } from "@/features/realtime/viewer-unread-ingestor";
+import { cleanupAllComposerDrafts } from "@/lib/composer-draft-cache";
 
 // App-shell orchestration effects, lifted out of `RegisteredAppShell` so the
 // shell stays a thin composition root. Each hook preserves the exact call
@@ -66,7 +66,7 @@ export function useAppShellGlobalSync(): void {
 export function useShutdownProgress(): string | null {
   const [shutdownStep, setShutdownStep] = useState<string | null>(null);
   useEffect(() => {
-    return window.silverhand.onShutdownProgress(step => setShutdownStep(step));
+    return window.silverhand.onShutdownProgress((step) => setShutdownStep(step));
   }, []);
   return shutdownStep;
 }
@@ -75,9 +75,9 @@ export function useShutdownProgress(): string | null {
 export function useComposerDraftCleanup(): void {
   useEffect(() => {
     const cleanup = (): void => cleanupAllComposerDrafts();
-    window.addEventListener('beforeunload', cleanup);
+    window.addEventListener("beforeunload", cleanup);
     return () => {
-      window.removeEventListener('beforeunload', cleanup);
+      window.removeEventListener("beforeunload", cleanup);
     };
   }, []);
 }
@@ -122,12 +122,12 @@ export function useLayoutKeyboardShortcuts(
     if (!enabled) return;
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-      if (event.code !== 'Backslash') return;
+      if (event.code !== "Backslash") return;
       event.preventDefault();
       toggleWorkspaceSidebar();
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, [enabled, toggleWorkspaceSidebar]);
 }
 

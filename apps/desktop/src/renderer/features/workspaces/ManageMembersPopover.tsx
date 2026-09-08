@@ -1,38 +1,32 @@
-import { useMemo, useState, type ReactNode } from 'react';
-import { Trash2 } from 'lucide-react';
-import type { AgentDto, WorkspaceRole } from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { ApiError } from '@/lib/api';
-import { parseApiErrorBody } from '@/lib/api-error-message';
-import { useAgents } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
-import { useUsers } from '@/features/users/hooks';
-import { MemberCandidatePicker } from './MemberCandidatePicker';
-import type {
-  MemberCandidate,
-  MemberCandidateGroup,
-} from './member-search';
+import { useMemo, useState, type ReactNode } from "react";
+import { Trash2 } from "lucide-react";
+import type { AgentDto, WorkspaceRole } from "@silverhand/shared";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { ApiError } from "@/lib/api";
+import { parseApiErrorBody } from "@/lib/api-error-message";
+import { useAgents } from "@/features/agents/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
+import { useUsers } from "@/features/users/hooks";
+import { MemberCandidatePicker } from "./MemberCandidatePicker";
+import type { MemberCandidate, MemberCandidateGroup } from "./member-search";
 import {
   useAddWorkspaceMember,
   useWorkspaceMemberLists,
   useRemoveWorkspaceMember,
   useRemoveWorkspaceHumanMember,
   type WorkspaceHumanMember,
-} from './hooks';
+} from "./hooks";
 
 type Candidate = MemberCandidate;
 
-type Member =
-  | { kind: 'agent'; agent: AgentDto }
-  | { kind: 'human'; user: WorkspaceHumanMember };
+type Member = { kind: "agent"; agent: AgentDto } | { kind: "human"; user: WorkspaceHumanMember };
 
 /** Membership controls retain per-kind, per-verb governance from the workspace roster. */
 export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }): JSX.Element {
-  const { data: memberLists, isLoading: membersLoading } =
-    useWorkspaceMemberLists(workspaceId);
+  const { data: memberLists, isLoading: membersLoading } = useWorkspaceMemberLists(workspaceId);
   const agentMembers = memberLists?.agents ?? [];
   const humanMembers = memberLists?.humans ?? [];
   const agentAvatarUrls = useAgentAvatarObjectUrls(agentMembers);
@@ -45,7 +39,7 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
   // Agents narrowed by the backend contract, not client-side: `?scope=owned`
   // returns only agents this viewer created (`GET /api/agents`, #task:1256),
   // and "whose agent is mine" is defined there so desktop and CLI agree.
-  const { data: agents = [] } = useAgents({ scope: 'owned' });
+  const { data: agents = [] } = useAgents({ scope: "owned" });
   const { data: users = [] } = useUsers();
   const addMember = useAddWorkspaceMember(workspaceId);
   const removeMember = useRemoveWorkspaceMember(workspaceId);
@@ -62,25 +56,16 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
   // `role_changed`, so these flags re-light live after a promotion.
   const viewerRole = memberLists?.viewerRole ?? null;
   const canAddOwnAgents = viewerRole !== null;
-  const canAddHumans = viewerRole === 'owner' || viewerRole === 'admin';
-  const canRemoveHumans = viewerRole === 'owner';
+  const canAddHumans = viewerRole === "owner" || viewerRole === "admin";
+  const canRemoveHumans = viewerRole === "owner";
   const canAddAny = canAddOwnAgents || canAddHumans;
 
-  const ownedAgentIds = useMemo(
-    () => new Set(agents.map(a => a.id)),
-    [agents],
-  );
+  const ownedAgentIds = useMemo(() => new Set(agents.map((a) => a.id)), [agents]);
   const canRemoveAgent = (agentId: string): boolean =>
     canRemoveWorkspaceAgent(viewerRole, ownedAgentIds, agentId);
 
-  const agentMemberIds = useMemo(
-    () => new Set(agentMembers.map(m => m.id)),
-    [agentMembers],
-  );
-  const humanMemberIds = useMemo(
-    () => new Set(humanMembers.map(h => h.id)),
-    [humanMembers],
-  );
+  const agentMemberIds = useMemo(() => new Set(agentMembers.map((m) => m.id)), [agentMembers]);
+  const humanMemberIds = useMemo(() => new Set(humanMembers.map((h) => h.id)), [humanMembers]);
 
   // Candidate pool, grouped, agents first (shiki 2026-07-27): every human,
   // plus ONLY the agents the viewer created. Someone else's agent is not
@@ -91,33 +76,26 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
   const candidateGroups = useMemo<MemberCandidateGroup[]>(() => {
     const agentItems: Candidate[] = canAddOwnAgents
       ? agents
-          .filter(a => !agentMemberIds.has(a.id))
-          .map(a => ({ kind: 'agent' as const, agent: a }))
+          .filter((a) => !agentMemberIds.has(a.id))
+          .map((a) => ({ kind: "agent" as const, agent: a }))
       : [];
     const humanItems: Candidate[] = canAddHumans
       ? users
-          .filter(u => !humanMemberIds.has(u.id))
-          .map(u => ({ kind: 'human' as const, user: u }))
+          .filter((u) => !humanMemberIds.has(u.id))
+          .map((u) => ({ kind: "human" as const, user: u }))
       : [];
     return [
-      { label: 'AGENTS', items: agentItems },
-      { label: 'HUMANS', items: humanItems },
+      { label: "AGENTS", items: agentItems },
+      { label: "HUMANS", items: humanItems },
     ];
-  }, [
-    agents,
-    users,
-    agentMemberIds,
-    humanMemberIds,
-    canAddOwnAgents,
-    canAddHumans,
-  ]);
+  }, [agents, users, agentMemberIds, humanMemberIds, canAddOwnAgents, canAddHumans]);
 
   // Flat member list (everyone currently enrolled). Agents first, then
   // humans — same ordering contract as the picker, without its labels.
   const members = useMemo<Member[]>(() => {
     const list: Member[] = [];
-    for (const a of agentMembers) list.push({ kind: 'agent', agent: a });
-    for (const u of humanMembers) list.push({ kind: 'human', user: u });
+    for (const a of agentMembers) list.push({ kind: "agent", agent: a });
+    for (const u of humanMembers) list.push({ kind: "human", user: u });
     return list;
   }, [agentMembers, humanMembers]);
 
@@ -125,9 +103,9 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
     setError(null);
     try {
       await addMember.mutateAsync(
-        candidate.kind === 'agent'
-          ? { kind: 'agent', agent_id: candidate.agent.id }
-          : { kind: 'human', user_id: candidate.user.id },
+        candidate.kind === "agent"
+          ? { kind: "agent", agent_id: candidate.agent.id }
+          : { kind: "human", user_id: candidate.user.id },
       );
     } catch (err) {
       setError(formatAddError(err));
@@ -155,21 +133,21 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
   return (
     <div className="flex flex-col gap-3">
       {/* Add-member picker — only when the viewer can add at least one kind.
-        * Picking a row fires the mutation immediately and clears the query,
-        * so enrolling several members in a row is type-Enter-type-Enter.
-        * A plain member can only add their own agents, so both the label and
-        * the empty hint say agents rather than members. */}
+       * Picking a row fires the mutation immediately and clears the query,
+       * so enrolling several members in a row is type-Enter-type-Enter.
+       * A plain member can only add their own agents, so both the label and
+       * the empty hint say agents rather than members. */}
       {canAddAny ? (
         <MemberCandidatePicker
           mode="floating"
           groups={candidateGroups}
-          onPick={c => void onPick(c)}
+          onPick={(c) => void onPick(c)}
           disabled={addMember.isPending}
-          ariaLabel={canAddHumans ? 'Add member' : 'Add agent'}
+          ariaLabel={canAddHumans ? "Add member" : "Add agent"}
           emptyHint={
             canAddHumans
-              ? 'Everyone is already in this workspace'
-              : 'You have no agents left to add'
+              ? "Everyone is already in this workspace"
+              : "You have no agents left to add"
           }
         />
       ) : null}
@@ -181,11 +159,11 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
           <Hint>No members yet</Hint>
         ) : (
           <ul className="flex flex-col gap-1">
-            {members.map(m => {
-              const id = m.kind === 'agent' ? m.agent.id : m.user.id;
-              const handle = m.kind === 'agent' ? m.agent.name : m.user.name;
+            {members.map((m) => {
+              const id = m.kind === "agent" ? m.agent.id : m.user.id;
+              const handle = m.kind === "agent" ? m.agent.name : m.user.name;
               const displayName =
-                m.kind === 'agent'
+                m.kind === "agent"
                   ? m.agent.display_name || m.agent.name
                   : m.user.display_name || m.user.name;
               return (
@@ -193,7 +171,7 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
                   key={`${m.kind}:${id}`}
                   className="flex h-8 items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2"
                 >
-                  {m.kind === 'agent' ? (
+                  {m.kind === "agent" ? (
                     <AgentAvatar
                       runtime={m.agent.runtime}
                       size={AVATAR_PX.sm}
@@ -216,9 +194,9 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
                     </span>
                   </span>
                   {/* Agent remove (DELETE …/members/:agentId): admin+ for the
-                    * whole roster, and any member for an agent they created —
-                    * the symmetric half of enrolling it (#task:1683). */}
-                  {m.kind === 'agent' && canRemoveAgent(m.agent.id) ? (
+                   * whole roster, and any member for an agent they created —
+                   * the symmetric half of enrolling it (#task:1683). */}
+                  {m.kind === "agent" && canRemoveAgent(m.agent.id) ? (
                     <button
                       type="button"
                       onClick={() => handleRemove(m.agent.id)}
@@ -231,12 +209,10 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
                     </button>
                   ) : null}
                   {/* Human remove is owner-only (DELETE …/members/users/:userId).
-                    * The owner row never renders it — UI mirror of the backend
-                    * `owner_removal_unsupported`, so removing an owner can't even
-                    * be attempted. */}
-                  {m.kind === 'human' &&
-                  canRemoveHumans &&
-                  m.user.role !== 'owner' ? (
+                   * The owner row never renders it — UI mirror of the backend
+                   * `owner_removal_unsupported`, so removing an owner can't even
+                   * be attempted. */}
+                  {m.kind === "human" && canRemoveHumans && m.user.role !== "owner" ? (
                     <button
                       type="button"
                       onClick={() => handleRemoveHuman(m.user.user_id)}
@@ -255,9 +231,7 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
         )}
       </Section>
 
-      {error ? (
-        <div className="text-xs text-error">{error}</div>
-      ) : null}
+      {error ? <div className="text-xs text-error">{error}</div> : null}
     </div>
   );
 }
@@ -277,19 +251,20 @@ function formatAddError(err: unknown): string {
     // names the creator rather than a step the reader may not be able to take
     // (adding that creator to the workspace is itself `admin` governance), and
     // never an admin, who collects the identical refusal here (#task:1683).
-    if (code === 'agent_not_owned') {
+    if (code === "agent_not_owned") {
       return "You can only add agents you created. Someone else's can be brought in only by its creator.";
     }
-    if (err.status === 403) return 'You do not have permission to manage members of this workspace.';
+    if (err.status === 403)
+      return "You do not have permission to manage members of this workspace.";
     if (err.status === 404) {
-      if (detail === 'user not found') return 'This user does not exist or has been deleted.';
-      if (detail === 'agent not found') return 'This agent does not exist or has been deleted.';
-      return 'This workspace does not exist.';
+      if (detail === "user not found") return "This user does not exist or has been deleted.";
+      if (detail === "agent not found") return "This agent does not exist or has been deleted.";
+      return "This workspace does not exist.";
     }
-    if (err.status === 400) return 'Invalid parameters. Please refresh and try again.';
+    if (err.status === 400) return "Invalid parameters. Please refresh and try again.";
     return `Failed to add member (HTTP ${err.status}).`;
   }
-  return 'Failed to add member. Please try again.';
+  return "Failed to add member. Please try again.";
 }
 
 /**
@@ -302,15 +277,15 @@ function formatAddError(err: unknown): string {
 function formatRemoveAgentError(err: unknown): string {
   if (err instanceof ApiError) {
     const { code } = parseApiErrorBody(err.body);
-    if (code === 'agent_not_owned') {
-      return 'You can only remove agents you created. Ask a workspace admin for the others.';
+    if (code === "agent_not_owned") {
+      return "You can only remove agents you created. Ask a workspace admin for the others.";
     }
-    if (err.kind === 'backend_unreachable') return 'Remove failed: cannot reach the backend.';
-    if (err.status === 403) return 'You do not have permission to remove this member.';
-    if (err.status === 404) return 'This member does not exist or has already been removed.';
+    if (err.kind === "backend_unreachable") return "Remove failed: cannot reach the backend.";
+    if (err.status === 403) return "You do not have permission to remove this member.";
+    if (err.status === 404) return "This member does not exist or has already been removed.";
     return `Failed to remove member (HTTP ${err.status}).`;
   }
-  return 'Failed to remove member. Please try again.';
+  return "Failed to remove member. Please try again.";
 }
 
 /**
@@ -321,22 +296,17 @@ function formatRemoveAgentError(err: unknown): string {
  */
 function formatRemoveHumanError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.kind === 'backend_unreachable') return 'Remove failed: cannot reach the backend.';
-    if (err.status === 403) return 'You do not have permission to remove this member (owner required).';
-    if (err.status === 400) return 'Cannot remove the workspace owner.';
-    if (err.status === 404) return 'This member does not exist or has already been removed.';
+    if (err.kind === "backend_unreachable") return "Remove failed: cannot reach the backend.";
+    if (err.status === 403)
+      return "You do not have permission to remove this member (owner required).";
+    if (err.status === 400) return "Cannot remove the workspace owner.";
+    if (err.status === 404) return "This member does not exist or has already been removed.";
     return `Failed to remove member (HTTP ${err.status}).`;
   }
-  return 'Failed to remove member. Please try again.';
+  return "Failed to remove member. Please try again.";
 }
 
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}): JSX.Element {
+function Section({ title, children }: { title: string; children: ReactNode }): JSX.Element {
   return (
     <section className="flex flex-col gap-1.5">
       <div className="text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
@@ -371,6 +341,6 @@ export function canRemoveWorkspaceAgent(
   agentId: string,
 ): boolean {
   if (viewerRole === null) return false;
-  if (viewerRole === 'owner' || viewerRole === 'admin') return true;
+  if (viewerRole === "owner" || viewerRole === "admin") return true;
   return ownedAgentIds.has(agentId);
 }

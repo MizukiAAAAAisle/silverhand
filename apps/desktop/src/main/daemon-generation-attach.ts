@@ -1,4 +1,4 @@
-import { HostClientError, type HostClient } from '@silverhand/host';
+import { HostClientError, type HostClient } from "@silverhand/host";
 
 export interface WaitForDaemonGenerationOptions {
   /** Hard deadline for the wait, in ms. Default 5000. The supervisor's
@@ -14,7 +14,7 @@ export interface WaitForDaemonGenerationOptions {
 
 export type WaitForDaemonGenerationResult =
   | { ok: true }
-  | { ok: false; reason: 'timeout' | 'client_closed' | 'connect_failed'; error?: Error };
+  | { ok: false; reason: "timeout" | "client_closed" | "connect_failed"; error?: Error };
 
 export function waitForDaemonGeneration(
   client: HostClient,
@@ -24,7 +24,7 @@ export function waitForDaemonGeneration(
   const timeoutMs = opts.timeoutMs ?? 5_000;
   const setTimer = opts.setTimer ?? defaultSetTimer;
 
-  return new Promise<WaitForDaemonGenerationResult>(resolve => {
+  return new Promise<WaitForDaemonGenerationResult>((resolve) => {
     let settled = false;
     let unsubscribe: (() => void) | null = null;
 
@@ -41,7 +41,7 @@ export function waitForDaemonGeneration(
     // the hard deadline. Pre-this-fix the timer only armed after
     // connect() resolved, defeating the helper's own contract.
     const timer = setTimer(() => {
-      settle({ ok: false, reason: 'timeout' });
+      settle({ ok: false, reason: "timeout" });
     }, timeoutMs);
 
     // Subscribe to reconnect BEFORE kicking connect() so any
@@ -84,12 +84,12 @@ export function waitForDaemonGeneration(
         }
         // Otherwise keep waiting on reconnect / timer.
       },
-      err => {
+      (err) => {
         if (settled) return;
         const reason =
-          err instanceof HostClientError && err.code === 'closed'
-            ? 'client_closed'
-            : 'connect_failed';
+          err instanceof HostClientError && err.code === "closed"
+            ? "client_closed"
+            : "connect_failed";
         settle({ ok: false, reason, error: err as Error });
       },
     );

@@ -17,7 +17,7 @@ import type {
   ConversationRosterPolicy,
   DirectPairCounterpart,
   DirectPairListItem,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 
 export interface ConversationPaneDescriptor {
   id: string;
@@ -79,8 +79,8 @@ export function directPairPaneDescriptor(
   return {
     id: pair.conversation_id,
     title: label,
-    placement_kind: 'direct_pair',
-    roster_policy: 'fixed',
+    placement_kind: "direct_pair",
+    roster_policy: "fixed",
     closed_at: null,
     archived_at: null,
     workspace_id: null,

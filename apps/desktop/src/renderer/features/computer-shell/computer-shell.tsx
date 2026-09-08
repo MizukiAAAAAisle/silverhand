@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
-import { useBackendInfoSnapshot, useHostsQuery } from '@/features/hosts/hooks';
-import { NewComputerDialog } from '@/features/hosts/NewComputerDialog';
-import { DirectoryShell, type DirectoryLifecycle } from '@/components/layout/directory-shell';
-import { ComputerSidebarShell } from './computer-sidebar-shell';
-import { ComputerDetailPage } from './computer-detail-page';
-import { resolveComputerSelection } from './selection';
+import { useEffect, useState } from "react";
+import { useBackendInfoSnapshot, useHostsQuery } from "@/features/hosts/hooks";
+import { NewComputerDialog } from "@/features/hosts/NewComputerDialog";
+import { DirectoryShell, type DirectoryLifecycle } from "@/components/layout/directory-shell";
+import { ComputerSidebarShell } from "./computer-sidebar-shell";
+import { ComputerDetailPage } from "./computer-detail-page";
+import { resolveComputerSelection } from "./selection";
 
 export function ComputerShell({ mounted, visible }: DirectoryLifecycle): JSX.Element {
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);

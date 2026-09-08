@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useState } from 'react';
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { z } from 'zod';
+import { useCallback, useMemo, useState } from "react";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { z } from "zod";
 import {
   HostCancelPendingResponseSchema,
   HostCreateResponseSchema,
@@ -32,55 +32,51 @@ import {
   type HostStatusResponse,
   type RuntimeCatalogResponse,
   type UpdateHostInput,
-} from '@silverhand/shared';
-import type { LocalHostWsAttachment } from '../../../preload/api';
-import { api, ApiError } from '@/lib/api';
-import { rejectHostLabel } from './host-label';
+} from "@silverhand/shared";
+import type { LocalHostWsAttachment } from "../../../preload/api";
+import { api, ApiError } from "@/lib/api";
+import { rejectHostLabel } from "./host-label";
 
 // Re-export the shared proxy DTO so feature consumers (HostDetailView) keep a
 // single import surface off this hooks module without reaching past it — the
 // *type* still originates from `@silverhand/shared` (single source), we just
 // forward it.
-export type { HostProxyConfig } from '@silverhand/shared';
+export type { HostProxyConfig } from "@silverhand/shared";
 
-export const hostsKey = ['hosts'] as const;
-export const hostByIdKey = (hostId: string) => ['host', hostId] as const;
-export const backendInfoKey = ['backend-info'] as const;
+export const hostsKey = ["hosts"] as const;
+export const hostByIdKey = (hostId: string) => ["host", hostId] as const;
+export const backendInfoKey = ["backend-info"] as const;
 /** Per-host dynamic-status query key. Each host gets its own cache entry
  *  so the manual-refresh button on `HostDetailView` only revalidates that
  *  one host's snapshot (registration view + daemon-derived facts), never
  *  the whole host list. */
-export const hostStatusKey = (hostId: string) =>
-  ['host-status', hostId] as const;
+export const hostStatusKey = (hostId: string) => ["host-status", hostId] as const;
 /** Prefixes of the two per-host caches that embed agent identity
  *  (`AgentOnHostDto.display_name` / `HostAgentResource.display_name`).
  *  Exported for the identity-carrier registry, which reseats every cached
  *  computer's copy on an `agent_changed` and has no host id in hand
  *  (`features/identity/identity-carrier-caches.ts`). */
-export const hostStatusKeyPrefix = ['host-status'] as const;
-export const hostProxyConfigKey = (hostId: string) =>
-  ['host-proxy-config', hostId] as const;
+export const hostStatusKeyPrefix = ["host-status"] as const;
+export const hostProxyConfigKey = (hostId: string) => ["host-proxy-config", hostId] as const;
 /** #task:1618 — per-computer PERSISTENT-OWNERSHIP query key (`/resources`).
  *  Deliberately separate from {@link hostStatusKey}: that one caches dynamic
  *  availability and is invalidated by attach/detach/liveness events, which say
  *  nothing about which agents and workspaces are rooted here. Sharing one key
  *  would make a disconnect event refetch ownership (pointless) and an agent
  *  creation leave the availability cache untouched (wrong). */
-export const hostResourcesKey = (hostId: string) =>
-  ['host-resources', hostId] as const;
+export const hostResourcesKey = (hostId: string) => ["host-resources", hostId] as const;
 /** @see hostStatusKeyPrefix */
-export const hostResourcesKeyPrefix = ['host-resources'] as const;
+export const hostResourcesKeyPrefix = ["host-resources"] as const;
 /** Per-host runtime-detection catalog query key. Each computer's installed
  *  runtimes are host-local truth (the daemon resolves them on that machine),
  *  so the catalog is cached per host and never shared across computers. */
-export const hostRuntimeCatalogKey = (hostId: string) =>
-  ['host-runtime-catalog', hostId] as const;
+export const hostRuntimeCatalogKey = (hostId: string) => ["host-runtime-catalog", hostId] as const;
 
 export interface BackendInfoSnapshot {
   /** Deployment mode of the active backend handle. Remote Settings saves must
    * update the persisted profile + renderer backend handle, not only the
    * daemon's outbound config. */
-  mode: 'embedded' | 'remote';
+  mode: "embedded" | "remote";
   /** D3.c Commit 4 — embedded backend's listen URL (where the
    *  renderer's HTTP API calls go). Used as fallback display when
    *  `local_host_server_url` is null (pre-claim). NOT the value
@@ -88,21 +84,18 @@ export interface BackendInfoSnapshot {
   url: string;
   outbound_protocol_compatibility:
     | {
-        status:
-          | 'compatible'
-          | 'app_update_required'
-          | 'server_update_required';
+        status: "compatible" | "app_update_required" | "server_update_required";
         app_protocol_version: number;
         server_protocol_version: number;
       }
     | {
-        status: 'unknown';
+        status: "unknown";
         app_protocol_version: number;
         server_protocol_version: null;
       }
     | null;
   local_host_id: string | null;
-  local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
+  local_host_status: "unclaimed" | "claimed" | "revoked" | "error" | "failed";
   /**
    * D3.a Commit 4 / #task:1630 — the daemon outbound WS attachment as
    * seen from the desktop main process. `{ observable: false }` in remote
@@ -128,7 +121,7 @@ export interface BackendInfoSnapshot {
 }
 
 async function fetchHosts(): Promise<HostListResponse> {
-  const raw = await api<unknown>('/api/hosts');
+  const raw = await api<unknown>("/api/hosts");
   return HostListResponseSchema.parse(raw);
 }
 
@@ -159,8 +152,8 @@ async function fetchHosts(): Promise<HostListResponse> {
  */
 export class BackendInfoUnavailableError extends Error {
   constructor() {
-    super('backend:info returned no snapshot (no backend handle yet)');
-    this.name = 'BackendInfoUnavailableError';
+    super("backend:info returned no snapshot (no backend handle yet)");
+    this.name = "BackendInfoUnavailableError";
   }
 }
 
@@ -213,9 +206,8 @@ export function useBackendInfoSnapshot(options?: {
     // reachability. Mark it neutral so `useBackendUnreachableSnitch`
     // ignores it — otherwise the protocol-compatibility poll below would
     // clear a legitimate "Can't reach server" banner every cycle.
-    meta: { backendReachability: 'neutral' },
-    refetchInterval: query =>
-      backendInfoRefetchIntervalMs(query.state.data ?? null, options),
+    meta: { backendReachability: "neutral" },
+    refetchInterval: (query) => backendInfoRefetchIntervalMs(query.state.data ?? null, options),
     refetchOnWindowFocus: options?.pollProtocolCompatibility === true,
   });
 }
@@ -270,15 +262,13 @@ export function backendInfoRefetchIntervalMs(
     const connectingInterval = connectingRefetchIntervalMs(data);
     if (connectingInterval !== false) return connectingInterval;
   }
-  if (options?.pollProtocolCompatibility && data?.mode === 'remote') {
+  if (options?.pollProtocolCompatibility && data?.mode === "remote") {
     return PROTOCOL_COMPATIBILITY_POLL_MS;
   }
   return false;
 }
 
-export function connectingRefetchIntervalMs(
-  data: BackendInfoSnapshot | null,
-): number | false {
+export function connectingRefetchIntervalMs(data: BackendInfoSnapshot | null): number | false {
   if (!data) return false;
   const attachment = data.local_host_ws_attachment;
   // `#task:1628` / `#task:1630` — this window only exists where its exit
@@ -300,7 +290,7 @@ export function connectingRefetchIntervalMs(
   // (already connected), `revoked` / `error` / `failed` (terminal),
   // and `unclaimed` (pre-claim, nothing to attach) — stops the
   // poll loop.
-  if (data.local_host_status !== 'claimed') return false;
+  if (data.local_host_status !== "claimed") return false;
   if (attachment.attached_at !== null) return false;
   return CONNECTING_POLL_MS;
 }
@@ -336,7 +326,7 @@ export function useHostByIdQuery(
   options?: { enabled?: boolean; refetchInterval?: number | false },
 ) {
   return useQuery({
-    queryKey: hostByIdKey(hostId ?? '__none__'),
+    queryKey: hostByIdKey(hostId ?? "__none__"),
     queryFn: async (): Promise<HostDto> => {
       const raw = await api<unknown>(apiPaths.host(hostId!));
       return HostGetResponseSchema.parse(raw).host;
@@ -395,7 +385,7 @@ export function useHostStatusQuery(
   options?: { enabled?: boolean },
 ) {
   return useQuery<HostStatusResponse>({
-    ...hostStatusQueryOptions(hostId ?? '__none__'),
+    ...hostStatusQueryOptions(hostId ?? "__none__"),
     enabled: (options?.enabled ?? true) && Boolean(hostId),
   });
 }
@@ -482,7 +472,7 @@ export function foldHostAvailabilityQueries(
   results: HostAvailabilityQueryState[],
 ): HostAvailabilitySnapshot {
   return foldHostAvailability(
-    results.map(result => ({
+    results.map((result) => ({
       id: result.id,
       checking: result.isPending,
       availability: result.availability,
@@ -490,11 +480,9 @@ export function foldHostAvailabilityQueries(
   );
 }
 
-export function useHostAvailabilityMap(
-  hostIds: string[],
-): HostAvailabilitySnapshot {
+export function useHostAvailabilityMap(hostIds: string[]): HostAvailabilitySnapshot {
   const results = useQueries({
-    queries: hostIds.map(id => hostStatusQueryOptions(id)),
+    queries: hostIds.map((id) => hostStatusQueryOptions(id)),
   });
   const entries = hostIds.map((id, i) => {
     const result = results[i];
@@ -515,8 +503,8 @@ export function useHostAvailabilityMap(
   // doesn't change the settled availability leaves the signature (and the memo)
   // untouched — no re-render churn, no flicker.
   const signature = entries
-    .map(entry => `${entry.id}=${entry.isPending ? 'c' : (entry.availability ?? 'x')}`)
-    .join(';');
+    .map((entry) => `${entry.id}=${entry.isPending ? "c" : (entry.availability ?? "x")}`)
+    .join(";");
   return useMemo(
     () => foldHostAvailabilityQueries(entries),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -554,18 +542,18 @@ export interface UpdateHostMutationVars {
  */
 export function useAgentOnlineByHost(hostIds: string[]): Map<string, boolean> {
   const results = useQueries({
-    queries: hostIds.map(id => hostStatusQueryOptions(id)),
+    queries: hostIds.map((id) => hostStatusQueryOptions(id)),
   });
   // Content signature over every agent's online flag, so the memo (and Map
   // identity) only changes when a liveness bit actually flips.
   const signature = results
-    .map(r => (r.data?.agents ?? []).map(a => `${a.agent_id}:${a.online}`).join(','))
-    .join('|');
+    .map((r) => (r.data?.agents ?? []).map((a) => `${a.agent_id}:${a.online}`).join(","))
+    .join("|");
   return useMemo(() => {
     const map = new Map<string, boolean>();
     for (const r of results) {
       for (const a of r.data?.agents ?? []) {
-        map.set(a.agent_id, a.online === 'online');
+        map.set(a.agent_id, a.online === "online");
       }
     }
     return map;
@@ -600,7 +588,7 @@ export function useUpdateHostMutation(hostId: string) {
       if (rejection) throw new Error(rejection);
       const body: UpdateHostInput = UpdateHostInputSchema.parse(vars);
       const raw = await api<unknown>(apiPaths.host(hostId), {
-        method: 'PATCH',
+        method: "PATCH",
         body: JSON.stringify(body),
       });
       const parsed = z.object({ host: HostDtoSchema }).parse(raw);
@@ -625,13 +613,8 @@ export function useUpdateHostMutation(hostId: string) {
  *  hook — mirrors `interpretDeleteComputerError`. */
 export function isHostProxyOfflineError(err: unknown): boolean {
   if (!(err instanceof ApiError)) return false;
-  const parsed = HostProxyConfigOfflineResponseSchema.safeParse(
-    safeJsonParse(err.body),
-  );
-  return (
-    parsed.success &&
-    parsed.data.error_code === HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE
-  );
+  const parsed = HostProxyConfigOfflineResponseSchema.safeParse(safeJsonParse(err.body));
+  return parsed.success && parsed.data.error_code === HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE;
 }
 
 /**
@@ -661,7 +644,7 @@ export function useHostProxyConfigQuery(
   options?: { enabled?: boolean },
 ) {
   return useQuery<HostProxyConfig>({
-    queryKey: hostProxyConfigKey(hostId ?? '__none__'),
+    queryKey: hostProxyConfigKey(hostId ?? "__none__"),
     queryFn: async () => {
       const raw = await api<unknown>(apiPaths.hostProxyConfig(hostId!));
       return HostProxyConfigResponseSchema.parse(raw).config;
@@ -685,7 +668,7 @@ export function useSaveHostProxyConfigMutation(hostId: string) {
     mutationFn: async (config: HostProxyConfig) => {
       const body = HostProxyConfigSchema.parse(config);
       const raw = await api<unknown>(apiPaths.hostProxyConfig(hostId), {
-        method: 'PUT',
+        method: "PUT",
         body: JSON.stringify(body),
       });
       return HostProxyConfigResponseSchema.parse(raw).config;
@@ -693,7 +676,7 @@ export function useSaveHostProxyConfigMutation(hostId: string) {
     // config-or-throw: a raced `computer_offline` rejects the mutation (the
     // caller shows the connect hint once); it is never written into the query
     // cache. Only a confirmed write updates the cached config.
-    onSuccess: config => {
+    onSuccess: (config) => {
       qc.setQueryData(hostProxyConfigKey(hostId), config);
     },
   });
@@ -717,7 +700,7 @@ export function useCreateComputerMutation() {
   return useMutation<HostCreateResponse, Error, void>({
     mutationFn: async () => {
       const raw = await api<unknown>(apiPaths.hosts, {
-        method: 'POST',
+        method: "POST",
         body: JSON.stringify({}),
       });
       return HostCreateResponseSchema.parse(raw);
@@ -728,9 +711,7 @@ export function useCreateComputerMutation() {
   });
 }
 
-export type RotateConnectTokenResult = z.infer<
-  typeof HostRotateTokenUserManagedResponseSchema
->;
+export type RotateConnectTokenResult = z.infer<typeof HostRotateTokenUserManagedResponseSchema>;
 
 /**
  * #task:1348 / #task:1354 — delete the user-managed computer behind an
@@ -758,7 +739,7 @@ export function useCancelPendingComputerMutation() {
   return useMutation<HostCancelPendingResponse, Error, string>({
     mutationFn: async (hostId: string) => {
       const raw = await api<unknown>(apiPaths.hostCancelPending(hostId), {
-        method: 'DELETE',
+        method: "DELETE",
       });
       return HostCancelPendingResponseSchema.parse(raw);
     },
@@ -784,7 +765,7 @@ export function useRotateConnectTokenMutation(hostId: string) {
   return useMutation<RotateConnectTokenResult, Error, void>({
     mutationFn: async () => {
       const raw = await api<unknown>(apiPaths.hostRotateConnectToken(hostId), {
-        method: 'POST',
+        method: "POST",
       });
       return HostRotateTokenUserManagedResponseSchema.parse(raw);
     },
@@ -813,7 +794,7 @@ export function useDisconnectHostMutation(hostId: string) {
   return useMutation<HostDisconnectResponse, Error, void>({
     mutationFn: async () => {
       const raw = await api<unknown>(apiPaths.hostDisconnect(hostId), {
-        method: 'POST',
+        method: "POST",
       });
       return HostDisconnectResponseSchema.parse(raw);
     },
@@ -909,7 +890,7 @@ export function useHostResourcesQuery(
   options?: { enabled?: boolean },
 ) {
   return useQuery<HostResourcesResponse>({
-    queryKey: hostResourcesKey(hostId ?? '__none__'),
+    queryKey: hostResourcesKey(hostId ?? "__none__"),
     queryFn: async () => {
       const raw = await api<unknown>(apiPaths.hostResources(hostId!));
       return HostResourcesResponseSchema.parse(raw);
@@ -937,8 +918,8 @@ export function useHostResourcesQuery(
  */
 export class ComputerHasPendingAgentsError extends Error {
   constructor(readonly pendingAgents: number) {
-    super('has_pending_agents');
-    this.name = 'ComputerHasPendingAgentsError';
+    super("has_pending_agents");
+    this.name = "ComputerHasPendingAgentsError";
   }
 }
 
@@ -975,10 +956,10 @@ export interface DeleteComputerVars {
 export function useDeleteComputerMutation(hostId: string) {
   const qc = useQueryClient();
   return useMutation<HostDeleteResponse, Error, DeleteComputerVars | void>({
-    mutationFn: async vars => {
+    mutationFn: async (vars) => {
       try {
         const raw = await api<unknown>(apiPaths.host(hostId), {
-          method: 'DELETE',
+          method: "DELETE",
           ...(vars?.cascadeDependents
             ? { body: JSON.stringify({ cascade_dependents: true }) }
             : {}),
@@ -1026,7 +1007,7 @@ export function useHostRuntimeCatalog(
   const [isReprobing, setIsReprobing] = useState(false);
   const enabled = (options?.enabled ?? true) && Boolean(hostId);
   const query = useQuery({
-    queryKey: hostRuntimeCatalogKey(hostId ?? '__none__'),
+    queryKey: hostRuntimeCatalogKey(hostId ?? "__none__"),
     enabled,
     // Installed-runtime sets change rarely; cache within a dialog session but
     // refetch on remount so reopening after an install picks it up. `reprobe`
@@ -1042,13 +1023,8 @@ export function useHostRuntimeCatalog(
     if (!hostId) return;
     setIsReprobing(true);
     try {
-      const raw = await api<unknown>(
-        `${apiPaths.hostRuntimeCatalog(hostId)}?force=1`,
-      );
-      qc.setQueryData(
-        hostRuntimeCatalogKey(hostId),
-        RuntimeCatalogResponseSchema.parse(raw),
-      );
+      const raw = await api<unknown>(`${apiPaths.hostRuntimeCatalog(hostId)}?force=1`);
+      qc.setQueryData(hostRuntimeCatalogKey(hostId), RuntimeCatalogResponseSchema.parse(raw));
     } catch {
       // Swallow: a forced re-probe failure leaves the last-known catalog (or
       // the unknown-for-all fallback) in place. Never break the dialog.
@@ -1083,9 +1059,7 @@ export function useHostRuntimeCatalog(
  */
 export function interpretDeleteComputerError(err: unknown): Error {
   if (err instanceof ApiError && err.status === 409) {
-    const pending = HostDeletePendingAgentsResponseSchema.safeParse(
-      safeJsonParse(err.body),
-    );
+    const pending = HostDeletePendingAgentsResponseSchema.safeParse(safeJsonParse(err.body));
     if (pending.success) {
       return new ComputerHasPendingAgentsError(pending.data.pending_agents);
     }

@@ -1,5 +1,5 @@
-import { useId, type ReactNode } from 'react';
-import { cn } from '@/lib/cn';
+import { useId, type ReactNode } from "react";
+import { cn } from "@/lib/cn";
 
 export interface AvatarPickerButtonProps {
   /**
@@ -82,13 +82,11 @@ export function AvatarPickerButton({
     <label
       htmlFor={inputId}
       className={cn(
-        'group relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none',
+        "group relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none",
         // Focus outline lives on the wrapper so keyboard users get a clear
         // outline when the hidden input gains focus via Tab.
-        'focus-outline-within',
-        disabled
-          ? 'pointer-events-none opacity-50'
-          : 'cursor-pointer',
+        "focus-outline-within",
+        disabled ? "pointer-events-none opacity-50" : "cursor-pointer",
         className,
       )}
       style={{ width: size, height: size }}
@@ -100,25 +98,25 @@ export function AvatarPickerButton({
         accept="image/png,image/jpeg,image/gif,image/webp"
         className="sr-only"
         disabled={disabled}
-        onChange={e => {
+        onChange={(e) => {
           const file = e.target.files?.[0] ?? null;
           // Reset so picking the same file again still fires `change`.
-          e.target.value = '';
+          e.target.value = "";
           if (file) onPick(file);
         }}
       />
       {children}
       <span
         className={cn(
-          'pointer-events-none absolute inset-x-0 bottom-0 grid place-items-center',
-          'bg-black/60 text-white',
+          "pointer-events-none absolute inset-x-0 bottom-0 grid place-items-center",
+          "bg-black/60 text-white",
           // Tight letter-spacing + a short label is mandatory: the strip
           // sits inside the square `overflow-hidden` clip, so anything
           // wider than the available width gets cut. Callers pass single
           // verbs; `ariaLabel` carries the verbose text.
-          'text-[length:var(--text-badge)] font-semibold uppercase tracking-normal',
-          'opacity-0 transition-opacity duration-100 ease-out',
-          'group-hover:opacity-100 group-focus-within:opacity-100',
+          "text-[length:var(--text-badge)] font-semibold uppercase tracking-normal",
+          "opacity-0 transition-opacity duration-100 ease-out",
+          "group-hover:opacity-100 group-focus-within:opacity-100",
         )}
         style={{
           // Bottom third reads as a label band without dominating the

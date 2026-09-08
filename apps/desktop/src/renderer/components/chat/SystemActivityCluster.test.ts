@@ -1,13 +1,13 @@
-import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { StaticRouter } from 'react-router-dom/server';
-import { describe, expect, it } from 'vitest';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { MessageDto, TaskSummaryDto } from '@silverhand/shared';
-import { decodeMessageSeq } from '@silverhand/shared';
-import { SystemActivityCluster } from './SystemActivityCluster';
-import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
-import { taskBoardCacheScope, taskByNumberKey } from '@/features/tasks/useTaskByNumber';
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { StaticRouter } from "react-router-dom/server";
+import { describe, expect, it } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { MessageDto, TaskSummaryDto } from "@silverhand/shared";
+import { decodeMessageSeq } from "@silverhand/shared";
+import { SystemActivityCluster } from "./SystemActivityCluster";
+import { TaskRefContextProvider } from "@/features/tasks/TaskRefContext";
+import { taskBoardCacheScope, taskByNumberKey } from "@/features/tasks/useTaskByNumber";
 
 /** Minimal MessageDto factory — same shape as Markdown.test's helper,
  *  duplicated locally so the cluster tests don't reach into another
@@ -15,17 +15,17 @@ import { taskBoardCacheScope, taskByNumberKey } from '@/features/tasks/useTaskBy
 function makeSystemMessage(
   subtype: string,
   metadata: Record<string, unknown>,
-  overrides: Partial<Omit<MessageDto, 'seq'>> & { seq?: number } = {},
+  overrides: Partial<Omit<MessageDto, "seq">> & { seq?: number } = {},
 ): MessageDto {
   const { seq, ...rest } = overrides;
   return {
-    id: 'sys-cluster-1',
-    conversation_id: 'conv-1',
-    from_kind: 'system',
+    id: "sys-cluster-1",
+    conversation_id: "conv-1",
+    from_kind: "system",
     from_agent_id: null,
     from_user_id: null,
     author: null,
-    content: '',
+    content: "",
     metadata: { subtype, ...metadata },
     attachments: null,
     seq: decodeMessageSeq(seq ?? 1),
@@ -39,19 +39,19 @@ function makeSystemMessage(
 
 function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
   return {
-    id: 'task-42',
+    id: "task-42",
     task_number: 42,
     place: {
-      kind: 'workspace',
-      conversation_id: 'chan-1',
-      workspace_id: 'ws-1',
-      channel_name: 'general',
+      kind: "workspace",
+      conversation_id: "chan-1",
+      workspace_id: "ws-1",
+      channel_name: "general",
     },
     thread_root_id: null,
-    status: 'todo',
-    title: 'wire registry',
+    status: "todo",
+    title: "wire registry",
     assignee: null,
-    creator: { type: 'agent', id: 'a-alice', name: 'Alice' },
+    creator: { type: "agent", id: "a-alice", name: "Alice" },
     created_at: 0,
     closed_at: null,
     ...overrides,
@@ -61,10 +61,10 @@ function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
 function renderCluster(messages: MessageDto[], seededTasks: TaskSummaryDto[] = []): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   for (const t of seededTasks) {
-    if (t.place.kind !== 'workspace') throw new Error('workspace fixture expected');
+    if (t.place.kind !== "workspace") throw new Error("workspace fixture expected");
     qc.setQueryData(
       taskByNumberKey(
-        taskBoardCacheScope({ workspaceId: t.place.workspace_id, conversationId: 'conv-1' }),
+        taskBoardCacheScope({ workspaceId: t.place.workspace_id, conversationId: "conv-1" }),
         t.task_number,
       ),
       t,
@@ -73,13 +73,13 @@ function renderCluster(messages: MessageDto[], seededTasks: TaskSummaryDto[] = [
   return renderToStaticMarkup(
     React.createElement(
       StaticRouter,
-      { location: '/' },
+      { location: "/" },
       React.createElement(
         QueryClientProvider,
         { client: qc },
         React.createElement(
           TaskRefContextProvider,
-          { value: { workspaceId: 'ws-1', conversationId: 'conv-1', onOpenTask: () => undefined } },
+          { value: { workspaceId: "ws-1", conversationId: "conv-1", onOpenTask: () => undefined } },
           React.createElement(SystemActivityCluster, {
             messages,
             channelsByName: new Map(),
@@ -91,28 +91,24 @@ function renderCluster(messages: MessageDto[], seededTasks: TaskSummaryDto[] = [
   );
 }
 
-const fullTaskMeta = (
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> => ({
+const fullTaskMeta = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   task_number: 42,
-  task_status: 'todo',
-  task_id: 'task-42',
-  task_message_id: 'msg-task-42',
-  task_title: 'wire registry',
+  task_status: "todo",
+  task_id: "task-42",
+  task_message_id: "msg-task-42",
+  task_title: "wire registry",
   task_assignee: null,
-  actor: { kind: 'agent', id: 'a-alice', name: 'Alice' },
+  actor: { kind: "agent", id: "a-alice", name: "Alice" },
   ...overrides,
 });
 
-describe('SystemActivityCluster (PR-10)', () => {
-  it('wraps the run in `.system-activity-cluster` and exposes the row count via data attribute', () => {
-    const a = makeSystemMessage('task_create', fullTaskMeta(), { id: 'a' });
-    const b = makeSystemMessage(
-      'task_status',
-      fullTaskMeta({ task_status: 'in_review' }),
-      { id: 'b' },
-    );
-    const html = renderCluster([a, b], [seededTask({ status: 'in_review' })]);
+describe("SystemActivityCluster (PR-10)", () => {
+  it("wraps the run in `.system-activity-cluster` and exposes the row count via data attribute", () => {
+    const a = makeSystemMessage("task_create", fullTaskMeta(), { id: "a" });
+    const b = makeSystemMessage("task_status", fullTaskMeta({ task_status: "in_review" }), {
+      id: "b",
+    });
+    const html = renderCluster([a, b], [seededTask({ status: "in_review" })]);
     // The cluster's outermost element carries the row-count data marker.
     expect(html).toMatch(/^<div[^>]*\bdata-system-activity-cluster="2"/);
   });
@@ -125,17 +121,11 @@ describe('SystemActivityCluster (PR-10)', () => {
     // wrapper ever drops the `data-system-event-row` attribute, the
     // cluster CSS hook would silently break — the rows would still
     // render, just no longer in tight 2px stacking.
-    const a = makeSystemMessage('task_claim', fullTaskMeta(), { id: 'a' });
-    const b = makeSystemMessage(
-      'task_status',
-      fullTaskMeta({ task_status: 'in_review' }),
-      { id: 'b' },
-    );
-    const c = makeSystemMessage(
-      'task_unclaim',
-      fullTaskMeta({ task_status: 'todo' }),
-      { id: 'c' },
-    );
+    const a = makeSystemMessage("task_claim", fullTaskMeta(), { id: "a" });
+    const b = makeSystemMessage("task_status", fullTaskMeta({ task_status: "in_review" }), {
+      id: "b",
+    });
+    const c = makeSystemMessage("task_unclaim", fullTaskMeta({ task_status: "todo" }), { id: "c" });
     const html = renderCluster([a, b, c], [seededTask()]);
     // Three rows → three system event-row wrappers, keyed on the PR-10
     // data attribute (not the class name).
@@ -143,7 +133,7 @@ describe('SystemActivityCluster (PR-10)', () => {
     expect(matches).toHaveLength(3);
   });
 
-  it('faithfully renders whatever subtypes it is handed, without re-gating (defensive passthrough)', () => {
+  it("faithfully renders whatever subtypes it is handed, without re-gating (defensive passthrough)", () => {
     // DEFENSIVE-INPUT test — NOT a grouping contract. The decision of
     // which subtypes actually cluster lives in `groupMessages.ts`, and
     // since #task:1145 `session_cleared` / `rename` are NOT clusterable
@@ -153,26 +143,26 @@ describe('SystemActivityCluster (PR-10)', () => {
     // standalone SystemMessage renderer instead of dropping or
     // re-filtering rows. Using non-clusterable subtypes here on purpose,
     // to prove the renderer doesn't second-guess its input.
-    const a = makeSystemMessage('task_claim', fullTaskMeta(), { id: 'a' });
+    const a = makeSystemMessage("task_claim", fullTaskMeta(), { id: "a" });
     const b = makeSystemMessage(
-      'session_cleared',
+      "session_cleared",
       {
-        agent_id: 'a-bob',
-        agent_name: 'Bob',
-        actor_user_id: 'local',
-        previous_cli_session_id_prefix: 'fbe21c8a',
+        agent_id: "a-bob",
+        agent_name: "Bob",
+        actor_user_id: "local",
+        previous_cli_session_id_prefix: "fbe21c8a",
         was_running: true,
       },
-      { id: 'b' },
+      { id: "b" },
     );
     const c = makeSystemMessage(
-      'rename',
-      { old_name: 'version2', new_name: 'version3' },
-      { id: 'c' },
+      "rename",
+      { old_name: "version2", new_name: "version3" },
+      { id: "c" },
     );
     const html = renderCluster([a, b, c], [seededTask()]);
     // task event signal
-    expect(html).toContain('data-task-event-dot');
+    expect(html).toContain("data-task-event-dot");
     expect(html).toContain('data-task-ref="42"');
     // session_cleared signal
     expect(html).toContain('data-session-cleared="1"');
@@ -180,13 +170,13 @@ describe('SystemActivityCluster (PR-10)', () => {
     expect(html).toContain('data-rename-row="1"');
   });
 
-  it('a 1-element cluster still uses the cluster wrapper (so even a lone audit row visually demotes)', () => {
+  it("a 1-element cluster still uses the cluster wrapper (so even a lone audit row visually demotes)", () => {
     // Even a stray task event between two real messages should drop
     // below real-message visual weight. The grouping pass produces a
     // 1-element cluster for it; the renderer must not optimize that
     // away into a bare `<SystemMessage>` (which would re-attach the
     // standalone chunky `px-4 py-1.5` padding).
-    const only = makeSystemMessage('task_claim', fullTaskMeta(), { id: 'only' });
+    const only = makeSystemMessage("task_claim", fullTaskMeta(), { id: "only" });
     const html = renderCluster([only], [seededTask()]);
     expect(html).toMatch(/^<div[^>]*\bdata-system-activity-cluster="1"/);
     expect(html).toContain('data-system-event-row="1"');

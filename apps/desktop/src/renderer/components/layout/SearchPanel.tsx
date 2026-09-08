@@ -1,6 +1,6 @@
-import { useMemo, useState, type ReactNode } from 'react';
-import * as Select from '@radix-ui/react-select';
-import dayjs from 'dayjs';
+import { useMemo, useState, type ReactNode } from "react";
+import * as Select from "@radix-ui/react-select";
+import dayjs from "dayjs";
 import {
   ChevronDown,
   Clock,
@@ -9,35 +9,35 @@ import {
   Search as SearchIcon,
   User,
   X,
-} from 'lucide-react';
-import type { AgentDto, SearchResultDto } from '@silverhand/shared';
-import { Input } from '@/components/ui/input';
-import { CollectionItemCard } from '@/components/layout/collection-item-card';
+} from "lucide-react";
+import type { AgentDto, SearchResultDto } from "@silverhand/shared";
+import { Input } from "@/components/ui/input";
+import { CollectionItemCard } from "@/components/layout/collection-item-card";
 import {
   FilterBlock,
   FilterSelectItem as SelectItem,
   FILTER_SELECT_TRIGGER_CLASS as SELECT_TRIGGER_CLASS,
   FILTER_SELECT_CONTENT_CLASS as SELECT_CONTENT_CLASS,
-} from '@/components/ui/filter-select';
-import { WorkspaceIcon } from '@/components/WorkspaceIcon';
-import { ChannelIcon } from '@/components/ChannelIcon';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { AuthorAvatarView, AuthorName } from '@/components/chat/author-avatar-view';
-import { presentAuthor } from '@/components/chat/author-presentation';
-import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
-import { useAgents } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useMessageSearch } from '@/features/search/hooks';
-import { useUsers, useUsersById, makeUserNameResolver } from '@/features/users/hooks';
-import type { WorkspaceListItem } from '@/features/workspaces/hooks';
-import { isAgentSpace } from '@/features/workspaces/workspace-ownership';
+} from "@/components/ui/filter-select";
+import { WorkspaceIcon } from "@/components/WorkspaceIcon";
+import { ChannelIcon } from "@/components/ChannelIcon";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { AuthorAvatarView, AuthorName } from "@/components/chat/author-avatar-view";
+import { presentAuthor } from "@/components/chat/author-presentation";
+import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
+import { useAgents } from "@/features/agents/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useMessageSearch } from "@/features/search/hooks";
+import { useUsers, useUsersById, makeUserNameResolver } from "@/features/users/hooks";
+import type { WorkspaceListItem } from "@/features/workspaces/hooks";
+import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
 import {
   SenderFilterSelect,
   parseSenderFilter,
   type SenderFilterValue,
-} from '@/components/ui/sender-filter-select';
-import { ListRowsSkeleton } from './ListRowsSkeleton';
-import { paneChrome } from './pane-chrome';
+} from "@/components/ui/sender-filter-select";
+import { ListRowsSkeleton } from "./ListRowsSkeleton";
+import { paneChrome } from "./pane-chrome";
 
 interface SearchPanelProps {
   workspaces: WorkspaceListItem[];
@@ -58,14 +58,11 @@ interface SearchPanelProps {
     messageId: string;
   }) => void;
   onOpenWorkspace: (workspaceId: string) => void;
-  onOpenConversation: (
-    workspaceId: string,
-    channelId: string,
-  ) => void;
+  onOpenConversation: (workspaceId: string, channelId: string) => void;
 }
 
-type WorkspaceFilter = 'all' | `workspace:${string}`;
-type TimeRange = 'all' | 'today' | 'week1' | 'week2' | 'month';
+type WorkspaceFilter = "all" | `workspace:${string}`;
+type TimeRange = "all" | "today" | "week1" | "week2" | "month";
 
 /** Search filter selection lifted to App-session state (#task:1259). Not
  *  persisted — a restart resets to the default. The query text is deliberately
@@ -79,9 +76,9 @@ export interface SearchFilterState {
 }
 
 export const SEARCH_FILTER_DEFAULT: SearchFilterState = {
-  workspace: 'all',
-  sender: 'all',
-  time: 'all',
+  workspace: "all",
+  sender: "all",
+  time: "all",
 };
 
 interface ResultGroup {
@@ -115,16 +112,14 @@ export function SearchPanel({
   onOpenWorkspace,
   onOpenConversation,
 }: SearchPanelProps): JSX.Element {
-  const [query, setQuery] = useState(initialQuery ?? '');
+  const [query, setQuery] = useState(initialQuery ?? "");
   // Filters are App-owned (controlled) so they persist across pane switches
   // for the session (#task:1259). Query stays local (see SearchPanelProps).
   const { workspace: workspaceFilter, sender: senderFilter, time: timeRange } = filter;
   const setWorkspaceFilter = (next: WorkspaceFilter) =>
     onFilterChange({ ...filter, workspace: next });
-  const setSenderFilter = (next: SenderFilterValue) =>
-    onFilterChange({ ...filter, sender: next });
-  const setTimeRange = (next: TimeRange) =>
-    onFilterChange({ ...filter, time: next });
+  const setSenderFilter = (next: SenderFilterValue) => onFilterChange({ ...filter, sender: next });
+  const setTimeRange = (next: TimeRange) => onFilterChange({ ...filter, time: next });
   const { data: agents = [] } = useAgents();
   const { data: users = [] } = useUsers();
   // Resolver feeds formatUserDisplayName so message-meta lines and the
@@ -159,25 +154,20 @@ export function SearchPanel({
 
   const hasIntent =
     query.trim().length > 0 ||
-    workspaceFilter !== 'all' ||
-    senderFilter !== 'all' ||
-    timeRange !== 'all';
+    workspaceFilter !== "all" ||
+    senderFilter !== "all" ||
+    timeRange !== "all";
   const { data, isFetching, isLoading } = useMessageSearch(filters);
   const results = data?.results ?? [];
   // The sender byline avatar's bytes come STRICTLY from each message hit's own
   // author DTO (#task:1792 B2) — never a directory join — so a match whose
   // author is deleted or outside the loaded directory still renders correctly.
   const messageAuthors = useMemo(
-    () =>
-      results.flatMap(r => (r.type === 'message' ? [r.message.author] : [])),
+    () => results.flatMap((r) => (r.type === "message" ? [r.message.author] : [])),
     [results],
   );
-  const { agentAvatarUrls, humanAvatarUrls } =
-    useAuthorAvatarObjectUrls(messageAuthors);
-  const agentsById = useMemo(
-    () => new Map(agents.map(agent => [agent.id, agent])),
-    [agents],
-  );
+  const { agentAvatarUrls, humanAvatarUrls } = useAuthorAvatarObjectUrls(messageAuthors);
+  const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
   // Owner avatars for workspace hits come from the DIRECTORY, not from the
   // result set — a workspace's owning agent is not one of the matched messages'
   // authors. Same wiring the filter dropdown already uses, so a workspace reads
@@ -186,28 +176,22 @@ export function SearchPanel({
   const resultGroups = useMemo(() => groupResults(results), [results]);
 
   const resetFilters = (): void => {
-    setQuery('');
+    setQuery("");
     onFilterChange(SEARCH_FILTER_DEFAULT);
   };
 
   return (
     <main
       className="flex h-full min-w-0 flex-1 flex-col bg-bg-chat"
-      style={{ ...paneChrome, overflow: 'hidden' }}
+      style={{ ...paneChrome, overflow: "hidden" }}
     >
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <SearchIcon className="size-3.5 text-accent" />
-        <span className="font-serif text-sm font-semibold text-text-primary">
-          Search
-        </span>
+        <span className="font-serif text-sm font-semibold text-text-primary">Search</span>
         {data ? (
-          <span className="text-xs tabular-nums text-text-muted">
-            {results.length}
-          </span>
+          <span className="text-xs tabular-nums text-text-muted">{results.length}</span>
         ) : null}
-        {isFetching ? (
-          <span className="ml-auto text-xs text-text-muted">Searching…</span>
-        ) : null}
+        {isFetching ? <span className="ml-auto text-xs text-text-muted">Searching…</span> : null}
       </header>
 
       <section className="shrink-0 border-b border-border-subtle px-4 py-3">
@@ -215,9 +199,9 @@ export function SearchPanel({
           <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-muted" />
           <Input
             value={query}
-            onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Escape' && hasIntent) {
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && hasIntent) {
                 e.preventDefault();
                 resetFilters();
               }
@@ -265,30 +249,22 @@ export function SearchPanel({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {!hasIntent ? (
-          <EmptyState
-            icon={<SearchIcon className="size-5" />}
-            text="Type to search"
-          />
+          <EmptyState icon={<SearchIcon className="size-5" />} text="Type to search" />
         ) : isLoading ? (
           <ListRowsSkeleton withIcon />
         ) : results.length === 0 ? (
-          <EmptyState
-            icon={<SearchIcon className="size-5" />}
-            text="No matches"
-          />
+          <EmptyState icon={<SearchIcon className="size-5" />} text="No matches" />
         ) : (
           <div className="space-y-5">
-            {resultGroups.map(group => (
+            {resultGroups.map((group) => (
               <section key={group.key}>
                 <header className="mb-2 flex items-center gap-2 px-1 text-[length:var(--text-meta)] font-medium uppercase leading-none tracking-wider text-text-muted">
                   {group.icon}
                   <span className="leading-none">{group.label}</span>
-                  <span className="leading-none text-text-muted/70">
-                    {group.results.length}
-                  </span>
+                  <span className="leading-none text-text-muted/70">{group.results.length}</span>
                 </header>
                 <ul className="space-y-2">
-                  {group.results.map(result => (
+                  {group.results.map((result) => (
                     <SearchResultRow
                       key={resultKey(result)}
                       result={result}
@@ -298,18 +274,18 @@ export function SearchPanel({
                       agentAvatarUrls={agentAvatarUrls}
                       userAvatarUrls={humanAvatarUrls}
                       onClick={() => {
-                        if (result.type === 'workspace') {
+                        if (result.type === "workspace") {
                           // Discovery arm: the workspace IS the hit and keeps a
                           // result-level `workspace` ref (#task:2053-C).
                           onOpenWorkspace(result.workspace.id);
-                        } else if (result.type === 'conversation') {
+                        } else if (result.type === "conversation") {
                           // Branch BEFORE reading the workspace container: it now
                           // lives inside the placement-discriminated `conversation`
                           // ref, present only on the `workspace` arm (#task:2053-C).
                           // A `direct_pair` conversation hit is workspace-less; but
                           // pair titles are empty so a pair never surfaces as a
                           // conversation-discovery result — no nav path, no-op.
-                          if (result.conversation.placement_kind === 'workspace') {
+                          if (result.conversation.placement_kind === "workspace") {
                             onOpenConversation(
                               result.conversation.workspace.id,
                               result.conversation.channel_id,
@@ -323,10 +299,10 @@ export function SearchPanel({
                             // (Paul #task:2051 F3; a comment alone can't fail).
                             console.assert(
                               false,
-                              'direct_pair surfaced as a conversation-discovery result — needs a nav path',
+                              "direct_pair surfaced as a conversation-discovery result — needs a nav path",
                             );
                           }
-                        } else if (result.conversation.placement_kind === 'workspace') {
+                        } else if (result.conversation.placement_kind === "workspace") {
                           onJumpMessage({
                             workspaceId: result.conversation.workspace.id,
                             channelId: result.conversation.channel_id,
@@ -371,22 +347,14 @@ function WorkspaceFilterSelect({
   agents: AgentDto[];
   onChange: (value: WorkspaceFilter) => void;
 }): JSX.Element {
-  const agentSpaces = workspaces.filter(workspace => isAgentSpace(workspace));
-  const peopleOwned = workspaces.filter(workspace => !isAgentSpace(workspace));
-  const agentsById = useMemo(
-    () => new Map(agents.map(agent => [agent.id, agent])),
-    [agents],
-  );
+  const agentSpaces = workspaces.filter((workspace) => isAgentSpace(workspace));
+  const peopleOwned = workspaces.filter((workspace) => !isAgentSpace(workspace));
+  const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
-  const selected = workspaceFilterLabel(
-    value,
-    workspaces,
-    agentsById,
-    agentAvatarUrls,
-  );
+  const selected = workspaceFilterLabel(value, workspaces, agentsById, agentAvatarUrls);
 
   return (
-    <Select.Root value={value} onValueChange={v => onChange(v as WorkspaceFilter)}>
+    <Select.Root value={value} onValueChange={(v) => onChange(v as WorkspaceFilter)}>
       <Select.Trigger aria-label="Workspace filter" className={SELECT_TRIGGER_CLASS}>
         <span className="flex min-w-0 items-center gap-1.5">
           {selected.icon}
@@ -412,7 +380,7 @@ function WorkspaceFilterSelect({
                 <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                   Agent Spaces
                 </Select.Label>
-                {agentSpaces.map(workspace => (
+                {agentSpaces.map((workspace) => (
                   <SelectItem
                     key={workspace.id}
                     value={`workspace:${workspace.id}`}
@@ -434,7 +402,7 @@ function WorkspaceFilterSelect({
                 <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                   Workspaces
                 </Select.Label>
-                {peopleOwned.map(workspace => (
+                {peopleOwned.map((workspace) => (
                   <SelectItem
                     key={workspace.id}
                     value={`workspace:${workspace.id}`}
@@ -467,7 +435,7 @@ function TimeRangeSelect({
   const selected = TIME_RANGE_LABELS[value];
 
   return (
-    <Select.Root value={value} onValueChange={v => onChange(v as TimeRange)}>
+    <Select.Root value={value} onValueChange={(v) => onChange(v as TimeRange)}>
       <Select.Trigger aria-label="Time filter" className={SELECT_TRIGGER_CLASS}>
         <span className="flex min-w-0 items-center gap-1.5">
           <Clock className="size-3.5 text-text-muted" />
@@ -485,7 +453,7 @@ function TimeRangeSelect({
           className={SELECT_CONTENT_CLASS}
         >
           <Select.Viewport className="p-1">
-            {TIME_RANGE_OPTIONS.map(option => (
+            {TIME_RANGE_OPTIONS.map((option) => (
               <SelectItem
                 key={option.value}
                 value={option.value}
@@ -524,7 +492,7 @@ function SearchResultRow({
   userAvatarUrls: Map<string, string | null>;
   onClick: () => void;
 }): JSX.Element {
-  const isMessage = result.type === 'message';
+  const isMessage = result.type === "message";
   const icon = resultIcon(result, agentsById, ownerAgentAvatarUrls);
   const excerpt = resultExcerpt(result, query);
 
@@ -598,7 +566,7 @@ function MessageResultHeader({
   agentAvatarUrls,
   userAvatarUrls,
 }: {
-  result: Extract<SearchResultDto, { type: 'message' }>;
+  result: Extract<SearchResultDto, { type: "message" }>;
   agentAvatarUrls: Map<string, string | null>;
   userAvatarUrls: Map<string, string | null>;
 }): JSX.Element {
@@ -607,17 +575,15 @@ function MessageResultHeader({
   // directory re-join. Deleted → snapshot name + neutral avatar; unresolved →
   // "Unknown …"; a matched system message (`author === null`) reads "System"
   // with a neutral person square (the left type icon already carries the kind).
-  const presentation = result.message.author
-    ? presentAuthor(result.message.author)
-    : null;
-  const senderName = presentation?.label ?? 'System';
+  const presentation = result.message.author ? presentAuthor(result.message.author) : null;
+  const senderName = presentation?.label ?? "System";
   // The container lives inside the placement-discriminated ref, and only the
   // `workspace` arm has one to show — workspace + channel, both readable only
   // after that narrowing. The `direct_pair` arm renders no segment (#task:2060).
   const place = result.conversation;
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
-      {place.placement_kind === 'workspace' ? (
+      {place.placement_kind === "workspace" ? (
         <>
           <span className="flex min-w-0 items-center gap-1">
             {/* No agent DIRECTORY is wired into this header, so an agent space's
@@ -626,9 +592,7 @@ function MessageResultHeader({
                 `kind` + hardcoded-null-agent pair (#task:2078) — the ownership
                 arc just says it in one argument instead of two. */}
             <WorkspaceIcon ownerAgentId={place.workspace.owner_agent_id} />
-            <span className="truncate">
-              {place.workspace.name}
-            </span>
+            <span className="truncate">{place.workspace.name}</span>
           </span>
           <span className="flex min-w-0 items-center gap-1">
             {/* Same channel glyph the sidebar / saved / activity lists use, via
@@ -647,7 +611,7 @@ function MessageResultHeader({
       ) : null}
       <span className="flex min-w-0 items-center gap-1">
         <AuthorAvatarView
-          avatar={presentation?.avatar ?? { variant: 'neutral-user' }}
+          avatar={presentation?.avatar ?? { variant: "neutral-user" }}
           size={AVATAR_PX.xs}
           label={senderName}
           agentAvatarUrls={agentAvatarUrls}
@@ -663,19 +627,13 @@ function MessageResultHeader({
       </span>
       <span className="flex shrink-0 items-center gap-1 tabular-nums">
         <Clock aria-hidden className="size-3.5 shrink-0" />
-        {dayjs(result.message.created_at).format('YYYY-MM-DD HH:mm')}
+        {dayjs(result.message.created_at).format("YYYY-MM-DD HH:mm")}
       </span>
     </span>
   );
 }
 
-function EmptyState({
-  icon,
-  text,
-}: {
-  icon: ReactNode;
-  text: string;
-}): JSX.Element {
+function EmptyState({ icon, text }: { icon: ReactNode; text: string }): JSX.Element {
   return (
     <div className="flex h-full min-h-[220px] items-center justify-center rounded-md border border-dashed border-border text-sm text-text-muted">
       <div className="flex items-center gap-2">
@@ -695,41 +653,41 @@ function EmptyState({
  *  GLYPH — an unresolved directory can never move a row into Workspaces. */
 function groupResults(results: SearchResultDto[]): ResultGroup[] {
   const workspaces = results.filter(
-    result => result.type === 'workspace' && !isAgentSpace(result.workspace),
+    (result) => result.type === "workspace" && !isAgentSpace(result.workspace),
   );
-  const conversations = results.filter(result => result.type === 'conversation');
+  const conversations = results.filter((result) => result.type === "conversation");
   const agentSpaces = results.filter(
-    result => result.type === 'workspace' && isAgentSpace(result.workspace),
+    (result) => result.type === "workspace" && isAgentSpace(result.workspace),
   );
-  const messages = results.filter(result => result.type === 'message');
+  const messages = results.filter((result) => result.type === "message");
 
   return [
     {
-      key: 'workspaces',
-      label: 'Workspaces',
+      key: "workspaces",
+      label: "Workspaces",
       icon: <WorkspaceGlyph size={3} />,
       results: workspaces,
     },
     {
-      key: 'conversations',
-      label: 'Channels / Threads',
+      key: "conversations",
+      label: "Channels / Threads",
       icon: <Hash className="size-3" />,
       results: conversations,
     },
     {
       // `key` stays `dms`: it is this group's internal identity, not its copy.
-      key: 'dms',
-      label: 'Agent Spaces',
+      key: "dms",
+      label: "Agent Spaces",
       icon: <User className="size-3" />,
       results: agentSpaces,
     },
     {
-      key: 'messages',
-      label: 'Messages',
+      key: "messages",
+      label: "Messages",
       icon: <MessageSquareText className="size-3" />,
       results: messages,
     },
-  ].filter(group => group.results.length > 0);
+  ].filter((group) => group.results.length > 0);
 }
 
 function resultIcon(
@@ -737,7 +695,7 @@ function resultIcon(
   agentsById: ReadonlyMap<string, AgentDto>,
   ownerAgentAvatarUrls: ReadonlyMap<string, string | null>,
 ): JSX.Element {
-  if (result.type === 'workspace') {
+  if (result.type === "workspace") {
     // ONE call, no local branch: `WorkspaceIcon` is the canonical workspace
     // identity glyph (rail / filter dropdown / here) and it already answers all
     // three ownership states from `owner_agent_id` alone — unowned → the serif
@@ -758,7 +716,7 @@ function resultIcon(
       />
     );
   }
-  if (result.type === 'conversation') {
+  if (result.type === "conversation") {
     return <Hash className="size-4" />;
   }
   return <MessageSquareText className="size-4" />;
@@ -768,29 +726,26 @@ function resultIcon(
  *  Message rows render a richer icon+avatar header via `MessageResultHeader`
  *  instead, so they don't pass through here. */
 function resultMeta(result: SearchResultDto): string[] {
-  if (result.type === 'workspace') {
-    return [isAgentSpace(result.workspace) ? 'Agent Space' : 'Workspace'];
+  if (result.type === "workspace") {
+    return [isAgentSpace(result.workspace) ? "Agent Space" : "Workspace"];
   }
-  if (result.type === 'conversation') {
+  if (result.type === "conversation") {
     // Workspace name only on the `workspace` arm; a `direct_pair` conversation
     // hit is workspace-less (#task:2053-C) and reads as an Agent Space.
-    return result.conversation.placement_kind === 'workspace'
+    return result.conversation.placement_kind === "workspace"
       ? [
-          'Channel',
+          "Channel",
           result.conversation.workspace.name,
-          dayjs(result.conversation.created_at).format('YYYY-MM-DD HH:mm'),
+          dayjs(result.conversation.created_at).format("YYYY-MM-DD HH:mm"),
         ]
-      : [
-          'Agent Space',
-          dayjs(result.conversation.created_at).format('YYYY-MM-DD HH:mm'),
-        ];
+      : ["Agent Space", dayjs(result.conversation.created_at).format("YYYY-MM-DD HH:mm")];
   }
   return [];
 }
 
 function resultTitle(result: SearchResultDto): string {
-  if (result.type === 'workspace') return result.workspace.name;
-  if (result.type === 'conversation') return result.conversation.title;
+  if (result.type === "workspace") return result.workspace.name;
+  if (result.type === "conversation") return result.conversation.title;
   // Message rows render through `MessageResultHeader` (which shows no title for a
   // pair at all, #task:2060), so this arm is unreachable and exists only for
   // type-exhaustiveness — do NOT wire it to a display path that would surface the
@@ -799,11 +754,11 @@ function resultTitle(result: SearchResultDto): string {
 }
 
 function resultExcerpt(result: SearchResultDto, query: string): string | null {
-  if (result.type === 'workspace') return result.workspace.description;
-  if (result.type === 'conversation') {
+  if (result.type === "workspace") return result.workspace.description;
+  if (result.type === "conversation") {
     // Excerpt line for a channel/thread hit is its workspace name; a workspace-
     // less `direct_pair` hit has none to show (#task:2053-C).
-    return result.conversation.placement_kind === 'workspace'
+    return result.conversation.placement_kind === "workspace"
       ? result.conversation.workspace.name
       : null;
   }
@@ -811,23 +766,23 @@ function resultExcerpt(result: SearchResultDto, query: string): string | null {
 }
 
 function resultKey(result: SearchResultDto): string {
-  if (result.type === 'workspace') return `workspace:${result.workspace.id}`;
-  if (result.type === 'conversation') {
+  if (result.type === "workspace") return `workspace:${result.workspace.id}`;
+  if (result.type === "conversation") {
     return `conversation:${result.conversation.id}`;
   }
   return `message:${result.message.id}`;
 }
 
 function buildExcerpt(content: string, query: string): string {
-  const flat = content.replace(/\s+/g, ' ').trim();
-  if (!flat) return '';
+  const flat = content.replace(/\s+/g, " ").trim();
+  if (!flat) return "";
   const needle = query.trim().toLowerCase();
   if (!needle) return flat.length > 260 ? `${flat.slice(0, 260)}…` : flat;
   const index = flat.toLowerCase().indexOf(needle);
   if (index < 0) return flat.length > 260 ? `${flat.slice(0, 260)}…` : flat;
   const start = Math.max(0, index - 80);
   const end = Math.min(flat.length, index + needle.length + 180);
-  return `${start > 0 ? '…' : ''}${flat.slice(start, end)}${end < flat.length ? '…' : ''}`;
+  return `${start > 0 ? "…" : ""}${flat.slice(start, end)}${end < flat.length ? "…" : ""}`;
 }
 
 export function highlightText(text: string, query: string): ReactNode {
@@ -847,7 +802,7 @@ export function highlightText(text: string, query: string): ReactNode {
 }
 
 function workspaceIdFromFilter(value: WorkspaceFilter): string | undefined {
-  return value.startsWith('workspace:') ? value.slice('workspace:'.length) : undefined;
+  return value.startsWith("workspace:") ? value.slice("workspace:".length) : undefined;
 }
 
 /** The trigger's own label + identity for the selected filter. An agent space is
@@ -862,9 +817,9 @@ function workspaceFilterLabel(
   agentsById: Map<string, AgentDto>,
   agentAvatarUrls: Map<string, string | null>,
 ): { label: string; icon: JSX.Element } {
-  if (value.startsWith('workspace:')) {
-    const workspaceId = value.slice('workspace:'.length);
-    const workspace = workspaces.find(w => w.id === workspaceId);
+  if (value.startsWith("workspace:")) {
+    const workspaceId = value.slice("workspace:".length);
+    const workspace = workspaces.find((w) => w.id === workspaceId);
     if (workspace) {
       return {
         label: workspace.name,
@@ -878,26 +833,26 @@ function workspaceFilterLabel(
       };
     }
   }
-  return { label: 'All locations', icon: <SearchIcon className="size-3.5" /> };
+  return { label: "All locations", icon: <SearchIcon className="size-3.5" /> };
 }
 
 const TIME_RANGE_OPTIONS: Array<{ value: TimeRange; label: string }> = [
-  { value: 'all', label: 'All time' },
-  { value: 'today', label: 'Today' },
-  { value: 'week1', label: 'Last 1 week' },
-  { value: 'week2', label: 'Last 2 weeks' },
-  { value: 'month', label: 'Last month' },
+  { value: "all", label: "All time" },
+  { value: "today", label: "Today" },
+  { value: "week1", label: "Last 1 week" },
+  { value: "week2", label: "Last 2 weeks" },
+  { value: "month", label: "Last month" },
 ];
 
 const TIME_RANGE_LABELS: Record<TimeRange, string> = Object.fromEntries(
-  TIME_RANGE_OPTIONS.map(option => [option.value, option.label]),
+  TIME_RANGE_OPTIONS.map((option) => [option.value, option.label]),
 ) as Record<TimeRange, string>;
 
 function timeRangeBounds(value: TimeRange): { from?: number; to?: number } {
   const now = Date.now();
-  if (value === 'today') return { from: dayjs().startOf('day').valueOf(), to: now };
-  if (value === 'week1') return { from: dayjs(now).subtract(1, 'week').valueOf(), to: now };
-  if (value === 'week2') return { from: dayjs(now).subtract(2, 'week').valueOf(), to: now };
-  if (value === 'month') return { from: dayjs(now).subtract(1, 'month').valueOf(), to: now };
+  if (value === "today") return { from: dayjs().startOf("day").valueOf(), to: now };
+  if (value === "week1") return { from: dayjs(now).subtract(1, "week").valueOf(), to: now };
+  if (value === "week2") return { from: dayjs(now).subtract(2, "week").valueOf(), to: now };
+  if (value === "month") return { from: dayjs(now).subtract(1, "month").valueOf(), to: now };
   return {};
 }

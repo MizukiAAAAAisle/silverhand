@@ -1,7 +1,7 @@
-import { useCallback, useMemo } from 'react';
-import { matchPath, useLocation, useNavigate } from 'react-router-dom';
-import type { AppSection } from '@/components/layout/NavRail';
-import type { LocatorTarget } from '@/features/conversations/locator-target';
+import { useCallback, useMemo } from "react";
+import { matchPath, useLocation, useNavigate } from "react-router-dom";
+import type { AppSection } from "@/components/layout/NavRail";
+import type { LocatorTarget } from "@/features/conversations/locator-target";
 
 /**
  * Single source of truth for our URL scheme. Keep all path templates
@@ -29,8 +29,8 @@ import type { LocatorTarget } from '@/features/conversations/locator-target';
  * the base path is untouched.
  */
 export const routes = {
-  home: () => '/',
-  chat: () => '/chat',
+  home: () => "/",
+  chat: () => "/chat",
   /**
    * Advanced search, optionally SEEDED by the inline header find's hand-off
    * (#task:1335, extended #task:2114).
@@ -56,15 +56,15 @@ export const routes = {
   chatSearch: (seed?: { q?: string; workspace?: string; sender?: string; reset?: boolean }) => {
     const params = new URLSearchParams();
     const q = seed?.q?.trim();
-    if (q) params.set('q', q);
-    if (seed?.reset) params.set('reset', '1');
-    if (seed?.workspace) params.set('workspace', seed.workspace);
-    if (seed?.sender) params.set('sender', seed.sender);
+    if (q) params.set("q", q);
+    if (seed?.reset) params.set("reset", "1");
+    if (seed?.workspace) params.set("workspace", seed.workspace);
+    if (seed?.sender) params.set("sender", seed.sender);
     const qs = params.toString();
-    return qs ? `/chat/search?${qs}` : '/chat/search';
+    return qs ? `/chat/search?${qs}` : "/chat/search";
   },
-  chatSaved: () => '/chat/saved',
-  chatArchived: () => '/chat/archived',
+  chatSaved: () => "/chat/saved",
+  chatArchived: () => "/chat/archived",
   chatWorkspace: (workspaceId: string) => `/chat/w/${workspaceId}`,
   chatChannel: (workspaceId: string, channelId: string) => `/chat/w/${workspaceId}/c/${channelId}`,
   /**
@@ -110,7 +110,7 @@ export const routes = {
   // does not reintroduce that empty-selection problem. Secondary panes
   // (`?thread=<root>`) ride the shared query helpers, which operate on the
   // current pathname and thus stay in-section automatically.
-  activity: () => '/activity',
+  activity: () => "/activity",
   activityChannel: (workspaceId: string, channelId: string) =>
     `/activity/w/${workspaceId}/c/${channelId}`,
   // The workspace-less DirectPair twin of `activityChannel` (#task:2115): a DM
@@ -118,7 +118,7 @@ export const routes = {
   // `activityChannel` by its `/d/` segment (mirrors the `chatDirect` vs
   // `chatChannel` split), and from `chatDirect` by the `/activity` prefix.
   activityDirect: (conversationId: string) => `/activity/d/${conversationId}`,
-  members: () => '/members',
+  members: () => "/members",
   membersAgent: (agentId: string) => `/members/${agentId}`,
   // Distinct prefix for users so a user id can never collide with the
   // agent id namespace at the URL level. The AgentSidebarShell writes this
@@ -126,32 +126,32 @@ export const routes = {
   // mutually exclusive at the App level (parseRouteState produces one
   // of agentId / userId, never both).
   membersUser: (userId: string) => `/members/u/${userId}`,
-  computers: () => '/computers',
-  tasks: () => '/tasks',
-  settings: () => '/settings',
+  computers: () => "/computers",
+  tasks: () => "/tasks",
+  settings: () => "/settings",
 } as const;
 
 export const routePatterns = {
-  chatChannel: '/chat/w/:workspaceId/c/:channelId',
-  chatDirectDraft: '/chat/d/new/:agentId',
-  chatDirect: '/chat/d/:conversationId',
-  chatWorkspace: '/chat/w/:workspaceId',
-  chatArchived: '/chat/archived',
-  chatSearch: '/chat/search',
-  chatSaved: '/chat/saved',
-  chat: '/chat',
-  activityChannel: '/activity/w/:workspaceId/c/:channelId',
-  activityDirect: '/activity/d/:conversationId',
-  activity: '/activity',
-  membersAgent: '/members/:agentId',
-  membersUser: '/members/u/:userId',
-  members: '/members',
-  computers: '/computers',
-  tasks: '/tasks',
-  settings: '/settings',
+  chatChannel: "/chat/w/:workspaceId/c/:channelId",
+  chatDirectDraft: "/chat/d/new/:agentId",
+  chatDirect: "/chat/d/:conversationId",
+  chatWorkspace: "/chat/w/:workspaceId",
+  chatArchived: "/chat/archived",
+  chatSearch: "/chat/search",
+  chatSaved: "/chat/saved",
+  chat: "/chat",
+  activityChannel: "/activity/w/:workspaceId/c/:channelId",
+  activityDirect: "/activity/d/:conversationId",
+  activity: "/activity",
+  membersAgent: "/members/:agentId",
+  membersUser: "/members/u/:userId",
+  members: "/members",
+  computers: "/computers",
+  tasks: "/tasks",
+  settings: "/settings",
 } as const;
 
-export type ChatView = 'channel' | 'saved' | 'search' | 'archived';
+export type ChatView = "channel" | "saved" | "search" | "archived";
 
 /**
  * Resolved view of the current URL. Components read this instead of
@@ -341,12 +341,12 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   const directDraftAgentId = mDirectDraft?.params.agentId ?? null;
   const channelId = mChannel?.params.channelId ?? directConversationId ?? null;
   const searchParams = new URLSearchParams(search);
-  const fullscreen = searchParams.get('fullscreen') === '1';
-  const rawSide = searchParams.get('side');
+  const fullscreen = searchParams.get("fullscreen") === "1";
+  const rawSide = searchParams.get("side");
   // Defensive: empty string treated as unset; prevents `?side=` from
   // forcing an "unresolved secondary" placeholder.
   const sideConversationId = rawSide && rawSide.length > 0 ? rawSide : null;
-  const rawThread = searchParams.get('thread');
+  const rawThread = searchParams.get("thread");
   // Defensive: empty string treated as unset (mirrors `?side`). The value
   // is a main-line message id whose thread (reply cluster) the right pane
   // shows.
@@ -355,18 +355,18 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   // list is channel-scoped (resolved against `channelId`), so no id is
   // carried — the flag alone is enough to switch the right pane to the
   // index view.
-  const threadsListOpen = searchParams.get('threads') === '1';
+  const threadsListOpen = searchParams.get("threads") === "1";
   // Channel Attachments panel: same shape as `?threads=1` (a boolean
   // flag; the panel scopes to `channelId`). Fourth secondary-family axis.
   // Any value other than exactly `'1'` treated as absent.
-  const filesListOpen = searchParams.get('files') === '1';
+  const filesListOpen = searchParams.get("files") === "1";
   // Agent side-panel pane (`?agent=<agentId>`). Empty string treated as
   // unset (mirrors `?side`). Carries an agent id, not a conversation id —
   // the chat-section right pane renders it as `AgentView variant="side"`.
-  const rawAgentPanel = searchParams.get('agent');
+  const rawAgentPanel = searchParams.get("agent");
   const agentPanelId = rawAgentPanel && rawAgentPanel.length > 0 ? rawAgentPanel : null;
-  const humanPanelId = searchParams.get('human') || null;
-  const rawTask = searchParams.get('task');
+  const humanPanelId = searchParams.get("human") || null;
+  const rawTask = searchParams.get("task");
   // Opaque id, treated exactly like `?side` / `?agent`: non-empty or null.
   // An unresolvable value is NOT filtered out here — the modal host resolves
   // it and renders a "Task not found" terminal state, because silently
@@ -375,32 +375,32 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   const taskDetailId = rawTask !== null && rawTask.length > 0 ? rawTask : null;
 
   // Advanced-search prefill query (`?q=`); empty treated as unset.
-  const rawSearchQuery = searchParams.get('q');
+  const rawSearchQuery = searchParams.get("q");
   const searchQuery = rawSearchQuery && rawSearchQuery.length > 0 ? rawSearchQuery : null;
   // Advanced-search filter seed (#task:2114) — same non-empty-or-null rule.
   // `reset` is a presence flag: only the canonical `1` counts, so a hand-edited
   // `reset=false` reads as "no reset" instead of as a truthy string.
-  const searchFilterReset = searchParams.get('reset') === '1';
-  const rawSearchWorkspace = searchParams.get('workspace');
+  const searchFilterReset = searchParams.get("reset") === "1";
+  const rawSearchWorkspace = searchParams.get("workspace");
   const searchWorkspace =
     rawSearchWorkspace && rawSearchWorkspace.length > 0 ? rawSearchWorkspace : null;
-  const rawSearchSender = searchParams.get('sender');
+  const rawSearchSender = searchParams.get("sender");
   const searchSender = rawSearchSender && rawSearchSender.length > 0 ? rawSearchSender : null;
 
-  let section: AppSection = 'chat';
-  if (pathname.startsWith('/members')) section = 'members';
-  else if (pathname.startsWith('/computers')) section = 'computers';
-  else if (pathname.startsWith('/tasks')) section = 'tasks';
-  else if (pathname.startsWith('/settings')) section = 'settings';
-  else if (pathname.startsWith('/activity')) section = 'activity';
+  let section: AppSection = "chat";
+  if (pathname.startsWith("/members")) section = "members";
+  else if (pathname.startsWith("/computers")) section = "computers";
+  else if (pathname.startsWith("/tasks")) section = "tasks";
+  else if (pathname.startsWith("/settings")) section = "settings";
+  else if (pathname.startsWith("/activity")) section = "activity";
 
-  const chatView: ChatView = pathname.startsWith('/chat/saved')
-    ? 'saved'
-    : pathname.startsWith('/chat/search')
-      ? 'search'
-      : pathname.startsWith('/chat/archived')
-        ? 'archived'
-        : 'channel';
+  const chatView: ChatView = pathname.startsWith("/chat/saved")
+    ? "saved"
+    : pathname.startsWith("/chat/search")
+      ? "search"
+      : pathname.startsWith("/chat/archived")
+        ? "archived"
+        : "channel";
 
   return {
     section,
@@ -454,10 +454,10 @@ export function useRouteState(): RouteState {
  * real unified secondary-fullscreen affordance when that lands.
  */
 export type ChannelLayout =
-  | { kind: 'none' }
-  | { kind: 'threads-list' }
-  | { kind: 'thread'; rootId: string }
-  | { kind: 'side'; id: string };
+  | { kind: "none" }
+  | { kind: "threads-list" }
+  | { kind: "thread"; rootId: string }
+  | { kind: "side"; id: string };
 
 /**
  * The secondary-pane slice of a RouteState that determines a channel's
@@ -468,7 +468,7 @@ export type ChannelLayout =
  */
 export type SecondaryRouteFields = Pick<
   RouteState,
-  'sideConversationId' | 'threadRootId' | 'threadsListOpen'
+  "sideConversationId" | "threadRootId" | "threadsListOpen"
 >;
 
 /**
@@ -483,15 +483,15 @@ export type SecondaryRouteFields = Pick<
  */
 export function layoutMemoryFromRoute(route: SecondaryRouteFields): ChannelLayout {
   if (route.sideConversationId) {
-    return { kind: 'side', id: route.sideConversationId };
+    return { kind: "side", id: route.sideConversationId };
   }
   if (route.threadRootId) {
-    return { kind: 'thread', rootId: route.threadRootId };
+    return { kind: "thread", rootId: route.threadRootId };
   }
   if (route.threadsListOpen) {
-    return { kind: 'threads-list' };
+    return { kind: "threads-list" };
   }
-  return { kind: 'none' };
+  return { kind: "none" };
 }
 
 /**
@@ -515,17 +515,17 @@ export function buildChannelLayoutUrl(
   layout: ChannelLayout | null | undefined,
 ): string {
   const base = routes.chatChannel(workspaceId, channelId);
-  if (!layout || layout.kind === 'none') return base;
+  if (!layout || layout.kind === "none") return base;
   const params = new URLSearchParams();
   switch (layout.kind) {
-    case 'threads-list':
-      params.set('threads', '1');
+    case "threads-list":
+      params.set("threads", "1");
       break;
-    case 'thread':
-      params.set('thread', layout.rootId);
+    case "thread":
+      params.set("thread", layout.rootId);
       break;
-    case 'side':
-      params.set('side', layout.id);
+    case "side":
+      params.set("side", layout.id);
       break;
   }
   return `${base}?${params.toString()}`;
@@ -554,17 +554,17 @@ export function buildChannelLayoutUrl(
  */
 export function buildLocatorTargetUrl(target: LocatorTarget): string {
   switch (target.kind) {
-    case 'workspace':
+    case "workspace":
       return routes.chatWorkspace(target.workspaceId);
-    case 'channel':
+    case "channel":
       return buildChannelLayoutUrl(
         target.workspaceId,
         target.conversationId,
         target.threadRootId === null
-          ? { kind: 'none' }
-          : { kind: 'thread', rootId: target.threadRootId },
+          ? { kind: "none" }
+          : { kind: "thread", rootId: target.threadRootId },
       );
-    case 'direct_pair': {
+    case "direct_pair": {
       const base = routes.chatDirect(target.conversationId);
       return target.threadRootId === null
         ? base
@@ -611,17 +611,17 @@ export function buildLocatorTargetUrl(target: LocatorTarget): string {
 const SECONDARY_PANES = {
   // `replace` conversation-context panes.
   //   side: covered-but-in-URL is data corruption → false is a HARD invariant.
-  side: { mode: 'replace', survivesOverlay: false },
+  side: { mode: "replace", survivesOverlay: false },
   //   thread/threads: pure render, safe to keep under an overlay (restore stack).
-  thread: { mode: 'replace', survivesOverlay: true },
-  threads: { mode: 'replace', survivesOverlay: true },
+  thread: { mode: "replace", survivesOverlay: true },
+  threads: { mode: "replace", survivesOverlay: true },
   // `overlay` utility/inspector panes. survivesOverlay:false here is a SOFT
   // topology choice ("one overlay at a time"), flippable without correctness risk.
-  agent: { mode: 'overlay', survivesOverlay: false },
-  human: { mode: 'overlay', survivesOverlay: false },
-  files: { mode: 'overlay', survivesOverlay: false },
-  task: { mode: 'overlay', survivesOverlay: false },
-} as const satisfies Record<string, { mode: 'overlay' | 'replace'; survivesOverlay: boolean }>;
+  agent: { mode: "overlay", survivesOverlay: false },
+  human: { mode: "overlay", survivesOverlay: false },
+  files: { mode: "overlay", survivesOverlay: false },
+  task: { mode: "overlay", survivesOverlay: false },
+} as const satisfies Record<string, { mode: "overlay" | "replace"; survivesOverlay: boolean }>;
 
 /** Every secondary-pane query param, derived from the registry. */
 export type SecondaryPane = keyof typeof SECONDARY_PANES;
@@ -638,8 +638,8 @@ const SECONDARY_PANE_KEYS = Object.keys(SECONDARY_PANES) as SecondaryPane[];
  */
 function writeSecondaryPaneOpen(params: URLSearchParams, pane: SecondaryPane, value: string): void {
   params.set(pane, value);
-  params.delete('fullscreen');
-  const overlay = SECONDARY_PANES[pane].mode === 'overlay';
+  params.delete("fullscreen");
+  const overlay = SECONDARY_PANES[pane].mode === "overlay";
   for (const other of SECONDARY_PANE_KEYS) {
     if (other === pane) continue;
     if (overlay && SECONDARY_PANES[other].survivesOverlay) continue;
@@ -654,7 +654,7 @@ function writeSecondaryPaneOpen(params: URLSearchParams, pane: SecondaryPane, va
  */
 function writeSecondaryPaneClose(params: URLSearchParams, pane: SecondaryPane): void {
   params.delete(pane);
-  params.delete('fullscreen');
+  params.delete("fullscreen");
 }
 
 function serializeQuery(pathname: string, params: URLSearchParams): string {
@@ -676,9 +676,9 @@ function serializeQuery(pathname: string, params: URLSearchParams): string {
 export function withSideQuery(pathname: string, search: string, id: string | null): string {
   const params = new URLSearchParams(search);
   if (id == null) {
-    writeSecondaryPaneClose(params, 'side');
+    writeSecondaryPaneClose(params, "side");
   } else {
-    writeSecondaryPaneOpen(params, 'side', id);
+    writeSecondaryPaneOpen(params, "side", id);
   }
   return serializeQuery(pathname, params);
 }
@@ -705,7 +705,7 @@ export function buildChannelPathPreservingSide(
   sideConversationId: string,
 ): string {
   const params = new URLSearchParams();
-  params.set('side', sideConversationId);
+  params.set("side", sideConversationId);
   return `${routes.chatChannel(workspaceId, channelId)}?${params.toString()}`;
 }
 
@@ -729,7 +729,7 @@ export function buildChannelPathPreservingAgent(
   agentId: string,
 ): string {
   const params = new URLSearchParams();
-  params.set('agent', agentId);
+  params.set("agent", agentId);
   return `${routes.chatChannel(workspaceId, channelId)}?${params.toString()}`;
 }
 
@@ -754,9 +754,9 @@ export function buildChannelPathPreservingAgent(
 export function withTaskQuery(pathname: string, search: string, taskId: string | null): string {
   const params = new URLSearchParams(search);
   if (taskId == null) {
-    writeSecondaryPaneClose(params, 'task');
+    writeSecondaryPaneClose(params, "task");
   } else {
-    writeSecondaryPaneOpen(params, 'task', taskId);
+    writeSecondaryPaneOpen(params, "task", taskId);
   }
   return serializeQuery(pathname, params);
 }
@@ -787,7 +787,7 @@ export function buildTaskOpenUrl(pathname: string, search: string, taskId: strin
  */
 export function buildSideOpenUrl(pathname: string, search: string, conversationId: string): string {
   const params = new URLSearchParams(search);
-  writeSecondaryPaneOpen(params, 'side', conversationId);
+  writeSecondaryPaneOpen(params, "side", conversationId);
   return serializeQuery(pathname, params);
 }
 
@@ -814,9 +814,9 @@ export function withThreadQuery(
 ): string {
   const params = new URLSearchParams(search);
   if (rootMessageId == null) {
-    writeSecondaryPaneClose(params, 'thread');
+    writeSecondaryPaneClose(params, "thread");
   } else {
-    writeSecondaryPaneOpen(params, 'thread', rootMessageId);
+    writeSecondaryPaneOpen(params, "thread", rootMessageId);
   }
   return serializeQuery(pathname, params);
 }
@@ -851,9 +851,9 @@ export function buildThreadOpenUrl(
 export function withThreadsQuery(pathname: string, search: string, open: boolean): string {
   const params = new URLSearchParams(search);
   if (!open) {
-    writeSecondaryPaneClose(params, 'threads');
+    writeSecondaryPaneClose(params, "threads");
   } else {
-    writeSecondaryPaneOpen(params, 'threads', '1');
+    writeSecondaryPaneOpen(params, "threads", "1");
   }
   return serializeQuery(pathname, params);
 }
@@ -881,9 +881,9 @@ export function withThreadsQuery(pathname: string, search: string, open: boolean
 export function withFilesQuery(pathname: string, search: string, open: boolean): string {
   const params = new URLSearchParams(search);
   if (!open) {
-    writeSecondaryPaneClose(params, 'files');
+    writeSecondaryPaneClose(params, "files");
   } else {
-    writeSecondaryPaneOpen(params, 'files', '1');
+    writeSecondaryPaneOpen(params, "files", "1");
   }
   return serializeQuery(pathname, params);
 }
@@ -910,9 +910,9 @@ export function withFilesQuery(pathname: string, search: string, open: boolean):
 export function withAgentQuery(pathname: string, search: string, agentId: string | null): string {
   const params = new URLSearchParams(search);
   if (agentId == null) {
-    writeSecondaryPaneClose(params, 'agent');
+    writeSecondaryPaneClose(params, "agent");
   } else {
-    writeSecondaryPaneOpen(params, 'agent', agentId);
+    writeSecondaryPaneOpen(params, "agent", agentId);
   }
   return serializeQuery(pathname, params);
 }
@@ -921,9 +921,9 @@ export function withHumanQuery(pathname: string, search: string, userId: string 
   const params = new URLSearchParams(search);
 
   if (userId === null) {
-    writeSecondaryPaneClose(params, 'human');
+    writeSecondaryPaneClose(params, "human");
   } else {
-    writeSecondaryPaneOpen(params, 'human', userId);
+    writeSecondaryPaneOpen(params, "human", userId);
   }
 
   return serializeQuery(pathname, params);
@@ -1072,7 +1072,7 @@ export function useNav(): {
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
   const toggleThreadsList = useCallback(() => {
-    const open = new URLSearchParams(location.search).get('threads') === '1';
+    const open = new URLSearchParams(location.search).get("threads") === "1";
     const next = withThreadsQuery(location.pathname, location.search, !open);
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
@@ -1085,7 +1085,7 @@ export function useNav(): {
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
   const toggleFilesList = useCallback(() => {
-    const open = new URLSearchParams(location.search).get('files') === '1';
+    const open = new URLSearchParams(location.search).get("files") === "1";
     const next = withFilesQuery(location.pathname, location.search, !open);
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);

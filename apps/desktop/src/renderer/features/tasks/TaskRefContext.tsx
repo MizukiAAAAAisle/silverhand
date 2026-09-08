@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from "react";
 
 /**
  * Resolution context for inline `#task:<n>` sigils.
@@ -44,9 +44,7 @@ export function TaskRefContextProvider({
   value: TaskRefContextValue;
   children?: ReactNode;
 }): JSX.Element {
-  return (
-    <TaskRefContext.Provider value={value}>{children}</TaskRefContext.Provider>
-  );
+  return <TaskRefContext.Provider value={value}>{children}</TaskRefContext.Provider>;
 }
 
 export function useTaskRefContext(): TaskRefContextValue | null {

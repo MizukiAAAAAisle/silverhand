@@ -3,7 +3,7 @@
  * the data hooks; consumers own layout. Primary fill remains separate from
  * the neutral frame so each theme preserves the action hierarchy.
  */
-import { CONTROL_HOVER_LIFT, CONTROL_SURFACE_BUTTON } from './ControlInkBorder';
+import { CONTROL_HOVER_LIFT, CONTROL_SURFACE_BUTTON } from "./ControlInkBorder";
 
 /**
  * Hover motion, animated. `translate` (not `transform`) is the property Tailwind
@@ -24,11 +24,11 @@ const PRIMARY_ACTION_CLASS = `focus-outline ${CONTROL_HOVER_LIFT} hover:bg-[var(
  * an xs toolbar Save and a full-width gate CTA can share it.
  */
 export function primaryAction(className?: string): {
-  'data-primary-action': 'commit';
+  "data-primary-action": "commit";
   className: string;
 } {
   return {
-    'data-primary-action': 'commit',
+    "data-primary-action": "commit",
     className: className ? `${PRIMARY_ACTION_CLASS} ${className}` : PRIMARY_ACTION_CLASS,
   };
 }
@@ -51,11 +51,11 @@ export function primaryAction(className?: string): {
  * dialogs is which commit shouts, never how the way out looks.
  */
 export function primaryCancel(className?: string): {
-  'data-primary-action': 'cancel';
+  "data-primary-action": "cancel";
   className: string;
 } {
   return {
-    'data-primary-action': 'cancel',
+    "data-primary-action": "cancel",
     className: className ? `${CONTROL_SURFACE_BUTTON} ${className}` : CONTROL_SURFACE_BUTTON,
   };
 }

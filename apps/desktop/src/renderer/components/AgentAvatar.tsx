@@ -1,4 +1,4 @@
-import type { RuntimeKind } from '@silverhand/shared';
+import type { RuntimeKind } from "@silverhand/shared";
 import {
   ClaudeIcon,
   CodexIcon,
@@ -7,9 +7,9 @@ import {
   OPENCODE_LOGO_DATA_URI,
   PI_LOGO_DATA_URI,
   QODER_LOGO_DATA_URI,
-} from '@/icons/agents';
-import { cn } from '@/lib/cn';
-import { AVATAR_PX_DEFAULT } from './avatar-scale';
+} from "@/icons/agents";
+import { cn } from "@/lib/cn";
+import { AVATAR_PX_DEFAULT } from "./avatar-scale";
 
 interface AgentAvatarProps {
   runtime: RuntimeKind;
@@ -41,9 +41,7 @@ interface AgentAvatarProps {
 // Monochrome vector marks, tinted via `currentColor` on a soft badge.
 // Runtimes with a full-bleed raster brand logo (see `BRAND_LOGOS`) are
 // NOT here — they render edge-to-edge and skip the tinted badge.
-const ICONS: Partial<
-  Record<RuntimeKind, (p: { style?: React.CSSProperties }) => JSX.Element>
-> = {
+const ICONS: Partial<Record<RuntimeKind, (p: { style?: React.CSSProperties }) => JSX.Element>> = {
   claude: ClaudeIcon,
   codex: CodexIcon,
   cursor: CursorIcon,
@@ -63,10 +61,10 @@ const BRAND_LOGOS: Partial<Record<RuntimeKind, string>> = {
 // path carries its own `#d97757` fill so `fg` is a no-op there.
 // Only runtimes rendered as tinted vector marks need an entry.
 const TINTS: Partial<Record<RuntimeKind, { bg: string; fg: string }>> = {
-  claude: { bg: 'bg-[#fdf3ec]', fg: 'text-[#d97757]' },
-  codex: { bg: 'bg-[#1f1f1f]', fg: 'text-white' },
-  cursor: { bg: 'bg-[#0f0f0f]', fg: 'text-white' },
-  gemini: { bg: 'bg-[#e8f0fe]', fg: 'text-[#1a73e8]' },
+  claude: { bg: "bg-[#fdf3ec]", fg: "text-[#d97757]" },
+  codex: { bg: "bg-[#1f1f1f]", fg: "text-white" },
+  cursor: { bg: "bg-[#0f0f0f]", fg: "text-white" },
+  gemini: { bg: "bg-[#e8f0fe]", fg: "text-[#1a73e8]" },
 };
 
 export function AgentAvatar({
@@ -85,7 +83,7 @@ export function AgentAvatar({
       <span
         data-avatar-ground
         className={cn(
-          'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle',
+          "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle",
           className,
         )}
         style={{ width: size, height: size }}
@@ -108,19 +106,14 @@ export function AgentAvatar({
     return (
       <span
         className={cn(
-          'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle',
+          "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle",
           className,
         )}
         style={{ width: size, height: size }}
         title={title}
         aria-hidden
       >
-        <img
-          src={brandLogo}
-          alt=""
-          className="h-full w-full object-cover"
-          draggable={false}
-        />
+        <img src={brandLogo} alt="" className="h-full w-full object-cover" draggable={false} />
       </span>
     );
   }
@@ -131,7 +124,7 @@ export function AgentAvatar({
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle',
+        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle",
         tint?.bg,
         tint?.fg,
         className,

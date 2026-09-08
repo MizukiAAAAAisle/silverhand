@@ -1,17 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
-import { QueryClient, QueryObserver, type InfiniteData } from '@tanstack/react-query';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryObserver, type InfiniteData } from "@tanstack/react-query";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type {
   TaskBoardColumnDto,
   TaskChangedEvent,
   TaskDetailDto,
   TaskStatus,
   TaskSummaryDto,
-} from '@silverhand/shared';
-import { boardColumnKey, boardCountsKey, boardFacetsKey } from './boardQuery';
-import { taskDetailKey } from './taskDetail';
-import { taskBoardCacheScope, taskByNumberKey } from './useTaskByNumber';
+} from "@silverhand/shared";
+import { boardColumnKey, boardCountsKey, boardFacetsKey } from "./boardQuery";
+import { taskDetailKey } from "./taskDetail";
+import { taskBoardCacheScope, taskByNumberKey } from "./useTaskByNumber";
 import {
   applyTaskChangedToProjections,
   beginOptimisticStatusWrite,
@@ -27,7 +27,7 @@ import {
   revertOptimisticStatusWrite,
   taskRowPrecedes,
   type BoardColumnPages,
-} from './taskProjection';
+} from "./taskProjection";
 
 /**
  * The task-status projection contract (#task:1975).
@@ -46,31 +46,31 @@ import {
  *     test env is `node`: no jsdom, no rendered hooks).
  */
 
-const WS = 'ws-1';
+const WS = "ws-1";
 // The by-number chip cache is keyed by BOARD scope, not by conversation
 // (#task:2041 / B4): every conversation on one workspace board collapses to
 // `workspace:<workspace_id>`, so a `task_changed` event reaches that single
 // cell no matter which sibling conversation rendered the chip. `eventOf()`'s
 // task sits on the `ws-1` board, so a chip keyed by this scope is its cell.
-const SCOPE = taskBoardCacheScope({ workspaceId: WS, conversationId: 'chan-1' })!;
+const SCOPE = taskBoardCacheScope({ workspaceId: WS, conversationId: "chan-1" })!;
 const FILTER = `${WS}|*|any|any`;
 const OTHER_FILTER = `${WS}|chan-2|any|any`;
 
 function row(over: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
   return {
-    id: 'task-a',
+    id: "task-a",
     task_number: 100,
     place: {
-      kind: 'workspace',
-      conversation_id: 'chan-1',
+      kind: "workspace",
+      conversation_id: "chan-1",
       workspace_id: WS,
-      channel_name: 'chan',
+      channel_name: "chan",
     },
     thread_root_id: null,
-    status: 'todo',
-    title: 'a task',
+    status: "todo",
+    title: "a task",
     assignee: null,
-    creator: { type: 'user', id: 'u1', name: 'Shiki' },
+    creator: { type: "user", id: "u1", name: "Shiki" },
     created_at: 1000,
     closed_at: null,
     ...over,
@@ -80,11 +80,11 @@ function row(over: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
 function detailOf(over: Partial<TaskDetailDto> = {}): TaskDetailDto {
   return {
     ...row(),
-    content: 'body',
+    content: "body",
     last_editor: null,
     last_edited_at: null,
-    source_message_id: 'msg-1',
-    nav: { kind: 'unavailable' },
+    source_message_id: "msg-1",
+    nav: { kind: "unavailable" },
     ...over,
   };
 }
@@ -92,7 +92,7 @@ function detailOf(over: Partial<TaskDetailDto> = {}): TaskDetailDto {
 function page(
   items: TaskSummaryDto[],
   next_cursor: string | null = null,
-  status: TaskStatus = 'todo',
+  status: TaskStatus = "todo",
 ): TaskBoardColumnDto {
   return { status, items, next_cursor };
 }
@@ -106,16 +106,16 @@ function pages(...list: TaskBoardColumnDto[]): BoardColumnPages {
 
 function eventOf(over: Partial<TaskChangedEvent> = {}): TaskChangedEvent {
   return {
-    kind: 'status',
+    kind: "status",
     workspace_id: WS,
     thread_root_id: null,
-    conversation_id: 'chan-1',
+    conversation_id: "chan-1",
     task_number: 100,
-    task_id: 'task-a',
-    source_message_id: 'msg-1',
-    status: 'in_progress',
+    task_id: "task-a",
+    source_message_id: "msg-1",
+    status: "in_progress",
     assignee: null,
-    title: 'a task',
+    title: "a task",
     closed_at: null,
     ...over,
   };
@@ -123,81 +123,92 @@ function eventOf(over: Partial<TaskChangedEvent> = {}): TaskChangedEvent {
 
 // ── Page algebra ───────────────────────────────────────────────────
 
-describe('wire order', () => {
-  it('is task_number DESC with id DESC as the tiebreak', () => {
-    expect(taskRowPrecedes({ id: 'b', task_number: 101 }, { id: 'a', task_number: 100 })).toBe(true);
-    expect(taskRowPrecedes({ id: 'a', task_number: 100 }, { id: 'b', task_number: 101 })).toBe(false);
+describe("wire order", () => {
+  it("is task_number DESC with id DESC as the tiebreak", () => {
+    expect(taskRowPrecedes({ id: "b", task_number: 101 }, { id: "a", task_number: 100 })).toBe(
+      true,
+    );
+    expect(taskRowPrecedes({ id: "a", task_number: 100 }, { id: "b", task_number: 101 })).toBe(
+      false,
+    );
     // Same number (possible across workspaces on the default board variant):
     // `id DESC` decides, so the order stays total.
-    expect(taskRowPrecedes({ id: 'b', task_number: 100 }, { id: 'a', task_number: 100 })).toBe(true);
-    expect(taskRowPrecedes({ id: 'a', task_number: 100 }, { id: 'b', task_number: 100 })).toBe(false);
+    expect(taskRowPrecedes({ id: "b", task_number: 100 }, { id: "a", task_number: 100 })).toBe(
+      true,
+    );
+    expect(taskRowPrecedes({ id: "a", task_number: 100 }, { id: "b", task_number: 100 })).toBe(
+      false,
+    );
   });
 });
 
-describe('removeTaskFromColumnPages', () => {
-  it('drops the row from its page and returns it, leaving cursors untouched', () => {
-    const target = row({ id: 'task-b', task_number: 99 });
+describe("removeTaskFromColumnPages", () => {
+  it("drops the row from its page and returns it, leaving cursors untouched", () => {
+    const target = row({ id: "task-b", task_number: 99 });
     const before = pages(
-      page([row({ task_number: 100 }), target], 'cursor-1'),
-      page([row({ id: 'task-c', task_number: 98 })]),
+      page([row({ task_number: 100 }), target], "cursor-1"),
+      page([row({ id: "task-c", task_number: 98 })]),
     );
-    const cut = removeTaskFromColumnPages(before, 'task-b');
+    const cut = removeTaskFromColumnPages(before, "task-b");
     expect(cut?.row).toBe(target);
-    expect(cut?.pages.pages[0]?.items.map(t => t.id)).toEqual(['task-a']);
+    expect(cut?.pages.pages[0]?.items.map((t) => t.id)).toEqual(["task-a"]);
     // A cursor is a POSITION in the surviving order, not an offset: page 1 still
     // continues from exactly where it did, so a 19-row page is correct.
-    expect(cut?.pages.pages[0]?.next_cursor).toBe('cursor-1');
-    expect(cut?.pages.pages[1]?.items.map(t => t.id)).toEqual(['task-c']);
+    expect(cut?.pages.pages[0]?.next_cursor).toBe("cursor-1");
+    expect(cut?.pages.pages[1]?.items.map((t) => t.id)).toEqual(["task-c"]);
   });
 
-  it('answers null when this column does not hold the row', () => {
-    expect(removeTaskFromColumnPages(pages(page([row()])), 'nope')).toBeNull();
+  it("answers null when this column does not hold the row", () => {
+    expect(removeTaskFromColumnPages(pages(page([row()])), "nope")).toBeNull();
   });
 });
 
-describe('insertTaskIntoColumnPages', () => {
+describe("insertTaskIntoColumnPages", () => {
   const loaded = pages(
-    page([row({ id: 't-100', task_number: 100 }), row({ id: 't-90', task_number: 90 })], 'cursor-1'),
-    page([row({ id: 't-80', task_number: 80 }), row({ id: 't-70', task_number: 70 })], 'cursor-2'),
+    page(
+      [row({ id: "t-100", task_number: 100 }), row({ id: "t-90", task_number: 90 })],
+      "cursor-1",
+    ),
+    page([row({ id: "t-80", task_number: 80 }), row({ id: "t-70", task_number: 70 })], "cursor-2"),
   );
 
-  it('places the row at its ordered position inside the page that covers it', () => {
-    const next = insertTaskIntoColumnPages(loaded, row({ id: 'new', task_number: 95 }));
-    expect(next?.pages[0]?.items.map(t => t.id)).toEqual(['t-100', 'new', 't-90']);
-    expect(next?.pages[0]?.next_cursor).toBe('cursor-1');
-    expect(next?.pages[1]?.items.map(t => t.id)).toEqual(['t-80', 't-70']);
+  it("places the row at its ordered position inside the page that covers it", () => {
+    const next = insertTaskIntoColumnPages(loaded, row({ id: "new", task_number: 95 }));
+    expect(next?.pages[0]?.items.map((t) => t.id)).toEqual(["t-100", "new", "t-90"]);
+    expect(next?.pages[0]?.next_cursor).toBe("cursor-1");
+    expect(next?.pages[1]?.items.map((t) => t.id)).toEqual(["t-80", "t-70"]);
   });
 
-  it('places it in a later loaded page when it sorts past the first', () => {
-    const next = insertTaskIntoColumnPages(loaded, row({ id: 'new', task_number: 75 }));
-    expect(next?.pages[0]?.items.map(t => t.id)).toEqual(['t-100', 't-90']);
-    expect(next?.pages[1]?.items.map(t => t.id)).toEqual(['t-80', 'new', 't-70']);
+  it("places it in a later loaded page when it sorts past the first", () => {
+    const next = insertTaskIntoColumnPages(loaded, row({ id: "new", task_number: 75 }));
+    expect(next?.pages[0]?.items.map((t) => t.id)).toEqual(["t-100", "t-90"]);
+    expect(next?.pages[1]?.items.map((t) => t.id)).toEqual(["t-80", "new", "t-70"]);
   });
 
-  it('DROPS a row that belongs to the unloaded tail', () => {
+  it("DROPS a row that belongs to the unloaded tail", () => {
     // Sorting after every loaded row while the column still has pages means the
     // server will deliver it in a page we have not fetched. Appending it here
     // would show it twice as soon as that page arrives.
-    expect(insertTaskIntoColumnPages(loaded, row({ id: 'new', task_number: 10 }))).toBeNull();
+    expect(insertTaskIntoColumnPages(loaded, row({ id: "new", task_number: 10 }))).toBeNull();
   });
 
-  it('appends only when the column is fully loaded', () => {
-    const complete = pages(page([row({ id: 't-100', task_number: 100 })], null));
-    const next = insertTaskIntoColumnPages(complete, row({ id: 'new', task_number: 10 }));
-    expect(next?.pages[0]?.items.map(t => t.id)).toEqual(['t-100', 'new']);
+  it("appends only when the column is fully loaded", () => {
+    const complete = pages(page([row({ id: "t-100", task_number: 100 })], null));
+    const next = insertTaskIntoColumnPages(complete, row({ id: "new", task_number: 10 }));
+    expect(next?.pages[0]?.items.map((t) => t.id)).toEqual(["t-100", "new"]);
   });
 });
 
-describe('optimisticClosedAt', () => {
-  it('mirrors the server formula except for the stamp it cannot compute', () => {
+describe("optimisticClosedAt", () => {
+  it("mirrors the server formula except for the stamp it cannot compute", () => {
     // Every non-closed status clears it — determinable.
-    expect(optimisticClosedAt(1234, 'in_progress')).toBeNull();
-    expect(optimisticClosedAt(null, 'todo')).toBeNull();
+    expect(optimisticClosedAt(1234, "in_progress")).toBeNull();
+    expect(optimisticClosedAt(null, "todo")).toBeNull();
     // Re-closing an already-closed task keeps the existing stamp — determinable.
-    expect(optimisticClosedAt(1234, 'closed')).toBe(1234);
+    expect(optimisticClosedAt(1234, "closed")).toBe(1234);
     // Closing a task that was never closed: the server stamps `Date.now()`, so
     // the client leaves it unknown rather than inventing a timestamp.
-    expect(optimisticClosedAt(null, 'closed')).toBeNull();
+    expect(optimisticClosedAt(null, "closed")).toBeNull();
   });
 });
 
@@ -214,145 +225,145 @@ function seedColumns(
   }
 }
 
-describe('locateTaskInBoardColumns', () => {
-  it('reports the column each filter scope holds the row in — the source column the event never carries', () => {
+describe("locateTaskInBoardColumns", () => {
+  it("reports the column each filter scope holds the row in — the source column the event never carries", () => {
     const qc = new QueryClient();
     seedColumns(qc, FILTER, {
       todo: pages(page([row()])),
       in_progress: pages(page([])),
     });
-    seedColumns(qc, OTHER_FILTER, { in_review: pages(page([row({ status: 'in_review' })])) });
+    seedColumns(qc, OTHER_FILTER, { in_review: pages(page([row({ status: "in_review" })])) });
 
-    const held = locateTaskInBoardColumns(qc, 'task-a');
-    expect(held.map(h => [h.filterKey, h.status])).toEqual([
-      [FILTER, 'todo'],
-      [OTHER_FILTER, 'in_review'],
+    const held = locateTaskInBoardColumns(qc, "task-a");
+    expect(held.map((h) => [h.filterKey, h.status])).toEqual([
+      [FILTER, "todo"],
+      [OTHER_FILTER, "in_review"],
     ]);
-    expect(locateTaskInBoardColumns(qc, 'nope')).toEqual([]);
+    expect(locateTaskInBoardColumns(qc, "nope")).toEqual([]);
   });
 });
 
-describe('moveTaskStatusInBoardColumns', () => {
-  it('moves the held row into the destination column and reports the pair', () => {
+describe("moveTaskStatusInBoardColumns", () => {
+  it("moves the held row into the destination column and reports the pair", () => {
     const qc = new QueryClient();
     seedColumns(qc, FILTER, {
-      todo: pages(page([row(), row({ id: 'task-b', task_number: 90 })])),
-      in_progress: pages(page([row({ id: 'task-c', task_number: 110, status: 'in_progress' })])),
+      todo: pages(page([row(), row({ id: "task-b", task_number: 90 })])),
+      in_progress: pages(page([row({ id: "task-c", task_number: 110, status: "in_progress" })])),
     });
 
     const projection = moveTaskStatusInBoardColumns(qc, {
-      taskId: 'task-a',
-      status: 'in_progress',
+      taskId: "task-a",
+      status: "in_progress",
     });
 
     expect(projection.moves).toMatchObject([
-      { filterKey: FILTER, from: 'todo', to: 'in_progress', placed: true },
+      { filterKey: FILTER, from: "todo", to: "in_progress", placed: true },
     ]);
     // The move retains the row AS IT WAS, which is the rollback path's only way
     // back when a destination column cannot hold it (see `placed: false` below).
-    expect(projection.moves[0]?.row).toMatchObject({ id: 'task-a', status: 'todo' });
-    const from = qc.getQueryData<BoardColumnPages>(boardColumnKey('todo', FILTER));
-    const to = qc.getQueryData<BoardColumnPages>(boardColumnKey('in_progress', FILTER));
-    expect(from?.pages[0]?.items.map(t => t.id)).toEqual(['task-b']);
+    expect(projection.moves[0]?.row).toMatchObject({ id: "task-a", status: "todo" });
+    const from = qc.getQueryData<BoardColumnPages>(boardColumnKey("todo", FILTER));
+    const to = qc.getQueryData<BoardColumnPages>(boardColumnKey("in_progress", FILTER));
+    expect(from?.pages[0]?.items.map((t) => t.id)).toEqual(["task-b"]);
     // Ordered placement, and the row carried over WHOLE — the fields the event
     // does not have (`place.channel_name`, `creator`, `created_at`) come from the row
     // itself, so the moved card renders identically.
-    expect(to?.pages[0]?.items.map(t => t.id)).toEqual(['task-c', 'task-a']);
+    expect(to?.pages[0]?.items.map((t) => t.id)).toEqual(["task-c", "task-a"]);
     expect(to?.pages[0]?.items[1]).toMatchObject({
-      status: 'in_progress',
-      place: { kind: 'workspace', channel_name: 'chan' },
-      creator: { name: 'Shiki' },
+      status: "in_progress",
+      place: { kind: "workspace", channel_name: "chan" },
+      creator: { name: "Shiki" },
     });
   });
 
-  it('reports a scope whose window cannot place the row as unknown', () => {
+  it("reports a scope whose window cannot place the row as unknown", () => {
     const qc = new QueryClient();
     seedColumns(qc, FILTER, { todo: pages(page([row()])) });
     seedColumns(qc, OTHER_FILTER, { todo: pages(page([])) });
 
     const projection = moveTaskStatusInBoardColumns(qc, {
-      taskId: 'task-a',
-      status: 'done',
+      taskId: "task-a",
+      status: "done",
     });
     // `placed: false` — the `done` column is not cached in this scope, so after
     // the move the row is in no column at all.
     expect(projection.moves).toMatchObject([
-      { filterKey: FILTER, from: 'todo', to: 'done', placed: false },
+      { filterKey: FILTER, from: "todo", to: "done", placed: false },
     ]);
     expect(projection.unknownFilterKeys).toEqual([OTHER_FILTER]);
   });
 
-  it('is a compare-and-swap when expectStatus is given', () => {
+  it("is a compare-and-swap when expectStatus is given", () => {
     const qc = new QueryClient();
     seedColumns(qc, FILTER, {
       todo: pages(page([])),
-      in_review: pages(page([row({ status: 'in_review' })])),
+      in_review: pages(page([row({ status: "in_review" })])),
       done: pages(page([])),
     });
     // The rollback of a `todo → done` write, arriving after an event already put
     // the task in `in_review`: the row no longer reads what we wrote, so it is
     // left alone rather than dragged back to `todo`.
     const projection = moveTaskStatusInBoardColumns(qc, {
-      taskId: 'task-a',
-      status: 'todo',
-      expectStatus: 'done',
+      taskId: "task-a",
+      status: "todo",
+      expectStatus: "done",
     });
     expect(projection.moves).toEqual([]);
     expect(
-      qc.getQueryData<BoardColumnPages>(boardColumnKey('in_review', FILTER))?.pages[0]
-        ?.items.map(t => t.id),
-    ).toEqual(['task-a']);
+      qc
+        .getQueryData<BoardColumnPages>(boardColumnKey("in_review", FILTER))
+        ?.pages[0]?.items.map((t) => t.id),
+    ).toEqual(["task-a"]);
   });
 });
 
-describe('patchTaskPointCaches', () => {
-  it('patches the detail and every chip entry that holds this task, by content', () => {
+describe("patchTaskPointCaches", () => {
+  it("patches the detail and every chip entry that holds this task, by content", () => {
     const qc = new QueryClient();
-    qc.setQueryData(taskDetailKey('task-a'), detailOf());
+    qc.setQueryData(taskDetailKey("task-a"), detailOf());
     qc.setQueryData(taskByNumberKey(SCOPE, 100), row());
-    qc.setQueryData(taskByNumberKey(SCOPE, 7), row({ id: 'other', task_number: 7 }));
+    qc.setQueryData(taskByNumberKey(SCOPE, 7), row({ id: "other", task_number: 7 }));
 
-    patchTaskPointCaches(qc, { taskId: 'task-a', patch: { status: 'done' } });
+    patchTaskPointCaches(qc, { taskId: "task-a", patch: { status: "done" } });
 
-    expect(qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a'))?.status).toBe('done');
+    expect(qc.getQueryData<TaskDetailDto>(taskDetailKey("task-a"))?.status).toBe("done");
     // The body is untouched: a status patch never claims to know the definition.
-    expect(qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a'))?.content).toBe('body');
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe('done');
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 7))?.status).toBe('todo');
+    expect(qc.getQueryData<TaskDetailDto>(taskDetailKey("task-a"))?.content).toBe("body");
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe("done");
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 7))?.status).toBe("todo");
   });
 });
 
-describe('applyTaskChangedToProjections', () => {
-  it('assigns the snapshot and asks for no reconciliation when nothing changed', () => {
+describe("applyTaskChangedToProjections", () => {
+  it("assigns the snapshot and asks for no reconciliation when nothing changed", () => {
     const qc = new QueryClient();
-    seedColumns(qc, FILTER, { in_progress: pages(page([row({ status: 'in_progress' })])) });
+    seedColumns(qc, FILTER, { in_progress: pages(page([row({ status: "in_progress" })])) });
 
-    const outcome = applyTaskChangedToProjections(qc, eventOf({ title: 'renamed' }));
+    const outcome = applyTaskChangedToProjections(qc, eventOf({ title: "renamed" }));
 
     expect(outcome.needsReconcile).toBe(false);
     expect(
-      qc.getQueryData<BoardColumnPages>(boardColumnKey('in_progress', FILTER))?.pages[0]
-        ?.items[0],
-    ).toMatchObject({ title: 'renamed', status: 'in_progress' });
+      qc.getQueryData<BoardColumnPages>(boardColumnKey("in_progress", FILTER))?.pages[0]?.items[0],
+    ).toMatchObject({ title: "renamed", status: "in_progress" });
   });
 
-  it('writes NOTHING when the snapshot says what the cache already reads', () => {
+  it("writes NOTHING when the snapshot says what the cache already reads", () => {
     const qc = new QueryClient();
-    const seeded = pages(page([row({ status: 'in_progress' })]));
+    const seeded = pages(page([row({ status: "in_progress" })]));
     seedColumns(qc, FILTER, { in_progress: seeded });
-    const seededDetail = detailOf({ status: 'in_progress' });
-    qc.setQueryData(taskDetailKey('task-a'), seededDetail);
+    const seededDetail = detailOf({ status: "in_progress" });
+    qc.setQueryData(taskDetailKey("task-a"), seededDetail);
 
     applyTaskChangedToProjections(qc, eventOf());
 
     // Object identity, not deep equality: a no-news echo that rebuilt an equal
     // row would still count as a cache write, and every read in flight on those
     // keys would be restarted for nothing.
-    expect(qc.getQueryData(boardColumnKey('in_progress', FILTER))).toBe(seeded);
-    expect(qc.getQueryData(taskDetailKey('task-a'))).toBe(seededDetail);
+    expect(qc.getQueryData(boardColumnKey("in_progress", FILTER))).toBe(seeded);
+    expect(qc.getQueryData(taskDetailKey("task-a"))).toBe(seededDetail);
   });
 
-  it('reconciles when the status or the assignee is news', () => {
+  it("reconciles when the status or the assignee is news", () => {
     const qc = new QueryClient();
     seedColumns(qc, FILTER, {
       todo: pages(page([row()])),
@@ -366,26 +377,24 @@ describe('applyTaskChangedToProjections', () => {
     const outcome = applyTaskChangedToProjections(
       qc2,
       eventOf({
-        kind: 'claim',
-        status: 'todo',
-        assignee: { type: 'agent', id: 'agent-1', name: 'Norman' },
+        kind: "claim",
+        status: "todo",
+        assignee: { type: "agent", id: "agent-1", name: "Norman" },
       }),
     );
     expect(outcome.needsReconcile).toBe(true);
   });
 
-  it('reconciles a task no cache holds — absence is not evidence', () => {
+  it("reconciles a task no cache holds — absence is not evidence", () => {
     const qc = new QueryClient();
     seedColumns(qc, FILTER, { todo: pages(page([])) });
-    const outcome = applyTaskChangedToProjections(qc, eventOf({ kind: 'create' }));
+    const outcome = applyTaskChangedToProjections(qc, eventOf({ kind: "create" }));
     expect(outcome.needsReconcile).toBe(true);
   });
 
-  it('leaves an `edit`s detail to be re-read, and settles every other kind', () => {
+  it("leaves an `edit`s detail to be re-read, and settles every other kind", () => {
     const qc = new QueryClient();
-    expect(applyTaskChangedToProjections(qc, eventOf({ kind: 'edit' })).detailSettled).toBe(
-      false,
-    );
+    expect(applyTaskChangedToProjections(qc, eventOf({ kind: "edit" })).detailSettled).toBe(false);
     expect(applyTaskChangedToProjections(qc, eventOf()).detailSettled).toBe(true);
   });
 });
@@ -439,12 +448,12 @@ function board(): Board {
   const qc = new QueryClient();
   const stops: Array<() => void> = [];
   const columns: Record<string, { fetches: () => number }> = {};
-  for (const status of ['todo', 'in_progress', 'in_review', 'done'] as const) {
+  for (const status of ["todo", "in_progress", "in_review", "done"] as const) {
     const probe = observe(
       qc,
       boardColumnKey(status, FILTER),
-      status === 'todo'
-        ? pages(page([row(), row({ id: 'task-b', task_number: 90 })]))
+      status === "todo"
+        ? pages(page([row(), row({ id: "task-b", task_number: 90 })]))
         : pages(page([], null, status)),
     );
     columns[status] = probe;
@@ -452,7 +461,7 @@ function board(): Board {
   }
   const counts = observe(qc, boardCountsKey(FILTER), { counts: {} });
   const facets = observe(qc, boardFacetsKey(), { assignees: [] });
-  const detail = observe(qc, taskDetailKey('task-a'), detailOf());
+  const detail = observe(qc, taskDetailKey("task-a"), detailOf());
   const chip = observe(qc, taskByNumberKey(SCOPE, 100), row());
   stops.push(counts.stop, facets.stop, detail.stop, chip.stop);
   return {
@@ -462,39 +471,39 @@ function board(): Board {
     facets,
     detail,
     chip,
-    stop: () => stops.forEach(s => s()),
+    stop: () => stops.forEach((s) => s()),
   };
 }
 
 /** The hook's own sequence, seam by seam (`useUpdateTaskStatus`). */
 function localWrite(qc: QueryClient, status: TaskStatus) {
-  return beginOptimisticStatusWrite(qc, { taskId: 'task-a', status });
+  return beginOptimisticStatusWrite(qc, { taskId: "task-a", status });
 }
 
 async function settled(): Promise<void> {
   await vi.waitFor(() => Promise.resolve());
-  await new Promise(resolve => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-describe('request budget for one status change', () => {
-  it('moves the card before the write, and re-reads only the column pair + counts', async () => {
+describe("request budget for one status change", () => {
+  it("moves the card before the write, and re-reads only the column pair + counts", async () => {
     const b = board();
-    const write = localWrite(b.qc, 'in_progress');
+    const write = localWrite(b.qc, "in_progress");
 
     // Acceptance #1: the card has already moved — no request has been made yet.
     expect(
-      b.qc.getQueryData<BoardColumnPages>(boardColumnKey('todo', FILTER))?.pages[0]
-        ?.items.map(t => t.id),
-    ).toEqual(['task-b']);
+      b.qc
+        .getQueryData<BoardColumnPages>(boardColumnKey("todo", FILTER))
+        ?.pages[0]?.items.map((t) => t.id),
+    ).toEqual(["task-b"]);
     expect(
-      b.qc.getQueryData<BoardColumnPages>(boardColumnKey('in_progress', FILTER))?.pages[0]
-        ?.items.map(t => t.id),
-    ).toEqual(['task-a']);
-    expect(b.qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a'))?.status).toBe(
-      'in_progress',
-    );
+      b.qc
+        .getQueryData<BoardColumnPages>(boardColumnKey("in_progress", FILTER))
+        ?.pages[0]?.items.map((t) => t.id),
+    ).toEqual(["task-a"]);
+    expect(b.qc.getQueryData<TaskDetailDto>(taskDetailKey("task-a"))?.status).toBe("in_progress");
     expect(b.qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe(
-      'in_progress',
+      "in_progress",
     );
     expect(b.columns.todo?.fetches()).toBe(0);
 
@@ -519,9 +528,9 @@ describe('request budget for one status change', () => {
     b.stop();
   });
 
-  it('costs ONE re-read of the detail when it closes a task, because that stamp is the server’s', async () => {
+  it("costs ONE re-read of the detail when it closes a task, because that stamp is the server’s", async () => {
     const b = board();
-    const write = localWrite(b.qc, 'closed');
+    const write = localWrite(b.qc, "closed");
     expect(write.closedAtUnknown).toBe(true);
     reconcileTaskStatusWrite(b.qc, write.projection, { detail: write.closedAtUnknown });
     await settled();
@@ -529,9 +538,9 @@ describe('request budget for one status change', () => {
     b.stop();
   });
 
-  it('spends NOTHING on the write’s own echo (acceptance #2)', async () => {
+  it("spends NOTHING on the write’s own echo (acceptance #2)", async () => {
     const b = board();
-    const write = localWrite(b.qc, 'in_progress');
+    const write = localWrite(b.qc, "in_progress");
     restartRacingTaskReads(b.qc, write.taskId);
     reconcileTaskStatusWrite(b.qc, write.projection, { detail: write.closedAtUnknown });
     await settled();
@@ -555,7 +564,7 @@ describe('request budget for one status change', () => {
     b.stop();
   });
 
-  it('is idempotent under a duplicate delivery (two scopes, replay)', async () => {
+  it("is idempotent under a duplicate delivery (two scopes, replay)", async () => {
     const b = board();
     applyTaskChangedToProjections(b.qc, eventOf());
     const first = b.columns.todo?.fetches();
@@ -564,17 +573,18 @@ describe('request budget for one status change', () => {
     // The row is not duplicated in the destination column, and the second
     // delivery asks for nothing.
     expect(
-      b.qc.getQueryData<BoardColumnPages>(boardColumnKey('in_progress', FILTER))?.pages[0]
-        ?.items.filter(t => t.id === 'task-a').length,
+      b.qc
+        .getQueryData<BoardColumnPages>(boardColumnKey("in_progress", FILTER))
+        ?.pages[0]?.items.filter((t) => t.id === "task-a").length,
     ).toBe(1);
     expect(outcome.needsReconcile).toBe(false);
     expect(b.columns.todo?.fetches()).toBe(first);
     b.stop();
   });
 
-  it('reverts a failed write and re-reads, without clobbering a newer authority', async () => {
+  it("reverts a failed write and re-reads, without clobbering a newer authority", async () => {
     const b = board();
-    const write = localWrite(b.qc, 'done');
+    const write = localWrite(b.qc, "done");
 
     revertOptimisticStatusWrite(b.qc, write);
     reconcileTaskStatusWrite(b.qc, write.projection, { detail: true });
@@ -582,37 +592,37 @@ describe('request budget for one status change', () => {
 
     // Back where it was, and the authority was asked.
     expect(
-      b.qc.getQueryData<BoardColumnPages>(boardColumnKey('todo', FILTER))?.pages[0]
-        ?.items.map(t => t.id),
-    ).toEqual(['task-a', 'task-b']);
-    expect(b.qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a'))?.status).toBe('todo');
+      b.qc
+        .getQueryData<BoardColumnPages>(boardColumnKey("todo", FILTER))
+        ?.pages[0]?.items.map((t) => t.id),
+    ).toEqual(["task-a", "task-b"]);
+    expect(b.qc.getQueryData<TaskDetailDto>(taskDetailKey("task-a"))?.status).toBe("todo");
     expect(b.counts.fetches()).toBe(1);
     b.stop();
   });
 
-  it('refuses to revert over a status that landed after the write', async () => {
+  it("refuses to revert over a status that landed after the write", async () => {
     const b = board();
-    const write = localWrite(b.qc, 'done');
+    const write = localWrite(b.qc, "done");
     // A remote event moves it to `in_review` while our POST is still in flight.
-    applyTaskChangedToProjections(b.qc, eventOf({ status: 'in_review' }));
+    applyTaskChangedToProjections(b.qc, eventOf({ status: "in_review" }));
 
     revertOptimisticStatusWrite(b.qc, write);
 
     // The newer authority stands: a snapshot restore would have shown `todo`
     // again and kept showing it until the next event.
     expect(
-      b.qc.getQueryData<BoardColumnPages>(boardColumnKey('in_review', FILTER))?.pages[0]
-        ?.items.map(t => t.id),
-    ).toEqual(['task-a']);
-    expect(b.qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a'))?.status).toBe(
-      'in_review',
-    );
+      b.qc
+        .getQueryData<BoardColumnPages>(boardColumnKey("in_review", FILTER))
+        ?.pages[0]?.items.map((t) => t.id),
+    ).toEqual(["task-a"]);
+    expect(b.qc.getQueryData<TaskDetailDto>(taskDetailKey("task-a"))?.status).toBe("in_review");
     b.stop();
   });
 
-  it('costs one column PAIR per hop across consecutive changes', async () => {
+  it("costs one column PAIR per hop across consecutive changes", async () => {
     const b = board();
-    for (const status of ['in_progress', 'in_review', 'done'] as const) {
+    for (const status of ["in_progress", "in_review", "done"] as const) {
       const write = localWrite(b.qc, status);
       reconcileTaskStatusWrite(b.qc, write.projection, { detail: write.closedAtUnknown });
       applyTaskChangedToProjections(b.qc, eventOf({ status }));
@@ -620,7 +630,7 @@ describe('request budget for one status change', () => {
     }
 
     // Exactly one row, in the last status asked for.
-    expect(locateTaskInBoardColumns(b.qc, 'task-a').map(h => h.status)).toEqual(['done']);
+    expect(locateTaskInBoardColumns(b.qc, "task-a").map((h) => h.status)).toEqual(["done"]);
     // Three hops = three pairs, so each column is read once as a destination and
     // once as the next hop's source. `todo` was only ever a source, `done` only
     // ever a destination. The retired root invalidation cost 4 columns × 2 owners
@@ -634,9 +644,9 @@ describe('request budget for one status change', () => {
     b.stop();
   });
 
-  it('converges when the event overtakes its own ACK', async () => {
+  it("converges when the event overtakes its own ACK", async () => {
     const b = board();
-    const write = localWrite(b.qc, 'in_progress');
+    const write = localWrite(b.qc, "in_progress");
     // Echo first…
     const outcome = applyTaskChangedToProjections(b.qc, eventOf());
     expect(outcome.needsReconcile).toBe(false);
@@ -644,23 +654,21 @@ describe('request budget for one status change', () => {
     reconcileTaskStatusWrite(b.qc, write.projection, { detail: write.closedAtUnknown });
     await settled();
 
-    expect(locateTaskInBoardColumns(b.qc, 'task-a').map(h => h.status)).toEqual([
-      'in_progress',
-    ]);
+    expect(locateTaskInBoardColumns(b.qc, "task-a").map((h) => h.status)).toEqual(["in_progress"]);
     expect(b.columns.in_progress?.fetches()).toBe(1);
     expect(b.facets.fetches()).toBe(0);
     b.stop();
   });
 
-  it('re-reads every column of a filter scope that could not place the row', async () => {
+  it("re-reads every column of a filter scope that could not place the row", async () => {
     const b = board();
     // A second board scope (e.g. a Tasks tab filtered to one channel) whose
     // window does not contain this task: it cannot say which column the row
     // left, so its columns are the honest re-read.
-    const otherTodo = observe(b.qc, boardColumnKey('todo', OTHER_FILTER), pages(page([])));
-    const otherDone = observe(b.qc, boardColumnKey('done', OTHER_FILTER), pages(page([])));
+    const otherTodo = observe(b.qc, boardColumnKey("todo", OTHER_FILTER), pages(page([])));
+    const otherDone = observe(b.qc, boardColumnKey("done", OTHER_FILTER), pages(page([])));
 
-    const write = localWrite(b.qc, 'in_progress');
+    const write = localWrite(b.qc, "in_progress");
     expect(write.projection.unknownFilterKeys).toEqual([OTHER_FILTER]);
     reconcileTaskStatusWrite(b.qc, write.projection, { detail: write.closedAtUnknown });
     await settled();
@@ -673,7 +681,7 @@ describe('request budget for one status change', () => {
     b.stop();
   });
 
-  it('restarts a point read that was already in flight, so it cannot commit pre-click state', async () => {
+  it("restarts a point read that was already in flight, so it cannot commit pre-click state", async () => {
     const qc = new QueryClient();
     const resolvers: Array<(value: TaskSummaryDto) => void> = [];
     let chipFetches = 0;
@@ -681,7 +689,7 @@ describe('request budget for one status change', () => {
     const observer = new QueryObserver(qc, {
       queryKey: [...taskByNumberKey(SCOPE, 100)],
       queryFn: () =>
-        new Promise<TaskSummaryDto>(resolve => {
+        new Promise<TaskSummaryDto>((resolve) => {
           chipFetches += 1;
           resolvers.push(resolve);
         }),
@@ -690,31 +698,31 @@ describe('request budget for one status change', () => {
     const stop = observer.subscribe(() => {});
     await vi.waitFor(() => expect(chipFetches).toBe(1));
 
-    const write = localWrite(qc, 'in_progress');
+    const write = localWrite(qc, "in_progress");
     restartRacingTaskReads(qc, write.taskId);
     await vi.waitFor(() => expect(chipFetches).toBe(2));
 
     // The read issued before the click answers late, with pre-click state. Its
     // retryer was cancelled, so the response has nowhere to commit — the card
     // the user has already seen move does not flip back.
-    resolvers[0]?.(row({ status: 'todo' }));
+    resolvers[0]?.(row({ status: "todo" }));
     await settled();
     expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe(
-      'in_progress',
+      "in_progress",
     );
     stop();
   });
 
-  it('spends nothing on a CHIP-ONLY write and its own echo', async () => {
+  it("spends nothing on a CHIP-ONLY write and its own echo", async () => {
     const qc = new QueryClient();
     // A `TaskRef` popover in a message row: no board, no detail modal. The chip is
     // the only projection there is — and therefore the only evidence about the
     // task's current value.
     const chip = observe(qc, taskByNumberKey(SCOPE, 100), row());
 
-    const write = localWrite(qc, 'in_progress');
+    const write = localWrite(qc, "in_progress");
     expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe(
-      'in_progress',
+      "in_progress",
     );
     restartRacingTaskReads(qc, write.taskId);
     reconcileTaskStatusWrite(qc, write.projection, { detail: write.closedAtUnknown });
@@ -731,10 +739,10 @@ describe('request budget for one status change', () => {
     chip.stop();
   });
 
-  it('settles a chip-only FAILURE with exactly one authoritative read', async () => {
+  it("settles a chip-only FAILURE with exactly one authoritative read", async () => {
     const qc = new QueryClient();
     const chip = observe(qc, taskByNumberKey(SCOPE, 100), row());
-    const write = localWrite(qc, 'done');
+    const write = localWrite(qc, "done");
 
     revertOptimisticStatusWrite(qc, write);
     reconcileTaskStatusWrite(qc, write.projection, { detail: true, points: true });
@@ -743,7 +751,7 @@ describe('request budget for one status change', () => {
     // The local rollback answers immediately; `points` is what makes the failure
     // path TOTAL — the cases the rollback deliberately declines (a superseded
     // write, a baseline no cache carried) still end on a server value.
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe('todo');
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe("todo");
     expect(chip.fetches()).toBe(1);
     chip.stop();
   });
@@ -776,7 +784,7 @@ function observeInFlight(
   const observer = new QueryObserver(qc, {
     queryKey: [...queryKey],
     queryFn: () =>
-      new Promise(resolve => {
+      new Promise((resolve) => {
         fetches += 1;
         resolvers.push(resolve);
       }),
@@ -799,18 +807,14 @@ function observeInFlight(
 // that round alone, and only a patch nobody will follow restarts its own racing
 // read (Cindy, #task:1975).
 
-describe('single refetch owner', () => {
-  it('spends ONE post-event read per column when source and destination are already fetching', async () => {
+describe("single refetch owner", () => {
+  it("spends ONE post-event read per column when source and destination are already fetching", async () => {
     const qc = new QueryClient();
-    const todo = observeInFlight(
-      qc,
-      boardColumnKey('todo', FILTER),
-      pages(page([row()])),
-    );
+    const todo = observeInFlight(qc, boardColumnKey("todo", FILTER), pages(page([row()])));
     const dest = observeInFlight(
       qc,
-      boardColumnKey('in_progress', FILTER),
-      pages(page([], null, 'in_progress')),
+      boardColumnKey("in_progress", FILTER),
+      pages(page([], null, "in_progress")),
     );
     await vi.waitFor(() => expect(todo.fetches()).toBe(1));
     await vi.waitFor(() => expect(dest.fetches()).toBe(1));
@@ -830,15 +834,12 @@ describe('single refetch owner', () => {
     dest.stop();
   });
 
-  it('spends ONE post-event read on an `edit` detail, and leaves it to its listener', async () => {
+  it("spends ONE post-event read on an `edit` detail, and leaves it to its listener", async () => {
     const qc = new QueryClient();
-    const detail = observeInFlight(qc, taskDetailKey('task-a'), detailOf());
+    const detail = observeInFlight(qc, taskDetailKey("task-a"), detailOf());
     await vi.waitFor(() => expect(detail.fetches()).toBe(1));
 
-    const outcome = applyTaskChangedToProjections(
-      qc,
-      eventOf({ kind: 'edit', title: 'renamed' }),
-    );
+    const outcome = applyTaskChangedToProjections(qc, eventOf({ kind: "edit", title: "renamed" }));
     expect(outcome.detailSettled).toBe(false);
     await settled();
     // The App-level patch did NOT restart it: an `edit`'s authority is wider than
@@ -846,15 +847,15 @@ describe('single refetch owner', () => {
     expect(detail.fetches()).toBe(1);
 
     // …and that owner's refresh is the only read.
-    void qc.invalidateQueries({ queryKey: taskDetailKey('task-a'), exact: true });
+    void qc.invalidateQueries({ queryKey: taskDetailKey("task-a"), exact: true });
     await settled();
     expect(detail.fetches()).toBe(2);
     detail.stop();
   });
 
-  it('DOES restart a racing read on a key nobody else will re-read', async () => {
+  it("DOES restart a racing read on a key nobody else will re-read", async () => {
     const qc = new QueryClient();
-    const todo = observeInFlight(qc, boardColumnKey('todo', FILTER), pages(page([row()])));
+    const todo = observeInFlight(qc, boardColumnKey("todo", FILTER), pages(page([row()])));
     await vi.waitFor(() => expect(todo.fetches()).toBe(1));
 
     // A title-only edit: nothing about membership changed, so no authoritative
@@ -862,42 +863,39 @@ describe('single refetch owner', () => {
     // would commit the old title over the patch. This one is ours to restart.
     const outcome = applyTaskChangedToProjections(
       qc,
-      eventOf({ kind: 'edit', status: 'todo', title: 'renamed' }),
+      eventOf({ kind: "edit", status: "todo", title: "renamed" }),
     );
     expect(outcome.needsReconcile).toBe(false);
     await settled();
     expect(todo.fetches()).toBe(2);
 
-    todo.answer(0, pages(page([row({ title: 'a task' })])));
+    todo.answer(0, pages(page([row({ title: "a task" })])));
     await settled();
     expect(
-      qc.getQueryData<BoardColumnPages>(boardColumnKey('todo', FILTER))?.pages[0]
-        ?.items[0]?.title,
-    ).toBe('renamed');
+      qc.getQueryData<BoardColumnPages>(boardColumnKey("todo", FILTER))?.pages[0]?.items[0]?.title,
+    ).toBe("renamed");
     todo.stop();
   });
 
-  it('keeps a chip read issued before the event from committing over it', async () => {
+  it("keeps a chip read issued before the event from committing over it", async () => {
     const qc = new QueryClient();
     const chip = observeInFlight(qc, taskByNumberKey(SCOPE, 100), row());
     await vi.waitFor(() => expect(chip.fetches()).toBe(1));
 
-    applyTaskChangedToProjections(qc, eventOf({ status: 'in_review' }));
+    applyTaskChangedToProjections(qc, eventOf({ status: "in_review" }));
     await vi.waitFor(() => expect(chip.fetches()).toBe(2));
 
     // The pre-event response answers late. Its retryer was cancelled by the
     // restart, so `todo` has nowhere to commit and the pill keeps the snapshot.
-    chip.answer(0, row({ status: 'todo' }));
+    chip.answer(0, row({ status: "todo" }));
     await settled();
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe(
-      'in_review',
-    );
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe("in_review");
     chip.stop();
   });
 
-  it('writes nothing and restarts nothing when the chip already reads the snapshot', async () => {
+  it("writes nothing and restarts nothing when the chip already reads the snapshot", async () => {
     const qc = new QueryClient();
-    const seeded = row({ status: 'in_progress' });
+    const seeded = row({ status: "in_progress" });
     const chip = observe(qc, taskByNumberKey(SCOPE, 100), seeded);
 
     applyTaskChangedToProjections(qc, eventOf());
@@ -910,79 +908,75 @@ describe('single refetch owner', () => {
     chip.stop();
   });
 
-  it('restarts a COLD chip read the event overtook, so the FIRST paint is not pre-event', async () => {
+  it("restarts a COLD chip read the event overtook, so the FIRST paint is not pre-event", async () => {
     const qc = new QueryClient();
     const chip = observeInFlight(qc, taskByNumberKey(SCOPE, 100));
     await vi.waitFor(() => expect(chip.fetches()).toBe(1));
 
     // There is nothing to patch — no DTO yet, and the event cannot synthesize one
     // — so the restart is the entire fix.
-    applyTaskChangedToProjections(qc, eventOf({ status: 'in_review' }));
+    applyTaskChangedToProjections(qc, eventOf({ status: "in_review" }));
     await vi.waitFor(() => expect(chip.fetches()).toBe(2));
 
     // The read issued before the event answers late and has nowhere to commit:
     // without the restart THIS would have been the pill's first value, and
     // nothing would re-read it afterwards.
-    chip.answer(0, row({ status: 'todo' }));
+    chip.answer(0, row({ status: "todo" }));
     await settled();
     expect(qc.getQueryData(taskByNumberKey(SCOPE, 100))).toBeUndefined();
 
-    chip.answer(1, row({ status: 'in_review' }));
+    chip.answer(1, row({ status: "in_review" }));
     await settled();
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe(
-      'in_review',
-    );
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe("in_review");
     chip.stop();
   });
 
-  it('restarts a COLD detail read on a status event — nothing else owns that key', async () => {
+  it("restarts a COLD detail read on a status event — nothing else owns that key", async () => {
     const qc = new QueryClient();
-    const detail = observeInFlight(qc, taskDetailKey('task-a'));
+    const detail = observeInFlight(qc, taskDetailKey("task-a"));
     await vi.waitFor(() => expect(detail.fetches()).toBe(1));
 
     // `status` / `claim` / `unclaim` are settled by the event, so `useTaskDetail`'s
     // listener deliberately does not refresh on them — this path is the modal's
     // only owner, and a cold read is the one state its patch cannot reach.
-    applyTaskChangedToProjections(qc, eventOf({ status: 'in_review' }));
+    applyTaskChangedToProjections(qc, eventOf({ status: "in_review" }));
     await vi.waitFor(() => expect(detail.fetches()).toBe(2));
 
-    detail.answer(0, detailOf({ status: 'todo' }));
+    detail.answer(0, detailOf({ status: "todo" }));
     await settled();
-    expect(qc.getQueryData(taskDetailKey('task-a'))).toBeUndefined();
+    expect(qc.getQueryData(taskDetailKey("task-a"))).toBeUndefined();
     detail.stop();
   });
 });
 
 // ── Assignee changes vs assignee-filtered columns ──────────────────
 
-describe('assignee-filtered membership', () => {
+describe("assignee-filtered membership", () => {
   const MINE = `${WS}|*|agent:agent-1|any`;
-  const NORMAN = { type: 'agent', id: 'agent-1', name: 'Norman' } as const;
+  const NORMAN = { type: "agent", id: "agent-1", name: "Norman" } as const;
 
-  it('re-reads the ONE column a narrowed scope holds the row in when it changes hands', async () => {
+  it("re-reads the ONE column a narrowed scope holds the row in when it changes hands", async () => {
     const qc = new QueryClient();
-    const claimed = row({ status: 'in_progress', assignee: NORMAN });
+    const claimed = row({ status: "in_progress", assignee: NORMAN });
     const mine = observe(
       qc,
-      boardColumnKey('in_progress', MINE),
-      pages(page([claimed], null, 'in_progress')),
+      boardColumnKey("in_progress", MINE),
+      pages(page([claimed], null, "in_progress")),
     );
-    const mineTodo = observe(qc, boardColumnKey('todo', MINE), pages(page([], null, 'todo')));
+    const mineTodo = observe(qc, boardColumnKey("todo", MINE), pages(page([], null, "todo")));
     const anyone = observe(
       qc,
-      boardColumnKey('in_progress', FILTER),
-      pages(page([claimed], null, 'in_progress')),
+      boardColumnKey("in_progress", FILTER),
+      pages(page([claimed], null, "in_progress")),
     );
 
     // Unclaimed: same status, so no move can express it — but the row has just
     // left the `assignee:agent-1` population.
     const outcome = applyTaskChangedToProjections(
       qc,
-      eventOf({ kind: 'unclaim', status: 'in_progress', assignee: null }),
+      eventOf({ kind: "unclaim", status: "in_progress", assignee: null }),
     );
-    expect(outcome.projection.recheckColumns).toEqual([
-      { filterKey: MINE, status: 'in_progress' },
-    ]);
+    expect(outcome.projection.recheckColumns).toEqual([{ filterKey: MINE, status: "in_progress" }]);
     reconcileTaskStatusWrite(qc, outcome.projection, { detail: false });
     await settled();
 
@@ -997,21 +991,21 @@ describe('assignee-filtered membership', () => {
     anyone.stop();
   });
 
-  it('re-reads a narrowed scope that does not hold the row yet when it is claimed', async () => {
+  it("re-reads a narrowed scope that does not hold the row yet when it is claimed", async () => {
     const qc = new QueryClient();
-    const mineTodo = observe(qc, boardColumnKey('todo', MINE), pages(page([], null, 'todo')));
+    const mineTodo = observe(qc, boardColumnKey("todo", MINE), pages(page([], null, "todo")));
     const mineProgress = observe(
       qc,
-      boardColumnKey('in_progress', MINE),
-      pages(page([], null, 'in_progress')),
+      boardColumnKey("in_progress", MINE),
+      pages(page([], null, "in_progress")),
     );
-    const anyone = observe(qc, boardColumnKey('todo', FILTER), pages(page([row()])));
+    const anyone = observe(qc, boardColumnKey("todo", FILTER), pages(page([row()])));
 
     // Claimed by the person that scope is filtered to: the row has to APPEAR
     // there, and only the server can say where in the window it lands.
     const outcome = applyTaskChangedToProjections(
       qc,
-      eventOf({ kind: 'claim', status: 'todo', assignee: NORMAN }),
+      eventOf({ kind: "claim", status: "todo", assignee: NORMAN }),
     );
     expect(outcome.projection.unknownFilterKeys).toEqual([MINE]);
     reconcileTaskStatusWrite(qc, outcome.projection, { detail: false });
@@ -1033,18 +1027,18 @@ describe('assignee-filtered membership', () => {
 // itself): the stamp it overwrote, a chip that is the only cache in play, and a
 // row that is in NO column because its destination was never cached.
 
-describe('rollback context', () => {
-  it('restores the closed_at stamp it overwrote', () => {
+describe("rollback context", () => {
+  it("restores the closed_at stamp it overwrote", () => {
     const qc = new QueryClient();
-    const closedRow = row({ status: 'closed', closed_at: 5000 });
+    const closedRow = row({ status: "closed", closed_at: 5000 });
     seedColumns(qc, FILTER, {
-      closed: pages(page([closedRow], null, 'closed')),
-      done: pages(page([], null, 'done')),
+      closed: pages(page([closedRow], null, "closed")),
+      done: pages(page([], null, "done")),
     });
-    qc.setQueryData(taskDetailKey('task-a'), detailOf({ status: 'closed', closed_at: 5000 }));
+    qc.setQueryData(taskDetailKey("task-a"), detailOf({ status: "closed", closed_at: 5000 }));
     qc.setQueryData(taskByNumberKey(SCOPE, 100), closedRow);
 
-    const write = localWrite(qc, 'done');
+    const write = localWrite(qc, "done");
     expect(write.previousClosedAt).toBe(5000);
     expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.closed_at).toBeNull();
 
@@ -1055,76 +1049,77 @@ describe('rollback context', () => {
     // the failure path's re-read does not reach on the chip.
     for (const held of [
       qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100)),
-      qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a')),
-      qc.getQueryData<BoardColumnPages>(boardColumnKey('closed', FILTER))?.pages[0]?.items[0],
+      qc.getQueryData<TaskDetailDto>(taskDetailKey("task-a")),
+      qc.getQueryData<BoardColumnPages>(boardColumnKey("closed", FILTER))?.pages[0]?.items[0],
     ]) {
-      expect(held).toMatchObject({ status: 'closed', closed_at: 5000 });
+      expect(held).toMatchObject({ status: "closed", closed_at: 5000 });
     }
   });
 
-  it('rolls back a write whose ONLY cache is an inline chip', () => {
+  it("rolls back a write whose ONLY cache is an inline chip", () => {
     const qc = new QueryClient();
     qc.setQueryData(taskByNumberKey(SCOPE, 100), row());
 
     // A `TaskRef` popover drives this mutation with no board and no detail
     // mounted. The by-number entry is then the only baseline there is.
-    const write = localWrite(qc, 'done');
-    expect(write.previousStatus).toBe('todo');
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe('done');
+    const write = localWrite(qc, "done");
+    expect(write.previousStatus).toBe("todo");
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe("done");
 
     revertOptimisticStatusWrite(qc, write);
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe('todo');
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe("todo");
   });
 
-  it('puts the board row back when the destination column was never cached', () => {
+  it("puts the board row back when the destination column was never cached", () => {
     const qc = new QueryClient();
     seedColumns(qc, FILTER, {
-      todo: pages(page([row(), row({ id: 'task-b', task_number: 90 })])),
+      todo: pages(page([row(), row({ id: "task-b", task_number: 90 })])),
     });
 
-    const write = localWrite(qc, 'done');
+    const write = localWrite(qc, "done");
     // The `done` column is collapsed, so the row is now in NO cached column:
     // there is nothing for a compare-and-swap to find.
     expect(write.projection.moves[0]?.placed).toBe(false);
-    expect(locateTaskInBoardColumns(qc, 'task-a')).toEqual([]);
+    expect(locateTaskInBoardColumns(qc, "task-a")).toEqual([]);
 
     revertOptimisticStatusWrite(qc, write);
 
     // Back at its ordered position, from the row the move retained.
     expect(
-      qc.getQueryData<BoardColumnPages>(boardColumnKey('todo', FILTER))?.pages[0]
-        ?.items.map(t => t.id),
-    ).toEqual(['task-a', 'task-b']);
+      qc
+        .getQueryData<BoardColumnPages>(boardColumnKey("todo", FILTER))
+        ?.pages[0]?.items.map((t) => t.id),
+    ).toEqual(["task-a", "task-b"]);
   });
 
-  it('does NOT reinstate a detached row once an authority has spoken', () => {
+  it("does NOT reinstate a detached row once an authority has spoken", () => {
     const qc = new QueryClient();
     seedColumns(qc, FILTER, { todo: pages(page([row()])) });
-    const write = localWrite(qc, 'done');
+    const write = localWrite(qc, "done");
 
     // Somebody else moved the task while our POST was in flight. The retained row
     // is a pre-write snapshot, and a snapshot is exactly what must not be
     // reinstated over an authority — the bounded re-read settles it instead.
-    applyTaskChangedToProjections(qc, eventOf({ status: 'in_review' }));
+    applyTaskChangedToProjections(qc, eventOf({ status: "in_review" }));
     revertOptimisticStatusWrite(qc, write);
 
     expect(
-      qc.getQueryData<BoardColumnPages>(boardColumnKey('todo', FILTER))?.pages[0]?.items,
+      qc.getQueryData<BoardColumnPages>(boardColumnKey("todo", FILTER))?.pages[0]?.items,
     ).toEqual([]);
   });
 
-  it('refuses to roll back a write a later write has superseded (same target value)', () => {
+  it("refuses to roll back a write a later write has superseded (same target value)", () => {
     const qc = new QueryClient();
     seedColumns(qc, FILTER, {
       todo: pages(page([row()])),
-      done: pages(page([], null, 'done')),
+      done: pages(page([], null, "done")),
     });
     qc.setQueryData(taskByNumberKey(SCOPE, 100), row());
 
     // Two clicks on the same target. B commits and echoes; A fails afterwards.
-    const a = localWrite(qc, 'done');
-    localWrite(qc, 'done');
-    applyTaskChangedToProjections(qc, eventOf({ status: 'done', closed_at: null }));
+    const a = localWrite(qc, "done");
+    localWrite(qc, "done");
+    applyTaskChangedToProjections(qc, eventOf({ status: "done", closed_at: null }));
 
     revertOptimisticStatusWrite(qc, a);
 
@@ -1132,24 +1127,24 @@ describe('rollback context', () => {
     // what A wrote — so only the LOCAL write order can refuse this rollback.
     // Without it the task reverts to `todo` and stays there: the failure path
     // re-reads the board, but B's committed `done` is what the server holds.
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe('done');
-    expect(locateTaskInBoardColumns(qc, 'task-a').map(h => h.status)).toEqual(['done']);
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe("done");
+    expect(locateTaskInBoardColumns(qc, "task-a").map((h) => h.status)).toEqual(["done"]);
   });
 
-  it('refuses the WHOLE rollback once an authoritative event has landed', () => {
+  it("refuses the WHOLE rollback once an authoritative event has landed", () => {
     const qc = new QueryClient();
     seedColumns(qc, FILTER, {
       todo: pages(page([row()])),
-      done: pages(page([], null, 'done')),
+      done: pages(page([], null, "done")),
     });
-    qc.setQueryData(taskDetailKey('task-a'), detailOf());
+    qc.setQueryData(taskDetailKey("task-a"), detailOf());
     qc.setQueryData(taskByNumberKey(SCOPE, 100), row());
 
     // ONE click, and the server COMMITTED it: the echo arrives with the real
     // stamp, only the HTTP answer is lost. `onError` then runs over caches the
     // authority already agrees with.
-    const write = localWrite(qc, 'done');
-    applyTaskChangedToProjections(qc, eventOf({ status: 'done', closed_at: 4000 }));
+    const write = localWrite(qc, "done");
+    applyTaskChangedToProjections(qc, eventOf({ status: "done", closed_at: 4000 }));
 
     revertOptimisticStatusWrite(qc, write);
 
@@ -1159,10 +1154,10 @@ describe('rollback context', () => {
     // authority has spoken since the write began" can, and it has to refuse the
     // whole rollback: the board card, the modal and the pill would otherwise all
     // rewind to `todo`, and the server-stamped `closed_at` would be wiped.
-    expect(locateTaskInBoardColumns(qc, 'task-a').map(h => h.status)).toEqual(['done']);
-    expect(qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a'))?.status).toBe('done');
-    expect(qc.getQueryData<TaskDetailDto>(taskDetailKey('task-a'))?.closed_at).toBe(4000);
-    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe('done');
+    expect(locateTaskInBoardColumns(qc, "task-a").map((h) => h.status)).toEqual(["done"]);
+    expect(qc.getQueryData<TaskDetailDto>(taskDetailKey("task-a"))?.status).toBe("done");
+    expect(qc.getQueryData<TaskDetailDto>(taskDetailKey("task-a"))?.closed_at).toBe(4000);
+    expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.status).toBe("done");
     expect(qc.getQueryData<TaskSummaryDto>(taskByNumberKey(SCOPE, 100))?.closed_at).toBe(4000);
   });
 });
@@ -1176,21 +1171,21 @@ describe('rollback context', () => {
  * the falsifiable half of that split: the write still re-reads, and it still
  * re-reads only the entries that hold this task.
  */
-describe('the chip scope a write that cannot patch still owes', () => {
-  it('re-reads the chips holding this task, and no other entry', async () => {
+describe("the chip scope a write that cannot patch still owes", () => {
+  it("re-reads the chips holding this task, and no other entry", async () => {
     const qc = new QueryClient();
     const holder = observe(qc, taskByNumberKey(SCOPE, 100), row());
     const otherTask = observe(
       qc,
       taskByNumberKey(SCOPE, 101),
-      row({ id: 'task-b', task_number: 101 }),
+      row({ id: "task-b", task_number: 101 }),
     );
     // A cached MISS: the entry exists, holds nothing, and cannot be located by
     // content. The event path owns it — it knows both key axes where a local
     // writer holds only a task id.
     const miss = observe(qc, taskByNumberKey(SCOPE, 102), null);
 
-    invalidateTaskPointCaches(qc, 'task-a');
+    invalidateTaskPointCaches(qc, "task-a");
     await vi.waitFor(() => expect(holder.fetches()).toBe(1));
     await settled();
 
@@ -1204,35 +1199,32 @@ describe('the chip scope a write that cannot patch still owes', () => {
 
 // ── Mechanical fence: no root invalidation from the status write ────
 
-describe('useUpdateTaskStatus wiring', () => {
-  const source = readFileSync(
-    fileURLToPath(new URL('./hooks.ts', import.meta.url)),
-    'utf8',
-  );
+describe("useUpdateTaskStatus wiring", () => {
+  const source = readFileSync(fileURLToPath(new URL("./hooks.ts", import.meta.url)), "utf8");
   const body = (() => {
-    const start = source.indexOf('export function useUpdateTaskStatus()');
+    const start = source.indexOf("export function useUpdateTaskStatus()");
     expect(start).toBeGreaterThan(-1);
-    const end = source.indexOf('\nexport ', start + 1);
+    const end = source.indexOf("\nexport ", start + 1);
     return source.slice(start, end === -1 ? undefined : end);
   })();
 
-  it('drives the projection seams on all three mutation edges', () => {
-    expect(body).toContain('onMutate: vars => beginOptimisticStatusWrite(qc, vars)');
-    expect(body).toContain('revertOptimisticStatusWrite(qc, write)');
-    expect(body).toContain('reconcileTaskStatusWrite(qc, write.projection');
-    expect(body).toContain('restartRacingTaskReads(qc, write.taskId)');
+  it("drives the projection seams on all three mutation edges", () => {
+    expect(body).toContain("onMutate: vars => beginOptimisticStatusWrite(qc, vars)");
+    expect(body).toContain("revertOptimisticStatusWrite(qc, write)");
+    expect(body).toContain("reconcileTaskStatusWrite(qc, write.projection");
+    expect(body).toContain("restartRacingTaskReads(qc, write.taskId)");
   });
 
-  it('closes every write in the local ledger, and settles the chips it failed', () => {
+  it("closes every write in the local ledger, and settles the chips it failed", () => {
     // Two wiring facts no cache test can see, because both are about writes this
     // hook did NOT finish: an entry left open makes the NEXT write on that task
     // look superseded and silently stops rolling back, and a failure that skips
     // `points` leaves whatever the rollback declined on a client-side value.
-    expect(body).toContain('closeOptimisticStatusWrite(write)');
-    expect(body).toContain('points: true');
+    expect(body).toContain("closeOptimisticStatusWrite(write)");
+    expect(body).toContain("points: true");
   });
 
-  it('never invalidates a task ROOT again', () => {
+  it("never invalidates a task ROOT again", () => {
     // The whole point of #task:1975: a root invalidation is what turned one
     // 7ms write into 17 requests, and it is a one-line regression to re-add.
     // Scoped to this mutation's body — `useEditTask` / `useCreateTask` legally
@@ -1240,25 +1232,22 @@ describe('useUpdateTaskStatus wiring', () => {
     // retitle any of them).
     expect(body).not.toContain("queryKey: ['tasks']");
     expect(body).not.toContain("queryKey: ['task-by-number']");
-    expect(body).not.toContain('boardFacetsKey');
+    expect(body).not.toContain("boardFacetsKey");
   });
 });
 
 // ── Mechanical fence: the assign write's two scopes are BOTH decisions ──
 
-describe('useAssignTask wiring', () => {
-  const source = readFileSync(
-    fileURLToPath(new URL('./hooks.ts', import.meta.url)),
-    'utf8',
-  );
+describe("useAssignTask wiring", () => {
+  const source = readFileSync(fileURLToPath(new URL("./hooks.ts", import.meta.url)), "utf8");
   const body = (() => {
-    const start = source.indexOf('export function useAssignTask()');
+    const start = source.indexOf("export function useAssignTask()");
     expect(start).toBeGreaterThan(-1);
-    const end = source.indexOf('\nexport ', start + 1);
+    const end = source.indexOf("\nexport ", start + 1);
     return source.slice(start, end === -1 ? undefined : end);
   })();
 
-  it('keeps the `[tasks]` root and narrows the chips (#task:2091)', () => {
+  it("keeps the `[tasks]` root and narrows the chips (#task:2091)", () => {
     // Fenced in BOTH directions, because the two scopes are opposite decisions
     // made for stated reasons, and each looks like an inconsistency from the
     // other's side. Narrowing the board root by symmetry would stop refreshing
@@ -1266,7 +1255,7 @@ describe('useAssignTask wiring', () => {
     // `['tasks']` face no content scan can locate a row in. Re-adding the chip
     // root by symmetry would re-read every inline `#task:<n>` in the app.
     expect(body).toContain("queryKey: ['tasks']");
-    expect(body).toContain('invalidateTaskPointCaches(qc, vars.taskId)');
+    expect(body).toContain("invalidateTaskPointCaches(qc, vars.taskId)");
     expect(body).not.toContain("queryKey: ['task-by-number']");
   });
 });

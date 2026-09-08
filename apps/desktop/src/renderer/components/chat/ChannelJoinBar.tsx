@@ -1,5 +1,5 @@
-import { LogIn } from 'lucide-react';
-import { primaryAction } from '@/features/common/PrimaryAction';
+import { LogIn } from "lucide-react";
+import { primaryAction } from "@/features/common/PrimaryAction";
 
 export function ChannelJoinBar({
   onJoin,
@@ -10,7 +10,7 @@ export function ChannelJoinBar({
   joining: boolean;
   channelTitle?: string | null;
 }): JSX.Element {
-  const label = channelTitle ? `Join #${channelTitle}` : 'Join channel';
+  const label = channelTitle ? `Join #${channelTitle}` : "Join channel";
   return (
     <div className="shrink-0 border-t border-border-subtle bg-bg-chat px-3 py-3">
       <button
@@ -18,13 +18,13 @@ export function ChannelJoinBar({
         data-channel-join
         onClick={onJoin}
         disabled={joining}
-        aria-label={channelTitle ? `Join #${channelTitle}` : 'Join channel'}
+        aria-label={channelTitle ? `Join #${channelTitle}` : "Join channel"}
         {...primaryAction(
-          'flex w-full items-center justify-center gap-2 rounded-[var(--control-radius)] bg-[var(--bg-control-primary)] px-3 py-2 text-sm font-medium text-[color:var(--text-on-control-primary)] hover:bg-[var(--bg-control-primary-hover)] disabled:pointer-events-none disabled:opacity-60',
+          "flex w-full items-center justify-center gap-2 rounded-[var(--control-radius)] bg-[var(--bg-control-primary)] px-3 py-2 text-sm font-medium text-[color:var(--text-on-control-primary)] hover:bg-[var(--bg-control-primary-hover)] disabled:pointer-events-none disabled:opacity-60",
         )}
       >
         <LogIn className="size-4 shrink-0" aria-hidden />
-        <span className="min-w-0 truncate">{joining ? 'Joining…' : label}</span>
+        <span className="min-w-0 truncate">{joining ? "Joining…" : label}</span>
       </button>
     </div>
   );

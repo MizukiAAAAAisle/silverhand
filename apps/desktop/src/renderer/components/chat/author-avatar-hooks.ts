@@ -1,8 +1,8 @@
-import { useMemo } from 'react';
-import type { MessageAuthorDto } from '@silverhand/shared';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
-import { collectAuthorAvatarSources } from './author-presentation';
+import { useMemo } from "react";
+import type { MessageAuthorDto } from "@silverhand/shared";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
+import { collectAuthorAvatarSources } from "./author-presentation";
 
 /**
  * Resolve avatar bytes for a set of message/thread authors STRICTLY from their
@@ -19,16 +19,11 @@ import { collectAuthorAvatarSources } from './author-presentation';
  * hover popover's extra detail, @mention chips, sender-filter options — which
  * resolve arbitrary actors, not the row's own author.
  */
-export function useAuthorAvatarObjectUrls(
-  authors: ReadonlyArray<MessageAuthorDto | null>,
-): {
+export function useAuthorAvatarObjectUrls(authors: ReadonlyArray<MessageAuthorDto | null>): {
   agentAvatarUrls: Map<string, string | null>;
   humanAvatarUrls: Map<string, string | null>;
 } {
-  const { agents, users } = useMemo(
-    () => collectAuthorAvatarSources(authors),
-    [authors],
-  );
+  const { agents, users } = useMemo(() => collectAuthorAvatarSources(authors), [authors]);
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(users);
   return { agentAvatarUrls, humanAvatarUrls };

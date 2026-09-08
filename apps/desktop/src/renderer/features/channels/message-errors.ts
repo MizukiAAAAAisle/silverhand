@@ -1,13 +1,11 @@
 // Channel agent-mutation error formatting (#task:1292), extracted verbatim from
 // hooks.ts. Leaf module (only depends on the ApiError shape).
-import { ApiError } from '@/lib/api';
+import { ApiError } from "@/lib/api";
 
 function parseApiErrorBody(err: ApiError): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(err.body) as unknown;
-    return parsed && typeof parsed === 'object'
-      ? (parsed as Record<string, unknown>)
-      : null;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
   } catch {
     return null;
   }
@@ -45,23 +43,23 @@ function parseApiErrorBody(err: ApiError): Record<string, unknown> | null {
 export function formatStartAgentError(err: unknown): string {
   if (err instanceof ApiError) {
     const body = parseApiErrorBody(err);
-    const code = typeof body?.code === 'string' ? body.code : null;
+    const code = typeof body?.code === "string" ? body.code : null;
     const detail =
-      typeof body?.error === 'string'
+      typeof body?.error === "string"
         ? body.error
-        : typeof body?.message === 'string'
+        : typeof body?.message === "string"
           ? body.message
           : err.body || err.message;
-    if (code === 'host_attach_pending') {
+    if (code === "host_attach_pending") {
       return "Can't start the agent: its computer is not connected yet.";
     }
-    if (code === 'workspace_bundle_missing') {
+    if (code === "workspace_bundle_missing") {
       return "Can't start the agent: its working directory on that computer isn't usable. Check the computer's disk space and permissions, then try again.";
     }
-    if (code === 'registry_unavailable') {
+    if (code === "registry_unavailable") {
       return "Can't start the agent: its computer hasn't finished registering with the server. Try again in a moment.";
     }
-    if (code === 'workspace_not_provisioned') {
+    if (code === "workspace_not_provisioned") {
       return "Can't start the agent: its computer reported an internal error. Try again, and report it if it keeps happening.";
     }
     return `Can't start the agent: ${detail}`;
@@ -72,22 +70,21 @@ export function formatStartAgentError(err: unknown): string {
 export function formatRemoveAgentError(err: unknown): string {
   if (err instanceof ApiError) {
     const body = parseApiErrorBody(err);
-    const code = typeof body?.code === 'string' ? body.code : null;
-    if (code === 'conversation_member_remove_unsupported') {
+    const code = typeof body?.code === "string" ? body.code : null;
+    if (code === "conversation_member_remove_unsupported") {
       // Capability, not kind (#task:2044): a direct pair and a fixed-roster
       // agent-space channel both land here, so the line can't name one of them.
       return "This conversation's members are fixed and can't be changed.";
     }
-    if (code === 'conversation_closed') {
+    if (code === "conversation_closed") {
       return "This conversation is closed. Members can't be removed.";
     }
-    if (err.status === 403)
-      return "You don't have permission to remove this agent.";
-    if (err.status === 404) return 'This agent is no longer a member.';
+    if (err.status === 403) return "You don't have permission to remove this agent.";
+    if (err.status === 404) return "This agent is no longer a member.";
     const detail =
-      typeof body?.error === 'string'
+      typeof body?.error === "string"
         ? body.error
-        : typeof body?.message === 'string'
+        : typeof body?.message === "string"
           ? body.message
           : `HTTP ${err.status}`;
     return `Can't remove the agent: ${detail}`;
@@ -110,35 +107,34 @@ export function formatRemoveAgentError(err: unknown): string {
 export function formatRemoveHumanError(err: unknown): string {
   if (err instanceof ApiError) {
     const body = parseApiErrorBody(err);
-    const code = typeof body?.code === 'string' ? body.code : null;
-    if (code === 'conversation_member_remove_unsupported') {
+    const code = typeof body?.code === "string" ? body.code : null;
+    if (code === "conversation_member_remove_unsupported") {
       // Same capability line as the agent path above — one fact, one wording.
       return "This conversation's members are fixed and can't be changed.";
     }
-    if (code === 'conversation_closed') {
+    if (code === "conversation_closed") {
       return "This channel is closed. Members can't be removed.";
     }
-    if (code === 'channel_archived') {
-      return 'Restore the channel before changing its members.';
+    if (code === "channel_archived") {
+      return "Restore the channel before changing its members.";
     }
-    if (code === 'target_outranks_actor') {
-      return 'This member holds a higher workspace role than you.';
+    if (code === "target_outranks_actor") {
+      return "This member holds a higher workspace role than you.";
     }
-    if (code === 'channel_owner') {
+    if (code === "channel_owner") {
       return "The owner of a private channel can't be removed.";
     }
-    if (code === 'last_human_member') {
+    if (code === "last_human_member") {
       return "The last member of a private channel can't be removed.";
     }
-    if (err.status === 403)
-      return "You don't have permission to remove this member.";
+    if (err.status === 403) return "You don't have permission to remove this member.";
     // 404 on this route means the CHANNEL is gone, never the member: a target
     // with no membership row is an idempotent 200.
-    if (err.status === 404) return 'This channel no longer exists.';
+    if (err.status === 404) return "This channel no longer exists.";
     const detail =
-      typeof body?.error === 'string'
+      typeof body?.error === "string"
         ? body.error
-        : typeof body?.message === 'string'
+        : typeof body?.message === "string"
           ? body.message
           : `HTTP ${err.status}`;
     return `Can't remove the member: ${detail}`;

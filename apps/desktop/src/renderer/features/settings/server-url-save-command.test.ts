@@ -12,16 +12,16 @@
  * Guessing an owner is worse than guessing a status word: the pill
  * self-heals on the next snapshot, a wrong write does not.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from "vitest";
 import {
   planServerUrlSave,
   runServerUrlSave,
   type ServerUrlSaveApi,
   type ServerUrlSaveCommand,
-} from './server-url-save-command';
-import type { DesktopServerMode } from './connection-readiness';
+} from "./server-url-save-command";
+import type { DesktopServerMode } from "./connection-readiness";
 
-const SERVER_URL = 'https://silverhand.example.com';
+const SERVER_URL = "https://silverhand.example.com";
 
 interface CountedApi {
   api: ServerUrlSaveApi;
@@ -44,12 +44,12 @@ function countingApi(): CountedApi {
       saveServerConnectionProfile: async ({ serverUrl }) => {
         calls.profile += 1;
         urls.push(serverUrl);
-        return { ok: false, phase: 'write', reason: 'write_failed' };
+        return { ok: false, phase: "write", reason: "write_failed" };
       },
       saveServerUrl: async ({ serverUrl }) => {
         calls.daemon += 1;
         urls.push(serverUrl);
-        return { ok: true, kind: 'unchanged' };
+        return { ok: true, kind: "unchanged" };
       },
     },
   };
@@ -71,8 +71,8 @@ async function submit(
   return command;
 }
 
-describe('planServerUrlSave — an unknown mode owns no command', () => {
-  it('issues ZERO IPC calls when no snapshot has been observed', async () => {
+describe("planServerUrlSave — an unknown mode owns no command", () => {
+  it("issues ZERO IPC calls when no snapshot has been observed", async () => {
     const { api, calls } = countingApi();
     await expect(submit(null, api)).resolves.toBeNull();
     // Both, explicitly: the bug was picking the WRONG one of these two,
@@ -80,7 +80,7 @@ describe('planServerUrlSave — an unknown mode owns no command', () => {
     expect(calls).toEqual({ profile: 0, daemon: 0 });
   });
 
-  it('never falls back to the embedded arm for an unknown mode', () => {
+  it("never falls back to the embedded arm for an unknown mode", () => {
     // Pinned separately from the call counts: if the plan itself
     // defaulted to embedded, the pane would never see a null to gate on
     // and the "nothing fired" test above could only fail by accident.
@@ -88,43 +88,37 @@ describe('planServerUrlSave — an unknown mode owns no command', () => {
   });
 });
 
-describe('planServerUrlSave / runServerUrlSave — a known mode routes to its own owner', () => {
-  it('remote → the server connection profile only', async () => {
+describe("planServerUrlSave / runServerUrlSave — a known mode routes to its own owner", () => {
+  it("remote → the server connection profile only", async () => {
     const { api, calls } = countingApi();
-    await expect(submit('remote', api)).resolves.toEqual({
-      source: 'profile',
+    await expect(submit("remote", api)).resolves.toEqual({
+      source: "profile",
       serverUrl: SERVER_URL,
     });
     expect(calls).toEqual({ profile: 1, daemon: 0 });
   });
 
-  it('embedded → the daemon outbound reload only', async () => {
+  it("embedded → the daemon outbound reload only", async () => {
     const { api, calls } = countingApi();
-    await expect(submit('embedded', api)).resolves.toEqual({
-      source: 'daemon_reload',
+    await expect(submit("embedded", api)).resolves.toEqual({
+      source: "daemon_reload",
       serverUrl: SERVER_URL,
     });
     expect(calls).toEqual({ profile: 0, daemon: 1 });
   });
 
-  it('reports which owner answered so the banner can describe it', async () => {
+  it("reports which owner answered so the banner can describe it", async () => {
     const { api } = countingApi();
-    const profile = await runServerUrlSave(
-      { source: 'profile', serverUrl: SERVER_URL },
-      api,
-    );
-    const daemon = await runServerUrlSave(
-      { source: 'daemon_reload', serverUrl: SERVER_URL },
-      api,
-    );
-    expect(profile.source).toBe('profile');
-    expect(daemon.source).toBe('daemon_reload');
+    const profile = await runServerUrlSave({ source: "profile", serverUrl: SERVER_URL }, api);
+    const daemon = await runServerUrlSave({ source: "daemon_reload", serverUrl: SERVER_URL }, api);
+    expect(profile.source).toBe("profile");
+    expect(daemon.source).toBe("daemon_reload");
   });
 
-  it('passes the address through untouched to the owning IPC', async () => {
+  it("passes the address through untouched to the owning IPC", async () => {
     const { api, urls } = countingApi();
-    await submit('remote', api);
-    await submit('embedded', api);
+    await submit("remote", api);
+    await submit("embedded", api);
     expect(urls).toEqual([SERVER_URL, SERVER_URL]);
   });
 });

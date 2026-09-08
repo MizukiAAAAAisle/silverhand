@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   AgentAvailability,
   AgentAvailabilityDto,
@@ -16,19 +16,19 @@ import type {
   SwitchAgentRuntimeInput,
   SwitchAgentRuntimeResponse,
   UpdateAgentInput,
-} from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
+} from "@silverhand/shared";
+import { apiPaths } from "@silverhand/shared";
 import {
   AGENT_AVAILABILITY_CHANGED_EVENT,
   AgentAvailabilityChangedEventSchema,
   AGENT_PRESENCE_CHANGED_EVENT,
   AgentPresenceChangedEventSchema,
-} from '@silverhand/shared';
-import { api, apiUpload, ApiError } from '@/lib/api';
-import { isCurrentViewerScope, onWsFrame, subscribeViewerScope } from '@/lib/ws-client';
+} from "@silverhand/shared";
+import { api, apiUpload, ApiError } from "@/lib/api";
+import { isCurrentViewerScope, onWsFrame, subscribeViewerScope } from "@/lib/ws-client";
 
-const agentsKey = ['agents'] as const;
-const agentKey = (id: string) => ['agents', id] as const;
+const agentsKey = ["agents"] as const;
+const agentKey = (id: string) => ["agents", id] as const;
 /**
  * Which directory an Agent Workspace read targets (Cindy #task:1190):
  *  - `home` → no `workspace_id` param → the agent home / L1 dir (full page);
@@ -37,33 +37,31 @@ const agentKey = (id: string) => ['agents', id] as const;
  * only names a workspace. Passing an agent space's own id resolves back to
  * home (expected overlap), so the renderer never branches on source.
  */
-export type AgentWorkspaceSource =
-  | { kind: 'home' }
-  | { kind: 'workspace'; workspaceId: string };
+export type AgentWorkspaceSource = { kind: "home" } | { kind: "workspace"; workspaceId: string };
 
 /** Cache-scope segment so home vs each workspace get distinct query entries.
  *  The prefix `['agents', id, 'workspace']` still matches all of them, so the
  *  pane's coarse refresh-invalidate keeps working. */
 function sourceScope(source: AgentWorkspaceSource): string {
-  return source.kind === 'workspace' ? `ws:${source.workspaceId}` : 'home';
+  return source.kind === "workspace" ? `ws:${source.workspaceId}` : "home";
 }
 
 /** The `?workspace_id=` query fragment for a source (`''` for home → existing
  *  L1 behaviour). Exported for the contract test — the param name must match
  *  the backend exactly. */
 export function workspaceScopeQuery(source: AgentWorkspaceSource): string {
-  return source.kind === 'workspace'
+  return source.kind === "workspace"
     ? `workspace_id=${encodeURIComponent(source.workspaceId)}`
-    : '';
+    : "";
 }
 
 const agentWorkspaceTreeKey = (id: string, scope: string) =>
-  ['agents', id, 'workspace', 'tree', scope] as const;
+  ["agents", id, "workspace", "tree", scope] as const;
 const agentWorkspaceFileKey = (id: string, scope: string, path: string) =>
-  ['agents', id, 'workspace', 'file', scope, path] as const;
-export const agentRuntimeStateKey = (id: string) => ['agents', id, 'runtime-state'] as const;
+  ["agents", id, "workspace", "file", scope, path] as const;
+export const agentRuntimeStateKey = (id: string) => ["agents", id, "runtime-state"] as const;
 const agentSchedulesKey = (id: string, status: ScheduleListStatusFilter) =>
-  ['agents', id, 'schedules', status] as const;
+  ["agents", id, "schedules", status] as const;
 /**
  * List agents the viewer can see. Default = the full `canViewAgent` ACL set
  * (agents the viewer created OR participates in via a shared workspace).
@@ -77,13 +75,13 @@ const agentSchedulesKey = (id: string, status: ScheduleListStatusFilter) =>
  * key (`['agents', 'owned']`) so it doesn't clobber the default list; both are
  * refreshed by the `['agents']`-prefixed invalidations on create/delete/avatar.
  */
-export function useAgents(options?: { enabled?: boolean; scope?: 'owned' }) {
+export function useAgents(options?: { enabled?: boolean; scope?: "owned" }) {
   const scope = options?.scope;
   return useQuery({
     queryKey: scope ? ([...agentsKey, scope] as const) : agentsKey,
     queryFn: async () => {
       const res = await api<{ agents: AgentDto[] }>(
-        scope ? `/api/agents?scope=${scope}` : '/api/agents',
+        scope ? `/api/agents?scope=${scope}` : "/api/agents",
       );
       return res.agents;
     },
@@ -93,7 +91,7 @@ export function useAgents(options?: { enabled?: boolean; scope?: 'owned' }) {
 
 export function useAgent(agentId: string | null) {
   return useQuery({
-    queryKey: agentId ? agentKey(agentId) : ['agents', 'none'],
+    queryKey: agentId ? agentKey(agentId) : ["agents", "none"],
     enabled: !!agentId,
     queryFn: async () => {
       const res = await api<{ agent: AgentDto }>(`/api/agents/${agentId}`);
@@ -102,7 +100,7 @@ export function useAgent(agentId: string | null) {
   });
 }
 
-const agentPresenceKey = (id: string) => ['agents', id, 'presence'] as const;
+const agentPresenceKey = (id: string) => ["agents", id, "presence"] as const;
 
 /**
  * The activity deadline in the CLIENT's wall-clock domain, or a sentinel when
@@ -115,7 +113,7 @@ const agentPresenceKey = (id: string) => ['agents', id, 'presence'] as const;
  * {@link useAgentPresence}: comparing a server-epoch deadline against a client
  * `now` silently misprojects under clock skew (#task:2049).
  */
-export type PresenceDeadline = number | null | 'unknown';
+export type PresenceDeadline = number | null | "unknown";
 
 /**
  * Shift the backend's ABSOLUTE server-epoch `away_at` into the CLIENT's
@@ -163,8 +161,8 @@ export function decideAgentPresenceInvalidation(
   frame: AgentAvailabilitySyncFrame,
   agentId: string,
 ): boolean {
-  if (frame.type === 'snapshot_required') return true;
-  if (frame.type !== 'event' || frame.kind !== AGENT_PRESENCE_CHANGED_EVENT) {
+  if (frame.type === "snapshot_required") return true;
+  if (frame.type !== "event" || frame.kind !== AGENT_PRESENCE_CHANGED_EVENT) {
     return false;
   }
   const parsed = AgentPresenceChangedEventSchema.safeParse(frame.payload);
@@ -203,13 +201,11 @@ export function decideAgentPresenceInvalidation(
  * safely (a past deadline reads Away; the availability axis, which folds stale →
  * unknown, is the safety valve for "should we claim anything at all").
  */
-export function useAgentPresence(
-  agentId: string | null | undefined,
-): GlobalPresence | null {
+export function useAgentPresence(agentId: string | null | undefined): GlobalPresence | null {
   const qc = useQueryClient();
   const availability = useAgentAvailability(agentId);
   const query = useQuery({
-    queryKey: agentId ? agentPresenceKey(agentId) : ['agents', 'none', 'presence'],
+    queryKey: agentId ? agentPresenceKey(agentId) : ["agents", "none", "presence"],
     enabled: !!agentId,
     // Route is the single source of the value; `agent_presence_changed` drives
     // every refresh, so no timer-based staleness (the boundary timer below
@@ -223,7 +219,7 @@ export function useAgentPresence(
     // agent Away for as long as its next real crossing is away. `'always'` closes
     // that gap and re-pairs `(dataUpdatedAt, server_now)` each mount, bounding the
     // skew residual (see {@link calibratePresenceDeadline}) to mount granularity.
-    refetchOnMount: 'always',
+    refetchOnMount: "always",
     retry: agentAvailabilityRetry,
     queryFn: async () => {
       const res = await api<AgentPresenceDto>(apiPaths.agentPresence(agentId!));
@@ -233,9 +229,9 @@ export function useAgentPresence(
   useEffect(() => {
     if (!agentId) return;
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
+    const unsub = onWsFrame((frame) => {
       if (
-        (frame.type !== 'event' && frame.type !== 'snapshot_required') ||
+        (frame.type !== "event" && frame.type !== "snapshot_required") ||
         !isCurrentViewerScope(frame.scope)
       ) {
         return;
@@ -252,7 +248,7 @@ export function useAgentPresence(
 
   const deadline: PresenceDeadline =
     query.data === undefined
-      ? 'unknown'
+      ? "unknown"
       : calibratePresenceDeadline(query.data.away_at, query.data.server_now, query.dataUpdatedAt);
 
   // Re-project once at the deadline: `agent_presence_changed` fires only for an
@@ -263,7 +259,7 @@ export function useAgentPresence(
   // (the projection already reads Away).
   const [, forceTick] = useState(0);
   useEffect(() => {
-    if (typeof deadline !== 'number') return;
+    if (typeof deadline !== "number") return;
     let timer: ReturnType<typeof setTimeout>;
     // `setTimeout` may fire a hair EARLY under engine clock granularity; a
     // forceTick then would re-render while `Date.now() < deadline` still reads
@@ -272,7 +268,7 @@ export function useAgentPresence(
     // truly passed, otherwise re-arm for the remainder.
     const tick = (): void => {
       if (Date.now() >= deadline) {
-        forceTick(t => t + 1);
+        forceTick((t) => t + 1);
         return;
       }
       timer = setTimeout(tick, deadline - Date.now());
@@ -284,7 +280,7 @@ export function useAgentPresence(
   return projectGlobalPresence(availability, deadline, Date.now());
 }
 
-const agentAvailabilityKey = (id: string) => ['agents', id, 'availability'] as const;
+const agentAvailabilityKey = (id: string) => ["agents", id, "availability"] as const;
 
 /**
  * Transport / 5xx retries for the availability read are BOUNDED, and a 4xx is
@@ -331,8 +327,8 @@ export function agentAvailabilityRetry(failureCount: number, err: unknown): bool
 export function projectAgentAvailability(state: {
   data: AgentAvailability | undefined;
   isStale: boolean;
-}): AgentAvailability | 'unknown' {
-  if (state.data === undefined || state.isStale) return 'unknown';
+}): AgentAvailability | "unknown" {
+  if (state.data === undefined || state.isStale) return "unknown";
   return state.data;
 }
 
@@ -356,13 +352,13 @@ export function projectAgentAvailability(state: {
  * status. Callers must pass the RAW `query.data` — defaulting it to `[]` reopens
  * the exact hole this closes.
  */
-export type RosterMembership = 'unknown' | 'member' | 'not_here';
+export type RosterMembership = "unknown" | "member" | "not_here";
 export function projectRosterMembership(
   members: readonly { agent_id: string }[] | undefined,
   agentId: string,
 ): RosterMembership {
-  if (members === undefined) return 'unknown';
-  return members.some(m => m.agent_id === agentId) ? 'member' : 'not_here';
+  if (members === undefined) return "unknown";
+  return members.some((m) => m.agent_id === agentId) ? "member" : "not_here";
 }
 
 /** Minimal WS frame shape {@link decideAgentAvailabilityInvalidation} consumes,
@@ -392,8 +388,8 @@ export function decideAgentAvailabilityInvalidation(
   frame: AgentAvailabilitySyncFrame,
   agentId: string,
 ): boolean {
-  if (frame.type === 'snapshot_required') return true;
-  if (frame.type !== 'event' || frame.kind !== AGENT_AVAILABILITY_CHANGED_EVENT) {
+  if (frame.type === "snapshot_required") return true;
+  if (frame.type !== "event" || frame.kind !== AGENT_AVAILABILITY_CHANGED_EVENT) {
     return false;
   }
   const parsed = AgentAvailabilityChangedEventSchema.safeParse(frame.payload);
@@ -422,10 +418,10 @@ export function decideAgentAvailabilityInvalidation(
  */
 export function useAgentAvailability(
   agentId: string | null | undefined,
-): AgentAvailability | 'unknown' {
+): AgentAvailability | "unknown" {
   const qc = useQueryClient();
   const query = useQuery({
-    queryKey: agentId ? agentAvailabilityKey(agentId) : ['agents', 'none', 'availability'],
+    queryKey: agentId ? agentAvailabilityKey(agentId) : ["agents", "none", "availability"],
     enabled: !!agentId,
     // The route is the single source of the value; the event drives every
     // refresh, so there is no timer-based staleness (no poll, no age-out).
@@ -433,7 +429,7 @@ export function useAgentAvailability(
     // A mount must hit the wire (see docblock): the unbuffered WS listener lives
     // on this hook, so a frame dropped while unmounted is only recovered by a
     // real mount refetch — never by rereading a never-stale warm entry.
-    refetchOnMount: 'always',
+    refetchOnMount: "always",
     retry: agentAvailabilityRetry,
     queryFn: async () => {
       const res = await api<AgentAvailabilityDto>(apiPaths.agentAvailability(agentId!));
@@ -443,9 +439,9 @@ export function useAgentAvailability(
   useEffect(() => {
     if (!agentId) return;
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
+    const unsub = onWsFrame((frame) => {
       if (
-        (frame.type !== 'event' && frame.type !== 'snapshot_required') ||
+        (frame.type !== "event" && frame.type !== "snapshot_required") ||
         !isCurrentViewerScope(frame.scope)
       ) {
         return;
@@ -464,7 +460,7 @@ export function useAgentAvailability(
 
 /** The user-facing presence a consumer draws once availability and the presence
  *  deadline are composed. */
-export type GlobalPresence = 'online' | 'away' | 'offline';
+export type GlobalPresence = "online" | "away" | "offline";
 
 /**
  * Compose the agent's availability with its (client-domain) presence deadline
@@ -492,17 +488,17 @@ export type GlobalPresence = 'online' | 'away' | 'offline';
  * a louder claim.
  */
 export function projectGlobalPresence(
-  availability: AgentAvailability | 'unknown',
+  availability: AgentAvailability | "unknown",
   deadline: PresenceDeadline,
   now: number,
 ): GlobalPresence | null {
-  if (availability === 'unknown') return null;
-  if (availability === 'offline') return 'offline';
-  if (deadline === 'unknown' || deadline === null) return 'away';
-  return now < deadline ? 'online' : 'away';
+  if (availability === "unknown") return null;
+  if (availability === "offline") return "offline";
+  if (deadline === "unknown" || deadline === null) return "away";
+  return now < deadline ? "online" : "away";
 }
 
-const agentProfileMcpKey = (id: string) => ['agents', id, 'profile-mcp'] as const;
+const agentProfileMcpKey = (id: string) => ["agents", id, "profile-mcp"] as const;
 
 /**
  * Read the agent's raw profile MCP config (`mcp.json`, or `null` when unset).
@@ -513,7 +509,7 @@ const agentProfileMcpKey = (id: string) => ['agents', id, 'profile-mcp'] as cons
  */
 export function useAgentProfileMcp(agentId: string | null) {
   return useQuery({
-    queryKey: agentId ? agentProfileMcpKey(agentId) : ['agents', 'none', 'profile-mcp'],
+    queryKey: agentId ? agentProfileMcpKey(agentId) : ["agents", "none", "profile-mcp"],
     enabled: !!agentId,
     queryFn: async () => {
       const res = await api<{ raw: string | null }>(apiPaths.agentProfileMcp(agentId!));
@@ -544,7 +540,7 @@ export function useMcpProbe(agentId: string) {
       // protocol failures are `{ok:false, phase}` at 200, only host-transport
       // faults are HTTP errors. (#task:1137 backend, agents.ts:603.)
       return api<McpProbeResult>(apiPaths.agentProfileMcpProbe(agentId), {
-        method: 'POST',
+        method: "POST",
         body: JSON.stringify(body),
       });
     },
@@ -583,16 +579,16 @@ export function useCreateAgent() {
         agent_home_workspace_id: string | null;
         dm_channel_id: string | null;
         onboarding_message_id: string | null;
-      }>('/api/agents', {
-        method: 'POST',
+      }>("/api/agents", {
+        method: "POST",
         body: JSON.stringify(input),
-        headers: { 'Idempotency-Key': idempotencyKey },
+        headers: { "Idempotency-Key": idempotencyKey },
       });
       return res;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: agentsKey });
-      qc.invalidateQueries({ queryKey: ['channels'] });
+      qc.invalidateQueries({ queryKey: ["channels"] });
     },
   });
 }
@@ -601,9 +597,9 @@ export function useUpdateAgent(agentId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: UpdateAgentInput) => {
-      if (!agentId) throw new Error('no agent id');
+      if (!agentId) throw new Error("no agent id");
       const res = await api<{ agent: AgentDto }>(`/api/agents/${agentId}`, {
-        method: 'PATCH',
+        method: "PATCH",
         body: JSON.stringify(input),
       });
       return res.agent;
@@ -627,17 +623,13 @@ export function useUpdateAgent(agentId: string | null) {
  * `['conversations']` prefix would over-fire against every conversation-scoped
  * query, so we use a structured predicate that matches only run-state slots.
  */
-export function applySwitchAgentRuntimeSideEffects(
-  qc: QueryClient,
-  agentId: string,
-): void {
+export function applySwitchAgentRuntimeSideEffects(qc: QueryClient, agentId: string): void {
   qc.invalidateQueries({ queryKey: agentsKey });
   qc.invalidateQueries({ queryKey: agentKey(agentId) });
   qc.invalidateQueries({ queryKey: agentRuntimeStateKey(agentId) });
-  qc.invalidateQueries({ queryKey: ['channels'] });
+  qc.invalidateQueries({ queryKey: ["channels"] });
   qc.invalidateQueries({
-    predicate: q =>
-      q.queryKey[0] === 'conversations' && q.queryKey[2] === 'agent-run-states',
+    predicate: (q) => q.queryKey[0] === "conversations" && q.queryKey[2] === "agent-run-states",
   });
 }
 
@@ -664,14 +656,11 @@ export function useSwitchAgentRuntime(agentId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: SwitchAgentRuntimeInput) => {
-      if (!agentId) throw new Error('no agent id');
-      const res = await api<SwitchAgentRuntimeResponse>(
-        apiPaths.agentRuntime(agentId),
-        {
-          method: 'PUT',
-          body: JSON.stringify(input),
-        },
-      );
+      if (!agentId) throw new Error("no agent id");
+      const res = await api<SwitchAgentRuntimeResponse>(apiPaths.agentRuntime(agentId), {
+        method: "PUT",
+        body: JSON.stringify(input),
+      });
       return res;
     },
     onSuccess: () => {
@@ -702,9 +691,9 @@ export function useUploadAgentAvatar(agentId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (file: File) => {
-      if (!agentId) throw new Error('no agent id');
+      if (!agentId) throw new Error("no agent id");
       const form = new FormData();
-      form.set('file', file);
+      form.set("file", file);
       const res = await apiUpload<{ avatar_url: string; agent: AgentDto }>(
         apiPaths.agentAvatar(agentId),
         form,
@@ -728,11 +717,10 @@ export function useClearAgentAvatar(agentId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      if (!agentId) throw new Error('no agent id');
-      const res = await api<{ agent: AgentDto }>(
-        apiPaths.agentAvatar(agentId),
-        { method: 'DELETE' },
-      );
+      if (!agentId) throw new Error("no agent id");
+      const res = await api<{ agent: AgentDto }>(apiPaths.agentAvatar(agentId), {
+        method: "DELETE",
+      });
       return res.agent;
     },
     onSuccess: () => {
@@ -745,13 +733,13 @@ export function useClearAgentAvatar(agentId: string | null) {
 
 export function useAgentWorkspaceTree(
   agentId: string | null,
-  source: AgentWorkspaceSource = { kind: 'home' },
+  source: AgentWorkspaceSource = { kind: "home" },
 ) {
   const scope = sourceScope(source);
   return useQuery({
     queryKey: agentId
       ? agentWorkspaceTreeKey(agentId, scope)
-      : ['agents', 'none', 'workspace', 'tree'],
+      : ["agents", "none", "workspace", "tree"],
     enabled: !!agentId,
     queryFn: async () => {
       const query = workspaceScopeQuery(source);
@@ -788,12 +776,12 @@ export function useAgentWorkspaceFile(
     queryKey:
       agentId && path
         ? agentWorkspaceFileKey(agentId, scope, path)
-        : ['agents', 'none', 'workspace', 'file'],
+        : ["agents", "none", "workspace", "file"],
     enabled: !!agentId && !!path,
     queryFn: async () => {
       const params = new URLSearchParams({ path: path! });
-      if (source.kind === 'workspace') {
-        params.set('workspace_id', source.workspaceId);
+      if (source.kind === "workspace") {
+        params.set("workspace_id", source.workspaceId);
       }
       const url = `${apiPaths.agentWorkspaceFile(agentId!)}?${params.toString()}`;
       const res = await api<{ file: AgentWorkspaceFileRead }>(url);
@@ -805,14 +793,10 @@ export function useAgentWorkspaceFile(
 
 export function useAgentRuntimeState(agentId: string | null) {
   return useQuery({
-    queryKey: agentId
-      ? agentRuntimeStateKey(agentId)
-      : ['agents', 'none', 'runtime-state'],
+    queryKey: agentId ? agentRuntimeStateKey(agentId) : ["agents", "none", "runtime-state"],
     enabled: !!agentId,
     queryFn: async () => {
-      const res = await api<AgentRuntimeStateDto>(
-        `/api/agents/${agentId}/runtime-state`,
-      );
+      const res = await api<AgentRuntimeStateDto>(`/api/agents/${agentId}/runtime-state`);
       return res;
     },
     // Status / pid change as soon as the user clicks Stop or a conversation
@@ -826,9 +810,9 @@ export function useStopAgent(agentId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      if (!agentId) throw new Error('no agent id');
+      if (!agentId) throw new Error("no agent id");
       return api<{ stopped: number }>(`/api/agents/${agentId}/stop`, {
-        method: 'POST',
+        method: "POST",
       });
     },
     onSuccess: () => {
@@ -843,13 +827,13 @@ export function useDeleteAgent() {
   return useMutation({
     mutationFn: async (agentId: string) => {
       await api<void>(`/api/agents/${agentId}`, {
-        method: 'DELETE',
+        method: "DELETE",
         body: JSON.stringify({ confirm: true }),
       });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: agentsKey });
-      qc.invalidateQueries({ queryKey: ['channels'] });
+      qc.invalidateQueries({ queryKey: ["channels"] });
     },
   });
 }
@@ -864,12 +848,12 @@ export function useDeleteAgent() {
  *  HTTP traffic on the much slower human read cadence. */
 export function useAgentSchedules(
   agentId: string | null,
-  status: ScheduleListStatusFilter = 'active',
+  status: ScheduleListStatusFilter = "active",
 ) {
   return useQuery({
     queryKey: agentId
       ? agentSchedulesKey(agentId, status)
-      : ['agents', 'none', 'schedules', status],
+      : ["agents", "none", "schedules", status],
     enabled: !!agentId,
     queryFn: async () => {
       const res = await api<{ schedules: ScheduleDto[] }>(
@@ -889,16 +873,16 @@ export function useCancelAgentSchedule(agentId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (scheduleId: string) => {
-      if (!agentId) throw new Error('no agent id');
+      if (!agentId) throw new Error("no agent id");
       const res = await api<{ schedule: ScheduleDto }>(
         apiPaths.agentScheduleCancel(agentId, scheduleId),
-        { method: 'POST' },
+        { method: "POST" },
       );
       return res.schedule;
     },
     onSuccess: () => {
       if (!agentId) return;
-      qc.invalidateQueries({ queryKey: ['agents', agentId, 'schedules'] });
+      qc.invalidateQueries({ queryKey: ["agents", agentId, "schedules"] });
     },
   });
 }

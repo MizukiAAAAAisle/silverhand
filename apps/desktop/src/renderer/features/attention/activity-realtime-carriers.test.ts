@@ -23,21 +23,17 @@
 // The applier is exercised against a real QueryClient rather than a rendered hook:
 // `applyActivityFrame` is a pure function of (frame, isViewerScope) precisely so
 // this needs no DOM, the same idiom as `attention-frame-gap.test.ts`.
-import { describe, expect, it, vi } from 'vitest';
-import { QueryClient } from '@tanstack/react-query';
-import type { ServerFrame } from '@silverhand/shared';
-import { decodeTransportEpoch, decodeTransportSeq } from '@silverhand/shared';
-import {
-  ACTIVITY_INVALIDATING_EVENT_KINDS,
-  activityKey,
-  applyActivityFrame,
-} from './hooks';
+import { describe, expect, it, vi } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import type { ServerFrame } from "@silverhand/shared";
+import { decodeTransportEpoch, decodeTransportSeq } from "@silverhand/shared";
+import { ACTIVITY_INVALIDATING_EVENT_KINDS, activityKey, applyActivityFrame } from "./hooks";
 
-const EPOCH = decodeTransportEpoch('e1');
+const EPOCH = decodeTransportEpoch("e1");
 
-function event(kind: string, scope = 'viewer:u1'): ServerFrame {
+function event(kind: string, scope = "viewer:u1"): ServerFrame {
   return {
-    type: 'event',
+    type: "event",
     scope,
     seq: decodeTransportSeq(7),
     epoch: EPOCH,
@@ -49,7 +45,7 @@ function event(kind: string, scope = 'viewer:u1'): ServerFrame {
 /** Records the query keys handed to `invalidateQueries`, in order. */
 function trackInvalidations(qc: QueryClient): string[] {
   const seen: string[] = [];
-  vi.spyOn(qc, 'invalidateQueries').mockImplementation((filters?: unknown) => {
+  vi.spyOn(qc, "invalidateQueries").mockImplementation((filters?: unknown) => {
     const key = (filters as { queryKey?: unknown } | undefined)?.queryKey;
     seen.push(JSON.stringify(key));
     return Promise.resolve();
@@ -59,22 +55,22 @@ function trackInvalidations(qc: QueryClient): string[] {
 
 const ACTIVITY = JSON.stringify(activityKey());
 
-describe('Activity live carriers (#task:2115)', () => {
+describe("Activity live carriers (#task:2115)", () => {
   // Named one by one, with the producer each stands for, because the claim is
   // per-carrier: a set that happened to contain three kinds but ignored the DM one
   // at runtime would pass an aggregate assertion.
   it.each([
     // A workspace send / a workspace stream read — the positional family's
     // workspace arm, paired with its badge inside `viewer-scope.ts`.
-    ['unread_updated'],
+    ["unread_updated"],
     // A directed insert or read: @me and agent-start failures, both placements.
-    ['notification'],
+    ["notification"],
     // The positional family's DM arm, in BOTH directions: a send's post-commit
     // fan-out (`delivery.ts`) and a pair's cursor move (`application/observe.ts`)
     // publish this instead of `unread_updated`. Miss it and a first DM never
     // appears, and a DM read in its own pane leaves its row behind in the rail.
-    ['direct_pairs_changed'],
-  ])('%s re-reads the rail', kind => {
+    ["direct_pairs_changed"],
+  ])("%s re-reads the rail", (kind) => {
     const qc = new QueryClient();
     const seen = trackInvalidations(qc);
 
@@ -83,17 +79,17 @@ describe('Activity live carriers (#task:2115)', () => {
     expect(seen).toEqual([ACTIVITY]);
   });
 
-  it('carries exactly these three kinds and no others', () => {
+  it("carries exactly these three kinds and no others", () => {
     // Exhaustive rather than a membership check: the point of naming the set is
     // that adding to it is a decision recorded in one place.
     expect([...ACTIVITY_INVALIDATING_EVENT_KINDS]).toEqual([
-      'unread_updated',
-      'notification',
-      'direct_pairs_changed',
+      "unread_updated",
+      "notification",
+      "direct_pairs_changed",
     ]);
   });
 
-  it('ignores the other frames the same viewer scope carries', () => {
+  it("ignores the other frames the same viewer scope carries", () => {
     // The differential that keeps the fix from being "invalidate on any viewer
     // event": these three ride the SAME subscription and none can change this
     // list, so swallowing them would turn every badge tick into a refetch of the
@@ -102,44 +98,44 @@ describe('Activity live carriers (#task:2115)', () => {
     const qc = new QueryClient();
     const seen = trackInvalidations(qc);
 
-    for (const kind of ['attention_badge_updated', 'attention_pref_changed', 'task_changed']) {
+    for (const kind of ["attention_badge_updated", "attention_pref_changed", "task_changed"]) {
       applyActivityFrame(qc, event(kind), true);
     }
 
     expect(seen).toEqual([]);
   });
 
-  it('ignores a carrier that arrives on another scope', () => {
+  it("ignores a carrier that arrives on another scope", () => {
     // Scope gating is the caller's answer ("is this MY viewer scope"), so the
     // applier must honour it rather than key on the kind alone — otherwise a
     // conversation-scoped frame of a listed kind would re-read the whole rail.
     const qc = new QueryClient();
     const seen = trackInvalidations(qc);
 
-    applyActivityFrame(qc, event('direct_pairs_changed', 'conversation:c1'), false);
-    applyActivityFrame(qc, event('unread_updated', 'workspace:w1'), false);
+    applyActivityFrame(qc, event("direct_pairs_changed", "conversation:c1"), false);
+    applyActivityFrame(qc, event("unread_updated", "workspace:w1"), false);
 
     expect(seen).toEqual([]);
   });
 
-  it('re-reads on a viewer-scope gap, and only the viewer scope', () => {
+  it("re-reads on a viewer-scope gap, and only the viewer scope", () => {
     // A gap may have swallowed any of the three, so `snapshot_required` cannot be
     // handled per-kind — and the list is app-lifetime with `refetchOnWindowFocus`
     // off, so nothing else would ever re-read it.
     const gap = (scope: string): ServerFrame => ({
-      type: 'snapshot_required',
+      type: "snapshot_required",
       scope,
-      reason: 'gap_too_large',
+      reason: "gap_too_large",
       epoch: EPOCH,
       currentSeq: decodeTransportSeq(42),
     });
     const qc = new QueryClient();
     const seen = trackInvalidations(qc);
 
-    applyActivityFrame(qc, gap('workspace:w1'), false);
+    applyActivityFrame(qc, gap("workspace:w1"), false);
     expect(seen).toEqual([]);
 
-    applyActivityFrame(qc, gap('viewer:u1'), true);
+    applyActivityFrame(qc, gap("viewer:u1"), true);
     expect(seen).toEqual([ACTIVITY]);
   });
 });

@@ -2,12 +2,12 @@
 
 Drop these files here before running `pnpm package`:
 
-| file               | required | what                                                              |
-| ------------------ | -------- | ----------------------------------------------------------------- |
-| `icon.icns`        | yes      | macOS app + dmg icon. 1024×1024 source, multi-res `.icns` bundle. |
-| `icon.png`         | no       | 1024×1024 source PNG (kept around for re-export)                  |
-| `background.png`   | no       | dmg installer background, 540×380                                 |
-| `entitlements.mac.plist` | no | Only needed if we enable hardened runtime / app sandbox          |
+| file                     | required | what                                                              |
+| ------------------------ | -------- | ----------------------------------------------------------------- |
+| `icon.icns`              | yes      | macOS app + dmg icon. 1024×1024 source, multi-res `.icns` bundle. |
+| `icon.png`               | no       | 1024×1024 source PNG (kept around for re-export)                  |
+| `background.png`         | no       | dmg installer background, 540×380                                 |
+| `entitlements.mac.plist` | no       | Only needed if we enable hardened runtime / app sandbox           |
 
 ### Making `icon.icns` from a 1024×1024 PNG
 

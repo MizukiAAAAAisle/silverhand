@@ -1,6 +1,6 @@
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { isSafeOpenExtension } from '@silverhand/shared';
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { isSafeOpenExtension } from "@silverhand/shared";
 
 export type AttachmentOpenResult = { ok: true } | { ok: false; reason: string };
 
@@ -36,22 +36,22 @@ export function resolveAttachmentScratchTarget(
   attachmentId: unknown,
   filename: unknown,
 ): { ok: true; target: ScratchTarget } | { ok: false; reason: string } {
-  if (typeof attachmentId !== 'string' || !ATTACHMENT_ID.test(attachmentId)) {
-    return { ok: false, reason: 'invalid_attachment_id' };
+  if (typeof attachmentId !== "string" || !ATTACHMENT_ID.test(attachmentId)) {
+    return { ok: false, reason: "invalid_attachment_id" };
   }
-  if (typeof filename !== 'string' || filename.length === 0) {
-    return { ok: false, reason: 'invalid_filename' };
+  if (typeof filename !== "string" || filename.length === 0) {
+    return { ok: false, reason: "invalid_filename" };
   }
   const safeName = filename
-    .replace(/[\\/]/g, '_')
-    .replace(/[\x00-\x1f]+/g, '')
+    .replace(/[\\/]/g, "_")
+    .replace(/[\x00-\x1f]+/g, "")
     .trim()
     .slice(0, 255);
-  if (!safeName) return { ok: false, reason: 'invalid_filename' };
+  if (!safeName) return { ok: false, reason: "invalid_filename" };
   if (!isSafeOpenExtension(safeName)) {
-    return { ok: false, reason: 'unsafe_extension' };
+    return { ok: false, reason: "unsafe_extension" };
   }
-  const dir = join(tmpdir(), 'silverhand-attachments', attachmentId);
+  const dir = join(tmpdir(), "silverhand-attachments", attachmentId);
   return { ok: true, target: { dir, fullPath: join(dir, safeName) } };
 }
 
@@ -74,11 +74,8 @@ export async function materializeAndOpenAttachment(
   input: { attachmentId: unknown; filename: unknown; bytes: Buffer },
   io: AttachmentOpenIo,
 ): Promise<AttachmentOpenResult> {
-  if (input.bytes.length === 0) return { ok: false, reason: 'empty_payload' };
-  const resolved = resolveAttachmentScratchTarget(
-    input.attachmentId,
-    input.filename,
-  );
+  if (input.bytes.length === 0) return { ok: false, reason: "empty_payload" };
+  const resolved = resolveAttachmentScratchTarget(input.attachmentId, input.filename);
   if (!resolved.ok) return resolved;
   const { dir, fullPath } = resolved.target;
   try {

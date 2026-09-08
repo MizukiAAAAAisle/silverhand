@@ -1,39 +1,39 @@
-import { sideAgentWorkspaceSource } from './workspace-source';
-import './agent-page.css';
-import { AgentPageLayout } from './AgentPageLayout';
+import { sideAgentWorkspaceSource } from "./workspace-source";
+import "./agent-page.css";
+import { AgentPageLayout } from "./AgentPageLayout";
 import {
   visibleAgentSideSections,
   resolveAgentSideSection,
   type AgentSideSection,
-} from './side-section-access';
-import { useEffect, useState } from 'react';
-import { Activity, CalendarClock, FolderTree, Lock, User } from 'lucide-react';
-import type { AgentDto, AgentRuntimeParticipation, AgentRuntimeStateDto } from '@silverhand/shared';
-import { cn } from '@/lib/cn';
-import { SidePanelHeader } from '@/components/layout/SidePanelHeader';
-import { AgentHeader } from './AgentHeader';
-import { AgentProfileCard } from './AgentProfileCard';
-import { AgentSchedulesCard } from './AgentSchedulesCard';
-import { AgentWorkspaceContainer, AgentWorkspacePane } from './AgentWorkspacePane';
-import { AgentMcpPane } from './AgentMcpPane';
-import { AgentActivityPane } from './AgentActivityPane';
-import { AgentActivityTimeline, AgentStreamActivityTimeline } from './AgentActivityTimeline';
-import { AgentChatsPane } from './AgentChatsPane';
-import { AGENT_PANE_INSET } from './agent-pane-layout';
-import { AgentSidebar, AgentSectionTabs, type AgentSection } from './AgentSidebar';
-import { useAgent, useAgentRuntimeState } from './hooks';
-import { canAuditAgentChats, canManageAgentSchedules, canViewAgentFiles } from './permissions';
-import { isBackendUnreachable, isUpdateRequired, useViewerUser } from '@/features/me/hooks';
-import { paneChrome } from '@/components/layout/pane-chrome';
+} from "./side-section-access";
+import { useEffect, useState } from "react";
+import { Activity, CalendarClock, FolderTree, Lock, User } from "lucide-react";
+import type { AgentDto, AgentRuntimeParticipation, AgentRuntimeStateDto } from "@silverhand/shared";
+import { cn } from "@/lib/cn";
+import { SidePanelHeader } from "@/components/layout/SidePanelHeader";
+import { AgentHeader } from "./AgentHeader";
+import { AgentProfileCard } from "./AgentProfileCard";
+import { AgentSchedulesCard } from "./AgentSchedulesCard";
+import { AgentWorkspaceContainer, AgentWorkspacePane } from "./AgentWorkspacePane";
+import { AgentMcpPane } from "./AgentMcpPane";
+import { AgentActivityPane } from "./AgentActivityPane";
+import { AgentActivityTimeline, AgentStreamActivityTimeline } from "./AgentActivityTimeline";
+import { AgentChatsPane } from "./AgentChatsPane";
+import { AGENT_PANE_INSET } from "./agent-pane-layout";
+import { AgentSidebar, AgentSectionTabs, type AgentSection } from "./AgentSidebar";
+import { useAgent, useAgentRuntimeState } from "./hooks";
+import { canAuditAgentChats, canManageAgentSchedules, canViewAgentFiles } from "./permissions";
+import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/me/hooks";
+import { paneChrome } from "@/components/layout/pane-chrome";
 
-const SECTION_STORAGE_KEY = 'silverhand:layout.agent-section';
+const SECTION_STORAGE_KEY = "silverhand:layout.agent-section";
 const VALID_SECTIONS: ReadonlyArray<AgentSection> = [
-  'profile',
-  'workspace',
-  'mcp',
-  'activity',
-  'schedules',
-  'chats',
+  "profile",
+  "workspace",
+  "mcp",
+  "activity",
+  "schedules",
+  "chats",
 ];
 
 function readSection(): AgentSection {
@@ -45,10 +45,10 @@ function readSection(): AgentSection {
   } catch {
     /* private mode / quota — fall back to default */
   }
-  return 'profile';
+  return "profile";
 }
 
-export type AgentViewVariant = 'full' | 'side';
+export type AgentViewVariant = "full" | "side";
 
 interface AgentViewProps {
   agentId: string;
@@ -89,7 +89,7 @@ export function AgentView({
   onOpenConversation,
   onOpenChat,
   onMessageAgent,
-  variant = 'full',
+  variant = "full",
   contextConversationId = null,
   contextWorkspaceId = null,
   onClose,
@@ -132,7 +132,7 @@ export function AgentView({
   // ownership hasn't resolved yet) on a section the rail won't show. Clamp the
   // effective section back to Profile until owner access is known.
   const effectiveSection: AgentSection =
-    section === 'chats' && !canAuditChats ? 'profile' : section;
+    section === "chats" && !canAuditChats ? "profile" : section;
 
   useEffect(() => {
     try {
@@ -143,7 +143,7 @@ export function AgentView({
   }, [section]);
 
   if (agentQuery.isLoading) {
-    return variant === 'side' ? (
+    return variant === "side" ? (
       <SidePanelShell onClose={onClose}>
         <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
           Loading agent…
@@ -152,14 +152,14 @@ export function AgentView({
     ) : (
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-        style={{ ...paneChrome, overflow: 'hidden' }}
+        style={{ ...paneChrome, overflow: "hidden" }}
       >
         Loading agent…
       </main>
     );
   }
   if (agentQuery.isError || !agentQuery.data) {
-    return variant === 'side' ? (
+    return variant === "side" ? (
       <SidePanelShell onClose={onClose}>
         <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
           Agent not found.
@@ -168,7 +168,7 @@ export function AgentView({
     ) : (
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-        style={{ ...paneChrome, overflow: 'hidden' }}
+        style={{ ...paneChrome, overflow: "hidden" }}
       >
         Agent not found.
       </main>
@@ -177,7 +177,7 @@ export function AgentView({
 
   const agent = agentQuery.data;
 
-  if (variant === 'side') {
+  if (variant === "side") {
     return (
       <AgentSidePanel
         agent={agent}
@@ -209,7 +209,7 @@ export function AgentView({
       }
     >
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {effectiveSection === 'workspace' ? (
+        {effectiveSection === "workspace" ? (
           // Workspace pane manages its own scrolling — file tree and
           // preview each scroll internally. The outer column must NOT
           // add a vertical scrollbar of its own (would defeat the
@@ -219,14 +219,14 @@ export function AgentView({
           // Inset is the shared `AGENT_PANE_INSET` (12px, one authority for
           // every section pane — #task:2116, shiki: 统一成 workspace nav 的
           // padding). This pane is the reference the others were unified to.
-          <div className={cn('flex min-h-0 flex-1 flex-col', AGENT_PANE_INSET)}>
+          <div className={cn("flex min-h-0 flex-1 flex-col", AGENT_PANE_INSET)}>
             {canViewFiles ? (
               <AgentWorkspacePane agentId={agent.id} />
             ) : (
               <AgentWorkspaceFilesPermissionState loading={!fileAccessKnown} />
             )}
           </div>
-        ) : effectiveSection === 'activity' ? (
+        ) : effectiveSection === "activity" ? (
           // Activity owns its scrolling for both the shared stream and conversation rail.
           <AgentActivityPane
             sessionScope={agent.session_scope}
@@ -234,7 +234,7 @@ export function AgentView({
             state={runtimeQuery.data}
             onOpenConversation={onOpenConversation}
           />
-        ) : effectiveSection === 'chats' ? (
+        ) : effectiveSection === "chats" ? (
           // The agent's conversations as one full-width list (#task:2040,
           // shiki). It owns its own scroll and its own padded inset, like the
           // panes above. Gated above: effectiveSection can only be 'chats'
@@ -247,16 +247,16 @@ export function AgentView({
           // schedules retain their full width.
           <div
             className={cn(
-              'flex-1 overflow-y-auto',
-              effectiveSection === 'profile' && '[scrollbar-gutter:stable]',
+              "flex-1 overflow-y-auto",
+              effectiveSection === "profile" && "[scrollbar-gutter:stable]",
             )}
           >
             <div className={AGENT_PANE_INSET}>
-              {effectiveSection === 'profile' ? <AgentProfileCard agent={agent} /> : null}
-              {effectiveSection === 'mcp' ? (
+              {effectiveSection === "profile" ? <AgentProfileCard agent={agent} /> : null}
+              {effectiveSection === "mcp" ? (
                 <AgentMcpPane agentId={agent.id} runtime={agent.runtime} />
               ) : null}
-              {effectiveSection === 'schedules' ? (
+              {effectiveSection === "schedules" ? (
                 canManageSchedules ? (
                   <AgentSchedulesCard agentId={agent.id} />
                 ) : (
@@ -273,7 +273,7 @@ export function AgentView({
 
 // ── side-panel variant (#task:1189) ─────────────────────────────────────────
 
-const SIDE_SECTION_STORAGE_KEY = 'silverhand:layout.agent-side-section';
+const SIDE_SECTION_STORAGE_KEY = "silverhand:layout.agent-side-section";
 
 interface SideSectionItem {
   id: AgentSideSection;
@@ -288,22 +288,22 @@ interface SideSectionItem {
 // Profile (shiki). MCP (raw config) stays full-page-only: a wide power-user
 // surface that doesn't belong in a narrow dock.
 const SIDE_SECTIONS: ReadonlyArray<SideSectionItem> = [
-  { id: 'activity', label: 'Activity', icon: Activity },
-  { id: 'profile', label: 'Profile', icon: User },
-  { id: 'workspace', label: 'Workspace', icon: FolderTree },
-  { id: 'schedules', label: 'Schedules', icon: CalendarClock },
+  { id: "activity", label: "Activity", icon: Activity },
+  { id: "profile", label: "Profile", icon: User },
+  { id: "workspace", label: "Workspace", icon: FolderTree },
+  { id: "schedules", label: "Schedules", icon: CalendarClock },
 ];
 
-function readSideSection(): SideSectionItem['id'] {
+function readSideSection(): SideSectionItem["id"] {
   try {
     const raw = localStorage.getItem(SIDE_SECTION_STORAGE_KEY);
-    if (raw === 'activity' || raw === 'workspace' || raw === 'profile' || raw === 'schedules') {
+    if (raw === "activity" || raw === "workspace" || raw === "profile" || raw === "schedules") {
       return raw;
     }
   } catch {
     /* private mode / quota — fall back to default */
   }
-  return 'activity';
+  return "activity";
 }
 
 /** Event that redirects an ALREADY-mounted docked agent panel to a section.
@@ -311,11 +311,11 @@ function readSideSection(): SideSectionItem['id'] {
  *  localStorage on mount; this event only covers "the panel already sits on
  *  this agent but another tab". Carries `agentId` so a panel showing a
  *  different agent ignores it. */
-const AGENT_SIDE_SECTION_FOCUS_EVENT = 'silverhand:agent-side-section-focus';
+const AGENT_SIDE_SECTION_FOCUS_EVENT = "silverhand:agent-side-section-focus";
 
 interface AgentSideSectionFocusDetail {
   agentId: string;
-  section: SideSectionItem['id'];
+  section: SideSectionItem["id"];
 }
 
 /**
@@ -326,7 +326,7 @@ interface AgentSideSectionFocusDetail {
  * before `openAgentPanel(agentId)` when a caller must land on a specific tab
  * (e.g. the Activity bubble → Activity), regardless of the last-used tab.
  */
-export function focusAgentSideSection(agentId: string, section: SideSectionItem['id']): void {
+export function focusAgentSideSection(agentId: string, section: SideSectionItem["id"]): void {
   try {
     localStorage.setItem(SIDE_SECTION_STORAGE_KEY, section);
   } catch {
@@ -377,10 +377,10 @@ function AgentSidePanel({
   onDeleted: () => void;
   onMessageAgent?: (agentId: string) => void;
 }): JSX.Element {
-  const [section, setSection] = useState<SideSectionItem['id']>(() => readSideSection());
+  const [section, setSection] = useState<SideSectionItem["id"]>(() => readSideSection());
 
   const workspaceSource = sideAgentWorkspaceSource(agent.session_scope, contextWorkspaceId);
-  const workspaceKey = workspaceSource.kind === 'home' ? 'home' : workspaceSource.workspaceId;
+  const workspaceKey = workspaceSource.kind === "home" ? "home" : workspaceSource.workspaceId;
 
   const visibleSections = visibleAgentSideSections(canViewFiles, canManageSchedules);
   const effectiveSection = resolveAgentSideSection(section, visibleSections);
@@ -442,8 +442,8 @@ function AgentSidePanel({
     >
       {/* content */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {effectiveSection === 'activity' ? (
-          agent.session_scope === 'agent' ? (
+        {effectiveSection === "activity" ? (
+          agent.session_scope === "agent" ? (
             <AgentStreamActivityTimeline key={agent.id} agentId={agent.id} />
           ) : !contextConversationId ? (
             <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">
@@ -464,7 +464,7 @@ function AgentSidePanel({
               />
             </div>
           )
-        ) : effectiveSection === 'workspace' ? (
+        ) : effectiveSection === "workspace" ? (
           canViewFiles ? (
             <div className="flex min-h-0 flex-1 flex-col">
               <AgentWorkspaceContainer
@@ -478,7 +478,7 @@ function AgentSidePanel({
               />
             </div>
           ) : null
-        ) : effectiveSection === 'profile' ? (
+        ) : effectiveSection === "profile" ? (
           <div className="flex-1 overflow-y-auto px-4 py-4 [scrollbar-gutter:stable]">
             <AgentProfileCard agent={agent} />
           </div>

@@ -27,7 +27,7 @@
  * shortcut here.)
  */
 
-export type MembershipState = 'member' | 'nonmember' | 'unknown';
+export type MembershipState = "member" | "nonmember" | "unknown";
 
 /** The minimal carrier shape the derivation reads. Both the discovery-union
  *  list item and the channel-detail `channel` satisfy it. */
@@ -50,11 +50,11 @@ export function deriveChannelMembership(
   carrier: MembershipCarrier | null | undefined,
   resolvedIsMember?: boolean,
 ): MembershipState {
-  if (!carrier) return 'unknown';
+  if (!carrier) return "unknown";
   const authoritative =
-    typeof carrier.is_member === 'boolean' ? carrier.is_member : resolvedIsMember;
-  if (typeof authoritative !== 'boolean') return 'unknown';
-  return authoritative ? 'member' : 'nonmember';
+    typeof carrier.is_member === "boolean" ? carrier.is_member : resolvedIsMember;
+  if (typeof authoritative !== "boolean") return "unknown";
+  return authoritative ? "member" : "nonmember";
 }
 
 /** The affordance/effect gate for a membership state. `unknown` and `nonmember`
@@ -76,12 +76,12 @@ export interface ChannelGate {
 }
 
 export function channelGateFor(state: MembershipState): ChannelGate {
-  const member = state === 'member';
+  const member = state === "member";
   return {
     allowMutations: member,
     allowMemberEffects: member,
     showComposer: member,
-    showJoin: state === 'nonmember',
+    showJoin: state === "nonmember",
   };
 }
 
@@ -144,9 +144,6 @@ export function isMemberChannel(carrier: MembershipCarrier): boolean {
  * this way — reading an existing thread is allowed for a non-member.) Pure so
  * the secondary-view owner's gate is unit-testable without rendering App.
  */
-export function mountsMemberOnlyPanel(
-  flagOpen: boolean,
-  state: MembershipState,
-): boolean {
-  return flagOpen && state === 'member';
+export function mountsMemberOnlyPanel(flagOpen: boolean, state: MembershipState): boolean {
+  return flagOpen && state === "member";
 }

@@ -3,7 +3,7 @@ import {
   CONTROL_HOVER_LIFT,
   CONTROL_SURFACE_BUTTON,
   CONTROL_SURFACE_BUTTON_STILL,
-} from './ControlInkBorder';
+} from "./ControlInkBorder";
 
 /**
  * The app's ONE destructive-confirm affordance — the button that actually
@@ -53,7 +53,7 @@ const DESTRUCTIVE_COMMIT_CLASS_STILL = `${CONTROL_HOVER_TRANSITION} hover:opacit
  * layers on, because opting out by adding `hover:translate-y-0` would leave two
  * translate utilities whose winner depends on Tailwind's emit order.
  */
-export type DestructiveMotion = { motion?: 'lift' | 'still' };
+export type DestructiveMotion = { motion?: "lift" | "still" };
 
 /**
  * The RED-ON-PAPER half of the destructive rank: token frame in `--error`, red
@@ -70,7 +70,7 @@ export type DestructiveMotion = { motion?: 'lift' | 'still' };
  * reads as disabled, not as caution.
  */
 export const DESTRUCTIVE_TRIGGER =
-  'border-[length:var(--control-border-width)] border-error text-error hover:bg-error-soft';
+  "border-[length:var(--control-border-width)] border-error text-error hover:bg-error-soft";
 
 /**
  * Spread onto the destructive commit `Button` — `{...destructiveAction()}`, or
@@ -84,15 +84,14 @@ export const DESTRUCTIVE_TRIGGER =
  */
 export function destructiveAction(
   className?: string,
-  { motion = 'lift' }: DestructiveMotion = {},
+  { motion = "lift" }: DestructiveMotion = {},
 ): {
-  'data-destructive-action': 'commit';
+  "data-destructive-action": "commit";
   className: string;
 } {
-  const recipe =
-    motion === 'still' ? DESTRUCTIVE_COMMIT_CLASS_STILL : DESTRUCTIVE_COMMIT_CLASS;
+  const recipe = motion === "still" ? DESTRUCTIVE_COMMIT_CLASS_STILL : DESTRUCTIVE_COMMIT_CLASS;
   return {
-    'data-destructive-action': 'commit',
+    "data-destructive-action": "commit",
     className: className ? `${recipe} ${className}` : recipe,
   };
 }
@@ -108,15 +107,14 @@ export function destructiveAction(
  */
 export function destructiveCancel(
   className?: string,
-  { motion = 'lift' }: DestructiveMotion = {},
+  { motion = "lift" }: DestructiveMotion = {},
 ): {
-  'data-destructive-action': 'cancel';
+  "data-destructive-action": "cancel";
   className: string;
 } {
-  const recipe =
-    motion === 'still' ? CONTROL_SURFACE_BUTTON_STILL : CONTROL_SURFACE_BUTTON;
+  const recipe = motion === "still" ? CONTROL_SURFACE_BUTTON_STILL : CONTROL_SURFACE_BUTTON;
   return {
-    'data-destructive-action': 'cancel',
+    "data-destructive-action": "cancel",
     className: className ? `${recipe} ${className}` : recipe,
   };
 }

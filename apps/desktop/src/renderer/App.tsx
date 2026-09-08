@@ -1,32 +1,32 @@
-import { ShutdownOverlay } from '@/features/app-shell/shutdown-overlay';
-import { ChatShell } from '@/features/chat-shell/chat-shell';
-import { ActivityShell } from '@/features/activity-shell/activity-shell';
-import { TaskShell } from '@/features/task-shell/task-shell';
-import { useConversationShell } from '@/features/conversation-shell/use-conversation-shell';
-import { renderConversationPanes } from '@/features/conversation-shell/conversation-content';
-import { useApplicationSignals } from '@/features/app-shell/application-signals';
-import { AgentShell } from '@/features/agent-shell/agent-shell';
-import { ComputerShell } from '@/features/computer-shell/computer-shell';
-import { Toaster } from 'sonner';
-import { NavRail } from '@/components/layout/NavRail';
-import { SectionLayer } from '@/components/layout/SectionLayer';
-import { Titlebar } from '@/components/layout/Titlebar';
-import { useAppearance } from '@/hooks/useAppearance';
+import { ShutdownOverlay } from "@/features/app-shell/shutdown-overlay";
+import { ChatShell } from "@/features/chat-shell/chat-shell";
+import { ActivityShell } from "@/features/activity-shell/activity-shell";
+import { TaskShell } from "@/features/task-shell/task-shell";
+import { useConversationShell } from "@/features/conversation-shell/use-conversation-shell";
+import { renderConversationPanes } from "@/features/conversation-shell/conversation-content";
+import { useApplicationSignals } from "@/features/app-shell/application-signals";
+import { AgentShell } from "@/features/agent-shell/agent-shell";
+import { ComputerShell } from "@/features/computer-shell/computer-shell";
+import { Toaster } from "sonner";
+import { NavRail } from "@/components/layout/NavRail";
+import { SectionLayer } from "@/components/layout/SectionLayer";
+import { Titlebar } from "@/components/layout/Titlebar";
+import { useAppearance } from "@/hooks/useAppearance";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useRuntimeEpochPromotion,
   useViewerUser,
-} from '@/features/me/hooks';
-import { RegistrationGate } from '@/features/me/RegistrationGate';
-import { BackendUnreachableGate } from '@/features/me/BackendUnreachableGate';
-import { UpdateRequiredGate } from '@/features/me/UpdateRequiredGate';
-import { AppStatusBanner } from '@/features/me/AppStatusBanner';
-import { SettingsPage } from '@/features/settings/SettingsPage';
-import { shouldSecondaryFullscreen } from '@/lib/secondary-pane';
-import { LAST_CHANNEL_KEY, clearPlaceMemory } from '@/lib/place-memory';
-import { toasterTypedIcons } from '@/lib/toast-icons';
+} from "@/features/me/hooks";
+import { RegistrationGate } from "@/features/me/RegistrationGate";
+import { BackendUnreachableGate } from "@/features/me/BackendUnreachableGate";
+import { UpdateRequiredGate } from "@/features/me/UpdateRequiredGate";
+import { AppStatusBanner } from "@/features/me/AppStatusBanner";
+import { SettingsPage } from "@/features/settings/SettingsPage";
+import { shouldSecondaryFullscreen } from "@/lib/secondary-pane";
+import { LAST_CHANNEL_KEY, clearPlaceMemory } from "@/lib/place-memory";
+import { toasterTypedIcons } from "@/lib/toast-icons";
 
 export { LAST_CHANNEL_KEY, clearPlaceMemory };
 
@@ -82,7 +82,7 @@ export function App(): JSX.Element {
   // slack-dark is our only dark theme; studio-light / forza6 are light. sonner
   // then picks the matching default scale for the parts our token overrides in
   // global.css don't cover (e.g. any action/close button greys).
-  return <RegisteredAppShell toasterTheme={appearance.theme === 'slack-dark' ? 'dark' : 'light'} />;
+  return <RegisteredAppShell toasterTheme={appearance.theme === "slack-dark" ? "dark" : "light"} />;
 }
 
 /**
@@ -105,19 +105,19 @@ export function App(): JSX.Element {
  * unset var.
  */
 const TOAST_OFFSET = {
-  top: 'calc(var(--titlebar-height) + 8px)',
-  right: '12px',
-  bottom: '24px',
-  left: '24px',
+  top: "calc(var(--titlebar-height) + 8px)",
+  right: "12px",
+  bottom: "24px",
+  left: "24px",
 } as const;
 const TOAST_MOBILE_OFFSET = {
-  top: 'calc(var(--titlebar-height) + 8px)',
-  right: '16px',
-  bottom: '16px',
-  left: '16px',
+  top: "calc(var(--titlebar-height) + 8px)",
+  right: "16px",
+  bottom: "16px",
+  left: "16px",
 } as const;
 
-function RegisteredAppShell({ toasterTheme }: { toasterTheme: 'light' | 'dark' }): JSX.Element {
+function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }): JSX.Element {
   const signals = useApplicationSignals();
   const { navRailDots } = signals;
   const conversation = useConversationShell(signals);
@@ -143,9 +143,9 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: 'light' | 'dark' }
     <div
       className="flex h-screen w-screen flex-col overflow-hidden"
       style={{
-        backgroundImage: 'var(--app-paper, none)',
-        backgroundSize: '100vw 100vh',
-        backgroundRepeat: 'no-repeat',
+        backgroundImage: "var(--app-paper, none)",
+        backgroundSize: "100vw 100vh",
+        backgroundRepeat: "no-repeat",
       }}
     >
       <Titlebar
@@ -153,29 +153,29 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: 'light' | 'dark' }
         workspaceArchivedAt={selectedWorkspace?.archived_at ?? null}
         workspaceSidebarVisible={workspaceSidebarVisible}
         onToggleWorkspaceSidebar={toggleWorkspaceSidebar}
-        chromeMode={appSection === 'activity' ? 'activity' : 'chat'}
+        chromeMode={appSection === "activity" ? "activity" : "chat"}
       />
       <div
         className="flex min-w-0 flex-1 overflow-hidden"
         style={{
-          backgroundColor: 'var(--bg-app, transparent)',
-          padding: '0 var(--frame-padding, 0) var(--frame-padding, 0)',
-          gap: 'var(--frame-padding, 0)',
+          backgroundColor: "var(--bg-app, transparent)",
+          padding: "0 var(--frame-padding, 0) var(--frame-padding, 0)",
+          gap: "var(--frame-padding, 0)",
         }}
       >
         <NavRail
           current={appSection}
           dots={navRailDots}
           onChange={(section) => {
-            if (section === 'chat') {
+            if (section === "chat") {
               nav.toChat();
-            } else if (section === 'activity') {
+            } else if (section === "activity") {
               nav.toActivity();
-            } else if (section === 'tasks') {
+            } else if (section === "tasks") {
               nav.toTasks();
-            } else if (section === 'members') {
+            } else if (section === "members") {
               nav.toMembers();
-            } else if (section === 'settings') {
+            } else if (section === "settings") {
               nav.toSettings();
             } else {
               nav.toComputers();
@@ -185,27 +185,27 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: 'light' | 'dark' }
         <div
           data-section-sheet=""
           className="flex min-w-0 flex-1"
-          style={{ gap: 'var(--pane-gap)' }}
+          style={{ gap: "var(--pane-gap)" }}
         >
-          {deferredSection === 'settings' && (
-            <SectionLayer visible={appSection !== 'chat'}>
+          {deferredSection === "settings" && (
+            <SectionLayer visible={appSection !== "chat"}>
               <SettingsPage />
             </SectionLayer>
           )}
-          {deferredSection === 'tasks' && (
-            <SectionLayer visible={appSection !== 'chat'}>
+          {deferredSection === "tasks" && (
+            <SectionLayer visible={appSection !== "chat"}>
               <TaskShell onJump={handleJumpToMessage} />
             </SectionLayer>
           )}
           <AgentShell
-            mounted={deferredSection === 'members'}
-            visible={appSection !== 'chat'}
+            mounted={deferredSection === "members"}
+            visible={appSection !== "chat"}
             onMessageAgent={handleMessageAgent}
             onOpenConversation={openAgentConversation}
           />
           <ComputerShell
-            mounted={deferredSection === 'computers'}
-            visible={appSection !== 'chat'}
+            mounted={deferredSection === "computers"}
+            visible={appSection !== "chat"}
           />
           <ActivityShell model={conversation.activity} content={content} fullscreen={fullscreen} />
           <ChatShell model={conversation.chat} content={content} fullscreen={fullscreen} />

@@ -1,12 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import type { RegistrationRequired, UserDto } from '@silverhand/shared';
-import { canEditUserProfile } from './permissions';
+import { describe, expect, it } from "vitest";
+import type { RegistrationRequired, UserDto } from "@silverhand/shared";
+import { canEditUserProfile } from "./permissions";
 
 function makeViewer(overrides: Partial<UserDto> = {}): UserDto {
   return {
-    id: 'u-self',
-    name: 'self',
-    display_name: 'Self',
+    id: "u-self",
+    name: "self",
+    display_name: "Self",
     avatar_url: null,
     created_at: 0,
     updated_at: 0,
@@ -14,24 +14,24 @@ function makeViewer(overrides: Partial<UserDto> = {}): UserDto {
   } as UserDto;
 }
 
-describe('canEditUserProfile', () => {
-  it('returns true when the viewer id matches the target user', () => {
-    expect(canEditUserProfile(makeViewer(), { id: 'u-self' })).toBe(true);
+describe("canEditUserProfile", () => {
+  it("returns true when the viewer id matches the target user", () => {
+    expect(canEditUserProfile(makeViewer(), { id: "u-self" })).toBe(true);
   });
 
-  it('returns false for a different user id (v2 multi-human guard)', () => {
-    expect(canEditUserProfile(makeViewer(), { id: 'u-other' })).toBe(false);
+  it("returns false for a different user id (v2 multi-human guard)", () => {
+    expect(canEditUserProfile(makeViewer(), { id: "u-other" })).toBe(false);
   });
 
-  it('returns false when the viewer query has not resolved yet', () => {
-    expect(canEditUserProfile(undefined, { id: 'u-self' })).toBe(false);
+  it("returns false when the viewer query has not resolved yet", () => {
+    expect(canEditUserProfile(undefined, { id: "u-self" })).toBe(false);
   });
 
-  it('returns false when registration is still required', () => {
+  it("returns false when registration is still required", () => {
     const pre: RegistrationRequired = {
       registration_required: true,
-      suggested_name: 'user-1234',
+      suggested_name: "user-1234",
     };
-    expect(canEditUserProfile(pre, { id: 'u-self' })).toBe(false);
+    expect(canEditUserProfile(pre, { id: "u-self" })).toBe(false);
   });
 });

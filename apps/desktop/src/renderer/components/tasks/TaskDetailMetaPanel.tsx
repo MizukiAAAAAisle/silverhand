@@ -1,5 +1,5 @@
-import type { TaskDetailDto, TaskStatus } from '@silverhand/shared';
-import { useTaskMetaRows, type TaskMetaWriteProps } from '@/components/tasks/taskDetailShared';
+import type { TaskDetailDto, TaskStatus } from "@silverhand/shared";
+import { useTaskMetaRows, type TaskMetaWriteProps } from "@/components/tasks/taskDetailShared";
 
 export interface TaskDetailMetaPanelProps {
   /** The AUTHORITATIVE detail read. Never a board summary merged in per field: a

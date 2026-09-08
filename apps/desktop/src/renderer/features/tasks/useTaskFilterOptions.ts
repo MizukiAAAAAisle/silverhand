@@ -1,19 +1,13 @@
-import { useMemo } from 'react';
-import {
-  useWorkspaces,
-  useChannelsAcrossWorkspaces,
-} from '@/features/workspaces/hooks';
-import { isMemberChannel } from '@/features/channels/membership';
+import { useMemo } from "react";
+import { useWorkspaces, useChannelsAcrossWorkspaces } from "@/features/workspaces/hooks";
+import { isMemberChannel } from "@/features/channels/membership";
 import {
   buildChannelFilterOptions,
   type ChannelFilterCandidate,
   type ChannelOption,
   type WorkspaceOption,
-} from '@/components/tasks/TaskFilterBar';
-import {
-  isAgentSpace,
-  type WorkspaceOwnership,
-} from '@/features/workspaces/workspace-ownership';
+} from "@/components/tasks/TaskFilterBar";
+import { isAgentSpace, type WorkspaceOwnership } from "@/features/workspaces/workspace-ownership";
 
 /**
  * Shared filter-option source for BOTH task surfaces — the global Tasks
@@ -76,7 +70,7 @@ export function workspaceChannelCandidates(
   // agent space's `dm-` prefix, so there is no shape to normalise).
   const sublabel = workspace.name;
   const fromAgentSpace = isAgentSpace(workspace);
-  return channels.map(conv => ({
+  return channels.map((conv) => ({
     id: conv.id,
     workspaceId: workspace.id,
     title: conv.title,
@@ -89,7 +83,7 @@ export function workspaceChannelCandidates(
 export function useTaskFilterOptions(): TaskFilterOptions {
   const { data: workspaces = [] } = useWorkspaces();
   const channelLists = useChannelsAcrossWorkspaces(
-    useMemo(() => workspaces.map(w => w.id), [workspaces]),
+    useMemo(() => workspaces.map((w) => w.id), [workspaces]),
   );
 
   // Workspace filter offers BOTH people-owned workspaces and agent spaces — the
@@ -102,7 +96,7 @@ export function useTaskFilterOptions(): TaskFilterOptions {
   const workspaceOptions = useMemo<WorkspaceOption[]>(
     () =>
       workspaces
-        .map(w => ({
+        .map((w) => ({
           id: w.id,
           label: w.name,
           owner_agent_id: w.owner_agent_id,
@@ -132,9 +126,9 @@ export function useTaskFilterOptions(): TaskFilterOptions {
     // alphabetical within each group. Tie-break on subtitle so the channels in
     // one agent's space keep a stable order.
     return buildChannelFilterOptions(candidates).sort((a, b) => {
-      if (a.group !== b.group) return a.group === 'workspace' ? -1 : 1;
+      if (a.group !== b.group) return a.group === "workspace" ? -1 : 1;
       if (a.label !== b.label) return a.label.localeCompare(b.label);
-      return (a.sublabel ?? '').localeCompare(b.sublabel ?? '');
+      return (a.sublabel ?? "").localeCompare(b.sublabel ?? "");
     });
   }, [workspaces, channelLists]);
 

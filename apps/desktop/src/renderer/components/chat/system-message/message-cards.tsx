@@ -1,30 +1,18 @@
-import { useState } from 'react';
-import {
-  AtSign,
-  ChevronRight,
-  Pencil,
-  RotateCcw,
-  UserMinus,
-  UserPlus,
-} from 'lucide-react';
+import { useState } from "react";
+import { AtSign, ChevronRight, Pencil, RotateCcw, UserMinus, UserPlus } from "lucide-react";
 import {
   type ConversationMemberChangeMetadata,
   type SessionClearedMetadata,
   readConversationMemberChangeMetadata,
   readRenameMetadata,
   readSessionClearedMetadata,
-} from '@silverhand/shared';
-import { useMessage } from '@/features/messages/hooks';
-import { formatUserDisplayName, isCurrentUserId } from '@/lib/current-user';
-import { Markdown } from '@/components/chat/Markdown';
-import { presentAuthor } from '@/components/chat/author-presentation';
-import { AuthorName } from '@/components/chat/author-avatar-view';
-import {
-  type RendererProps,
-  GenericNarrationFallback,
-  firstLine,
-  useUserResolver,
-} from './shared';
+} from "@silverhand/shared";
+import { useMessage } from "@/features/messages/hooks";
+import { formatUserDisplayName, isCurrentUserId } from "@/lib/current-user";
+import { Markdown } from "@/components/chat/Markdown";
+import { presentAuthor } from "@/components/chat/author-presentation";
+import { AuthorName } from "@/components/chat/author-avatar-view";
+import { type RendererProps, GenericNarrationFallback, firstLine, useUserResolver } from "./shared";
 
 // ─── mention_cc card ───────────────────────────────────────────────────
 
@@ -49,32 +37,28 @@ export function MentionCcCard({
   const meta = (message.metadata ?? {}) as Record<string, unknown>;
 
   const workspaceName =
-    typeof meta['source_workspace_name'] === 'string'
-      ? (meta['source_workspace_name'] as string)
+    typeof meta["source_workspace_name"] === "string"
+      ? (meta["source_workspace_name"] as string)
       : null;
   const conversationTitle =
-    typeof meta['source_conversation_title'] === 'string'
-      ? (meta['source_conversation_title'] as string)
+    typeof meta["source_conversation_title"] === "string"
+      ? (meta["source_conversation_title"] as string)
       : null;
   const inlineOriginal =
-    typeof meta['source_message_content'] === 'string'
-      ? (meta['source_message_content'] as string)
+    typeof meta["source_message_content"] === "string"
+      ? (meta["source_message_content"] as string)
       : null;
   const sourceMessageId =
-    typeof meta['source_message_id'] === 'string'
-      ? (meta['source_message_id'] as string)
-      : null;
+    typeof meta["source_message_id"] === "string" ? (meta["source_message_id"] as string) : null;
   const sourceConversationId =
-    typeof meta['source_conversation_id'] === 'string'
-      ? (meta['source_conversation_id'] as string)
+    typeof meta["source_conversation_id"] === "string"
+      ? (meta["source_conversation_id"] as string)
       : null;
   const sourceFromKind =
-    typeof meta['source_from_kind'] === 'string'
-      ? (meta['source_from_kind'] as string)
-      : null;
+    typeof meta["source_from_kind"] === "string" ? (meta["source_from_kind"] as string) : null;
   const sourceFromUserId =
-    typeof meta['source_from_user_id'] === 'string'
-      ? (meta['source_from_user_id'] as string)
+    typeof meta["source_from_user_id"] === "string"
+      ? (meta["source_from_user_id"] as string)
       : null;
   // Legacy rows (pre-`source_message_content`) fall back to fetching
   // the original message by id. Hook stays disabled when the inline
@@ -94,18 +78,13 @@ export function MentionCcCard({
   // NOT track the source account's later deletion; that would require a backend
   // read-time author resolve this historical card is deliberately not worth. Do
   // not "upgrade" this into a dynamic deleted-tracking read-model.
-  const sourcePresentation = fetched?.message.author
-    ? presentAuthor(fetched.message.author)
-    : null;
+  const sourcePresentation = fetched?.message.author ? presentAuthor(fetched.message.author) : null;
   const sourceFallbackLabel =
-    sourceFromKind === 'user' || fetched?.message.from_kind === 'user'
-      ? formatUserDisplayName(
-          sourceFromUserId ?? fetched?.message.from_user_id,
-          userResolver,
-        )
-      : sourceFromKind === 'agent' || fetched?.message.from_kind === 'agent'
-        ? 'an agent'
-        : 'someone';
+    sourceFromKind === "user" || fetched?.message.from_kind === "user"
+      ? formatUserDisplayName(sourceFromUserId ?? fetched?.message.from_user_id, userResolver)
+      : sourceFromKind === "agent" || fetched?.message.from_kind === "agent"
+        ? "an agent"
+        : "someone";
 
   // In-card nav to the origin conversation. The `mention_external`
   // notification for this same mention anchors at the SOURCE message
@@ -122,7 +101,7 @@ export function MentionCcCard({
     ? conversationTitle
       ? `${workspaceName} · ${conversationTitle}`
       : workspaceName
-    : conversationTitle ?? null;
+    : (conversationTitle ?? null);
   // Collapse the byline when the mention's author IS the reader. The card
   // cannot know which conversation it is being read in — only its metadata —
   // so it asks the one question it can answer locally, and that question is
@@ -135,8 +114,7 @@ export function MentionCcCard({
   // for any row whose origin is unknown. A location is required too, because
   // after the collapse the origin reference IS the line — with nothing to point
   // at, a lone glyph would say less than the byline it replaced.
-  const readerIsMentionAuthor =
-    sourceFromKind === 'user' && isCurrentUserId(sourceFromUserId);
+  const readerIsMentionAuthor = sourceFromKind === "user" && isCurrentUserId(sourceFromUserId);
   const collapseByline = readerIsMentionAuthor && sourceLocationLabel !== null;
   const sourceLocationNode = sourceLocationLabel ? (
     handleOpenSource ? (
@@ -161,18 +139,15 @@ export function MentionCcCard({
           <span>{sourceLocationNode}</span>
         ) : (
           <span>
-            mentioned by{' '}
+            mentioned by{" "}
             {sourcePresentation ? (
-              <AuthorName
-                presentation={sourcePresentation}
-                className="text-text-secondary"
-              />
+              <AuthorName presentation={sourcePresentation} className="text-text-secondary" />
             ) : (
               <span className="text-text-secondary">{sourceFallbackLabel}</span>
             )}
             {sourceLocationNode ? (
               <>
-                {' in '}
+                {" in "}
                 {sourceLocationNode}
               </>
             ) : null}
@@ -246,11 +221,7 @@ export function SessionClearedCard({
   );
 }
 
-function SessionClearedRow({
-  meta,
-}: {
-  meta: SessionClearedMetadata;
-}): JSX.Element {
+function SessionClearedRow({ meta }: { meta: SessionClearedMetadata }): JSX.Element {
   // `actor_user_id: null` in this metadata means "principal info wasn't
   // recorded at insert time" (per shared schema docstring), NOT "current
   // viewer" — the latter is the v1 message-row convention used by
@@ -260,7 +231,7 @@ function SessionClearedRow({
   const userResolver = useUserResolver();
   const actorLabel = meta.actor_user_id
     ? formatUserDisplayName(meta.actor_user_id, userResolver)
-    : 'a user';
+    : "a user";
   return (
     <div
       className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-4 py-1 text-text-muted"
@@ -269,7 +240,7 @@ function SessionClearedRow({
       <RotateCcw aria-hidden className="size-3.5 shrink-0 opacity-60" />
       <span
         className="text-text-secondary"
-        data-session-cleared-actor={meta.actor_user_id ?? 'unknown'}
+        data-session-cleared-actor={meta.actor_user_id ?? "unknown"}
       >
         {actorLabel}
       </span>
@@ -278,18 +249,22 @@ function SessionClearedRow({
       <span>'s session context</span>
       {meta.previous_cli_session_id_prefix ? (
         <>
-          <span aria-hidden className="text-text-muted/60">·</span>
+          <span aria-hidden className="text-text-muted/60">
+            ·
+          </span>
           <span>
-            prev{' '}
+            prev{" "}
             <code className="rounded bg-bg-elevated px-1 font-mono text-[length:var(--text-meta)] text-text-secondary">
               {meta.previous_cli_session_id_prefix}
             </code>
           </span>
         </>
       ) : null}
-      <span aria-hidden className="text-text-muted/60">·</span>
-      <span data-session-cleared-running={meta.was_running ? '1' : '0'}>
-        was {meta.was_running ? 'running' : 'idle'}
+      <span aria-hidden className="text-text-muted/60">
+        ·
+      </span>
+      <span data-session-cleared-running={meta.was_running ? "1" : "0"}>
+        was {meta.was_running ? "running" : "idle"}
       </span>
     </div>
   );
@@ -309,16 +284,16 @@ export function OnboardingRow({
       type="button"
       onClick={() => setExpanded((v) => !v)}
       className={
-        'group flex w-full items-start gap-2 px-2 py-1 text-left text-text-muted ' +
-        (expanded ? 'bg-bg-floating' : 'rounded hover:bg-bg-hover')
+        "group flex w-full items-start gap-2 px-2 py-1 text-left text-text-muted " +
+        (expanded ? "bg-bg-floating" : "rounded hover:bg-bg-hover")
       }
       aria-expanded={expanded}
       data-onboarding-row="1"
     >
       <ChevronRight
         className={
-          'mt-[3px] size-3 shrink-0 text-text-muted/60 transition-transform ' +
-          (expanded ? 'rotate-90' : '')
+          "mt-[3px] size-3 shrink-0 text-text-muted/60 transition-transform " +
+          (expanded ? "rotate-90" : "")
         }
       />
       <span
@@ -327,7 +302,7 @@ export function OnboardingRow({
       >
         Onboarding
       </span>
-      <div className={'min-w-0 flex-1 ' + (expanded ? '' : 'truncate')}>
+      <div className={"min-w-0 flex-1 " + (expanded ? "" : "truncate")}>
         {expanded ? (
           <Markdown
             content={message.content}
@@ -353,14 +328,14 @@ export function RenameRow(props: RendererProps): JSX.Element {
     return <GenericNarrationFallback {...props} />;
   }
 
-  const isConversation = meta.scope === 'conversation';
+  const isConversation = meta.scope === "conversation";
   return (
     <div
       data-rename-row="1"
       className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 text-text-muted"
     >
       <Pencil aria-hidden className="size-3.5 shrink-0 opacity-60" />
-      <span>{isConversation ? 'channel renamed' : 'workspace renamed'}</span>
+      <span>{isConversation ? "channel renamed" : "workspace renamed"}</span>
       <span className="text-text-secondary">{meta.old_name}</span>
       <span aria-hidden>→</span>
       <span className="font-medium text-text-primary">{meta.new_name}</span>
@@ -386,11 +361,11 @@ export function ConversationMemberChangeRow(props: RendererProps): JSX.Element {
   if (!meta) {
     return <GenericNarrationFallback {...props} />;
   }
-  const removed = meta.subtype === 'conversation_member_removed';
+  const removed = meta.subtype === "conversation_member_removed";
   const Icon = removed ? UserMinus : UserPlus;
   return (
     <div
-      data-conversation-member-change={removed ? 'removed' : 'added'}
+      data-conversation-member-change={removed ? "removed" : "added"}
       className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 text-text-muted"
     >
       <Icon aria-hidden className="size-3.5 shrink-0 opacity-60" />
@@ -401,7 +376,7 @@ export function ConversationMemberChangeRow(props: RendererProps): JSX.Element {
           displayName: meta.actor_display_name,
         })}
       </span>
-      <span>{removed ? 'removed' : 'added'}</span>
+      <span>{removed ? "removed" : "added"}</span>
       <span className="font-medium text-text-primary">
         {participantLabel({
           kind: meta.member_kind,
@@ -409,18 +384,19 @@ export function ConversationMemberChangeRow(props: RendererProps): JSX.Element {
           displayName: meta.member_display_name,
         })}
       </span>
-      <span>{removed ? 'from this conversation' : 'to this conversation'}</span>
+      <span>{removed ? "from this conversation" : "to this conversation"}</span>
     </div>
   );
 }
 
 function participantLabel(input: {
-  kind: ConversationMemberChangeMetadata['actor_kind']
-    | ConversationMemberChangeMetadata['member_kind'];
+  kind:
+    | ConversationMemberChangeMetadata["actor_kind"]
+    | ConversationMemberChangeMetadata["member_kind"];
   name: string;
   displayName: string | null;
 }): string {
-  if (input.kind === 'system') return 'system';
+  if (input.kind === "system") return "system";
   // Recognition surface (system-message narration), not a mention — plain
   // display name, no `@` handle
   return input.displayName?.trim() || input.name;

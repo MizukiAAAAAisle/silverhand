@@ -3,18 +3,15 @@ import type {
   DaemonHostConfig,
   ServerUrlClassification,
   ServerUrlRejectionReason,
-} from '@silverhand/shared';
-import type { HostWsAttachment } from '@silverhand/backend';
-import type {
-  HostOutboundReloadFailureReason,
-  HostOutboundReloadResult,
-} from '@silverhand/host';
+} from "@silverhand/shared";
+import type { HostWsAttachment } from "@silverhand/backend";
+import type { HostOutboundReloadFailureReason, HostOutboundReloadResult } from "@silverhand/host";
 import {
   startAttachWatchdog,
   type AttachWatchdogDeps,
   type AttachWatchdogOutcome,
   type ExpectedAttachWindow,
-} from './outbound-attach.js';
+} from "./outbound-attach.js";
 
 /**
  * Outcome the IPC handler returns to the renderer. Four success
@@ -36,7 +33,7 @@ import {
 export type OutboundReloadOutcome =
   | {
       ok: true;
-      kind: 'reloaded';
+      kind: "reloaded";
       /** ms from save-start to fresh attachment observed. */
       elapsedMs: number;
       /** `attachedAt` from the fresh attachment, for diagnostics. */
@@ -44,38 +41,38 @@ export type OutboundReloadOutcome =
     }
   | {
       ok: true;
-      kind: 'unchanged';
+      kind: "unchanged";
     }
   | {
       ok: true;
-      kind: 'connectivity_unverified';
+      kind: "connectivity_unverified";
       /** ms elapsed before the watchdog budget expired. */
       elapsedMs: number;
     }
   | {
       ok: true;
-      kind: 'reloaded_remote';
+      kind: "reloaded_remote";
     }
   | {
       ok: false;
-      kind: 'classify_rejected';
+      kind: "classify_rejected";
       reason: ServerUrlRejectionReason;
       message: string;
     }
   | {
       ok: false;
-      kind: 'config_write_failed';
+      kind: "config_write_failed";
       message: string;
     }
   | {
       ok: false;
-      kind: 'reload_rejected';
+      kind: "reload_rejected";
       reason: HostOutboundReloadFailureReason;
       message: string;
     }
   | {
       ok: false;
-      kind: 'no_attachment_controller';
+      kind: "no_attachment_controller";
       message: string;
     };
 
@@ -100,9 +97,7 @@ export type WriteDaemonHostConfigFn = (config: DaemonHostConfig) => void;
  * Returning `null` (rather than `undefined`) keeps the contract
  * boring for `attachmentSatisfies`.
  */
-export type GetHostAttachmentFn = (
-  hostId: string,
-) => HostWsAttachment | null;
+export type GetHostAttachmentFn = (hostId: string) => HostWsAttachment | null;
 
 /**
  * IPC binding — `HostClient.hostOutboundReload()` exactly.
@@ -196,7 +191,7 @@ export async function performOutboundReload(
   if (!classified.ok) {
     return {
       ok: false,
-      kind: 'classify_rejected',
+      kind: "classify_rejected",
       reason: classified.reason,
       message: classified.message,
     };
@@ -224,12 +219,12 @@ export async function performOutboundReload(
   if (hostId === null || hostToken === null) {
     return {
       ok: false,
-      kind: 'reload_rejected',
-      reason: 'not_attached',
+      kind: "reload_rejected",
+      reason: "not_attached",
       message:
         hostId === null
-          ? 'no local host claim — sign in before changing server URL'
-          : 'no host token in memory — log out + log in to recover',
+          ? "no local host claim — sign in before changing server URL"
+          : "no host token in memory — log out + log in to recover",
     };
   }
 
@@ -260,9 +255,7 @@ export async function performOutboundReload(
     server_url: classified.url.toString(),
     host_id: hostId,
     host_token: hostToken,
-    ...(deps.allowInsecureRemote === true
-      ? { allow_insecure_remote: true }
-      : {}),
+    ...(deps.allowInsecureRemote === true ? { allow_insecure_remote: true } : {}),
     // 5c-1 carry-through. Legacy settings:saveServerUrl is not a
     // profile commit, so the daemon's `<none>` ↔ explicit-value
     // distinction must reflect only profile commits — not raw URL
@@ -278,7 +271,7 @@ export async function performOutboundReload(
   } catch (err) {
     return {
       ok: false,
-      kind: 'config_write_failed',
+      kind: "config_write_failed",
       message: err instanceof Error ? err.message : String(err),
     };
   }
@@ -300,15 +293,15 @@ export async function performOutboundReload(
     // err for diagnostics.
     return {
       ok: false,
-      kind: 'reload_rejected',
-      reason: 'not_attached',
+      kind: "reload_rejected",
+      reason: "not_attached",
       message: err instanceof Error ? err.message : String(err),
     };
   }
   if (!reload.reloaded) {
     return {
       ok: false,
-      kind: 'reload_rejected',
+      kind: "reload_rejected",
       reason: reload.reason,
       message: reload.message ?? reload.reason,
     };
@@ -318,8 +311,8 @@ export async function performOutboundReload(
   //     there's no reconnect to wait for and starting one would
   //     just timeout in `connectivity_unverified` even though the
   //     save was a no-op.
-  if (reload.action === 'unchanged') {
-    return { ok: true, kind: 'unchanged' };
+  if (reload.action === "unchanged") {
+    return { ok: true, kind: "unchanged" };
   }
 
   // 6b. `reloaded` — daemon spawned a fresh outbound client.
@@ -332,15 +325,15 @@ export async function performOutboundReload(
     // No in-process attachment registry to watch. Two very different
     // reasons land here:
     if (deps.remoteMode) {
-      return { ok: true, kind: 'reloaded_remote' };
+      return { ok: true, kind: "reloaded_remote" };
     }
     // Headless / unsupported edge — no controller AND no indicator to
     // defer to. Caller still saw `reloaded: true` from the daemon, so
     // the config is updated; we just can't verify the WS landed.
     return {
       ok: false,
-      kind: 'no_attachment_controller',
-      message: 'backend HostWsServerController unavailable in this mode',
+      kind: "no_attachment_controller",
+      message: "backend HostWsServerController unavailable in this mode",
     };
   }
   const window: ExpectedAttachWindow = {
@@ -350,8 +343,7 @@ export async function performOutboundReload(
   };
   const startWatchdog = deps.startWatchdog ?? startAttachWatchdog;
   const watchdog = startWatchdog(window, {
-    getAttachment: id =>
-      deps.getAttachment ? deps.getAttachment(id) : null,
+    getAttachment: (id) => (deps.getAttachment ? deps.getAttachment(id) : null),
     pollIntervalMs: deps.watchdogPollIntervalMs,
     timeoutMs: deps.watchdogTimeoutMs,
     now,
@@ -360,7 +352,7 @@ export async function performOutboundReload(
   if (outcome.ok) {
     return {
       ok: true,
-      kind: 'reloaded',
+      kind: "reloaded",
       elapsedMs: outcome.elapsedMs,
       attachedAt: outcome.attachment.attachedAt,
     };
@@ -371,7 +363,7 @@ export async function performOutboundReload(
   // "saved; reconnecting…" without claiming failure.
   return {
     ok: true,
-    kind: 'connectivity_unverified',
+    kind: "connectivity_unverified",
     elapsedMs: outcome.elapsedMs,
   };
 }
@@ -394,10 +386,8 @@ export async function performOutboundReload(
  * what kind of mode-specific edge happened.
  */
 export function bindAttachmentAccessor(
-  controller:
-    | { getAttachment(hostId: string): HostWsAttachment | null }
-    | null,
+  controller: { getAttachment(hostId: string): HostWsAttachment | null } | null,
 ): GetHostAttachmentFn | null {
   if (controller === null) return null;
-  return hostId => controller.getAttachment(hostId);
+  return (hostId) => controller.getAttachment(hostId);
 }

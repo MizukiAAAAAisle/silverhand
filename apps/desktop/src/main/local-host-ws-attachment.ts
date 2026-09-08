@@ -1,4 +1,4 @@
-import type { LocalHostWsAttachment } from '../backend-info-contract.js';
+import type { LocalHostWsAttachment } from "../backend-info-contract.js";
 
 export function describeLocalHostWsAttachment(input: {
   /**

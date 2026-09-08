@@ -1,11 +1,11 @@
 export type OutboundProtocolCompatibility =
   | {
-      status: 'compatible' | 'app_update_required' | 'server_update_required';
+      status: "compatible" | "app_update_required" | "server_update_required";
       app_protocol_version: number;
       server_protocol_version: number;
     }
   | {
-      status: 'unknown';
+      status: "unknown";
       app_protocol_version: number;
       server_protocol_version: null;
     };
@@ -25,7 +25,7 @@ export function classifyOutboundProtocolCompatibility(input: {
   const { appProtocolVersion, serverProtocolVersion } = input;
   if (serverProtocolVersion === undefined) {
     return {
-      status: 'unknown',
+      status: "unknown",
       app_protocol_version: appProtocolVersion,
       server_protocol_version: null,
     };
@@ -33,10 +33,10 @@ export function classifyOutboundProtocolCompatibility(input: {
   return {
     status:
       appProtocolVersion === serverProtocolVersion
-        ? 'compatible'
+        ? "compatible"
         : appProtocolVersion < serverProtocolVersion
-          ? 'app_update_required'
-          : 'server_update_required',
+          ? "app_update_required"
+          : "server_update_required",
     app_protocol_version: appProtocolVersion,
     server_protocol_version: serverProtocolVersion,
   };

@@ -12,7 +12,7 @@ export const STARTUP_PROTOCOL_VERSION = 2;
 
 /** The only frame kind the child emits: bound (listener up, app composed) — NOT yet
  * `/readyz`-confirmed. The launcher still polls `/readyz` before publishing. */
-export const BOUND_FRAME_KIND = 'bound';
+export const BOUND_FRAME_KIND = "bound";
 
 /** Hard cap on a single stdout frame line (bytes, matching the Rust
  * `BOUND_FRAME_MAX_BYTES`). A line whose byte length REACHES this cap (`>=`) is rejected
@@ -29,48 +29,45 @@ export interface ParsedBoundFrame {
 }
 
 export type BoundFrameParse =
-  | { status: 'bound'; frame: ParsedBoundFrame }
-  | { status: 'invalid'; reason: BoundFrameRejectReason };
+  | { status: "bound"; frame: ParsedBoundFrame }
+  | { status: "invalid"; reason: BoundFrameRejectReason };
 
-export type StartupFrameParse = BoundFrameParse | { status: 'preparing' } | { status: 'prepared' };
+export type StartupFrameParse = BoundFrameParse | { status: "preparing" } | { status: "prepared" };
 
 /** Why a candidate stdout line was rejected. Every arm is a hard startup failure with an
  * actionable, surfaced reason — never a silent fallback. */
 export type BoundFrameRejectReason =
-  | 'oversize'
-  | 'not-json'
-  | 'not-object'
-  | 'unknown-version'
-  | 'wrong-kind'
-  | 'generation-mismatch'
-  | 'bad-url'
-  | 'bad-port'
-  | 'extra-keys';
+  | "oversize"
+  | "not-json"
+  | "not-object"
+  | "unknown-version"
+  | "wrong-kind"
+  | "generation-mismatch"
+  | "bad-url"
+  | "bad-port"
+  | "extra-keys";
 
-const EXPECTED_KEYS = ['v', 'kind', 'generation', 'url', 'port'] as const;
+const EXPECTED_KEYS = ["v", "kind", "generation", "url", "port"] as const;
 
 /**
  * Parse ONE candidate stdout line against the frame contract, checking the `generation`
  * echo against the value this spawn minted. `raw` is a single line WITHOUT its trailing
  * newline (the reader splits on `\n`). Never throws.
  */
-export function parseBoundFrame(
-  raw: string,
-  expectedGeneration: string,
-): BoundFrameParse {
+export function parseBoundFrame(raw: string, expectedGeneration: string): BoundFrameParse {
   // Length bound measured on the raw bytes BEFORE JSON.parse (cheap hostile-input guard,
   // mirrored with the Rust emitter's byte bound: `>= BOUND_FRAME_MAX_BYTES` is over).
-  if (Buffer.byteLength(raw, 'utf8') >= BOUND_FRAME_MAX_BYTES) {
-    return { status: 'invalid', reason: 'oversize' };
+  if (Buffer.byteLength(raw, "utf8") >= BOUND_FRAME_MAX_BYTES) {
+    return { status: "invalid", reason: "oversize" };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { status: 'invalid', reason: 'not-json' };
+    return { status: "invalid", reason: "not-json" };
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return { status: 'invalid', reason: 'not-object' };
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { status: "invalid", reason: "not-object" };
   }
   const record = parsed as Record<string, unknown>;
   // Reject unknown/extra keys (strict shape) — a padded frame does not become `bound`.
@@ -79,35 +76,27 @@ export function parseBoundFrame(
     keys.length !== EXPECTED_KEYS.length ||
     !EXPECTED_KEYS.every((key) => Object.prototype.hasOwnProperty.call(record, key))
   ) {
-    return { status: 'invalid', reason: 'extra-keys' };
+    return { status: "invalid", reason: "extra-keys" };
   }
   if (record.v !== STARTUP_PROTOCOL_VERSION) {
-    return { status: 'invalid', reason: 'unknown-version' };
+    return { status: "invalid", reason: "unknown-version" };
   }
   if (record.kind !== BOUND_FRAME_KIND) {
-    return { status: 'invalid', reason: 'wrong-kind' };
+    return { status: "invalid", reason: "wrong-kind" };
   }
   // Generation must be the exact value this spawn minted — a child that echoes a
   // different (or missing) token cannot be correlated to this spawn and is rejected.
-  if (
-    typeof record.generation !== 'string' ||
-    record.generation !== expectedGeneration
-  ) {
-    return { status: 'invalid', reason: 'generation-mismatch' };
+  if (typeof record.generation !== "string" || record.generation !== expectedGeneration) {
+    return { status: "invalid", reason: "generation-mismatch" };
   }
   const port = record.port;
-  if (
-    typeof port !== 'number' ||
-    !Number.isInteger(port) ||
-    port < 1 ||
-    port > 65535
-  ) {
-    return { status: 'invalid', reason: 'bad-port' };
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
+    return { status: "invalid", reason: "bad-port" };
   }
-  if (typeof record.url !== 'string' || !isLoopbackHttpUrl(record.url, port)) {
-    return { status: 'invalid', reason: 'bad-url' };
+  if (typeof record.url !== "string" || !isLoopbackHttpUrl(record.url, port)) {
+    return { status: "invalid", reason: "bad-url" };
   }
-  return { status: 'bound', frame: { url: record.url, port } };
+  return { status: "bound", frame: { url: record.url, port } };
 }
 
 /**
@@ -117,11 +106,11 @@ export function parseBoundFrame(
  */
 export class BoundFrameReader {
   private buffer = Buffer.alloc(0);
-  private settled: StartupFrameParse | { status: 'duplicate' } | null = null;
+  private settled: StartupFrameParse | { status: "duplicate" } | null = null;
 
   constructor(
     private readonly expectedGeneration: string,
-    private readonly onPhase: (phase: 'preparing' | 'prepared') => void = () => {},
+    private readonly onPhase: (phase: "preparing" | "prepared") => void = () => {},
   ) {}
 
   /**
@@ -135,58 +124,77 @@ export class BoundFrameReader {
    * grow launcher memory without limit. The bound is on the pending line only; already
    * consumed lines do not count.
    */
-  push(chunk: string | Buffer): StartupFrameParse | { status: 'duplicate' } | null {
-    if (this.settled?.status === 'duplicate') return this.settled;
-    const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+  push(chunk: string | Buffer): StartupFrameParse | { status: "duplicate" } | null {
+    if (this.settled?.status === "duplicate") return this.settled;
+    const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     let offset = 0;
     while (offset < bytes.length) {
       const newline = bytes.indexOf(10, offset);
       const end = newline < 0 ? bytes.length : newline;
       if (this.buffer.length + end - offset >= BOUND_FRAME_MAX_BYTES) {
         this.buffer = Buffer.alloc(0);
-        this.settled = { status: 'invalid', reason: 'oversize' };
+        this.settled = { status: "invalid", reason: "oversize" };
         return this.settled;
       }
       this.buffer = Buffer.concat([this.buffer, bytes.subarray(offset, end)]);
       if (newline < 0) break;
-      const line = this.buffer.toString('utf8');
+      const line = this.buffer.toString("utf8");
       this.buffer = Buffer.alloc(0);
-      if (line.trim() !== '') this.settleLine(line);
-      if (this.outcome()?.status === 'duplicate' || this.outcome()?.status === 'invalid') return this.settled;
+      if (line.trim() !== "") this.settleLine(line);
+      if (this.outcome()?.status === "duplicate" || this.outcome()?.status === "invalid")
+        return this.settled;
       offset = end + 1;
     }
     return this.settled;
   }
 
   private settleLine(line: string): void {
-    if (this.settled?.status === 'bound' || this.settled?.status === 'invalid') {
-      this.settled = { status: 'duplicate' };
+    if (this.settled?.status === "bound" || this.settled?.status === "invalid") {
+      this.settled = { status: "duplicate" };
       return;
     }
-    const expected = this.settled === null ? 'preparing' : this.settled.status === 'preparing' ? 'prepared' : 'bound';
-    if (expected === 'bound') {
+    const expected =
+      this.settled === null
+        ? "preparing"
+        : this.settled.status === "preparing"
+          ? "prepared"
+          : "bound";
+    if (expected === "bound") {
       this.settled = parseBoundFrame(line, this.expectedGeneration);
       return;
     }
     let value: unknown;
-    try { value = JSON.parse(line); } catch {
-      this.settled = { status: 'invalid', reason: 'not-json' }; return;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      this.settled = { status: "invalid", reason: "not-json" };
+      return;
     }
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      this.settled = { status: 'invalid', reason: 'not-object' }; return;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      this.settled = { status: "invalid", reason: "not-object" };
+      return;
     }
     const record = value as Record<string, unknown>;
-    const reason = record.v !== STARTUP_PROTOCOL_VERSION ? 'unknown-version'
-      : record.kind !== expected ? 'wrong-kind'
-      : record.generation !== this.expectedGeneration ? 'generation-mismatch'
-      : Object.keys(record).length !== 3 ? 'extra-keys' : null;
-    if (reason) { this.settled = { status: 'invalid', reason }; return; }
+    const reason =
+      record.v !== STARTUP_PROTOCOL_VERSION
+        ? "unknown-version"
+        : record.kind !== expected
+          ? "wrong-kind"
+          : record.generation !== this.expectedGeneration
+            ? "generation-mismatch"
+            : Object.keys(record).length !== 3
+              ? "extra-keys"
+              : null;
+    if (reason) {
+      this.settled = { status: "invalid", reason };
+      return;
+    }
     this.settled = { status: expected };
     this.onPhase(expected);
   }
 
   /** The settled outcome, or `null` if no complete line has arrived yet. */
-  outcome(): StartupFrameParse | { status: 'duplicate' } | null {
+  outcome(): StartupFrameParse | { status: "duplicate" } | null {
     return this.settled;
   }
 }
@@ -200,14 +208,14 @@ function isLoopbackHttpUrl(value: string, port: number): boolean {
   } catch {
     return false;
   }
-  if (url.protocol !== 'http:') return false;
-  if (url.pathname !== '' && url.pathname !== '/') return false;
-  if (url.search !== '' || url.hash !== '' || url.username !== '' || url.password !== '') {
+  if (url.protocol !== "http:") return false;
+  if (url.pathname !== "" && url.pathname !== "/") return false;
+  if (url.search !== "" || url.hash !== "" || url.username !== "" || url.password !== "") {
     return false;
   }
   if (Number(url.port) !== port) return false;
   const host = url.hostname;
-  const isIpv4Loopback = host === '127.0.0.1';
-  const isIpv6Loopback = host === '::1' || host === '[::1]';
+  const isIpv4Loopback = host === "127.0.0.1";
+  const isIpv6Loopback = host === "::1" || host === "[::1]";
   return isIpv4Loopback || isIpv6Loopback;
 }

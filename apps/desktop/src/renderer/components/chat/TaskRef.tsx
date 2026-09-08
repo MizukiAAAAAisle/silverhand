@@ -1,12 +1,12 @@
-import { taskChannelLabel } from '../../features/tasks/taskPlace.js';
-import { useState } from 'react';
-import { useTaskByNumber } from '@/features/tasks/useTaskByNumber';
-import { useTaskRefContext } from '@/features/tasks/TaskRefContext';
-import { useUpdateTaskStatus } from '@/features/tasks/hooks';
-import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge';
-import { HoverPopover } from './HoverPopover';
-import { useRelativeTime } from './useRelativeTime';
-import type { TaskSummaryDto, TaskStatus } from '@silverhand/shared';
+import { taskChannelLabel } from "../../features/tasks/taskPlace.js";
+import { useState } from "react";
+import { useTaskByNumber } from "@/features/tasks/useTaskByNumber";
+import { useTaskRefContext } from "@/features/tasks/TaskRefContext";
+import { useUpdateTaskStatus } from "@/features/tasks/hooks";
+import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
+import { HoverPopover } from "./HoverPopover";
+import { useRelativeTime } from "./useRelativeTime";
+import type { TaskSummaryDto, TaskStatus } from "@silverhand/shared";
 
 interface TaskRefProps {
   /** Raw `<n>` from the `#task:<n>` sigil — already validated as a
@@ -84,7 +84,9 @@ export function TaskRefStaticChip({
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved"
     >
-      <span className="truncate"><span data-task-ref-num>#{task.task_number}</span> {task.title}</span>
+      <span className="truncate">
+        <span data-task-ref-num>#{task.task_number}</span> {task.title}
+      </span>
     </span>
   );
 }
@@ -126,9 +128,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   const ctx = useTaskRefContext();
   const conversationId = ctx?.conversationId ?? null;
   const result = useTaskByNumber(
-    ctx
-      ? { workspaceId: ctx.workspaceId, conversationId: ctx.conversationId }
-      : null,
+    ctx ? { workspaceId: ctx.workspaceId, conversationId: ctx.conversationId } : null,
     taskNumber,
   );
   const task = result.data ?? null;
@@ -193,13 +193,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
         <span className="truncate">{inertLabel}</span>
       </span>
     );
-    return (
-      <HoverPopover
-        trigger={loadingChip}
-        content={null}
-        isContentReady={false}
-      />
-    );
+    return <HoverPopover trigger={loadingChip} content={null} isContentReady={false} />;
   }
 
   if (!task) {
@@ -226,7 +220,9 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   // (#task:1760).
   const chipContent = (
     <>
-      <span className="truncate"><span data-task-ref-num>#{task.task_number}</span> {task.title}</span>
+      <span className="truncate">
+        <span data-task-ref-num>#{task.task_number}</span> {task.title}
+      </span>
     </>
   );
 
@@ -275,13 +271,13 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
       aria-label={tooltip}
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved"
-      onClick={event => {
+      onClick={(event) => {
         event.preventDefault();
         event.stopPropagation();
         onOpenTask?.(task.id);
       }}
-      onKeyDown={event => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         event.stopPropagation();
         onOpenTask?.(task.id);
@@ -302,9 +298,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
       content={
         <TaskPopoverBody
           task={task}
-          onStatusChange={next =>
-            updateStatus.mutate({ taskId: task.id, status: next })
-          }
+          onStatusChange={(next) => updateStatus.mutate({ taskId: task.id, status: next })}
           onPickerOpenChange={setPickerOpen}
         />
       }
@@ -336,10 +330,7 @@ function TaskPopoverBody({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <span
-          data-tasks-num
-          className="font-mono text-[length:var(--text-badge)] text-text-muted"
-        >
+        <span data-tasks-num className="font-mono text-[length:var(--text-badge)] text-text-muted">
           #{task.task_number}
         </span>
         {/* Same interactive chip as the task-pane card: click → "Move to"
@@ -351,26 +342,27 @@ function TaskPopoverBody({
           onOpenChange={onPickerOpenChange}
         />
       </div>
-      <p className="break-words text-xs font-medium text-text-primary">
-        {task.title}
-      </p>
+      <p className="break-words text-xs font-medium text-text-primary">{task.title}</p>
       <p className="flex items-baseline gap-1.5 text-[length:var(--text-meta)] text-text-muted">
         <span className="shrink-0 text-text-secondary">
           {task.assignee ? task.assignee.name : <em>unassigned</em>}
         </span>
         {channelLabel !== null ? (
           <>
-            <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
-            <span
-              className="min-w-0 truncate text-text-secondary"
-              title={channelLabel}
-            >
+            <span aria-hidden className="shrink-0 text-text-muted/60">
+              ·
+            </span>
+            <span className="min-w-0 truncate text-text-secondary" title={channelLabel}>
               in {channelLabel}
             </span>
           </>
         ) : null}
-        <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
-        <span className="shrink-0" title={absolute}>{relative}</span>
+        <span aria-hidden className="shrink-0 text-text-muted/60">
+          ·
+        </span>
+        <span className="shrink-0" title={absolute}>
+          {relative}
+        </span>
       </p>
     </div>
   );

@@ -1,23 +1,23 @@
-import { useChatBrowse } from './use-chat-browse';
-import { useWorkspaceActions } from './use-workspace-actions';
-import { Sidebar } from '@/components/layout/Sidebar';
-import { SectionLayer } from '@/components/layout/SectionLayer';
-import { SavedListView } from '@/components/layout/SavedListView';
-import { SearchPanel } from '@/components/layout/SearchPanel';
-import { ArchivedChannelsPanel } from '@/components/layout/ArchivedChannelsPanel';
-import { VerticalSplitter } from '@/components/layout/VerticalSplitter';
+import { useChatBrowse } from "./use-chat-browse";
+import { useWorkspaceActions } from "./use-workspace-actions";
+import { Sidebar } from "@/components/layout/Sidebar";
+import { SectionLayer } from "@/components/layout/SectionLayer";
+import { SavedListView } from "@/components/layout/SavedListView";
+import { SearchPanel } from "@/components/layout/SearchPanel";
+import { ArchivedChannelsPanel } from "@/components/layout/ArchivedChannelsPanel";
+import { VerticalSplitter } from "@/components/layout/VerticalSplitter";
 import {
   SIDEBAR_ANIMATE_LAYOUT,
   SIDEBAR_PERFORMANCE_VARIANT,
-} from '@/sidebar-performance-experiment';
-import { useResizableWidth } from '@/hooks/useResizableWidth';
-import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
-import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
-import { WorkspaceSettingsDialog } from '@/features/workspaces/WorkspaceSettingsDialog';
-import { workspaceCapabilities } from '@/features/workspaces/workspace-capabilities';
-import type { ChatShellModel } from '@/features/conversation-shell/conversation-shell-models';
-import type { ConversationContent } from '@/features/conversation-shell/conversation-content';
-import { ConversationStage } from '@/features/conversation-shell/conversation-stage';
+} from "@/sidebar-performance-experiment";
+import { useResizableWidth } from "@/hooks/useResizableWidth";
+import { CreateWorkspaceDialog } from "@/features/workspaces/CreateWorkspaceDialog";
+import { CreateChannelDialog } from "@/features/workspaces/CreateChannelDialog";
+import { WorkspaceSettingsDialog } from "@/features/workspaces/WorkspaceSettingsDialog";
+import { workspaceCapabilities } from "@/features/workspaces/workspace-capabilities";
+import type { ChatShellModel } from "@/features/conversation-shell/conversation-shell-models";
+import type { ConversationContent } from "@/features/conversation-shell/conversation-content";
+import { ConversationStage } from "@/features/conversation-shell/conversation-stage";
 
 export function ChatShell({
   model,
@@ -71,42 +71,42 @@ export function ChatShell({
   } = useChatBrowse();
 
   const sidebar = useResizableWidth({
-    storageKey: 'silverhand.layout.sidebar-width',
+    storageKey: "silverhand.layout.sidebar-width",
     defaultWidth: 240,
     min: 230,
     max: 400,
-    cssVar: '--sidebar-width',
+    cssVar: "--sidebar-width",
   });
 
   return (
     <>
-      {(appSection === 'chat' || deferredSection === 'chat') && (
+      {(appSection === "chat" || deferredSection === "chat") && (
         <SectionLayer visible>
           <>
             <div
               className="sidebar-slot"
               data-animating={
-                SIDEBAR_ANIMATE_LAYOUT && workspaceSidebarPane.transitioning ? 'true' : undefined
+                SIDEBAR_ANIMATE_LAYOUT && workspaceSidebarPane.transitioning ? "true" : undefined
               }
               data-performance-variant={SIDEBAR_PERFORMANCE_VARIANT}
               style={{
-                flexBasis: workspaceSidebarVisible ? 'var(--sidebar-width)' : '0px',
+                flexBasis: workspaceSidebarVisible ? "var(--sidebar-width)" : "0px",
                 // When hidden, eat the right-side flex gap so the sheet's
                 // `gap: var(--pane-gap)` doesn't render twice (once on
                 // each side of the 0-width slot). Animates alongside
                 // flex-basis so the collapse stays smooth end-to-end.
-                marginRight: workspaceSidebarVisible ? '0px' : 'calc(-1 * var(--pane-gap))',
+                marginRight: workspaceSidebarVisible ? "0px" : "calc(-1 * var(--pane-gap))",
               }}
               // hidden subtree must not steal focus or grab pointer events
               // mid-slide; `inert` removes it from the a11y tree too.
-              {...(workspaceSidebarVisible ? {} : { inert: '' })}
+              {...(workspaceSidebarVisible ? {} : { inert: "" })}
               aria-hidden={workspaceSidebarVisible ? undefined : true}
             >
               {workspaceSidebarPane.present ? (
                 <div
                   className="sidebar-surface"
                   data-state={workspaceSidebarPane.surfaceState}
-                  style={{ width: 'var(--sidebar-width)' }}
+                  style={{ width: "var(--sidebar-width)" }}
                 >
                   <Sidebar
                     workspaces={workspaces.map((w) => ({
@@ -155,11 +155,11 @@ export function ChatShell({
                       handleSelectChannel(conversationId, workspaceId)
                     }
                     onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
-                    savedActive={view === 'saved'}
+                    savedActive={view === "saved"}
                     onSelectSaved={() => nav.toChatSaved()}
-                    archivedActive={view === 'archived'}
+                    archivedActive={view === "archived"}
                     onSelectArchived={() => nav.toChatArchived()}
-                    searchActive={view === 'search'}
+                    searchActive={view === "search"}
                     onSelectSearch={() => nav.toChatSearch()}
                     savedCount={savedItems?.length}
                   />
@@ -176,14 +176,14 @@ export function ChatShell({
             {workspaceSidebarPane.present ? (
               <VerticalSplitter onPointerDown={sidebar.startResize} active={sidebar.isDragging} />
             ) : null}
-            {view === 'saved' ? (
+            {view === "saved" ? (
               <SavedListView
                 workspaces={workspaces}
                 filter={savedFilter}
                 onFilterChange={setSavedFilter}
                 onJump={(params) => handleJumpToMessage(params)}
               />
-            ) : view === 'search' ? (
+            ) : view === "search" ? (
               <SearchPanel
                 workspaces={workspaces}
                 initialQuery={route.searchQuery ?? undefined}
@@ -199,7 +199,7 @@ export function ChatShell({
                   nav.toChannel(navWorkspaceId, channelId);
                 }}
               />
-            ) : view === 'archived' ? (
+            ) : view === "archived" ? (
               <ArchivedChannelsPanel
                 workspaces={workspaces}
                 filter={archivedFilter}
@@ -224,7 +224,7 @@ export function ChatShell({
               <>
                 <ConversationStage
                   content={content}
-                  ready={deferredSection === 'chat'}
+                  ready={deferredSection === "chat"}
                   fullscreen={fullscreen}
                   storageKey="silverhand.layout.split-ratio"
                 />
@@ -232,7 +232,7 @@ export function ChatShell({
             )}
           </>
         </SectionLayer>
-      )}{' '}
+      )}{" "}
       <CreateWorkspaceDialog
         open={createWorkspaceOpen}
         onOpenChange={setCreateWorkspaceOpen}
@@ -254,7 +254,7 @@ export function ChatShell({
         }}
       />
       <WorkspaceSettingsDialog
-        key={workspaceSettingsId ?? 'closed'}
+        key={workspaceSettingsId ?? "closed"}
         open={workspaceSettingsId !== null && settingsWorkspace !== null}
         onOpenChange={(open) => {
           if (!open) {

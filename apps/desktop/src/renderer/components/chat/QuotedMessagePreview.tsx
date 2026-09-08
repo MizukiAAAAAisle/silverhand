@@ -1,11 +1,11 @@
-import { useMemo } from 'react';
-import { ThreadIcon } from '@/components/icons/conversation-icons';
-import type { MessageDto } from '@silverhand/shared';
-import { useMessage } from '@/features/messages/hooks';
-import { useUsersById, makeUserNameResolver } from '@/features/users/hooks';
-import { formatUserDisplayName } from '@/lib/current-user';
-import { Markdown } from './Markdown';
-import { useRelativeTime } from './useRelativeTime';
+import { useMemo } from "react";
+import { ThreadIcon } from "@/components/icons/conversation-icons";
+import type { MessageDto } from "@silverhand/shared";
+import { useMessage } from "@/features/messages/hooks";
+import { useUsersById, makeUserNameResolver } from "@/features/users/hooks";
+import { formatUserDisplayName } from "@/lib/current-user";
+import { Markdown } from "./Markdown";
+import { useRelativeTime } from "./useRelativeTime";
 
 interface QuotedMessagePreviewProps {
   /** The thread_anchor system message — its metadata carries the
@@ -26,32 +26,30 @@ interface QuotedFields {
   createdAt: number;
 }
 
-function readSnapshot(metadata: MessageDto['metadata']): QuotedFields | null {
+function readSnapshot(metadata: MessageDto["metadata"]): QuotedFields | null {
   if (!metadata) return null;
   const meta = metadata as Record<string, unknown>;
-  const content = typeof meta['quoted_content'] === 'string' ? meta['quoted_content'] : null;
+  const content = typeof meta["quoted_content"] === "string" ? meta["quoted_content"] : null;
   const createdAt =
-    typeof meta['quoted_created_at'] === 'number' ? meta['quoted_created_at'] : null;
+    typeof meta["quoted_created_at"] === "number" ? meta["quoted_created_at"] : null;
   if (!content || createdAt === null) return null;
   return {
     content,
-    fromKind: typeof meta['quoted_from_kind'] === 'string' ? meta['quoted_from_kind'] : null,
+    fromKind: typeof meta["quoted_from_kind"] === "string" ? meta["quoted_from_kind"] : null,
     userId:
-      typeof meta['quoted_from_user_id'] === 'string'
-        ? (meta['quoted_from_user_id'] as string)
+      typeof meta["quoted_from_user_id"] === "string"
+        ? (meta["quoted_from_user_id"] as string)
         : null,
     agentName:
-      typeof meta['quoted_agent_name'] === 'string'
-        ? (meta['quoted_agent_name'] as string)
-        : null,
+      typeof meta["quoted_agent_name"] === "string" ? (meta["quoted_agent_name"] as string) : null,
     createdAt,
   };
 }
 
-function readQuotedMessageId(metadata: MessageDto['metadata']): string | null {
+function readQuotedMessageId(metadata: MessageDto["metadata"]): string | null {
   if (!metadata) return null;
-  const v = (metadata as Record<string, unknown>)['quoted_message_id'];
-  return typeof v === 'string' ? v : null;
+  const v = (metadata as Record<string, unknown>)["quoted_message_id"];
+  return typeof v === "string" ? v : null;
 }
 
 /**
@@ -104,26 +102,26 @@ export function QuotedMessagePreview({
   // Fallback finished but the message is gone (deleted parent etc.).
   if (!fields) return null;
 
-  const isUser = fields.fromKind === 'user';
+  const isUser = fields.fromKind === "user";
   const displayName = isUser
     ? formatUserDisplayName(fields.userId, userResolver)
     : fields.agentName
       ? `@${fields.agentName}`
-      : '@agent';
+      : "@agent";
 
   return (
     <div
       className={
-        'w-full border-2 border-border bg-bg-floating px-4 py-2 ' +
-        (onJumpToOriginal ? 'cursor-pointer transition-colors hover:border-accent' : '')
+        "w-full border-2 border-border bg-bg-floating px-4 py-2 " +
+        (onJumpToOriginal ? "cursor-pointer transition-colors hover:border-accent" : "")
       }
       onClick={onJumpToOriginal}
-      role={onJumpToOriginal ? 'button' : undefined}
+      role={onJumpToOriginal ? "button" : undefined}
       tabIndex={onJumpToOriginal ? 0 : undefined}
       onKeyDown={
         onJumpToOriginal
-          ? e => {
-              if (e.key === 'Enter' || e.key === ' ') {
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 onJumpToOriginal();
               }
@@ -136,11 +134,7 @@ export function QuotedMessagePreview({
         <span>thread from</span>
       </div>
       <header className="mb-1 text-xs">
-        <span
-          className={
-            'font-medium ' + (isUser ? 'text-text-primary' : 'text-accent')
-          }
-        >
+        <span className={"font-medium " + (isUser ? "text-text-primary" : "text-accent")}>
           {displayName}
         </span>
         <time

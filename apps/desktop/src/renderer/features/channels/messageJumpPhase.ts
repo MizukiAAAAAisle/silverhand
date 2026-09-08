@@ -18,7 +18,7 @@
  *                  (fallback latest may fill the pane); locate does a bounded
  *                  best-effort. (`not_found` clears the jump entirely → null.)
  */
-export type JumpPhase = 'priming' | 'committed' | 'settled';
+export type JumpPhase = "priming" | "committed" | "settled";
 
 /**
  * WINDOW LOCK: true while a jump's around-window must stay protected from a
@@ -30,7 +30,7 @@ export type JumpPhase = 'priming' | 'committed' | 'settled';
  * clobber race.
  */
 export function jumpWindowLockedForPhase(phase: JumpPhase | null): boolean {
-  return phase === 'priming' || phase === 'committed';
+  return phase === "priming" || phase === "committed";
 }
 
 /**
@@ -50,5 +50,5 @@ export function jumpWindowLockedForPhase(phase: JumpPhase | null): boolean {
  * `onJumped → clearJump` drops the phase — no "neither render nor release" state.
  */
 export function threadLocateAllowed(phase: JumpPhase | null): boolean {
-  return phase === 'committed' || phase === 'settled';
+  return phase === "committed" || phase === "settled";
 }

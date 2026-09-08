@@ -37,13 +37,13 @@
 import {
   conversationPaneDescriptorFromIdentity,
   type ConversationIdentityResolution,
-} from '@/features/conversations/conversation-identity';
-import type { ConversationPaneDescriptor } from '@/features/conversations/pane-descriptor';
+} from "@/features/conversations/conversation-identity";
+import type { ConversationPaneDescriptor } from "@/features/conversations/pane-descriptor";
 
 export type SecondaryDescriptor =
   | {
-      source: 'side';
-      status: 'resolved';
+      source: "side";
+      status: "resolved";
       id: string;
       /** Everything the pane needs about the conversation, in the ONE shape
        *  `ChannelView` takes. Built by
@@ -59,10 +59,10 @@ export type SecondaryDescriptor =
        *  chain never carries a container kind (#task:2078). */
       hasChannelNamespace: boolean;
     }
-  | { source: 'side'; status: 'loading'; id: string }
-  | { source: 'side'; status: 'unauthorized'; id: string }
-  | { source: 'side'; status: 'not_found'; id: string }
-  | { source: 'side'; status: 'unresolved'; id: string };
+  | { source: "side"; status: "loading"; id: string }
+  | { source: "side"; status: "unauthorized"; id: string }
+  | { source: "side"; status: "not_found"; id: string }
+  | { source: "side"; status: "unresolved"; id: string };
 
 export interface SecondaryRouteInputs {
   /** From `useRouteState().sideConversationId`. */
@@ -95,19 +95,20 @@ export function selectSecondaryDescriptor(
 ): SecondaryDescriptor | null {
   if (!route.sideConversationId) return null;
   const id = route.sideConversationId;
-  const resolution = sideIdentity ?? { status: 'loading' as const };
-  if (resolution.status !== 'resolved') {
-    return { source: 'side', status: resolution.status, id };
+  const resolution = sideIdentity ?? { status: "loading" as const };
+  if (resolution.status !== "resolved") {
+    return { source: "side", status: resolution.status, id };
   }
   // Resolved — pull all routing metadata out of the identity so the descriptor
   // is the single source of truth for downstream wiring (no second hop into the
   // channels list / workspace store).
   return {
-    source: 'side',
-    status: 'resolved',
-    id: resolution.identity.placement === 'workspace'
-      ? resolution.identity.ref.id
-      : resolution.identity.pair.conversation_id,
+    source: "side",
+    status: "resolved",
+    id:
+      resolution.identity.placement === "workspace"
+        ? resolution.identity.ref.id
+        : resolution.identity.pair.conversation_id,
     descriptor: conversationPaneDescriptorFromIdentity(resolution.identity),
     // The one bit the pane chain reads, taken straight off the identity's own
     // discriminant: a workspace placement has a `#` namespace, a private line has
@@ -115,7 +116,7 @@ export function selectSecondaryDescriptor(
     // (ChannelView, ThreadPanel, Composer) ever distinguished the two kinds, so
     // reading it would only give a second spelling of the same bit (#task:2078;
     // the read-through of the published word it replaced landed in #task:2070).
-    hasChannelNamespace: resolution.identity.placement === 'workspace',
+    hasChannelNamespace: resolution.identity.placement === "workspace",
   };
 }
 
@@ -162,9 +163,7 @@ export interface SecondaryViewMappingInputs {
  * other workspace id/kind/path，focused IPC 也用 other workspace
  * id。这个比只测 hook 更能防回归。" — that's this helper.
  */
-export function selectSecondaryViewInputs(
-  inputs: SecondaryViewMappingInputs,
-): SecondaryViewInputs {
+export function selectSecondaryViewInputs(inputs: SecondaryViewMappingInputs): SecondaryViewInputs {
   const { secondary, primaryHasChannelNamespace, primaryWorkspaceId } = inputs;
 
   if (!secondary) {
@@ -178,7 +177,7 @@ export function selectSecondaryViewInputs(
   // `?side` resolved: the descriptor is already built from the identity, so a
   // cross-workspace channel needs no lookup hit and a private line needs no
   // workspace at all.
-  if (secondary.source === 'side' && secondary.status === 'resolved') {
+  if (secondary.source === "side" && secondary.status === "resolved") {
     return {
       conversationDescriptor: secondary.descriptor,
       hasChannelNamespace: secondary.hasChannelNamespace,
@@ -198,7 +197,7 @@ export function selectSecondaryViewInputs(
 /** Conversation pointer used by the read-cursor / focus selectors. */
 export interface ConversationPointer {
   id: string;
-  rosterPolicy: 'open' | 'fixed';
+  rosterPolicy: "open" | "fixed";
 }
 
 export interface VisibleConversations {
@@ -232,14 +231,12 @@ export interface VisibleSelectionInputs {
  *   - Fullscreen + no secondary → only primary visible (fullscreen is a
  *                                no-op without a secondary).
  */
-export function selectVisibleConversations(
-  inputs: VisibleSelectionInputs,
-): VisibleConversations {
+export function selectVisibleConversations(inputs: VisibleSelectionInputs): VisibleConversations {
   const { primary, secondary, fullscreen } = inputs;
   if (!secondary) {
     return { primary, secondary: null };
   }
-  if (secondary.status !== 'resolved') {
+  if (secondary.status !== "resolved") {
     // Placeholder occupies the slot visually but has no conversation
     // id to mark read. Primary is still visible behind it.
     return { primary, secondary: null };
@@ -256,7 +253,7 @@ export function selectVisibleConversations(
 
 export interface FocusedConversation {
   id: string;
-  rosterPolicy: 'open' | 'fixed';
+  rosterPolicy: "open" | "fixed";
   /** Workspace id for the focused conversation — the resolved secondary's own
    *  coordinate (cross-workspace capable, and `null` for a workspace-less
    *  placement) or the caller's `primaryWorkspaceId` for the primary case. */
@@ -289,7 +286,7 @@ export function selectFocusedConversation(
   inputs: FocusSelectionInputs,
 ): FocusedConversation | null {
   const { primary, primaryWorkspaceId, secondary, fullscreen } = inputs;
-  if (secondary && secondary.status === 'resolved') {
+  if (secondary && secondary.status === "resolved") {
     return {
       id: secondary.id,
       rosterPolicy: secondary.descriptor.roster_policy,
@@ -337,14 +334,12 @@ export function selectSidebarSelectedConversationId(inputs: {
   primaryWorkspaceId: string | null;
 }): string | null {
   const { primarySelectedChannelId, secondary, primaryWorkspaceId } = inputs;
-  if (!secondary || secondary.status !== 'resolved') {
+  if (!secondary || secondary.status !== "resolved") {
     return primarySelectedChannelId;
   }
   const workspaceId = secondary.descriptor.workspace_id;
   if (workspaceId === null) return secondary.id;
-  return workspaceId === primaryWorkspaceId
-    ? secondary.id
-    : primarySelectedChannelId;
+  return workspaceId === primaryWorkspaceId ? secondary.id : primarySelectedChannelId;
 }
 
 /**
@@ -369,5 +364,5 @@ export function shouldSecondaryFullscreen(
   secondary: SecondaryDescriptor | null,
   fullscreen: boolean,
 ): boolean {
-  return fullscreen && secondary?.status === 'resolved';
+  return fullscreen && secondary?.status === "resolved";
 }

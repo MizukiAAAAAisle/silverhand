@@ -1,8 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import { applyAppearanceOverrides, APPEARANCE_TOKENS } from './apply';
-import { parseAppearance, parseAppearanceJson } from './parse';
-import { LEGACY_THEME_IDS, THEME_IDS } from './types';
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { applyAppearanceOverrides, APPEARANCE_TOKENS } from "./apply";
+import { parseAppearance, parseAppearanceJson } from "./parse";
+import { LEGACY_THEME_IDS, THEME_IDS } from "./types";
 
 class StyleStub {
   values = new Map<string, string>();
@@ -14,51 +14,51 @@ class StyleStub {
 
   removeProperty(property: string): string {
     this.removed.push(property);
-    const prev = this.values.get(property) ?? '';
+    const prev = this.values.get(property) ?? "";
     this.values.delete(property);
     return prev;
   }
 }
 
-describe('parseAppearance', () => {
-  it('keeps the legacy theme-only shape', () => {
-    expect(parseAppearance({ theme: 'forza6' })).toEqual({
-      theme: 'forza6',
+describe("parseAppearance", () => {
+  it("keeps the legacy theme-only shape", () => {
+    expect(parseAppearance({ theme: "forza6" })).toEqual({
+      theme: "forza6",
     });
   });
 
-  it('falls back to the current default theme when input is missing or bad', () => {
-    expect(parseAppearance(null)).toEqual({ theme: 'forza6' });
-    expect(parseAppearanceJson('{bad json')).toEqual({ theme: 'forza6' });
-    expect(parseAppearance({ theme: 'unknown' })).toEqual({
-      theme: 'forza6',
+  it("falls back to the current default theme when input is missing or bad", () => {
+    expect(parseAppearance(null)).toEqual({ theme: "forza6" });
+    expect(parseAppearanceJson("{bad json")).toEqual({ theme: "forza6" });
+    expect(parseAppearance({ theme: "unknown" })).toEqual({
+      theme: "forza6",
     });
   });
 
-  it('normalizes shared font size and trims font families', () => {
+  it("normalizes shared font size and trims font families", () => {
     expect(
       parseAppearance({
-        theme: 'forza6',
+        theme: "forza6",
         fontSize: 100,
-        prose: { fontFamily: '  Georgia, serif  ' },
-        code: { fontFamily: '   ' },
+        prose: { fontFamily: "  Georgia, serif  " },
+        code: { fontFamily: "   " },
       }),
     ).toEqual({
-      theme: 'forza6',
+      theme: "forza6",
       // Clamped to FONT_SIZE_MAX.
       fontSize: 22,
-      prose: { fontFamily: 'Georgia, serif' },
+      prose: { fontFamily: "Georgia, serif" },
       // code's fontFamily was empty after trim, so the slot drops.
     });
   });
 
-  it('drops non-number sizes instead of coercing strings', () => {
+  it("drops non-number sizes instead of coercing strings", () => {
     expect(
       parseAppearance({
-        theme: 'studio-light',
-        fontSize: '16',
+        theme: "studio-light",
+        fontSize: "16",
       }),
-    ).toEqual({ theme: 'studio-light' });
+    ).toEqual({ theme: "studio-light" });
   });
 
   // Renamed-theme compatibility (#task:1656). A user who had picked the
@@ -67,7 +67,7 @@ describe('parseAppearance', () => {
   // a silently lost preference, which no type check can catch. Every
   // entry in LEGACY_THEME_IDS must land on a live id, and the rest of
   // the settings blob must survive the rewrite.
-  it('maps every legacy theme id onto a current one', () => {
+  it("maps every legacy theme id onto a current one", () => {
     for (const [legacy, current] of Object.entries(LEGACY_THEME_IDS)) {
       expect(THEME_IDS).toContain(current);
       expect(parseAppearance({ theme: legacy, fontSize: 16 })).toEqual({
@@ -81,28 +81,28 @@ describe('parseAppearance', () => {
   });
 });
 
-describe('applyAppearanceOverrides', () => {
-  it('writes the shared font size into a single appearance token', () => {
+describe("applyAppearanceOverrides", () => {
+  it("writes the shared font size into a single appearance token", () => {
     const style = new StyleStub();
     applyAppearanceOverrides(style, {
-      theme: 'studio-light',
+      theme: "studio-light",
       fontSize: 16,
-      prose: { fontFamily: 'Georgia, serif' },
-      code: { fontFamily: 'Menlo, monospace' },
+      prose: { fontFamily: "Georgia, serif" },
+      code: { fontFamily: "Menlo, monospace" },
     });
 
     expect(style.values).toEqual(
       new Map([
-        [APPEARANCE_TOKENS.PROSE_FONT, 'Georgia, serif'],
-        [APPEARANCE_TOKENS.CODE_FONT, 'Menlo, monospace'],
-        [APPEARANCE_TOKENS.MARKDOWN_FONT_SIZE, '16px'],
+        [APPEARANCE_TOKENS.PROSE_FONT, "Georgia, serif"],
+        [APPEARANCE_TOKENS.CODE_FONT, "Menlo, monospace"],
+        [APPEARANCE_TOKENS.MARKDOWN_FONT_SIZE, "16px"],
       ]),
     );
   });
 
-  it('removes markdown override tokens when settings reset', () => {
+  it("removes markdown override tokens when settings reset", () => {
     const style = new StyleStub();
-    applyAppearanceOverrides(style, { theme: 'forza6' });
+    applyAppearanceOverrides(style, { theme: "forza6" });
 
     expect(style.removed).toEqual([
       APPEARANCE_TOKENS.PROSE_FONT,
@@ -112,47 +112,47 @@ describe('applyAppearanceOverrides', () => {
   });
 });
 
-describe('theme markdown token cascade contract', () => {
-  const globalCss = readFileSync(new URL('../styles/global.css', import.meta.url), 'utf8');
+describe("theme markdown token cascade contract", () => {
+  const globalCss = readFileSync(new URL("../styles/global.css", import.meta.url), "utf8");
   const studioLightCss = readFileSync(
-    new URL('../styles/themes/studio-light.css', import.meta.url),
-    'utf8',
+    new URL("../styles/themes/studio-light.css", import.meta.url),
+    "utf8",
   );
-  const forza6Css = readFileSync(new URL('../styles/themes/forza6.css', import.meta.url), 'utf8');
+  const forza6Css = readFileSync(new URL("../styles/themes/forza6.css", import.meta.url), "utf8");
   const forza6ComponentsCss = readFileSync(
-    new URL('../styles/themes/forza6-components.css', import.meta.url),
-    'utf8',
+    new URL("../styles/themes/forza6-components.css", import.meta.url),
+    "utf8",
   );
   const slackDarkCss = readFileSync(
-    new URL('../styles/themes/slack-dark.css', import.meta.url),
-    'utf8',
+    new URL("../styles/themes/slack-dark.css", import.meta.url),
+    "utf8",
   );
-  const irisCss = readFileSync(new URL('../styles/themes/iris.css', import.meta.url), 'utf8');
+  const irisCss = readFileSync(new URL("../styles/themes/iris.css", import.meta.url), "utf8");
 
   // Cascade STRUCTURE guards: the whole no-leak model rests on the default
   // theme owning `:root` and being imported before any override theme. If
   // another theme declares `:root`, or the default imports after an override,
   // the default's festival-only values leak globally / get clobbered — a
   // cross-theme corruption TS can't catch. (Structural boundaries, not values.)
-  it('imports the default :root theme before the themes that override it', () => {
+  it("imports the default :root theme before the themes that override it", () => {
     const order = [...globalCss.matchAll(/@import ['"]\.\/themes\/([^'"]+)['"];/g)].map(
       (m) => m[1],
     );
-    const forzaIdx = order.indexOf('forza6.css');
+    const forzaIdx = order.indexOf("forza6.css");
     expect(forzaIdx).toBeGreaterThanOrEqual(0);
-    for (const override of ['studio-light.css', 'slack-dark.css', 'iris.css']) {
+    for (const override of ["studio-light.css", "slack-dark.css", "iris.css"]) {
       expect(order.indexOf(override)).toBeGreaterThan(forzaIdx);
     }
   });
 
-  it('keeps :root only on the default theme', () => {
+  it("keeps :root only on the default theme", () => {
     // Whitespace-insensitive: the default theme owns a `:root, [data-theme='forza6']`
     // block. Match the selector pair structurally so this guard doesn't itself
     // relock the exact newline/spacing formatting.
     expect(forza6Css).toMatch(/:root\s*,\s*\[data-theme=['"]forza6['"]\]/);
-    expect(studioLightCss).not.toContain(':root');
-    expect(slackDarkCss).not.toContain(':root');
-    expect(irisCss).not.toContain(':root');
+    expect(studioLightCss).not.toContain(":root");
+    expect(slackDarkCss).not.toContain(":root");
+    expect(irisCss).not.toContain(":root");
   });
 
   // Component-layer root-ownership guard (restored, #task:788 failure path).
@@ -163,16 +163,16 @@ describe('theme markdown token cascade contract', () => {
   // theme block here would silently fork the token SSOT (values drift between
   // the two files, invisible to TS). This is a stable layering boundary
   // (guideline 5), not a CSS re-lock: it names the concrete corruption path.
-  it('forbids root-level token reassignment in the forza6 component layer', () => {
+  it("forbids root-level token reassignment in the forza6 component layer", () => {
     // Strip CSS comments first — the file's own header prose mentions the
     // removed `[data-theme='forza6'] {}` block, which must not trip the guard.
-    const code = forza6ComponentsCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    const code = forza6ComponentsCss.replace(/\/\*[\s\S]*?\*\//g, "");
     // A bare theme selector = the attribute selector directly followed by `{`
     // (only whitespace between). Qualified selectors like
     // `[data-theme='forza6'] header[...] {` have another selector before `{`,
     // so they don't match.
     expect(code).not.toMatch(/\[data-theme=['"]forza6['"]\]\s*\{/);
-    expect(code).not.toContain(':root');
+    expect(code).not.toContain(":root");
   });
 
   // The ONE cascade-safety token test: every promoted token MUST be declared
@@ -188,8 +188,8 @@ describe('theme markdown token cascade contract', () => {
   // theme must declare too." Adding a token to forza6 auto-extends the contract;
   // deleting a dead one auto-retracts it — the fence maintains itself, no manual
   // token list to drift out of sync.
-  it('every theme explicitly declares the full promoted-token set (no :root leak)', () => {
-    const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, '');
+  it("every theme explicitly declares the full promoted-token set (no :root leak)", () => {
+    const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
     // A declaration is `--name:`; `var(--name)` usages end in `)`, not `:`, so
     // this matches definitions only.
     const declaredTokens = (css: string) =>
@@ -205,9 +205,9 @@ describe('theme markdown token cascade contract', () => {
     //              (`[data-tasks-num]`) is painted ONLY in forza6-components.css
     //              `[data-theme='forza6']` rules; other themes render the number
     //              as `text-text-muted` and never read the token, so it can't leak.
-    const FORZA6_ONLY = new Set(['--app-corner-radius', '--task-num']);
+    const FORZA6_ONLY = new Set(["--app-corner-radius", "--task-num"]);
     const isPromoted = (t: string) =>
-      !t.startsWith('--forza6-') && !t.startsWith('--color-') && !FORZA6_ONLY.has(t);
+      !t.startsWith("--forza6-") && !t.startsWith("--color-") && !FORZA6_ONLY.has(t);
 
     const required = [...declaredTokens(forza6Css)].filter(isPromoted);
     // Sanity: if the regex ever breaks, the set collapses and the test would
@@ -215,9 +215,9 @@ describe('theme markdown token cascade contract', () => {
     expect(required.length).toBeGreaterThan(100);
 
     for (const [name, css] of [
-      ['studio-light', studioLightCss],
-      ['slack-dark', slackDarkCss],
-      ['iris', irisCss],
+      ["studio-light", studioLightCss],
+      ["slack-dark", slackDarkCss],
+      ["iris", irisCss],
     ] as const) {
       const declared = declaredTokens(css);
       const missing = required.filter((t) => !declared.has(t));

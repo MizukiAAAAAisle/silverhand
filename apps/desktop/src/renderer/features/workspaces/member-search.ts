@@ -1,8 +1,6 @@
-import type { AgentDto, UserDto } from '@silverhand/shared';
+import type { AgentDto, UserDto } from "@silverhand/shared";
 
-export type MemberCandidate =
-  | { kind: 'agent'; agent: AgentDto }
-  | { kind: 'human'; user: UserDto };
+export type MemberCandidate = { kind: "agent"; agent: AgentDto } | { kind: "human"; user: UserDto };
 
 export interface MemberCandidateGroup {
   /** Uppercase section label, e.g. `AGENTS`. */
@@ -12,17 +10,17 @@ export interface MemberCandidateGroup {
 }
 
 export function candidateKey(c: MemberCandidate): string {
-  return c.kind === 'agent' ? `agent:${c.agent.id}` : `human:${c.user.id}`;
+  return c.kind === "agent" ? `agent:${c.agent.id}` : `human:${c.user.id}`;
 }
 
 export function candidateDisplayName(c: MemberCandidate): string {
-  return c.kind === 'agent'
+  return c.kind === "agent"
     ? c.agent.display_name || c.agent.name
     : c.user.display_name || c.user.name;
 }
 
 export function candidateHandle(c: MemberCandidate): string {
-  return c.kind === 'agent' ? c.agent.name : c.user.name;
+  return c.kind === "agent" ? c.agent.name : c.user.name;
 }
 
 /**
@@ -41,7 +39,7 @@ export function candidateHandle(c: MemberCandidate): string {
  */
 export function normalizeMemberQuery(query: string): string {
   const trimmed = query.trim();
-  const withoutSigil = trimmed.startsWith('@') ? trimmed.slice(1) : trimmed;
+  const withoutSigil = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
   return withoutSigil.toLowerCase();
 }
 
@@ -54,7 +52,7 @@ export function normalizeMemberQuery(query: string): string {
 export function matchesCandidate(c: MemberCandidate, query: string): boolean {
   if (!query) return true;
   return (
-    candidateHandle(c).toLowerCase().includes(query)
-    || candidateDisplayName(c).toLowerCase().includes(query)
+    candidateHandle(c).toLowerCase().includes(query) ||
+    candidateDisplayName(c).toLowerCase().includes(query)
   );
 }

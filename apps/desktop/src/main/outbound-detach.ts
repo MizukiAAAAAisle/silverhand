@@ -1,4 +1,4 @@
-import type { HostClient, HostClientError } from '@silverhand/host';
+import type { HostClient, HostClientError } from "@silverhand/host";
 
 /**
  * Domain outcome of one `gracefullyDetachOutbound` call. All fields
@@ -14,9 +14,7 @@ export interface GracefulDetachOutcome {
    * `shutting_down`, `timeout`, or `internal_error`. Either way
    * the caller continues.
    */
-  rpc:
-    | { ok: true; action: 'detached' | 'noop' }
-    | { ok: false; error: string; code?: string };
+  rpc: { ok: true; action: "detached" | "noop" } | { ok: false; error: string; code?: string };
   /**
    * Registry-cleared verification step.
    *  - `true`  — the backend's `getAttachment(hostId)` returned
@@ -34,7 +32,7 @@ export interface GracefulDetachOutcome {
    *              "registry observation failure" signal rather than
    *              a benign degradation. (Cindy #task:630 P1-B.)
    */
-  registryCleared: boolean | 'skipped' | 'error';
+  registryCleared: boolean | "skipped" | "error";
   /** Populated only when `registryCleared === 'error'`. Plain
    *  string message extracted from whatever the accessor threw;
    *  the helper never propagates the thrown value itself, in
@@ -56,7 +54,7 @@ export interface GracefulDetachOutcome {
  */
 export interface GracefulDetachDeps {
   /** `HostClient` instance whose `hostOutboundDetach()` we drive. */
-  client: Pick<HostClient, 'hostOutboundDetach'>;
+  client: Pick<HostClient, "hostOutboundDetach">;
   /**
    * `hostId` of the currently-claimed local host whose attachment
    * we want to observe go null. `null` triggers the degradation
@@ -110,11 +108,9 @@ export async function gracefullyDetachOutbound(
   const budget = deps.budgetMs ?? 1500;
   const pollInterval = deps.pollIntervalMs ?? 100;
   const now = deps.now ?? (() => Date.now());
-  const setT =
-    deps.setTimeoutImpl ?? ((cb: () => void, ms: number) => setTimeout(cb, ms));
+  const setT = deps.setTimeoutImpl ?? ((cb: () => void, ms: number) => setTimeout(cb, ms));
   const clearT =
-    deps.clearTimeoutImpl ??
-    ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
+    deps.clearTimeoutImpl ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
 
   const startedAt = now();
   const deadline = startedAt + budget;
@@ -140,7 +136,7 @@ export async function gracefullyDetachOutbound(
   // attachment server-side via the normal close-detection path.
   const canPoll = deps.hostId !== null && deps.getAttachment !== undefined;
   if (!canPoll) {
-    return finish(rpcOutcome, 'skipped', now() - startedAt, false);
+    return finish(rpcOutcome, "skipped", now() - startedAt, false);
   }
 
   // ── Poll loop ────────────────────────────────────────────────────
@@ -179,7 +175,7 @@ export async function gracefullyDetachOutbound(
     return finish(rpcOutcome, false, now() - startedAt, true);
   }
 
-  return new Promise<GracefulDetachOutcome>(resolve => {
+  return new Promise<GracefulDetachOutcome>((resolve) => {
     let timer: unknown = null;
     const tick = (): void => {
       const probe = safeProbe();
@@ -224,21 +220,21 @@ export async function gracefullyDetachOutbound(
  *  possible. A reject here would break the helper's
  *  never-throws contract (Cindy #task:630 P1-B). */
 async function raceRpc(
-  client: Pick<HostClient, 'hostOutboundDetach'>,
+  client: Pick<HostClient, "hostOutboundDetach">,
   remaining: () => number,
   setT: (cb: () => void, ms: number) => unknown,
   clearT: (h: unknown) => void,
-): Promise<GracefulDetachOutcome['rpc']> {
+): Promise<GracefulDetachOutcome["rpc"]> {
   const budget = remaining();
   if (budget === 0) {
     // Pathological: budget gone before the RPC even fired. Don't
     // bother dispatching — go straight to a synthetic timeout.
-    return { ok: false, error: 'budget exhausted before RPC dispatch', code: 'synthetic_timeout' };
+    return { ok: false, error: "budget exhausted before RPC dispatch", code: "synthetic_timeout" };
   }
   // Wrap the sync call so an implementation that throws synchronously
   // (rather than returning a rejecting Promise) maps to the same
   // `rpc.ok: false` data path as an async rejection.
-  let rpcThenable: Promise<{ detached: true; action: 'detached' | 'noop' }>;
+  let rpcThenable: Promise<{ detached: true; action: "detached" | "noop" }>;
   try {
     rpcThenable = client.hostOutboundDetach();
   } catch (err) {
@@ -246,49 +242,47 @@ async function raceRpc(
   }
   let timerHandle: unknown = null;
   const rpcPromise = rpcThenable.then(
-    res => ({ kind: 'ok' as const, action: res.action }),
-    (err: unknown) => ({ kind: 'err' as const, err }),
+    (res) => ({ kind: "ok" as const, action: res.action }),
+    (err: unknown) => ({ kind: "err" as const, err }),
   );
-  const timerPromise = new Promise<{ kind: 'timeout' }>(resolve => {
-    timerHandle = setT(() => resolve({ kind: 'timeout' }), budget);
+  const timerPromise = new Promise<{ kind: "timeout" }>((resolve) => {
+    timerHandle = setT(() => resolve({ kind: "timeout" }), budget);
   });
   const winner = await Promise.race([rpcPromise, timerPromise]);
   if (timerHandle !== null) clearT(timerHandle);
-  if (winner.kind === 'ok') {
+  if (winner.kind === "ok") {
     return { ok: true, action: winner.action };
   }
-  if (winner.kind === 'timeout') {
+  if (winner.kind === "timeout") {
     return {
       ok: false,
-      error: 'RPC did not settle within shutdown budget',
-      code: 'synthetic_timeout',
+      error: "RPC did not settle within shutdown budget",
+      code: "synthetic_timeout",
     };
   }
   return rpcErrorFromUnknown(winner.err);
 }
 
-function rpcErrorFromUnknown(err: unknown): GracefulDetachOutcome['rpc'] {
+function rpcErrorFromUnknown(err: unknown): GracefulDetachOutcome["rpc"] {
   if (err instanceof Error) {
     const code =
-      typeof (err as HostClientError).code === 'string'
-        ? (err as HostClientError).code
-        : undefined;
+      typeof (err as HostClientError).code === "string" ? (err as HostClientError).code : undefined;
     return { ok: false, error: err.message, code };
   }
   return { ok: false, error: String(err) };
 }
 
 function finishWithRegistryError(
-  rpc: GracefulDetachOutcome['rpc'],
+  rpc: GracefulDetachOutcome["rpc"],
   registryError: string,
   elapsedMs: number,
 ): GracefulDetachOutcome {
-  return { rpc, registryCleared: 'error', registryError, elapsedMs, budgetExhausted: false };
+  return { rpc, registryCleared: "error", registryError, elapsedMs, budgetExhausted: false };
 }
 
 function finish(
-  rpc: GracefulDetachOutcome['rpc'],
-  registryCleared: GracefulDetachOutcome['registryCleared'],
+  rpc: GracefulDetachOutcome["rpc"],
+  registryCleared: GracefulDetachOutcome["registryCleared"],
   elapsedMs: number,
   budgetExhausted: boolean,
 ): GracefulDetachOutcome {

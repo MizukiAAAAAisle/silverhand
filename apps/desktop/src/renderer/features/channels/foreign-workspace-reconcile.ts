@@ -11,7 +11,7 @@ import {
   resolveChannelMembershipLosses,
   type ChannelMembershipLoss,
   type ChannelMembershipRow,
-} from './viewer-channel-removal';
+} from "./viewer-channel-removal";
 
 /** Which channels of a workspace a notice asks about: a set of ids, or `null` for
  *  "unknown — every channel this client holds state for" (what a per-scope
@@ -72,20 +72,18 @@ export interface ForeignReconciler {
  * backend) leaves every cache exactly as it is: a failed read is never evidence
  * of a removal.
  */
-export function createForeignWorkspaceReconciler(
-  deps: ForeignReconcilerDeps,
-): ForeignReconciler {
+export function createForeignWorkspaceReconciler(deps: ForeignReconcilerDeps): ForeignReconciler {
   const inFlight = new Map<string, Promise<void>>();
   const queued = new Map<string, ReconcileScope>();
   let disposed = false;
 
   const run = async (workspaceId: string, scope: ReconcileScope): Promise<void> => {
     const held = deps.heldChannelIds(workspaceId);
-    const observed = scope ? [...held].filter(id => scope.has(id)) : [...held];
+    const observed = scope ? [...held].filter((id) => scope.has(id)) : [...held];
     // Holding nothing for the named channel(s) is the churn guard: a busy
     // workspace the viewer keeps no state in costs no requests.
     if (observed.length === 0) return;
-    let tables: Awaited<ReturnType<ForeignReconcilerDeps['fetchTables']>>;
+    let tables: Awaited<ReturnType<ForeignReconcilerDeps["fetchTables"]>>;
     try {
       tables = await deps.fetchTables(workspaceId);
     } catch (error) {

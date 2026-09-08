@@ -1,7 +1,4 @@
-import {
-  PanelLeftClose,
-  PanelLeftOpen,
-} from 'lucide-react';
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 interface TitlebarProps {
   workspaceName: string | null;
@@ -21,7 +18,7 @@ interface TitlebarProps {
    *  aligned above the ChannelView column while the user drags the Activity list
    *  wider/narrower (no second computed offset). With no channel selected the route
    *  carries no workspace, so no label renders and the offset is inert. */
-  chromeMode: 'chat' | 'activity';
+  chromeMode: "chat" | "activity";
 }
 
 /**
@@ -51,13 +48,13 @@ export function Titlebar({
   // label aligned above ChannelView as the user drags the list (`app-layout.md
   // §1.1`, #task:1394). Fallback to `--sidebar-width` only guards the var being
   // unset before first layout. Chat keeps the collapsible offset.
-  const showSidebarToggle = chromeMode === 'chat';
+  const showSidebarToggle = chromeMode === "chat";
   const leftColumnWidth =
-    chromeMode === 'activity'
-      ? 'var(--activity-list-width, var(--sidebar-width))'
+    chromeMode === "activity"
+      ? "var(--activity-list-width, var(--sidebar-width))"
       : workspaceSidebarVisible
-        ? 'var(--sidebar-width)'
-        : '0px';
+        ? "var(--sidebar-width)"
+        : "0px";
   // Three gutters sit left of the next column: the frame's own left padding,
   // the frame gap between rail and section sheet (both `--frame-padding`), and
   // the sheet's INNER gap between left column and main — that third one is
@@ -67,21 +64,21 @@ export function Titlebar({
     `calc(var(--nav-rail-width) + ${leftColumnWidth} + var(--frame-padding, 0px) * 2` +
     ` + var(--pane-gap))`;
   const toggleButton =
-    'no-drag flex size-6 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline';
+    "no-drag flex size-6 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline";
 
   return (
     <header
       data-titlebar="app"
       className={
-        'drag-region flex h-[var(--titlebar-height)] shrink-0 items-center ' +
-        'gap-2 border-b text-xs ' +
-        'bg-[var(--bg-app,var(--bg-primary))] ' +
-        'border-[var(--titlebar-border,var(--border-subtle))]'
+        "drag-region flex h-[var(--titlebar-height)] shrink-0 items-center " +
+        "gap-2 border-b text-xs " +
+        "bg-[var(--bg-app,var(--bg-primary))] " +
+        "border-[var(--titlebar-border,var(--border-subtle))]"
       }
     >
       {/* Spacer matches the visible left chrome so the workspace info
-        * lines up with the next column. The native macOS traffic-lights
-        * and the sidebar toggle live inside this region. */}
+       * lines up with the next column. The native macOS traffic-lights
+       * and the sidebar toggle live inside this region. */}
       <div
         className="relative h-full shrink-0"
         style={{
@@ -90,24 +87,22 @@ export function Titlebar({
       >
         <div className="absolute left-[var(--titlebar-sidebar-toggle-left)] top-1/2 flex -translate-y-1/2 items-center gap-1">
           {/* The browse-sidebar toggle is chat-only: Activity has no browse
-            * sidebar (its list is a fixed column), so it's hidden there —
-            * the empty region still reserves the traffic-lights inset via
-            * `chromeWidth`/`--titlebar-controls-safe-width` (#task:1394).
-            *
-            * ONE toggle since #task:1889 merged the two browse columns into a
-            * single tree. State is communicated by *icon shape*, not background
-            * colour: the chevron points at what the click will do — close the
-            * panel while it is visible, open it while it is hidden (#task:1904).
-            * The retired channel toggle's Columns/Square family went with its
-            * column — a second shape family for one pane would read as a
-            * missing control. */}
+           * sidebar (its list is a fixed column), so it's hidden there —
+           * the empty region still reserves the traffic-lights inset via
+           * `chromeWidth`/`--titlebar-controls-safe-width` (#task:1394).
+           *
+           * ONE toggle since #task:1889 merged the two browse columns into a
+           * single tree. State is communicated by *icon shape*, not background
+           * colour: the chevron points at what the click will do — close the
+           * panel while it is visible, open it while it is hidden (#task:1904).
+           * The retired channel toggle's Columns/Square family went with its
+           * column — a second shape family for one pane would read as a
+           * missing control. */}
           {showSidebarToggle ? (
             <button
               type="button"
               onClick={onToggleWorkspaceSidebar}
-              aria-label={
-                workspaceSidebarVisible ? 'Hide sidebar' : 'Show sidebar'
-              }
+              aria-label={workspaceSidebarVisible ? "Hide sidebar" : "Show sidebar"}
               aria-pressed={workspaceSidebarVisible}
               title="Sidebar (⌘\\)"
               className={toggleButton}
@@ -128,11 +123,11 @@ export function Titlebar({
           className="truncate font-serif text-sm font-semibold text-text-primary"
         >
           {/* An Agent Space's titlebar shows only its agent's raw display name —
-            * no `@`, no `· DM` marker (shiki 2026-08-01, #task:1768). Reads like
-            * the person you're talking to; the icon + rail already convey whose
-            * space it is. The name itself is resolved upstream via
-            * `agentSpaceRecognitionName` (App.tsx), shared with the rail so the two
-            * can't drift. */}
+           * no `@`, no `· DM` marker (shiki 2026-08-01, #task:1768). Reads like
+           * the person you're talking to; the icon + rail already convey whose
+           * space it is. The name itself is resolved upstream via
+           * `agentSpaceRecognitionName` (App.tsx), shared with the rail so the two
+           * can't drift. */}
           {workspaceName}
         </span>
       ) : null}
@@ -144,7 +139,7 @@ export function Titlebar({
       ) : null}
 
       {/* Trailing spacer keeps a small breathable margin at the right
-        * edge of the window. */}
+       * edge of the window. */}
       <div className="ml-auto w-3 shrink-0" />
     </header>
   );

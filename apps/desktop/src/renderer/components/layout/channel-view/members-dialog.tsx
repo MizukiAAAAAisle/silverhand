@@ -27,57 +27,51 @@
  * Confirmation is INLINE under its row: a dialog inside a dialog loses "which
  * row am I confirming?" and walks into the nested-overlay traps.
  */
-import { useMemo, useState } from 'react';
-import { Loader2, LogOut, Plus, Power, RefreshCw, Search, UserMinus } from 'lucide-react';
+import { useMemo, useState } from "react";
+import { Loader2, LogOut, Plus, Power, RefreshCw, Search, UserMinus } from "lucide-react";
 import type {
   ChannelLeaveBlockedReason,
   ConversationAgentRuntimeDto,
   ConversationVisibility,
   MemberDto,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 import {
   Dialog,
   DialogContent,
   DialogCornerButton,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { SEARCH_FIELD_FRAME } from '@/features/common/ControlInkBorder';
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { SEARCH_FIELD_FRAME } from "@/features/common/ControlInkBorder";
 import {
   destructiveAction,
   destructiveCancel,
   DESTRUCTIVE_TRIGGER,
-} from '@/features/common/DestructiveAction';
-import { primaryAction } from '@/features/common/PrimaryAction';
-import {
-  useRemoveAgentFromChannel,
-  useRemoveHumanFromChannel,
-} from '@/features/channels/hooks';
+} from "@/features/common/DestructiveAction";
+import { primaryAction } from "@/features/common/PrimaryAction";
+import { useRemoveAgentFromChannel, useRemoveHumanFromChannel } from "@/features/channels/hooks";
 import {
   canRemoveMember,
   memberDtoKey,
   useConversationMembers,
-} from '@/features/conversations/useConversationMembers';
-import { AddConversationMemberPopover } from '@/features/conversations/AddConversationMemberPopover';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
-import { useUsersById } from '@/features/users/hooks';
-import { presenceDotStatus, usePresenceById } from '@/features/presence/hooks';
+} from "@/features/conversations/useConversationMembers";
+import { AddConversationMemberPopover } from "@/features/conversations/AddConversationMemberPopover";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
+import { useUsersById } from "@/features/users/hooks";
+import { presenceDotStatus, usePresenceById } from "@/features/presence/hooks";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useViewerUser,
-} from '@/features/me/hooks';
-import { STATUS_DOT } from '@/components/status-dot';
-import { projectMemberRuntimeStatus } from '@/features/agents/member-runtime-status';
-import {
-  PRESENCE_TONE_DOT,
-  projectPresence,
-} from '@/features/agents/presence-projection';
+} from "@/features/me/hooks";
+import { STATUS_DOT } from "@/components/status-dot";
+import { projectMemberRuntimeStatus } from "@/features/agents/member-runtime-status";
+import { PRESENCE_TONE_DOT, projectPresence } from "@/features/agents/presence-projection";
 
 /** Above this many members the roster stops being scannable at a glance, so the
  *  search field appears. It is the same cap that collapses the header strip into
@@ -89,7 +83,7 @@ const MEMBERS_SEARCH_MIN = 8;
  *  this list, so a second filled square inside it reads as two overlapping
  *  hovers. */
 const ROW_ACTION =
-  'inline-flex size-6 items-center justify-center text-text-muted transition-colors hover:text-error disabled:opacity-50';
+  "inline-flex size-6 items-center justify-center text-text-muted transition-colors hover:text-error disabled:opacity-50";
 
 interface ChannelMembersDialogProps {
   open: boolean;
@@ -125,16 +119,14 @@ interface ChannelMembersDialogProps {
 /** Human copy for a leave-blocked reason. Mirrors `ChannelSettingsDialog`'s
  *  wording — one blocked state must not read two ways depending on which
  *  surface the viewer opened. */
-function leaveBlockedCopy(
-  reason: ChannelLeaveBlockedReason | null | undefined,
-): string | null {
+function leaveBlockedCopy(reason: ChannelLeaveBlockedReason | null | undefined): string | null {
   switch (reason) {
-    case 'channel_owner':
+    case "channel_owner":
       return "As the owner, you can't leave this channel.";
-    case 'last_human_member':
+    case "last_human_member":
       return "As the last member, you can't leave this channel.";
-    case 'channel_archived':
-      return 'Restore the channel before leaving.';
+    case "channel_archived":
+      return "Restore the channel before leaving.";
     default:
       return null;
   }
@@ -146,12 +138,12 @@ function leaveBlockedCopy(
  *  not one of these inputs. */
 type ChannelMembersContentProps = Omit<
   ChannelMembersDialogProps,
-  | 'open'
-  | 'onOpenChange'
-  | 'onRestartAllAgents'
-  | 'onStopAllAgents'
-  | 'bulkAgentPending'
-  | 'addMemberWorkspaceId'
+  | "open"
+  | "onOpenChange"
+  | "onRestartAllAgents"
+  | "onStopAllAgents"
+  | "bulkAgentPending"
+  | "addMemberWorkspaceId"
 > & {
   /** Called after a successful self-leave, so a host that is a transient shell
    *  can dismiss itself. The modal passes `onOpenChange(false)`; the tab host
@@ -177,7 +169,7 @@ export function ChannelAddMemberEntry({
   conversationId: string;
   /** Extra classes for the trigger Button — the host's width budget. */
   triggerWidthClass?: string;
-  align?: 'start' | 'center' | 'end';
+  align?: "start" | "center" | "end";
   popoverWidthClass?: string;
   modal?: boolean;
 }): JSX.Element {
@@ -216,8 +208,7 @@ export function ChannelMembersDialog({
   // The count in the title is chrome, so the shell reads it itself rather than
   // taking it back out of the roster. Same cached query — no second fetch.
   const membersResult = useConversationMembers(content.channelId);
-  const memberCount =
-    membersResult.status === 'resolved' ? membersResult.members.length : 0;
+  const memberCount = membersResult.status === "resolved" ? membersResult.members.length : 0;
   const showBulk = !!onRestartAllAgents || !!onStopAllAgents;
 
   return (
@@ -257,10 +248,7 @@ export function ChannelMembersDialog({
               {/* Bulk runtime actions and "close this surface" are two different
                   kinds of thing — one hairline keeps them from reading as one
                   group of three. */}
-              <span
-                aria-hidden
-                className="h-4 w-px shrink-0 bg-border-subtle"
-              />
+              <span aria-hidden className="h-4 w-px shrink-0 bg-border-subtle" />
             </>
           ) : null
         }
@@ -269,9 +257,7 @@ export function ChannelMembersDialog({
           <DialogTitle className="flex items-baseline gap-1.5">
             Members
             {memberCount > 0 ? (
-              <span className="text-xs font-medium text-text-muted">
-                {memberCount}
-              </span>
+              <span className="text-xs font-medium text-text-muted">{memberCount}</span>
             ) : null}
           </DialogTitle>
         </DialogHeader>
@@ -320,11 +306,14 @@ export function ChannelMembersContent({
   const membersResult = useConversationMembers(channelId);
   const { data: viewer } = useViewerUser();
   const viewerUserId =
-    viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) && !isUpdateRequired(viewer)
+    viewer &&
+    !isRegistrationRequired(viewer) &&
+    !isBackendUnreachable(viewer) &&
+    !isUpdateRequired(viewer)
       ? viewer.id
       : null;
 
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState("");
   /** `memberDtoKey` of the row whose confirm is expanded — at most one. */
   const [confirming, setConfirming] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
@@ -336,19 +325,19 @@ export function ChannelMembersContent({
   const removeAgent = useRemoveAgentFromChannel(channelId);
   const removeHuman = useRemoveHumanFromChannel(channelId);
 
-  const members = membersResult.status === 'resolved' ? membersResult.members : [];
+  const members = membersResult.status === "resolved" ? membersResult.members : [];
 
   const usersById = useUsersById();
   const humanAvatarSources = useMemo(
     () =>
       members
-        .filter((m): m is Extract<MemberDto, { kind: 'human' }> => m.kind === 'human')
+        .filter((m): m is Extract<MemberDto, { kind: "human" }> => m.kind === "human")
         // Prefer the member DTO's denormalized avatar; fall back to the users
         // directory the same way the header strip does, so one human is never
         // a placeholder here and a photo there. Both caches are invalidated on
         // a profile write — either one going stale would resurrect
         // a removed avatar.
-        .map(m => ({
+        .map((m) => ({
           id: m.user_id,
           avatar_url: m.avatar_url ?? usersById.get(m.user_id)?.avatar_url ?? null,
         })),
@@ -363,15 +352,15 @@ export function ChannelMembersContent({
   // there, adding an agent is the likely intent.
   const needle = query.trim().toLowerCase();
   const matches = (m: MemberDto): boolean =>
-    !needle
-    || m.name.toLowerCase().includes(needle)
-    || (m.display_name ?? '').toLowerCase().includes(needle);
-  const humans = members.filter(m => m.kind === 'human' && matches(m));
-  const agents = members.filter(m => m.kind === 'agent' && matches(m));
+    !needle ||
+    m.name.toLowerCase().includes(needle) ||
+    (m.display_name ?? "").toLowerCase().includes(needle);
+  const humans = members.filter((m) => m.kind === "human" && matches(m));
+  const agents = members.filter((m) => m.kind === "agent" && matches(m));
   // Self pinned to the top of its group; everyone else keeps the backend order.
   const orderedHumans = [
-    ...humans.filter(m => m.kind === 'human' && m.user_id === viewerUserId),
-    ...humans.filter(m => !(m.kind === 'human' && m.user_id === viewerUserId)),
+    ...humans.filter((m) => m.kind === "human" && m.user_id === viewerUserId),
+    ...humans.filter((m) => !(m.kind === "human" && m.user_id === viewerUserId)),
   ];
 
   const handleLeave = async (): Promise<void> => {
@@ -389,7 +378,7 @@ export function ChannelMembersContent({
 
   const handleRemove = async (member: MemberDto): Promise<void> => {
     try {
-      if (member.kind === 'agent') {
+      if (member.kind === "agent") {
         await removeAgent.mutateAsync(member.agent_id);
       } else {
         await removeHuman.mutateAsync(member.user_id);
@@ -406,7 +395,7 @@ export function ChannelMembersContent({
   const renderRow = (member: MemberDto): JSX.Element => {
     const key = memberDtoKey(member);
     const label = member.display_name?.trim() || member.name;
-    const isSelf = member.kind === 'human' && member.user_id === viewerUserId;
+    const isSelf = member.kind === "human" && member.user_id === viewerUserId;
     // One projection for the agent arm: membership is given by the
     // row's existence in this roster, so only the runtime read can be unsettled,
     // and `null` there means "draw no dot" rather than a status. The agent dot
@@ -414,12 +403,12 @@ export function ChannelMembersContent({
     // accessible name — there is no status column, so a crashed session's fault
     // would otherwise be colour-only. The human arm keeps its own presence dot.
     const presenceDot: { colorClass: string; a11yLabel: string | null; pulse: boolean } | null =
-      member.kind === 'agent'
+      member.kind === "agent"
         ? (() => {
             const display = projectPresence({
-              scope: 'conversation',
+              scope: "conversation",
               runtime: projectMemberRuntimeStatus({
-                membership: 'member',
+                membership: "member",
                 runtime: agentRuntime,
                 agentId: member.agent_id,
               }),
@@ -448,10 +437,10 @@ export function ChannelMembersContent({
     // removed and can be added back, and its runtime is handled either way —
     // there is no cost the user needs told.
     const confirmCopy = isSelf
-      ? visibility === 'private'
+      ? visibility === "private"
         ? "You won't be able to rejoin unless you're added back."
-        : 'You can rejoin this channel anytime.'
-      : member.kind === 'human'
+        : "You can rejoin this channel anytime."
+      : member.kind === "human"
         ? `@${member.name} loses access to this channel and can be added again later.`
         : null;
     return (
@@ -461,7 +450,7 @@ export function ChannelMembersContent({
           data-member-row={member.kind}
         >
           <span className="relative flex shrink-0 items-center">
-            {member.kind === 'agent' ? (
+            {member.kind === "agent" ? (
               <AgentAvatar
                 runtime={member.runtime}
                 size={AVATAR_PX.sm}
@@ -477,12 +466,12 @@ export function ChannelMembersContent({
             )}
             {presenceDot === null ? null : (
               <span
-                role={presenceDot.a11yLabel ? 'img' : undefined}
+                role={presenceDot.a11yLabel ? "img" : undefined}
                 aria-label={presenceDot.a11yLabel ?? undefined}
                 className={
-                  'pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating '
-                  + presenceDot.colorClass
-                  + (presenceDot.pulse ? ' motion-safe:animate-pulse' : '')
+                  "pointer-events-none absolute bottom-0 right-0 size-2 translate-x-1/2 translate-y-1/2 rounded-full border border-bg-floating " +
+                  presenceDot.colorClass +
+                  (presenceDot.pulse ? " motion-safe:animate-pulse" : "")
                 }
               />
             )}
@@ -494,10 +483,7 @@ export function ChannelMembersContent({
               readable. The group is `min-w-0`, so neither ever pushes into the
               action cell. */}
           <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-            <span
-              className="truncate text-sm font-medium text-text-primary"
-              title={label}
-            >
+            <span className="truncate text-sm font-medium text-text-primary" title={label}>
               {label}
             </span>
             <span className="max-w-[45%] shrink-0 truncate font-mono text-[length:var(--text-meta)] text-text-muted">
@@ -586,7 +572,7 @@ export function ChannelMembersContent({
                 size="xs"
                 disabled={leaving || removePending}
                 onClick={() => setConfirming(null)}
-                {...destructiveCancel(undefined, { motion: 'still' })}
+                {...destructiveCancel(undefined, { motion: "still" })}
               >
                 Cancel
               </Button>
@@ -594,18 +580,14 @@ export function ChannelMembersContent({
                 variant="outline"
                 size="xs"
                 disabled={leaving || removePending}
-                onClick={() =>
-                  isSelf ? void handleLeave() : void handleRemove(member)
-                }
-                {...destructiveAction(DESTRUCTIVE_TRIGGER, { motion: 'still' })}
+                onClick={() => (isSelf ? void handleLeave() : void handleRemove(member))}
+                {...destructiveAction(DESTRUCTIVE_TRIGGER, { motion: "still" })}
               >
                 {/* Label only — the glyph would repeat the row action that
                     opened this confirm. The spinner still shows, being state
                     rather than identity. */}
-                {leaving || removePending ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : null}
-                {isSelf ? 'Leave' : 'Remove'}
+                {leaving || removePending ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                {isSelf ? "Leave" : "Remove"}
               </Button>
             </div>
           </div>
@@ -622,21 +604,17 @@ export function ChannelMembersContent({
           <input
             type="text"
             value={query}
-            onChange={e => setQuery(e.target.value)}
+            onChange={(e) => setQuery(e.target.value)}
             placeholder="Search by name or @handle"
             className="w-full min-w-0 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
           />
         </label>
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        {membersResult.status === 'loading' ? (
-          <p className="px-1.5 py-3 text-center text-xs italic text-text-muted">
-            Loading…
-          </p>
+        {membersResult.status === "loading" ? (
+          <p className="px-1.5 py-3 text-center text-xs italic text-text-muted">Loading…</p>
         ) : orderedHumans.length === 0 && agents.length === 0 ? (
-          <p className="px-1.5 py-3 text-center text-xs italic text-text-muted">
-            No matches
-          </p>
+          <p className="px-1.5 py-3 text-center text-xs italic text-text-muted">No matches</p>
         ) : (
           // One column when narrow, HUMANS | AGENTS side by side once this
           // surface is wide (rule in `global.css`).

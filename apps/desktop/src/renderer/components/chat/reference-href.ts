@@ -4,7 +4,7 @@ import {
   parseReference,
   type Locator,
   type Reference,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 
 /**
  * #task:2001 — which arm of the `a` override a link destination takes, for the
@@ -30,25 +30,23 @@ import {
 export type ReferenceHrefArm =
   /** A reference written as a bare autolink whose destination
    *  {@link parseReference} accepts: draw the member chip. */
-  | { readonly arm: 'reference'; readonly reference: Reference }
+  | { readonly arm: "reference"; readonly reference: Reference }
   /** A locator written as a bare autolink whose destination
    *  {@link parseLocator} accepts: draw the container chip (#task:2120). */
-  | { readonly arm: 'locator'; readonly locator: Locator }
+  | { readonly arm: "locator"; readonly locator: Locator }
   /** Our scheme, but not a reference this renderer draws — a malformed
    *  destination, or a spelling other than a bare autolink. Render the authored
    *  text inertly. Never a link — the destination is internal. */
-  | { readonly arm: 'inert' }
+  | { readonly arm: "inert" }
   /** Not this scheme. The caller's remaining arms decide. */
-  | { readonly arm: 'other' };
+  | { readonly arm: "other" };
 
 /** Whether this href is spelled in the reference scheme, ignoring scheme case
  *  (URI schemes are case-insensitive; handles are not). Also the admission test
  *  for `urlTransform`, which must let the scheme survive sanitization or the
  *  arms below can never see it. */
 export function isReferenceScheme(href: string): boolean {
-  return (
-    href.slice(0, REFERENCE_PREFIX.length).toLowerCase() === REFERENCE_PREFIX
-  );
+  return href.slice(0, REFERENCE_PREFIX.length).toLowerCase() === REFERENCE_PREFIX;
 }
 
 /**
@@ -84,7 +82,7 @@ export function isReferenceScheme(href: string): boolean {
  * The value is the boolean `true` and the predicate below compares against it
  * exactly: one writer, one reader, no coercion in between.
  */
-export const PLUGIN_LINK_PROP = 'data-sh-plugin-link';
+export const PLUGIN_LINK_PROP = "data-sh-plugin-link";
 
 /** The part of the hast node react-markdown hands a component that carries
  *  provenance. Everything else about the node is irrelevant here. */
@@ -95,9 +93,7 @@ export interface PluginLinkNode {
 /** Whether `remarkRefs` produced or vouched for this link node. False for every
  *  link an author wrote, which is what keeps the internal schemes from being
  *  hand-forgeable. */
-export function isPluginLink(
-  node: PluginLinkNode | null | undefined,
-): boolean {
+export function isPluginLink(node: PluginLinkNode | null | undefined): boolean {
   return node?.properties?.[PLUGIN_LINK_PROP] === true;
 }
 
@@ -128,37 +124,35 @@ export function isPluginLink(
  * fallback to `href`, because a fallback is precisely the mixed authority that
  * would let a re-encoded destination decide the outcome.
  */
-export const AUTHORED_HREF_PROP = 'data-sh-authored-href';
+export const AUTHORED_HREF_PROP = "data-sh-authored-href";
 
 /** The authored destination, or `null` when this node carries no such
  *  provenance. A non-string value is `null` too: the prop has one writer, and
  *  anything else means the assumption behind it no longer holds. */
-export function authoredHref(
-  node: PluginLinkNode | null | undefined,
-): string | null {
+export function authoredHref(node: PluginLinkNode | null | undefined): string | null {
   const value = node?.properties?.[AUTHORED_HREF_PROP];
-  return typeof value === 'string' ? value : null;
+  return typeof value === "string" ? value : null;
 }
 
 export function classifyReferenceHref(
   href: string | null | undefined,
   node?: PluginLinkNode | null | undefined,
 ): ReferenceHrefArm {
-  if (typeof href !== 'string' || !isReferenceScheme(href)) {
-    return { arm: 'other' };
+  if (typeof href !== "string" || !isReferenceScheme(href)) {
+    return { arm: "other" };
   }
   // Our scheme without provenance: a labelled link, a reference link, or a
   // hand-written destination the remark pass declined to stamp. Inert either
   // way — clickable would hand an internal scheme to the OS, and a chip would
   // read as addressed while the addressing side records no reference here.
-  if (!isPluginLink(node)) return { arm: 'inert' };
+  if (!isPluginLink(node)) return { arm: "inert" };
   const reference = parseReference(href);
-  if (reference) return { arm: 'reference', reference };
+  if (reference) return { arm: "reference", reference };
   // One scheme, two disjoint grammars (`human`/`agent` address a principal;
   // `workspace`/`dm` locate a container), so the order of these two attempts is
   // free — a destination cannot satisfy both. Addressing is tried first because
   // it is the older and the load-bearing one.
   const authored = authoredHref(node);
   const locator = authored === null ? null : parseLocator(authored);
-  return locator ? { arm: 'locator', locator } : { arm: 'inert' };
+  return locator ? { arm: "locator", locator } : { arm: "inert" };
 }

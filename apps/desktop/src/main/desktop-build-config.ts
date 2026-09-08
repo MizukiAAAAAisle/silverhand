@@ -1,30 +1,20 @@
-import {
-  classifyServerUrl,
-  type ServerConnectionProfileView,
-} from '@silverhand/shared';
+import { classifyServerUrl, type ServerConnectionProfileView } from "@silverhand/shared";
 
-export type EffectiveBootProfileSource =
-  | 'saved_profile'
-  | 'packaged_default'
-  | 'none';
+export type EffectiveBootProfileSource = "saved_profile" | "packaged_default" | "none";
 
 export type EffectiveBootProfile =
   | {
-      source: 'saved_profile' | 'packaged_default';
+      source: "saved_profile" | "packaged_default";
       profileView: ServerConnectionProfileView;
       warning: null;
     }
   | {
-      source: 'none';
+      source: "none";
       profileView: null;
-      warning:
-        | null
-        | {
-            reason:
-              | 'packaged_default_invalid'
-              | 'packaged_default_loopback_remote_only';
-            message: string;
-          };
+      warning: null | {
+        reason: "packaged_default_invalid" | "packaged_default_loopback_remote_only";
+        message: string;
+      };
     };
 
 export interface ResolveEffectiveBootProfileInput {
@@ -40,7 +30,7 @@ export function resolveEffectiveBootProfile(
 ): EffectiveBootProfile {
   if (input.savedProfileView) {
     return {
-      source: 'saved_profile',
+      source: "saved_profile",
       profileView: input.savedProfileView,
       warning: null,
     };
@@ -48,7 +38,7 @@ export function resolveEffectiveBootProfile(
 
   const rawDefault = input.packagedDefaultServerUrl.trim();
   if (rawDefault.length === 0) {
-    return { source: 'none', profileView: null, warning: null };
+    return { source: "none", profileView: null, warning: null };
   }
 
   const classification = classifyServerUrl(rawDefault, {
@@ -56,28 +46,27 @@ export function resolveEffectiveBootProfile(
   });
   if (!classification.ok) {
     return {
-      source: 'none',
+      source: "none",
       profileView: null,
       warning: {
-        reason: 'packaged_default_invalid',
+        reason: "packaged_default_invalid",
         message: classification.message,
       },
     };
   }
-  if (input.remoteOnly && classification.kind === 'loopback') {
+  if (input.remoteOnly && classification.kind === "loopback") {
     return {
-      source: 'none',
+      source: "none",
       profileView: null,
       warning: {
-        reason: 'packaged_default_loopback_remote_only',
-        message:
-          'Remote-only desktop packages require a non-loopback remote server URL.',
+        reason: "packaged_default_loopback_remote_only",
+        message: "Remote-only desktop packages require a non-loopback remote server URL.",
       },
     };
   }
 
   return {
-    source: 'packaged_default',
+    source: "packaged_default",
     profileView: {
       server_url: classification.url.origin,
       updated_at: (input.now ?? Date.now)(),

@@ -1,33 +1,33 @@
-import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
-import { isMemberChannel } from '@/features/channels/membership';
-import { useChannelMembership } from '@/features/channels/use-channel-membership';
-import { locatorWorkspaceName } from '@/features/conversations/locator-source';
+import type { WorkspaceChannelReference } from "@/components/chat/ConversationRef";
+import { isMemberChannel } from "@/features/channels/membership";
+import { useChannelMembership } from "@/features/channels/use-channel-membership";
+import { locatorWorkspaceName } from "@/features/conversations/locator-source";
 import {
   directPairPaneDescriptor,
   type ConversationPaneDescriptor,
-} from '@/features/conversations/pane-descriptor';
+} from "@/features/conversations/pane-descriptor";
 import {
   inheritedComposerDirectory,
   inheritedPaneCapabilities,
-} from '@/features/conversations/pane-mode';
-import { presentCounterpart } from '@/features/direct-pairs/counterpart-presentation';
+} from "@/features/conversations/pane-mode";
+import { presentCounterpart } from "@/features/direct-pairs/counterpart-presentation";
 import {
   directPairPaneProps,
   useDirectPairPane,
   useDirectPairsList,
-} from '@/features/direct-pairs/hooks';
+} from "@/features/direct-pairs/hooks";
 import {
   useArchivedChannelsForWorkspace,
   useChannelsForWorkspace,
   useWorkspaces,
   type ChannelListItem,
-} from '@/features/workspaces/hooks';
-import { isAgentSpace } from '@/features/workspaces/workspace-ownership';
-import { directPairAuthorityFromQuery, type DirectPairAuthority } from '@/lib/chat-place-restore';
-import { type ConversationPointer } from '@/lib/secondary-pane';
-import { useRouteState } from '@/router';
-import { isWorkspacePlaced } from '@silverhand/shared';
-import { useCallback, useDeferredValue, useMemo } from 'react';
+} from "@/features/workspaces/hooks";
+import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
+import { directPairAuthorityFromQuery, type DirectPairAuthority } from "@/lib/chat-place-restore";
+import { type ConversationPointer } from "@/lib/secondary-pane";
+import { useRouteState } from "@/router";
+import { isWorkspacePlaced } from "@silverhand/shared";
+import { useCallback, useDeferredValue, useMemo } from "react";
 
 /** Carrier authority only; navigation and read-cursor writes belong to the coordinators. */
 export function useConversationReadModel() {
@@ -118,7 +118,7 @@ export function useConversationReadModel() {
     // (`conversation-repo.ts`) and its two endpoints are the placement itself,
     // so the value is a property of the KIND, not of the row.
     if (directPair) {
-      return { id: directPair.conversation_id, rosterPolicy: 'fixed' };
+      return { id: directPair.conversation_id, rosterPolicy: "fixed" };
     }
     if (!selectedChannelId) {
       return null;
@@ -278,7 +278,7 @@ export function useConversationReadModel() {
     primaryPaneHasChannelNamespace,
     primaryThreadComposerDirectory,
     resolveNavWorkspaceId,
-    activeSettled: activeChannelsStatus === 'success' && activeChannelsFetchStatus === 'idle',
-    archivedSettled: archivedChannelsStatus === 'success' && archivedChannelsFetchStatus === 'idle',
+    activeSettled: activeChannelsStatus === "success" && activeChannelsFetchStatus === "idle",
+    archivedSettled: archivedChannelsStatus === "success" && archivedChannelsFetchStatus === "idle",
   };
 }

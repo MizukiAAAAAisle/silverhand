@@ -1,18 +1,18 @@
-import { useInfiniteQuery } from '@tanstack/react-query';
-import type { InfiniteData, QueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery } from "@tanstack/react-query";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import {
   apiPaths,
   type ListChannelThreadsResponse,
   type ThreadSummary,
   type ThreadSummaryInvariant,
-} from '@silverhand/shared';
-import { api } from '@/lib/api';
-import { wsConversationScope } from '@/hooks/useConversationStream';
-import { useInterest } from '@/features/realtime/interest-registry';
+} from "@silverhand/shared";
+import { api } from "@/lib/api";
+import { wsConversationScope } from "@/hooks/useConversationStream";
+import { useInterest } from "@/features/realtime/interest-registry";
 
 // Re-export so existing consumers (ChannelThreadsPanel) keep their import path
 // while the type now lives in the shared barrel (#task:1074 backend landing).
-export type { ThreadSummary } from '@silverhand/shared';
+export type { ThreadSummary } from "@silverhand/shared";
 
 /**
  * Channel Threads-list data (#task:1073, P2). Lists every reply-cluster in
@@ -24,13 +24,13 @@ export type { ThreadSummary } from '@silverhand/shared';
  */
 
 export const channelThreadsKey = (channelId: string) =>
-  ['channels', channelId, 'threads-list'] as const;
+  ["channels", channelId, "threads-list"] as const;
 
 /** The two threads-list datasets (#task:1773). `all` is the full channel index
  *  (recency-sorted, follow-agnostic); `followed-unread` is the attention subset
  *  the header dot mirrors. They are TWO datasets, never one list re-sorted — the
  *  server owns each keyset (never couple per-viewer unread into the All order). */
-export type ChannelThreadsFilter = 'all' | 'followed-unread';
+export type ChannelThreadsFilter = "all" | "followed-unread";
 
 /** Query key for the `followed ∩ unread` filtered dataset (#task:1773). A CHILD
  *  of {@link channelThreadsKey}, so every family prefix-invalidate (observe,
@@ -40,20 +40,15 @@ export type ChannelThreadsFilter = 'all' | 'followed-unread';
  *  server-authoritative, and always settles via invalidate→refetch (Cindy
  *  freshness gate: filtered never guesses rows, only refetches). */
 export const channelThreadsUnreadKey = (channelId: string) =>
-  ['channels', channelId, 'threads-list', 'followed-unread'] as const;
+  ["channels", channelId, "threads-list", "followed-unread"] as const;
 
 /** True when a `useChannelThreads(channelId)` reader is mounted — the exact
  *  threads-list key has at least one active observer. Stage-2 P1c gate
  *  (#task:1255): the central ingestor took over `useChannelThreads.onEvent`,
  *  which only ran while that hook was mounted, so the list is invalidated only
  *  while a reader is alive (interest-only scope subscription must not). */
-export function hasActiveChannelThreadsReader(
-  qc: QueryClient,
-  channelId: string,
-): boolean {
-  const entry = qc
-    .getQueryCache()
-    .find({ queryKey: channelThreadsKey(channelId), exact: true });
+export function hasActiveChannelThreadsReader(qc: QueryClient, channelId: string): boolean {
+  const entry = qc.getQueryCache().find({ queryKey: channelThreadsKey(channelId), exact: true });
   return (entry?.getObserversCount() ?? 0) > 0;
 }
 
@@ -61,10 +56,7 @@ export function hasActiveChannelThreadsReader(
  *  `useChannelThreads.onEvent`: any reply (or a reconnect needing a fresh
  *  snapshot) can change the list's contents or order, so refetch. Both the
  *  `message` and `snapshot_required` branches did exactly this. */
-export function invalidateChannelThreadsList(
-  qc: QueryClient,
-  channelId: string,
-): Promise<void> {
+export function invalidateChannelThreadsList(qc: QueryClient, channelId: string): Promise<void> {
   // Returns the invalidate Promise (reconcile-settle signal for the P2 snapshot
   // join, #1255 P2); the message-path caller ignores it, strategy unchanged.
   return qc.invalidateQueries({ queryKey: channelThreadsKey(channelId) });
@@ -77,10 +69,7 @@ export function invalidateChannelThreadsList(
  *  membership), so it must still refetch. The non-patched / snapshot / observe
  *  paths already reach this child through the {@link channelThreadsKey} family
  *  prefix-invalidate, so this narrow form is only for the merge case. */
-export function invalidateChannelThreadsUnread(
-  qc: QueryClient,
-  channelId: string,
-): Promise<void> {
+export function invalidateChannelThreadsUnread(qc: QueryClient, channelId: string): Promise<void> {
   return qc.invalidateQueries({ queryKey: channelThreadsUnreadKey(channelId) });
 }
 
@@ -127,7 +116,7 @@ export function compareThreadSummary(a: ThreadSummary, b: ThreadSummary): number
  *                    `next_cursor` a reorder would desync (#task:1773 Cindy R2 gate).
  *   - `cold-absent`— no page data loaded (reader mounted but still fetching) → its
  *                    own mount-fetch is the authoritative recovery → vacuous. */
-export type ThreadsListMergeOutcome = 'merged' | 'off-page' | 'cold-absent';
+export type ThreadsListMergeOutcome = "merged" | "off-page" | "cold-absent";
 
 /** Merge an absolute `ThreadSummaryInvariant` into the held threads-list PAGES,
  *  keeping the local `viewer_following` (the broadcast frame carries no per-viewer
@@ -148,23 +137,21 @@ export function mergeThreadsListEntry(
   const prev = qc.getQueryData<InfiniteData<ListChannelThreadsResponse, string | null>>(
     channelThreadsKey(channelId),
   );
-  if (!prev || prev.pages.length === 0) return 'cold-absent';
+  if (!prev || prev.pages.length === 0) return "cold-absent";
 
   // Locate the root across every loaded page (the merge/refetch decision needs to
   // know WHICH page holds it, not just whether it's present).
   let pageIndex = -1;
   let existing: ThreadSummary | undefined;
   for (const [i, pg] of prev.pages.entries()) {
-    const found = pg.threads.find(
-      t => t.root_message_id === entry.root_message_id,
-    );
+    const found = pg.threads.find((t) => t.root_message_id === entry.root_message_id);
     if (found) {
       pageIndex = i;
       existing = found;
       break;
     }
   }
-  if (!existing) return 'off-page';
+  if (!existing) return "off-page";
 
   // Idempotency short-circuit BEFORE the page gate (mirrors P1's scalar guard): a
   // reply always changes the last-reply identity + count, so equal on both ⇒
@@ -176,14 +163,14 @@ export function mergeThreadsListEntry(
     existing.last_reply_message_id === entry.last_reply_message_id &&
     existing.reply_count === entry.reply_count
   ) {
-    return 'merged';
+    return "merged";
   }
 
   // A genuine change bumps `last_reply_at` to now (>= every held row), so the row
   // belongs at the head of page 0. If it's on a LATER page, repositioning it there
   // crosses a page boundary — the cross-page membership guess we refuse. Fall back
   // to invalidate→refetch, which refetches every loaded page in keyset order.
-  if (pageIndex > 0) return 'off-page';
+  if (pageIndex > 0) return "off-page";
 
   // pageIndex === 0 (the row is on the newest page). But a keyset `next_cursor`
   // is bound to the page's TAIL TUPLE, not its membership set — so reordering
@@ -198,8 +185,8 @@ export function mergeThreadsListEntry(
   // next boundary, and with later pages loaded the unloaded boundary lives on the
   // last page, which a page-0 reorder never touches.
   const page0 = prev.pages[0];
-  if (!page0) return 'cold-absent';
-  if (prev.pages.length === 1 && page0.next_cursor !== null) return 'off-page';
+  if (!page0) return "cold-absent";
+  if (prev.pages.length === 1 && page0.next_cursor !== null) return "off-page";
   // Absolute overwrite of every viewer-invariant field; KEEP the local
   // viewer_following (the frame carries none — never default it, Cindy gate ③).
   const merged: ThreadSummary = {
@@ -207,7 +194,7 @@ export function mergeThreadsListEntry(
     viewer_following: existing.viewer_following,
   };
   const nextThreads = page0.threads
-    .map(t => (t.root_message_id === entry.root_message_id ? merged : t))
+    .map((t) => (t.root_message_id === entry.root_message_id ? merged : t))
     .sort(compareThreadSummary);
   const nextPages = prev.pages.slice();
   nextPages[0] = { ...page0, threads: nextThreads };
@@ -215,7 +202,7 @@ export function mergeThreadsListEntry(
     channelThreadsKey(channelId),
     { ...prev, pages: nextPages },
   );
-  return 'merged';
+  return "merged";
 }
 
 /**
@@ -240,7 +227,7 @@ export function mergeThreadsListEntry(
  */
 export function useChannelThreads(
   channelId: string | null,
-  filter: ChannelThreadsFilter = 'all',
+  filter: ChannelThreadsFilter = "all",
 ): {
   threads: ThreadSummary[];
   isLoading: boolean;
@@ -252,9 +239,9 @@ export function useChannelThreads(
 } {
   const enabled = !!channelId;
   const key =
-    filter === 'followed-unread'
-      ? channelThreadsUnreadKey(channelId ?? 'none')
-      : channelThreadsKey(channelId ?? 'none');
+    filter === "followed-unread"
+      ? channelThreadsUnreadKey(channelId ?? "none")
+      : channelThreadsKey(channelId ?? "none");
 
   const query = useInfiniteQuery<
     ListChannelThreadsResponse,
@@ -271,14 +258,14 @@ export function useChannelThreads(
       // The filter rides EVERY page (not just page 1) so a paginated filtered set
       // stays filtered; `cursor` is the opaque keyset token from the prior page.
       const params = new URLSearchParams();
-      if (filter === 'followed-unread') params.set('filter', 'followed-unread');
-      if (pageParam != null) params.set('cursor', pageParam);
+      if (filter === "followed-unread") params.set("filter", "followed-unread");
+      if (pageParam != null) params.set("cursor", pageParam);
       const qs = params.toString();
       return api<ListChannelThreadsResponse>(qs ? `${base}?${qs}` : base, {
         signal,
       });
     },
-    getNextPageParam: lastPage => lastPage.next_cursor,
+    getNextPageParam: (lastPage) => lastPage.next_cursor,
   });
 
   // Pure reader (#task:1255 P1c): no `onWsFrame` here — the central conversation
@@ -295,7 +282,7 @@ export function useChannelThreads(
 
   return {
     // Flatten pages once so consumers never reach into the InfiniteData shape.
-    threads: query.data?.pages.flatMap(p => p.threads) ?? [],
+    threads: query.data?.pages.flatMap((p) => p.threads) ?? [],
     isLoading: query.isLoading,
     isError: query.isError,
     isFetchingNextPage: query.isFetchingNextPage,

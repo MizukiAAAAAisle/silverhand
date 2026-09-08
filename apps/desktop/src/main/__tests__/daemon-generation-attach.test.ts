@@ -18,12 +18,12 @@
  * keeps the test focused on the gate logic and avoids dragging the
  * real client's socket/reconnect machinery into a pure-logic test.
  */
-import { describe, expect, it } from 'vitest';
-import { HostClientError } from '@silverhand/host';
+import { describe, expect, it } from "vitest";
+import { HostClientError } from "@silverhand/host";
 import {
   waitForDaemonGeneration,
   type WaitForDaemonGenerationOptions,
-} from '../daemon-generation-attach.js';
+} from "../daemon-generation-attach.js";
 
 interface FakeNegotiated {
   instanceId: string;
@@ -58,7 +58,7 @@ class FakeHostClient {
 
 /** A trivially-controllable timer the helper can call into. */
 function makeFakeTimer(): {
-  setTimer: NonNullable<WaitForDaemonGenerationOptions['setTimer']>;
+  setTimer: NonNullable<WaitForDaemonGenerationOptions["setTimer"]>;
   fire(): void;
   isCleared(): boolean;
   isArmed(): boolean;
@@ -103,13 +103,13 @@ async function flushMicrotasks(): Promise<void> {
   }
 }
 
-describe('waitForDaemonGeneration', () => {
-  it('returns immediately when client.negotiated already matches', async () => {
+describe("waitForDaemonGeneration", () => {
+  it("returns immediately when client.negotiated already matches", async () => {
     const stub = new FakeHostClient();
-    stub.negotiated = { instanceId: 'gen-1' };
+    stub.negotiated = { instanceId: "gen-1" };
     const timer = makeFakeTimer();
 
-    const result = await waitForDaemonGeneration(asHostClient(stub), 'gen-1', {
+    const result = await waitForDaemonGeneration(asHostClient(stub), "gen-1", {
       setTimer: timer.setTimer,
     });
 
@@ -119,12 +119,12 @@ describe('waitForDaemonGeneration', () => {
     expect(timer.isArmed()).toBe(false);
   });
 
-  it('resolves ok when reconnect lands on the expected generation', async () => {
+  it("resolves ok when reconnect lands on the expected generation", async () => {
     const stub = new FakeHostClient();
-    stub.negotiated = { instanceId: 'gen-old' };
+    stub.negotiated = { instanceId: "gen-old" };
     const timer = makeFakeTimer();
 
-    const pending = waitForDaemonGeneration(asHostClient(stub), 'gen-new', {
+    const pending = waitForDaemonGeneration(asHostClient(stub), "gen-new", {
       setTimer: timer.setTimer,
     });
 
@@ -132,7 +132,7 @@ describe('waitForDaemonGeneration', () => {
     await flushMicrotasks();
     expect(stub.handlerCount).toBe(1);
 
-    stub.fireReconnect('gen-new');
+    stub.fireReconnect("gen-new");
     const result = await pending;
 
     expect(result).toEqual({ ok: true });
@@ -141,12 +141,12 @@ describe('waitForDaemonGeneration', () => {
     expect(timer.isCleared()).toBe(true);
   });
 
-  it('returns timeout when expected generation never arrives', async () => {
+  it("returns timeout when expected generation never arrives", async () => {
     const stub = new FakeHostClient();
-    stub.negotiated = { instanceId: 'gen-other' };
+    stub.negotiated = { instanceId: "gen-other" };
     const timer = makeFakeTimer();
 
-    const pending = waitForDaemonGeneration(asHostClient(stub), 'gen-target', {
+    const pending = waitForDaemonGeneration(asHostClient(stub), "gen-target", {
       setTimer: timer.setTimer,
     });
 
@@ -156,16 +156,16 @@ describe('waitForDaemonGeneration', () => {
     timer.fire();
     const result = await pending;
 
-    expect(result).toEqual({ ok: false, reason: 'timeout' });
+    expect(result).toEqual({ ok: false, reason: "timeout" });
     expect(stub.handlerCount).toBe(0);
   });
 
-  it('keeps waiting through reconnects that land on the wrong generation', async () => {
+  it("keeps waiting through reconnects that land on the wrong generation", async () => {
     const stub = new FakeHostClient();
     stub.negotiated = null;
     const timer = makeFakeTimer();
 
-    const pending = waitForDaemonGeneration(asHostClient(stub), 'gen-target', {
+    const pending = waitForDaemonGeneration(asHostClient(stub), "gen-target", {
       setTimer: timer.setTimer,
     });
 
@@ -174,13 +174,13 @@ describe('waitForDaemonGeneration', () => {
 
     // Two unrelated reconnects — neither matches; helper must NOT
     // resolve, must keep its handler subscribed, must not clear timer.
-    stub.fireReconnect('gen-old');
-    stub.fireReconnect('gen-stranger');
+    stub.fireReconnect("gen-old");
+    stub.fireReconnect("gen-stranger");
     expect(stub.handlerCount).toBe(1);
     expect(timer.isCleared()).toBe(false);
 
     // The expected one finally arrives.
-    stub.fireReconnect('gen-target');
+    stub.fireReconnect("gen-target");
     const result = await pending;
 
     expect(result).toEqual({ ok: true });
@@ -188,19 +188,19 @@ describe('waitForDaemonGeneration', () => {
     expect(timer.isCleared()).toBe(true);
   });
 
-  it('surfaces connect failures without subscribing to reconnect', async () => {
+  it("surfaces connect failures without subscribing to reconnect", async () => {
     const stub = new FakeHostClient();
-    const boom = new Error('socket refused');
+    const boom = new Error("socket refused");
     stub.connectImpl = () => Promise.reject(boom);
     const timer = makeFakeTimer();
 
-    const result = await waitForDaemonGeneration(asHostClient(stub), 'gen-any', {
+    const result = await waitForDaemonGeneration(asHostClient(stub), "gen-any", {
       setTimer: timer.setTimer,
     });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.reason).toBe('connect_failed');
+      expect(result.reason).toBe("connect_failed");
       expect(result.error).toBe(boom);
     }
     expect(stub.handlerCount).toBe(0);
@@ -220,18 +220,19 @@ describe('waitForDaemonGeneration', () => {
    * only path out, and it must produce a clean `timeout` + drained
    * reconnect handler.
    */
-  it('hits timeout even when client.connect() never resolves (stuck reconnect loop)', async () => {
+  it("hits timeout even when client.connect() never resolves (stuck reconnect loop)", async () => {
     const stub = new FakeHostClient();
     stub.negotiated = null;
     // Stuck reconnect loop semantics: HostClient.connect() returns the
     // current readyPromise which never settles while reconnect keeps
     // failing internally without rejecting.
-    stub.connectImpl = () => new Promise<void>(() => {
-      /* never resolves, never rejects */
-    });
+    stub.connectImpl = () =>
+      new Promise<void>(() => {
+        /* never resolves, never rejects */
+      });
     const timer = makeFakeTimer();
 
-    const pending = waitForDaemonGeneration(asHostClient(stub), 'gen-any', {
+    const pending = waitForDaemonGeneration(asHostClient(stub), "gen-any", {
       setTimer: timer.setTimer,
     });
 
@@ -246,7 +247,7 @@ describe('waitForDaemonGeneration', () => {
     timer.fire();
     const result = await pending;
 
-    expect(result).toEqual({ ok: false, reason: 'timeout' });
+    expect(result).toEqual({ ok: false, reason: "timeout" });
     // No residual subscription leaked even though connect() is still
     // pending in the background.
     expect(stub.handlerCount).toBe(0);
@@ -260,17 +261,17 @@ describe('waitForDaemonGeneration', () => {
    */
   it('maps HostClientError("closed") from connect() to client_closed', async () => {
     const stub = new FakeHostClient();
-    const closedErr = new HostClientError('closed', 'client is closed');
+    const closedErr = new HostClientError("closed", "client is closed");
     stub.connectImpl = () => Promise.reject(closedErr);
     const timer = makeFakeTimer();
 
-    const result = await waitForDaemonGeneration(asHostClient(stub), 'gen-any', {
+    const result = await waitForDaemonGeneration(asHostClient(stub), "gen-any", {
       setTimer: timer.setTimer,
     });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.reason).toBe('client_closed');
+      expect(result.reason).toBe("client_closed");
       expect(result.error).toBe(closedErr);
     }
     expect(stub.handlerCount).toBe(0);

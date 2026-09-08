@@ -37,7 +37,7 @@ interface HastNode {
 
 // Only `mark` is skipped — descending into it would double-wrap (breaking
 // idempotency). `pre` / `code` are intentionally NOT skipped (see header).
-const SKIP_TAGS = new Set(['mark']);
+const SKIP_TAGS = new Set(["mark"]);
 
 export interface HighlightTermOptions {
   term: string;
@@ -55,15 +55,11 @@ function walk(node: HastNode, needleLower: string, needleLen: number): void {
   if (!node.children || node.children.length === 0) return;
   const next: HastNode[] = [];
   for (const child of node.children) {
-    if (
-      child.type === 'element' &&
-      child.tagName &&
-      SKIP_TAGS.has(child.tagName)
-    ) {
+    if (child.type === "element" && child.tagName && SKIP_TAGS.has(child.tagName)) {
       next.push(child);
       continue;
     }
-    if (child.type === 'text' && typeof child.value === 'string') {
+    if (child.type === "text" && typeof child.value === "string") {
       const split = splitTextNode(child.value, needleLower, needleLen);
       if (split) {
         next.push(...split);
@@ -81,28 +77,24 @@ function walk(node: HastNode, needleLower: string, needleLen: number): void {
 // Split one text node on every case-insensitive occurrence of the needle,
 // wrapping each hit in a `<mark class="search-hit">`. Returns null when the
 // needle doesn't occur (so the caller keeps the original node untouched).
-function splitTextNode(
-  text: string,
-  needleLower: string,
-  needleLen: number,
-): HastNode[] | null {
+function splitTextNode(text: string, needleLower: string, needleLen: number): HastNode[] | null {
   const hay = text.toLowerCase();
   let idx = hay.indexOf(needleLower);
   if (idx === -1) return null;
   const out: HastNode[] = [];
   let from = 0;
   while (idx !== -1) {
-    if (idx > from) out.push({ type: 'text', value: text.slice(from, idx) });
+    if (idx > from) out.push({ type: "text", value: text.slice(from, idx) });
     out.push({
-      type: 'element',
-      tagName: 'mark',
-      properties: { className: ['search-hit'] },
+      type: "element",
+      tagName: "mark",
+      properties: { className: ["search-hit"] },
       // Preserve the ORIGINAL casing of the matched span, not the needle's.
-      children: [{ type: 'text', value: text.slice(idx, idx + needleLen) }],
+      children: [{ type: "text", value: text.slice(idx, idx + needleLen) }],
     });
     from = idx + needleLen;
     idx = hay.indexOf(needleLower, from);
   }
-  if (from < text.length) out.push({ type: 'text', value: text.slice(from) });
+  if (from < text.length) out.push({ type: "text", value: text.slice(from) });
   return out;
 }

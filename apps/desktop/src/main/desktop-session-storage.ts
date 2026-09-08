@@ -1,5 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 export interface DesktopSessionStorageLogger {
   warn(obj: Record<string, unknown>, msg?: string): void;
@@ -12,8 +12,8 @@ export function clearPersistedDesktopSession(opts: {
   try {
     unlinkSync(opts.sessionPath);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      opts.logger?.warn({ err }, 'failed to remove desktop auth session file');
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      opts.logger?.warn({ err }, "failed to remove desktop auth session file");
     }
   }
 }
@@ -24,10 +24,10 @@ export function loadPersistedDesktopSessionToken(opts: {
 }): string | null {
   if (!existsSync(opts.sessionPath)) return null;
   try {
-    const token = readFileSync(opts.sessionPath, 'utf8').trim();
+    const token = readFileSync(opts.sessionPath, "utf8").trim();
     return token.length > 0 ? token : null;
   } catch (err) {
-    opts.logger?.warn({ err }, 'failed to read desktop auth session file; clearing');
+    opts.logger?.warn({ err }, "failed to read desktop auth session file; clearing");
     clearPersistedDesktopSession(opts);
     return null;
   }
@@ -43,6 +43,6 @@ export function persistDesktopSessionToken(opts: {
   try {
     chmodSync(opts.sessionPath, 0o600);
   } catch (err) {
-    opts.logger?.warn({ err }, 'failed to chmod desktop auth session file');
+    opts.logger?.warn({ err }, "failed to chmod desktop auth session file");
   }
 }

@@ -1,36 +1,27 @@
-import { useMemo } from 'react';
-import { Archive, Bookmark, Plus, Search } from 'lucide-react';
-import type { AgentDto } from '@silverhand/shared';
-import { cn } from '@/lib/cn';
-import { Button } from '@/components/ui/button';
-import {
-  useAgentAvatarObjectUrls,
-  type AgentAvatarSource,
-} from '@/features/agents/avatar-hooks';
-import {
-  useSetSortMode,
-  useWorkspaceSortState,
-} from '@/features/workspaces/hooks';
-import { sortModeOf } from '@/lib/viewer-sort';
-import { railSortGroupOf, type RailSortGroup } from '@/features/workspaces/rail-sort-group';
-import { useListDragSort } from './list-drag-sort';
-import { SortModeMenu } from './SortModeMenu';
+import { useMemo } from "react";
+import { Archive, Bookmark, Plus, Search } from "lucide-react";
+import type { AgentDto } from "@silverhand/shared";
+import { cn } from "@/lib/cn";
+import { Button } from "@/components/ui/button";
+import { useAgentAvatarObjectUrls, type AgentAvatarSource } from "@/features/agents/avatar-hooks";
+import { useSetSortMode, useWorkspaceSortState } from "@/features/workspaces/hooks";
+import { sortModeOf } from "@/lib/viewer-sort";
+import { railSortGroupOf, type RailSortGroup } from "@/features/workspaces/rail-sort-group";
+import { useListDragSort } from "./list-drag-sort";
+import { SortModeMenu } from "./SortModeMenu";
 import {
   AGENT_SPACES_SECTION_GLYPH,
   WORKSPACES_SECTION_GLYPH,
   WorkspaceGroup,
   type WorkspaceItem,
   type WorkspaceSortConfig,
-} from './WorkspacesPanel';
-import { FavoritesGroup } from './FavoritesPanel';
-import { DirectMessagesGroup } from './DirectMessagesPanel';
-import { useStarMembership } from '@/features/favorites/hooks';
-import { OUTER_GLYPH_INSET, sidebarRowStateClass } from './sidebar-shared';
-import {
-  partitionRailWorkspaces,
-  type SelectedConversation,
-} from '@/lib/home-grouping';
-import { paneChrome } from './pane-chrome';
+} from "./WorkspacesPanel";
+import { FavoritesGroup } from "./FavoritesPanel";
+import { DirectMessagesGroup } from "./DirectMessagesPanel";
+import { useStarMembership } from "@/features/favorites/hooks";
+import { OUTER_GLYPH_INSET, sidebarRowStateClass } from "./sidebar-shared";
+import { partitionRailWorkspaces, type SelectedConversation } from "@/lib/home-grouping";
+import { paneChrome } from "./pane-chrome";
 
 interface SidebarProps {
   workspaces: WorkspaceItem[];
@@ -156,16 +147,13 @@ export function Sidebar(props: SidebarProps): JSX.Element {
 
   const { data: viewerSort } = useWorkspaceSortState();
   const setSortMode = useSetSortMode();
-  const { orderedGroups, onReorder } = useListDragSort<
-    RailGroup,
-    WorkspaceItem
-  >({
-    listKey: 'workspaces',
+  const { orderedGroups, onReorder } = useListDragSort<RailGroup, WorkspaceItem>({
+    listKey: "workspaces",
     groups: { agent_space: homeAgentSpaces, regular: homeRegular },
     viewerSort,
-    getId: w => w.id,
-    getCreatedAt: w => w.created_at,
-    modeScopeOf: g => g,
+    getId: (w) => w.id,
+    getCreatedAt: (w) => w.created_at,
+    modeScopeOf: (g) => g,
   });
   const orderedAgentSpaces = orderedGroups.agent_space;
   const orderedRegular = orderedGroups.regular;
@@ -175,7 +163,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   const sortMenuFor = (group: RailGroup): JSX.Element => (
     <SortModeMenu
       mode={sortModeOf(viewerSort, group)}
-      onChange={m => setSortMode.mutate({ list_key: 'workspaces', group, mode: m })}
+      onChange={(m) => setSortMode.mutate({ list_key: "workspaces", group, mode: m })}
     />
   );
   const sortConfigFor = (group: RailGroup): WorkspaceSortConfig<RailGroup> => ({
@@ -195,7 +183,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     <aside
       data-sidebar="workspaces"
       className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
-      style={{ ...paneChrome, overflow: 'hidden' }}
+      style={{ ...paneChrome, overflow: "hidden" }}
     >
       <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
         <div className="mb-3 space-y-1">
@@ -203,7 +191,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             type="button"
             onClick={props.onSelectSearch}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-sm font-medium leading-4 ' +
+              "sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-sm font-medium leading-4 " +
                 OUTER_GLYPH_INSET,
               sidebarRowStateClass(props.searchActive),
             )}
@@ -216,24 +204,19 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             type="button"
             onClick={props.onSelectSaved}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-sm font-medium leading-4 ' +
+              "sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-sm font-medium leading-4 " +
                 OUTER_GLYPH_INSET,
               sidebarRowStateClass(props.savedActive),
             )}
           >
-            <Bookmark
-              className={cn(
-                'size-4',
-                props.savedActive ? 'fill-current' : '',
-              )}
-            />
+            <Bookmark className={cn("size-4", props.savedActive ? "fill-current" : "")} />
             <span>Saved</span>
             {props.savedCount !== undefined && props.savedCount > 0 ? (
               <span
                 data-sidebar-count
                 className={cn(
-                  'text-xs tabular-nums',
-                  props.savedActive ? 'text-text-on-selected/70' : 'text-text-muted',
+                  "text-xs tabular-nums",
+                  props.savedActive ? "text-text-on-selected/70" : "text-text-muted",
                 )}
               >
                 {props.savedCount}
@@ -245,7 +228,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             type="button"
             onClick={props.onSelectArchived}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-sm font-medium leading-4 ' +
+              "sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-sm font-medium leading-4 " +
                 OUTER_GLYPH_INSET,
               sidebarRowStateClass(props.archivedActive),
             )}
@@ -270,7 +253,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
           headerAction={
             <span className="flex items-center">
-              {sortMenuFor('regular')}
+              {sortMenuFor("regular")}
               <Button
                 variant="ghost"
                 size="icon"
@@ -282,14 +265,10 @@ export function Sidebar(props: SidebarProps): JSX.Element {
               </Button>
             </span>
           }
-          emptyHint={
-            <>
-              No workspaces
-            </>
-          }
+          emptyHint={<>No workspaces</>}
           agentsById={props.agentsById}
           ownerAgentAvatarUrls={ownerAgentAvatarUrls}
-          sort={sortConfigFor('regular')}
+          sort={sortConfigFor("regular")}
           persistId="workspaces"
         />
         <DirectMessagesGroup
@@ -309,8 +288,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           emptyHint="No agents"
           agentsById={props.agentsById}
           ownerAgentAvatarUrls={ownerAgentAvatarUrls}
-          headerAction={sortMenuFor('agent_space')}
-          sort={sortConfigFor('agent_space')}
+          headerAction={sortMenuFor("agent_space")}
+          sort={sortConfigFor("agent_space")}
           persistId="dm"
         />
       </nav>

@@ -1,4 +1,4 @@
-import type { HostAvailability, HostDto } from '@silverhand/shared';
+import type { HostAvailability, HostDto } from "@silverhand/shared";
 
 /**
  * The single place the renderer turns a computer into a user-facing name:
@@ -15,7 +15,7 @@ export function hostDisplayName(host: HostDto): string {
  * Restrained fallback when an agent references a computer that isn't in the
  * owned-computers list — deleted, revoked, or not owned by the viewer.
  */
-export const UNKNOWN_COMPUTER_LABEL = 'Unknown computer';
+export const UNKNOWN_COMPUTER_LABEL = "Unknown computer";
 
 /**
  * Resolve a computer name from an optional host DTO, falling back to the
@@ -33,10 +33,8 @@ export function resolveComputerName(host: HostDto | undefined): string {
  * availability half — `undefined` means the status probe is still in flight, so
  * it is treated as not-yet-selectable rather than optimistically available.
  */
-export function isComputerAvailable(
-  availability: HostAvailability | undefined,
-): boolean {
-  return availability === 'available';
+export function isComputerAvailable(availability: HostAvailability | undefined): boolean {
+  return availability === "available";
 }
 
 /**
@@ -53,15 +51,15 @@ export function computerUnavailableLabel(
   availability: HostAvailability | undefined,
 ): string | null {
   switch (availability) {
-    case 'available':
+    case "available":
       return null;
-    case 'disconnected':
-      return 'Offline';
-    case 'unreachable':
-      return 'Unreachable';
-    case 'revoked':
-      return 'Revoked';
+    case "disconnected":
+      return "Offline";
+    case "unreachable":
+      return "Unreachable";
+    case "revoked":
+      return "Revoked";
     case undefined:
-      return 'Checking…';
+      return "Checking…";
   }
 }

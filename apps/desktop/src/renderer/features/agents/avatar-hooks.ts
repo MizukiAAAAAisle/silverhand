@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { getAvatarBlobUrl, loadAvatarBlobUrl } from '@/lib/avatar-blob-cache';
+import { useEffect, useMemo, useState } from "react";
+import { getAvatarBlobUrl, loadAvatarBlobUrl } from "@/lib/avatar-blob-cache";
 
 /**
  * Avatar fetch hooks for agents. Both flavors resolve an `avatar_url` (relative
@@ -32,11 +32,9 @@ import { getAvatarBlobUrl, loadAvatarBlobUrl } from '@/lib/avatar-blob-cache';
  * from the cache synchronously so a remount with an already-fetched avatar shows
  * it with no flash-to-placeholder. Pass `null`/`undefined` to short-circuit.
  */
-export function useAgentAvatarObjectUrl(
-  avatarUrl: string | null | undefined,
-): string | null {
+export function useAgentAvatarObjectUrl(avatarUrl: string | null | undefined): string | null {
   const [objectUrl, setObjectUrl] = useState<string | null>(() =>
-    avatarUrl ? getAvatarBlobUrl(avatarUrl) ?? null : null,
+    avatarUrl ? (getAvatarBlobUrl(avatarUrl) ?? null) : null,
   );
   useEffect(() => {
     if (!avatarUrl) {
@@ -49,7 +47,7 @@ export function useAgentAvatarObjectUrl(
       return;
     }
     let cancelled = false;
-    void loadAvatarBlobUrl(avatarUrl).then(url => {
+    void loadAvatarBlobUrl(avatarUrl).then((url) => {
       if (!cancelled) setObjectUrl(url);
     });
     return () => {
@@ -86,15 +84,13 @@ export function useAgentAvatarObjectUrls(
   // the input list never re-runs the effect (#task:1146).
   const cacheKey = useMemo(
     () =>
-      Array.from(new Set(agents.map(a => `${a.id}:${a.avatar_url ?? ''}`)))
+      Array.from(new Set(agents.map((a) => `${a.id}:${a.avatar_url ?? ""}`)))
         .sort()
-        .join('|'),
+        .join("|"),
     [agents],
   );
 
-  const [byId, setById] = useState<Map<string, string | null>>(
-    () => new Map(),
-  );
+  const [byId, setById] = useState<Map<string, string | null>>(() => new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -116,9 +112,9 @@ export function useAgentAvatarObjectUrls(
 
     for (const { id, url } of toLoad) {
       // loadAvatarBlobUrl de-dupes concurrent same-url fetches internally.
-      void loadAvatarBlobUrl(url).then(resolved => {
+      void loadAvatarBlobUrl(url).then((resolved) => {
         if (cancelled || !resolved) return;
-        setById(prev => {
+        setById((prev) => {
           const out = new Map(prev);
           out.set(id, resolved);
           return out;

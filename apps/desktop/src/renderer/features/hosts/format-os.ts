@@ -24,15 +24,15 @@
  * rather than guessing (the field renders best-effort, never throws).
  */
 export function formatOsShort(os: string): string {
-  if (typeof os !== 'string') return '';
+  if (typeof os !== "string") return "";
   // Strip a single trailing parenthesized suffix:
   //   "Fedora Linux 40 (Workstation Edition)" → "Fedora Linux 40"
   //   "Debian GNU/Linux 12 (bookworm)"        → "Debian GNU/Linux 12"
   //   "macOS 15.0.1 (24A335)"                 → "macOS 15.0.1"
   // Only the final paren group is removed — middle-of-string parens
   // (rare in OS names) survive.
-  let s = os.replace(/\s*\([^()]*\)\s*$/u, '').trim();
+  let s = os.replace(/\s*\([^()]*\)\s*$/u, "").trim();
   // Strip the LTS decoration on Debian/Ubuntu-style PRETTY_NAMEs.
-  s = s.replace(/\s+LTS$/u, '').trim();
+  s = s.replace(/\s+LTS$/u, "").trim();
   return s.length === 0 ? os : s;
 }

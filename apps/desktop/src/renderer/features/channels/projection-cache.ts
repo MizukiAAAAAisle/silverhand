@@ -4,19 +4,16 @@
 // helpers the conversation ingestor drives. Depends on the message-cache core
 // (keys + primitives); the reader hooks that consume the live-gap readers stay
 // in hooks.ts.
-import { useQuery, type QueryClient } from '@tanstack/react-query';
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import type {
   ConversationMessagesDto,
   MessageDto,
   ReactionAggregateDto,
   TaskChangedEvent,
   ThreadReplyPreviewRow,
-} from '@silverhand/shared';
-import {
-  normalizeThreadPreviewExcerpt,
-  resolveAttachmentLabels,
-} from '@silverhand/shared';
-import { isCommittedMessage } from '@/features/channels/pending-message';
+} from "@silverhand/shared";
+import { normalizeThreadPreviewExcerpt, resolveAttachmentLabels } from "@silverhand/shared";
+import { isCommittedMessage } from "@/features/channels/pending-message";
 import {
   type MessagesCache,
   type CachedMessagesPage,
@@ -30,7 +27,7 @@ import {
   cacheHasRootOrKey,
   lastPageIsTail,
   appendMessageToCache,
-} from '@/features/channels/message-cache-core';
+} from "@/features/channels/message-cache-core";
 
 /** Apply a `task_changed` frame to a SINGLE message row — the source message
  *  the task was created from, which carries the inline task chip. This is the
@@ -41,10 +38,7 @@ import {
  *  Idempotent: SETS `linked_task` as an ABSOLUTE snapshot from the event (not a
  *  delta/merge over any prior chip), so a first sighting builds it from null and
  *  replay is a no-op. The caller matches `message.id === task.source_message_id`. */
-export function applyTaskChangedToMessage(
-  message: MessageDto,
-  task: TaskChangedEvent,
-): MessageDto {
+export function applyTaskChangedToMessage(message: MessageDto, task: TaskChangedEvent): MessageDto {
   return {
     ...message,
     linked_task: {
@@ -100,17 +94,14 @@ export type CommittedReaction = {
  *  this is the one place the reaction-merge logic lives so the main window,
  *  reply-cluster window, and the thread-pane root row all stay consistent
  *  (#task:1122 review, P1.1 — no second copy of the merge). */
-export function applyReactionToMessage(
-  message: MessageDto,
-  delta: CommittedReaction,
-): MessageDto {
+export function applyReactionToMessage(message: MessageDto, delta: CommittedReaction): MessageDto {
   const { emoji, count, viewerReacted } = delta;
   const prev = message.reactions ?? [];
-  const existing = prev.find(r => r.emoji === emoji);
+  const existing = prev.find((r) => r.emoji === emoji);
   let next: ReactionAggregateDto[];
   if (count <= 0) {
     if (!existing) return message;
-    next = prev.filter(r => r.emoji !== emoji);
+    next = prev.filter((r) => r.emoji !== emoji);
   } else if (!existing) {
     next = [...prev, { emoji, count, viewer_reacted: viewerReacted ?? false }];
   } else {
@@ -118,7 +109,7 @@ export function applyReactionToMessage(
     if (existing.count === count && existing.viewer_reacted === viewer) {
       return message;
     }
-    next = prev.map(r =>
+    next = prev.map((r) =>
       r.emoji === emoji ? { emoji: r.emoji, count, viewer_reacted: viewer } : r,
     );
   }
@@ -165,11 +156,7 @@ export function applyReactionToMessage(
 /** Whether a paginated message-window cache currently holds the row — the one
  *  definition of window MEMBERSHIP, shared by the patch and the re-read seams so
  *  the two planes can never disagree about which projections a fact reaches. */
-function windowHoldsMessage(
-  qc: QueryClient,
-  key: readonly unknown[],
-  messageId: string,
-): boolean {
+function windowHoldsMessage(qc: QueryClient, key: readonly unknown[], messageId: string): boolean {
   return cacheHasMessage(qc.getQueryData<MessagesCache>(key), messageId);
 }
 
@@ -184,10 +171,8 @@ function threadRootHoldsMessage(
   messageId: string,
 ): boolean {
   if (rootId !== messageId) return false;
-  const prev = qc.getQueryData<ConversationMessagesDto>(
-    threadRootKey(channelId, rootId),
-  );
-  return prev?.messages.some(m => m.id === messageId) ?? false;
+  const prev = qc.getQueryData<ConversationMessagesDto>(threadRootKey(channelId, rootId));
+  return prev?.messages.some((m) => m.id === messageId) ?? false;
 }
 
 /** Map the one row `messageId` inside a paginated message-window cache via
@@ -205,12 +190,12 @@ function writeMessageRowInWindow(
   messageId: string,
   patchRow: (message: MessageDto) => MessageDto,
 ): void {
-  qc.setQueryData<MessagesCache>(key, prev => {
+  qc.setQueryData<MessagesCache>(key, (prev) => {
     if (!prev) return prev;
     let changed = false;
-    const pages = prev.pages.map(page => {
+    const pages = prev.pages.map((page) => {
       let pageChanged = false;
-      const messages = page.messages.map(message => {
+      const messages = page.messages.map((message) => {
         if (message.id !== messageId || !isCommittedMessage(message)) {
           return message;
         }
@@ -237,21 +222,18 @@ function writeMessageRowInThreadRoot(
   messageId: string,
   patchRow: (message: MessageDto) => MessageDto,
 ): void {
-  qc.setQueryData<ConversationMessagesDto>(
-    threadRootKey(channelId, rootId),
-    p => {
-      if (!p) return p;
-      let changed = false;
-      const messages = p.messages.map(m => {
-        if (m.id !== messageId) return m;
-        const patched = patchRow(m);
-        if (patched === m) return m;
-        changed = true;
-        return patched;
-      });
-      return changed ? { ...p, messages } : p;
-    },
-  );
+  qc.setQueryData<ConversationMessagesDto>(threadRootKey(channelId, rootId), (p) => {
+    if (!p) return p;
+    let changed = false;
+    const messages = p.messages.map((m) => {
+      if (m.id !== messageId) return m;
+      const patched = patchRow(m);
+      if (patched === m) return m;
+      changed = true;
+      return patched;
+    });
+    return changed ? { ...p, messages } : p;
+  });
 }
 
 /** One DISPLAYED projection that currently holds the row: its query key plus how
@@ -280,7 +262,7 @@ function heldMessageProjections(
     if (!windowHoldsMessage(qc, key, messageId)) return;
     held.push({
       key,
-      write: patchRow => writeMessageRowInWindow(qc, key, messageId, patchRow),
+      write: (patchRow) => writeMessageRowInWindow(qc, key, messageId, patchRow),
     });
   };
   // MAINLINE window — gated on a mounted mainline reader; then membership-gated.
@@ -300,8 +282,7 @@ function heldMessageProjections(
     if (!threadRootHoldsMessage(qc, channelId, rootId, messageId)) continue;
     held.push({
       key: threadRootKey(channelId, rootId),
-      write: patchRow =>
-        writeMessageRowInThreadRoot(qc, channelId, rootId, messageId, patchRow),
+      write: (patchRow) => writeMessageRowInThreadRoot(qc, channelId, rootId, messageId, patchRow),
     });
   }
   return held;
@@ -338,7 +319,7 @@ export function patchMessageInActiveProjections(
   // NOT `cancelQueries`: it reverts the query to its pre-fetch state, discarding
   // every OTHER interim write too (an appended message, another row's patch).
   const racing = held.filter(
-    projection => qc.getQueryState(projection.key)?.fetchStatus === 'fetching',
+    (projection) => qc.getQueryState(projection.key)?.fetchStatus === "fetching",
   );
   for (const projection of held) projection.write(patchRow);
   for (const projection of racing) {
@@ -375,7 +356,7 @@ export function invalidateMessageRowInActiveProjections(
   target: { channelId: string; messageId: string },
 ): Promise<void> {
   return Promise.all(
-    heldMessageProjections(qc, target).map(projection =>
+    heldMessageProjections(qc, target).map((projection) =>
       qc.invalidateQueries({ queryKey: projection.key, exact: true }),
     ),
   ).then(() => undefined);
@@ -430,21 +411,14 @@ export function patchWarmInactiveMessageRow(
 
 /** Roots of WARM-INACTIVE thread-root rows (warm cache, zero observers) —
  *  the thread-root sibling of {@link warmInactiveClusterRoots}. */
-function warmInactiveThreadRootRoots(
-  qc: QueryClient,
-  channelId: string,
-): string[] {
+function warmInactiveThreadRootRoots(qc: QueryClient, channelId: string): string[] {
   return qc
     .getQueryCache()
-    .findAll({ queryKey: ['channels', channelId, 'thread-root'] })
-    .filter(q => q.getObserversCount() === 0 && q.state.data !== undefined)
-    .map(q => (q.queryKey as readonly unknown[])[3] as string);
+    .findAll({ queryKey: ["channels", channelId, "thread-root"] })
+    .filter((q) => q.getObserversCount() === 0 && q.state.data !== undefined)
+    .map((q) => (q.queryKey as readonly unknown[])[3] as string);
 }
-export function setMainlineLiveGap(
-  qc: QueryClient,
-  channelId: string,
-  value: boolean,
-): void {
+export function setMainlineLiveGap(qc: QueryClient, channelId: string, value: boolean): void {
   qc.setQueryData<boolean>(mainlineLiveGapKey(channelId), value);
 }
 
@@ -463,13 +437,8 @@ export function setMainlineLiveGap(
  *  (docs/renderer-event-ingestion-v1.md §3.1/§5).
  *  `messagesKey` is observed only by `useChannelMessages`; primers/jumps use
  *  `setQueryData`/`fetchQuery` and register no standing observer. */
-export function hasActiveMainlineReader(
-  qc: QueryClient,
-  channelId: string,
-): boolean {
-  const entry = qc
-    .getQueryCache()
-    .find({ queryKey: messagesKey(channelId), exact: true });
+export function hasActiveMainlineReader(qc: QueryClient, channelId: string): boolean {
+  const entry = qc.getQueryCache().find({ queryKey: messagesKey(channelId), exact: true });
   return (entry?.getObserversCount() ?? 0) > 0;
 }
 
@@ -498,7 +467,7 @@ export function applyMainlineMessageToChannelCaches(
   msg: MessageDto,
 ): Promise<void> | null {
   if (msg.thread_root_id !== null) {
-    if (msg.from_kind === 'system') return null;
+    if (msg.from_kind === "system") return null;
     const rootId = msg.thread_root_id;
     const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
     if (!cacheHasRootOrKey(cur, rootId)) return null;
@@ -509,9 +478,7 @@ export function applyMainlineMessageToChannelCaches(
     setMainlineLiveGap(qc, channelId, true);
     return Promise.resolve();
   }
-  qc.setQueryData<MessagesCache>(messagesKey(channelId), prev =>
-    appendMessageToCache(prev, msg),
-  );
+  qc.setQueryData<MessagesCache>(messagesKey(channelId), (prev) => appendMessageToCache(prev, msg));
   return Promise.resolve();
 }
 
@@ -536,7 +503,7 @@ export function reconcileChannelMainlineOnSnapshotRequired(
  *  `queryFn` from ever clobbering an ingestor-written `true`. */
 export function useMainlineLiveGap(channelId: string | null): boolean {
   const { data } = useQuery<boolean>({
-    queryKey: mainlineLiveGapKey(channelId ?? 'none'),
+    queryKey: mainlineLiveGapKey(channelId ?? "none"),
     enabled: !!channelId,
     queryFn: () => false,
     initialData: false,
@@ -565,12 +532,9 @@ export function setClusterLiveGap(
   qc.setQueryData<boolean>(clusterLiveGapKey(channelId, rootId), value);
 }
 
-export function useClusterLiveGap(
-  channelId: string | null,
-  rootId: string | null,
-): boolean {
+export function useClusterLiveGap(channelId: string | null, rootId: string | null): boolean {
   const { data } = useQuery<boolean>({
-    queryKey: clusterLiveGapKey(channelId ?? 'none', rootId ?? 'none'),
+    queryKey: clusterLiveGapKey(channelId ?? "none", rootId ?? "none"),
     enabled: !!channelId && !!rootId,
     queryFn: () => false,
     initialData: false,
@@ -580,44 +544,35 @@ export function useClusterLiveGap(
 }
 
 /** Roots of the OPEN clusters in this channel (cluster window has ≥1 observer). */
-export function openClusterReaderRoots(
-  qc: QueryClient,
-  channelId: string,
-): string[] {
+export function openClusterReaderRoots(qc: QueryClient, channelId: string): string[] {
   return qc
     .getQueryCache()
-    .findAll({ queryKey: ['channels', channelId, 'cluster'] })
-    .filter(q => {
+    .findAll({ queryKey: ["channels", channelId, "cluster"] })
+    .filter((q) => {
       const k = q.queryKey as readonly unknown[];
       // The cluster id space holds two keys per root (`…cluster/<root>/messages`
       // and `…/fetch-epoch`); only the window query is a reader.
-      return k[4] === 'messages' && q.getObserversCount() > 0;
+      return k[4] === "messages" && q.getObserversCount() > 0;
     })
-    .map(q => (q.queryKey as readonly unknown[])[3] as string);
+    .map((q) => (q.queryKey as readonly unknown[])[3] as string);
 }
 
 /** Roots of the OPEN thread-root rows in this channel (≥1 observer). */
-export function openThreadRootReaderRoots(
-  qc: QueryClient,
-  channelId: string,
-): string[] {
+export function openThreadRootReaderRoots(qc: QueryClient, channelId: string): string[] {
   return qc
     .getQueryCache()
-    .findAll({ queryKey: ['channels', channelId, 'thread-root'] })
-    .filter(q => q.getObserversCount() > 0)
-    .map(q => (q.queryKey as readonly unknown[])[3] as string);
+    .findAll({ queryKey: ["channels", channelId, "thread-root"] })
+    .filter((q) => q.getObserversCount() > 0)
+    .map((q) => (q.queryKey as readonly unknown[])[3] as string);
 }
 
 /** Roots of the OPEN follower snapshots in this channel (≥1 observer). */
-export function openThreadFollowerReaderRoots(
-  qc: QueryClient,
-  channelId: string,
-): string[] {
+export function openThreadFollowerReaderRoots(qc: QueryClient, channelId: string): string[] {
   return qc
     .getQueryCache()
-    .findAll({ queryKey: ['channels', channelId, 'thread-followers'] })
-    .filter(q => q.getObserversCount() > 0)
-    .map(q => (q.queryKey as readonly unknown[])[3] as string);
+    .findAll({ queryKey: ["channels", channelId, "thread-followers"] })
+    .filter((q) => q.getObserversCount() > 0)
+    .map((q) => (q.queryKey as readonly unknown[])[3] as string);
 }
 
 /** Roots of reply clusters in this channel that hold a WARM cache but have NO
@@ -627,22 +582,15 @@ export function openThreadFollowerReaderRoots(
  *  than invalidated — the "旧内容已同步移除且不会展示" arm of the `satisfied`
  *  predicate (#task:1255 §6). Active clusters are covered by
  *  {@link openClusterReaderRoots} (invalidate→refetch settles the promise). */
-export function warmInactiveClusterRoots(
-  qc: QueryClient,
-  channelId: string,
-): string[] {
+export function warmInactiveClusterRoots(qc: QueryClient, channelId: string): string[] {
   return qc
     .getQueryCache()
-    .findAll({ queryKey: ['channels', channelId, 'cluster'] })
-    .filter(q => {
+    .findAll({ queryKey: ["channels", channelId, "cluster"] })
+    .filter((q) => {
       const k = q.queryKey as readonly unknown[];
-      return (
-        k[4] === 'messages' &&
-        q.getObserversCount() === 0 &&
-        q.state.data !== undefined
-      );
+      return k[4] === "messages" && q.getObserversCount() === 0 && q.state.data !== undefined;
     })
-    .map(q => (q.queryKey as readonly unknown[])[3] as string);
+    .map((q) => (q.queryKey as readonly unknown[])[3] as string);
 }
 
 /** Warm-remove one inactive cluster window on `snapshot_required` (#task:1255
@@ -673,18 +621,9 @@ export function removeInactiveClusterCache(
  *  `event-ws-transport-v1.md §8` lists both mainline `useChannelMessages` and
  *  `useThreadCluster` in the warm-remove class. Active mainlines are covered by
  *  {@link hasActiveMainlineReader} (invalidate→refetch settles the promise). */
-export function hasWarmInactiveMainline(
-  qc: QueryClient,
-  channelId: string,
-): boolean {
-  const entry = qc
-    .getQueryCache()
-    .find({ queryKey: messagesKey(channelId), exact: true });
-  return (
-    entry !== undefined &&
-    entry.getObserversCount() === 0 &&
-    entry.state.data !== undefined
-  );
+export function hasWarmInactiveMainline(qc: QueryClient, channelId: string): boolean {
+  const entry = qc.getQueryCache().find({ queryKey: messagesKey(channelId), exact: true });
+  return entry !== undefined && entry.getObserversCount() === 0 && entry.state.data !== undefined;
 }
 
 /** Warm-remove the inactive main-stream window on `snapshot_required` (#task:1255
@@ -692,10 +631,7 @@ export function hasWarmInactiveMainline(
  *  `Promise.allSettled` commit gate as a fulfilled reconcile. The mainline
  *  live-gap fact is cleared alongside so a stale "new below" hint can't survive
  *  the cold-start. Sibling of {@link removeInactiveClusterCache}. */
-export function removeInactiveMainlineCache(
-  qc: QueryClient,
-  channelId: string,
-): Promise<void> {
+export function removeInactiveMainlineCache(qc: QueryClient, channelId: string): Promise<void> {
   setMainlineLiveGap(qc, channelId, false);
   qc.removeQueries({ queryKey: messagesKey(channelId), exact: true });
   return Promise.resolve();
@@ -729,14 +665,12 @@ export function applyClusterMessageToCaches(
   msg: MessageDto,
 ): Promise<void> | null {
   if (msg.thread_root_id !== rootId && msg.id !== rootId) return null;
-  const cur = qc.getQueryData<MessagesCache>(
-    clusterMessagesKey(channelId, rootId),
-  );
+  const cur = qc.getQueryData<MessagesCache>(clusterMessagesKey(channelId, rootId));
   if (!lastPageIsTail(cur)) {
     setClusterLiveGap(qc, channelId, rootId, true);
     return Promise.resolve();
   }
-  qc.setQueryData<MessagesCache>(clusterMessagesKey(channelId, rootId), prev =>
+  qc.setQueryData<MessagesCache>(clusterMessagesKey(channelId, rootId), (prev) =>
     appendMessageToCache(prev, msg),
   );
   return Promise.resolve();
@@ -772,10 +706,8 @@ export function applyThreadRootReplyBump(
   rootId: string,
   msg: MessageDto,
 ): Promise<void> | null {
-  if (msg.thread_root_id !== rootId || msg.from_kind === 'system') return null;
-  const prev = qc.getQueryData<ConversationMessagesDto>(
-    threadRootKey(channelId, rootId),
-  );
+  if (msg.thread_root_id !== rootId || msg.from_kind === "system") return null;
+  const prev = qc.getQueryData<ConversationMessagesDto>(threadRootKey(channelId, rootId));
   if (!prev) return null;
   return qc.invalidateQueries({ queryKey: threadRootKey(channelId, rootId) });
 }
@@ -795,12 +727,10 @@ export function mergeThreadRootReplyCount(
   rootId: string,
   replyCount: number,
 ): boolean {
-  const prev = qc.getQueryData<ConversationMessagesDto>(
-    threadRootKey(channelId, rootId),
-  );
+  const prev = qc.getQueryData<ConversationMessagesDto>(threadRootKey(channelId, rootId));
   if (!prev) return false;
   if (prev.reply_counts_by_root[rootId] === replyCount) return true;
-  qc.setQueryData<ConversationMessagesDto>(threadRootKey(channelId, rootId), p =>
+  qc.setQueryData<ConversationMessagesDto>(threadRootKey(channelId, rootId), (p) =>
     p
       ? {
           ...p,
@@ -831,13 +761,13 @@ export function mergeMainlineReplyCount(
 ): boolean {
   const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
   if (!cacheHasRootOrKey(cur, rootId)) return false;
-  qc.setQueryData<MessagesCache>(messagesKey(channelId), prev => {
+  qc.setQueryData<MessagesCache>(messagesKey(channelId), (prev) => {
     if (!prev) return prev;
     let changed = false;
-    const pages = prev.pages.map(page => {
+    const pages = prev.pages.map((page) => {
       const holdsRoot =
         Object.prototype.hasOwnProperty.call(page.reply_counts_by_root, rootId) ||
-        page.messages.some(m => m.id === rootId);
+        page.messages.some((m) => m.id === rootId);
       if (!holdsRoot || page.reply_counts_by_root[rootId] === replyCount) {
         return page;
       }
@@ -867,13 +797,9 @@ const THREAD_PREVIEW_TAIL_SIZE = 3;
  *  `message_id`. `seq` is immutable insert order (no edit/delete write path), so
  *  seq-ordering IS recency and an out-of-order frame lands in its true position
  *  instead of at the end. */
-function convergeReplyPreviewTail(
-  rows: readonly ThreadReplyPreviewRow[],
-): ThreadReplyPreviewRow[] {
-  const byId = new Map(rows.map(row => [row.message_id, row]));
-  return [...byId.values()]
-    .sort((a, b) => a.seq - b.seq)
-    .slice(-THREAD_PREVIEW_TAIL_SIZE);
+function convergeReplyPreviewTail(rows: readonly ThreadReplyPreviewRow[]): ThreadReplyPreviewRow[] {
+  const byId = new Map(rows.map((row) => [row.message_id, row]));
+  return [...byId.values()].sort((a, b) => a.seq - b.seq).slice(-THREAD_PREVIEW_TAIL_SIZE);
 }
 
 /** Build this reply's preview row from the frame that delivered it (#task:1745
@@ -891,10 +817,8 @@ function convergeReplyPreviewTail(
  *  from the read model or was merged live from this frame.
  *
  *  `null` for a system reply — eligibility mirrors `reply_counts_by_root`. */
-export function threadReplyPreviewRowFromMessage(
-  msg: MessageDto,
-): ThreadReplyPreviewRow | null {
-  if (msg.from_kind === 'system') return null;
+export function threadReplyPreviewRowFromMessage(msg: MessageDto): ThreadReplyPreviewRow | null {
+  if (msg.from_kind === "system") return null;
   const snapshots = msg.attachments ?? [];
   // Carry the server-authoritative author DTO straight through (#task:1792) —
   // the preview row's identity is the SAME resolved author the byline uses, so a
@@ -902,9 +826,9 @@ export function threadReplyPreviewRowFromMessage(
   // "Unknown …". A non-system message always resolves an author server-side; a
   // null here is a degraded frame, so it falls back to the non-aggregating
   // `unresolved` author rather than fabricating one from the (nulled) FK.
-  const author: ThreadReplyPreviewRow['author'] = msg.author ?? {
-    kind: msg.from_kind === 'agent' ? 'agent' : 'user',
-    status: 'unresolved',
+  const author: ThreadReplyPreviewRow["author"] = msg.author ?? {
+    kind: msg.from_kind === "agent" ? "agent" : "user",
+    status: "unresolved",
     id: null,
     name: null,
     display_name: null,
@@ -917,7 +841,7 @@ export function threadReplyPreviewRowFromMessage(
     preview: normalizeThreadPreviewExcerpt(msg.content),
     attachment_count: snapshots.length,
     first_attachment_label:
-      snapshots.length > 0 ? resolveAttachmentLabels(snapshots)[0] ?? null : null,
+      snapshots.length > 0 ? (resolveAttachmentLabels(snapshots)[0] ?? null) : null,
   };
 }
 
@@ -969,7 +893,7 @@ export function mergeMainlineReplyPreview(
   /** The read model's `rootIds` filter, evaluated against a loaded page. */
   const pageDisplaysEligibleRoot = (page: CachedMessagesPage): boolean =>
     page.messages.some(
-      m => m.id === rootId && m.thread_root_id === null && m.from_kind !== 'system',
+      (m) => m.id === rootId && m.thread_root_id === null && m.from_kind !== "system",
     );
   const nextTailFor = (page: CachedMessagesPage): ThreadReplyPreviewRow[] | null => {
     const previews = page.reply_previews_by_root;
@@ -978,23 +902,22 @@ export function mergeMainlineReplyPreview(
     if (!tail) {
       return pageDisplaysEligibleRoot(page) ? [row] : null;
     }
-    if (tail.some(r => r.message_id === row.message_id)) return null;
+    if (tail.some((r) => r.message_id === row.message_id)) return null;
     return convergeReplyPreviewTail([...tail, row]);
   };
 
   const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
   const displaysTail =
     cur?.pages.some(
-      page =>
+      (page) =>
         page.reply_previews_by_root != null &&
-        (page.reply_previews_by_root[rootId] != null ||
-          pageDisplaysEligibleRoot(page)),
+        (page.reply_previews_by_root[rootId] != null || pageDisplaysEligibleRoot(page)),
     ) ?? false;
   if (!displaysTail) return false;
-  qc.setQueryData<MessagesCache>(messagesKey(channelId), prev => {
+  qc.setQueryData<MessagesCache>(messagesKey(channelId), (prev) => {
     if (!prev) return prev;
     let changed = false;
-    const pages = prev.pages.map(page => {
+    const pages = prev.pages.map((page) => {
       const next = nextTailFor(page);
       if (!next) return page;
       changed = true;

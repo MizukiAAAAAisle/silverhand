@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX } from 'react';
+import { useEffect, useState, type JSX } from "react";
 import {
   Dialog,
   DialogContent,
@@ -6,10 +6,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
-import { useLeaveWorkspace } from './hooks';
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
+import { useLeaveWorkspace } from "./hooks";
 
 /**
  * Confirm modal for self-leaving a workspace from the right-click menu. A menu
@@ -54,12 +54,12 @@ export function LeaveWorkspaceConfirmDialog({
     setError(null);
     leaveWorkspace.mutate(workspaceId, {
       onSuccess: () => onOpenChange(false),
-      onError: () => setError('Could not leave this workspace. Try again.'),
+      onError: () => setError("Could not leave this workspace. Try again."),
     });
   };
 
   return (
-    <Dialog open={open} onOpenChange={next => (pending ? undefined : onOpenChange(next))}>
+    <Dialog open={open} onOpenChange={(next) => (pending ? undefined : onOpenChange(next))}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{`Leave ${workspaceName}?`}</DialogTitle>
@@ -82,7 +82,7 @@ export function LeaveWorkspaceConfirmDialog({
             Cancel
           </Button>
           <Button onClick={onConfirm} disabled={pending} {...primaryAction()}>
-            {pending ? 'Leaving…' : 'Leave workspace'}
+            {pending ? "Leaving…" : "Leave workspace"}
           </Button>
         </DialogFooter>
       </DialogContent>

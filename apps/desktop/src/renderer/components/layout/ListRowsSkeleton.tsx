@@ -19,7 +19,7 @@
  * `px-4 py-3`), so this only lays out the `space-y-2` card stack.
  */
 
-import { COLLECTION_CARD_CLASS } from '@/components/layout/collection-item-card';
+import { COLLECTION_CARD_CLASS } from "@/components/layout/collection-item-card";
 
 // Per-card recipe: the meta-line width, the title width, and the body-line
 // widths beneath. Hand-varied so the stack reads as a list of real cards, not a
@@ -29,11 +29,11 @@ const CARDS: ReadonlyArray<{
   title: string;
   body: readonly string[];
 }> = [
-  { meta: 'w-40', title: 'w-[52%]', body: ['w-[86%]', 'w-[40%]'] },
-  { meta: 'w-28', title: 'w-[64%]', body: ['w-[72%]'] },
-  { meta: 'w-48', title: 'w-[44%]', body: ['w-[90%]', 'w-[58%]'] },
-  { meta: 'w-32', title: 'w-[58%]', body: ['w-[66%]'] },
-  { meta: 'w-36', title: 'w-[48%]', body: ['w-[80%]', 'w-[34%]'] },
+  { meta: "w-40", title: "w-[52%]", body: ["w-[86%]", "w-[40%]"] },
+  { meta: "w-28", title: "w-[64%]", body: ["w-[72%]"] },
+  { meta: "w-48", title: "w-[44%]", body: ["w-[90%]", "w-[58%]"] },
+  { meta: "w-32", title: "w-[58%]", body: ["w-[66%]"] },
+  { meta: "w-36", title: "w-[48%]", body: ["w-[80%]", "w-[34%]"] },
 ];
 
 export function ListRowsSkeleton({
@@ -48,11 +48,7 @@ export function ListRowsSkeleton({
 } = {}): JSX.Element {
   const cards = CARDS.slice(0, Math.max(1, Math.min(rows, CARDS.length)));
   return (
-    <div
-      className="animate-pulse space-y-2"
-      aria-hidden
-      data-list-rows-skeleton
-    >
+    <div className="animate-pulse space-y-2" aria-hidden data-list-rows-skeleton>
       {cards.map((card, i) => (
         <div
           key={i}
@@ -61,9 +57,7 @@ export function ListRowsSkeleton({
           // must not pick up the per-theme hover.
           className={`${COLLECTION_CARD_CLASS} flex items-start gap-3 px-4 py-3`}
         >
-          {withIcon ? (
-            <div className="mt-0.5 size-8 shrink-0 rounded-md bg-bg-hover" />
-          ) : null}
+          {withIcon ? <div className="mt-0.5 size-8 shrink-0 rounded-md bg-bg-hover" /> : null}
           <div className="min-w-0 flex-1">
             {/* meta line (where / sender / date) */}
             <div className={`h-2.5 rounded bg-bg-hover ${card.meta}`} />

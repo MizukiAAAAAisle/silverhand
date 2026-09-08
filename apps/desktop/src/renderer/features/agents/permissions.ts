@@ -1,5 +1,5 @@
-import type { AgentDto, MeResponse, WorkspaceRole } from '@silverhand/shared';
-import { isRegistrationRequired } from '@/features/me/hooks';
+import type { AgentDto, MeResponse, WorkspaceRole } from "@silverhand/shared";
+import { isRegistrationRequired } from "@/features/me/hooks";
 
 /**
  * Renderer-side mirror of `canEditAgent` (creator branch only).
@@ -44,7 +44,7 @@ import { isRegistrationRequired } from '@/features/me/hooks';
  */
 export function canEditAgentProfile(
   viewer: MeResponse | undefined,
-  agent: Pick<AgentDto, 'created_by_user_id'>,
+  agent: Pick<AgentDto, "created_by_user_id">,
 ): boolean {
   if (!viewer) return false;
   if (isRegistrationRequired(viewer)) return false;
@@ -60,7 +60,7 @@ export function canEditAgentProfile(
  */
 export function canManageAgentSchedules(
   viewer: MeResponse | undefined,
-  agent: Pick<AgentDto, 'created_by_user_id'>,
+  agent: Pick<AgentDto, "created_by_user_id">,
 ): boolean {
   return canEditAgentProfile(viewer, agent);
 }
@@ -81,7 +81,7 @@ export function canManageAgentSchedules(
  */
 export function canViewAgentFiles(
   viewer: MeResponse | undefined,
-  agent: Pick<AgentDto, 'created_by_user_id'>,
+  agent: Pick<AgentDto, "created_by_user_id">,
 ): boolean {
   return canEditAgentProfile(viewer, agent);
 }
@@ -102,7 +102,7 @@ export function canViewAgentFiles(
  */
 export function canAuditAgentChats(
   viewer: MeResponse | undefined,
-  agent: Pick<AgentDto, 'created_by_user_id'>,
+  agent: Pick<AgentDto, "created_by_user_id">,
 ): boolean {
   return canEditAgentProfile(viewer, agent);
 }
@@ -129,11 +129,11 @@ export function canAuditAgentChats(
  */
 export function canRemoveAgentFromChannel(
   viewer: MeResponse | undefined,
-  agent: Pick<AgentDto, 'created_by_user_id'>,
+  agent: Pick<AgentDto, "created_by_user_id">,
   viewerWorkspaceRole: WorkspaceRole | null | undefined,
 ): boolean {
   if (!viewer) return false;
   if (isRegistrationRequired(viewer)) return false;
   if (viewer.id === agent.created_by_user_id) return true;
-  return viewerWorkspaceRole === 'owner' || viewerWorkspaceRole === 'admin';
+  return viewerWorkspaceRole === "owner" || viewerWorkspaceRole === "admin";
 }

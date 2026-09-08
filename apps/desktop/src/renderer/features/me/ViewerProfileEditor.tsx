@@ -1,17 +1,14 @@
-import { useId, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { Loader2, User as UserIcon } from 'lucide-react';
-import {
-  validateAvatarFile,
-  type UserDto,
-} from '@silverhand/shared';
-import { ApiError } from '@/lib/api';
-import { AvatarPickerButton } from '@/components/AvatarPickerButton';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { Button } from '@/components/ui/button';
-import { Input, Label } from '@/components/ui/input';
-import { primaryAction } from '@/features/common/PrimaryAction';
-import { readDisplayNameDraft } from '@/features/common/display-name';
-import { useUpdateProfile, useUploadAvatar, useViewerAvatarObjectUrl } from './hooks';
+import { useId, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Loader2, User as UserIcon } from "lucide-react";
+import { validateAvatarFile, type UserDto } from "@silverhand/shared";
+import { ApiError } from "@/lib/api";
+import { AvatarPickerButton } from "@/components/AvatarPickerButton";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { Button } from "@/components/ui/button";
+import { Input, Label } from "@/components/ui/input";
+import { primaryAction } from "@/features/common/PrimaryAction";
+import { readDisplayNameDraft } from "@/features/common/display-name";
+import { useUpdateProfile, useUploadAvatar, useViewerAvatarObjectUrl } from "./hooks";
 
 export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
   const update = useUpdateProfile();
@@ -27,9 +24,9 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
   const nameValue = draftName ?? user.display_name;
 
   const nameDraft = readDisplayNameDraft(draftName, user.display_name);
-  const canSave = nameDraft.kind === 'ready' && !update.isPending;
+  const canSave = nameDraft.kind === "ready" && !update.isPending;
 
-  const nameRejection = nameDraft.kind === 'rejected' ? nameDraft.message : null;
+  const nameRejection = nameDraft.kind === "rejected" ? nameDraft.message : null;
 
   const onPickAvatar = async (file: File): Promise<void> => {
     setAvatarError(null);
@@ -47,7 +44,7 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
-    if (nameDraft.kind !== 'ready' || update.isPending) return;
+    if (nameDraft.kind !== "ready" || update.isPending) return;
     setSaveError(null);
     try {
       await update.mutateAsync({ display_name: nameDraft.value });
@@ -62,7 +59,7 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
   const onNameKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     // Escape discards the draft — the counterpart of Enter submitting
     // through the form. Neither blur nor navigation saves.
-    if (event.key === 'Escape') {
+    if (event.key === "Escape") {
       event.preventDefault();
       setDraftName(null);
       setSaveError(null);
@@ -76,21 +73,17 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-3">
           <AvatarPickerButton
-            size={AVATAR_PX['3xl']}
-            label={hasAvatar ? 'Edit' : 'Add'}
-            onPick={file => void onPickAvatar(file)}
+            size={AVATAR_PX["3xl"]}
+            label={hasAvatar ? "Edit" : "Add"}
+            onPick={(file) => void onPickAvatar(file)}
             disabled={upload.isPending}
-            ariaLabel={hasAvatar ? 'Change avatar' : 'Add avatar'}
+            ariaLabel={hasAvatar ? "Change avatar" : "Add avatar"}
             className="border border-border-subtle"
           >
             <span data-avatar-ground className="grid size-full place-items-center">
               {avatarObjectUrl ? (
                 // eslint-disable-next-line jsx-a11y/img-redundant-alt
-                <img
-                  src={avatarObjectUrl}
-                  alt="Your avatar"
-                  className="size-full object-cover"
-                />
+                <img src={avatarObjectUrl} alt="Your avatar" className="size-full object-cover" />
               ) : (
                 <UserIcon className="size-7 text-text-muted" />
               )}
@@ -100,9 +93,7 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
             <p className="truncate font-serif text-base font-semibold leading-tight text-text-primary">
               {user.display_name}
             </p>
-            <p className="truncate font-mono text-xs text-text-muted">
-              @{user.name}
-            </p>
+            <p className="truncate font-mono text-xs text-text-muted">@{user.name}</p>
           </div>
         </div>
         {avatarError ? (
@@ -117,7 +108,7 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
       </div>
 
       <form
-        onSubmit={event => void onSubmit(event)}
+        onSubmit={(event) => void onSubmit(event)}
         className="flex flex-col gap-4 border-t border-border-subtle pt-5"
       >
         <div className="flex flex-col gap-1.5">
@@ -128,7 +119,7 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
             disabled={update.isPending}
             aria-invalid={nameRejection ? true : undefined}
             aria-describedby={nameRejection ? nameErrorId : undefined}
-            onChange={event => setDraftName(event.target.value)}
+            onChange={(event) => setDraftName(event.target.value)}
             onKeyDown={onNameKeyDown}
           />
           {nameRejection ? (
@@ -139,15 +130,8 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
         </div>
 
         <div className="flex flex-col gap-2">
-          <Button
-            type="submit"
-            size="sm"
-            disabled={!canSave}
-            {...primaryAction('self-start')}
-          >
-            {update.isPending ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : null}
+          <Button type="submit" size="sm" disabled={!canSave} {...primaryAction("self-start")}>
+            {update.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
             Save Profile
           </Button>
           {saveError ? (
@@ -168,19 +152,19 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
  */
 export function formatProfileSaveError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.kind === 'backend_unreachable') {
-      return 'Server unreachable. Check the connection and try again.';
+    if (err.kind === "backend_unreachable") {
+      return "Server unreachable. Check the connection and try again.";
     }
     switch (err.status) {
       case 400:
-        return 'This display name was rejected. Try a different one.';
+        return "This display name was rejected. Try a different one.";
       case 401:
-        return 'Sign-in expired. Reload the app and try again.';
+        return "Sign-in expired. Reload the app and try again.";
       default:
         return `Failed to save profile (HTTP ${err.status}).`;
     }
   }
-  return 'Failed to save profile.';
+  return "Failed to save profile.";
 }
 
 /**
@@ -192,36 +176,36 @@ export function formatAvatarMutationError(err: unknown): string {
   if (err instanceof ApiError) {
     const code = parseErrorCode(err.body);
     switch (code) {
-      case 'avatar_too_large':
-        return 'Avatar must be 5 MB or smaller.';
-      case 'avatar_unsupported_type':
-        return 'Avatar must be a PNG, JPEG, GIF, or WEBP image.';
-      case 'avatar_missing':
-        return 'Avatar file is empty.';
-      case 'avatar_storage_failed':
-        return 'Storage backend failed to write the avatar. Try again.';
+      case "avatar_too_large":
+        return "Avatar must be 5 MB or smaller.";
+      case "avatar_unsupported_type":
+        return "Avatar must be a PNG, JPEG, GIF, or WEBP image.";
+      case "avatar_missing":
+        return "Avatar file is empty.";
+      case "avatar_storage_failed":
+        return "Storage backend failed to write the avatar. Try again.";
       default:
         break;
     }
     switch (err.status) {
       case 401:
-        return 'Sign-in expired. Reload the app and try again.';
+        return "Sign-in expired. Reload the app and try again.";
       case 403:
-        return 'You no longer have permission to edit this profile.';
+        return "You no longer have permission to edit this profile.";
       case 404:
-        return 'This profile no longer exists.';
+        return "This profile no longer exists.";
       default:
         return `Failed to update avatar (HTTP ${err.status}).`;
     }
   }
-  return 'Failed to update avatar.';
+  return "Failed to update avatar.";
 }
 
 function parseErrorCode(body: string): string | null {
   if (!body) return null;
   try {
     const parsed = JSON.parse(body) as { code?: unknown };
-    return typeof parsed.code === 'string' ? parsed.code : null;
+    return typeof parsed.code === "string" ? parsed.code : null;
   } catch {
     return null;
   }

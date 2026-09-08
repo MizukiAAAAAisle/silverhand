@@ -35,7 +35,7 @@
  * place-memory and the query state, calls this, and executes the action.
  */
 
-import type { ChatPlace } from '@/lib/place-memory';
+import type { ChatPlace } from "@/lib/place-memory";
 
 /** The viewer's direct-pair list, as the restore decision needs it: an answer,
  *  or the absence of one. `ready` carries the conversation ids the viewer is an
@@ -43,9 +43,9 @@ import type { ChatPlace } from '@/lib/place-memory';
  *  accidentally ask about a pair that is not in the list. */
 export type DirectPairAuthority =
   /** Not answered yet (cold query, or refetching with nothing cached). */
-  | { status: 'pending' }
+  | { status: "pending" }
   /** Answered and settled: these are the viewer's lines. */
-  | { status: 'ready'; conversationIds: ReadonlySet<string> }
+  | { status: "ready"; conversationIds: ReadonlySet<string> }
   /** Answered before, and a fresher read is in flight now — carries the last
    *  answer. The two consumers read it differently ON PURPOSE (#task:2052): a
    *  one-shot gesture (`resolveJumpNav`) may act on a HIT, because the viewer's
@@ -55,9 +55,9 @@ export type DirectPairAuthority =
    *  freshly minted pair this refetch will bring back. A render-driven restore
    *  (`resolveChatPlaceRestore`) instead keeps WAITING — it can afford a frame,
    *  and the fresher read may change reachability. */
-  | { status: 'refetching'; conversationIds: ReadonlySet<string> }
+  | { status: "refetching"; conversationIds: ReadonlySet<string> }
   /** The read failed. Reachability is unknown and no answer is coming. */
-  | { status: 'failed' };
+  | { status: "failed" };
 
 /**
  * Project a React Query read of the direct-pair list onto {@link DirectPairAuthority}.
@@ -107,23 +107,23 @@ export function directPairAuthorityFromQuery(query: {
     // alive through the refetch storm every incoming DM opens (#task:2052),
     // and it changes nothing for restore (both map to `wait` there).
     return query.answered !== undefined
-      ? { status: 'refetching', conversationIds: query.answered }
-      : { status: 'pending' };
+      ? { status: "refetching", conversationIds: query.answered }
+      : { status: "pending" };
   }
-  if (query.isError) return { status: 'failed' };
+  if (query.isError) return { status: "failed" };
   if (query.answered !== undefined) {
-    return { status: 'ready', conversationIds: query.answered };
+    return { status: "ready", conversationIds: query.answered };
   }
-  return { status: 'pending' };
+  return { status: "pending" };
 }
 
 export type ChatPlaceRestore =
   /** Hold the bare route for one more render — the authority is still answering. */
-  | { kind: 'wait' }
+  | { kind: "wait" }
   /** Open this direct line. */
-  | { kind: 'open-direct'; conversationId: string }
+  | { kind: "open-direct"; conversationId: string }
   /** Use the workspace arm (last workspace → its last channel), unchanged. */
-  | { kind: 'workspace' };
+  | { kind: "workspace" };
 
 /**
  * WHICH ARM the current chat route is on, for the recorder — or `null` when the
@@ -155,9 +155,9 @@ export function chatPlaceForRoute(route: {
   if (!route.chatSectionActive) return null;
   if (route.directDraftAgentId !== null) return null;
   if (route.directConversationId !== null) {
-    return { kind: 'direct_pair', conversationId: route.directConversationId };
+    return { kind: "direct_pair", conversationId: route.directConversationId };
   }
-  if (route.selectedWorkspaceId !== null) return { kind: 'workspace_channel' };
+  if (route.selectedWorkspaceId !== null) return { kind: "workspace_channel" };
   return null;
 }
 
@@ -169,24 +169,24 @@ export function resolveChatPlaceRestore(inputs: {
   const { place, pairs } = inputs;
   // No memory, or memory that names the workspace arm: the existing path decides,
   // and it does so without consulting the pair list at all.
-  if (place === null || place.kind === 'workspace_channel') {
-    return { kind: 'workspace' };
+  if (place === null || place.kind === "workspace_channel") {
+    return { kind: "workspace" };
   }
   switch (pairs.status) {
-    case 'pending':
-    case 'refetching':
+    case "pending":
+    case "refetching":
       // A read in flight — held rows or not — is not the settled answer here.
       // Restore is render-driven, so it can afford a frame, and the fresher read
       // may change reachability; it must NOT re-open the line from rows that
       // predate the question. `refetching` carries the held rows only so the
       // one-shot jump seam can act on a HIT; restore's behavior is unchanged
       // (both still `wait`), which #task:2052 keeps intact.
-      return { kind: 'wait' };
-    case 'failed':
-      return { kind: 'workspace' };
-    case 'ready':
+      return { kind: "wait" };
+    case "failed":
+      return { kind: "workspace" };
+    case "ready":
       return pairs.conversationIds.has(place.conversationId)
-        ? { kind: 'open-direct', conversationId: place.conversationId }
-        : { kind: 'workspace' };
+        ? { kind: "open-direct", conversationId: place.conversationId }
+        : { kind: "workspace" };
   }
 }

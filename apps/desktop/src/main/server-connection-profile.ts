@@ -1,13 +1,24 @@
-import { chmodSync, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync, openSync, fsyncSync, closeSync, readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+  openSync,
+  fsyncSync,
+  closeSync,
+  readFileSync,
+} from "node:fs";
+import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   SERVER_CONNECTION_PROFILE_MIN_VERSION,
   redactServerConnectionProfile,
   safeParseServerConnectionProfile,
   type ServerConnectionProfile,
   type ServerConnectionProfileView,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 
 /**
  * Logger seam — production callers pass the pino `FileLogger` instance;
@@ -57,8 +68,8 @@ function resolveLogger(opts: ProfileStorageOptions): ProfileStorageLogger {
  */
 export type ReadProfileResult =
   | { ok: true; profile: ServerConnectionProfile }
-  | { ok: false; reason: 'not_found' }
-  | { ok: false; reason: 'parse_failed'; detail: string };
+  | { ok: false; reason: "not_found" }
+  | { ok: false; reason: "parse_failed"; detail: string };
 
 /**
  * Read the persisted profile, if any.
@@ -68,41 +79,33 @@ export type ReadProfileResult =
  * caller can surface the same "reset profile" repair affordance regardless of
  * whether bytes could not be read or could not be parsed.
  */
-export function readServerConnectionProfile(
-  opts: ProfileStorageOptions,
-): ReadProfileResult {
+export function readServerConnectionProfile(opts: ProfileStorageOptions): ReadProfileResult {
   const logger = resolveLogger(opts);
   const path = opts.profilePath;
   if (!existsSync(path)) {
-    return { ok: false, reason: 'not_found' };
+    return { ok: false, reason: "not_found" };
   }
   let plaintext: string;
   try {
-    plaintext = readFileSync(path, 'utf8');
+    plaintext = readFileSync(path, "utf8");
   } catch (err) {
-    logger.warn(
-      { path, err },
-      'failed to read server connection profile',
-    );
-    return { ok: false, reason: 'parse_failed', detail: String(err) };
+    logger.warn({ path, err }, "failed to read server connection profile");
+    return { ok: false, reason: "parse_failed", detail: String(err) };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(plaintext);
   } catch (err) {
-    logger.warn(
-      { path, err },
-      'server connection profile JSON parse failed',
-    );
-    return { ok: false, reason: 'parse_failed', detail: String(err) };
+    logger.warn({ path, err }, "server connection profile JSON parse failed");
+    return { ok: false, reason: "parse_failed", detail: String(err) };
   }
   const result = safeParseServerConnectionProfile(parsed);
   if (!result.ok) {
     logger.warn(
       { path, detail: result.reason },
-      'server connection profile file failed schema validation',
+      "server connection profile file failed schema validation",
     );
-    return { ok: false, reason: 'parse_failed', detail: result.reason };
+    return { ok: false, reason: "parse_failed", detail: result.reason };
   }
   return { ok: true, profile: result.profile };
 }
@@ -131,7 +134,7 @@ export function readServerConnectionProfileViewOrNull(
  */
 export type WriteProfileResult =
   | { ok: true; profile: ServerConnectionProfile }
-  | { ok: false; reason: 'write_failed'; detail: string };
+  | { ok: false; reason: "write_failed"; detail: string };
 
 /**
  * Commit a server connection profile to disk.
@@ -191,21 +194,15 @@ export function writeServerConnectionProfile(
   try {
     serialized = JSON.stringify(profile);
   } catch (err) {
-    logger.warn(
-      { path, err },
-      'failed to serialize server connection profile',
-    );
-    return { ok: false, reason: 'write_failed', detail: String(err) };
+    logger.warn({ path, err }, "failed to serialize server connection profile");
+    return { ok: false, reason: "write_failed", detail: String(err) };
   }
 
   try {
     mkdirSync(dirname(path), { recursive: true });
   } catch (err) {
-    logger.warn(
-      { dir: dirname(path), err },
-      'failed to ensure desktop profile directory',
-    );
-    return { ok: false, reason: 'write_failed', detail: String(err) };
+    logger.warn({ dir: dirname(path), err }, "failed to ensure desktop profile directory");
+    return { ok: false, reason: "write_failed", detail: String(err) };
   }
 
   const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
@@ -215,7 +212,7 @@ export function writeServerConnectionProfile(
     // fsync a crash between the write and the rename could leave the
     // rename pointing at a zero-byte inode — the design explicitly
     // requires fsync here.
-    const fd = openSync(tmp, 'r+');
+    const fd = openSync(tmp, "r+");
     try {
       fsyncSync(fd);
     } finally {
@@ -228,10 +225,7 @@ export function writeServerConnectionProfile(
       // chmod failure on the live file is not fatal — the temp
       // creation already set mode 0600, so this is belt-and-braces.
       // Log and continue.
-      logger.warn(
-        { path, err },
-        'chmod 0600 on server connection profile failed (best-effort)',
-      );
+      logger.warn({ path, err }, "chmod 0600 on server connection profile failed (best-effort)");
     }
   } catch (err) {
     // Best-effort cleanup of the temp file. If unlink itself fails
@@ -242,11 +236,8 @@ export function writeServerConnectionProfile(
     } catch {
       // ignore
     }
-    logger.warn(
-      { path, err },
-      'failed to commit server connection profile (temp+fsync+rename)',
-    );
-    return { ok: false, reason: 'write_failed', detail: String(err) };
+    logger.warn({ path, err }, "failed to commit server connection profile (temp+fsync+rename)");
+    return { ok: false, reason: "write_failed", detail: String(err) };
   }
 
   return { ok: true, profile };
@@ -261,7 +252,7 @@ export function writeServerConnectionProfile(
  */
 export type ClearProfileResult =
   | { ok: true; cleared: boolean }
-  | { ok: false; reason: 'unlink_failed'; detail: string };
+  | { ok: false; reason: "unlink_failed"; detail: string };
 
 /**
  * Remove the persisted profile, if any. Idempotent: a non-existent
@@ -272,9 +263,7 @@ export type ClearProfileResult =
  *   - Recovery from `parse_failed` reads (the renderer offers a
  *     "reset and re-enter URL" affordance).
  */
-export function clearServerConnectionProfile(
-  opts: ProfileStorageOptions,
-): ClearProfileResult {
+export function clearServerConnectionProfile(opts: ProfileStorageOptions): ClearProfileResult {
   const logger = resolveLogger(opts);
   const path = opts.profilePath;
   if (!existsSync(path)) {
@@ -284,10 +273,7 @@ export function clearServerConnectionProfile(
     unlinkSync(path);
     return { ok: true, cleared: true };
   } catch (err) {
-    logger.warn(
-      { path, err },
-      'failed to unlink server connection profile file',
-    );
-    return { ok: false, reason: 'unlink_failed', detail: String(err) };
+    logger.warn({ path, err }, "failed to unlink server connection profile file");
+    return { ok: false, reason: "unlink_failed", detail: String(err) };
   }
 }

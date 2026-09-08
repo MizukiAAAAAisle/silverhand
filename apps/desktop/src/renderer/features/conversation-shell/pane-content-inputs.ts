@@ -1,23 +1,23 @@
-import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
-import type { JumpPhase } from '@/features/channels/messageJumpPhase';
-import type { ResolvedChannelMembership } from '@/features/channels/use-channel-membership';
-import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
-import type { ConversationPaneDescriptor } from '@/features/conversations/pane-descriptor';
+import type { WorkspaceChannelReference } from "@/components/chat/ConversationRef";
+import type { JumpPhase } from "@/features/channels/messageJumpPhase";
+import type { ResolvedChannelMembership } from "@/features/channels/use-channel-membership";
+import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import type { ConversationPaneDescriptor } from "@/features/conversations/pane-descriptor";
 import type {
   ComposerDirectory,
   ConversationPaneCapabilities,
-} from '@/features/conversations/pane-mode';
-import type { DirectPairPaneProps } from '@/features/direct-pairs/hooks';
-import type { AdvancedSearchSeed } from '@/features/search/advanced-search-seed';
-import type { ChannelListItem } from '@/features/workspaces/hooks';
-import type { SecondaryDescriptor, SecondaryViewInputs } from '@/lib/secondary-pane';
-import type { RouteState } from '@/router';
-import type { ConversationVisibility } from '@silverhand/shared';
-import type { PaneAttachmentRequest } from './conversation-shell-models';
+} from "@/features/conversations/pane-mode";
+import type { DirectPairPaneProps } from "@/features/direct-pairs/hooks";
+import type { AdvancedSearchSeed } from "@/features/search/advanced-search-seed";
+import type { ChannelListItem } from "@/features/workspaces/hooks";
+import type { SecondaryDescriptor, SecondaryViewInputs } from "@/lib/secondary-pane";
+import type { RouteState } from "@/router";
+import type { ConversationVisibility } from "@silverhand/shared";
+import type { PaneAttachmentRequest } from "./conversation-shell-models";
 
 export interface PaneContentRead {
   workspaceNameById: (wid: string | null) => string | null;
-  directPair: DirectPairPaneProps['pair'];
+  directPair: DirectPairPaneProps["pair"];
   directPairLoadFailed: boolean;
   directPairNotFound: boolean;
   selectedChannel: ChannelListItem | null;
@@ -86,10 +86,10 @@ export interface PaneContentCommands {
 
 export type PaneContentRoute = Pick<
   RouteState,
-  | 'workspaceId'
-  | 'channelId'
-  | 'directDraftAgentId'
-  | 'threadRootId'
-  | 'agentPanelId'
-  | 'humanPanelId'
+  | "workspaceId"
+  | "channelId"
+  | "directDraftAgentId"
+  | "threadRootId"
+  | "agentPanelId"
+  | "humanPanelId"
 >;

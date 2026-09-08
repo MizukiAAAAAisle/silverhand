@@ -1,13 +1,13 @@
-import { type RefObject, useCallback, useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import type { SearchDto } from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
-import { api } from '@/lib/api';
+import { type RefObject, useCallback, useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import type { SearchDto } from "@silverhand/shared";
+import { apiPaths } from "@silverhand/shared";
+import { api } from "@/lib/api";
 
 export const INLINE_FIND_LIMIT = 500;
 const DEBOUNCE_MS = 200;
 
-export type InlineFindStream = 'mainline' | 'thread';
+export type InlineFindStream = "mainline" | "thread";
 
 export function buildInlineFindParams(input: {
   q: string;
@@ -16,13 +16,13 @@ export function buildInlineFindParams(input: {
   threadRootId?: string;
 }): string {
   const params = new URLSearchParams();
-  params.set('q', input.q.trim());
-  params.set('conversation_id', input.conversationId);
-  params.set('stream', input.stream);
-  params.set('order', 'recency_desc');
-  params.set('limit', String(INLINE_FIND_LIMIT));
-  if (input.stream === 'thread' && input.threadRootId) {
-    params.set('thread_root_id', input.threadRootId);
+  params.set("q", input.q.trim());
+  params.set("conversation_id", input.conversationId);
+  params.set("stream", input.stream);
+  params.set("order", "recency_desc");
+  params.set("limit", String(INLINE_FIND_LIMIT));
+  if (input.stream === "thread" && input.threadRootId) {
+    params.set("thread_root_id", input.threadRootId);
   }
   return params.toString();
 }
@@ -61,7 +61,7 @@ export function activeMatch(
  *  keystroke (Enter to accept a candidate) belongs to the input method, not the
  *  find (the composer's IME-safe rule). The bar only dispatches / preventDefaults
  *  when this is non-null, so it never steals unhandled keys. */
-export type InlineFindKeyAction = 'next' | 'prev' | 'close' | null;
+export type InlineFindKeyAction = "next" | "prev" | "close" | null;
 export function inlineFindKeyAction(e: {
   key: string;
   shiftKey: boolean;
@@ -69,14 +69,14 @@ export function inlineFindKeyAction(e: {
 }): InlineFindKeyAction {
   if (e.isComposing) return null;
   switch (e.key) {
-    case 'Enter':
-      return e.shiftKey ? 'prev' : 'next';
-    case 'ArrowDown':
-      return 'next';
-    case 'ArrowUp':
-      return 'prev';
-    case 'Escape':
-      return 'close';
+    case "Enter":
+      return e.shiftKey ? "prev" : "next";
+    case "ArrowDown":
+      return "next";
+    case "ArrowUp":
+      return "prev";
+    case "Escape":
+      return "close";
     default:
       return null;
   }
@@ -88,10 +88,10 @@ interface InlineFindData {
   truncated: boolean;
 }
 
-export function toChronologicalMatchIds(results: SearchDto['results']): string[] {
+export function toChronologicalMatchIds(results: SearchDto["results"]): string[] {
   const ids: string[] = [];
   for (const r of results) {
-    if (r.type === 'message') ids.push(r.message.id);
+    if (r.type === "message") ids.push(r.message.id);
   }
   ids.reverse();
   return ids;
@@ -103,11 +103,7 @@ export function toChronologicalMatchIds(results: SearchDto['results']): string[]
  *  lives HERE, on the query source, not only on the visible toggle — a
  *  non-member (or a viewer whose membership is revoked mid-search) must never
  *  reach the member-only endpoint. Pure — unit-tested. */
-export function inlineFindQueryEnabled(
-  open: boolean,
-  available: boolean,
-  q: string,
-): boolean {
+export function inlineFindQueryEnabled(open: boolean, available: boolean, q: string): boolean {
   return open && available && q.trim().length > 0;
 }
 
@@ -121,7 +117,7 @@ function useInlineFindQuery(input: {
   const q = input.q.trim();
   return useQuery<InlineFindData>({
     queryKey: [
-      'inline-find',
+      "inline-find",
       input.conversationId,
       input.stream,
       input.threadRootId ?? null,
@@ -130,7 +126,7 @@ function useInlineFindQuery(input: {
     enabled: input.enabled,
     // Keep the previous result visible while the next query resolves, so the
     // counter / marks don't flicker to empty between keystrokes.
-    placeholderData: prev => prev,
+    placeholderData: (prev) => prev,
     staleTime: 5_000,
     queryFn: async () => {
       const qs = buildInlineFindParams({
@@ -197,16 +193,16 @@ export function useInlineFindController(input: {
 }): InlineFindController {
   const { conversationId, stream, threadRootId, onNavigate, enabled = true } = input;
   const [open, setOpen] = useState(false);
-  const [query, setQueryState] = useState('');
-  const [debounced, setDebounced] = useState('');
+  const [query, setQueryState] = useState("");
+  const [debounced, setDebounced] = useState("");
   const [activeIndex, setActiveIndex] = useState(-1);
 
   // Reset when the panel's scope changes (switch channel, or reopen the pane
   // for a different thread root) so state never leaks across conversations.
   useEffect(() => {
     setOpen(false);
-    setQueryState('');
-    setDebounced('');
+    setQueryState("");
+    setDebounced("");
     setActiveIndex(-1);
   }, [conversationId, threadRootId]);
 
@@ -216,8 +212,8 @@ export function useInlineFindController(input: {
   useEffect(() => {
     if (enabled) return;
     setOpen(false);
-    setQueryState('');
-    setDebounced('');
+    setQueryState("");
+    setDebounced("");
     setActiveIndex(-1);
   }, [enabled]);
 
@@ -240,13 +236,12 @@ export function useInlineFindController(input: {
   // one debounce interval (Cindy #task:1335); while typing, the debounced term
   // still drives what's actually searched/marked. `enabled` gates it too so a
   // downgrade clears marks/counter the same render.
-  const hasActiveQuery =
-    open && enabled && query.trim().length > 0 && debounced.trim().length > 0;
+  const hasActiveQuery = open && enabled && query.trim().length > 0 && debounced.trim().length > 0;
   const matchIds = hasActiveQuery ? (result.data?.matchIds ?? []) : [];
   const truncated = hasActiveQuery ? (result.data?.truncated ?? false) : false;
   // Stable value key: fire the "new results" effect only when the actual match
   // set changes, not on every query-object identity change.
-  const matchKey = matchIds.join(',');
+  const matchKey = matchIds.join(",");
 
   // New result set → land on the NEWEST match (last index, since matchIds are
   // chronological) and navigate to it: the find defaults to the most recent hit
@@ -283,8 +278,8 @@ export function useInlineFindController(input: {
   // re-jumping to — the previous search.
   const close = useCallback(() => {
     setOpen(false);
-    setQueryState('');
-    setDebounced('');
+    setQueryState("");
+    setDebounced("");
     setActiveIndex(-1);
   }, []);
   const setQuery = useCallback((q: string) => setQueryState(q), []);
@@ -299,7 +294,7 @@ export function useInlineFindController(input: {
     close,
     query,
     setQuery,
-    highlightQuery: inlineFindQueryEnabled(open, enabled, query) ? debounced.trim() : '',
+    highlightQuery: inlineFindQueryEnabled(open, enabled, query) ? debounced.trim() : "",
     matchCount: matchIds.length,
     truncated,
     isFetching: result.isFetching,
@@ -333,7 +328,7 @@ export function useInlineFindHotkey(opts: {
   useEffect(() => {
     if (!enabled) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'f' || !e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key !== "f" || !e.metaKey || e.ctrlKey || e.altKey) return;
       const root = rootRef.current;
       if (!root) return;
       const active = document.activeElement;
@@ -344,7 +339,7 @@ export function useInlineFindHotkey(opts: {
         onOpen();
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, [rootRef, enabled, isPrimary, onOpen]);
 }

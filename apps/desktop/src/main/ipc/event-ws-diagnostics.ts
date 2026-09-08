@@ -1,21 +1,21 @@
-import type { GuardedIpcRegistrar } from './guarded-ipc.js';
+import type { GuardedIpcRegistrar } from "./guarded-ipc.js";
 
 interface EventWsDiagnosticLogger {
   info(fields: Record<string, unknown>, message: string): void;
 }
 
 const EVENT_WS_DIAGNOSTIC_KINDS: ReadonlySet<string> = new Set([
-  'socket_open',
-  'socket_close',
-  'authenticated',
-  'subscribed',
-  'message_event',
-  'live_gap',
-  'resume_sent',
-  'snapshot_required',
-  'orphan_frame',
-  'markSatisfied_no_floor',
-  'satisfied_pending_overflow',
+  "socket_open",
+  "socket_close",
+  "authenticated",
+  "subscribed",
+  "message_event",
+  "live_gap",
+  "resume_sent",
+  "snapshot_required",
+  "orphan_frame",
+  "markSatisfied_no_floor",
+  "satisfied_pending_overflow",
 ] as const);
 
 interface RendererEventWsDiagnostic {
@@ -35,25 +35,23 @@ export function registerEventWsDiagnosticIpcHandler(opts: {
   getLogger: () => EventWsDiagnosticLogger | null;
   ipc: GuardedIpcRegistrar;
 }): void {
-  opts.ipc.handle('eventWs:diagnostic', (_event, input: unknown) => {
+  opts.ipc.handle("eventWs:diagnostic", (_event, input: unknown) => {
     const diagnostic = normalizeRendererEventWsDiagnostic(input);
     if (!diagnostic) return;
     opts.getLogger()?.info(
       {
-        category: 'event_ws.renderer',
-        source: 'renderer',
+        category: "event_ws.renderer",
+        source: "renderer",
         ...diagnostic,
         conversationId: conversationIdFromWsDiagnosticScope(diagnostic.scope),
       },
-      'event ws renderer diagnostic',
+      "event ws renderer diagnostic",
     );
   });
 }
 
-function normalizeRendererEventWsDiagnostic(
-  input: unknown,
-): RendererEventWsDiagnostic | null {
-  if (!input || typeof input !== 'object') return null;
+function normalizeRendererEventWsDiagnostic(input: unknown): RendererEventWsDiagnostic | null {
+  if (!input || typeof input !== "object") return null;
   const record = input as Record<string, unknown>;
   const kind = boundedString(record.kind, 64);
   if (!kind || !EVENT_WS_DIAGNOSTIC_KINDS.has(kind)) return null;
@@ -66,26 +64,20 @@ function normalizeRendererEventWsDiagnostic(
   out.lastSeq = safeInteger(record.lastSeq);
   out.expectedSeq = safeInteger(record.expectedSeq);
   out.code = safeInteger(record.code);
-  if (typeof record.wasClean === 'boolean') out.wasClean = record.wasClean;
+  if (typeof record.wasClean === "boolean") out.wasClean = record.wasClean;
   return out;
 }
 
 function boundedString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== 'string') return undefined;
+  if (typeof value !== "string") return undefined;
   if (value.length === 0) return undefined;
   return value.length <= maxLength ? value : value.slice(0, maxLength);
 }
 
 function safeInteger(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isSafeInteger(value)
-    ? value
-    : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
 }
 
-function conversationIdFromWsDiagnosticScope(
-  scope: string | undefined,
-): string | undefined {
-  return scope?.startsWith('conversation:')
-    ? scope.slice('conversation:'.length)
-    : undefined;
+function conversationIdFromWsDiagnosticScope(scope: string | undefined): string | undefined {
+  return scope?.startsWith("conversation:") ? scope.slice("conversation:".length) : undefined;
 }

@@ -1,16 +1,8 @@
-import { taskWorkspaceId } from './taskPlace.js';
-import {
-  useQuery,
-  type QueryClient,
-  type UseQueryResult,
-} from '@tanstack/react-query';
-import {
-  apiPaths,
-  type TaskChangedEvent,
-  type TaskSummaryDto,
-} from '@silverhand/shared';
-import { api, ApiError } from '@/lib/api';
-import { restartRacingRead } from './racingRead';
+import { taskWorkspaceId } from "./taskPlace.js";
+import { useQuery, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { apiPaths, type TaskChangedEvent, type TaskSummaryDto } from "@silverhand/shared";
+import { api, ApiError } from "@/lib/api";
+import { restartRacingRead } from "./racingRead";
 
 /**
  * Fetch a single task by its board-scoped task_number for inline
@@ -94,10 +86,10 @@ export function taskBoardCacheScope(
   // unresolvable.
   const workspaceId = coord?.workspaceId ?? null;
   const conversationId = coord?.conversationId ?? null;
-  if (typeof workspaceId === 'string' && workspaceId.length > 0) {
+  if (typeof workspaceId === "string" && workspaceId.length > 0) {
     return `workspace:${workspaceId}` as TaskBoardCacheScope;
   }
-  if (typeof conversationId === 'string' && conversationId.length > 0) {
+  if (typeof conversationId === "string" && conversationId.length > 0) {
     return `direct_pair:${conversationId}` as TaskBoardCacheScope;
   }
   return null;
@@ -106,7 +98,7 @@ export function taskBoardCacheScope(
 export const taskByNumberKey = (
   scope: TaskBoardCacheScope | null | undefined,
   taskNumber: number | null | undefined,
-) => ['task-by-number', scope ?? null, taskNumber ?? null] as const;
+) => ["task-by-number", scope ?? null, taskNumber ?? null] as const;
 
 /**
  * What one event did to the by-number entries it names.
@@ -131,27 +123,24 @@ export type TaskByNumberPatchOutcome =
    *  one. A first load still IN FLIGHT is restarted, because it was issued before
    *  this event and would otherwise commit pre-event state as the chip's initial
    *  value. */
-  | 'absent'
+  | "absent"
   /** A cached MISS that has become a real task — only a read can build it. */
-  | 'invalidated'
+  | "invalidated"
   /** The snapshot says what the entry already reads. */
-  | 'unchanged'
-  | 'patched';
+  | "unchanged"
+  | "patched";
 
-function sameTaskChangedFields(
-  row: TaskSummaryDto,
-  task: TaskChangedEvent,
-): boolean {
+function sameTaskChangedFields(row: TaskSummaryDto, task: TaskChangedEvent): boolean {
   return (
-    row.id === task.task_id
-    && taskWorkspaceId(row) === task.workspace_id
-    && row.place.conversation_id === task.conversation_id
-    && row.thread_root_id === task.thread_root_id
-    && row.status === task.status
-    && row.title === task.title
-    && row.closed_at === task.closed_at
-    && (row.assignee?.id ?? null) === (task.assignee?.id ?? null)
-    && (row.assignee?.type ?? null) === (task.assignee?.type ?? null)
+    row.id === task.task_id &&
+    taskWorkspaceId(row) === task.workspace_id &&
+    row.place.conversation_id === task.conversation_id &&
+    row.thread_root_id === task.thread_root_id &&
+    row.status === task.status &&
+    row.title === task.title &&
+    row.closed_at === task.closed_at &&
+    (row.assignee?.id ?? null) === (task.assignee?.id ?? null) &&
+    (row.assignee?.type ?? null) === (task.assignee?.type ?? null)
   );
 }
 
@@ -163,7 +152,7 @@ function patchTaskByNumberEntry(
   key: ReturnType<typeof taskByNumberKey>,
   prev: TaskSummaryDto,
   task: TaskChangedEvent,
-  fetchStatus: 'fetching' | 'paused' | 'idle',
+  fetchStatus: "fetching" | "paused" | "idle",
 ): void {
   qc.setQueryData<TaskSummaryDto | null>(key, {
     ...prev,
@@ -177,7 +166,7 @@ function patchTaskByNumberEntry(
     assignee: task.assignee,
     closed_at: task.closed_at,
   });
-  if (fetchStatus === 'fetching') {
+  if (fetchStatus === "fetching") {
     restartRacingRead(qc, key);
   }
 }
@@ -197,11 +186,7 @@ function eventScopeMatchesKey(
   eventScope: TaskBoardCacheScope | null,
   task: TaskChangedEvent,
 ): boolean {
-  return (
-    eventScope !== null
-    && scope === eventScope
-    && taskNumber === task.task_number
-  );
+  return eventScope !== null && scope === eventScope && taskNumber === task.task_number;
 }
 
 /**
@@ -231,20 +216,20 @@ export function applyTaskChangedToTaskByNumberCache(
   qc: QueryClient,
   task: TaskChangedEvent,
 ): TaskByNumberPatchOutcome {
-  const entries = qc.getQueryCache().findAll({ queryKey: ['task-by-number'] });
+  const entries = qc.getQueryCache().findAll({ queryKey: ["task-by-number"] });
   // The event's board scope, projected from the SAME source the consumer uses.
   // `pair_key` on the resolved DTO is deliberately NOT consulted — one source.
   const eventScope = taskBoardCacheScope({
     workspaceId: task.workspace_id,
     conversationId: task.conversation_id,
   });
-  let outcome: TaskByNumberPatchOutcome = 'absent';
+  let outcome: TaskByNumberPatchOutcome = "absent";
   const raise = (next: TaskByNumberPatchOutcome) => {
     // Precedence for the aggregate: patched > invalidated > absent. `unchanged`
     // only survives if it is the sole signal from a matched entry.
-    if (next === 'patched') outcome = 'patched';
-    else if (next === 'invalidated' && outcome !== 'patched') outcome = 'invalidated';
-    else if (next === 'unchanged' && outcome === 'absent') outcome = 'unchanged';
+    if (next === "patched") outcome = "patched";
+    else if (next === "invalidated" && outcome !== "patched") outcome = "invalidated";
+    else if (next === "unchanged" && outcome === "absent") outcome = "unchanged";
   };
 
   for (const entry of entries) {
@@ -275,7 +260,7 @@ export function applyTaskChangedToTaskByNumberCache(
     if (state.data === null) {
       if (eventScopeMatchesKey(scope, taskNumber, eventScope, task)) {
         void qc.invalidateQueries({ queryKey: key, exact: true });
-        raise('invalidated');
+        raise("invalidated");
       }
       continue;
     }
@@ -285,11 +270,11 @@ export function applyTaskChangedToTaskByNumberCache(
     const prev = state.data;
     if (prev.id !== task.task_id) continue;
     if (sameTaskChangedFields(prev, task)) {
-      raise('unchanged');
+      raise("unchanged");
       continue;
     }
     patchTaskByNumberEntry(qc, key, prev, task, state.fetchStatus);
-    raise('patched');
+    raise("patched");
   }
 
   return outcome;
@@ -312,13 +297,10 @@ export function applyTaskChangedToTaskByNumberCache(
  * indirectly by any conversation on it, so a DirectPair task — with no
  * workspace coordinate — is reachable by the same face (#task:2041).
  */
-export function taskByNumberPath(
-  conversationId: string,
-  taskNumber: number,
-): string {
+export function taskByNumberPath(conversationId: string, taskNumber: number): string {
   const qs = new URLSearchParams();
-  qs.set('conversation_id', conversationId);
-  qs.set('task_number', String(taskNumber));
+  qs.set("conversation_id", conversationId);
+  qs.set("task_number", String(taskNumber));
   return `${apiPaths.taskByNumber}?${qs.toString()}`;
 }
 
@@ -336,11 +318,11 @@ export function canLookupTaskByNumber(
   taskNumber: number | null | undefined,
 ): boolean {
   return (
-    typeof conversationId === 'string'
-    && conversationId.length > 0
-    && typeof taskNumber === 'number'
-    && Number.isInteger(taskNumber)
-    && taskNumber > 0
+    typeof conversationId === "string" &&
+    conversationId.length > 0 &&
+    typeof taskNumber === "number" &&
+    Number.isInteger(taskNumber) &&
+    taskNumber > 0
   );
 }
 
@@ -375,9 +357,7 @@ export async function fetchTaskByNumber(
   taskNumber: number,
 ): Promise<TaskSummaryDto | null> {
   try {
-    const res = await api<{ task: TaskSummaryDto }>(
-      taskByNumberPath(conversationId, taskNumber),
-    );
+    const res = await api<{ task: TaskSummaryDto }>(taskByNumberPath(conversationId, taskNumber));
     return res.task;
   } catch (err) {
     // A resolved miss, not a failure — so it needs no `retry` policy: the query
@@ -407,8 +387,7 @@ export function useTaskByNumber(
 
   return useQuery({
     queryKey: taskByNumberKey(scope, taskNumber),
-    queryFn: () =>
-      fetchTaskByNumber(conversationId as string, taskNumber as number),
+    queryFn: () => fetchTaskByNumber(conversationId as string, taskNumber as number),
     enabled,
     staleTime: TASK_REF_STALE_MS,
     gcTime: TASK_REF_GC_MS,

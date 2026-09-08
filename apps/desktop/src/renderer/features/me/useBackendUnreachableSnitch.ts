@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
-import type { QueryClient } from '@tanstack/react-query';
-import { useQueryClient } from '@tanstack/react-query';
-import { ApiError } from '@/lib/api';
+import { useEffect, useState } from "react";
+import type { QueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
+import { ApiError } from "@/lib/api";
 
 export interface BackendUnreachableSnitch {
   /** Whether the banner should be shown. */
@@ -23,7 +23,7 @@ export interface BackendUnreachableSnitch {
  * - String / object-with-fake-kind → false (no duck-typing).
  */
 export function isBackendUnreachableError(err: unknown): boolean {
-  return err instanceof ApiError && err.kind === 'backend_unreachable';
+  return err instanceof ApiError && err.kind === "backend_unreachable";
 }
 
 /**
@@ -35,15 +35,15 @@ export function isBackendUnreachableError(err: unknown): boolean {
 export interface SnitchCacheEvent {
   status: string;
   error: unknown;
-  backendReachability?: 'neutral';
+  backendReachability?: "neutral";
 }
 
 export function decideNextVisible(event: SnitchCacheEvent): boolean | null {
-  if (event.backendReachability === 'neutral') return null;
-  if (event.status === 'error') {
+  if (event.backendReachability === "neutral") return null;
+  if (event.status === "error") {
     return isBackendUnreachableError(event.error) ? true : null;
   }
-  if (event.status === 'success') return false;
+  if (event.status === "success") return false;
   return null;
 }
 
@@ -92,8 +92,7 @@ export function useBackendUnreachableSnitch(
         // Copy the reachability marker off the query's meta so a
         // local-IPC poll (e.g. backend:info, #task:1462) can't toggle
         // the banner. Read from meta, not the query key string.
-        backendReachability:
-          q.meta?.backendReachability === 'neutral' ? 'neutral' : undefined,
+        backendReachability: q.meta?.backendReachability === "neutral" ? "neutral" : undefined,
       });
     };
 

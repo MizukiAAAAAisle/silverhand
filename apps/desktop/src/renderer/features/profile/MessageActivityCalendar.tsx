@@ -1,14 +1,14 @@
-import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import * as Tooltip from '@radix-ui/react-tooltip';
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   messageActivityCalendar,
   messageActivityLevel,
   type MessageActivityDay,
-} from './message-activity-calendar';
-import './message-activity.css';
+} from "./message-activity-calendar";
+import "./message-activity.css";
 
 interface Props {
-  year: number | 'recent';
+  year: number | "recent";
   days: readonly MessageActivityDay[];
   today: string;
 }
@@ -24,7 +24,7 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
     const container = scrollContainer.current;
 
     if (container) {
-      container.scrollLeft = year === 'recent' ? container.scrollWidth : 0;
+      container.scrollLeft = year === "recent" ? container.scrollWidth : 0;
     }
   }, [year, today]);
 
@@ -37,18 +37,18 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
 
   const columns = cells.length / 7;
   const monthLabels = cells.flatMap((cell, index) =>
-    (year === 'recent' ? cell.visible : cell.date.startsWith(`${year}-`)) &&
-    cell.date.endsWith('-01')
+    (year === "recent" ? cell.visible : cell.date.startsWith(`${year}-`)) &&
+    cell.date.endsWith("-01")
       ? [{ column: Math.floor(index / 7) + 1, date: cell.date }]
       : [],
   );
 
-  const monthFormat = new Intl.DateTimeFormat('en-US', { month: 'short', timeZone: 'UTC' });
-  const dateFormat = new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    timeZone: 'UTC',
+  const monthFormat = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" });
+  const dateFormat = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
   });
 
   return (
@@ -56,7 +56,7 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
       <div ref={scrollContainer} className="message-activity-calendar">
         <div
           className="message-activity-plot"
-          style={{ '--activity-columns': columns } as CSSProperties}
+          style={{ "--activity-columns": columns } as CSSProperties}
         >
           <div className="message-activity-months" aria-hidden>
             {monthLabels.map((month) => (
@@ -89,7 +89,7 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
                           type="button"
                           className="message-activity-cell"
                           data-level={messageActivityLevel(cell.count)}
-                          aria-label={`${cell.date}: ${cell.count.toLocaleString()} ${cell.count === 1 ? 'message' : 'messages'}`}
+                          aria-label={`${cell.date}: ${cell.count.toLocaleString()} ${cell.count === 1 ? "message" : "messages"}`}
                           tabIndex={cell.date === activeDate ? 0 : -1}
                           ref={(node) => {
                             if (node) {
@@ -134,8 +134,8 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
                             {dateFormat.format(new Date(`${cell.date}T00:00:00Z`))}
                           </div>
                           <div className="mt-1 text-text-secondary">
-                            {cell.count.toLocaleString()}{' '}
-                            {cell.count === 1 ? 'message' : 'messages'}
+                            {cell.count.toLocaleString()}{" "}
+                            {cell.count === 1 ? "message" : "messages"}
                           </div>
                         </Tooltip.Content>
                       </Tooltip.Portal>

@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { paneChrome } from '@/components/layout/pane-chrome';
+import type { ReactNode } from "react";
+import { paneChrome } from "@/components/layout/pane-chrome";
 
 export function AgentPageLayout({
   host,
@@ -7,7 +7,7 @@ export function AgentPageLayout({
   navigation,
   children,
 }: {
-  host: 'agent' | 'side';
+  host: "agent" | "side";
   header: ReactNode;
   navigation?: ReactNode;
   children: ReactNode;

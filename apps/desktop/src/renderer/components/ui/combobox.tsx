@@ -1,8 +1,8 @@
-import { useId, useRef, useState, type KeyboardEvent } from 'react';
-import * as Popover from '@radix-ui/react-popover';
-import { ChevronDown } from 'lucide-react';
-import { cn } from '@/lib/cn';
-import { dropdownPanelProps } from './dropdownPanel';
+import { useId, useRef, useState, type KeyboardEvent } from "react";
+import * as Popover from "@radix-ui/react-popover";
+import { ChevronDown } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { dropdownPanelProps } from "./dropdownPanel";
 
 /**
  * Editable combobox — a free-text input paired with a suggestions dropdown.
@@ -55,13 +55,13 @@ export function Combobox({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       e.preventDefault();
       onCommit(value);
       setOpen(false);
-    } else if (e.key === 'Escape') {
+    } else if (e.key === "Escape") {
       setOpen(false);
-    } else if (e.key === 'ArrowDown' && hasSuggestions && !open) {
+    } else if (e.key === "ArrowDown" && hasSuggestions && !open) {
       setOpen(true);
     }
   };
@@ -72,9 +72,9 @@ export function Combobox({
         <div
           data-input=""
           className={cn(
-            'flex items-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating transition-colors',
-            'hover:border-[color:var(--border-control-hover)]',
-            'focus-within:border-border-focus',
+            "flex items-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating transition-colors",
+            "hover:border-[color:var(--border-control-hover)]",
+            "focus-within:border-border-focus",
             className,
           )}
         >
@@ -88,7 +88,7 @@ export function Combobox({
             aria-label={ariaLabel}
             value={value}
             placeholder={placeholder}
-            onChange={e => {
+            onChange={(e) => {
               onChange(e.target.value);
               if (hasSuggestions) setOpen(true);
             }}
@@ -115,9 +115,9 @@ export function Combobox({
               tabIndex={-1}
               aria-label="Show suggestions"
               // Keep input focus; just toggle the list.
-              onMouseDown={e => e.preventDefault()}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
-                setOpen(o => !o);
+                setOpen((o) => !o);
                 inputRef.current?.focus();
               }}
               className="flex shrink-0 items-center px-1.5 text-text-muted hover:text-text-primary"
@@ -132,24 +132,24 @@ export function Combobox({
           id={listId}
           align="start"
           sideOffset={4}
-          onOpenAutoFocus={e => e.preventDefault()}
+          onOpenAutoFocus={(e) => e.preventDefault()}
           {...dropdownPanelProps(
-            'poster',
-            'z-[var(--z-in-dialog)] max-h-[42vh] min-w-[var(--radix-popover-trigger-width)] overflow-y-auto p-1',
+            "poster",
+            "z-[var(--z-in-dialog)] max-h-[42vh] min-w-[var(--radix-popover-trigger-width)] overflow-y-auto p-1",
           )}
         >
-          {suggestions.map(s => (
+          {suggestions.map((s) => (
             <button
               key={s}
               type="button"
               // preventDefault so the input doesn't blur-commit before this
               // click lands (which would fire onCommit twice with the draft).
-              onMouseDown={e => e.preventDefault()}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => pick(s)}
               className={cn(
-                'flex w-full items-center rounded-[var(--select-item-radius)] px-2 py-1.5 text-left text-sm text-text-primary outline-none',
-                'hover:bg-bg-hover',
-                s === value ? 'bg-bg-hover' : '',
+                "flex w-full items-center rounded-[var(--select-item-radius)] px-2 py-1.5 text-left text-sm text-text-primary outline-none",
+                "hover:bg-bg-hover",
+                s === value ? "bg-bg-hover" : "",
               )}
             >
               {s}

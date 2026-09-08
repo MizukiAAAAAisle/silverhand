@@ -26,7 +26,7 @@
  * on input order.
  */
 
-export type ListSortMode = 'recent' | 'manual';
+export type ListSortMode = "recent" | "manual";
 
 export interface SortableEntry {
   /** Stable identity — final tiebreak so equal-rank/equal-time items have a
@@ -55,7 +55,11 @@ function presentFirst(aHas: boolean, bHas: boolean): number | null {
 function compareRecent(a: SortableEntry, b: SortableEntry): number {
   const presence = presentFirst(a.lastAccessedAt !== null, b.lastAccessedAt !== null);
   if (presence !== null) return presence;
-  if (a.lastAccessedAt !== null && b.lastAccessedAt !== null && a.lastAccessedAt !== b.lastAccessedAt) {
+  if (
+    a.lastAccessedAt !== null &&
+    b.lastAccessedAt !== null &&
+    a.lastAccessedAt !== b.lastAccessedAt
+  ) {
     return b.lastAccessedAt - a.lastAccessedAt; // most-recent first
   }
   return byCreatedThenId(a, b);
@@ -71,10 +75,8 @@ function compareManual(a: SortableEntry, b: SortableEntry): number {
 }
 
 /** The comparator for a mode, over the normalized `SortableEntry` shape. */
-export function modeComparator(
-  mode: ListSortMode,
-): (a: SortableEntry, b: SortableEntry) => number {
-  return mode === 'manual' ? compareManual : compareRecent;
+export function modeComparator(mode: ListSortMode): (a: SortableEntry, b: SortableEntry) => number {
+  return mode === "manual" ? compareManual : compareRecent;
 }
 
 /**

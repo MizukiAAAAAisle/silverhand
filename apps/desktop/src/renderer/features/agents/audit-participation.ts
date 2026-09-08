@@ -34,11 +34,8 @@
  * every authority below is nullable — `null` is "no answer", and there is no way
  * to spell it as an empty set by accident.
  */
-import type { AgentAuditChatSummary } from '@silverhand/shared';
-import {
-  deriveChannelMembership,
-  type MembershipCarrier,
-} from '@/features/channels/membership';
+import type { AgentAuditChatSummary } from "@silverhand/shared";
+import { deriveChannelMembership, type MembershipCarrier } from "@/features/channels/membership";
 
 /**
  * The viewer-scoped authorities a row is judged against. `null` means the
@@ -63,7 +60,7 @@ export interface ViewerParticipation {
 /** Why a row is inert: the viewer is provably not in it, or no viewer authority
  *  could answer. The second is not a permission statement and must not be drawn
  *  as one. */
-export type AgentChatBlockedReason = 'not-a-participant' | 'unverified';
+export type AgentChatBlockedReason = "not-a-participant" | "unverified";
 
 /** The bit of a viewer workspace this module reads: its id, plus the DM channels
  *  it fronts (an agent-home container names them, a regular workspace has none —
@@ -81,8 +78,8 @@ export interface ViewerWorkspaceCoordinate {
  * the row must not re-derive that from a nullable field at the call site.
  */
 export type AgentChatRowAccess =
-  | { kind: 'open'; conversationId: string; workspaceId: string | null }
-  | { kind: 'blocked'; reason: AgentChatBlockedReason };
+  | { kind: "open"; conversationId: string; workspaceId: string | null }
+  | { kind: "blocked"; reason: AgentChatBlockedReason };
 
 /**
  * Collect the viewer's joined conversation ids out of however many channel lists
@@ -103,7 +100,7 @@ export function collectMemberConversationIds(
   for (const list of lists) {
     if (!list) continue;
     for (const item of list) {
-      if (deriveChannelMembership(item) === 'member') ids.add(item.id);
+      if (deriveChannelMembership(item) === "member") ids.add(item.id);
     }
   }
   return ids;
@@ -127,11 +124,9 @@ export function viewerWorkspaceForChat(
   chat: AgentAuditChatSummary,
   viewerWorkspaces: readonly ViewerWorkspaceCoordinate[],
 ): string | null {
-  if (chat.placement_kind !== 'workspace') return null;
-  if (viewerWorkspaces.some(w => w.id === chat.workspace_id)) return chat.workspace_id;
-  const home = viewerWorkspaces.find(w =>
-    w.dm_channel_ids?.includes(chat.conversation_id),
-  );
+  if (chat.placement_kind !== "workspace") return null;
+  if (viewerWorkspaces.some((w) => w.id === chat.workspace_id)) return chat.workspace_id;
+  const home = viewerWorkspaces.find((w) => w.dm_channel_ids?.includes(chat.conversation_id));
   return home?.id ?? null;
 }
 
@@ -147,39 +142,39 @@ export function decideAgentChatRowAccess(
   chat: AgentAuditChatSummary,
   viewer: ViewerParticipation,
 ): AgentChatRowAccess {
-  if (chat.placement_kind === 'direct_pair') {
+  if (chat.placement_kind === "direct_pair") {
     // No pair answer ⇒ no claim. Silence here would otherwise tell the viewer
     // they are not in their own line.
-    if (!viewer.directPairIds) return { kind: 'blocked', reason: 'unverified' };
+    if (!viewer.directPairIds) return { kind: "blocked", reason: "unverified" };
     return viewer.directPairIds.has(chat.conversation_id)
       ? {
-          kind: 'open',
+          kind: "open",
           conversationId: chat.conversation_id,
           // A pair has no workspace coordinate, and that is the whole reason it
           // routes differently (#task:2035).
           workspaceId: null,
         }
-      : { kind: 'blocked', reason: 'not-a-participant' };
+      : { kind: "blocked", reason: "not-a-participant" };
   }
 
-  if (!viewer.workspaces) return { kind: 'blocked', reason: 'unverified' };
+  if (!viewer.workspaces) return { kind: "blocked", reason: "unverified" };
   const holder = viewerWorkspaceForChat(chat, viewer.workspaces);
   // A PROVEN negative that needs no channel table: the viewer holds no container
   // that could contain this conversation.
-  if (!holder) return { kind: 'blocked', reason: 'not-a-participant' };
+  if (!holder) return { kind: "blocked", reason: "not-a-participant" };
   if (!viewer.resolvedWorkspaceIds.has(holder)) {
-    return { kind: 'blocked', reason: 'unverified' };
+    return { kind: "blocked", reason: "unverified" };
   }
   return viewer.memberConversationIds.has(chat.conversation_id)
     ? {
-        kind: 'open',
+        kind: "open",
         conversationId: chat.conversation_id,
         // The holder, not `chat.workspace_id`: for a `dm_channel` the row's own
         // workspace is the agent's home, while the viewer navigates through the
         // container they actually hold.
         workspaceId: holder,
       }
-    : { kind: 'blocked', reason: 'not-a-participant' };
+    : { kind: "blocked", reason: "not-a-participant" };
 }
 
 /**
@@ -206,7 +201,7 @@ export function viewerAuthoritiesSettled(input: {
   channelTablesPending: readonly boolean[];
 }): boolean {
   if (input.workspacesPending || input.pairsPending) return false;
-  return input.channelTablesPending.every(pending => !pending);
+  return input.channelTablesPending.every((pending) => !pending);
 }
 
 /**

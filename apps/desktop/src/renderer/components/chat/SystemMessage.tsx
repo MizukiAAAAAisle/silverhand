@@ -3,27 +3,24 @@ import {
   type SystemSubtype,
   type UserDto,
   resolveSubtype,
-} from '@silverhand/shared';
-import type { ChannelReference } from './ChannelRef';
-import type { WorkspaceChannelReference } from './ConversationRef';
-import {
-  type SystemMessageRenderer,
-  GenericNarrationFallback,
-} from './system-message/shared';
-import { ScheduleFireBanner } from './system-message/schedule-fire';
-import { TaskEventRow } from './system-message/task-event';
+} from "@silverhand/shared";
+import type { ChannelReference } from "./ChannelRef";
+import type { WorkspaceChannelReference } from "./ConversationRef";
+import { type SystemMessageRenderer, GenericNarrationFallback } from "./system-message/shared";
+import { ScheduleFireBanner } from "./system-message/schedule-fire";
+import { TaskEventRow } from "./system-message/task-event";
 import {
   ChannelContextCard,
   ChildContextCard,
   ThreadAnchorCard,
-} from './system-message/context-cards';
+} from "./system-message/context-cards";
 import {
   ConversationMemberChangeRow,
   MentionCcCard,
   OnboardingRow,
   RenameRow,
   SessionClearedCard,
-} from './system-message/message-cards';
+} from "./system-message/message-cards";
 
 interface SystemMessageProps {
   message: MessageDto;
@@ -51,7 +48,7 @@ interface SystemMessageProps {
 export function SystemMessage(props: SystemMessageProps): JSX.Element {
   const resolution = resolveSubtype(readRawSubtype(props.message.metadata));
   const Renderer =
-    resolution.kind === 'current'
+    resolution.kind === "current"
       ? systemMessageRenderers[resolution.subtype]
       : GenericNarrationFallback;
   // PR-8: every system message renders inside `.system-message-row` so
@@ -77,26 +74,20 @@ export function SystemMessage(props: SystemMessageProps): JSX.Element {
   // the wrapper; the layout CSS (`.system-message-row[data-system-
   // layout="info"]` in `global.css`) does the alignment override.
   const layout =
-    resolution.kind === 'current' && INFO_BLOCK_SUBTYPES.has(resolution.subtype)
-      ? 'info'
+    resolution.kind === "current" && INFO_BLOCK_SUBTYPES.has(resolution.subtype)
+      ? "info"
       : undefined;
   return (
-    <div
-      className="system-message-row"
-      data-system-event-row="1"
-      data-system-layout={layout}
-    >
+    <div className="system-message-row" data-system-event-row="1" data-system-layout={layout}>
       <Renderer {...props} />
     </div>
   );
 }
 
-function readRawSubtype(
-  metadata: MessageDto['metadata'],
-): string | null | undefined {
+function readRawSubtype(metadata: MessageDto["metadata"]): string | null | undefined {
   if (!metadata) return null;
-  const v = (metadata as Record<string, unknown>)['subtype'];
-  return typeof v === 'string' ? v : null;
+  const v = (metadata as Record<string, unknown>)["subtype"];
+  return typeof v === "string" ? v : null;
 }
 
 // ─── Registry ──────────────────────────────────────────────────────────
@@ -167,10 +158,10 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
  * gets to decide which lane the new subtype belongs in.
  */
 const INFO_BLOCK_SUBTYPES: ReadonlySet<SystemSubtype> = new Set<SystemSubtype>([
-  'schedule_fire',
-  'channel_context',
-  'child_context',
-  'thread_anchor',
-  'onboarding',
-  'mention_cc',
+  "schedule_fire",
+  "channel_context",
+  "child_context",
+  "thread_anchor",
+  "onboarding",
+  "mention_cc",
 ]);

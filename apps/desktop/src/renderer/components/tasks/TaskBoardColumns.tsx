@@ -1,31 +1,31 @@
-import { taskChannelLabel } from '../../features/tasks/taskPlace.js';
-import { useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Clock } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
-import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
-import { cn } from '@/lib/cn';
+import { taskChannelLabel } from "../../features/tasks/taskPlace.js";
+import { useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Clock } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import type { TaskStatus, TaskSummaryDto } from "@silverhand/shared";
+import { cn } from "@/lib/cn";
 import {
   boardColumnTotal,
   boardCountLabel,
   type BoardAuthority,
   type BoardCounts,
-} from '@/features/tasks/boardAuthority';
+} from "@/features/tasks/boardAuthority";
 import {
   boardColumnCanGrow,
   boardVisibleItems,
   type BoardColumns,
-} from '@/features/tasks/useBoard';
-import { useColumnEndSentinel } from '@/features/tasks/useColumnWindow';
-import type { ColumnWindow } from '@/features/tasks/columnWindow';
-import { isTaskDrag, readTaskDrag, writeTaskDrag } from '@/features/tasks/taskDnd';
-import { useRelativeTime } from '@/components/chat/useRelativeTime';
-import { ChannelIcon } from '@/components/ChannelIcon';
+} from "@/features/tasks/useBoard";
+import { useColumnEndSentinel } from "@/features/tasks/useColumnWindow";
+import type { ColumnWindow } from "@/features/tasks/columnWindow";
+import { isTaskDrag, readTaskDrag, writeTaskDrag } from "@/features/tasks/taskDnd";
+import { useRelativeTime } from "@/components/chat/useRelativeTime";
+import { ChannelIcon } from "@/components/ChannelIcon";
 import {
   TaskStatusBadge,
   TaskCardContextMenu,
   TASK_STATUS_ICON,
-} from '@/components/tasks/TaskStatusBadge';
-import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
+} from "@/components/tasks/TaskStatusBadge";
+import { TaskDropPlaceholder } from "@/components/tasks/TaskDropPlaceholder";
 
 /**
  * The task board's five-column kanban BODY — the one authority for column
@@ -53,34 +53,34 @@ interface ColumnSpec {
 
 const COLUMNS: ReadonlyArray<ColumnSpec> = [
   {
-    status: 'todo',
-    label: 'Todo',
+    status: "todo",
+    label: "Todo",
     icon: TASK_STATUS_ICON.todo,
-    iconClass: 'text-[color:var(--task-status-todo-solid)]',
+    iconClass: "text-[color:var(--task-status-todo-solid)]",
   },
   {
-    status: 'in_progress',
-    label: 'In progress',
+    status: "in_progress",
+    label: "In progress",
     icon: TASK_STATUS_ICON.in_progress,
-    iconClass: 'text-[color:var(--task-status-in-progress-solid)]',
+    iconClass: "text-[color:var(--task-status-in-progress-solid)]",
   },
   {
-    status: 'in_review',
-    label: 'In review',
+    status: "in_review",
+    label: "In review",
     icon: TASK_STATUS_ICON.in_review,
-    iconClass: 'text-[color:var(--task-status-in-review-solid)]',
+    iconClass: "text-[color:var(--task-status-in-review-solid)]",
   },
   {
-    status: 'done',
-    label: 'Done',
+    status: "done",
+    label: "Done",
     icon: TASK_STATUS_ICON.done,
-    iconClass: 'text-[color:var(--task-status-done-solid)]',
+    iconClass: "text-[color:var(--task-status-done-solid)]",
   },
   {
-    status: 'closed',
-    label: 'Closed',
+    status: "closed",
+    label: "Closed",
     icon: TASK_STATUS_ICON.closed,
-    iconClass: 'text-[color:var(--task-status-closed-solid)]',
+    iconClass: "text-[color:var(--task-status-closed-solid)]",
   },
 ];
 
@@ -127,7 +127,7 @@ export function TaskBoardColumns({
       // each column's own body, so the board itself never scrolls up/down.
       className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto overflow-y-hidden p-4 scrollbar-hide"
     >
-      {COLUMNS.map(col => (
+      {COLUMNS.map((col) => (
         <KanbanColumn
           key={col.status}
           title={col.label}
@@ -142,7 +142,7 @@ export function TaskBoardColumns({
           collapsed={isCollapsed(col.status)}
           onToggleCollapse={() => onToggleCollapse(col.status)}
           onReachEnd={() => onGrow(col.status)}
-          onCardClick={t => onOpenTask(t.id)}
+          onCardClick={(t) => onOpenTask(t.id)}
           onStatusChange={onStatusChange}
           columnClassName={columnClassName}
           cardClassName={cardClassName}
@@ -222,19 +222,19 @@ function KanbanColumn({
       data-tasks-column
       data-status={status}
       data-drop-target={dragOver || undefined}
-      onDragOver={e => {
+      onDragOver={(e) => {
         if (!isTaskDrag(e.dataTransfer)) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
+        e.dataTransfer.dropEffect = "move";
         if (!dragOver) setDragOver(true);
       }}
-      onDragLeave={e => {
+      onDragLeave={(e) => {
         // Ignore leave events bubbling from children — only clear when the
         // pointer actually exits the column box.
         if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
         setDragOver(false);
       }}
-      onDrop={e => {
+      onDrop={(e) => {
         const payload = readTaskDrag(e.dataTransfer);
         setDragOver(false);
         if (!payload) return;
@@ -253,11 +253,11 @@ function KanbanColumn({
         // column, so the live columns don't jitter when Closed folds/unfolds.
         // `min-w-[12rem]` is the readable floor — below it the board scrolls
         // (parent `overflow-x-auto`) rather than letting a card squeeze.
-        'flex min-h-0 max-h-full min-w-[12rem] flex-1 flex-col overflow-hidden rounded-[var(--card-radius)] border border-border-subtle transition-colors',
+        "flex min-h-0 max-h-full min-w-[12rem] flex-1 flex-col overflow-hidden rounded-[var(--card-radius)] border border-border-subtle transition-colors",
         columnClassName,
         // Done + Closed are terminal — dim slightly so the live columns read as
         // the focus.
-        (status === 'done' || status === 'closed') && 'opacity-80',
+        (status === "done" || status === "closed") && "opacity-80",
       )}
     >
       <button
@@ -265,11 +265,11 @@ function KanbanColumn({
         data-tasks-column-header
         onClick={onToggleCollapse}
         aria-expanded={!collapsed}
-        aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${title} column`}
+        aria-label={`${collapsed ? "Expand" : "Collapse"} ${title} column`}
         className="flex w-full shrink-0 cursor-pointer items-center gap-2 border-b border-border-subtle px-3 py-2 text-left transition-colors hover:bg-bg-hover"
       >
         <Chevron className="size-3.5 shrink-0 text-text-muted" aria-hidden />
-        <Icon data-tasks-column-icon className={cn('size-3.5 shrink-0', iconClass)} aria-hidden />
+        <Icon data-tasks-column-icon className={cn("size-3.5 shrink-0", iconClass)} aria-hidden />
         <span className="text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-secondary">
           {title}
         </span>
@@ -278,11 +278,7 @@ function KanbanColumn({
         </span>
       </button>
       {collapsed ? null : (
-        <div
-          ref={bodyRef}
-          data-tasks-column-body
-          className="min-h-0 flex-auto overflow-y-auto p-2"
-        >
+        <div ref={bodyRef} data-tasks-column-body className="min-h-0 flex-auto overflow-y-auto p-2">
           {isLoading ? (
             <p className="px-2 py-3 text-center text-[length:var(--text-meta)] text-text-muted">
               Loading…
@@ -298,12 +294,12 @@ function KanbanColumn({
           ) : (
             <ul className="space-y-1.5">
               {dragOver ? <TaskDropPlaceholder /> : null}
-              {items.map(t => (
+              {items.map((t) => (
                 <li key={t.id}>
                   <TaskCard
                     task={t}
                     onClick={() => onCardClick(t)}
-                    onStatusChange={next => onStatusChange(t.id, next)}
+                    onStatusChange={(next) => onStatusChange(t.id, next)}
                     cardClassName={cardClassName}
                   />
                 </li>
@@ -344,15 +340,15 @@ function TaskCard({
         data-task-number={task.task_number}
         data-task-id={task.id}
         draggable
-        onDragStart={e => {
+        onDragStart={(e) => {
           writeTaskDrag(e.dataTransfer, { taskId: task.id, from: task.status });
           setDragging(true);
         }}
         onDragEnd={() => setDragging(false)}
         className={cn(
-          'group relative min-w-0 cursor-grab rounded-[var(--card-radius)] border border-border-subtle transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
+          "group relative min-w-0 cursor-grab rounded-[var(--card-radius)] border border-border-subtle transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing",
           cardClassName,
-          dragging && 'opacity-50',
+          dragging && "opacity-50",
         )}
       >
         {/* Stretched jump overlay — covers the whole card so a click anywhere
@@ -378,7 +374,10 @@ function TaskCard({
               `flex-wrap` (#task:918): in a narrow column the chip drops beneath
               `#nnn` instead of overflowing the card edge. */}
           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pb-0.5 leading-none">
-            <span data-tasks-num className="shrink-0 font-mono text-[length:var(--text-badge)] text-text-muted">
+            <span
+              data-tasks-num
+              className="shrink-0 font-mono text-[length:var(--text-badge)] text-text-muted"
+            >
               #{task.task_number}
             </span>
             <TaskStatusBadge
@@ -401,9 +400,7 @@ function TaskCard({
               (shiki 2026-07-23). 稳定 > 自适应. */}
           <div className="mt-1 flex items-center gap-x-2 text-[length:var(--text-badge)] text-text-muted">
             <span className="shrink-0 text-text-secondary">
-              {task.assignee ? task.assignee.name : (
-                <span className="italic">unassigned</span>
-              )}
+              {task.assignee ? task.assignee.name : <span className="italic">unassigned</span>}
             </span>
             {channelLabel !== null ? (
               <span

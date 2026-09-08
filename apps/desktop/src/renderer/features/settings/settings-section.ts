@@ -1,14 +1,14 @@
-export type SettingsSection = 'account' | 'appearance' | 'connection';
+export type SettingsSection = "account" | "appearance" | "connection";
 
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
-  'account',
-  'appearance',
-  'connection',
+  "account",
+  "appearance",
+  "connection",
 ];
 
 const DEFAULT_SECTION: SettingsSection = SETTINGS_SECTIONS[0]!;
 
-const SETTINGS_SECTION_KEY = 'silverhand:settings-section';
+const SETTINGS_SECTION_KEY = "silverhand:settings-section";
 
 let currentSection: SettingsSection | null = null;
 
@@ -27,8 +27,8 @@ function loadPersistedSection(): SettingsSection {
   // identity editing lived in Members — a returning user who left the
   // app on `profile` lands on Account, which is again where profile
   // editing lives.
-  if (raw === 'server' || raw === 'hosts' || raw === 'proxy') return 'connection';
-  if (raw === 'profile') return 'account';
+  if (raw === "server" || raw === "hosts" || raw === "proxy") return "connection";
+  if (raw === "profile") return "account";
   return SETTINGS_SECTIONS.includes(raw as SettingsSection)
     ? (raw as SettingsSection)
     : DEFAULT_SECTION;

@@ -1,23 +1,23 @@
-import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
-import { channelGateFor } from '@/features/channels/membership';
-import { inheritedPaneCapabilities } from '@/features/conversations/pane-mode';
-import { selectSecondaryViewInputs } from '@/lib/secondary-pane';
-import type { ConversationPaneDescriptor } from '@/features/conversations/pane-descriptor';
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { channelGateFor } from "@/features/channels/membership";
+import { inheritedPaneCapabilities } from "@/features/conversations/pane-mode";
+import { selectSecondaryViewInputs } from "@/lib/secondary-pane";
+import type { ConversationPaneDescriptor } from "@/features/conversations/pane-descriptor";
 import type {
   PaneContentRoute,
   PaneContentRead,
   PaneContentState,
   PaneContentCommands,
-} from './pane-content-inputs';
-import type { SecondaryPaneModel } from './pane-render-models';
-import { buildConversationPanes, resolveSecondaryPane } from './build-conversation-panes';
+} from "./pane-content-inputs";
+import type { SecondaryPaneModel } from "./pane-render-models";
+import { buildConversationPanes, resolveSecondaryPane } from "./build-conversation-panes";
 
 const descriptor: ConversationPaneDescriptor = {
-  id: 'foreign',
-  title: 'Foreign',
-  workspace_id: 'other-workspace',
-  placement_kind: 'workspace',
-  roster_policy: 'open',
+  id: "foreign",
+  title: "Foreign",
+  workspace_id: "other-workspace",
+  placement_kind: "workspace",
+  roster_policy: "open",
   closed_at: null,
   archived_at: null,
   is_member: true,
@@ -31,8 +31,8 @@ const calls: string[] = [];
 beforeEach(() => {
   calls.length = 0;
   route = {
-    workspaceId: 'w',
-    channelId: 'c',
+    workspaceId: "w",
+    channelId: "c",
     directDraftAgentId: null,
     threadRootId: null,
     agentPanelId: null,
@@ -44,14 +44,14 @@ beforeEach(() => {
     directPairLoadFailed: false,
     directPairNotFound: false,
     selectedChannel: null,
-    parentMembership: { membership: 'unknown', gate: channelGateFor('unknown') },
+    parentMembership: { membership: "unknown", gate: channelGateFor("unknown") },
     parentChannelResolving: false,
     conversationRefsById: new Map(),
     selectedChannelDescriptor: null,
     primaryPaneDescriptor: null,
     primaryPaneCapabilities: inheritedPaneCapabilities(null),
     primaryPaneHasChannelNamespace: false,
-    primaryThreadComposerDirectory: { kind: 'withheld' },
+    primaryThreadComposerDirectory: { kind: "withheld" },
   };
   state = {
     archivePending: false,
@@ -64,7 +64,7 @@ beforeEach(() => {
     secondaryViewInputs: selectSecondaryViewInputs({
       secondary: null,
       primaryHasChannelNamespace: false,
-      primaryWorkspaceId: 'w',
+      primaryWorkspaceId: "w",
     }),
     secondaryConversationDescriptor: null,
     parentJumpTarget: null,
@@ -76,7 +76,7 @@ beforeEach(() => {
   };
   commands = {
     requestJump: vi.fn(() => {
-      calls.push('prime');
+      calls.push("prime");
     }),
     handleOpenAdvancedSearch: vi.fn(),
     openTaskInPane: vi.fn(),
@@ -103,7 +103,7 @@ beforeEach(() => {
     closeHumanPanel: vi.fn(),
     closeFilesList: vi.fn(),
     closeThread: vi.fn(() => {
-      calls.push('close');
+      calls.push("close");
     }),
     closeThreadsList: vi.fn(),
     openThread: vi.fn(),
@@ -113,8 +113,8 @@ beforeEach(() => {
 const secondary = () => resolveSecondaryPane(route, read, state, commands);
 function resolveSide() {
   state.secondaryDescriptor = {
-    source: 'side',
-    status: 'resolved',
+    source: "side",
+    status: "resolved",
     id: descriptor.id,
     descriptor,
     hasChannelNamespace: true,
@@ -122,193 +122,193 @@ function resolveSide() {
   state.secondaryViewInputs = selectSecondaryViewInputs({
     secondary: state.secondaryDescriptor,
     primaryHasChannelNamespace: false,
-    primaryWorkspaceId: 'w',
+    primaryWorkspaceId: "w",
   });
   state.secondaryConversationDescriptor = descriptor;
 }
 
-describe('single secondary priority resolver', () => {
-  it('selects each overlay in order without invoking any command during construction', () => {
-    route.agentPanelId = 'a';
-    route.threadRootId = 'root';
+describe("single secondary priority resolver", () => {
+  it("selects each overlay in order without invoking any command during construction", () => {
+    route.agentPanelId = "a";
+    route.threadRootId = "root";
     state.filesListMounted = true;
-    state.taskPaneId = 'task';
+    state.taskPaneId = "task";
     state.threadsListMounted = true;
     resolveSide();
-    expect(secondary().kind).toBe('agent');
+    expect(secondary().kind).toBe("agent");
     route.agentPanelId = null;
-    expect(secondary().kind).toBe('files');
+    expect(secondary().kind).toBe("files");
     state.filesListMounted = false;
-    expect(secondary().kind).toBe('task');
+    expect(secondary().kind).toBe("task");
     state.taskPaneId = null;
-    expect(secondary().kind).toBe('conversation');
+    expect(secondary().kind).toBe("conversation");
     state.secondaryDescriptor = null;
-    expect(secondary().kind).toBe('thread');
+    expect(secondary().kind).toBe("thread");
     route.threadRootId = null;
-    expect(secondary().kind).toBe('threads');
+    expect(secondary().kind).toBe("threads");
     state.threadsListMounted = false;
-    expect(secondary()).toEqual({ kind: 'none' });
+    expect(secondary()).toEqual({ kind: "none" });
     for (const command of Object.values(commands)) {
       expect(command).not.toHaveBeenCalled();
     }
   });
-  it.each(['loading', 'unauthorized', 'not_found', 'unresolved'] as const)(
-    'keeps an unresolved %s side above thread and threads',
+  it.each(["loading", "unauthorized", "not_found", "unresolved"] as const)(
+    "keeps an unresolved %s side above thread and threads",
     (status) => {
-      route.threadRootId = 'root';
+      route.threadRootId = "root";
       state.threadsListMounted = true;
-      state.secondaryDescriptor = { source: 'side', status, id: 'side-id' };
+      state.secondaryDescriptor = { source: "side", status, id: "side-id" };
       const model = secondary();
       expect(model).toMatchObject({
-        kind: 'conversation',
-        status: 'unresolved',
-        props: { conversationId: 'side-id', status },
+        kind: "conversation",
+        status: "unresolved",
+        props: { conversationId: "side-id", status },
       });
-      if (model.kind !== 'conversation' || model.status !== 'unresolved') {
-        throw new Error('Expected unresolved side');
+      if (model.kind !== "conversation" || model.status !== "unresolved") {
+        throw new Error("Expected unresolved side");
       }
       model.props.onClose();
       expect(commands.closeSecondary).toHaveBeenCalledTimes(1);
     },
   );
-  it('requires a conversation for files/task/thread/threads but not the agent overlay', () => {
+  it("requires a conversation for files/task/thread/threads but not the agent overlay", () => {
     route.channelId = null;
-    route.threadRootId = 'root';
+    route.threadRootId = "root";
     state.filesListMounted = true;
-    state.taskPaneId = 'task';
+    state.taskPaneId = "task";
     state.threadsListMounted = true;
-    expect(secondary().kind).toBe('none');
-    route.agentPanelId = 'a';
+    expect(secondary().kind).toBe("none");
+    route.agentPanelId = "a";
     expect(secondary()).toMatchObject({
-      kind: 'agent',
-      props: { agentId: 'a', contextConversationId: null },
+      kind: "agent",
+      props: { agentId: "a", contextConversationId: null },
     });
   });
 });
 
-describe('branch-specific data and commands', () => {
-  it('isolates draft identity and preserves conversation loading/index gates', () => {
-    route.directDraftAgentId = 'agent';
+describe("branch-specific data and commands", () => {
+  it("isolates draft identity and preserves conversation loading/index gates", () => {
+    route.directDraftAgentId = "agent";
     let model = buildConversationPanes(route, read, state, commands).primary;
     expect(model).toEqual({
-      kind: 'draft',
-      props: { agentId: 'agent', onOpenPair: commands.handleDraftOpenedPair },
+      kind: "draft",
+      props: { agentId: "agent", onOpenPair: commands.handleDraftOpenedPair },
     });
     route.directDraftAgentId = null;
     read.directPairNotFound = true;
     read.directPairLoadFailed = true;
     read.parentChannelResolving = true;
     model = buildConversationPanes(route, read, state, commands).primary;
-    if (model.kind !== 'conversation') {
-      throw new Error('Expected conversation');
+    if (model.kind !== "conversation") {
+      throw new Error("Expected conversation");
     }
     expect(model.props).toMatchObject({ resolving: true, loadFailed: true, notFound: true });
     expect(model.props.onToggleThreadsList).toBeUndefined();
     expect(model.props.onToggleFilesList).toBeUndefined();
     read.primaryPaneDescriptor = descriptor;
     const ready = buildConversationPanes(route, read, state, commands).primary;
-    if (ready.kind !== 'conversation') {
-      throw new Error('Expected conversation');
+    if (ready.kind !== "conversation") {
+      throw new Error("Expected conversation");
     }
     expect(ready.props.conversation).toBe(descriptor);
     ready.props.onToggleThreadsList?.();
     expect(commands.toggleThreadsList).toHaveBeenCalledTimes(1);
   });
-  it('gives a foreign side its own descriptor and mutation callbacks, never primary mutations', () => {
+  it("gives a foreign side its own descriptor and mutation callbacks, never primary mutations", () => {
     resolveSide();
     const model = secondary();
-    if (model.kind !== 'conversation' || model.status !== 'resolved') {
-      throw new Error('Expected resolved side');
+    if (model.kind !== "conversation" || model.status !== "resolved") {
+      throw new Error("Expected resolved side");
     }
     expect(model.props.conversation).toBe(descriptor);
-    expect(model.props.workspaceName).toBe('other-workspace');
-    model.props.onArchiveChannel?.('foreign', true);
+    expect(model.props.workspaceName).toBe("other-workspace");
+    model.props.onArchiveChannel?.("foreign", true);
     expect(commands.handleArchiveSecondaryChannelMutation).toHaveBeenCalledExactlyOnceWith(
-      'foreign',
+      "foreign",
       true,
     );
     expect(commands.handleArchiveChannelMutation).not.toHaveBeenCalled();
-    expect(model.props).not.toHaveProperty('nav');
+    expect(model.props).not.toHaveProperty("nav");
   });
-  it('binds files attachments to the selected conversation at model creation', () => {
+  it("binds files attachments to the selected conversation at model creation", () => {
     state.filesListMounted = true;
     const model = secondary();
-    if (model.kind !== 'files') {
-      throw new Error('Expected files');
+    if (model.kind !== "files") {
+      throw new Error("Expected files");
     }
-    route.channelId = 'later';
+    route.channelId = "later";
     const attachment = {
-      id: 'a',
-      filename: 'a.md',
+      id: "a",
+      filename: "a.md",
       size: 1,
-      content_type: 'text/markdown',
+      content_type: "text/markdown",
       created_at: 0,
-      channel_id: 'c',
+      channel_id: "c",
       source_conversation_id: null,
-      storage: 'local' as const,
+      storage: "local" as const,
       content_revision: 1,
-      created_by_kind: 'user' as const,
-      created_by_id: 'u',
+      created_by_kind: "user" as const,
+      created_by_id: "u",
     };
     model.props.onOpenAttachment?.(attachment);
     expect(commands.setPaneAttachmentRequest).toHaveBeenCalledExactlyOnceWith({
-      conversationId: 'c',
+      conversationId: "c",
       attachment,
     });
     model.props.onClose();
     expect(commands.closeFilesList).toHaveBeenCalledTimes(1);
   });
-  it('keeps DM thread coordinates, inherited permissions and prime-before-close ordering', () => {
+  it("keeps DM thread coordinates, inherited permissions and prime-before-close ordering", () => {
     route.workspaceId = null;
-    route.channelId = 'dm';
-    route.threadRootId = 'root';
-    state.threadJumpMessageId = 'reply';
-    state.threadJumpPhase = 'committed';
+    route.channelId = "dm";
+    route.threadRootId = "root";
+    state.threadJumpMessageId = "reply";
+    state.threadJumpPhase = "committed";
     const model = secondary();
-    if (model.kind !== 'thread') {
-      throw new Error('Expected thread');
+    if (model.kind !== "thread") {
+      throw new Error("Expected thread");
     }
     expect(model.capabilities).toBe(read.primaryPaneCapabilities);
     expect(model.props.gate).toBe(read.parentMembership.gate);
     expect(model.props.directory).toBe(read.primaryThreadComposerDirectory);
     expect(model.props).toMatchObject({
-      channelId: 'dm',
+      channelId: "dm",
       workspaceId: null,
-      rootMessageId: 'root',
-      jumpMessageId: 'reply',
-      jumpPhase: 'committed',
+      rootMessageId: "root",
+      jumpMessageId: "reply",
+      jumpPhase: "committed",
     });
     model.props.onViewInChannel?.();
     expect(commands.requestJump).toHaveBeenCalledExactlyOnceWith({
       workspaceId: undefined,
-      channelId: 'dm',
-      messageId: 'root',
+      channelId: "dm",
+      messageId: "root",
     });
-    expect(calls).toEqual(['prime', 'close']);
+    expect(calls).toEqual(["prime", "close"]);
     const attachment = {
-      id: 'a',
-      filename: 'a.md',
+      id: "a",
+      filename: "a.md",
       size: 1,
-      content_type: 'text/markdown',
+      content_type: "text/markdown",
       created_at: 0,
-      channel_id: 'c',
+      channel_id: "c",
       source_conversation_id: null,
-      storage: 'local' as const,
+      storage: "local" as const,
       content_revision: 1,
-      created_by_kind: 'user' as const,
-      created_by_id: 'u',
+      created_by_kind: "user" as const,
+      created_by_id: "u",
     };
     model.props.onOpenAttachment?.(attachment);
     expect(commands.setPaneAttachmentRequest).toHaveBeenCalledExactlyOnceWith({
-      conversationId: 'dm',
+      conversationId: "dm",
       attachment,
     });
   });
-  it('routes task closing through the editing guard and lists through their own close/open commands', () => {
-    state.taskPaneId = 'task';
+  it("routes task closing through the editing guard and lists through their own close/open commands", () => {
+    state.taskPaneId = "task";
     const task = secondary();
-    if (task.kind !== 'task') {
-      throw new Error('Expected task');
+    if (task.kind !== "task") {
+      throw new Error("Expected task");
     }
     expect(task.props.onClose).toBe(commands.requestCloseTaskPane);
     task.props.onEditingChange?.(true);
@@ -316,36 +316,36 @@ describe('branch-specific data and commands', () => {
     state.taskPaneId = null;
     state.threadsListMounted = true;
     const list = secondary();
-    if (list.kind !== 'threads') {
-      throw new Error('Expected threads');
+    if (list.kind !== "threads") {
+      throw new Error("Expected threads");
     }
-    list.props.onOpenThread('root');
+    list.props.onOpenThread("root");
     list.props.onClose();
-    expect(commands.openThread).toHaveBeenCalledExactlyOnceWith('root');
+    expect(commands.openThread).toHaveBeenCalledExactlyOnceWith("root");
     expect(commands.closeThreadsList).toHaveBeenCalledTimes(1);
   });
-  it('does not expose unrelated pane fields through the branch contract', () => {
-    type Task = Extract<SecondaryPaneModel, { kind: 'task' }>;
-    type Files = Extract<SecondaryPaneModel, { kind: 'files' }>;
-    expectTypeOf<Task['props']>().not.toHaveProperty('channelId');
-    expectTypeOf<Task['props']>().not.toHaveProperty('onMessageAgent');
-    expectTypeOf<Files['props']>().not.toHaveProperty('taskId');
-    expectTypeOf<Files['props']>().not.toHaveProperty('nav');
+  it("does not expose unrelated pane fields through the branch contract", () => {
+    type Task = Extract<SecondaryPaneModel, { kind: "task" }>;
+    type Files = Extract<SecondaryPaneModel, { kind: "files" }>;
+    expectTypeOf<Task["props"]>().not.toHaveProperty("channelId");
+    expectTypeOf<Task["props"]>().not.toHaveProperty("onMessageAgent");
+    expectTypeOf<Files["props"]>().not.toHaveProperty("taskId");
+    expectTypeOf<Files["props"]>().not.toHaveProperty("nav");
   });
 });
 
-describe('human profile pane', () => {
-  it('keeps the exact subject and closes only the profile overlay', () => {
-    route.humanPanelId = 'other-human';
-    route.threadRootId = 'thread-root';
+describe("human profile pane", () => {
+  it("keeps the exact subject and closes only the profile overlay", () => {
+    route.humanPanelId = "other-human";
+    route.threadRootId = "thread-root";
     const model = secondary();
 
-    expect(model.kind).toBe('human');
-    if (model.kind !== 'human') {
-      throw new Error('Expected human pane');
+    expect(model.kind).toBe("human");
+    if (model.kind !== "human") {
+      throw new Error("Expected human pane");
     }
 
-    expect(model.props.userId).toBe('other-human');
+    expect(model.props.userId).toBe("other-human");
     model.props.onClose?.();
     expect(commands.closeHumanPanel).toHaveBeenCalledTimes(1);
     expect(commands.closeThread).not.toHaveBeenCalled();

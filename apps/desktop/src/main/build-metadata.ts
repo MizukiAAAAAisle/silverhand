@@ -7,11 +7,10 @@ declare const __SILVERHAND_BUILD_DIRTY__: boolean | undefined;
  * mistaken for a reproducible artifact of that short prefix.
  */
 export const BUILD_COMMIT: string =
-  typeof __SILVERHAND_BUILD_COMMIT__ === 'string' &&
-  __SILVERHAND_BUILD_COMMIT__.length > 0
+  typeof __SILVERHAND_BUILD_COMMIT__ === "string" && __SILVERHAND_BUILD_COMMIT__.length > 0
     ? __SILVERHAND_BUILD_COMMIT__
-    : 'dev';
+    : "dev";
 
 /** True iff the build tree had uncommitted changes at package time. */
 export const BUILD_DIRTY: boolean =
-  typeof __SILVERHAND_BUILD_DIRTY__ === 'boolean' ? __SILVERHAND_BUILD_DIRTY__ : false;
+  typeof __SILVERHAND_BUILD_DIRTY__ === "boolean" ? __SILVERHAND_BUILD_DIRTY__ : false;

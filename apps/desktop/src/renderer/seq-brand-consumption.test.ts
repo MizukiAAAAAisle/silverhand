@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from "vitest";
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // #task:1267 §6 — the renderer-consumption fences for brand-typed seq (S2).
 //
@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 // `realtime-ingestion-read-inert` / `notification-toast-purity` — we statically
 // fence the source instead of rendering.
 
-const RENDERER_ROOT = fileURLToPath(new URL('.', import.meta.url));
+const RENDERER_ROOT = fileURLToPath(new URL(".", import.meta.url));
 
 /** Collect every renderer production `.ts`/`.tsx` (no tests, no decls). */
 function rendererSourceFiles(): string[] {
@@ -43,17 +43,17 @@ function rendererSourceFiles(): string[] {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = `${dir}/${entry.name}`;
       if (entry.isDirectory()) {
-        if (entry.name === 'node_modules') continue;
+        if (entry.name === "node_modules") continue;
         walk(full);
         continue;
       }
       if (!/\.(ts|tsx)$/.test(entry.name)) continue;
-      if (entry.name.endsWith('.d.ts')) continue;
+      if (entry.name.endsWith(".d.ts")) continue;
       if (/\.test\.(ts|tsx)$/.test(entry.name)) continue;
       out.push(full);
     }
   };
-  walk(RENDERER_ROOT.replace(/\/$/, ''));
+  walk(RENDERER_ROOT.replace(/\/$/, ""));
   return out;
 }
 
@@ -64,9 +64,7 @@ function rendererSourceFiles(): string[] {
  *  false-PASS in a pathological same-line case — none exist in the scanned tree),
  *  never INVENT one, so it cannot manufacture a false failure. */
 function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\/\/[^\n]*/g, '');
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 }
 
 /** Path relative to the renderer root, for readable failure messages. */
@@ -77,46 +75,43 @@ function rel(file: string): string {
 const FILES = rendererSourceFiles().map((file) => ({
   path: file,
   rel: rel(file),
-  code: stripComments(readFileSync(file, 'utf8')),
+  code: stripComments(readFileSync(file, "utf8")),
 }));
 
-describe('seq-brand renderer consumption fences (#task:1267 §6)', () => {
-  it('collected a non-trivial renderer source tree', () => {
+describe("seq-brand renderer consumption fences (#task:1267 §6)", () => {
+  it("collected a non-trivial renderer source tree", () => {
     // Guards the walker itself — an empty list would make every fence vacuously
     // pass.
     expect(FILES.length).toBeGreaterThan(50);
   });
 
-  it('mints ReadSeq ONLY at streamSourceAtSeq (§3.1 single bridge)', () => {
+  it("mints ReadSeq ONLY at streamSourceAtSeq (§3.1 single bridge)", () => {
     const offenders = FILES.filter(
-      (f) =>
-        f.code.includes('asReadSeq(') &&
-        f.rel !== 'features/attention/observe.ts',
+      (f) => f.code.includes("asReadSeq(") && f.rel !== "features/attention/observe.ts",
     ).map((f) => f.rel);
     expect(offenders).toEqual([]);
   });
 
-  it('has NO scattered `as <SeqBrand>` escape-hatch cast (§5/§6)', () => {
+  it("has NO scattered `as <SeqBrand>` escape-hatch cast (§5/§6)", () => {
     const CAST = /\bas\s+(MessageSeq|ReadSeq|TransportSeq|TransportEpoch|ObservedSeq)\b/;
     const offenders = FILES.filter((f) => CAST.test(f.code)).map((f) => f.rel);
     expect(offenders).toEqual([]);
   });
 
-  it('never re-parses a wire seq via a *SeqSchema.parse() (§3.6 wire-trust)', () => {
+  it("never re-parses a wire seq via a *SeqSchema.parse() (§3.6 wire-trust)", () => {
     // Branded wire DTOs are minted server-side and trusted through api<T>(); a
     // per-hook `MessageSeqSchema.parse(...)` is the scattered escape hatch the
     // fence forbids. A future centralized apiParse boundary is a different,
     // deliberate change (and would update this fence). TransportEpochSchema is
     // included: the TransportSeq cut brought TransportEpoch into the renderer
     // consumption face, so a scattered `.parse()` of it is the same hole.
-    const SCHEMA_PARSE = /(MessageSeq|ReadSeq|TransportSeq|TransportEpoch|ObservedSeq)Schema\s*\.\s*parse/;
-    const offenders = FILES.filter((f) => SCHEMA_PARSE.test(f.code)).map(
-      (f) => f.rel,
-    );
+    const SCHEMA_PARSE =
+      /(MessageSeq|ReadSeq|TransportSeq|TransportEpoch|ObservedSeq)Schema\s*\.\s*parse/;
+    const offenders = FILES.filter((f) => SCHEMA_PARSE.test(f.code)).map((f) => f.rel);
     expect(offenders).toEqual([]);
   });
 
-  it('imports NO stream-erasing generic cursor comparator (Blocker 4)', () => {
+  it("imports NO stream-erasing generic cursor comparator (Blocker 4)", () => {
     // The shared package deletes isUnread / isBeyond outright; guard against a
     // renderer reintroducing a stream-key-erasing comparator.
     const offenders = FILES.filter(
@@ -125,45 +120,43 @@ describe('seq-brand renderer consumption fences (#task:1267 §6)', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('constructs a MessageSeq via decodeMessageSeq ONLY at the two legal points', () => {
+  it("constructs a MessageSeq via decodeMessageSeq ONLY at the two legal points", () => {
     // §3.3 pending provisional head (role-defined zero) + §3.4 localStorage
     // hydrate decode. Everything else arriving as a brand is trusted from the
     // wire (§3.6), so a new decodeMessageSeq call is a new boundary that must be
     // justified here.
     const ALLOWED = new Set([
-      'features/channels/hooks.ts',
+      "features/channels/hooks.ts",
       // #task:1292: appendPendingMessage's §3.3 provisional-head decode moved
       // here with the append trio.
-      'features/channels/message-cache-core.ts',
-      'lib/place-memory.ts',
+      "features/channels/message-cache-core.ts",
+      "lib/place-memory.ts",
     ]);
     const offenders = FILES.filter(
-      (f) => f.code.includes('decodeMessageSeq(') && !ALLOWED.has(f.rel),
+      (f) => f.code.includes("decodeMessageSeq(") && !ALLOWED.has(f.rel),
     ).map((f) => f.rel);
     expect(offenders).toEqual([]);
   });
 
-  it('advances a TransportSeq floor ONLY through advanceTransportSeq — no raw `+ 1` (Cindy cond#3)', () => {
+  it("advances a TransportSeq floor ONLY through advanceTransportSeq — no raw `+ 1` (Cindy cond#3)", () => {
     // A TransportSeq `+ 1` decays to a bare number; the sole legal successor is
     // the shared `advanceTransportSeq` boundary (docs/brand-typed-seq-v1.md §4).
     // Lock the resume-floor arithmetic in ws-client so a future edit can't
     // re-introduce a scattered `received.lastSeq + 1` / `floor.lastSeq + 1` that
     // silently drops the brand.
     const RAW_ADVANCE = /\.lastSeq\s*[+-]\s*1\b/;
-    const offenders = FILES.filter((f) => RAW_ADVANCE.test(f.code)).map(
-      (f) => f.rel,
-    );
+    const offenders = FILES.filter((f) => RAW_ADVANCE.test(f.code)).map((f) => f.rel);
     expect(offenders).toEqual([]);
   });
 
-  it('routes every transport-floor advance through advanceTransportSeq alone', () => {
+  it("routes every transport-floor advance through advanceTransportSeq alone", () => {
     // Positive-space companion to the ban above: the only renderer consumer of
     // the shared advance boundary is the transport client. If a second file
     // starts advancing a transport floor, it must be reviewed here (and prove it
     // holds the same (scope, epoch) context the helper does not check).
-    const ALLOWED = new Set(['lib/ws-client.ts']);
+    const ALLOWED = new Set(["lib/ws-client.ts"]);
     const offenders = FILES.filter(
-      (f) => f.code.includes('advanceTransportSeq(') && !ALLOWED.has(f.rel),
+      (f) => f.code.includes("advanceTransportSeq(") && !ALLOWED.has(f.rel),
     ).map((f) => f.rel);
     expect(offenders).toEqual([]);
   });

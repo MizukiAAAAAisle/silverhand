@@ -1,4 +1,4 @@
-import { cn } from '@/lib/cn';
+import { cn } from "@/lib/cn";
 
 /**
  * Frame identity for a HAND-ROLLED floating list panel — the suggestion
@@ -23,17 +23,15 @@ import { cn } from '@/lib/cn';
  * via `layoutClassName` — they are layout, and a shared hook that also owned
  * layout would mis-fit the next consumer.
  */
-export type DropdownPanelVariant = 'poster' | 'soft';
+export type DropdownPanelVariant = "poster" | "soft";
 
 const DROPDOWN_PANEL_FRAME =
-  'rounded-[var(--select-content-radius)] border border-border bg-bg-floating shadow-popover';
+  "rounded-[var(--select-content-radius)] border border-border bg-bg-floating shadow-popover";
 
 export function dropdownPanelProps(
   variant: DropdownPanelVariant,
   layoutClassName: string,
-): { className: string; 'data-field-dropdown'?: '' } {
+): { className: string; "data-field-dropdown"?: "" } {
   const className = cn(DROPDOWN_PANEL_FRAME, layoutClassName);
-  return variant === 'poster'
-    ? { className, 'data-field-dropdown': '' }
-    : { className };
+  return variant === "poster" ? { className, "data-field-dropdown": "" } : { className };
 }

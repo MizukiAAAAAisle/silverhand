@@ -1,6 +1,6 @@
-import { toast } from 'sonner';
-import type { AttachmentSnapshot } from '@silverhand/shared';
-import { fetchAttachmentBytes } from '@/lib/api';
+import { toast } from "sonner";
+import type { AttachmentSnapshot } from "@silverhand/shared";
+import { fetchAttachmentBytes } from "@/lib/api";
 
 /**
  * Open-with-OS flow for a non-image chat attachment. Fetches bytes through
@@ -25,7 +25,7 @@ import { fetchAttachmentBytes } from '@/lib/api';
  * Exported for testing.
  */
 export async function openAttachmentExternally(
-  attachment: Pick<AttachmentSnapshot, 'id' | 'filename'>,
+  attachment: Pick<AttachmentSnapshot, "id" | "filename">,
   opts: OpenAttachmentOptions = {},
   deps: OpenAttachmentDeps = defaultDeps,
 ): Promise<void> {
@@ -74,14 +74,14 @@ export function formatOpenException(err: unknown): string {
 /** Translate the IPC failure reason into a user-facing string. Kept short —
  *  used both as a toast body and a tile's `title` hint. */
 export function describeOpenFailure(reason: string): string {
-  if (reason === 'unsafe_extension') {
+  if (reason === "unsafe_extension") {
     return "This file type can't be opened from Silverhand.";
   }
-  if (reason.startsWith('open_failed')) {
-    return 'macOS could not open this file.';
+  if (reason.startsWith("open_failed")) {
+    return "macOS could not open this file.";
   }
-  if (reason === 'empty_payload' || reason === 'invalid_payload') {
-    return 'The attachment data is invalid.';
+  if (reason === "empty_payload" || reason === "invalid_payload") {
+    return "The attachment data is invalid.";
   }
   return reason;
 }
@@ -124,9 +124,9 @@ export interface OpenAttachmentDeps extends OpenAttachmentCoreDeps {
 }
 
 const defaultDeps: OpenAttachmentDeps = {
-  fetchBytes: id => fetchAttachmentBytes(id),
-  open: input => window.silverhand.openAttachmentExternal(input),
-  toastError: msg => {
+  fetchBytes: (id) => fetchAttachmentBytes(id),
+  open: (input) => window.silverhand.openAttachmentExternal(input),
+  toastError: (msg) => {
     toast.error(msg);
   },
 };

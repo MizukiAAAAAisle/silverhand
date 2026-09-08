@@ -12,14 +12,14 @@
  * Hence: await the load, show explicitly on success, and tear
  * the window down before rethrowing.
  */
-import { app, BrowserWindow, dialog, shell } from 'electron';
-import { BUILD_COMMIT, BUILD_DIRTY } from './build-metadata.js';
+import { app, BrowserWindow, dialog, shell } from "electron";
+import { BUILD_COMMIT, BUILD_DIRTY } from "./build-metadata.js";
 import {
   presentStartupFailure,
   STARTUP_FAILURE_EXIT_CODE,
   type StartupFailureExitDeps,
-} from './startup-failure-exit.js';
-import type { StartupFailureNotice } from './startup-failure.js';
+} from "./startup-failure-exit.js";
+import type { StartupFailureNotice } from "./startup-failure.js";
 
 /**
  * A local `data:` document has no network to wait on, so anything slower
@@ -29,16 +29,13 @@ import type { StartupFailureNotice } from './startup-failure.js';
  */
 const LOAD_BUDGET_MS = 5_000;
 
-const openWindow: StartupFailureExitDeps['openWindow'] = async ({
-  html,
-  onAction,
-}) => {
+const openWindow: StartupFailureExitDeps["openWindow"] = async ({ html, onAction }) => {
   const win = new BrowserWindow({
     width: 520,
     height: 380,
     minWidth: 420,
     minHeight: 260,
-    title: 'Silverhand',
+    title: "Silverhand",
     show: false,
     minimizable: false,
     maximizable: false,
@@ -52,17 +49,17 @@ const openWindow: StartupFailureExitDeps['openWindow'] = async ({
 
   // Every navigation in this window is an action, never a page load: the
   // only document is the one passed in.
-  win.webContents.on('will-navigate', (event, url) => {
+  win.webContents.on("will-navigate", (event, url) => {
     event.preventDefault();
     onAction(url);
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
     onAction(url);
-    return { action: 'deny' };
+    return { action: "deny" };
   });
   // The window owns the process lifetime once it is up: closing it by any
   // means (Quit, close box, ⌘Q) exits non-zero.
-  win.on('closed', () => app.exit(STARTUP_FAILURE_EXIT_CODE));
+  win.on("closed", () => app.exit(STARTUP_FAILURE_EXIT_CODE));
 
   let budget: NodeJS.Timeout | undefined;
   try {
@@ -70,7 +67,7 @@ const openWindow: StartupFailureExitDeps['openWindow'] = async ({
       win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`),
       new Promise<never>((_, reject) => {
         budget = setTimeout(
-          () => reject(new Error('startup failure window did not load')),
+          () => reject(new Error("startup failure window did not load")),
           LOAD_BUDGET_MS,
         );
       }),
@@ -80,7 +77,7 @@ const openWindow: StartupFailureExitDeps['openWindow'] = async ({
     // Drop the close handler first: destroying the window fires `closed`,
     // and exiting there would pre-empt the native error box the caller is
     // about to show.
-    win.removeAllListeners('closed');
+    win.removeAllListeners("closed");
     if (!win.isDestroyed()) win.destroy();
     throw err;
   } finally {
@@ -111,10 +108,10 @@ export function showStartupFailureWindow(input: {
     {
       openWindow,
       showErrorBox: (title, body) => dialog.showErrorBox(title, body),
-      revealLogs: dir => {
+      revealLogs: (dir) => {
         void shell.openPath(dir);
       },
-      exit: code => app.exit(code),
+      exit: (code) => app.exit(code),
     },
   );
 }

@@ -1,9 +1,13 @@
-import { useCallback, useMemo, useSyncExternalStore } from 'react';
-import { addTab, removeTab, reorderTabs, tabKey, type Tab } from '@/lib/conversation-tabs';
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { addTab, removeTab, reorderTabs, tabKey, type Tab } from "@/lib/conversation-tabs";
 import {
-  getConversationTabs, getConversationActiveTab, getConversationTabsVersion,
-  recordConversationTabs, recordConversationActiveTab, subscribeConversationTabs,
-} from '@/lib/place-memory';
+  getConversationTabs,
+  getConversationActiveTab,
+  getConversationTabsVersion,
+  recordConversationTabs,
+  recordConversationActiveTab,
+  subscribeConversationTabs,
+} from "@/lib/place-memory";
 
 export interface ConversationTabsController {
   /** Shared functional tabs combined with this conversation's file tabs. */
@@ -27,16 +31,38 @@ export interface ConversationTabsController {
 export function useConversationTabs(conversationId: string): ConversationTabsController {
   const version = useSyncExternalStore(subscribeConversationTabs, getConversationTabsVersion);
   const tabs = useMemo(() => getConversationTabs(conversationId), [conversationId, version]);
-  const setActive = useCallback((key: string) => recordConversationActiveTab(conversationId, key), [conversationId]);
-  const openTab = useCallback((tab: Tab) => {
-    recordConversationTabs(conversationId, addTab(getConversationTabs(conversationId), tab));
-    recordConversationActiveTab(conversationId, tabKey(tab));
-  }, [conversationId]);
-  const closeTab = useCallback((key: string) => {
-    recordConversationTabs(conversationId, removeTab(getConversationTabs(conversationId), key));
-  }, [conversationId]);
-  const reorder = useCallback((fromIndex: number, toIndex: number) => {
-    recordConversationTabs(conversationId, reorderTabs(getConversationTabs(conversationId), fromIndex, toIndex));
-  }, [conversationId]);
-  return { tabs, activeKey: getConversationActiveTab(conversationId), setActive, openTab, closeTab, reorder };
+  const setActive = useCallback(
+    (key: string) => recordConversationActiveTab(conversationId, key),
+    [conversationId],
+  );
+  const openTab = useCallback(
+    (tab: Tab) => {
+      recordConversationTabs(conversationId, addTab(getConversationTabs(conversationId), tab));
+      recordConversationActiveTab(conversationId, tabKey(tab));
+    },
+    [conversationId],
+  );
+  const closeTab = useCallback(
+    (key: string) => {
+      recordConversationTabs(conversationId, removeTab(getConversationTabs(conversationId), key));
+    },
+    [conversationId],
+  );
+  const reorder = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      recordConversationTabs(
+        conversationId,
+        reorderTabs(getConversationTabs(conversationId), fromIndex, toIndex),
+      );
+    },
+    [conversationId],
+  );
+  return {
+    tabs,
+    activeKey: getConversationActiveTab(conversationId),
+    setActive,
+    openTab,
+    closeTab,
+    reorder,
+  };
 }

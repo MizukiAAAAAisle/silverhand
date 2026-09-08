@@ -1,4 +1,4 @@
-import { MessageSquare, type LucideIcon } from 'lucide-react';
+import { MessageSquare, type LucideIcon } from "lucide-react";
 
 /**
  * Single source of truth for the Thread icon. "Thread" is one product concept,

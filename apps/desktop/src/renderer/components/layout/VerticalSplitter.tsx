@@ -1,4 +1,4 @@
-import { SplitterTrack } from './SplitterTrack';
+import { SplitterTrack } from "./SplitterTrack";
 
 interface VerticalSplitterProps {
   onPointerDown: (e: React.PointerEvent) => void;

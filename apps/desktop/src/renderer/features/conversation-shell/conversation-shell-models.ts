@@ -1,19 +1,19 @@
-import type { AppSection } from '@/components/layout/NavRail';
-import type { MembershipState } from '@/features/channels/membership';
-import type { JumpPhase } from '@/features/channels/messageJumpPhase';
-import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
-import type { UnreadCounts } from '@/features/notifications/hooks';
-import type { WorkspaceListItem } from '@/features/workspaces/hooks';
-import type { SidebarPane } from '@/hooks/useSidebarPane';
-import type { ConversationPointer, SecondaryDescriptor } from '@/lib/secondary-pane';
-import type { ChatView, RouteState, useNav } from '@/router';
+import type { AppSection } from "@/components/layout/NavRail";
+import type { MembershipState } from "@/features/channels/membership";
+import type { JumpPhase } from "@/features/channels/messageJumpPhase";
+import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import type { UnreadCounts } from "@/features/notifications/hooks";
+import type { WorkspaceListItem } from "@/features/workspaces/hooks";
+import type { SidebarPane } from "@/hooks/useSidebarPane";
+import type { ConversationPointer, SecondaryDescriptor } from "@/lib/secondary-pane";
+import type { ChatView, RouteState, useNav } from "@/router";
 import type {
   AgentDto,
   AttachmentSnapshot,
   AttentionBadgeRollupDto,
   SavedMessageDto,
-} from '@silverhand/shared';
-import type { ConversationPanesModel } from './pane-render-models';
+} from "@silverhand/shared";
+import type { ConversationPanesModel } from "./pane-render-models";
 
 export interface ConversationShellSignals {
   attentionBadges: AttentionBadgeRollupDto | undefined;

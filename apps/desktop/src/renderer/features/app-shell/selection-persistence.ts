@@ -1,16 +1,16 @@
-import { useEffect, useRef, type MutableRefObject } from 'react';
+import { useEffect, useRef, type MutableRefObject } from "react";
 import {
   useTouchSort,
   type ChannelListItem,
   type WorkspaceListItem,
-} from '@/features/workspaces/hooks';
+} from "@/features/workspaces/hooks";
 import {
   lastChannelByWorkspace,
   persistLastChannel,
   recordLastChatPlace,
   recordLastWorkspace,
-} from '@/lib/place-memory';
-import { chatPlaceForRoute } from '@/lib/chat-place-restore';
+} from "@/lib/place-memory";
+import { chatPlaceForRoute } from "@/lib/chat-place-restore";
 
 /** Chat selection memory and recent-opened stamps. Page-specific selection lives in its Shell. */
 export function useSelectionPersistenceEffects(params: {
@@ -101,7 +101,7 @@ export function useSelectionPersistenceEffects(params: {
     if (!ws || ws.archived_at !== null) return;
     if (lastTouchedWorkspaceRef.current === selectedWorkspaceId) return;
     lastTouchedWorkspaceRef.current = selectedWorkspaceId;
-    touchSort.mutate({ list_key: 'workspaces', entity_id: selectedWorkspaceId });
+    touchSort.mutate({ list_key: "workspaces", entity_id: selectedWorkspaceId });
   }, [selectedWorkspaceId, workspaces]);
 
   // Remember the workspace the user is actively viewing so returning to the

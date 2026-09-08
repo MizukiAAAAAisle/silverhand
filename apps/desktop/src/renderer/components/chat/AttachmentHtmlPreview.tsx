@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef } from 'react';
-import { htmlPreviewSrcDoc, readPinchDelta } from '@/lib/html-preview-csp';
+import { useEffect, useMemo, useRef } from "react";
+import { htmlPreviewSrcDoc, readPinchDelta } from "@/lib/html-preview-csp";
 
 export function AttachmentHtmlPreview({
   html,
@@ -40,9 +40,9 @@ export function AttachmentHtmlPreview({
       pending += delta;
       if (raf === 0) raf = requestAnimationFrame(flush);
     };
-    window.addEventListener('message', onMessage);
+    window.addEventListener("message", onMessage);
     return () => {
-      window.removeEventListener('message', onMessage);
+      window.removeEventListener("message", onMessage);
       if (raf !== 0) cancelAnimationFrame(raf);
     };
   }, [onPinch]);
@@ -60,7 +60,7 @@ export function AttachmentHtmlPreview({
           width: `${100 / safeZoom}%`,
           height: `${100 / safeZoom}%`,
           transform: safeZoom === 1 ? undefined : `scale(${safeZoom})`,
-          transformOrigin: 'top left',
+          transformOrigin: "top left",
         }}
       />
     </div>

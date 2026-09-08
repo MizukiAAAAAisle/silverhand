@@ -1,5 +1,5 @@
-import type { HostAgentResource, HostResourcesResponse } from '@silverhand/shared';
-import { ComputerHasPendingAgentsError } from './hooks';
+import type { HostAgentResource, HostResourcesResponse } from "@silverhand/shared";
+import { ComputerHasPendingAgentsError } from "./hooks";
 
 /**
  * #task:1618 — what the delete-computer dialog shows, derived from the
@@ -33,9 +33,9 @@ import { ComputerHasPendingAgentsError } from './hooks';
  *                    ONE confirm.
  */
 export type DeleteComputerPhase =
-  | { kind: 'loading' }
-  | { kind: 'unavailable' }
-  | { kind: 'confirm'; agents: HostAgentResource[] };
+  | { kind: "loading" }
+  | { kind: "unavailable" }
+  | { kind: "confirm"; agents: HostAgentResource[] };
 
 export interface DeleteComputerPreviewState {
   /** React Query `isPending` — no settled data yet. */
@@ -60,7 +60,7 @@ export interface DeleteComputerPreviewState {
    * other fields; naming only `agents` keeps the retired workspace dimension out
    * of the renderer entirely, so removing it from the DTO is a backend-only cut.
    */
-  data: Pick<HostResourcesResponse, 'agents'> | undefined;
+  data: Pick<HostResourcesResponse, "agents"> | undefined;
 }
 
 /**
@@ -76,11 +76,11 @@ export interface DeleteComputerPreviewState {
 export function resolveDeleteComputerPhase(
   preview: DeleteComputerPreviewState,
 ): DeleteComputerPhase {
-  if (preview.isError) return { kind: 'unavailable' };
+  if (preview.isError) return { kind: "unavailable" };
   if (preview.isPending || preview.isFetching || !preview.data) {
-    return { kind: 'loading' };
+    return { kind: "loading" };
   }
-  return { kind: 'confirm', agents: preview.data.agents };
+  return { kind: "confirm", agents: preview.data.agents };
 }
 
 /**
@@ -96,8 +96,8 @@ export function resolveDeleteComputerPhase(
  *    skipped the preview; a named screen for each would rebuild
  *    discovery-through-error.
  */
-export type DeleteComputerFailure = 'pending' | 'generic';
+export type DeleteComputerFailure = "pending" | "generic";
 
 export function resolveDeleteFailure(err: unknown): DeleteComputerFailure {
-  return err instanceof ComputerHasPendingAgentsError ? 'pending' : 'generic';
+  return err instanceof ComputerHasPendingAgentsError ? "pending" : "generic";
 }

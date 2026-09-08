@@ -1,5 +1,5 @@
-import { forwardRef, type InputHTMLAttributes } from 'react';
-import { cn } from '@/lib/cn';
+import { forwardRef, type InputHTMLAttributes } from "react";
+import { cn } from "@/lib/cn";
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   ({ className, ...props }, ref) => {
@@ -8,7 +8,7 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
         ref={ref}
         data-input=""
         className={cn(
-          'flex h-9 w-full rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-3 py-1 text-sm text-text-primary placeholder:text-text-muted focus-visible:border-border-focus focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50',
+          "flex h-9 w-full rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-3 py-1 text-sm text-text-primary placeholder:text-text-muted focus-visible:border-border-focus focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
           className,
         )}
         {...props}
@@ -16,7 +16,7 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
     );
   },
 );
-Input.displayName = 'Input';
+Input.displayName = "Input";
 
 export const Textarea = forwardRef<
   HTMLTextAreaElement,
@@ -26,13 +26,13 @@ export const Textarea = forwardRef<
     ref={ref}
     data-input=""
     className={cn(
-      'flex min-h-[80px] w-full rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus-visible:border-border-focus focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50',
+      "flex min-h-[80px] w-full rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus-visible:border-border-focus focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
       className,
     )}
     {...props}
   />
 ));
-Textarea.displayName = 'Textarea';
+Textarea.displayName = "Textarea";
 
 export function Label({
   className,
@@ -43,10 +43,7 @@ export function Label({
   required?: boolean;
 }): JSX.Element {
   return (
-    <label
-      className={cn('text-xs font-medium text-text-secondary', className)}
-      {...props}
-    >
+    <label className={cn("text-xs font-medium text-text-secondary", className)} {...props}>
       {children}
       {required ? (
         <span aria-hidden className="ml-0.5 text-error">

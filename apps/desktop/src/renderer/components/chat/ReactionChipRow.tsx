@@ -1,4 +1,4 @@
-import type { ReactionAggregateDto } from '@silverhand/shared';
+import type { ReactionAggregateDto } from "@silverhand/shared";
 
 /**
  * The single source of truth for how a message's reactions LOOK, plus the pure
@@ -26,10 +26,7 @@ import type { ReactionAggregateDto } from '@silverhand/shared';
  *  replies · reactions share one line, #task:1185); this class only governs
  *  the chips' own flex/gap. */
 export function reactionRowClass(alignRight: boolean): string {
-  return (
-    'flex flex-wrap items-center gap-1.5 ' +
-    (alignRight ? 'justify-end' : 'justify-start')
-  );
+  return "flex flex-wrap items-center gap-1.5 " + (alignRight ? "justify-end" : "justify-start");
 }
 
 /** The chip fill recipe. `interactive` only adds the hover-fill shift; the
@@ -37,33 +34,25 @@ export function reactionRowClass(alignRight: boolean): string {
  *  looks clickable. Chips are utility count elements (neutral
  *  `--reaction-chip-*` fill), and the viewer's own reaction is distinguished by
  *  a stronger `--accent-soft` fill, not a color reversal. */
-export function reactionChipClass(
-  agg: ReactionAggregateDto,
-  interactive: boolean,
-): string {
+export function reactionChipClass(agg: ReactionAggregateDto, interactive: boolean): string {
   return (
-    'flex h-[18px] items-center gap-1 rounded-[var(--chip-radius)] px-2 text-xs tabular-nums text-text-primary transition-colors ' +
+    "flex h-[18px] items-center gap-1 rounded-[var(--chip-radius)] px-2 text-xs tabular-nums text-text-primary transition-colors " +
     (agg.viewer_reacted
-      ? 'bg-accent-soft'
+      ? "bg-accent-soft"
       : interactive
-        ? 'bg-[var(--chip-bg)] hover:bg-[var(--chip-bg-hover)]'
-        : 'bg-[var(--chip-bg)]')
+        ? "bg-[var(--chip-bg)] hover:bg-[var(--chip-bg-hover)]"
+        : "bg-[var(--chip-bg)]")
   );
 }
 
 /** Emoji glyph + count — the inner content shared by every chip variant. */
-export function ReactionChipBody({
-  agg,
-}: {
-  agg: ReactionAggregateDto;
-}): JSX.Element {
+export function ReactionChipBody({ agg }: { agg: ReactionAggregateDto }): JSX.Element {
   return (
     <>
       <span className="text-[length:var(--text-strong)] leading-none">{agg.emoji}</span>
       <span
         className={
-          'font-semibold ' +
-          (agg.viewer_reacted ? 'text-text-primary' : 'text-text-muted')
+          "font-semibold " + (agg.viewer_reacted ? "text-text-primary" : "text-text-muted")
         }
       >
         {agg.count}
@@ -75,7 +64,7 @@ export function ReactionChipBody({
 /** Accessible label for a single chip (also asserted by the screenshot parity
  *  test, so it stays in sync across surfaces). */
 export function reactionChipCountLabel(agg: ReactionAggregateDto): string {
-  return `${agg.emoji}, ${agg.count} reaction${agg.count === 1 ? '' : 's'}`;
+  return `${agg.emoji}, ${agg.count} reaction${agg.count === 1 ? "" : "s"}`;
 }
 
 /**
@@ -95,14 +84,11 @@ export function ReactionChipRow({
   if (!reactions || reactions.length === 0) return null;
   return (
     <div data-reaction-row className={reactionRowClass(alignRight)}>
-      {reactions.map(agg => (
+      {reactions.map((agg) => (
         <div
           key={agg.emoji}
           data-reaction-chip
-          aria-label={
-            reactionChipCountLabel(agg) +
-            (agg.viewer_reacted ? ', you reacted' : '')
-          }
+          aria-label={reactionChipCountLabel(agg) + (agg.viewer_reacted ? ", you reacted" : "")}
           className={reactionChipClass(agg, false)}
         >
           <ReactionChipBody agg={agg} />

@@ -1,26 +1,26 @@
-import { useEffect, useRef, useState } from 'react';
-import { Loader2 } from 'lucide-react';
-import type { HostCreateResponse } from '@silverhand/shared';
+import { useEffect, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
+import type { HostCreateResponse } from "@silverhand/shared";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Input, Label } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { primaryAction } from '@/features/common/PrimaryAction';
+} from "@/components/ui/dialog";
+import { Input, Label } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { primaryAction } from "@/features/common/PrimaryAction";
 import {
   useBackendInfoSnapshot,
   useCancelPendingComputerMutation,
   useCreateComputerMutation,
   useHostByIdQuery,
   useUpdateHostMutation,
-} from './hooks';
-import { ConnectionCommandCard } from './ConnectionCommandCard';
-import { computerCopy } from './computer-copy';
-import { rejectHostLabel } from './host-label';
+} from "./hooks";
+import { ConnectionCommandCard } from "./ConnectionCommandCard";
+import { computerCopy } from "./computer-copy";
+import { rejectHostLabel } from "./host-label";
 
 interface NewComputerDialogProps {
   open: boolean;
@@ -30,7 +30,7 @@ interface NewComputerDialogProps {
   onCreated?: (hostId: string) => void;
 }
 
-type Phase = 'creating' | 'waiting' | 'naming' | 'error';
+type Phase = "creating" | "waiting" | "naming" | "error";
 
 /**
  * #task:1348 — the "Add computer" flow.
@@ -61,9 +61,9 @@ export function NewComputerDialog({
   onOpenChange,
   onCreated,
 }: NewComputerDialogProps): JSX.Element {
-  const [phase, setPhase] = useState<Phase>('creating');
+  const [phase, setPhase] = useState<Phase>("creating");
   const [created, setCreated] = useState<HostCreateResponse | null>(null);
-  const [name, setName] = useState('');
+  const [name, setName] = useState("");
   const [finalizeError, setFinalizeError] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
   const startedRef = useRef(false);
@@ -85,7 +85,7 @@ export function NewComputerDialog({
 
   const createComputer = useCreateComputerMutation();
   const cancelComputer = useCancelPendingComputerMutation();
-  const rename = useUpdateHostMutation(created?.host_id ?? '');
+  const rename = useUpdateHostMutation(created?.host_id ?? "");
   // #task:1428 — the connect command is assembled locally from THIS desktop's
   // own connected server URL (a proven-reachable origin), never from the
   // server-echoed `server_url` (which carried a bind-address fallback bug).
@@ -98,7 +98,7 @@ export function NewComputerDialog({
   // ask for a name.
   const draftQuery = useHostByIdQuery(created?.host_id, {
     enabled: created !== null,
-    refetchInterval: phase === 'waiting' ? 2000 : false,
+    refetchInterval: phase === "waiting" ? 2000 : false,
   });
   const draft = draftQuery.data ?? null;
 
@@ -108,9 +108,9 @@ export function NewComputerDialog({
     if (!open) {
       startedRef.current = false;
       committingRef.current = false;
-      setPhase('creating');
+      setPhase("creating");
       setCreated(null);
-      setName('');
+      setName("");
       setFinalizeError(false);
       return;
     }
@@ -128,9 +128,9 @@ export function NewComputerDialog({
           return;
         }
         setCreated(res);
-        setPhase('waiting');
+        setPhase("waiting");
       } catch {
-        setPhase('error');
+        setPhase("error");
       }
     })();
     // Intentionally keyed on `open` only — the ref guard makes this a
@@ -142,11 +142,8 @@ export function NewComputerDialog({
   // (or `active`, if a poll races past it) both mean the connection is
   // live, which is the only prerequisite for the finalize/name step.
   useEffect(() => {
-    if (
-      phase === 'waiting' &&
-      (draft?.status === 'attached' || draft?.status === 'active')
-    ) {
-      setPhase('naming');
+    if (phase === "waiting" && (draft?.status === "attached" || draft?.status === "active")) {
+      setPhase("naming");
     }
   }, [phase, draft?.status]);
 
@@ -227,30 +224,29 @@ export function NewComputerDialog({
   // live-attached right now), orthogonal to the identity fields — we never
   // read `name`/`display_label` AS the hostname. Fall back to the display
   // name only if the diagnostic isn't populated yet (Alice doc §7.1).
-  const connectedHostname =
-    draft?.connected_host_name ?? draft?.display_label ?? draft?.name ?? '';
+  const connectedHostname = draft?.connected_host_name ?? draft?.display_label ?? draft?.name ?? "";
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{computerCopy.dialogTitle}</DialogTitle>
-          {phase !== 'naming' ? (
+          {phase !== "naming" ? (
             <DialogDescription>{computerCopy.dialogIntro}</DialogDescription>
           ) : null}
         </DialogHeader>
 
-        {phase === 'error' ? (
+        {phase === "error" ? (
           <p className="text-sm text-error">{computerCopy.createFailed}</p>
-        ) : phase === 'creating' || !created ? (
+        ) : phase === "creating" || !created ? (
           <div className="flex items-center gap-2 py-6 text-sm text-text-muted">
             <Loader2 className="size-4 animate-spin" />
             {computerCopy.addComputer}…
           </div>
-        ) : phase === 'naming' ? (
+        ) : phase === "naming" ? (
           <form
             className="flex flex-col gap-3"
-            onSubmit={e => {
+            onSubmit={(e) => {
               e.preventDefault();
               void handleFinish();
             }}
@@ -264,21 +260,17 @@ export function NewComputerDialog({
               <Input
                 id="computer-name"
                 value={name}
-                onChange={e => {
+                onChange={(e) => {
                   setName(e.target.value);
                   setNameError(null);
                 }}
                 placeholder={computerCopy.namePlaceholder}
                 aria-invalid={nameError ? true : undefined}
-                aria-describedby={nameError ? 'computer-name-error' : undefined}
+                aria-describedby={nameError ? "computer-name-error" : undefined}
                 autoFocus
               />
               {nameError ? (
-                <p
-                  id="computer-name-error"
-                  role="alert"
-                  className="text-sm text-error"
-                >
+                <p id="computer-name-error" role="alert" className="text-sm text-error">
                   {nameError}
                 </p>
               ) : null}
@@ -290,7 +282,7 @@ export function NewComputerDialog({
               {/* Name is required — it's the finalize gate. */}
               <Button
                 type="submit"
-                disabled={rename.isPending || name.trim() === ''}
+                disabled={rename.isPending || name.trim() === ""}
                 {...primaryAction()}
               >
                 {computerCopy.finish}
@@ -303,7 +295,7 @@ export function NewComputerDialog({
             <ConnectionCommandCard
               daemonNpmSpec={created.daemon_npm_spec}
               connectToken={created.connect_token}
-              connectedServerUrl={backendInfo.data?.url ?? ''}
+              connectedServerUrl={backendInfo.data?.url ?? ""}
             />
 
             <div className="mt-1 flex items-center gap-2 border border-dashed border-border px-3 py-2.5 text-sm text-text-secondary">

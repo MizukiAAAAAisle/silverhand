@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webFrame, type IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, webFrame, type IpcRendererEvent } from "electron";
 import type {
   AuthLoginInput,
   AuthSignupInput,
@@ -8,45 +8,45 @@ import type {
   ServerInfo,
   TlsErrorCode,
   UserDto,
-} from '@silverhand/shared';
-import { desktopBuildConfig, type DesktopBuildConfig } from '../build-flags.js';
-import type { LocalHostWsAttachment } from '../backend-info-contract.js';
+} from "@silverhand/shared";
+import { desktopBuildConfig, type DesktopBuildConfig } from "../build-flags.js";
+import type { LocalHostWsAttachment } from "../backend-info-contract.js";
 
 export type { LocalHostWsAttachment };
 
 export interface BackendInfo {
   url: string;
-  mode: 'embedded' | 'remote';
+  mode: "embedded" | "remote";
   /** Local comparison between the protocol compiled into this app's bundled
    * daemon and the exact outbound protocol accepted by the connected server. */
   outbound_protocol_compatibility:
     | {
-        status: 'compatible' | 'app_update_required' | 'server_update_required';
+        status: "compatible" | "app_update_required" | "server_update_required";
         app_protocol_version: number;
         server_protocol_version: number;
       }
     | {
-        status: 'unknown';
+        status: "unknown";
         app_protocol_version: number;
         server_protocol_version: null;
       };
   local_host_id: string | null;
-  local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
+  local_host_status: "unclaimed" | "claimed" | "revoked" | "error" | "failed";
   local_host_ws_attachment: LocalHostWsAttachment;
   local_host_server_url: string | null;
 }
 
 export type DesktopAuthState =
-  | { status: 'authenticated'; signup_enabled: boolean; user: UserDto }
-  | { status: 'unauthenticated'; signup_enabled: boolean }
-  | { status: 'backend_unreachable'; server_url: string; message: string }
+  | { status: "authenticated"; signup_enabled: boolean; user: UserDto }
+  | { status: "unauthenticated"; signup_enabled: boolean }
+  | { status: "backend_unreachable"; server_url: string; message: string }
   | {
-      status: 'app_update_required';
+      status: "app_update_required";
       server_api_epoch: number;
       minimum_client_epoch: number;
     }
   | {
-      status: 'server_update_required';
+      status: "server_update_required";
       server_api_epoch: number;
       desktop_api_epoch: number;
     };
@@ -60,7 +60,7 @@ export interface BackendProxyRequest {
   method?: string;
   headers?: Record<string, string>;
   bodyText?: string;
-  responseType?: 'text' | 'arrayBuffer';
+  responseType?: "text" | "arrayBuffer";
 }
 
 export interface BackendProxyResponse {
@@ -99,15 +99,15 @@ export type DesktopHostProxyConfigResult =
   | {
       ok: false;
       code:
-        | 'not_local_host'
-        | 'unauthorized'
-        | 'host_not_found'
-        | 'host_not_active'
-        | 'host_revoked'
-        | 'computer_offline'
-        | 'daemon_unavailable'
-        | 'daemon_error'
-        | 'invalid_input';
+        | "not_local_host"
+        | "unauthorized"
+        | "host_not_found"
+        | "host_not_active"
+        | "host_revoked"
+        | "computer_offline"
+        | "daemon_unavailable"
+        | "daemon_error"
+        | "invalid_input";
       message?: string;
     };
 
@@ -115,76 +115,76 @@ export type DesktopHostMutationResult =
   | {
       ok: true;
       host: HostDto;
-      local_host_id: BackendInfo['local_host_id'];
-      local_host_status: BackendInfo['local_host_status'];
-      local_host_ws_attachment: BackendInfo['local_host_ws_attachment'];
-      local_host_server_url: BackendInfo['local_host_server_url'];
+      local_host_id: BackendInfo["local_host_id"];
+      local_host_status: BackendInfo["local_host_status"];
+      local_host_ws_attachment: BackendInfo["local_host_ws_attachment"];
+      local_host_server_url: BackendInfo["local_host_server_url"];
     }
   | {
       ok: false;
       code:
-        | 'unauthorized'
-        | 'not_current_host'
-        | 'host_not_found'
-        | 'host_revoked'
-        | 'kind_not_supported'
-        | 'invalid_response'
-        | 'network_error';
+        | "unauthorized"
+        | "not_current_host"
+        | "host_not_found"
+        | "host_revoked"
+        | "kind_not_supported"
+        | "invalid_response"
+        | "network_error";
       message?: string;
     };
 
 export type DesktopSaveServerUrlResult =
-  | { ok: true; kind: 'reloaded'; elapsedMs: number; attachedAt: number }
-  | { ok: true; kind: 'unchanged' }
-  | { ok: true; kind: 'connectivity_unverified'; elapsedMs: number }
+  | { ok: true; kind: "reloaded"; elapsedMs: number; attachedAt: number }
+  | { ok: true; kind: "unchanged" }
+  | { ok: true; kind: "connectivity_unverified"; elapsedMs: number }
   | {
       ok: false;
-      kind: 'classify_rejected';
+      kind: "classify_rejected";
       reason:
-        | 'malformed_url'
-        | 'unsupported_scheme'
-        | 'non_origin_url'
-        | 'insecure_remote_http_disallowed'
-        | 'obfuscated_loopback_disallowed';
+        | "malformed_url"
+        | "unsupported_scheme"
+        | "non_origin_url"
+        | "insecure_remote_http_disallowed"
+        | "obfuscated_loopback_disallowed";
       message: string;
     }
-  | { ok: false; kind: 'config_write_failed'; message: string }
+  | { ok: false; kind: "config_write_failed"; message: string }
   | {
       ok: false;
-      kind: 'reload_rejected';
-      reason: 'not_attached' | 'config_unreadable' | 'parse_failed' | 'invalid_server_url';
+      kind: "reload_rejected";
+      reason: "not_attached" | "config_unreadable" | "parse_failed" | "invalid_server_url";
       message: string;
     }
-  | { ok: false; kind: 'no_attachment_controller'; message: string };
+  | { ok: false; kind: "no_attachment_controller"; message: string };
 
 export type DesktopProbeServerInfoResult =
   | {
       ok: true;
-      kind: 'system_ca_verified' | 'loopback_ok' | 'insecure_dev_remote';
+      kind: "system_ca_verified" | "loopback_ok" | "insecure_dev_remote";
       info: ServerInfo;
       originUrl: string;
     }
   | {
       ok: false;
-      kind: 'classify_rejected';
+      kind: "classify_rejected";
       reason:
-        | 'malformed_url'
-        | 'unsupported_scheme'
-        | 'non_origin_url'
-        | 'insecure_remote_http_disallowed'
-        | 'obfuscated_loopback_disallowed';
+        | "malformed_url"
+        | "unsupported_scheme"
+        | "non_origin_url"
+        | "insecure_remote_http_disallowed"
+        | "obfuscated_loopback_disallowed";
       message: string;
     }
-  | { ok: false; kind: 'tls_failed'; code: TlsErrorCode; message: string }
+  | { ok: false; kind: "tls_failed"; code: TlsErrorCode; message: string }
   | {
       ok: false;
-      kind: 'http_failed';
+      kind: "http_failed";
       status: number;
       statusText: string;
       bodyText: string;
     }
-  | { ok: false; kind: 'network_failed'; message: string }
-  | { ok: false; kind: 'invalid_response'; message: string };
+  | { ok: false; kind: "network_failed"; message: string }
+  | { ok: false; kind: "invalid_response"; message: string };
 
 export type DesktopProfileSaveWithTestResult =
   | {
@@ -195,73 +195,73 @@ export type DesktopProfileSaveWithTestResult =
     }
   | {
       ok: false;
-      phase: 'test';
+      phase: "test";
       test: DesktopProbeServerInfoResult & { ok: false };
     }
   | {
       ok: false;
-      phase: 'commit_guard';
-      reason: 'remote_backend_not_yet_supported';
+      phase: "commit_guard";
+      reason: "remote_backend_not_yet_supported";
       message: string;
       test: DesktopProbeServerInfoResult & { ok: true };
     }
   | {
       ok: false;
-      phase: 'write';
-      reason: 'write_failed';
+      phase: "write";
+      reason: "write_failed";
       detail?: string;
     };
 
 export type DesktopServerProfileApplyOutcome =
   | {
-      kind: 'fully_applied';
+      kind: "fully_applied";
       profileVersion: number;
-      reloadKind: 'reloaded' | 'unchanged' | 'connectivity_unverified';
+      reloadKind: "reloaded" | "unchanged" | "connectivity_unverified";
       elapsedMs: number;
     }
   | {
-      kind: 'no_op_no_host_claim';
+      kind: "no_op_no_host_claim";
       profileVersion: number;
     }
   | {
-      kind: 'partial_apply_pending';
+      kind: "partial_apply_pending";
       profileVersion: number;
       reason:
-        | 'config_write_failed'
-        | 'reload_rejected'
-        | 'no_attachment_controller'
-        | 'host_token_missing';
+        | "config_write_failed"
+        | "reload_rejected"
+        | "no_attachment_controller"
+        | "host_token_missing";
       reloadRejectionReason:
-        | 'not_attached'
-        | 'config_unreadable'
-        | 'parse_failed'
-        | 'invalid_server_url'
+        | "not_attached"
+        | "config_unreadable"
+        | "parse_failed"
+        | "invalid_server_url"
         | null;
       detail: string;
     };
 
 export type DesktopPartialApplyState =
-  | { kind: 'fully_applied' }
-  | { kind: 'no_profile' }
+  | { kind: "fully_applied" }
+  | { kind: "no_profile" }
   | {
-      kind: 'unusable_profile';
-      reason: 'parse_failed';
+      kind: "unusable_profile";
+      reason: "parse_failed";
       detail: string;
       lastReadAt: number;
     }
   | {
-      kind: 'partial_apply_pending';
+      kind: "partial_apply_pending";
       profileVersion: number;
       reason:
-        | 'config_write_failed'
-        | 'reload_rejected'
-        | 'no_attachment_controller'
-        | 'host_token_missing';
+        | "config_write_failed"
+        | "reload_rejected"
+        | "no_attachment_controller"
+        | "host_token_missing";
       reloadRejectionReason:
-        | 'not_attached'
-        | 'config_unreadable'
-        | 'parse_failed'
-        | 'invalid_server_url'
+        | "not_attached"
+        | "config_unreadable"
+        | "parse_failed"
+        | "invalid_server_url"
         | null;
       detail: string;
       lastAttemptAt: number;
@@ -273,25 +273,25 @@ export type DesktopPartialApplyRetryResult =
       outcome: DesktopServerProfileApplyOutcome;
       state: DesktopPartialApplyState;
     }
-  | { ok: false; reason: 'no_profile' }
-  | { ok: false; reason: 'profile_unreadable'; detail: string };
+  | { ok: false; reason: "no_profile" }
+  | { ok: false; reason: "profile_unreadable"; detail: string };
 
 export type DesktopClearProfileResult =
   | { ok: true; cleared: boolean }
-  | { ok: false; reason: 'unlink_failed'; detail: string };
+  | { ok: false; reason: "unlink_failed"; detail: string };
 
 export type DesktopEventWsDiagnosticKind =
-  | 'socket_open'
-  | 'socket_close'
-  | 'authenticated'
-  | 'subscribed'
-  | 'message_event'
-  | 'live_gap'
-  | 'resume_sent'
-  | 'snapshot_required'
-  | 'orphan_frame'
-  | 'markSatisfied_no_floor'
-  | 'satisfied_pending_overflow';
+  | "socket_open"
+  | "socket_close"
+  | "authenticated"
+  | "subscribed"
+  | "message_event"
+  | "live_gap"
+  | "resume_sent"
+  | "snapshot_required"
+  | "orphan_frame"
+  | "markSatisfied_no_floor"
+  | "satisfied_pending_overflow";
 
 export interface DesktopEventWsDiagnostic {
   kind: DesktopEventWsDiagnosticKind;
@@ -315,12 +315,12 @@ interface PinchWheelEvent {
 
 interface PreloadEventTarget {
   addEventListener(
-    type: 'wheel',
+    type: "wheel",
     listener: (event: PinchWheelEvent) => void,
     options: { capture: true; passive: false },
   ): void;
   removeEventListener(
-    type: 'wheel',
+    type: "wheel",
     listener: (event: PinchWheelEvent) => void,
     capture: true,
   ): void;
@@ -342,7 +342,7 @@ function setPreviewPinchZoom(enabled: boolean): void {
   previewPinchZoomEnabled = enabled;
 
   if (enabled) {
-    preloadEventTarget.addEventListener('wheel', preventPagePinchZoom, {
+    preloadEventTarget.addEventListener("wheel", preventPagePinchZoom, {
       capture: true,
       passive: false,
     });
@@ -351,51 +351,51 @@ function setPreviewPinchZoom(enabled: boolean): void {
   }
 
   webFrame.setVisualZoomLevelLimits(1, 1);
-  preloadEventTarget.removeEventListener('wheel', preventPagePinchZoom, true);
+  preloadEventTarget.removeEventListener("wheel", preventPagePinchZoom, true);
 }
 
 const api = {
   getDesktopBuildConfig: async (): Promise<DesktopBuildConfig> => desktopBuildConfig(),
-  getBackendInfo: (): Promise<BackendInfo | null> => ipcRenderer.invoke('backend:info'),
-  getAuthState: (): Promise<DesktopAuthState> => ipcRenderer.invoke('auth:getState'),
+  getBackendInfo: (): Promise<BackendInfo | null> => ipcRenderer.invoke("backend:info"),
+  getAuthState: (): Promise<DesktopAuthState> => ipcRenderer.invoke("auth:getState"),
   signup: (input: AuthSignupInput): Promise<DesktopAuthResult> =>
-    ipcRenderer.invoke('auth:signup', input),
+    ipcRenderer.invoke("auth:signup", input),
   login: (input: AuthLoginInput): Promise<DesktopAuthResult> =>
-    ipcRenderer.invoke('auth:login', input),
-  logout: (): Promise<{ ok: true }> => ipcRenderer.invoke('auth:logout'),
+    ipcRenderer.invoke("auth:login", input),
+  logout: (): Promise<{ ok: true }> => ipcRenderer.invoke("auth:logout"),
   backendRequest: (input: BackendProxyRequest): Promise<BackendProxyResponse> =>
-    ipcRenderer.invoke('backend:request', input),
+    ipcRenderer.invoke("backend:request", input),
   backendUpload: (input: BackendUploadRequest): Promise<BackendProxyResponse> =>
-    ipcRenderer.invoke('backend:upload', input),
+    ipcRenderer.invoke("backend:upload", input),
   recordEventWsDiagnostic: (input: DesktopEventWsDiagnostic): Promise<void> =>
-    ipcRenderer.invoke('eventWs:diagnostic', input),
+    ipcRenderer.invoke("eventWs:diagnostic", input),
   rotateHostToken: (input: { hostId: string }): Promise<DesktopHostMutationResult> =>
-    ipcRenderer.invoke('hosts:rotate', input),
+    ipcRenderer.invoke("hosts:rotate", input),
   revokeHost: (input: { hostId: string }): Promise<DesktopHostMutationResult> =>
-    ipcRenderer.invoke('hosts:revoke', input),
+    ipcRenderer.invoke("hosts:revoke", input),
   getHostProxyConfig: (input: { hostId: string }): Promise<DesktopHostProxyConfigResult> =>
-    ipcRenderer.invoke('hosts:proxyConfig:get', input),
+    ipcRenderer.invoke("hosts:proxyConfig:get", input),
   saveHostProxyConfig: (input: {
     hostId: string;
     config: DesktopHostProxyConfig;
-  }): Promise<DesktopHostProxyConfigResult> => ipcRenderer.invoke('hosts:proxyConfig:set', input),
+  }): Promise<DesktopHostProxyConfigResult> => ipcRenderer.invoke("hosts:proxyConfig:set", input),
   saveServerUrl: (input: { serverUrl: string }): Promise<DesktopSaveServerUrlResult> =>
-    ipcRenderer.invoke('settings:saveServerUrl', input),
+    ipcRenderer.invoke("settings:saveServerUrl", input),
   getServerConnectionProfile: (): Promise<ServerConnectionProfileView | null> =>
-    ipcRenderer.invoke('profile:get'),
+    ipcRenderer.invoke("profile:get"),
   saveServerConnectionProfile: (input: {
     serverUrl: string;
   }): Promise<DesktopProfileSaveWithTestResult> =>
-    ipcRenderer.invoke('profile:saveWithTest', input),
+    ipcRenderer.invoke("profile:saveWithTest", input),
   clearServerConnectionProfile: (): Promise<DesktopClearProfileResult> =>
-    ipcRenderer.invoke('profile:clear'),
+    ipcRenderer.invoke("profile:clear"),
   getPartialApplyState: (): Promise<DesktopPartialApplyState> =>
-    ipcRenderer.invoke('partialApply:get'),
+    ipcRenderer.invoke("partialApply:get"),
   retryPartialApply: (): Promise<DesktopPartialApplyRetryResult> =>
-    ipcRenderer.invoke('partialApply:retry'),
+    ipcRenderer.invoke("partialApply:retry"),
   pickDirectory: (options?: { defaultPath?: string }): Promise<string | null> =>
-    ipcRenderer.invoke('dialog:pickDirectory', options),
-  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
+    ipcRenderer.invoke("dialog:pickDirectory", options),
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke("shell:openExternal", url),
   setPinchZoom: setPreviewPinchZoom,
   /** Materialize attachment bytes to ONE stable per-id scratch file and
    *  hand it off to the OS default handler (e.g. open `.html` in the
@@ -408,7 +408,7 @@ const api = {
     filename: string;
     bytes: Uint8Array;
   }): Promise<{ ok: true } | { ok: false; reason: string }> =>
-    ipcRenderer.invoke('attachment:openExternal', input),
+    ipcRenderer.invoke("attachment:openExternal", input),
   /** Save attachment bytes to a user-chosen path via the OS save-as
    *  dialog. The renderer stays out of `fs` and `dialog`; main owns
    *  the write. `canceled: true` is the "user dismissed the picker"
@@ -418,27 +418,27 @@ const api = {
     bytes: Uint8Array;
   }): Promise<
     { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; reason: string }
-  > => ipcRenderer.invoke('attachment:save', input),
+  > => ipcRenderer.invoke("attachment:save", input),
   /** Subscribe to shutdown progress steps emitted by the main process
    *  just before and during graceful shutdown. Drives the in-app overlay
    *  so the user sees what's happening instead of a frozen window. */
   onShutdownProgress: (handler: (step: string) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, step: string) => handler(step);
-    ipcRenderer.on('shutdown:progress', listener);
-    return () => ipcRenderer.off('shutdown:progress', listener);
+    ipcRenderer.on("shutdown:progress", listener);
+    return () => ipcRenderer.off("shutdown:progress", listener);
   },
   onEpochUpdateRequired: (handler: () => void): (() => void) => {
     const listener = (_event: IpcRendererEvent) => handler();
-    ipcRenderer.on('epoch:update-required', listener);
-    return () => ipcRenderer.off('epoch:update-required', listener);
+    ipcRenderer.on("epoch:update-required", listener);
+    return () => ipcRenderer.off("epoch:update-required", listener);
   },
   /** Fired by the App menu's "Settings…" item (Cmd+,) so the renderer
    *  can navigate to the Settings page. The main process also focuses
    *  the window before emitting, so the handler only needs to navigate. */
   onNavigateSettings: (handler: () => void): (() => void) => {
     const listener = (_event: IpcRendererEvent) => handler();
-    ipcRenderer.on('navigate:settings', listener);
-    return () => ipcRenderer.off('navigate:settings', listener);
+    ipcRenderer.on("navigate:settings", listener);
+    return () => ipcRenderer.off("navigate:settings", listener);
   },
   /** ⌘W contextual close. Main is the single interception owner
    *  (a menu accelerator fires before any renderer keydown), so it sends a
@@ -450,11 +450,11 @@ const api = {
    *  instead). */
   onContextualClose: (handler: (reqId: string) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, reqId: string) => handler(reqId);
-    ipcRenderer.on('shortcut:contextual-close', listener);
-    return () => ipcRenderer.off('shortcut:contextual-close', listener);
+    ipcRenderer.on("shortcut:contextual-close", listener);
+    return () => ipcRenderer.off("shortcut:contextual-close", listener);
   },
-  respondContextualClose: (reqId: string, outcome: 'closed-panel' | 'background-app'): void => {
-    ipcRenderer.send('shortcut:contextual-close-result', reqId, outcome);
+  respondContextualClose: (reqId: string, outcome: "closed-panel" | "background-app"): void => {
+    ipcRenderer.send("shortcut:contextual-close-result", reqId, outcome);
   },
   showSystemNotification: (opts: {
     title: string;
@@ -464,7 +464,7 @@ const api = {
      *  can route the click to the right navigation target. Fire-and-
      *  forget if omitted (the notification is just informational). */
     notificationId?: string;
-  }): Promise<void> => ipcRenderer.invoke('notification:show', opts),
+  }): Promise<void> => ipcRenderer.invoke("notification:show", opts),
   /** Subscribe to native-notification click events. Main fires this
    *  when the user clicks an OS-level Silverhand notification, after
    *  focusing the window. The id matches what the renderer originally
@@ -473,8 +473,8 @@ const api = {
     const listener = (_event: IpcRendererEvent, notificationId: string) => {
       handler(notificationId);
     };
-    ipcRenderer.on('notification:clicked', listener);
-    return () => ipcRenderer.off('notification:clicked', listener);
+    ipcRenderer.on("notification:clicked", listener);
+    return () => ipcRenderer.off("notification:clicked", listener);
   },
   /** Dismiss OS-level notifications by the ids originally passed to
    *  `showSystemNotification`. Fired when the backend reports those
@@ -482,8 +482,8 @@ const api = {
    *  system notification center clears in step with in-app read state.
    *  Unknown / already-closed ids are ignored by main. */
   dismissSystemNotifications: (notificationIds: string[]): Promise<void> =>
-    ipcRenderer.invoke('notification:dismiss', notificationIds),
-  setBadgeCount: (count: number): Promise<void> => ipcRenderer.invoke('badge:setCount', count),
+    ipcRenderer.invoke("notification:dismiss", notificationIds),
+  setBadgeCount: (count: number): Promise<void> => ipcRenderer.invoke("badge:setCount", count),
   /** Save a PNG snapshot to disk via the native save dialog. The
    *  renderer hands over raw bytes; main owns the dialog + writeFile.
    *  See `export:savePng` in main. */
@@ -492,14 +492,14 @@ const api = {
     suggestedName: string;
   }): Promise<
     { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; error: string }
-  > => ipcRenderer.invoke('export:savePng', input),
+  > => ipcRenderer.invoke("export:savePng", input),
   /** Copy PNG snapshot bytes to the OS clipboard. Main constructs a
    *  NativeImage so Electron handles pasteboard format negotiation —
    *  renderer-side `ClipboardItem` for images is brittle on macOS. */
   copyPngExport: (input: {
     pngBytes: Uint8Array;
   }): Promise<{ ok: true } | { ok: false; error: string }> =>
-    ipcRenderer.invoke('export:copyPng', input),
+    ipcRenderer.invoke("export:copyPng", input),
 };
 
-contextBridge.exposeInMainWorld('silverhand', api);
+contextBridge.exposeInMainWorld("silverhand", api);

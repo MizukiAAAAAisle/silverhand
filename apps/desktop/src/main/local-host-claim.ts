@@ -7,10 +7,10 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
-} from 'node:fs';
-import { hostname } from 'node:os';
-import { dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
+} from "node:fs";
+import { hostname } from "node:os";
+import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   DaemonHostConfigSchema,
   HOST_DISPLAY_LABEL_MAX_LENGTH,
@@ -18,22 +18,22 @@ import {
   apiPaths,
   type DaemonHostConfig,
   type HostClaimOrCreateInput,
-} from '@silverhand/shared';
-import { z } from 'zod';
+} from "@silverhand/shared";
+import { z } from "zod";
 
 const InstallationIdSchema = z.string().uuid();
 
 export type LocalHostClaimStatus =
-  | { status: 'unclaimed'; hostId: null }
-  | { status: 'claimed'; hostId: string }
-  | { status: 'revoked'; hostId: string | null }
-  | { status: 'error'; hostId: string | null }
-  | { status: 'failed'; hostId: string | null };
+  | { status: "unclaimed"; hostId: null }
+  | { status: "claimed"; hostId: string }
+  | { status: "revoked"; hostId: string | null }
+  | { status: "error"; hostId: string | null }
+  | { status: "failed"; hostId: string | null };
 
 export function loadOrCreateInstallationId(installationIdPath: string): string {
   const path = installationIdPath;
   if (existsSync(path)) {
-    const parsed = InstallationIdSchema.safeParse(readFileSync(path, 'utf8').trim());
+    const parsed = InstallationIdSchema.safeParse(readFileSync(path, "utf8").trim());
     if (parsed.success) return parsed.data;
   }
 
@@ -42,9 +42,7 @@ export function loadOrCreateInstallationId(installationIdPath: string): string {
   return installationId;
 }
 
-export function readDaemonHostConfig(
-  daemonConfigPath: string,
-): DaemonHostConfig | null {
+export function readDaemonHostConfig(daemonConfigPath: string): DaemonHostConfig | null {
   const path = daemonConfigPath;
   // Stat-first safe read (Cindy `#task:634` re-review P1). The daemon
   // side already uses this pattern in `readHostConfig`
@@ -64,7 +62,7 @@ export function readDaemonHostConfig(
   try {
     stat = statSync(path);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     // EACCES / EIO / etc. — fail-closed; the renderer just sees null
     // and falls back to the embedded backend URL hint.
     return null;
@@ -72,7 +70,7 @@ export function readDaemonHostConfig(
   if (!stat.isFile()) return null;
   try {
     const parsed = DaemonHostConfigSchema.safeParse(
-      JSON.parse(readFileSync(path, 'utf8')) as unknown,
+      JSON.parse(readFileSync(path, "utf8")) as unknown,
     );
     return parsed.success ? parsed.data : null;
   } catch {
@@ -80,30 +78,21 @@ export function readDaemonHostConfig(
   }
 }
 
-export function writeDaemonHostConfig(
-  daemonConfigPath: string,
-  config: DaemonHostConfig,
-): void {
+export function writeDaemonHostConfig(daemonConfigPath: string, config: DaemonHostConfig): void {
   const parsed = DaemonHostConfigSchema.parse(config);
-  writeSecretFile(
-    daemonConfigPath,
-    `${JSON.stringify(parsed, null, 2)}\n`,
-  );
+  writeSecretFile(daemonConfigPath, `${JSON.stringify(parsed, null, 2)}\n`);
 }
 
 export function removeDaemonHostConfig(daemonConfigPath: string): void {
   try {
     unlinkSync(daemonConfigPath);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
 }
 
 export function defaultClaimLabel(machineName: string): string | null {
-  const fitted = machineName
-    .trim()
-    .slice(0, HOST_DISPLAY_LABEL_MAX_LENGTH)
-    .trim();
+  const fitted = machineName.trim().slice(0, HOST_DISPLAY_LABEL_MAX_LENGTH).trim();
   return fitted.length > 0 ? fitted : null;
 }
 
@@ -118,9 +107,7 @@ export function buildHostClaimInput(input: {
   return HostClaimOrCreateInputSchema.parse({
     installation_id: input.installationId,
     ...(label !== null ? { label } : {}),
-    ...(input.existingConfig
-      ? { current_host_id: input.existingConfig.host_id }
-      : {}),
+    ...(input.existingConfig ? { current_host_id: input.existingConfig.host_id } : {}),
   });
 }
 
@@ -139,7 +126,7 @@ export function buildHostClaimInput(input: {
  *  raw check on the original string FIRST. */
 export function pathnameOf(rawPath: string): string {
   try {
-    return new URL(rawPath, 'http://silverhand.local').pathname;
+    return new URL(rawPath, "http://silverhand.local").pathname;
   } catch {
     return rawPath;
   }
@@ -169,8 +156,8 @@ export function pathnameOf(rawPath: string): string {
 export function isMainManagedHostPath(path: string): boolean {
   const pathname = pathnameOf(path);
   if (pathname === apiPaths.hostClaimOrCreate) return true;
-  if (pathname.startsWith('/api/hosts/') && pathname.endsWith('/rotate-token')) return true;
-  if (pathname.startsWith('/api/hosts/') && pathname.endsWith('/revoke')) return true;
+  if (pathname.startsWith("/api/hosts/") && pathname.endsWith("/rotate-token")) return true;
+  if (pathname.startsWith("/api/hosts/") && pathname.endsWith("/revoke")) return true;
   return false;
 }
 
@@ -200,7 +187,7 @@ export const isTokenBearingHostClaimPath = isMainManagedHostPath;
  *     claim / rotate / revoke so renderer can't reach those routes
  *     through the generic proxy. */
 export function assertApiProxyPath(path: string): void {
-  if (!path.startsWith('/api/')) {
+  if (!path.startsWith("/api/")) {
     throw new Error(`desktop backend proxy only accepts /api/* paths: ${path}`);
   }
   if (isMainManagedHostPath(path)) {
@@ -231,9 +218,7 @@ export function applyRotateSideEffects(input: {
     // field would make a daemon attached to an explicitly allowed
     // http:// remote start rejecting the same config on the next
     // reload/restart.
-    ...(existing?.allow_insecure_remote === true
-      ? { allow_insecure_remote: true }
-      : {}),
+    ...(existing?.allow_insecure_remote === true ? { allow_insecure_remote: true } : {}),
   });
 }
 
@@ -243,11 +228,11 @@ export function applyRotateSideEffects(input: {
 export function applyRevokeSideEffects(input: {
   daemonConfigPath: string;
   hostId: string;
-}): 'cleared' | 'unchanged' {
+}): "cleared" | "unchanged" {
   const existing = readDaemonHostConfig(input.daemonConfigPath);
-  if (existing?.host_id !== input.hostId) return 'unchanged';
+  if (existing?.host_id !== input.hostId) return "unchanged";
   removeDaemonHostConfig(input.daemonConfigPath);
-  return 'cleared';
+  return "cleared";
 }
 
 function writeSecretFile(path: string, content: string): void {

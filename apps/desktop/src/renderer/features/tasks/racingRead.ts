@@ -1,4 +1,4 @@
-import { type QueryClient } from '@tanstack/react-query';
+import { type QueryClient } from "@tanstack/react-query";
 
 /**
  * Restart a read on `key` that was ISSUED BEFORE the patch we just committed.
@@ -33,12 +33,9 @@ import { type QueryClient } from '@tanstack/react-query';
  * and invalidating it would spend a request to re-read what the patch already
  * says.
  */
-export function restartRacingRead(
-  qc: QueryClient,
-  key: readonly unknown[],
-): void {
+export function restartRacingRead(qc: QueryClient, key: readonly unknown[]): void {
   const state = qc.getQueryState(key);
-  if (state?.fetchStatus !== 'fetching') return;
+  if (state?.fetchStatus !== "fetching") return;
   if (state.data === undefined) {
     void qc.cancelQueries({ queryKey: key, exact: true });
   }

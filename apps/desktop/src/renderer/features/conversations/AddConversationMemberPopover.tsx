@@ -1,18 +1,15 @@
-import { useMemo, useState } from 'react';
-import * as Popover from '@radix-ui/react-popover';
-import { Plus } from 'lucide-react';
-import type { AgentDto, MemberDto, UserDto, WorkspaceRole } from '@silverhand/shared';
-import { ApiError } from '@/lib/api';
-import { MemberCandidatePicker } from '../workspaces/MemberCandidatePicker';
-import type {
-  MemberCandidate,
-  MemberCandidateGroup,
-} from '../workspaces/member-search';
-import { useWorkspaceMemberLists } from '../workspaces/hooks';
-import { useConversationMembers } from './useConversationMembers';
-import { useAddConversationMember } from './useAddConversationMember';
-import { useAgents } from '@/features/agents/hooks';
-import { useUsers } from '@/features/users/hooks';
+import { useMemo, useState } from "react";
+import * as Popover from "@radix-ui/react-popover";
+import { Plus } from "lucide-react";
+import type { AgentDto, MemberDto, UserDto, WorkspaceRole } from "@silverhand/shared";
+import { ApiError } from "@/lib/api";
+import { MemberCandidatePicker } from "../workspaces/MemberCandidatePicker";
+import type { MemberCandidate, MemberCandidateGroup } from "../workspaces/member-search";
+import { useWorkspaceMemberLists } from "../workspaces/hooks";
+import { useConversationMembers } from "./useConversationMembers";
+import { useAddConversationMember } from "./useAddConversationMember";
+import { useAgents } from "@/features/agents/hooks";
+import { useUsers } from "@/features/users/hooks";
 
 export interface AddConversationMemberPopoverProps {
   workspaceId: string;
@@ -23,8 +20,7 @@ export interface AddConversationMemberPopoverProps {
  *  reusable part — its per-candidate grading (see below) must never be
  *  re-derived by a second surface — while the trigger is the surface's own
  *  affordance. */
-interface AddConversationMemberPopoverOptions
-  extends AddConversationMemberPopoverProps {
+interface AddConversationMemberPopoverOptions extends AddConversationMemberPopoverProps {
   /** Replaces the default `+` chip. The node is the Radix trigger itself
    *  (`asChild`), so the consumer owns its glyph, label and box — the members
    *  modal opens the SAME picker from a full-width "Add member" row at its
@@ -36,7 +32,7 @@ interface AddConversationMemberPopoverOptions
    *  — a centred panel of the modal's own width then sits flush with the modal
    *  (shiki 2026-07-28), without this file or the caller restating the dialog's
    *  padding. */
-  align?: 'start' | 'center' | 'end';
+  align?: "start" | "center" | "end";
   /** Open as a MODAL popover. Needed when the trigger lives inside a Radix
    *  Dialog (the members modal): the Dialog wraps its content in
    *  `react-remove-scroll`, which blocks wheel/touch scroll everywhere OUTSIDE
@@ -105,9 +101,9 @@ export function AddConversationMemberPopover({
   workspaceId,
   conversationId,
   trigger,
-  align = 'end',
+  align = "end",
   modal = false,
-  widthClass = 'w-[260px]',
+  widthClass = "w-[260px]",
 }: AddConversationMemberPopoverOptions): JSX.Element {
   return (
     <Popover.Root modal={modal}>
@@ -136,10 +132,7 @@ export function AddConversationMemberPopover({
           // `+` is a low-key affordance, the modal's row aligns to the modal.
           className={`${widthClass} z-[var(--z-dialog)] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none`}
         >
-          <PopoverBody
-            workspaceId={workspaceId}
-            conversationId={conversationId}
-          />
+          <PopoverBody workspaceId={workspaceId} conversationId={conversationId} />
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -160,7 +153,7 @@ function PopoverBody({
   const viewerRole = memberLists.data?.viewerRole ?? null;
   const canAddOthers = canAddForeignConversationMembers(viewerRole);
   const humans = useUsers();
-  const ownedAgents = useAgents({ scope: 'owned' });
+  const ownedAgents = useAgents({ scope: "owned" });
   const conversationMembers = useConversationMembers(conversationId);
   const addMember = useAddConversationMember(conversationId, workspaceId);
 
@@ -170,8 +163,8 @@ function PopoverBody({
   const wsHumans: UserDto[] = memberLists.data?.humans ?? [];
   const pickableHumans = useMemo(() => {
     if (!canAddOthers) return [];
-    const workspaceIds = new Set(wsHumans.map(u => u.id));
-    const externalHumans = (humans.data ?? []).filter(u => !workspaceIds.has(u.id));
+    const workspaceIds = new Set(wsHumans.map((u) => u.id));
+    const externalHumans = (humans.data ?? []).filter((u) => !workspaceIds.has(u.id));
     return [...wsHumans, ...externalHumans];
   }, [canAddOthers, wsHumans, humans.data]);
   const pickableAgents = useMemo(
@@ -183,7 +176,7 @@ function PopoverBody({
   // to narrow the pools to "not yet in conversation".
   const inConversation = useMemo(() => {
     const set = new Set<string>();
-    if (conversationMembers.status === 'resolved') {
+    if (conversationMembers.status === "resolved") {
       for (const m of conversationMembers.members) set.add(memberKey(m));
     }
     return set;
@@ -197,28 +190,28 @@ function PopoverBody({
     () =>
       [
         {
-          label: 'AGENTS',
+          label: "AGENTS",
           items: pickableAgents
-            .filter(a => !inConversation.has(`agent:${a.id}`))
-            .map(a => ({ kind: 'agent' as const, agent: a })),
+            .filter((a) => !inConversation.has(`agent:${a.id}`))
+            .map((a) => ({ kind: "agent" as const, agent: a })),
         },
         {
-          label: 'HUMANS',
+          label: "HUMANS",
           items: pickableHumans
-            .filter(u => !inConversation.has(`human:${u.id}`))
-            .map(u => ({ kind: 'human' as const, user: u })),
+            .filter((u) => !inConversation.has(`human:${u.id}`))
+            .map((u) => ({ kind: "human" as const, user: u })),
         },
-      ].filter(g => g.items.length > 0),
+      ].filter((g) => g.items.length > 0),
     [pickableAgents, pickableHumans, inConversation],
   );
 
   const onPick = async (c: MemberCandidate): Promise<void> => {
     setError(null);
     try {
-      if (c.kind === 'agent') {
-        await addMember.mutateAsync({ kind: 'agent', agent_id: c.agent.id });
+      if (c.kind === "agent") {
+        await addMember.mutateAsync({ kind: "agent", agent_id: c.agent.id });
       } else {
-        await addMember.mutateAsync({ kind: 'human', user_id: c.user.id });
+        await addMember.mutateAsync({ kind: "human", user_id: c.user.id });
       }
       // Filter immediately picks up the new member via the
       // `useConversationMembers` invalidation; no manual close.
@@ -228,25 +221,25 @@ function PopoverBody({
   };
 
   const isLoading =
-    !memberLists.data
-    || (canAddOthers && !humans.data)
-    || !ownedAgents.data
-    || conversationMembers.status === 'loading';
+    !memberLists.data ||
+    (canAddOthers && !humans.data) ||
+    !ownedAgents.data ||
+    conversationMembers.status === "loading";
 
   return (
     <MemberCandidatePicker
       mode="inline"
       groups={groups}
-      onPick={c => void onPick(c)}
+      onPick={(c) => void onPick(c)}
       rowsDisabled={addMember.isPending}
       autoFocus
       ariaLabel="Add member"
       emptyHint={
         isLoading
-          ? 'Loading…'
+          ? "Loading…"
           : canAddOthers
-            ? 'Everyone is already in this conversation'
-            : 'You have no agents left to add'
+            ? "Everyone is already in this conversation"
+            : "You have no agents left to add"
       }
       footer={
         error ? (
@@ -262,7 +255,7 @@ function PopoverBody({
 // ── Helpers ──────────────────────────────────────────────────────
 
 function memberKey(m: MemberDto): string {
-  return m.kind === 'agent' ? `agent:${m.agent_id}` : `human:${m.user_id}`;
+  return m.kind === "agent" ? `agent:${m.agent_id}` : `human:${m.user_id}`;
 }
 
 /**
@@ -274,7 +267,7 @@ function formatError(err: unknown): string {
   if (err instanceof ApiError) {
     const code = parseCode(err.body);
     switch (code) {
-      case 'workspace_membership_required':
+      case "workspace_membership_required":
         // A backstop, not a live state: a human caller no longer reaches this
         // code on this route — a candidate outside the workspace is enrolled by
         // this very action (shiki's design, reaffirmed 2026-07-28), and a caller
@@ -282,8 +275,8 @@ function formatError(err: unknown): string {
         // `addConversationMember`. It survives only for a non-human principal
         // (the CLI), so the line states the rule rather than prescribing the
         // manual step the product does for you.
-        return 'Only the person who created this agent can bring it into the workspace.';
-      case 'agent_not_owned':
+        return "Only the person who created this agent can bring it into the workspace.";
+      case "agent_not_owned":
         // #task:1683 — the picker offers a plain member only their own agents,
         // so this is a backstop for a stale pool. Two targets land here and the
         // remedy differs, which is why `admin` is stated CONDITIONALLY (Cindy,
@@ -294,26 +287,25 @@ function formatError(err: unknown): string {
         // send the user to someone who hits the same 403; the creator is the
         // one exit that holds in both cases, so it comes first.
         return "You can only add agents you created. Someone else's needs its creator, or a workspace admin once it is in this workspace.";
-      case 'host_attach_pending':
-        return 'Its computer is not connected yet.';
-      case 'candidate_not_found':
-        return 'This candidate no longer exists.';
-      case 'handle_ambiguous':
-        return 'Several candidates share this handle.';
-      case 'conversation_member_add_unsupported':
+      case "host_attach_pending":
+        return "Its computer is not connected yet.";
+      case "candidate_not_found":
+        return "This candidate no longer exists.";
+      case "handle_ambiguous":
+        return "Several candidates share this handle.";
+      case "conversation_member_add_unsupported":
         // States the CAPABILITY, not a guess at which kind of conversation this
         // is (#task:2044): the same code covers a direct pair AND a fixed-roster
         // channel in an agent space, so naming either one would be wrong half
         // the time — and "DM" is exactly the word that stopped being unambiguous.
         return "This conversation's members are fixed and can't be changed.";
-      case 'conversation_closed':
+      case "conversation_closed":
         return "This conversation is closed. Members can't be added.";
       default:
         break;
     }
-    if (err.status === 403)
-      return "You don't have permission to add members here.";
-    if (err.status === 404) return 'This conversation no longer exists.';
+    if (err.status === 403) return "You don't have permission to add members here.";
+    if (err.status === 404) return "This conversation no longer exists.";
     return `Can't add the member (HTTP ${err.status}).`;
   }
   return "Can't add the member. Try again.";
@@ -323,7 +315,7 @@ function parseCode(body: string): string | null {
   if (!body) return null;
   try {
     const parsed = JSON.parse(body) as { code?: unknown };
-    return typeof parsed.code === 'string' ? parsed.code : null;
+    return typeof parsed.code === "string" ? parsed.code : null;
   } catch {
     return null;
   }
@@ -336,10 +328,8 @@ function parseCode(body: string): string | null {
  * the own-agent half needs no role at all, only membership of this
  * conversation, which the caller has already established.
  */
-export function canAddForeignConversationMembers(
-  viewerRole: WorkspaceRole | null,
-): boolean {
-  return viewerRole === 'owner' || viewerRole === 'admin';
+export function canAddForeignConversationMembers(viewerRole: WorkspaceRole | null): boolean {
+  return viewerRole === "owner" || viewerRole === "admin";
 }
 
 /**
@@ -373,6 +363,6 @@ export function computePickableAgents(
   viewerRole: WorkspaceRole | null,
 ): AgentDto[] {
   if (!canAddForeignConversationMembers(viewerRole)) return ownedAgents;
-  const workspaceIds = new Set(wsAgents.map(a => a.id));
-  return [...wsAgents, ...ownedAgents.filter(a => !workspaceIds.has(a.id))];
+  const workspaceIds = new Set(wsAgents.map((a) => a.id));
+  return [...wsAgents, ...ownedAgents.filter((a) => !workspaceIds.has(a.id))];
 }

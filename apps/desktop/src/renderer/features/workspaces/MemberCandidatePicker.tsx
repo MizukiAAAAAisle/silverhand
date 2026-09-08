@@ -1,20 +1,13 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from 'react';
-import { Search } from 'lucide-react';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { dropdownPanelProps } from '@/components/ui/dropdownPanel';
-import { SEARCH_FIELD_FRAME } from '@/features/common/ControlInkBorder';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
-import { cn } from '@/lib/cn';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Search } from "lucide-react";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { dropdownPanelProps } from "@/components/ui/dropdownPanel";
+import { SEARCH_FIELD_FRAME } from "@/features/common/ControlInkBorder";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
+import { cn } from "@/lib/cn";
 import {
   candidateDisplayName,
   candidateHandle,
@@ -23,7 +16,7 @@ import {
   normalizeMemberQuery,
   type MemberCandidate,
   type MemberCandidateGroup,
-} from './member-search';
+} from "./member-search";
 
 /**
  * The single member picker — a search input that narrows a grouped candidate
@@ -74,7 +67,7 @@ export function MemberCandidatePicker({
   /** Candidate pool, already narrowed by the caller's eligibility rules. */
   groups: readonly MemberCandidateGroup[];
   onPick: (candidate: MemberCandidate) => void;
-  mode: 'floating' | 'inline';
+  mode: "floating" | "inline";
   ariaLabel: string;
   /** Shown when the viewer has no eligible candidates at all (no query). */
   emptyHint: string;
@@ -86,8 +79,8 @@ export function MemberCandidatePicker({
   /** Rendered below the list, inside the picker's own column (inline errors). */
   footer?: ReactNode;
 }): JSX.Element {
-  const inline = mode === 'inline';
-  const [query, setQuery] = useState('');
+  const inline = mode === "inline";
+  const [query, setQuery] = useState("");
   // Inline mode is always open (input + list shown together); floating opens
   // on focus/type. A single `listOpen` drives rendering either way.
   const [open, setOpen] = useState(false);
@@ -101,29 +94,23 @@ export function MemberCandidatePicker({
 
   const matched = useMemo<MemberCandidateGroup[]>(() => {
     return groups
-      .map(g => ({
+      .map((g) => ({
         label: g.label,
         items: normalizedQuery
-          ? g.items.filter(c => matchesCandidate(c, normalizedQuery))
+          ? g.items.filter((c) => matchesCandidate(c, normalizedQuery))
           : g.items,
       }))
-      .filter(g => g.items.length > 0);
+      .filter((g) => g.items.length > 0);
   }, [groups, normalizedQuery]);
 
-  const flat = useMemo(() => matched.flatMap(g => g.items), [matched]);
+  const flat = useMemo(() => matched.flatMap((g) => g.items), [matched]);
   // Avatars for what is on screen only — the batch hooks key off the list they
   // are given, so a narrowed query doesn't churn the whole fleet.
   const agentAvatarUrls = useAgentAvatarObjectUrls(
-    useMemo(
-      () => flat.flatMap(c => (c.kind === 'agent' ? [c.agent] : [])),
-      [flat],
-    ),
+    useMemo(() => flat.flatMap((c) => (c.kind === "agent" ? [c.agent] : [])), [flat]),
   );
   const humanAvatarUrls = useUserAvatarObjectUrls(
-    useMemo(
-      () => flat.flatMap(c => (c.kind === 'human' ? [c.user] : [])),
-      [flat],
-    ),
+    useMemo(() => flat.flatMap((c) => (c.kind === "human" ? [c.user] : [])), [flat]),
   );
 
   // Keep the highlight in range as the list narrows.
@@ -134,34 +121,32 @@ export function MemberCandidatePicker({
   // Keep the highlighted row inside the scroll area.
   useEffect(() => {
     if (!listOpen) return;
-    listRef.current
-      ?.querySelector('[data-active="true"]')
-      ?.scrollIntoView({ block: 'nearest' });
+    listRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
   }, [active, listOpen]);
 
   const pick = (candidate: MemberCandidate): void => {
     onPick(candidate);
-    setQuery('');
+    setQuery("");
     setActive(0);
     if (!inline) setOpen(false);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>): void => {
-    if (e.key === 'ArrowDown') {
+    if (e.key === "ArrowDown") {
       e.preventDefault();
       if (!inline && !open) {
         setOpen(true);
         return;
       }
-      if (flat.length > 0) setActive(i => (i + 1) % flat.length);
+      if (flat.length > 0) setActive((i) => (i + 1) % flat.length);
       return;
     }
-    if (e.key === 'ArrowUp') {
+    if (e.key === "ArrowUp") {
       e.preventDefault();
-      if (flat.length > 0) setActive(i => (i - 1 + flat.length) % flat.length);
+      if (flat.length > 0) setActive((i) => (i - 1 + flat.length) % flat.length);
       return;
     }
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       e.preventDefault();
       const candidate = flat[active];
       if (candidate) pick(candidate);
@@ -169,7 +154,7 @@ export function MemberCandidatePicker({
     }
     // Floating swallows the first Escape to close its own list before the host
     // popover; inline has no list to close, so Escape falls through to the host.
-    if (e.key === 'Escape' && !inline && open) {
+    if (e.key === "Escape" && !inline && open) {
       e.preventDefault();
       e.stopPropagation();
       setOpen(false);
@@ -180,15 +165,15 @@ export function MemberCandidatePicker({
   const rows =
     flat.length === 0 ? (
       <div className="px-2 py-2 text-center text-xs italic text-text-muted">
-        {normalizedQuery ? 'No matches' : emptyHint}
+        {normalizedQuery ? "No matches" : emptyHint}
       </div>
     ) : (
-      matched.map(group => (
+      matched.map((group) => (
         <div key={group.label}>
           <div className="px-2 py-1 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
             {group.label}
           </div>
-          {group.items.map(candidate => {
+          {group.items.map((candidate) => {
             flatIndex += 1;
             const index = flatIndex;
             const displayName = candidateDisplayName(candidate);
@@ -199,25 +184,23 @@ export function MemberCandidatePicker({
                 type="button"
                 role="option"
                 aria-selected={index === active}
-                data-active={index === active ? 'true' : undefined}
+                data-active={index === active ? "true" : undefined}
                 disabled={rowsDisabled}
                 // preventDefault so the input never blurs (which would close a
                 // floating list) before this click lands.
-                onMouseDown={e => e.preventDefault()}
+                onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => setActive(index)}
                 onClick={() => pick(candidate)}
                 className={cn(
-                  'flex w-full items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 text-left disabled:opacity-60',
-                  index === active ? 'bg-bg-hover' : '',
+                  "flex w-full items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 text-left disabled:opacity-60",
+                  index === active ? "bg-bg-hover" : "",
                 )}
               >
-                {candidate.kind === 'agent' ? (
+                {candidate.kind === "agent" ? (
                   <AgentAvatar
                     runtime={candidate.agent.runtime}
                     size={AVATAR_PX.sm}
-                    avatarObjectUrl={
-                      agentAvatarUrls.get(candidate.agent.id) ?? null
-                    }
+                    avatarObjectUrl={agentAvatarUrls.get(candidate.agent.id) ?? null}
                     alt={displayName}
                   />
                 ) : (
@@ -249,11 +232,8 @@ export function MemberCandidatePicker({
     );
 
   return (
-    <div className={inline ? 'flex flex-col gap-2' : 'relative'}>
-      <label
-        data-input=""
-        className={cn(SEARCH_FIELD_FRAME, disabled ? 'opacity-60' : '')}
-      >
+    <div className={inline ? "flex flex-col gap-2" : "relative"}>
+      <label data-input="" className={cn(SEARCH_FIELD_FRAME, disabled ? "opacity-60" : "")}>
         <Search className="size-3.5 shrink-0 text-text-muted" aria-hidden />
         <input
           type="text"
@@ -265,7 +245,7 @@ export function MemberCandidatePicker({
           disabled={disabled}
           autoFocus={autoFocus}
           placeholder="Search by name or @handle"
-          onChange={e => {
+          onChange={(e) => {
             setQuery(e.target.value);
             setActive(0);
             if (!inline) setOpen(true);
@@ -285,11 +265,7 @@ export function MemberCandidatePicker({
       </label>
 
       {inline ? (
-        <div
-          ref={listRef}
-          role="listbox"
-          className="flex max-h-[40vh] flex-col overflow-y-auto"
-        >
+        <div ref={listRef} role="listbox" className="flex max-h-[40vh] flex-col overflow-y-auto">
           {rows}
         </div>
       ) : open ? (
@@ -297,8 +273,8 @@ export function MemberCandidatePicker({
           ref={listRef}
           role="listbox"
           {...dropdownPanelProps(
-            'poster',
-            'absolute left-0 right-0 top-[calc(100%+4px)] z-[var(--z-raised)] max-h-[220px] overflow-y-auto p-1',
+            "poster",
+            "absolute left-0 right-0 top-[calc(100%+4px)] z-[var(--z-raised)] max-h-[220px] overflow-y-auto p-1",
           )}
         >
           {rows}

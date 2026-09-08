@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 interface Options {
   /** localStorage key the width is persisted under. */
@@ -51,13 +51,16 @@ export function useResizableWidth({
   const widthRef = useRef(width);
   const frameRef = useRef<number | null>(null);
 
-  const persistWidth = useCallback((next: number): void => {
-    try {
-      localStorage.setItem(storageKey, String(next));
-    } catch {
-      /* quota or private mode — in-memory is fine */
-    }
-  }, [storageKey]);
+  const persistWidth = useCallback(
+    (next: number): void => {
+      try {
+        localStorage.setItem(storageKey, String(next));
+      } catch {
+        /* quota or private mode — in-memory is fine */
+      }
+    },
+    [storageKey],
+  );
 
   useLayoutEffect(() => {
     widthRef.current = width;
@@ -71,23 +74,23 @@ export function useResizableWidth({
     };
   }, []);
 
-  const scheduleCssWidth = useCallback((next: number): void => {
-    widthRef.current = next;
+  const scheduleCssWidth = useCallback(
+    (next: number): void => {
+      widthRef.current = next;
 
-    if (!cssVar) {
-      setWidth(next);
-      return;
-    }
+      if (!cssVar) {
+        setWidth(next);
+        return;
+      }
 
-    if (frameRef.current !== null) return;
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = null;
-      document.documentElement.style.setProperty(
-        cssVar,
-        `${widthRef.current}px`,
-      );
-    });
-  }, [cssVar]);
+      if (frameRef.current !== null) return;
+      frameRef.current = requestAnimationFrame(() => {
+        frameRef.current = null;
+        document.documentElement.style.setProperty(cssVar, `${widthRef.current}px`);
+      });
+    },
+    [cssVar],
+  );
 
   const flushCssWidth = useCallback((): void => {
     if (!cssVar) return;
@@ -111,10 +114,7 @@ export function useResizableWidth({
 
       const onMove = (ev: PointerEvent): void => {
         const dx = ev.clientX - dragOriginX.current;
-        const next = Math.max(
-          min,
-          Math.min(max, dragOriginWidth.current + dx),
-        );
+        const next = Math.max(min, Math.min(max, dragOriginWidth.current + dx));
         scheduleCssWidth(next);
       };
       const onUp = (): void => {
@@ -123,18 +123,18 @@ export function useResizableWidth({
         setWidth(next);
         persistWidth(next);
         setDragging(false);
-        document.removeEventListener('pointermove', onMove);
-        document.removeEventListener('pointerup', onUp);
-        document.removeEventListener('pointercancel', onUp);
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+        document.removeEventListener("pointercancel", onUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
       };
 
-      document.addEventListener('pointermove', onMove);
-      document.addEventListener('pointerup', onUp);
-      document.addEventListener('pointercancel', onUp);
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+      document.addEventListener("pointercancel", onUp);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
     },
     [flushCssWidth, max, min, persistWidth, scheduleCssWidth],
   );

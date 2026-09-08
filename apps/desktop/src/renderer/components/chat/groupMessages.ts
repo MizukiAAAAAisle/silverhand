@@ -1,15 +1,12 @@
-import type { MessageDto, SystemSubtype } from '@silverhand/shared';
-import {
-  type CachedMessage,
-  isCommittedMessage,
-} from '@/features/channels/pending-message';
+import type { MessageDto, SystemSubtype } from "@silverhand/shared";
+import { type CachedMessage, isCommittedMessage } from "@/features/channels/pending-message";
 
 export const CLUSTERABLE_SUBTYPES: ReadonlySet<SystemSubtype> = new Set<SystemSubtype>([
-  'task_create',
-  'task_claim',
-  'task_unclaim',
-  'task_status',
-  'task_edit',
+  "task_create",
+  "task_claim",
+  "task_unclaim",
+  "task_status",
+  "task_edit",
 ]);
 
 /** 5-minute window between consecutive activity events to remain in
@@ -20,14 +17,14 @@ export const CLUSTERABLE_SUBTYPES: ReadonlySet<SystemSubtype> = new Set<SystemSu
 export const ACTIVITY_RUN_GAP_MS = 5 * 60 * 1000;
 
 export interface ActivityCluster {
-  kind: 'cluster';
+  kind: "cluster";
   /** Stable React key: see module docstring "Cluster identity". */
   id: string;
   messages: MessageDto[];
 }
 
 export interface SingleMessage {
-  kind: 'message';
+  kind: "message";
   message: CachedMessage;
 }
 
@@ -48,11 +45,11 @@ export interface GroupMessagesOptions {
  *  clusterable row is always a committed server row, so this is a type guard. */
 export function isClusterableMessage(m: CachedMessage): m is MessageDto {
   if (!isCommittedMessage(m)) return false;
-  if (m.from_kind !== 'system') return false;
+  if (m.from_kind !== "system") return false;
   const meta = m.metadata as Record<string, unknown> | null;
   if (meta === null) return false;
-  const subtype = meta['subtype'];
-  if (typeof subtype !== 'string') return false;
+  const subtype = meta["subtype"];
+  if (typeof subtype !== "string") return false;
   return CLUSTERABLE_SUBTYPES.has(subtype as SystemSubtype);
 }
 
@@ -72,7 +69,7 @@ export function groupMessages(
     if (run.length === 0) return;
     const first = run[0]!;
     out.push({
-      kind: 'cluster',
+      kind: "cluster",
       id: `activity-cluster:${first.id}`,
       messages: run,
     });
@@ -82,7 +79,7 @@ export function groupMessages(
   for (const m of messages) {
     if (!isClusterableMessage(m)) {
       flushRun();
-      out.push({ kind: 'message', message: m });
+      out.push({ kind: "message", message: m });
       continue;
     }
 

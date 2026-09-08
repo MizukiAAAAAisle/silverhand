@@ -1,8 +1,8 @@
-import { useEffect, useState, type JSX } from 'react';
-import { Check, Copy, Eye, EyeOff, Terminal } from 'lucide-react';
-import { toast } from 'sonner';
-import { assembleConnectCommand } from '@silverhand/shared';
-import { computerCopy } from './computer-copy';
+import { useEffect, useState, type JSX } from "react";
+import { Check, Copy, Eye, EyeOff, Terminal } from "lucide-react";
+import { toast } from "sonner";
+import { assembleConnectCommand } from "@silverhand/shared";
+import { computerCopy } from "./computer-copy";
 
 interface ConnectionCommandCardProps {
   /** Server-owned launch recipe (npm spec) from the bootstrap payload —
@@ -91,11 +91,9 @@ export function ConnectionCommandCard({
         serverUrl: connectedServerUrl,
         connectToken,
       })
-    : '';
+    : "";
 
-  const displayCommand = revealed
-    ? daemonCommand
-    : maskToken(daemonCommand, connectToken);
+  const displayCommand = revealed ? daemonCommand : maskToken(daemonCommand, connectToken);
 
   const handleCopy = async (): Promise<void> => {
     if (!daemonCommand) return;
@@ -120,16 +118,12 @@ export function ConnectionCommandCard({
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => setRevealed(v => !v)}
+              onClick={() => setRevealed((v) => !v)}
               disabled={!daemonCommand}
               className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-[length:var(--text-meta)] text-[var(--text-terminal-chrome)] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={revealed ? computerCopy.hide : computerCopy.reveal}
             >
-              {revealed ? (
-                <EyeOff className="size-3.5" />
-              ) : (
-                <Eye className="size-3.5" />
-              )}
+              {revealed ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
               {revealed ? computerCopy.hide : computerCopy.reveal}
             </button>
             <button
@@ -139,30 +133,24 @@ export function ConnectionCommandCard({
               className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-[length:var(--text-meta)] text-[var(--text-terminal-chrome)] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={computerCopy.copy}
             >
-              {copied ? (
-                <Check className="size-3.5" />
-              ) : (
-                <Copy className="size-3.5" />
-              )}
+              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
               {copied ? computerCopy.copied : computerCopy.copy}
             </button>
           </div>
         </div>
         {/* Body: `$` prompt + the command. The prompt is decorative
-          * (select-none, its own span) so it's never part of the copy. */}
+         * (select-none, its own span) so it's never part of the copy. */}
         <div className="max-h-32 overflow-y-auto px-3 py-2.5">
           <code className="block whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-[var(--text-terminal)]">
             <span className="select-none opacity-50" aria-hidden>
-              ${' '}
+              ${" "}
             </span>
             {displayCommand}
           </code>
         </div>
       </div>
 
-      <p className="text-xs leading-relaxed text-text-muted">
-        {computerCopy.revealOnceNotice}
-      </p>
+      <p className="text-xs leading-relaxed text-text-muted">{computerCopy.revealOnceNotice}</p>
     </div>
   );
 }
@@ -175,5 +163,5 @@ export function ConnectionCommandCard({
  */
 export function maskToken(command: string, token: string): string {
   if (!token) return command;
-  return command.split(token).join('•'.repeat(12));
+  return command.split(token).join("•".repeat(12));
 }

@@ -1,58 +1,45 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type FormEvent,
-} from 'react';
-import { RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { RefreshCw } from "lucide-react";
 import type {
   AgentSessionScope,
   CreateAgentInput,
   RuntimeAvailabilityState,
   RuntimeKind,
-} from '@silverhand/shared';
-import {
-  RUNTIME_CATALOG,
-  runtimeCatalogEntry,
-  runtimeDefaultModel,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
+import { RUNTIME_CATALOG, runtimeCatalogEntry, runtimeDefaultModel } from "@silverhand/shared";
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Combobox } from '@/components/ui/combobox';
-import { Input, Label } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
-import { cn } from '@/lib/cn';
-import { describeApiError } from '@/lib/api-error-message';
-import {
-  NameAvailabilityHint,
-  useNameAvailability,
-} from '@/features/naming/useNameAvailability';
+} from "@/components/ui/dialog";
+import { Combobox } from "@/components/ui/combobox";
+import { Input, Label } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
+import { cn } from "@/lib/cn";
+import { describeApiError } from "@/lib/api-error-message";
+import { NameAvailabilityHint, useNameAvailability } from "@/features/naming/useNameAvailability";
 import {
   useHostAvailabilityMap,
   useHostRuntimeCatalog,
   useHostsQuery,
-} from '@/features/hosts/hooks';
-import { isComputerAvailable } from '@/features/hosts/host-display';
-import { ComputerPicker } from '@/features/hosts/ComputerPicker';
-import { useCreateAgent } from './hooks';
+} from "@/features/hosts/hooks";
+import { isComputerAvailable } from "@/features/hosts/host-display";
+import { ComputerPicker } from "@/features/hosts/ComputerPicker";
+import { useCreateAgent } from "./hooks";
 import {
   deriveRuntimePickerMode,
   runtimeChipDisabled,
   runtimeSectionHint,
-} from './runtime-detection-ui';
+} from "./runtime-detection-ui";
 
 // The picker lists only offerable runtimes (`selectable`) — shiki: 没支持的
 // 直接不展示 (no roadmap/"coming soon" rows in a focused create task). Which
 // of these is actually installed on the chosen computer is detected per host
 // at runtime (see the runtime-catalog probe below), never baked in here.
-const SELECTABLE_RUNTIMES = RUNTIME_CATALOG.filter(entry => entry.selectable);
+const SELECTABLE_RUNTIMES = RUNTIME_CATALOG.filter((entry) => entry.selectable);
 
 // Shared chip styling for the Runtime + "Computer" pickers: ink border +
 // the theme's own selection fill (`--bg-row-selected`), border WIDTH /
@@ -60,19 +47,17 @@ const SELECTABLE_RUNTIMES = RUNTIME_CATALOG.filter(entry => entry.selectable);
 // 1px). Text held constant at text-primary across states. Kept identical
 // across both rows so the dialog reads as one control family (#task:1214).
 const CHIP_BASE =
-  'rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs transition-colors ';
+  "rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs transition-colors ";
 
 function chipClass(isSelected: boolean, isDisabled = false): string {
   if (isDisabled) {
-    return (
-      CHIP_BASE + 'cursor-not-allowed border-border-subtle text-text-muted opacity-50'
-    );
+    return CHIP_BASE + "cursor-not-allowed border-border-subtle text-text-muted opacity-50";
   }
   return (
     CHIP_BASE +
     (isSelected
-      ? 'border-text-primary bg-[var(--bg-row-selected)] text-text-primary'
-      : 'border-border-subtle text-text-primary hover:border-border')
+      ? "border-text-primary bg-[var(--bg-row-selected)] text-text-primary"
+      : "border-border-subtle text-text-primary hover:border-border")
   );
 }
 
@@ -108,9 +93,7 @@ export interface CreateAgentSubmitDraft {
  * default for old clients; only a positive Agent-scoped choice widens the
  * payload. This function is the path the real form submits through, so tests
  * can exercise both branches without a second form-only mirror. */
-export function createAgentInputFromDraft(
-  draft: CreateAgentSubmitDraft,
-): CreateAgentInput {
+export function createAgentInputFromDraft(draft: CreateAgentSubmitDraft): CreateAgentInput {
   const input: CreateAgentInput = {
     name: draft.name.trim(),
     runtime: draft.runtime,
@@ -118,7 +101,7 @@ export function createAgentInputFromDraft(
   const trimmedModel = draft.model.trim();
   if (trimmedModel) input.model = trimmedModel;
   if (draft.hostId) input.host_id = draft.hostId;
-  if (draft.sessionScope === 'agent') input.session_scope = 'agent';
+  if (draft.sessionScope === "agent") input.session_scope = "agent";
   return input;
 }
 
@@ -127,22 +110,21 @@ export function CreateAgentDialog({
   onOpenChange,
   onCreated,
 }: CreateAgentDialogProps): JSX.Element {
-  const [name, setName] = useState('');
-  const [runtime, setRuntime] = useState<RuntimeKind>('claude');
-  const [sessionScope, setSessionScope] =
-    useState<AgentSessionScope>('conversation');
+  const [name, setName] = useState("");
+  const [runtime, setRuntime] = useState<RuntimeKind>("claude");
+  const [sessionScope, setSessionScope] = useState<AgentSessionScope>("conversation");
   // Model tracks the selected runtime's catalog default (qoder → `Ultimate`,
   // others → blank = the runtime's own CLI default). Switching runtime resets
   // it to that runtime's default so the field always reflects what will be
   // stored (the backend applies the same default, but showing it here keeps
   // create WYSIWYG). Any suggested tier or custom model-id is accepted.
-  const [model, setModel] = useState(runtimeDefaultModel('claude') ?? '');
+  const [model, setModel] = useState(runtimeDefaultModel("claude") ?? "");
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const createAgent = useCreateAgent();
   // onBlur name validation — format (shared ParticipantNameSchema) + uniqueness
   // (agents ∪ users, server probe). See features/naming/useNameAvailability.
-  const nameCheck = useNameAvailability('agent', name);
+  const nameCheck = useNameAvailability("agent", name);
 
   const modelSuggestions = runtimeCatalogEntry(runtime).modelSuggestions;
 
@@ -154,7 +136,7 @@ export function CreateAgentDialog({
   // effects.
   const selectRuntime = useCallback((next: RuntimeKind): void => {
     setRuntime(next);
-    setModel(runtimeDefaultModel(next) ?? '');
+    setModel(runtimeDefaultModel(next) ?? "");
     setError(null);
   }, []);
 
@@ -165,13 +147,10 @@ export function CreateAgentDialog({
   // online, finalized user-managed (daemon) computer is just as valid a target
   // as the local one, so we never re-derive eligibility from `kind` here.
   const placeableHosts = useMemo(
-    () => (hostsQuery.data?.hosts ?? []).filter(host => host.placeable),
+    () => (hostsQuery.data?.hosts ?? []).filter((host) => host.placeable),
     [hostsQuery.data],
   );
-  const placeableHostIds = useMemo(
-    () => placeableHosts.map(host => host.id),
-    [placeableHosts],
-  );
+  const placeableHostIds = useMemo(() => placeableHosts.map((host) => host.id), [placeableHosts]);
 
   // Second placement axis: a `placeable` computer can only actually run an
   // agent if its daemon is online right now. We probe live availability per
@@ -180,10 +159,7 @@ export function CreateAgentDialog({
   // submit check (shiki #task:1359).
   const { availabilityById, allSettled } = useHostAvailabilityMap(placeableHostIds);
   const availableHosts = useMemo(
-    () =>
-      placeableHosts.filter(host =>
-        isComputerAvailable(availabilityById.get(host.id)),
-      ),
+    () => placeableHosts.filter((host) => isComputerAvailable(availabilityById.get(host.id))),
     [placeableHosts, availabilityById],
   );
 
@@ -194,9 +170,7 @@ export function CreateAgentDialog({
   // probes resolve one by one, a transient single `available` must NOT
   // auto-select, or two online computers could still end up with a default.
   const defaultHostId =
-    allSettled && availableHosts.length === 1
-      ? (availableHosts[0]?.id ?? null)
-      : null;
+    allSettled && availableHosts.length === 1 ? (availableHosts[0]?.id ?? null) : null;
 
   // Preselect the sole available host when the picker opens; clear on close.
   // If a previously-chosen host drops offline while the dialog is open, fall
@@ -205,14 +179,12 @@ export function CreateAgentDialog({
   useEffect(() => {
     if (!open) {
       setSelectedHostId(null);
-      setSessionScope('conversation');
+      setSessionScope("conversation");
       setRuntimeGate(EMPTY_RUNTIME_GATE);
       return;
     }
-    const availableIds = new Set(availableHosts.map(host => host.id));
-    setSelectedHostId(prev =>
-      prev && availableIds.has(prev) ? prev : defaultHostId,
-    );
+    const availableIds = new Set(availableHosts.map((host) => host.id));
+    setSelectedHostId((prev) => (prev && availableIds.has(prev) ? prev : defaultHostId));
   }, [open, defaultHostId, availableHosts]);
 
   // The picker is the single source of the chosen host; when no placeable
@@ -235,7 +207,7 @@ export function CreateAgentDialog({
     e.preventDefault();
     setError(null);
     if (!name.trim()) {
-      setError('Please enter an agent name');
+      setError("Please enter an agent name");
       return;
     }
     // Final format pass — arms the inline hint even on a field never blurred.
@@ -249,15 +221,15 @@ export function CreateAgentDialog({
         // Probes still landing — the Create button is disabled meanwhile, but
         // guard here too so a stale click can't fall through to a misleading
         // "no computer online".
-        setError('Checking which computers are online…');
+        setError("Checking which computers are online…");
         return;
       }
       if (availableHosts.length === 0) {
-        setError('No computer is online right now. Connect one and try again.');
+        setError("No computer is online right now. Connect one and try again.");
         return;
       }
-      if (!selectedHostId || !availableHosts.some(h => h.id === selectedHostId)) {
-        setError('Please choose an online computer to run this agent');
+      if (!selectedHostId || !availableHosts.some((h) => h.id === selectedHostId)) {
+        setError("Please choose an online computer to run this agent");
         return;
       }
     }
@@ -266,7 +238,7 @@ export function CreateAgentDialog({
     // normally moves selection off an absent runtime; this guards the
     // all-absent case and any race before that effect runs.
     if (runtimeGate.selectedAbsent) {
-      setError('That runtime is not installed on the selected computer.');
+      setError("That runtime is not installed on the selected computer.");
       return;
     }
     try {
@@ -279,10 +251,10 @@ export function CreateAgentDialog({
       });
       const res = await createAgent.mutateAsync(input);
       onCreated?.(res.agent.id);
-      setName('');
-      setRuntime('claude');
-      setSessionScope('conversation');
-      setModel(runtimeDefaultModel('claude') ?? '');
+      setName("");
+      setRuntime("claude");
+      setSessionScope("conversation");
+      setModel(runtimeDefaultModel("claude") ?? "");
       setSelectedHostId(null);
       setRuntimeGate(EMPTY_RUNTIME_GATE);
       onOpenChange(false);
@@ -308,7 +280,7 @@ export function CreateAgentDialog({
               hosts={placeableHosts}
               availabilityById={availabilityById}
               value={selectedHostId}
-              onChange={id => {
+              onChange={(id) => {
                 setSelectedHostId(id);
                 setError(null);
               }}
@@ -323,7 +295,7 @@ export function CreateAgentDialog({
             <Input
               id="ag-name"
               value={name}
-              onChange={e => {
+              onChange={(e) => {
                 setName(e.target.value);
                 setError(null);
               }}
@@ -340,10 +312,10 @@ export function CreateAgentDialog({
             <div className="flex flex-wrap gap-1.5" role="group" aria-label="Session model">
               <button
                 type="button"
-                className={chipClass(sessionScope === 'conversation')}
-                aria-pressed={sessionScope === 'conversation'}
+                className={chipClass(sessionScope === "conversation")}
+                aria-pressed={sessionScope === "conversation"}
                 onClick={() => {
-                  setSessionScope('conversation');
+                  setSessionScope("conversation");
                   setError(null);
                 }}
               >
@@ -351,10 +323,10 @@ export function CreateAgentDialog({
               </button>
               <button
                 type="button"
-                className={chipClass(sessionScope === 'agent')}
-                aria-pressed={sessionScope === 'agent'}
+                className={chipClass(sessionScope === "agent")}
+                aria-pressed={sessionScope === "agent"}
                 onClick={() => {
-                  setSessionScope('agent');
+                  setSessionScope("agent");
                   setError(null);
                 }}
               >
@@ -362,9 +334,9 @@ export function CreateAgentDialog({
               </button>
             </div>
             <p className="text-xs text-text-muted">
-              {sessionScope === 'agent'
-                ? 'One persistent session across participating conversations.'
-                : 'Independent session for each conversation.'}
+              {sessionScope === "agent"
+                ? "One persistent session across participating conversations."
+                : "Independent session for each conversation."}
             </p>
           </div>
 
@@ -389,7 +361,7 @@ export function CreateAgentDialog({
               id="ag-model"
               ariaLabel="Model"
               value={model}
-              onChange={value => {
+              onChange={(value) => {
                 setModel(value);
                 setError(null);
               }}
@@ -418,15 +390,15 @@ export function CreateAgentDialog({
             <Button
               type="submit"
               disabled={
-                createAgent.isPending
-                || hostsQuery.isLoading
-                || (placeableHosts.length > 0 && !allSettled)
-                || runtimeGate.allAbsent
-                || nameCheck.blocking
+                createAgent.isPending ||
+                hostsQuery.isLoading ||
+                (placeableHosts.length > 0 && !allSettled) ||
+                runtimeGate.allAbsent ||
+                nameCheck.blocking
               }
               {...primaryAction()}
             >
-              {createAgent.isPending ? 'Creating…' : 'Create'}
+              {createAgent.isPending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>
         </form>
@@ -486,19 +458,15 @@ function RuntimePicker({
     isLoading: runtimeCatalog.isLoading,
     isError: runtimeCatalog.isError,
   });
-  const detectionActive = mode === 'detected';
+  const detectionActive = mode === "detected";
   const sectionHint = runtimeSectionHint(mode);
 
   const allAbsent =
-    detectionActive
-    && SELECTABLE_RUNTIMES.every(
-      entry => runtimeStateByKind.get(entry.kind) === 'absent',
-    );
-  const selectedAbsent =
-    detectionActive && runtimeStateByKind.get(value) === 'absent';
+    detectionActive &&
+    SELECTABLE_RUNTIMES.every((entry) => runtimeStateByKind.get(entry.kind) === "absent");
+  const selectedAbsent = detectionActive && runtimeStateByKind.get(value) === "absent";
   const runtimeHint =
-    sectionHint
-    ?? (allAbsent ? 'No supported runtime detected on this computer.' : null);
+    sectionHint ?? (allAbsent ? "No supported runtime detected on this computer." : null);
 
   // Report the gating facts up. Deps are the two primitives, so this fires only
   // when they actually flip — the isReprobing spinner toggling or a Recheck
@@ -513,9 +481,9 @@ function RuntimePicker({
   // the section shows the empty state.
   useEffect(() => {
     if (!detectionActive) return;
-    if (runtimeStateByKind.get(value) !== 'absent') return;
+    if (runtimeStateByKind.get(value) !== "absent") return;
     const firstInstalled = SELECTABLE_RUNTIMES.find(
-      entry => runtimeStateByKind.get(entry.kind) !== 'absent',
+      (entry) => runtimeStateByKind.get(entry.kind) !== "absent",
     );
     if (firstInstalled) onSelect(firstInstalled.kind);
   }, [detectionActive, runtimeStateByKind, value, onSelect]);
@@ -534,9 +502,7 @@ function RuntimePicker({
               dialog is vertically centered, so any height delta would re-center
               the whole modal and read as a jump (shiki). */}
           {checking ? (
-            <span className="text-xs font-normal text-text-muted">
-              Detecting…
-            </span>
+            <span className="text-xs font-normal text-text-muted">Detecting…</span>
           ) : null}
         </div>
         {hostAvailable ? (
@@ -548,26 +514,21 @@ function RuntimePicker({
             title="Recheck"
             className="border border-transparent p-1 text-text-muted transition-colors hover:text-text-primary disabled:cursor-default disabled:opacity-60"
           >
-            <RefreshCw className={cn('size-3.5', checking && 'animate-spin')} />
+            <RefreshCw className={cn("size-3.5", checking && "animate-spin")} />
           </button>
         ) : null}
       </div>
       <div className="flex flex-wrap gap-2">
-        {SELECTABLE_RUNTIMES.map(entry => {
-          const absent = runtimeChipDisabled(
-            mode,
-            runtimeStateByKind.get(entry.kind),
-          );
+        {SELECTABLE_RUNTIMES.map((entry) => {
+          const absent = runtimeChipDisabled(mode, runtimeStateByKind.get(entry.kind));
           const isSelected = !absent && value === entry.kind;
-          const state = detectionActive
-            ? runtimeStateByKind.get(entry.kind)
-            : undefined;
+          const state = detectionActive ? runtimeStateByKind.get(entry.kind) : undefined;
           const title =
-            state === 'absent'
-              ? 'Not detected on this computer'
-              : state === 'present_unverified'
-                ? 'Installed · version unverified'
-                : state === 'unknown'
+            state === "absent"
+              ? "Not detected on this computer"
+              : state === "present_unverified"
+                ? "Installed · version unverified"
+                : state === "unknown"
                   ? "Couldn't verify — you can still create"
                   : undefined;
           return (
@@ -582,32 +543,23 @@ function RuntimePicker({
               className={chipClass(isSelected, absent)}
             >
               {entry.cliLabel}
-              {absent ? (
-                <span className="ml-1.5 text-text-muted">· not installed</span>
-              ) : null}
+              {absent ? <span className="ml-1.5 text-text-muted">· not installed</span> : null}
             </button>
           );
         })}
       </div>
-      {runtimeHint ? (
-        <div className="text-xs text-text-muted">{runtimeHint}</div>
-      ) : null}
+      {runtimeHint ? <div className="text-xs text-text-muted">{runtimeHint}</div> : null}
     </div>
   );
 }
 
 const AGENT_CREATE_ERROR_MESSAGES: Record<string, string> = {
-  local_host_ambiguous: 'Choose which computer should run this agent.',
-  local_host_unbound:
-    'No connected computer can run this agent. Connect one and try again.',
-  host_attach_pending:
-    'That computer is not connected yet. Try again in a moment.',
-  host_revoked:
-    "That computer isn't available anymore. Pick another and try again.",
-  host_not_owned:
-    "That computer isn't available anymore. Pick another and try again.",
-  host_missing:
-    "That computer isn't available anymore. Pick another and try again.",
+  local_host_ambiguous: "Choose which computer should run this agent.",
+  local_host_unbound: "No connected computer can run this agent. Connect one and try again.",
+  host_attach_pending: "That computer is not connected yet. Try again in a moment.",
+  host_revoked: "That computer isn't available anymore. Pick another and try again.",
+  host_not_owned: "That computer isn't available anymore. Pick another and try again.",
+  host_missing: "That computer isn't available anymore. Pick another and try again.",
 };
 
 /** Map a create-agent failure to a calm, user-facing line. Known
@@ -617,8 +569,7 @@ const AGENT_CREATE_ERROR_MESSAGES: Record<string, string> = {
 function friendlyCreateError(err: unknown): string {
   return describeApiError(err, {
     actionLabel: "Couldn't create the agent",
-    backendUnreachableMessage:
-      "Can't reach the backend. Check your connection and try again.",
+    backendUnreachableMessage: "Can't reach the backend. Check your connection and try again.",
     fallbackMessage: "Couldn't create the agent. Please try again.",
     knownCodeMessages: AGENT_CREATE_ERROR_MESSAGES,
   });

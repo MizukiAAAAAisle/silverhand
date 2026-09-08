@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { makePinchZoomLease } from './pinch-zoom-lease';
+import { describe, expect, it } from "vitest";
+import { makePinchZoomLease } from "./pinch-zoom-lease";
 
-describe('makePinchZoomLease', () => {
-  it('enables on the first acquire and disables on the last release', () => {
+describe("makePinchZoomLease", () => {
+  it("enables on the first acquire and disables on the last release", () => {
     const calls: boolean[] = [];
-    const lease = makePinchZoomLease(v => calls.push(v));
+    const lease = makePinchZoomLease((v) => calls.push(v));
 
     const releaseA = lease.acquire();
     const releaseB = lease.acquire();
@@ -17,18 +17,18 @@ describe('makePinchZoomLease', () => {
     expect(calls).toEqual([true, false]); // last release turns it off
   });
 
-  it('re-enables after a full release cycle', () => {
+  it("re-enables after a full release cycle", () => {
     const calls: boolean[] = [];
-    const lease = makePinchZoomLease(v => calls.push(v));
+    const lease = makePinchZoomLease((v) => calls.push(v));
 
     lease.acquire()();
     lease.acquire();
     expect(calls).toEqual([true, false, true]);
   });
 
-  it('ignores a double release', () => {
+  it("ignores a double release", () => {
     const calls: boolean[] = [];
-    const lease = makePinchZoomLease(v => calls.push(v));
+    const lease = makePinchZoomLease((v) => calls.push(v));
 
     const release = lease.acquire();
     release();

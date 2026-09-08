@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // #task:1267 slice B — a pending optimistic message row has no server id/seq, so
 // every affordance that needs a real server row (reaction, thread, save, share,
@@ -16,35 +16,35 @@ import { fileURLToPath } from 'node:url';
 // `realtime-ingestion-read-inert` / `notification-toast-purity` — we statically
 // fence the source rather than render.
 
-describe('MessageItem — pending rows render no server-row affordance (#task:1267)', () => {
-  const source = readFileSync(fileURLToPath(new URL('./MessageItem.tsx', import.meta.url)), 'utf8');
+describe("MessageItem — pending rows render no server-row affordance (#task:1267)", () => {
+  const source = readFileSync(fileURLToPath(new URL("./MessageItem.tsx", import.meta.url)), "utf8");
 
-  it('computes the committed gate from the message', () => {
-    expect(source).toContain('const committed = isCommittedMessage(message)');
+  it("computes the committed gate from the message", () => {
+    expect(source).toContain("const committed = isCommittedMessage(message)");
   });
 
-  it('gates the top-corner action cluster (reaction / thread / save) on committed', () => {
+  it("gates the top-corner action cluster (reaction / thread / save) on committed", () => {
     // The cluster div (which holds ReactionPicker + Thread + Save) is wrapped in
     // `{committed ? ( <div onFocus=... > … ) : null}`. Assert the wrap sits
     // immediately before the cluster div so a pending row renders none of them.
-    expect(source.replace(/\s+/g, ' ')).toContain(
-      '{committed ? ( <div onFocus={() => setFocusWithin(true)}',
+    expect(source.replace(/\s+/g, " ")).toContain(
+      "{committed ? ( <div onFocus={() => setFocusWithin(true)}",
     );
   });
 
-  it('gates selection checkbox + row-toggle capture on committed', () => {
+  it("gates selection checkbox + row-toggle capture on committed", () => {
     // Both the capture handler and the checkbox render are `selectionMode &&
     // committed` — a pending row shows no checkbox and does not toggle-select.
-    const occurrences = source.split('selectionMode && committed').length - 1;
+    const occurrences = source.split("selectionMode && committed").length - 1;
     expect(occurrences).toBeGreaterThanOrEqual(2);
   });
 
-  it('gates every context-menu callback on committed', () => {
+  it("gates every context-menu callback on committed", () => {
     for (const cb of [
-      'committed && onCopyMarkdown',
-      'committed && onSave',
-      'committed && onShare',
-      'committed && onUnfollowThread',
+      "committed && onCopyMarkdown",
+      "committed && onSave",
+      "committed && onShare",
+      "committed && onUnfollowThread",
     ]) {
       expect(source).toContain(cb);
     }

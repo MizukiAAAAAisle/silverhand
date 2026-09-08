@@ -1,11 +1,11 @@
-import { directPairSenderSeed } from '@/features/search/advanced-search-seed';
-import type { ConversationPanesModel, SecondaryPaneModel } from './pane-render-models';
+import { directPairSenderSeed } from "@/features/search/advanced-search-seed";
+import type { ConversationPanesModel, SecondaryPaneModel } from "./pane-render-models";
 import type {
   PaneContentRoute,
   PaneContentRead,
   PaneContentState,
   PaneContentCommands,
-} from './pane-content-inputs';
+} from "./pane-content-inputs";
 
 export function buildConversationPanes(
   route: PaneContentRoute,
@@ -16,14 +16,14 @@ export function buildConversationPanes(
   return {
     primary: route.directDraftAgentId
       ? {
-          kind: 'draft',
+          kind: "draft",
           props: {
             agentId: route.directDraftAgentId,
             onOpenPair: commands.handleDraftOpenedPair,
           },
         }
       : {
-          kind: 'conversation',
+          kind: "conversation",
           props: {
             hasChannelNamespace: read.primaryPaneHasChannelNamespace,
             workspaceName: read.workspaceNameById(read.primaryPaneDescriptor?.workspace_id ?? null),
@@ -75,7 +75,7 @@ export function resolveSecondaryPane(
 ): SecondaryPaneModel {
   if (route.agentPanelId) {
     return {
-      kind: 'agent',
+      kind: "agent",
       props: {
         agentId: route.agentPanelId,
         contextConversationId: route.channelId,
@@ -89,7 +89,7 @@ export function resolveSecondaryPane(
 
   if (route.humanPanelId) {
     return {
-      kind: 'human',
+      kind: "human",
       props: { userId: route.humanPanelId, onClose: commands.closeHumanPanel },
     };
   }
@@ -97,7 +97,7 @@ export function resolveSecondaryPane(
   if (state.filesListMounted && route.channelId) {
     const channelId = route.channelId;
     return {
-      kind: 'files',
+      kind: "files",
       props: {
         channelId: route.channelId,
         workspaceId: route.workspaceId ?? null,
@@ -115,7 +115,7 @@ export function resolveSecondaryPane(
 
   if (state.taskPaneId && route.channelId) {
     return {
-      kind: 'task',
+      kind: "task",
       props: {
         taskId: state.taskPaneId,
         onClose: commands.requestCloseTaskPane,
@@ -125,10 +125,10 @@ export function resolveSecondaryPane(
   }
 
   if (state.secondaryDescriptor) {
-    if (state.secondaryDescriptor.status !== 'resolved') {
+    if (state.secondaryDescriptor.status !== "resolved") {
       return {
-        kind: 'conversation',
-        status: 'unresolved',
+        kind: "conversation",
+        status: "unresolved",
         props: {
           conversationId: state.secondaryDescriptor.id,
           status: state.secondaryDescriptor.status,
@@ -138,8 +138,8 @@ export function resolveSecondaryPane(
     }
     if (state.secondaryConversationDescriptor) {
       return {
-        kind: 'conversation',
-        status: 'resolved',
+        kind: "conversation",
+        status: "resolved",
         props: {
           hasChannelNamespace: state.secondaryViewInputs.hasChannelNamespace,
           workspaceName: read.workspaceNameById(state.secondaryConversationDescriptor.workspace_id),
@@ -149,7 +149,7 @@ export function resolveSecondaryPane(
           jumpPrimePending: state.secondaryJumpPrimePending,
           onJumped: commands.handleJumped,
           onCloseChild: commands.closeSecondary,
-          closeLabel: 'Close side pane',
+          closeLabel: "Close side pane",
           isFullscreen: false,
           onArchiveChannel: commands.handleArchiveSecondaryChannelMutation,
           onRenameChannel: commands.handleRenameSecondaryChannelMutation,
@@ -161,7 +161,7 @@ export function resolveSecondaryPane(
         },
       };
     }
-    return { kind: 'none' };
+    return { kind: "none" };
   }
 
   if (route.threadRootId && route.channelId) {
@@ -169,7 +169,7 @@ export function resolveSecondaryPane(
     const threadWorkspaceId = route.workspaceId ?? null;
     const threadRoot = route.threadRootId;
     return {
-      kind: 'thread',
+      kind: "thread",
       capabilities: read.primaryPaneCapabilities,
       props: {
         channelId: threadChannelId,
@@ -212,7 +212,7 @@ export function resolveSecondaryPane(
 
   if (state.threadsListMounted && route.channelId) {
     return {
-      kind: 'threads',
+      kind: "threads",
       props: {
         channelId: route.channelId,
         parentTitle: read.selectedChannel?.title ?? null,
@@ -222,5 +222,5 @@ export function resolveSecondaryPane(
     };
   }
 
-  return { kind: 'none' };
+  return { kind: "none" };
 }

@@ -22,11 +22,8 @@
  * These tests pin the producer side of the fix: the fetcher rejects
  * rather than inventing an observation.
  */
-import { afterEach, describe, expect, it } from 'vitest';
-import {
-  BackendInfoUnavailableError,
-  fetchBackendInfo,
-} from './hooks';
+import { afterEach, describe, expect, it } from "vitest";
+import { BackendInfoUnavailableError, fetchBackendInfo } from "./hooks";
 
 const originalWindow = (globalThis as { window?: unknown }).window;
 
@@ -40,36 +37,34 @@ afterEach(() => {
   (globalThis as { window?: unknown }).window = originalWindow;
 });
 
-describe('fetchBackendInfo — a missing snapshot is a query failure, not a snapshot', () => {
-  it('rejects when backend:info answers null', async () => {
+describe("fetchBackendInfo — a missing snapshot is a query failure, not a snapshot", () => {
+  it("rejects when backend:info answers null", async () => {
     stubBackendInfo(null);
-    await expect(fetchBackendInfo()).rejects.toBeInstanceOf(
-      BackendInfoUnavailableError,
-    );
+    await expect(fetchBackendInfo()).rejects.toBeInstanceOf(BackendInfoUnavailableError);
   });
 
-  it('never resolves a synthesised unobservable attachment', async () => {
+  it("never resolves a synthesised unobservable attachment", async () => {
     // The exact shape the previous implementation returned. Stated as a
     // separate assertion because "it throws" and "it does not fabricate
     // THIS" fail for different reasons: a future author who re-adds a
     // fallback snapshot (with any status word) breaks this one.
     stubBackendInfo(null);
     const settled = await fetchBackendInfo().then(
-      value => ({ ok: true as const, value }),
+      (value) => ({ ok: true as const, value }),
       () => ({ ok: false as const }),
     );
     expect(settled.ok).toBe(false);
   });
 
-  it('passes a real snapshot through unchanged', async () => {
+  it("passes a real snapshot through unchanged", async () => {
     const snapshot = {
-      url: 'http://127.0.0.1:1234',
-      mode: 'embedded' as const,
+      url: "http://127.0.0.1:1234",
+      mode: "embedded" as const,
       outbound_protocol_compatibility: null,
-      local_host_id: 'host-1',
-      local_host_status: 'claimed' as const,
+      local_host_id: "host-1",
+      local_host_status: "claimed" as const,
       local_host_ws_attachment: { observable: true as const, attached_at: null },
-      local_host_server_url: 'http://127.0.0.1:1234',
+      local_host_server_url: "http://127.0.0.1:1234",
     };
     stubBackendInfo(snapshot);
     await expect(fetchBackendInfo()).resolves.toEqual(snapshot);

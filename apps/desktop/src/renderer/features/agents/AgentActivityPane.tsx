@@ -1,19 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ArrowUpRight } from 'lucide-react';
+import { useEffect, useMemo, useState } from "react";
+import { ArrowUpRight } from "lucide-react";
 import type {
   AgentDto,
   AgentRuntimeParticipation,
   AgentRuntimeSeatDto,
   AgentRuntimeStateDto,
   ConversationPlacementKind,
-} from '@silverhand/shared';
-import { cn } from '@/lib/cn';
-import { ConversationGlyph } from '@/components/ConversationGlyph';
-import { AgentActivityTimeline, AgentStreamActivityTimeline } from './AgentActivityTimeline';
+} from "@silverhand/shared";
+import { cn } from "@/lib/cn";
+import { ConversationGlyph } from "@/components/ConversationGlyph";
+import { AgentActivityTimeline, AgentStreamActivityTimeline } from "./AgentActivityTimeline";
 
 interface AgentActivityPaneProps {
   agentId: string;
-  sessionScope: AgentDto['session_scope'];
+  sessionScope: AgentDto["session_scope"];
   state: AgentRuntimeStateDto | undefined;
   /** Jump the main view to this conversation (open in chat). */
   onOpenConversation?: (s: AgentRuntimeParticipation) => void;
@@ -41,16 +41,12 @@ export function partitionRoster(
   const active: AgentRuntimeParticipation[] = [];
   const recent: AgentRuntimeParticipation[] = [];
   for (const r of channels) {
-    const seat = seats.find(s =>
-      s.scope.kind === 'conversation'
+    const seat = seats.find((s) =>
+      s.scope.kind === "conversation"
         ? s.scope.conversation_id === r.conversation_id
-        : s.focus?.kind === 'conversation'
-          && s.focus.conversation_id === r.conversation_id,
+        : s.focus?.kind === "conversation" && s.focus.conversation_id === r.conversation_id,
     );
-    if (
-      r.closed_at === null
-      && (seat?.status === 'active' || seat?.status === 'starting')
-    ) {
+    if (r.closed_at === null && (seat?.status === "active" || seat?.status === "starting")) {
       active.push(r);
     } else {
       recent.push(r);
@@ -62,20 +58,18 @@ export function partitionRoster(
 /** First selectable conversation id: prefer an active one, else the first
  *  recent, else null. */
 function defaultSelection(groups: RosterGroups): string | null {
-  return (
-    groups.active[0]?.conversation_id ??
-    groups.recent[0]?.conversation_id ??
-    null
-  );
+  return groups.active[0]?.conversation_id ?? groups.recent[0]?.conversation_id ?? null;
 }
 
 /**
  * Agent scope has one stream; conversation scope retains its conversation rail.
  */
 export function AgentActivityPane(props: AgentActivityPaneProps): JSX.Element {
-  return props.sessionScope === 'agent'
-    ? <AgentStreamActivityTimeline agentId={props.agentId} />
-    : <ConversationActivityPane {...props} />;
+  return props.sessionScope === "agent" ? (
+    <AgentStreamActivityTimeline agentId={props.agentId} />
+  ) : (
+    <ConversationActivityPane {...props} />
+  );
 }
 
 function ConversationActivityPane({
@@ -93,18 +87,14 @@ function ConversationActivityPane({
   // switch): if nothing is selected or the selection dropped out of the
   // allowlist, fall back to the default.
   useEffect(() => {
-    const present = new Set(
-      [...groups.active, ...groups.recent].map(r => r.conversation_id),
-    );
+    const present = new Set([...groups.active, ...groups.recent].map((r) => r.conversation_id));
     if (!selectedId || !present.has(selectedId)) {
       setSelectedId(defaultSelection(groups));
     }
   }, [groups, selectedId]);
 
   const selected =
-    [...groups.active, ...groups.recent].find(
-      r => r.conversation_id === selectedId,
-    ) ?? null;
+    [...groups.active, ...groups.recent].find((r) => r.conversation_id === selectedId) ?? null;
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -178,14 +168,14 @@ function RosterGroup({
         {label}
       </p>
       <ul className="flex flex-col">
-        {rows.map(row => (
+        {rows.map((row) => (
           <RosterItem
             key={row.conversation_id}
             row={row}
             selected={row.conversation_id === selectedId}
             onSelect={onSelect}
             onOpen={onOpen}
-            live={label === 'Active'}
+            live={label === "Active"}
           />
         ))}
       </ul>
@@ -219,14 +209,12 @@ function RosterGroup({
  * pane has a graceful unknown state, an identity glyph does not, so it fails loud
  * rather than mis-label.
  */
-function placementGlyphKind(
-  placement: ConversationPlacementKind,
-): 'channel' | 'dm' {
+function placementGlyphKind(placement: ConversationPlacementKind): "channel" | "dm" {
   switch (placement) {
-    case 'workspace':
-      return 'channel';
-    case 'direct_pair':
-      return 'dm';
+    case "workspace":
+      return "channel";
+    case "direct_pair":
+      return "dm";
   }
 }
 
@@ -251,7 +239,7 @@ function RosterItem({
       <button
         type="button"
         onClick={() => onSelect(row.conversation_id)}
-        aria-current={selected ? 'true' : undefined}
+        aria-current={selected ? "true" : undefined}
         data-row-selected={selected || undefined}
         className={cn(
           // Content-area list row (NOT inside aside[data-sidebar]), so it
@@ -260,7 +248,7 @@ function RosterItem({
           // lime selection ground. `sidebar-row-border` carries the per-theme
           // border width (forza6 = 2px). No `transition-colors`: selection is
           // a discrete committed state, instant switch (#task:1162).
-          'sidebar-row-border flex w-full items-center gap-1.5 border py-1 pl-2 pr-7 text-left',
+          "sidebar-row-border flex w-full items-center gap-1.5 border py-1 pl-2 pr-7 text-left",
           // Foreground pairs with the `--bg-row-selected` fill via
           // `text-text-on-selected` (same row vocabulary as WorkspaceChannels /
           // WorkspacesPanel): forza6 = ink-on-lime, warm = text-primary,
@@ -268,8 +256,8 @@ function RosterItem({
           // `aside[data-sidebar]`-scoped, so on this content-area row the class
           // is purely the colour utility — border/bg stay the inline tokens.
           selected
-            ? 'border-[var(--border-row-selected,var(--accent))] bg-[var(--bg-row-selected,var(--bg-selected))] font-semibold text-text-on-selected'
-            : 'border-transparent text-text-secondary hover:border-[var(--border-row-hover,var(--accent))] hover:text-text-primary',
+            ? "border-[var(--border-row-selected,var(--accent))] bg-[var(--bg-row-selected,var(--bg-selected))] font-semibold text-text-on-selected"
+            : "border-transparent text-text-secondary hover:border-[var(--border-row-hover,var(--accent))] hover:text-text-primary",
         )}
       >
         {/* Conversation roster row identity. The `data-channel-icon` sticker
@@ -280,11 +268,9 @@ function RosterItem({
             `--text-on-selected` so it stays legible on the fill. */}
         <ConversationGlyph
           kind={glyphKind}
-          className={selected ? 'text-text-on-selected' : 'text-text-muted'}
+          className={selected ? "text-text-on-selected" : "text-text-muted"}
         />
-        <span className="min-w-0 flex-1 truncate text-xs">
-          {row.channel_title}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-xs">{row.channel_title}</span>
         {live ? (
           <span
             data-status-pip

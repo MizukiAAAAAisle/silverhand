@@ -1,4 +1,4 @@
-import type { HostDto } from '@silverhand/shared';
+import type { HostDto } from "@silverhand/shared";
 
 /**
  * The four mutually-exclusive lifecycle/credential verbs the Computer
@@ -27,7 +27,7 @@ import type { HostDto } from '@silverhand/shared';
  * capability inputs; `provisioning_source` picks which flow the
  * capability takes.
  */
-export type ComputerAction = 'connection' | 'delete' | 'refresh' | 'revoke';
+export type ComputerAction = "connection" | "delete" | "refresh" | "revoke";
 
 export interface ComputerActionsInput {
   host: HostDto;
@@ -79,15 +79,13 @@ const NONE: ComputerActionsResult = Object.freeze({
  *     app-managed and expose them to Refresh/Revoke actions that have
  *     no meaning for that origin.
  */
-export function computerActions(
-  input: ComputerActionsInput,
-): ComputerActionsResult {
+export function computerActions(input: ComputerActionsInput): ComputerActionsResult {
   const { host, viewerId, currentLocalHostId } = input;
 
   const owns = viewerId !== null && host.creator_user_id === viewerId;
   if (!owns) return NONE;
 
-  const revoked = host.status === 'revoked' || host.revoked_at !== null;
+  const revoked = host.status === "revoked" || host.revoked_at !== null;
   if (revoked) return NONE;
 
   // Exact discriminators — no fall-through. `system` (backend placeholders
@@ -96,12 +94,11 @@ export function computerActions(
   // rotate (no `refresh`), no revoke-preserves-agents semantics (no
   // `revoke`), no reveal-once connect command (no `connection`), and
   // no dependency-checked terminal delete flow (no `delete`).
-  if (host.provisioning_source === 'user_invite') {
+  if (host.provisioning_source === "user_invite") {
     return { connection: true, delete: true, refresh: false, revoke: false };
   }
-  if (host.provisioning_source === 'app_install') {
-    const isCurrent =
-      currentLocalHostId !== null && host.id === currentLocalHostId;
+  if (host.provisioning_source === "app_install") {
+    const isCurrent = currentLocalHostId !== null && host.id === currentLocalHostId;
     return {
       connection: false,
       delete: false,

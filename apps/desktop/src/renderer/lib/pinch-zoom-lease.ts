@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect } from "react";
 
 /**
  * Trackpad pinch (`ctrl+wheel`) must be enabled process-wide through the preload
@@ -31,7 +31,7 @@ export function makePinchZoomLease(apply: (enabled: boolean) => void): {
   };
 }
 
-const lease = makePinchZoomLease(enabled => {
+const lease = makePinchZoomLease((enabled) => {
   // Optional-chained so a renderer on a not-yet-restarted preload can't throw.
   window.silverhand.setPinchZoom?.(enabled);
 });

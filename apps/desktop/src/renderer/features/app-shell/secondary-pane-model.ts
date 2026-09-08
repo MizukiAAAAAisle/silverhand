@@ -1,12 +1,12 @@
-import { useMemo } from 'react';
-import { useConversationIdentity } from '@/features/conversations/conversation-identity';
+import { useMemo } from "react";
+import { useConversationIdentity } from "@/features/conversations/conversation-identity";
 import {
   selectFocusedConversation,
   selectSecondaryDescriptor,
   selectVisibleConversations,
   type ConversationPointer,
   type SecondaryDescriptor,
-} from '@/lib/secondary-pane';
+} from "@/lib/secondary-pane";
 
 /**
  * Secondary-pane view model, lifted out of `RegisteredAppShell`.
@@ -47,7 +47,6 @@ export function useSecondaryPaneModel(params: {
     selectedWorkspaceId,
     routeFullscreen,
   } = params;
-
 
   // `?side=<id>` resolution (#task:2038). `useConversationIdentity` is the single
   // source of truth for the right pane's identity: the workspace face for a

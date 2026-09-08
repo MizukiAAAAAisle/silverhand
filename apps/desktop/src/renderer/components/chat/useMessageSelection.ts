@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { MessageDto } from '@silverhand/shared';
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { MessageDto } from "@silverhand/shared";
 
 /**
  * Multi-select selection state for the message list.
@@ -43,7 +43,7 @@ import type { MessageDto } from '@silverhand/shared';
 // machine without React. The `useMessageSelection` hook is a thin
 // adapter that wires them to React state.
 
-export type SelectionMode = 'idle' | 'selecting';
+export type SelectionMode = "idle" | "selecting";
 
 export interface SelectionState {
   mode: SelectionMode;
@@ -53,18 +53,15 @@ export interface SelectionState {
 }
 
 export function createSelectionState(): SelectionState {
-  return { mode: 'idle', selected: new Map() };
+  return { mode: "idle", selected: new Map() };
 }
 
 /** Enter selection mode and seed with one message. Idempotent: if
  *  already selecting, just adds the message. Returns a new state. */
-export function selectionEnter(
-  state: SelectionState,
-  initial: MessageDto,
-): SelectionState {
+export function selectionEnter(state: SelectionState, initial: MessageDto): SelectionState {
   const next = new Map(state.selected);
   next.set(initial.id, initial);
-  return { mode: 'selecting', selected: next };
+  return { mode: "selecting", selected: next };
 }
 
 /** Toggle a single message's membership. **No-op when `mode === 'idle'`**:
@@ -73,11 +70,8 @@ export function selectionEnter(
  *  idle would write rows into `selected` while leaving `mode` at idle,
  *  and the next `enter()` would inherit those ghost selections (because
  *  enter copies the existing `selected` map). Returns a new state. */
-export function selectionToggle(
-  state: SelectionState,
-  msg: MessageDto,
-): SelectionState {
-  if (state.mode === 'idle') return state;
+export function selectionToggle(state: SelectionState, msg: MessageDto): SelectionState {
+  if (state.mode === "idle") return state;
   const next = new Map(state.selected);
   if (next.has(msg.id)) next.delete(msg.id);
   else next.set(msg.id, msg);
@@ -100,10 +94,7 @@ export function selectionSorted(state: SelectionState): MessageDto[] {
   return Array.from(state.selected.values()).sort((a, b) => a.seq - b.seq);
 }
 
-export function selectionIsSelected(
-  state: SelectionState,
-  messageId: string,
-): boolean {
+export function selectionIsSelected(state: SelectionState, messageId: string): boolean {
   return state.selected.has(messageId);
 }
 
@@ -158,28 +149,25 @@ export function useMessageSelection(deps: {
   }, [deps.channelId, deps.windowResetVersion, deps.jumpToMessageId]);
 
   const enter = useCallback((initial: MessageDto) => {
-    setState(s => selectionEnter(s, initial));
+    setState((s) => selectionEnter(s, initial));
   }, []);
   const toggle = useCallback((msg: MessageDto) => {
-    setState(s => selectionToggle(s, msg));
+    setState((s) => selectionToggle(s, msg));
   }, []);
   const clear = useCallback(() => {
-    setState(s => selectionClear(s));
+    setState((s) => selectionClear(s));
   }, []);
   const exit = useCallback(() => {
     setState(selectionExit());
   }, []);
-  const selectedSorted = useCallback(
-    (): MessageDto[] => selectionSorted(state),
-    [state],
-  );
+  const selectedSorted = useCallback((): MessageDto[] => selectionSorted(state), [state]);
   const isSelected = useCallback(
     (messageId: string): boolean => selectionIsSelected(state, messageId),
     [state],
   );
 
   const count = state.selected.size;
-  const active = state.mode === 'selecting';
+  const active = state.mode === "selecting";
 
   return useMemo(
     () => ({

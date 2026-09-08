@@ -10,13 +10,13 @@
   );
 }
 
-[data-profile-layout]:has([data-activity-columns='54']),
-[data-profile-host]:has([data-activity-columns='54']) {
+[data-profile-layout]:has([data-activity-columns="54"]),
+[data-profile-host]:has([data-activity-columns="54"]) {
   --profile-week-count: 54;
 }
 
-[data-theme='forza6'] [data-profile-layout],
-[data-theme='forza6'] [data-profile-host]:has([data-profile-layout]) {
+[data-theme="forza6"] [data-profile-layout],
+[data-theme="forza6"] [data-profile-host]:has([data-profile-layout]) {
   --profile-section-border: 2px;
 }
 
@@ -25,15 +25,15 @@
   min-width: var(--profile-content-width);
 }
 
-[data-profile-host='human']:has([data-profile-layout]),
-[data-profile-host='agent']:has([data-profile-layout]),
-[data-profile-host='side']:has([data-profile-layout]) {
+[data-profile-host="human"]:has([data-profile-layout]),
+[data-profile-host="agent"]:has([data-profile-layout]),
+[data-profile-host="side"]:has([data-profile-layout]) {
   min-width: 0;
 }
 
-[data-profile-host='human'] [data-profile-layout],
-[data-profile-host='agent'] [data-profile-layout],
-[data-profile-host='side'] [data-profile-layout] {
+[data-profile-host="human"] [data-profile-layout],
+[data-profile-host="agent"] [data-profile-layout],
+[data-profile-host="side"] [data-profile-layout] {
   width: 100%;
   min-width: 0;
   max-width: var(--profile-content-width);
@@ -102,19 +102,19 @@
   background: var(--activity-empty);
 }
 
-[data-message-activity] [data-level='1'] {
+[data-message-activity] [data-level="1"] {
   background: var(--activity-low);
 }
 
-[data-message-activity] [data-level='2'] {
+[data-message-activity] [data-level="2"] {
   background: var(--activity-medium);
 }
 
-[data-message-activity] [data-level='3'] {
+[data-message-activity] [data-level="3"] {
   background: var(--activity-high);
 }
 
-[data-message-activity] [data-level='4'] {
+[data-message-activity] [data-level="4"] {
   background: var(--message-activity-color);
 }
 
@@ -154,6 +154,6 @@
   margin-left: 4px;
 }
 
-[data-theme='forza6'] .message-activity-cell:hover {
+[data-theme="forza6"] .message-activity-cell:hover {
   box-shadow: var(--forza6-poster-shadow-hover-tiny);
 }

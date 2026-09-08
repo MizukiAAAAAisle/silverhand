@@ -1,4 +1,4 @@
-import { useChannelDetail } from '@/features/workspaces/hooks';
+import { useChannelDetail } from "@/features/workspaces/hooks";
 import {
   channelGateFor,
   deriveChannelMembership,
@@ -6,7 +6,7 @@ import {
   type ChannelGate,
   type MembershipCarrier,
   type MembershipState,
-} from './membership';
+} from "./membership";
 
 export interface ResolvedChannelMembership {
   membership: MembershipState;
@@ -40,13 +40,13 @@ export function useChannelMembership(
   directPair?: { readOnly: boolean } | null,
 ): ResolvedChannelMembership {
   const carrierMembership = deriveChannelMembership(carrier ?? undefined);
-  const needsDetail = !directPair && carrierMembership === 'unknown' && !!channelId;
+  const needsDetail = !directPair && carrierMembership === "unknown" && !!channelId;
   const { data: detail } = useChannelDetail(channelId, needsDetail);
   const membership = needsDetail
     ? deriveChannelMembership(carrier ?? undefined, detail?.is_member)
     : carrierMembership;
   if (directPair) {
-    return { membership: 'member', gate: directPairGate(directPair.readOnly) };
+    return { membership: "member", gate: directPairGate(directPair.readOnly) };
   }
   return { membership, gate: channelGateFor(membership) };
 }

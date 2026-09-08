@@ -1,5 +1,5 @@
-import { useEffect, useId } from 'react';
-import { subscribeWsScope, type WsScopeSubscription } from '@/lib/ws-client';
+import { useEffect, useId } from "react";
+import { subscribeWsScope, type WsScopeSubscription } from "@/lib/ws-client";
 
 export type InterestScope = Parameters<typeof subscribeWsScope>[0];
 export type HolderToken = string;

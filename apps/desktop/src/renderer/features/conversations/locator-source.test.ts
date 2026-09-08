@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { locatorWorkspaceName, type LocatorWorkspaceRow } from './locator-source';
+import { describe, expect, it } from "vitest";
+import { locatorWorkspaceName, type LocatorWorkspaceRow } from "./locator-source";
 
 /**
  * Fences the PRODUCER half of the locator-spellability rule: the pane owner may
@@ -11,23 +11,23 @@ import { locatorWorkspaceName, type LocatorWorkspaceRow } from './locator-source
  */
 
 function row(overrides: Partial<LocatorWorkspaceRow> = {}): LocatorWorkspaceRow {
-  return { name: 'silverhand', owner_agent_id: null, ...overrides };
+  return { name: "silverhand", owner_agent_id: null, ...overrides };
 }
 
-describe('locatorWorkspaceName', () => {
-  it('regular workspace → its spellable name', () => {
-    expect(locatorWorkspaceName(row({ name: 'silverhand', owner_agent_id: null }))).toBe(
-      'silverhand',
+describe("locatorWorkspaceName", () => {
+  it("regular workspace → its spellable name", () => {
+    expect(locatorWorkspaceName(row({ name: "silverhand", owner_agent_id: null }))).toBe(
+      "silverhand",
     );
   });
 
-  it('Agent Space → null (name is not one this grammar can spell)', () => {
+  it("Agent Space → null (name is not one this grammar can spell)", () => {
     // The row HAS a name, but the resolver's fold indexes `owner_agent_id IS
     // NULL` only, so a locator minted from it would render inert — fall back.
-    expect(locatorWorkspaceName(row({ name: 'Alice', owner_agent_id: 'agent-1' }))).toBeNull();
+    expect(locatorWorkspaceName(row({ name: "Alice", owner_agent_id: "agent-1" }))).toBeNull();
   });
 
-  it('missing / unresolved row → null (workspace-less or not yet loaded)', () => {
+  it("missing / unresolved row → null (workspace-less or not yet loaded)", () => {
     expect(locatorWorkspaceName(null)).toBeNull();
     expect(locatorWorkspaceName(undefined)).toBeNull();
   });

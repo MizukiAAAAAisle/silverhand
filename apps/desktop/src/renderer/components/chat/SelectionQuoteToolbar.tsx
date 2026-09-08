@@ -1,17 +1,7 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type RefObject,
-} from 'react';
-import { createPortal } from 'react-dom';
-import { Copy, TextQuote } from 'lucide-react';
-import {
-  clampToolbarCenterX,
-  requestQuoteToComposer,
-} from '@/lib/quote-to-composer';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
+import { Copy, TextQuote } from "lucide-react";
+import { clampToolbarCenterX, requestQuoteToComposer } from "@/lib/quote-to-composer";
 
 /**
  * Floating Quote / Copy toolbar for a text selection inside a message
@@ -60,7 +50,7 @@ export function SelectionQuoteToolbar({
   draftKey: string;
 }): JSX.Element | null {
   const [anchor, setAnchor] = useState<SelectionAnchor | null>(null);
-  const [selectedText, setSelectedText] = useState('');
+  const [selectedText, setSelectedText] = useState("");
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ width: number; height: number }>({
     width: 0,
@@ -69,7 +59,7 @@ export function SelectionQuoteToolbar({
 
   const hide = useCallback(() => {
     setAnchor(null);
-    setSelectedText('');
+    setSelectedText("");
   }, []);
 
   const sync = useCallback(() => {
@@ -101,10 +91,7 @@ export function SelectionQuoteToolbar({
       hide();
       return;
     }
-    if (
-      !anchorEl.closest('[data-message-body]')
-      || !focusEl.closest('[data-message-body]')
-    ) {
+    if (!anchorEl.closest("[data-message-body]") || !focusEl.closest("[data-message-body]")) {
       hide();
       return;
     }
@@ -137,29 +124,29 @@ export function SelectionQuoteToolbar({
       if (!selection || selection.isCollapsed) hide();
     };
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') hide();
+      if (event.key === "Escape") hide();
     };
     const onPointerDown = (event: PointerEvent): void => {
       if (toolbarRef.current?.contains(event.target as Node)) return;
       hide();
     };
-    document.addEventListener('mouseup', onMouseUp);
-    document.addEventListener('keyup', onKeyUp);
-    document.addEventListener('selectionchange', onSelectionChange);
-    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener("mouseup", onMouseUp);
+    document.addEventListener("keyup", onKeyUp);
+    document.addEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("keydown", onKeyDown);
     // Capture phase: scroll events don't bubble, and a virtual-list scroll
     // moves the selection out from under the anchored toolbar.
-    document.addEventListener('scroll', hide, true);
-    window.addEventListener('resize', hide);
-    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener("scroll", hide, true);
+    window.addEventListener("resize", hide);
+    document.addEventListener("pointerdown", onPointerDown, true);
     return () => {
-      document.removeEventListener('mouseup', onMouseUp);
-      document.removeEventListener('keyup', onKeyUp);
-      document.removeEventListener('selectionchange', onSelectionChange);
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('scroll', hide, true);
-      window.removeEventListener('resize', hide);
-      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("keyup", onKeyUp);
+      document.removeEventListener("selectionchange", onSelectionChange);
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("scroll", hide, true);
+      window.removeEventListener("resize", hide);
+      document.removeEventListener("pointerdown", onPointerDown, true);
     };
   }, [sync, hide]);
 
@@ -167,7 +154,7 @@ export function SelectionQuoteToolbar({
     const node = toolbarRef.current;
     if (!node) return;
     const rect = node.getBoundingClientRect();
-    setSize(prev =>
+    setSize((prev) =>
       prev.width === rect.width && prev.height === rect.height
         ? prev
         : { width: rect.width, height: rect.height },
@@ -185,9 +172,7 @@ export function SelectionQuoteToolbar({
   // Prefer above the selection; flip below when there isn't room.
   const placeAbove = anchor.top - GAP - size.height >= VIEWPORT_MARGIN;
   const top = placeAbove ? anchor.top - GAP : anchor.bottom + GAP;
-  const transform = placeAbove
-    ? 'translate(-50%, -100%)'
-    : 'translate(-50%, 0)';
+  const transform = placeAbove ? "translate(-50%, -100%)" : "translate(-50%, 0)";
 
   const runQuote = (): void => {
     requestQuoteToComposer(draftKey, selectedText);
@@ -208,8 +193,8 @@ export function SelectionQuoteToolbar({
       // Keep the text selection intact when the toolbar is clicked — a
       // mousedown that stole focus would collapse the range before the
       // button handler reads it.
-      onMouseDown={event => event.preventDefault()}
-      style={{ position: 'fixed', top, left: centerX, transform }}
+      onMouseDown={(event) => event.preventDefault()}
+      style={{ position: "fixed", top, left: centerX, transform }}
       // Resting frame, every theme (shiki #task:2114:「选中消息的 Quote/Copy 那个
       // popover 需要加上 border（所有主题），否则看不清」) — this reverses the
       // frameless call in #task:1959: over a message stream the lift alone did not
@@ -225,11 +210,7 @@ export function SelectionQuoteToolbar({
         label="Quote"
         onClick={runQuote}
       />
-      <SelectionQuoteButton
-        icon={<Copy className="size-3.5" />}
-        label="Copy"
-        onClick={runCopy}
-      />
+      <SelectionQuoteButton icon={<Copy className="size-3.5" />} label="Copy" onClick={runCopy} />
     </div>,
     document.body,
   );

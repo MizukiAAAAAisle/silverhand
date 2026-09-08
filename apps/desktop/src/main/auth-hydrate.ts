@@ -1,5 +1,5 @@
-import type { UserDto } from '@silverhand/shared';
-import { UserDtoSchema } from '@silverhand/shared';
+import type { UserDto } from "@silverhand/shared";
+import { UserDtoSchema } from "@silverhand/shared";
 
 /**
  * Three-arm classification of a `/api/me` validation attempt
@@ -21,9 +21,9 @@ import { UserDtoSchema } from '@silverhand/shared';
  * daemon-host config.
  */
 export type SessionValidationResult =
-  | { kind: 'valid'; user: UserDto }
-  | { kind: 'rejected' }
-  | { kind: 'unreachable'; message: string };
+  | { kind: "valid"; user: UserDto }
+  | { kind: "rejected" }
+  | { kind: "unreachable"; message: string };
 
 /**
  * Pure classifier — given the outcome of a `fetch('/api/me')`
@@ -36,24 +36,22 @@ export type SessionValidationResult =
  * `validateUserSessionToken` wrapper in `index.ts`.
  */
 export type MeFetchOutcome =
-  | { kind: 'response'; status: number; body: unknown }
-  | { kind: 'throw'; error: unknown };
+  | { kind: "response"; status: number; body: unknown }
+  | { kind: "throw"; error: unknown };
 
-export function classifyMeFetchOutcome(
-  outcome: MeFetchOutcome,
-): SessionValidationResult {
-  if (outcome.kind === 'throw') {
-    return { kind: 'unreachable', message: errorMessage(outcome.error) };
+export function classifyMeFetchOutcome(outcome: MeFetchOutcome): SessionValidationResult {
+  if (outcome.kind === "throw") {
+    return { kind: "unreachable", message: errorMessage(outcome.error) };
   }
   if (outcome.status === 401 || outcome.status === 403) {
-    return { kind: 'rejected' };
+    return { kind: "rejected" };
   }
   if (outcome.status < 200 || outcome.status >= 300) {
     // 5xx, 404, gateway timeouts, … server is reachable in the
     // TCP sense but its `/api/me` did not deliver a valid auth
     // verdict. Pessimistic-keep: do not clear local state on a
     // backend hiccup.
-    return { kind: 'unreachable', message: `HTTP ${outcome.status}` };
+    return { kind: "unreachable", message: `HTTP ${outcome.status}` };
   }
   const parsed = UserDtoSchema.safeParse(outcome.body);
   if (!parsed.success) {
@@ -61,11 +59,11 @@ export function classifyMeFetchOutcome(
     // reject. Keep the token; this is closer to "server broken"
     // than "user signed out".
     return {
-      kind: 'unreachable',
+      kind: "unreachable",
       message: `invalid /api/me body: ${parsed.error.message}`,
     };
   }
-  return { kind: 'valid', user: parsed.data };
+  return { kind: "valid", user: parsed.data };
 }
 
 function errorMessage(err: unknown): string {
@@ -84,11 +82,7 @@ function errorMessage(err: unknown): string {
  * inspects `loadPersistedUserSessionToken()` after the call —
  * see `index.ts`).
  */
-export type HydrateOutcome =
-  | 'no_token'
-  | 'authenticated'
-  | 'rejected'
-  | 'unreachable';
+export type HydrateOutcome = "no_token" | "authenticated" | "rejected" | "unreachable";
 
 export interface HydrateDeps {
   /** Read the persisted session token from disk. */
@@ -129,29 +123,27 @@ export interface HydrateDeps {
  * NOT call `clear`. The whole point of this refactor is that a
  * transient outage at boot doesn't cost the user a re-login.
  */
-export async function executeHydrate(
-  deps: HydrateDeps,
-): Promise<HydrateOutcome> {
+export async function executeHydrate(deps: HydrateDeps): Promise<HydrateOutcome> {
   const token = deps.loadToken();
-  if (!token) return 'no_token';
+  if (!token) return "no_token";
   const result = await deps.validate(token);
-  if (result.kind === 'valid') {
+  if (result.kind === "valid") {
     await deps.store(token, result.user);
     await deps.claim();
-    return 'authenticated';
+    return "authenticated";
   }
-  if (result.kind === 'rejected') {
+  if (result.kind === "rejected") {
     deps.log?.info?.(
       {},
-      'persisted desktop session rejected by server (401/403); clearing local session',
+      "persisted desktop session rejected by server (401/403); clearing local session",
     );
     await deps.clear();
-    return 'rejected';
+    return "rejected";
   }
   // unreachable
   deps.log?.warn?.(
     { reason: result.message },
-    'persisted desktop session validation deferred — backend unreachable; keeping token + daemon-host config',
+    "persisted desktop session validation deferred — backend unreachable; keeping token + daemon-host config",
   );
-  return 'unreachable';
+  return "unreachable";
 }

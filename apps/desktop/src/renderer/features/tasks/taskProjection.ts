@@ -1,21 +1,15 @@
-import type { InfiniteData, QueryClient } from '@tanstack/react-query';
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import type {
   TaskBoardColumnDto,
   TaskChangedEvent,
   TaskDetailDto,
   TaskStatus,
   TaskSummaryDto,
-} from '@silverhand/shared';
-import {
-  boardColumnKey,
-  classifyTasksCacheKey,
-  filterKeyConstrainsAssignee,
-} from './boardQuery';
-import { restartRacingRead } from './racingRead';
-import { taskDetailKey } from './taskDetail';
-import {
-  applyTaskChangedToTaskByNumberCache,
-} from './useTaskByNumber';
+} from "@silverhand/shared";
+import { boardColumnKey, classifyTasksCacheKey, filterKeyConstrainsAssignee } from "./boardQuery";
+import { restartRacingRead } from "./racingRead";
+import { taskDetailKey } from "./taskDetail";
+import { applyTaskChangedToTaskByNumberCache } from "./useTaskByNumber";
 
 /**
  * The task caches' PROJECTION layer (#task:1975): what a status change can be
@@ -70,8 +64,8 @@ export type BoardColumnPages = InfiniteData<TaskBoardColumnDto, string | null>;
  *  is not total on the cross-workspace board, `id` is the unique tiebreak).
  *  True when `a` sorts strictly before `b`. */
 export function taskRowPrecedes(
-  a: Pick<TaskSummaryDto, 'id' | 'task_number'>,
-  b: Pick<TaskSummaryDto, 'id' | 'task_number'>,
+  a: Pick<TaskSummaryDto, "id" | "task_number">,
+  b: Pick<TaskSummaryDto, "id" | "task_number">,
 ): boolean {
   if (a.task_number !== b.task_number) return a.task_number > b.task_number;
   return a.id > b.id;
@@ -85,10 +79,10 @@ export function removeTaskFromColumnPages(
   taskId: string,
 ): { pages: BoardColumnPages; row: TaskSummaryDto } | null {
   for (const [i, page] of pages.pages.entries()) {
-    const row = page.items.find(t => t.id === taskId);
+    const row = page.items.find((t) => t.id === taskId);
     if (!row) continue;
     const next = [...pages.pages];
-    next[i] = { ...page, items: page.items.filter(t => t.id !== taskId) };
+    next[i] = { ...page, items: page.items.filter((t) => t.id !== taskId) };
     return { pages: { ...pages, pages: next }, row };
   }
   return null;
@@ -112,7 +106,7 @@ export function insertTaskIntoColumnPages(
   row: TaskSummaryDto,
 ): BoardColumnPages | null {
   for (const [i, page] of pages.pages.entries()) {
-    const at = page.items.findIndex(item => taskRowPrecedes(row, item));
+    const at = page.items.findIndex((item) => taskRowPrecedes(row, item));
     const isLastPage = i === pages.pages.length - 1;
     const next = [...pages.pages];
     if (at === -1) {
@@ -139,7 +133,7 @@ export function patchTaskInColumnPages(
   patch: (row: TaskSummaryDto) => TaskSummaryDto,
 ): BoardColumnPages | null {
   for (const [i, page] of pages.pages.entries()) {
-    const at = page.items.findIndex(t => t.id === taskId);
+    const at = page.items.findIndex((t) => t.id === taskId);
     const held = at === -1 ? undefined : page.items[at];
     if (!held) continue;
     const patched = patch(held);
@@ -164,11 +158,8 @@ export function patchTaskInColumnPages(
  * authoritative stamp settle it. Inventing a client timestamp here would be the
  * same fabrication as a client-side `±1` on a count.
  */
-export function optimisticClosedAt(
-  prevClosedAt: number | null,
-  status: TaskStatus,
-): number | null {
-  return status === 'closed' ? prevClosedAt : null;
+export function optimisticClosedAt(prevClosedAt: number | null, status: TaskStatus): number | null {
+  return status === "closed" ? prevClosedAt : null;
 }
 
 /** Where the board caches currently hold one task, per filter scope. */
@@ -189,11 +180,11 @@ interface CachedColumnKey {
  *  three different values live under that root). */
 function cachedColumnKeys(qc: QueryClient): CachedColumnKey[] {
   const out: CachedColumnKey[] = [];
-  for (const q of qc.getQueryCache().findAll({ queryKey: ['tasks', 'board', 'column'] })) {
-    if (classifyTasksCacheKey(q.queryKey) !== 'board-column') continue;
+  for (const q of qc.getQueryCache().findAll({ queryKey: ["tasks", "board", "column"] })) {
+    if (classifyTasksCacheKey(q.queryKey) !== "board-column") continue;
     const status = q.queryKey[3];
     const filterKey = q.queryKey[4];
-    if (typeof status !== 'string' || typeof filterKey !== 'string') continue;
+    if (typeof status !== "string" || typeof filterKey !== "string") continue;
     out.push({ key: q.queryKey, status: status as TaskStatus, filterKey });
   }
   return out;
@@ -202,16 +193,13 @@ function cachedColumnKeys(qc: QueryClient): CachedColumnKey[] {
 /** Which cached column each filter scope holds this task in. At most one per
  *  filter scope (a task has one status), and absent for a scope that does not
  *  hold it at all — out of window, filtered out, or simply not loaded. */
-export function locateTaskInBoardColumns(
-  qc: QueryClient,
-  taskId: string,
-): HeldTaskRow[] {
+export function locateTaskInBoardColumns(qc: QueryClient, taskId: string): HeldTaskRow[] {
   const found: HeldTaskRow[] = [];
   for (const column of cachedColumnKeys(qc)) {
     const pages = qc.getQueryData<BoardColumnPages>(column.key);
     if (!pages) continue;
     for (const page of pages.pages) {
-      const row = page.items.find(t => t.id === taskId);
+      const row = page.items.find((t) => t.id === taskId);
       if (!row) continue;
       found.push({ filterKey: column.filterKey, status: column.status, row });
       break;
@@ -222,11 +210,8 @@ export function locateTaskInBoardColumns(
 
 /** One filter scope's cached columns that do NOT hold the task — the scopes
  *  whose window cannot say where the row was, so only a re-read can. */
-function filterScopesWithoutTask(
-  qc: QueryClient,
-  held: readonly HeldTaskRow[],
-): string[] {
-  const holding = new Set(held.map(h => h.filterKey));
+function filterScopesWithoutTask(qc: QueryClient, held: readonly HeldTaskRow[]): string[] {
+  const holding = new Set(held.map((h) => h.filterKey));
   const scopes = new Set<string>();
   for (const column of cachedColumnKeys(qc)) {
     if (!holding.has(column.filterKey)) scopes.add(column.filterKey);
@@ -237,13 +222,10 @@ function filterScopesWithoutTask(
 /** Where the task sits in the scopes whose FILTER narrows the assignee axis —
  *  the only columns whose membership an assignee change can end without any
  *  status change to derive it from. */
-function assigneeFilteredColumnsHolding(
-  qc: QueryClient,
-  taskId: string,
-): BoardColumnRef[] {
+function assigneeFilteredColumnsHolding(qc: QueryClient, taskId: string): BoardColumnRef[] {
   return locateTaskInBoardColumns(qc, taskId)
-    .filter(at => filterKeyConstrainsAssignee(at.filterKey))
-    .map(at => ({ filterKey: at.filterKey, status: at.status }));
+    .filter((at) => filterKeyConstrainsAssignee(at.filterKey))
+    .map((at) => ({ filterKey: at.filterKey, status: at.status }));
 }
 
 /** A row this client moved between two of its own columns. */
@@ -374,14 +356,11 @@ export interface TaskFieldPatch {
   status?: TaskStatus;
   closedAt?: number | null;
   title?: string;
-  assignee?: TaskSummaryDto['assignee'];
+  assignee?: TaskSummaryDto["assignee"];
   threadRootId?: string | null;
 }
 
-function sameAssignee(
-  a: TaskSummaryDto['assignee'],
-  b: TaskSummaryDto['assignee'],
-): boolean {
+function sameAssignee(a: TaskSummaryDto["assignee"], b: TaskSummaryDto["assignee"]): boolean {
   return (a?.id ?? null) === (b?.id ?? null) && (a?.type ?? null) === (b?.type ?? null);
 }
 
@@ -396,10 +375,7 @@ function sameAssignee(
  * equal row instead cost one extra column read per echo (caught by the
  * consecutive-hops budget in `taskProjection.test.ts`).
  */
-function withFields<T extends TaskSummaryDto | TaskDetailDto>(
-  row: T,
-  patch: TaskFieldPatch,
-): T {
+function withFields<T extends TaskSummaryDto | TaskDetailDto>(row: T, patch: TaskFieldPatch): T {
   const unchanged =
     (patch.status === undefined || patch.status === row.status) &&
     (patch.closedAt === undefined || patch.closedAt === row.closed_at) &&
@@ -422,10 +398,8 @@ function fieldPatcher(
   patch: TaskFieldPatch,
   expectStatus?: TaskStatus,
 ): <T extends TaskSummaryDto | TaskDetailDto>(row: T) => T {
-  return row =>
-    expectStatus !== undefined && row.status !== expectStatus
-      ? row
-      : withFields(row, patch);
+  return (row) =>
+    expectStatus !== undefined && row.status !== expectStatus ? row : withFields(row, patch);
 }
 
 /** Apply fields to the open detail modal's projection, if one is cached. */
@@ -434,9 +408,7 @@ export function patchTaskDetailCache(
   args: { taskId: string; patch: TaskFieldPatch; expectStatus?: TaskStatus },
 ): void {
   const guard = fieldPatcher(args.patch, args.expectStatus);
-  qc.setQueryData<TaskDetailDto>(taskDetailKey(args.taskId), prev =>
-    prev ? guard(prev) : prev,
-  );
+  qc.setQueryData<TaskDetailDto>(taskDetailKey(args.taskId), (prev) => (prev ? guard(prev) : prev));
 }
 
 /**
@@ -465,19 +437,16 @@ export function patchTaskPointCaches(
   patchTaskDetailCache(qc, args);
   const guard = fieldPatcher(args.patch, args.expectStatus);
   for (const key of pointCacheKeysHolding(qc, args.taskId)) {
-    qc.setQueryData<TaskSummaryDto | null>(key, prev => (prev ? guard(prev) : prev));
+    qc.setQueryData<TaskSummaryDto | null>(key, (prev) => (prev ? guard(prev) : prev));
   }
 }
 
 /** Every `['task-by-number']` entry that currently HOLDS this task. A cached
  *  MISS (`null`) holds nothing — it is addressed by the event path instead,
  *  which knows both axes and can invalidate it. */
-function pointCacheKeysHolding(
-  qc: QueryClient,
-  taskId: string,
-): readonly unknown[][] {
+function pointCacheKeysHolding(qc: QueryClient, taskId: string): readonly unknown[][] {
   const keys: unknown[][] = [];
-  for (const q of qc.getQueryCache().findAll({ queryKey: ['task-by-number'] })) {
+  for (const q of qc.getQueryCache().findAll({ queryKey: ["task-by-number"] })) {
     const held = qc.getQueryData<TaskSummaryDto | null>(q.queryKey);
     if (held?.id === taskId) keys.push([...q.queryKey]);
   }
@@ -512,10 +481,7 @@ export function invalidateTaskPointCaches(qc: QueryClient, taskId: string): void
  * it nowhere is what left a chip-only write with nothing to roll back and made
  * its own echo look like news (Cindy, #task:1975).
  */
-export function locateTaskInPointCaches(
-  qc: QueryClient,
-  taskId: string,
-): TaskSummaryDto | null {
+export function locateTaskInPointCaches(qc: QueryClient, taskId: string): TaskSummaryDto | null {
   for (const key of pointCacheKeysHolding(qc, taskId)) {
     const held = qc.getQueryData<TaskSummaryDto | null>(key);
     if (held) return held;
@@ -609,8 +575,8 @@ export function reconcileTaskStatusWrite(
   for (const key of columnKeysToReconcile(qc, projection)) {
     void qc.invalidateQueries({ queryKey: key, exact: true });
   }
-  for (const q of qc.getQueryCache().findAll({ queryKey: ['tasks', 'board', 'counts'] })) {
-    if (classifyTasksCacheKey(q.queryKey) !== 'board-counts') continue;
+  for (const q of qc.getQueryCache().findAll({ queryKey: ["tasks", "board", "counts"] })) {
+    if (classifyTasksCacheKey(q.queryKey) !== "board-counts") continue;
     void qc.invalidateQueries({ queryKey: q.queryKey, exact: true });
   }
   if (opts?.detail) {
@@ -727,9 +693,9 @@ export function beginOptimisticStatusWrite(
 ): OptimisticStatusWrite {
   const held = locateTaskInBoardColumns(qc, args.taskId);
   const baseline: TaskSummaryDto | TaskDetailDto | null =
-    held[0]?.row
-    ?? qc.getQueryData<TaskDetailDto>(taskDetailKey(args.taskId))
-    ?? locateTaskInPointCaches(qc, args.taskId);
+    held[0]?.row ??
+    qc.getQueryData<TaskDetailDto>(taskDetailKey(args.taskId)) ??
+    locateTaskInPointCaches(qc, args.taskId);
   const previousStatus = baseline?.status ?? null;
   const previousClosedAt = baseline?.closed_at ?? null;
   const epoch = openWriteEpoch(args.taskId);
@@ -750,7 +716,7 @@ export function beginOptimisticStatusWrite(
     status: args.status,
     previousStatus,
     previousClosedAt,
-    closedAtUnknown: args.status === 'closed' && previousClosedAt === null,
+    closedAtUnknown: args.status === "closed" && previousClosedAt === null,
     writeSeq: epoch.writeSeq,
     eventSeq: epoch.eventSeq,
     projection,
@@ -789,10 +755,7 @@ export function beginOptimisticStatusWrite(
  * Whatever these gates decline, the caller's authoritative round settles — which
  * is why the failure path re-reads the detail and every chip holding the task.
  */
-export function revertOptimisticStatusWrite(
-  qc: QueryClient,
-  write: OptimisticStatusWrite,
-): void {
+export function revertOptimisticStatusWrite(qc: QueryClient, write: OptimisticStatusWrite): void {
   const epoch = taskWriteEpochs.get(write.taskId);
   if (epoch?.write !== write.writeSeq) return;
   if (epoch.event !== write.eventSeq) return;
@@ -807,7 +770,7 @@ export function revertOptimisticStatusWrite(
   for (const move of write.projection.moves) {
     if (move.placed) continue;
     const stillHeld = locateTaskInBoardColumns(qc, write.taskId).some(
-      at => at.filterKey === move.filterKey,
+      (at) => at.filterKey === move.filterKey,
     );
     if (stillHeld) continue;
     const fromKey = boardColumnKey(move.from, move.filterKey);
@@ -912,13 +875,11 @@ export function applyTaskChangedToProjections(
 
   // Decided BEFORE anything is written — the caches are about to agree with the
   // event by construction, so afterwards there is no news left to detect.
-  const assigneeChanged =
-    known === null || !sameAssignee(known.assignee, event.assignee);
-  const needsReconcile =
-    known === null || known.status !== event.status || assigneeChanged;
+  const assigneeChanged = known === null || !sameAssignee(known.assignee, event.assignee);
+  const needsReconcile = known === null || known.status !== event.status || assigneeChanged;
   // `edit` is the one kind whose authoritative state is wider than the event
   // (body, editor byline, edit timestamp), so the detail projection re-reads.
-  const detailSettled = event.kind !== 'edit';
+  const detailSettled = event.kind !== "edit";
   noteAppliedEvent(event.task_id);
 
   // Rewrite the row in place wherever its status did NOT change (title/assignee
@@ -929,7 +890,7 @@ export function applyTaskChangedToProjections(
     if (at.status === event.status) {
       const pages = qc.getQueryData<BoardColumnPages>(key);
       if (!pages) continue;
-      const patched = patchTaskInColumnPages(pages, event.task_id, row =>
+      const patched = patchTaskInColumnPages(pages, event.task_id, (row) =>
         withFields(row, fields),
       );
       if (patched && patched !== pages) {
@@ -962,7 +923,7 @@ export function applyTaskChangedToProjections(
   // and it needs it, because a read issued before this event would otherwise
   // commit pre-event rows over the assignment just made.
   const owned = needsReconcile
-    ? new Set(columnKeysToReconcile(qc, projection).map(key => JSON.stringify(key)))
+    ? new Set(columnKeysToReconcile(qc, projection).map((key) => JSON.stringify(key)))
     : new Set<string>();
   for (const key of touched) {
     if (!owned.has(JSON.stringify(key))) restartRacingRead(qc, key);

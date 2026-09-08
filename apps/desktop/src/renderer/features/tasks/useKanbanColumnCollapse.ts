@@ -1,5 +1,5 @@
-import { useSyncExternalStore } from 'react';
-import type { TaskStatus } from '@silverhand/shared';
+import { useSyncExternalStore } from "react";
+import type { TaskStatus } from "@silverhand/shared";
 
 /**
  * Per-column collapse state for the task kanban (global NavRail section +
@@ -29,7 +29,7 @@ import type { TaskStatus } from '@silverhand/shared';
 // Closed is collapsed by default — it's the archived terminal column and
 // holds the bulk of historical tasks, so hiding its (potentially very large)
 // card list also keeps the initial board mount cheap.
-const DEFAULT_COLLAPSED: readonly TaskStatus[] = ['closed'];
+const DEFAULT_COLLAPSED: readonly TaskStatus[] = ["closed"];
 
 // Module-level single source of truth. Snapshot identity only changes when a
 // column is actually toggled, so `useSyncExternalStore` stays stable.

@@ -1,10 +1,10 @@
-import { useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { UserChangedEventSchema, type ServerFrame } from '@silverhand/shared';
-import { invalidateIdentityCarrierCaches } from '@/features/identity/identity-carrier-caches';
-import { reseatViewerFromBackend } from '@/features/me/hooks';
-import { getCurrentUserId } from '@/lib/current-user';
-import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
+import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { UserChangedEventSchema, type ServerFrame } from "@silverhand/shared";
+import { invalidateIdentityCarrierCaches } from "@/features/identity/identity-carrier-caches";
+import { reseatViewerFromBackend } from "@/features/me/hooks";
+import { getCurrentUserId } from "@/lib/current-user";
+import { onWsFrame, subscribeWsScope } from "@/lib/ws-client";
 
 /**
  * What an incoming WS frame means for the human-identity caches. The human
@@ -19,26 +19,20 @@ import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
  * Pure — exported for unit tests.
  */
 export type UserSyncAction = {
-  kind: 'invalidate';
+  kind: "invalidate";
   /** Whose profile changed; `null` when the signal is a replay recovery. */
   userId: string | null;
 };
 
 export function decideUserSyncAction(frame: ServerFrame): UserSyncAction | null {
-  if (frame.type === 'snapshot_required') {
-    return frame.scope === 'app' ? { kind: 'invalidate', userId: null } : null;
+  if (frame.type === "snapshot_required") {
+    return frame.scope === "app" ? { kind: "invalidate", userId: null } : null;
   }
-  if (
-    frame.type !== 'event' ||
-    frame.scope !== 'app' ||
-    frame.kind !== 'user_changed'
-  ) {
+  if (frame.type !== "event" || frame.scope !== "app" || frame.kind !== "user_changed") {
     return null;
   }
   const parsed = UserChangedEventSchema.safeParse(frame.payload);
-  return parsed.success
-    ? { kind: 'invalidate', userId: parsed.data.user_id }
-    : null;
+  return parsed.success ? { kind: "invalidate", userId: parsed.data.user_id } : null;
 }
 
 /**
@@ -53,10 +47,7 @@ export function decideUserSyncAction(frame: ServerFrame): UserSyncAction | null 
  *
  * Pure — exported for unit tests.
  */
-export function userSyncTouchesViewer(
-  action: UserSyncAction,
-  viewerId: string | null,
-): boolean {
+export function userSyncTouchesViewer(action: UserSyncAction, viewerId: string | null): boolean {
   if (action.userId === null) return true;
   return viewerId !== null && action.userId === viewerId;
 }
@@ -86,11 +77,11 @@ export function userSyncTouchesViewer(
 export function useUserSync(): void {
   const qc = useQueryClient();
   useEffect(() => {
-    const sub = subscribeWsScope('app');
-    const unsub = onWsFrame(frame => {
+    const sub = subscribeWsScope("app");
+    const unsub = onWsFrame((frame) => {
       const action = decideUserSyncAction(frame);
       if (!action) return;
-      invalidateIdentityCarrierCaches(qc, 'human');
+      invalidateIdentityCarrierCaches(qc, "human");
       if (userSyncTouchesViewer(action, getCurrentUserId())) {
         void reseatViewerFromBackend(qc);
       }

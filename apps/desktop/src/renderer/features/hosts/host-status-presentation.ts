@@ -35,15 +35,10 @@ import type {
   HostAdmissionFailure,
   HostStatusResponse,
   HostUnreachableReason,
-} from '@silverhand/shared';
-import { computerCopy } from './computer-copy';
+} from "@silverhand/shared";
+import { computerCopy } from "./computer-copy";
 
-export type HostStatusTone =
-  | 'accent'
-  | 'success'
-  | 'muted'
-  | 'warning'
-  | 'error';
+export type HostStatusTone = "accent" | "success" | "muted" | "warning" | "error";
 
 export interface HostStatusView {
   /** Short product label rendered as a pill next to the host name.
@@ -67,16 +62,14 @@ export interface HostStatusView {
  * Daemon-language reasons stay in the wire shape; the renderer never
  * displays them verbatim.
  */
-export function describeUnreachableReason(
-  reason: HostUnreachableReason,
-): string {
+export function describeUnreachableReason(reason: HostUnreachableReason): string {
   switch (reason) {
-    case 'timeout':
-      return 'The computer took too long to answer. Try refreshing.';
-    case 'daemon_unreachable':
-      return 'Could not reach this computer. Make sure it is connected.';
-    case 'protocol_error':
-      return 'This computer sent an unexpected response.';
+    case "timeout":
+      return "The computer took too long to answer. Try refreshing.";
+    case "daemon_unreachable":
+      return "Could not reach this computer. Make sure it is connected.";
+    case "protocol_error":
+      return "This computer sent an unexpected response.";
     default: {
       // Exhaustive — adding a new reason on the schema side fails the
       // typecheck here loud-and-early rather than rendering an empty
@@ -146,14 +139,14 @@ export function describeAdmissionFailure(
   options: { appManaged: boolean },
 ): string {
   switch (failure.kind) {
-    case 'protocol_mismatch': {
+    case "protocol_mismatch": {
       const offered = failure.offered_protocol_version;
       const expected = failure.expected_protocol_version;
       if (offered > expected) {
         return `Silverhand on this computer is not compatible with this server: it uses connection protocol v${offered}, and the server accepts v${expected}. Update Silverhand on the server to restore agent connectivity.`;
       }
       const target = options.appManaged
-        ? 'Silverhand on this computer'
+        ? "Silverhand on this computer"
         : `${computerCopy.connectionPackageName} on this computer`;
       return `Silverhand on this computer is not compatible with this server: it uses connection protocol v${offered}, and the server requires v${expected}. Update ${target} to restore agent connectivity.`;
     }
@@ -174,17 +167,15 @@ export function describeAdmissionFailure(
  * this function only describes the **availability** of the host as a
  * whole.
  */
-export function describeHostStatus(
-  status: HostStatusResponse,
-): HostStatusView {
+export function describeHostStatus(status: HostStatusResponse): HostStatusView {
   switch (status.availability) {
-    case 'available':
+    case "available":
       return {
         label: computerCopy.availabilityConnected,
         detail: null,
-        tone: 'success',
+        tone: "success",
       };
-    case 'disconnected':
+    case "disconnected":
       // `admission_failure` does NOT change the availability view: same
       // word, same muted tone (`#task:1631` + shiki 2026-07-26). The
       // "you must upgrade this machine" fact is a page-level notice on
@@ -194,21 +185,20 @@ export function describeHostStatus(
       return {
         label: computerCopy.availabilityOffline,
         detail:
-          'This computer is not connected right now. Registered agents are shown but cannot run.',
-        tone: 'muted',
+          "This computer is not connected right now. Registered agents are shown but cannot run.",
+        tone: "muted",
       };
-    case 'unreachable':
+    case "unreachable":
       return {
         label: computerCopy.availabilityUnreachable,
         detail: describeUnreachableReason(status.reason),
-        tone: 'warning',
+        tone: "warning",
       };
-    case 'revoked':
+    case "revoked":
       return {
         label: computerCopy.lifecycleRevoked,
-        detail:
-          'This computer has been revoked. Re-add it to use it again.',
-        tone: 'muted',
+        detail: "This computer has been revoked. Re-add it to use it again.",
+        tone: "muted",
       };
     default: {
       // Exhaustive over the discriminator — a new arm on the schema

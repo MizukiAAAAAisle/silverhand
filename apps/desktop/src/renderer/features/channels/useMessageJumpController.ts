@@ -1,6 +1,6 @@
-import { useCallback, useRef, useState } from 'react';
-import { useMarkMessageChannelRead, usePrimeConversationMessages } from './hooks';
-import { type JumpPhase, jumpWindowLockedForPhase } from './messageJumpPhase';
+import { useCallback, useRef, useState } from "react";
+import { useMarkMessageChannelRead, usePrimeConversationMessages } from "./hooks";
+import { type JumpPhase, jumpWindowLockedForPhase } from "./messageJumpPhase";
 
 export interface MessageJumpTarget {
   workspaceId?: string;
@@ -60,7 +60,7 @@ export function useMessageJumpController() {
 
       attemptIdRef.current += 1;
       const attemptId = attemptIdRef.current;
-      setPrime({ conversationId, messageId: target.messageId, phase: 'priming' });
+      setPrime({ conversationId, messageId: target.messageId, phase: "priming" });
 
       void primeAround(conversationId, target.messageId, {
         // A reply-cluster target primes the cluster cache (the same window
@@ -71,17 +71,17 @@ export function useMessageJumpController() {
         threadRootId: target.threadRootId ?? undefined,
         shouldCommit: () => attemptIdRef.current === attemptId,
       })
-        .then(result => {
+        .then((result) => {
           if (attemptIdRef.current !== attemptId) return;
           if (result.committed) {
             // Around-window is in the cache. Advance to `committed`: render is
             // released (rows present) but the window stays LOCKED (see
             // `JumpPhase`) until the visual locate calls `onJumped → clearJump`
             // — a latest refetch must not clobber the window mid-locate.
-            setPrime({ conversationId, messageId: target.messageId, phase: 'committed' });
+            setPrime({ conversationId, messageId: target.messageId, phase: "committed" });
             return;
           }
-          if (result.reason === 'not_found') {
+          if (result.reason === "not_found") {
             // No such message. Clear the target AND the phase together — a
             // `settled` phase with a null jumpTarget would hang unconsumed
             // (no locate → no onJumped → no clearJump). No third state.
@@ -91,11 +91,11 @@ export function useMessageJumpController() {
           }
           // stale / aborted: no authoritative window, but keep the target so
           // locate can still best-effort against whatever is loaded (bounded).
-          setPrime({ conversationId, messageId: target.messageId, phase: 'settled' });
+          setPrime({ conversationId, messageId: target.messageId, phase: "settled" });
         })
         .catch(() => {
           if (attemptIdRef.current !== attemptId) return;
-          setPrime({ conversationId, messageId: target.messageId, phase: 'settled' });
+          setPrime({ conversationId, messageId: target.messageId, phase: "settled" });
         });
     },
     [markRead, primeAround],
@@ -112,9 +112,7 @@ export function useMessageJumpController() {
    *  callers project loader / locate / window-lock from it. */
   const primePhaseFor = useCallback(
     (conversationId: string, messageId: string): JumpPhase | null =>
-      prime !== null &&
-      prime.conversationId === conversationId &&
-      prime.messageId === messageId
+      prime !== null && prime.conversationId === conversationId && prime.messageId === messageId
         ? prime.phase
         : null,
     [prime],
@@ -129,9 +127,7 @@ export function useMessageJumpController() {
   const isPrimePendingFor = useCallback(
     (conversationId: string, messageId: string) =>
       jumpWindowLockedForPhase(
-        prime !== null &&
-          prime.conversationId === conversationId &&
-          prime.messageId === messageId
+        prime !== null && prime.conversationId === conversationId && prime.messageId === messageId
           ? prime.phase
           : null,
       ),

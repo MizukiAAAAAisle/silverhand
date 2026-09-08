@@ -1,6 +1,6 @@
-import { User as UserIcon } from 'lucide-react';
-import { cn } from '@/lib/cn';
-import { AVATAR_PX_DEFAULT } from './avatar-scale';
+import { User as UserIcon } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { AVATAR_PX_DEFAULT } from "./avatar-scale";
 
 interface UserAvatarProps {
   /** Pixel size of the square. Sizes come from the `AVATAR_PX` scale
@@ -51,7 +51,7 @@ export function UserAvatar({
       <span
         data-avatar-ground
         className={cn(
-          'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle',
+          "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle",
           className,
         )}
         style={{ width: size, height: size }}
@@ -59,7 +59,7 @@ export function UserAvatar({
       >
         <img
           src={avatarObjectUrl}
-          alt={alt ?? title ?? 'avatar'}
+          alt={alt ?? title ?? "avatar"}
           className="h-full w-full object-cover"
           draggable={false}
         />
@@ -75,7 +75,7 @@ export function UserAvatar({
     <span
       data-avatar-ground
       className={cn(
-        'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none text-text-muted align-middle',
+        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none text-text-muted align-middle",
         className,
       )}
       style={{ width: size, height: size }}

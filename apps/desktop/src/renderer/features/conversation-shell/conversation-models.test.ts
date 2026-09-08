@@ -1,15 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DirectPairListItem } from '@silverhand/shared';
-import type { ChannelListItem, WorkspaceListItem } from '@/features/workspaces/hooks';
-import type { ConversationIdentityResolution } from '@/features/conversations/conversation-identity';
-import type { PaneJumpModel, PaneReadModel } from './conversation-shell-models';
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DirectPairListItem } from "@silverhand/shared";
+import type { ChannelListItem, WorkspaceListItem } from "@/features/workspaces/hooks";
+import type { ConversationIdentityResolution } from "@/features/conversations/conversation-identity";
+import type { PaneJumpModel, PaneReadModel } from "./conversation-shell-models";
 
 const h = vi.hoisted(() => ({
   route: {
-    section: 'chat',
-    chatView: 'channel',
-    workspaceId: 'w' as string | null,
-    channelId: 'c' as string | null,
+    section: "chat",
+    chatView: "channel",
+    workspaceId: "w" as string | null,
+    channelId: "c" as string | null,
     directConversationId: null as string | null,
     sideConversationId: null as string | null,
     fullscreen: false,
@@ -41,8 +41,8 @@ const h = vi.hoisted(() => ({
   effects: [] as Array<() => void>,
 }));
 
-vi.mock('react', async (original) => ({
-  ...(await original<typeof import('react')>()),
+vi.mock("react", async (original) => ({
+  ...(await original<typeof import("react")>()),
   useMemo: <T>(fn: () => T) => fn(),
   useCallback: <T>(fn: T) => fn,
   useDeferredValue: <T>(value: T) => (h.deferred === undefined ? value : h.deferred),
@@ -72,8 +72,8 @@ vi.mock('react', async (original) => ({
     }
   },
 }));
-vi.mock('@/router', async (original) => ({
-  ...(await original<typeof import('@/router')>()),
+vi.mock("@/router", async (original) => ({
+  ...(await original<typeof import("@/router")>()),
   useRouteState: () => h.route,
   useNav: () => ({
     closeTask: h.closeTask,
@@ -82,28 +82,28 @@ vi.mock('@/router', async (original) => ({
     openThread: h.openThread,
   }),
 }));
-vi.mock('@/features/workspaces/hooks', () => ({
+vi.mock("@/features/workspaces/hooks", () => ({
   useWorkspaces: () => ({ data: h.workspaces }),
   useChannelsForWorkspace: (id: string | null, enabled: boolean) => {
     h.activeQuery(id, enabled);
     return {
       data: h.active,
-      status: 'success',
+      status: "success",
       isLoading: h.loading,
-      fetchStatus: h.fetching ? 'fetching' : 'idle',
+      fetchStatus: h.fetching ? "fetching" : "idle",
     };
   },
   useArchivedChannelsForWorkspace: (id: string | null, enabled: boolean) => {
     h.archivedQuery(id, enabled);
-    return { data: h.archived, status: 'success', fetchStatus: 'idle' };
+    return { data: h.archived, status: "success", fetchStatus: "idle" };
   },
   useChannelDetail: (id: string | null, enabled: boolean) => {
     h.detail(id, enabled);
     return { data: undefined };
   },
 }));
-vi.mock('@/features/direct-pairs/hooks', async (original) => {
-  const actual = await original<typeof import('@/features/direct-pairs/hooks')>();
+vi.mock("@/features/direct-pairs/hooks", async (original) => {
+  const actual = await original<typeof import("@/features/direct-pairs/hooks")>();
   return {
     ...actual,
     useDirectPairsList: () => ({
@@ -120,49 +120,49 @@ vi.mock('@/features/direct-pairs/hooks', async (original) => {
       }),
   };
 });
-vi.mock('@/features/conversations/conversation-identity', async (original) => ({
-  ...(await original<typeof import('@/features/conversations/conversation-identity')>()),
+vi.mock("@/features/conversations/conversation-identity", async (original) => ({
+  ...(await original<typeof import("@/features/conversations/conversation-identity")>()),
   useConversationIdentity: () => h.side,
 }));
-vi.mock('@/features/channels/hooks', () => ({
+vi.mock("@/features/channels/hooks", () => ({
   useMarkMessageChannelRead: () => ({ mutate: h.reads }),
 }));
-vi.mock('@/features/app-shell/keyboard-shortcuts', () => ({
+vi.mock("@/features/app-shell/keyboard-shortcuts", () => ({
   useContextualCloseResponder: (...args: unknown[]) => h.closeResponder(...args),
 }));
 
-import { useConversationReadModel } from './use-conversation-read-model';
-import { useConversationPanes } from './use-conversation-panes';
+import { useConversationReadModel } from "./use-conversation-read-model";
+import { useConversationPanes } from "./use-conversation-panes";
 
 const channel = (id: string): ChannelListItem => ({
   id,
-  workspace_id: 'w',
-  placement_kind: 'workspace',
-  roster_policy: 'open',
+  workspace_id: "w",
+  placement_kind: "workspace",
+  roster_policy: "open",
   title: id,
-  status: 'active',
+  status: "active",
   spawned_by_agent_id: null,
   closed_at: null,
   close_summary: null,
   archived_at: null,
   created_at: 0,
   updated_at: 0,
-  visibility: 'private',
+  visibility: "private",
   is_member: true,
 });
 const pair: DirectPairListItem = {
-  conversation_id: 'dm',
+  conversation_id: "dm",
   created_at: 0,
   read_only: true,
   unread_count: 0,
   counterpart: {
-    id: 'u',
-    name: 'u',
-    display_name: 'User',
-    kind: 'human',
+    id: "u",
+    name: "u",
+    display_name: "User",
+    kind: "human",
     runtime: null,
     avatar_url: null,
-    status: 'active',
+    status: "active",
   },
 };
 const jump: PaneJumpModel = {
@@ -173,10 +173,10 @@ const jump: PaneJumpModel = {
 };
 function render(
   read: PaneReadModel = {
-    primaryPointer: { id: 'c', rosterPolicy: 'open' },
-    parentChannelMembership: 'member',
+    primaryPointer: { id: "c", rosterPolicy: "open" },
+    parentChannelMembership: "member",
     hasChannelNamespace: true,
-    deferredChannelId: 'c',
+    deferredChannelId: "c",
   },
   nextJump = jump,
 ) {
@@ -188,9 +188,9 @@ function render(
 beforeEach(() => {
   vi.clearAllMocks();
   Object.assign(h.route, {
-    section: 'chat',
-    workspaceId: 'w',
-    channelId: 'c',
+    section: "chat",
+    workspaceId: "w",
+    channelId: "c",
     directConversationId: null,
     sideConversationId: null,
     fullscreen: false,
@@ -201,18 +201,18 @@ beforeEach(() => {
   });
   h.workspaces = [
     {
-      id: 'w',
-      name: 'Workspace',
+      id: "w",
+      name: "Workspace",
       description: null,
       created_at: 0,
       updated_at: 0,
       archived_at: null,
       owner_agent_id: null,
       dm_channel_ids: [],
-      workspace_scope_ids: ['w'],
+      workspace_scope_ids: ["w"],
     },
   ];
-  h.active = [channel('c')];
+  h.active = [channel("c")];
   h.archived = [];
   h.fetching = false;
   h.loading = false;
@@ -225,66 +225,66 @@ beforeEach(() => {
   h.effects = [];
 });
 
-describe('conversation authority read model', () => {
-  it('keeps current membership separate from the deferred descriptor and settled list facts', () => {
-    h.active.push({ ...channel('new'), is_member: false });
-    h.route.channelId = 'new';
-    h.deferred = 'c';
+describe("conversation authority read model", () => {
+  it("keeps current membership separate from the deferred descriptor and settled list facts", () => {
+    h.active.push({ ...channel("new"), is_member: false });
+    h.route.channelId = "new";
+    h.deferred = "c";
     h.fetching = true;
     const model = useConversationReadModel();
-    expect(model.selectedChannel?.id).toBe('new');
-    expect(model.parentChannelMembership).toBe('nonmember');
-    expect(model.primaryPaneDescriptor?.id).toBe('c');
+    expect(model.selectedChannel?.id).toBe("new");
+    expect(model.parentChannelMembership).toBe("nonmember");
+    expect(model.primaryPaneDescriptor?.id).toBe("c");
     expect(model.activeSettled).toBe(false);
     expect(model.archivedSettled).toBe(true);
-    expect(model.memberActiveChannels.map((c) => c.id)).toEqual(['c']);
-    expect(h.activeQuery).toHaveBeenCalledExactlyOnceWith('w', true);
+    expect(model.memberActiveChannels.map((c) => c.id)).toEqual(["c"]);
+    expect(h.activeQuery).toHaveBeenCalledExactlyOnceWith("w", true);
     expect(h.reads).not.toHaveBeenCalled();
   });
-  it('uses the workspace-less pair for pointer, permissions and composer directory', () => {
+  it("uses the workspace-less pair for pointer, permissions and composer directory", () => {
     h.route.workspaceId = null;
-    h.route.channelId = 'dm';
-    h.route.directConversationId = 'dm';
+    h.route.channelId = "dm";
+    h.route.directConversationId = "dm";
     h.pairRows = [pair];
     const model = useConversationReadModel();
-    expect(model.primaryPointer).toEqual({ id: 'dm', rosterPolicy: 'fixed' });
+    expect(model.primaryPointer).toEqual({ id: "dm", rosterPolicy: "fixed" });
     expect(model.primaryPaneDescriptor?.workspace_id).toBeNull();
     expect(model.primaryPaneHasChannelNamespace).toBe(false);
-    expect(model.primaryThreadComposerDirectory.kind).toBe('viewer');
+    expect(model.primaryThreadComposerDirectory.kind).toBe("viewer");
     expect(model.parentMembership.gate).toEqual({
       allowMutations: false,
       allowMemberEffects: true,
       showComposer: true,
       showJoin: false,
     });
-    expect(h.detail).toHaveBeenCalledWith('dm', false);
+    expect(h.detail).toHaveBeenCalledWith("dm", false);
     expect(h.activeQuery).toHaveBeenCalledWith(null, false);
     expect(h.reads).not.toHaveBeenCalled();
   });
-  it.each(['loading', 'error', 'absent'] as const)(
-    'preserves pair %s as a distinct load result',
+  it.each(["loading", "error", "absent"] as const)(
+    "preserves pair %s as a distinct load result",
     (state) => {
       h.route.workspaceId = null;
-      h.route.channelId = 'dm';
-      h.route.directConversationId = 'dm';
-      h.pairRows = state === 'absent' ? [] : undefined;
-      h.pairError = state === 'error';
+      h.route.channelId = "dm";
+      h.route.directConversationId = "dm";
+      h.pairRows = state === "absent" ? [] : undefined;
+      h.pairError = state === "error";
       const model = useConversationReadModel();
-      expect(model.parentChannelResolving).toBe(state === 'loading');
-      expect(model.directPairLoadFailed).toBe(state === 'error');
-      expect(model.directPairNotFound).toBe(state === 'absent');
+      expect(model.parentChannelResolving).toBe(state === "loading");
+      expect(model.directPairLoadFailed).toBe(state === "error");
+      expect(model.directPairNotFound).toBe(state === "absent");
       expect(model.primaryPointer).toBeNull();
     },
   );
 });
 
-describe('conversation pane coordination', () => {
-  it('marks each visible pane once, suppresses the hidden primary, and restores it once', () => {
-    h.route.sideConversationId = 'dm';
-    h.side = { status: 'resolved', identity: { placement: 'direct_pair', pair } };
+describe("conversation pane coordination", () => {
+  it("marks each visible pane once, suppresses the hidden primary, and restores it once", () => {
+    h.route.sideConversationId = "dm";
+    h.side = { status: "resolved", identity: { placement: "direct_pair", pair } };
     let model = render();
-    expect(h.reads.mock.calls).toEqual([['c'], ['dm']]);
-    expect(model.focusedConversation?.id).toBe('dm');
+    expect(h.reads.mock.calls).toEqual([["c"], ["dm"]]);
+    expect(model.focusedConversation?.id).toBe("dm");
     render();
     expect(h.reads).toHaveBeenCalledTimes(2);
     h.route.fullscreen = true;
@@ -292,27 +292,27 @@ describe('conversation pane coordination', () => {
     expect(h.reads).toHaveBeenCalledTimes(2);
     h.route.fullscreen = false;
     model = render();
-    expect(h.reads.mock.calls).toEqual([['c'], ['dm'], ['c']]);
+    expect(h.reads.mock.calls).toEqual([["c"], ["dm"], ["c"]]);
     expect(model.secondaryViewInputs.hasChannelNamespace).toBe(false);
     expect(model.secondaryViewInputs.archiveWorkspaceId).toBeNull();
   });
-  it('an unresolved side has no read cursor and does not steal primary focus', () => {
-    h.route.sideConversationId = 'missing';
-    h.side = { status: 'unauthorized' };
+  it("an unresolved side has no read cursor and does not steal primary focus", () => {
+    h.route.sideConversationId = "missing";
+    h.side = { status: "unauthorized" };
     const model = render();
-    expect(h.reads.mock.calls).toEqual([['c']]);
-    expect(model.focusedConversation?.id).toBe('c');
+    expect(h.reads.mock.calls).toEqual([["c"]]);
+    expect(model.focusedConversation?.id).toBe("c");
     expect(model.secondaryConversationDescriptor).toBeNull();
   });
-  it('withholds member panels and guards task close while editing', () => {
+  it("withholds member panels and guards task close while editing", () => {
     h.route.filesListOpen = true;
     h.route.threadsListOpen = true;
-    h.route.taskDetailId = 'task';
+    h.route.taskDetailId = "task";
     const model = render({
       primaryPointer: null,
-      parentChannelMembership: 'unknown',
+      parentChannelMembership: "unknown",
       hasChannelNamespace: false,
-      deferredChannelId: 'c',
+      deferredChannelId: "c",
     });
     expect(model.filesListMounted).toBe(false);
     expect(model.threadsListMounted).toBe(false);
@@ -326,35 +326,35 @@ describe('conversation pane coordination', () => {
     model.setTaskPaneEditing(false);
     model.requestCloseTaskPane();
     expect(h.closeTask).toHaveBeenCalledTimes(1);
-    h.route.section = 'tasks';
+    h.route.section = "tasks";
     expect(render().taskPaneId).toBeNull();
   });
-  it('keeps attachment origin and matches thread jump by both parent and root', () => {
-    h.route.threadRootId = 'root';
+  it("keeps attachment origin and matches thread jump by both parent and root", () => {
+    h.route.threadRootId = "root";
     const model = render(undefined, {
       ...jump,
-      jumpTarget: { channelId: 'c', threadRootId: 'root', messageId: 'reply' },
-      primePhaseFor: () => 'committed',
+      jumpTarget: { channelId: "c", threadRootId: "root", messageId: "reply" },
+      primePhaseFor: () => "committed",
     });
-    expect(model.threadJumpMessageId).toBe('reply');
-    expect(model.threadJumpPhase).toBe('committed');
+    expect(model.threadJumpMessageId).toBe("reply");
+    expect(model.threadJumpPhase).toBe("committed");
     expect(model.parentJumpTarget).toBeNull();
     model.setPaneAttachmentRequest({
-      conversationId: 'origin',
-      attachment: { id: 'a', filename: 'a.md', size: 1, content_type: 'text/markdown' },
+      conversationId: "origin",
+      attachment: { id: "a", filename: "a.md", size: 1, content_type: "text/markdown" },
     });
-    expect(render().paneAttachmentRequest?.conversationId).toBe('origin');
+    expect(render().paneAttachmentRequest?.conversationId).toBe("origin");
     const other = render(undefined, {
       ...jump,
-      jumpTarget: { channelId: 'other', threadRootId: 'root', messageId: 'reply' },
+      jumpTarget: { channelId: "other", threadRootId: "root", messageId: "reply" },
     });
     expect(other.threadJumpMessageId).toBeNull();
-    other.handleOpenThreadFromChannel('root', 'reply');
+    other.handleOpenThreadFromChannel("root", "reply");
     expect(jump.handleJumpToMessage).toHaveBeenCalledExactlyOnceWith({
-      workspaceId: 'w',
-      channelId: 'c',
-      threadRootId: 'root',
-      messageId: 'reply',
+      workspaceId: "w",
+      channelId: "c",
+      threadRootId: "root",
+      messageId: "reply",
     });
   });
 });

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode } from "react";
 
 /**
  * The shared, presentational content column for a message row — the single
@@ -96,7 +96,7 @@ export function MessageRowContent({
           rather than leaving an empty band above the body. Same
           render-only-when-present shape as the bottom adornment row below. */}
       {author || timestamp ? (
-        <header className={'mb-1 text-xs ' + (alignRight ? 'text-right' : '')}>
+        <header className={"mb-1 text-xs " + (alignRight ? "text-right" : "")}>
           {alignRight ? (
             <>
               {timestamp}
@@ -162,7 +162,7 @@ export function MessageRowContent({
           <div
             className={
               alignRight
-                ? 'ml-auto w-fit max-w-full rounded-[var(--message-bubble-radius)] bg-[var(--bg-message-bubble)] px-3 py-2'
+                ? "ml-auto w-fit max-w-full rounded-[var(--message-bubble-radius)] bg-[var(--bg-message-bubble)] px-3 py-2"
                 : undefined
             }
           >
@@ -183,8 +183,7 @@ export function MessageRowContent({
       {taskTag || trailing || reactions ? (
         <div
           className={
-            'mt-1.5 flex flex-nowrap items-center gap-2 ' +
-            (alignRight ? 'flex-row-reverse' : '')
+            "mt-1.5 flex flex-nowrap items-center gap-2 " + (alignRight ? "flex-row-reverse" : "")
           }
         >
           {taskTag}

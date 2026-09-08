@@ -54,16 +54,16 @@ export const HTML_PREVIEW_CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline' 'unsafe-eval' https: data: blob:",
   "style-src 'unsafe-inline' https: data: blob:",
-  'img-src https: data: blob:',
-  'font-src https: data: blob:',
-  'media-src https: data: blob:',
+  "img-src https: data: blob:",
+  "font-src https: data: blob:",
+  "media-src https: data: blob:",
   "connect-src 'none'",
   "form-action 'none'",
   "base-uri 'none'",
   "object-src 'none'",
   "frame-src 'none'",
   "child-src 'none'",
-].join('; ');
+].join("; ");
 
 /**
  * The trackpad-pinch bridge (#task:2161). The preview lives in an opaque-origin
@@ -77,30 +77,30 @@ export const HTML_PREVIEW_CSP = [
  * two-finger scroll still scrolls the author page. It sits in body position
  * after the policy, so the "nothing active precedes the CSP" invariant holds.
  */
-export const HTML_PREVIEW_PINCH_TYPE = 'silverhand:html-preview:pinch';
+export const HTML_PREVIEW_PINCH_TYPE = "silverhand:html-preview:pinch";
 export const HTML_PREVIEW_PINCH_VERSION = 1;
 /** A single wheel event's `deltaY` is clamped to this before it can move scale,
  *  so a spoofed or flooded value cannot jump the zoom. */
 export const HTML_PREVIEW_PINCH_MAX_DELTA = 100;
 
 const HTML_PREVIEW_PINCH_BRIDGE =
-  `<script>(function(){`
-  + `var T=${JSON.stringify(HTML_PREVIEW_PINCH_TYPE)},V=${HTML_PREVIEW_PINCH_VERSION};`
-  + `window.addEventListener('wheel',function(e){`
-  + `if(!e.ctrlKey)return;`
-  + `e.preventDefault();`
-  + `parent.postMessage({type:T,version:V,deltaY:e.deltaY},'*');`
-  + `},{capture:true,passive:false});`
-  + `})();</script>`;
+  `<script>(function(){` +
+  `var T=${JSON.stringify(HTML_PREVIEW_PINCH_TYPE)},V=${HTML_PREVIEW_PINCH_VERSION};` +
+  `window.addEventListener('wheel',function(e){` +
+  `if(!e.ctrlKey)return;` +
+  `e.preventDefault();` +
+  `parent.postMessage({type:T,version:V,deltaY:e.deltaY},'*');` +
+  `},{capture:true,passive:false});` +
+  `})();</script>`;
 
 /** The fixed, author-independent document head — charset first (so UTF-8 is
  *  fixed before the author body parses), then the policy. Nothing here derives
  *  from author bytes, so no input can place an active element before it. The
  *  trusted pinch bridge sits in body position, strictly after the policy. */
 export const HTML_PREVIEW_TRUSTED_PREFIX =
-  `<!DOCTYPE html><html><head><meta charset="utf-8">`
-  + `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">`
-  + `</head><body>${HTML_PREVIEW_PINCH_BRIDGE}`;
+  `<!DOCTYPE html><html><head><meta charset="utf-8">` +
+  `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">` +
+  `</head><body>${HTML_PREVIEW_PINCH_BRIDGE}`;
 
 const TRUSTED_SUFFIX = `</body></html>`;
 
@@ -113,13 +113,13 @@ const TRUSTED_SUFFIX = `</body></html>`;
  * visible, revocable zoom of its own preview.
  */
 export function readPinchDelta(data: unknown): number | null {
-  if (typeof data !== 'object' || data === null) return null;
+  if (typeof data !== "object" || data === null) return null;
   const msg = data as Record<string, unknown>;
   if (msg.type !== HTML_PREVIEW_PINCH_TYPE || msg.version !== HTML_PREVIEW_PINCH_VERSION) {
     return null;
   }
   const deltaY = msg.deltaY;
-  if (typeof deltaY !== 'number' || !Number.isFinite(deltaY)) return null;
+  if (typeof deltaY !== "number" || !Number.isFinite(deltaY)) return null;
   return Math.max(-HTML_PREVIEW_PINCH_MAX_DELTA, Math.min(HTML_PREVIEW_PINCH_MAX_DELTA, deltaY));
 }
 

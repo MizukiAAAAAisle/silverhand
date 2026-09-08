@@ -11,17 +11,17 @@ export interface FontPreset {
 }
 
 export const PROSE_FONT_PRESETS: ReadonlyArray<FontPreset> = [
-  { label: 'Theme default', value: '' },
-  { label: 'System', value: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
-  { label: 'Georgia', value: 'Georgia, serif' },
-  { label: 'LXGW WenKai', value: '"LXGW WenKai", "LXGW WenKai Screen", serif' },
-  { label: 'Songti SC', value: '"Songti SC", SimSun, serif' },
+  { label: "Theme default", value: "" },
+  { label: "System", value: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
+  { label: "Georgia", value: "Georgia, serif" },
+  { label: "LXGW WenKai", value: '"LXGW WenKai", "LXGW WenKai Screen", serif' },
+  { label: "Songti SC", value: '"Songti SC", SimSun, serif' },
 ];
 
 export const CODE_FONT_PRESETS: ReadonlyArray<FontPreset> = [
-  { label: 'Theme default', value: '' },
-  { label: 'Menlo', value: 'Menlo, Consolas, monospace' },
-  { label: 'SF Mono', value: '"SF Mono", "SFMono-Regular", Menlo, monospace' },
-  { label: 'JetBrains Mono', value: '"JetBrains Mono", Menlo, monospace' },
-  { label: 'Fira Code', value: '"Fira Code", Menlo, monospace' },
+  { label: "Theme default", value: "" },
+  { label: "Menlo", value: "Menlo, Consolas, monospace" },
+  { label: "SF Mono", value: '"SF Mono", "SFMono-Regular", Menlo, monospace' },
+  { label: "JetBrains Mono", value: '"JetBrains Mono", Menlo, monospace' },
+  { label: "Fira Code", value: '"Fira Code", Menlo, monospace' },
 ];

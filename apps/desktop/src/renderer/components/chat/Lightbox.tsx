@@ -1,12 +1,12 @@
-import { RangeInput } from '@/components/ui/range-input';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { Download, X, ZoomIn, ZoomOut } from 'lucide-react';
-import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
-import { neutralAction } from '@/features/common/ControlInkBorder';
-import { usePinchZoomLease } from '@/lib/pinch-zoom-lease';
-import { SelectionActionButton } from './SelectionToolbar';
+import { RangeInput } from "@/components/ui/range-input";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { Download, X, ZoomIn, ZoomOut } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { neutralAction } from "@/features/common/ControlInkBorder";
+import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
+import { SelectionActionButton } from "./SelectionToolbar";
 
 interface LightboxProps {
   open: boolean;
@@ -36,13 +36,13 @@ const WELL_PADDING = 24;
  *  (`fit-content`) box may grow to, and — because a frozen box is a px value
  *  measured before the window could change — the clamp that keeps a frozen
  *  shell inside a window the user has since made smaller. */
-const SHELL_MAX_WIDTH = 'min(920px, 88vw)';
-const SHELL_MAX_HEIGHT = '82vh';
+const SHELL_MAX_WIDTH = "min(920px, 88vw)";
+const SHELL_MAX_HEIGHT = "82vh";
 /** Header + footer + the well's padding, as an approximation used only for the
  *  RESTING image caps (the real chrome measures ~110px). It keeps a
  *  fit-to-window image from overflowing the shell's own `82vh` ceiling, which
  *  would put the well into scroll while still at 100%. */
-const SHELL_CHROME = '7rem';
+const SHELL_CHROME = "7rem";
 /**
  * Floors for the hug (shiki 2026-08-06「给一个最小尺寸」/「有时候确实太窄了,
  * 观感不好」). The shell hugging the image is right for the resting view, but a
@@ -58,8 +58,8 @@ const SHELL_CHROME = '7rem';
  * the shell is `overflow-hidden` under `82vh`, so a floor that outlived the
  * window would push the footer out of the frame instead of shrinking the well.
  */
-const SHELL_MIN_WIDTH = 'min(40rem, 60vw)';
-const WELL_MIN_HEIGHT = 'min(15rem, 40vh)';
+const SHELL_MIN_WIDTH = "min(40rem, 60vw)";
+const WELL_MIN_HEIGHT = "min(15rem, 40vh)";
 
 const clamp = (v: number, min: number, max: number): number => Math.min(max, Math.max(min, v));
 
@@ -226,8 +226,8 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
         e.preventDefault();
         setZoom(scaleRef.current * Math.exp(-e.deltaY / 100));
       };
-      node.addEventListener('wheel', onWheel, { passive: false });
-      wheelCleanupRef.current = () => node.removeEventListener('wheel', onWheel);
+      node.addEventListener("wheel", onWheel, { passive: false });
+      wheelCleanupRef.current = () => node.removeEventListener("wheel", onWheel);
     },
     [setZoom],
   );
@@ -270,13 +270,13 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
   };
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (e.key === '+' || e.key === '=') {
+    if (e.key === "+" || e.key === "=") {
       e.preventDefault();
       setZoom(scale * STEP);
-    } else if (e.key === '-' || e.key === '_') {
+    } else if (e.key === "-" || e.key === "_") {
       e.preventDefault();
       setZoom(scale / STEP);
-    } else if (e.key === '0') {
+    } else if (e.key === "0") {
       e.preventDefault();
       setZoom(1);
     }
@@ -290,7 +290,7 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
       const bytes = new Uint8Array(await blob.arrayBuffer());
       const result = await window.silverhand.copyPngExport({ pngBytes: bytes });
       if (result.ok) {
-        toast.success('Image copied to clipboard');
+        toast.success("Image copied to clipboard");
       } else {
         toast.error("Couldn't copy: " + result.error);
       }
@@ -331,8 +331,8 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
           // that trick shrink-to-fit — plain `auto` would stretch to `inset: 0`.
           className="fixed inset-0 z-[var(--z-lightbox-chrome)] m-auto flex flex-col overflow-hidden rounded-[var(--floating-radius,var(--radius-md))] bg-bg-floating shadow-xl focus:outline-none"
           style={{
-            width: frozenBox ? `${frozenBox.w}px` : 'fit-content',
-            height: frozenBox ? `${frozenBox.h}px` : 'fit-content',
+            width: frozenBox ? `${frozenBox.w}px` : "fit-content",
+            height: frozenBox ? `${frozenBox.h}px` : "fit-content",
             minWidth: SHELL_MIN_WIDTH,
             maxWidth: SHELL_MAX_WIDTH,
             maxHeight: SHELL_MAX_HEIGHT,
@@ -401,9 +401,9 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
                       // — without this the explicit width is clamped to the
                       // well's width, so zoom past fit couldn't widen the image
                       // (it just stalled at 100% width; shiki 2026-07-22).
-                      maxWidth: 'none',
-                      maxHeight: 'none',
-                      cursor: zoomed ? (dragging ? 'grabbing' : 'grab') : 'default',
+                      maxWidth: "none",
+                      maxHeight: "none",
+                      cursor: zoomed ? (dragging ? "grabbing" : "grab") : "default",
                     }
                   : {
                       maxWidth: `calc(${SHELL_MAX_WIDTH} - ${WELL_PADDING}px)`,
@@ -425,7 +425,7 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
                 aria-label="Zoom out"
                 disabled={scale <= MIN_SCALE}
                 onClick={() => setZoom(scale / STEP)}
-                {...neutralAction('size-[22px] shrink-0')}
+                {...neutralAction("size-[22px] shrink-0")}
                 data-zoom-stepper
               >
                 <ZoomOut className="size-4" />
@@ -446,7 +446,7 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
                 aria-label="Zoom in"
                 disabled={scale >= MAX_SCALE}
                 onClick={() => setZoom(scale * STEP)}
-                {...neutralAction('size-[22px] shrink-0')}
+                {...neutralAction("size-[22px] shrink-0")}
                 data-zoom-stepper
               >
                 <ZoomIn className="size-4" />
@@ -462,7 +462,7 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
             </div>
             <div className="flex items-center gap-2">
               <SelectionActionButton
-                rank={onDownload ? 'secondary' : 'primary'}
+                rank={onDownload ? "secondary" : "primary"}
                 label="Copy"
                 disabled={busy}
                 onClick={onCopy}

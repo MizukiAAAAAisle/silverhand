@@ -1,10 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
-import type { TaskStatus } from '@silverhand/shared';
-import {
-  FIRST_COLUMN_WINDOW,
-  growColumnWindow,
-  type ColumnWindow,
-} from './columnWindow';
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import type { TaskStatus } from "@silverhand/shared";
+import { FIRST_COLUMN_WINDOW, growColumnWindow, type ColumnWindow } from "./columnWindow";
 
 /**
  * Surface-local render window for one task board (see `columnWindow.ts` for the
@@ -23,17 +19,14 @@ export function useColumnWindow(): {
   /** Back to the first page of every column. */
   reset: () => void;
 } {
-  const [columnWindow, setColumnWindow] =
-    useState<ColumnWindow>(FIRST_COLUMN_WINDOW);
+  const [columnWindow, setColumnWindow] = useState<ColumnWindow>(FIRST_COLUMN_WINDOW);
 
   const grow = useCallback((status: TaskStatus) => {
-    setColumnWindow(prev => growColumnWindow(prev, status));
+    setColumnWindow((prev) => growColumnWindow(prev, status));
   }, []);
 
   const reset = useCallback(() => {
-    setColumnWindow(prev =>
-      prev === FIRST_COLUMN_WINDOW ? prev : FIRST_COLUMN_WINDOW,
-    );
+    setColumnWindow((prev) => (prev === FIRST_COLUMN_WINDOW ? prev : FIRST_COLUMN_WINDOW));
   }, []);
 
   return { columnWindow, grow, reset };
@@ -74,10 +67,10 @@ export function useColumnEndSentinel(args: {
     const sentinel = sentinelRef.current;
     if (!root || !sentinel) return;
     const io = new IntersectionObserver(
-      entries => {
-        if (entries.some(e => e.isIntersecting)) onReachEndRef.current();
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) onReachEndRef.current();
       },
-      { root, rootMargin: '120px' },
+      { root, rootMargin: "120px" },
     );
     io.observe(sentinel);
     return () => io.disconnect();

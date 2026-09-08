@@ -1,20 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2 } from 'lucide-react';
-import { TASK_CONTENT_MAX_LEN, TASK_TITLE_MAX_LEN } from '@silverhand/shared';
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { TASK_CONTENT_MAX_LEN, TASK_TITLE_MAX_LEN } from "@silverhand/shared";
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Input, Label, Textarea } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { CreateTaskChannelPicker } from '@/components/tasks/CreateTaskChannelPicker';
-import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
-import { createTaskErrorMessage } from '@/features/tasks/createTaskError';
-import { useCreateTask } from '@/features/tasks/hooks';
-import type { ChannelOption } from '@/components/tasks/TaskFilterBar';
+} from "@/components/ui/dialog";
+import { Input, Label, Textarea } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { CreateTaskChannelPicker } from "@/components/tasks/CreateTaskChannelPicker";
+import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
+import { createTaskErrorMessage } from "@/features/tasks/createTaskError";
+import { useCreateTask } from "@/features/tasks/hooks";
+import type { ChannelOption } from "@/components/tasks/TaskFilterBar";
 
 /**
  * The values the create form yields. The owner turns these into the create
@@ -48,7 +48,7 @@ export interface CreateTaskFormValues {
  */
 export type CreateTaskTarget =
   | {
-      kind: 'pick';
+      kind: "pick";
       /** Candidate channels to create in (same member-scoped projection as the
        *  filter bar). This is a picker source, NOT the create-admission gate: the
        *  server is the final authority and can still reject a listed channel with
@@ -62,7 +62,7 @@ export type CreateTaskTarget =
        *  board (the actor picks one). */
       defaultChannelId: string | null;
     }
-  | { kind: 'locked'; conversationId: string };
+  | { kind: "locked"; conversationId: string };
 
 export interface CreateTaskDialogProps {
   open: boolean;
@@ -96,19 +96,19 @@ export function CreateTaskDialog({
   target,
   onSubmit,
 }: CreateTaskDialogProps): JSX.Element {
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [channelId, setChannelId] = useState('');
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [channelId, setChannelId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // In a locked target the pair conversation IS the destination — the local
   // channelId state and its picker exist only in the `pick` target.
-  const locked = target.kind === 'locked';
-  const defaultChannelId = target.kind === 'pick' ? target.defaultChannelId : null;
+  const locked = target.kind === "locked";
+  const defaultChannelId = target.kind === "pick" ? target.defaultChannelId : null;
   // The conversation the create will target: fixed to the pair in a locked
   // context, the actor's channel pick otherwise.
-  const conversationId = target.kind === 'locked' ? target.conversationId : channelId;
+  const conversationId = target.kind === "locked" ? target.conversationId : channelId;
 
   // Reset ONLY on the closed→open transition — never while the dialog is up.
   // `defaultChannelId` (and the option list behind it) can settle asynchronously
@@ -117,9 +117,9 @@ export function CreateTaskDialog({
   const wasOpen = useRef(false);
   useEffect(() => {
     if (open && !wasOpen.current) {
-      setTitle('');
-      setBody('');
-      setChannelId(defaultChannelId ?? '');
+      setTitle("");
+      setBody("");
+      setChannelId(defaultChannelId ?? "");
       setSubmitting(false);
       setError(null);
     }
@@ -131,12 +131,12 @@ export function CreateTaskDialog({
   // channel the actor already chose. Inert in a locked target (no picker,
   // `defaultChannelId` is null).
   useEffect(() => {
-    if (open && channelId === '' && defaultChannelId) {
+    if (open && channelId === "" && defaultChannelId) {
       setChannelId(defaultChannelId);
     }
   }, [open, channelId, defaultChannelId]);
 
-  const canSubmit = title.trim().length > 0 && conversationId !== '';
+  const canSubmit = title.trim().length > 0 && conversationId !== "";
 
   const submit = async (): Promise<void> => {
     if (!canSubmit || submitting) return;
@@ -150,7 +150,7 @@ export function CreateTaskDialog({
       // member channels, but the target may be closed (server rejects with a
       // typed `conversation_closed`), and the actor must be able to retarget
       // without retyping. Do not "simplify" this to close-on-catch.
-      setError(e instanceof Error ? e.message : 'The task could not be created.');
+      setError(e instanceof Error ? e.message : "The task could not be created.");
       setSubmitting(false);
       return;
     }
@@ -163,7 +163,7 @@ export function CreateTaskDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={next => {
+      onOpenChange={(next) => {
         if (submitting) return;
         onOpenChange(next);
       }}
@@ -175,7 +175,7 @@ export function CreateTaskDialog({
 
         <form
           className="flex flex-col gap-4"
-          onSubmit={e => {
+          onSubmit={(e) => {
             e.preventDefault();
             void submit();
           }}
@@ -189,7 +189,7 @@ export function CreateTaskDialog({
               autoFocus
               value={title}
               maxLength={TASK_TITLE_MAX_LEN}
-              onChange={e => setTitle(e.target.value)}
+              onChange={(e) => setTitle(e.target.value)}
             />
           </div>
 
@@ -215,7 +215,7 @@ export function CreateTaskDialog({
               rows={5}
               value={body}
               maxLength={TASK_CONTENT_MAX_LEN}
-              onChange={e => setBody(e.target.value)}
+              onChange={(e) => setBody(e.target.value)}
             />
           </div>
 
@@ -231,11 +231,7 @@ export function CreateTaskDialog({
             >
               Cancel
             </Button>
-            <Button
-              type="submit"
-              disabled={!canSubmit || submitting}
-              {...primaryAction('gap-2')}
-            >
+            <Button type="submit" disabled={!canSubmit || submitting} {...primaryAction("gap-2")}>
               {submitting ? <Loader2 className="size-4 animate-spin" /> : null}
               Create task
             </Button>
@@ -256,9 +252,7 @@ export function CreateTaskDialog({
  * manual copy (`createTaskErrorMessage`, classified on the typed `code`) — the
  * dialog catches it, keeps the draft, and shows the message.
  */
-export function useCreateTaskSubmit(): (
-  values: CreateTaskFormValues,
-) => Promise<void> {
+export function useCreateTaskSubmit(): (values: CreateTaskFormValues) => Promise<void> {
   const createTask = useCreateTask();
   return useCallback(
     async (values: CreateTaskFormValues): Promise<void> => {

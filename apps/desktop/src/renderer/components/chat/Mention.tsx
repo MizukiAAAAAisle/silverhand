@@ -1,14 +1,14 @@
-import type { AgentDto, UserDto } from '@silverhand/shared';
-import { AgentInfoPopover } from '@/components/AgentInfoPopover';
-import { HumanInfoPopover } from '@/components/HumanInfoPopover';
-import { useUserAvatarObjectUrl } from '@/features/users/avatar-hooks';
-import { useNav } from '@/router';
-import { INLINE_REF_HOVER_CLASS } from './inline-ref-chip';
+import type { AgentDto, UserDto } from "@silverhand/shared";
+import { AgentInfoPopover } from "@/components/AgentInfoPopover";
+import { HumanInfoPopover } from "@/components/HumanInfoPopover";
+import { useUserAvatarObjectUrl } from "@/features/users/avatar-hooks";
+import { useNav } from "@/router";
+import { INLINE_REF_HOVER_CLASS } from "./inline-ref-chip";
 
 /** Both mention chips share one string on purpose: the two differ only in where
  *  they navigate, so box model, ink, hover and focus must stay identical. */
 const MENTION_CHIP_CLASS =
-  'rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent ' +
+  "rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent " +
   `${INLINE_REF_HOVER_CLASS} focus-visible:bg-accent-soft focus-visible:outline-none`;
 
 interface MentionProps {

@@ -1,15 +1,15 @@
-import { useState } from 'react';
-import * as HoverCard from '@radix-ui/react-hover-card';
-import { SmilePlus } from 'lucide-react';
-import type { MessageDto, ReactionAggregateDto } from '@silverhand/shared';
-import { useMessageReactors } from '@/features/channels/reaction-hooks';
-import { ReactionPicker } from './ReactionPicker';
+import { useState } from "react";
+import * as HoverCard from "@radix-ui/react-hover-card";
+import { SmilePlus } from "lucide-react";
+import type { MessageDto, ReactionAggregateDto } from "@silverhand/shared";
+import { useMessageReactors } from "@/features/channels/reaction-hooks";
+import { ReactionPicker } from "./ReactionPicker";
 import {
   ReactionChipBody,
   reactionChipClass,
   reactionChipCountLabel,
   reactionRowClass,
-} from './ReactionChipRow';
+} from "./ReactionChipRow";
 
 export interface MessageReactionsProps {
   message: MessageDto;
@@ -54,7 +54,7 @@ export function MessageReactions({
   if (!reactions || reactions.length === 0) return null;
   return (
     <div data-reaction-row className={reactionRowClass(alignRight)}>
-      {reactions.map(agg => (
+      {reactions.map((agg) => (
         <ReactionChip
           key={agg.emoji}
           messageId={message.id}
@@ -66,9 +66,9 @@ export function MessageReactions({
       ))}
       {canReact ? (
         <ReactionPicker
-          align={alignRight ? 'end' : 'start'}
+          align={alignRight ? "end" : "start"}
           onOpenChange={onPickerOpenChange}
-          onPick={emoji => onReact(emoji, false)}
+          onPick={(emoji) => onReact(emoji, false)}
           trigger={
             <button
               type="button"
@@ -104,9 +104,7 @@ function ReactionChip({
   // Lazy: reactor names load only while hovered (§6 perf).
   const reactors = useMessageReactors(messageId, open);
   const names =
-    reactors.data
-      ?.find(d => d.emoji === agg.emoji)
-      ?.reactors.map(r => r.display_name) ?? [];
+    reactors.data?.find((d) => d.emoji === agg.emoji)?.reactors.map((r) => r.display_name) ?? [];
   // Shared visual (single-sourced in ReactionChipRow); only the interactive
   // chip gets the hover-fill shift and the focus outline — a display-only chip in
   // a read-only channel must not look clickable.
@@ -114,12 +112,7 @@ function ReactionChip({
   const inner = <ReactionChipBody agg={agg} />;
   const countLabel = reactionChipCountLabel(agg);
   return (
-    <HoverCard.Root
-      open={open}
-      onOpenChange={setOpen}
-      openDelay={350}
-      closeDelay={120}
-    >
+    <HoverCard.Root open={open} onOpenChange={setOpen} openDelay={350} closeDelay={120}>
       <HoverCard.Trigger asChild>
         {interactive ? (
           <button
@@ -128,21 +121,18 @@ function ReactionChip({
             aria-pressed={agg.viewer_reacted}
             aria-label={
               countLabel +
-              (agg.viewer_reacted ? ', you reacted' : '') +
-              `, click to ${agg.viewer_reacted ? 'remove' : 'add'}`
+              (agg.viewer_reacted ? ", you reacted" : "") +
+              `, click to ${agg.viewer_reacted ? "remove" : "add"}`
             }
             onClick={onClick}
-            className={
-              chipClass +
-              ' focus-outline'
-            }
+            className={chipClass + " focus-outline"}
           >
             {inner}
           </button>
         ) : (
           <div
             data-reaction-chip
-            aria-label={countLabel + (agg.viewer_reacted ? ', you reacted' : '')}
+            aria-label={countLabel + (agg.viewer_reacted ? ", you reacted" : "")}
             className={chipClass}
           >
             {inner}
@@ -155,7 +145,7 @@ function ReactionChip({
           // on an own message), so its chips sit against the row's right
           // edge and the card has to grow leftward from there instead of
           // outward (#task:1840).
-          align={alignRight ? 'end' : 'start'}
+          align={alignRight ? "end" : "start"}
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
@@ -165,7 +155,7 @@ function ReactionChip({
           {reactors.isLoading && names.length === 0 ? (
             <span className="text-text-muted">…</span>
           ) : names.length > 0 ? (
-            <span>{names.join('、')}</span>
+            <span>{names.join("、")}</span>
           ) : (
             <span className="text-text-muted">—</span>
           )}

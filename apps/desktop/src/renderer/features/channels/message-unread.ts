@@ -2,28 +2,24 @@
 // hooks.ts: the debounced badge invalidate, the S1 viewer-unread in-place
 // patches (#task:1284), and the badge-count hooks. Self-contained leaf — owns
 // its own query keys and the viewer-scope WS interest for the fallback refetch.
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import type {
   ConversationStreamUnreadDto,
   MessageUnreadByConversationDto,
   MessageUnreadPointerDto,
   MessageUnreadSummaryDto,
   UnreadUpdatedMessagePayload,
-} from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
-import { api } from '@/lib/api';
-import {
-  onWsFrame,
-  subscribeViewerScope,
-  isCurrentViewerScope,
-} from '@/lib/ws-client';
+} from "@silverhand/shared";
+import { apiPaths } from "@silverhand/shared";
+import { api } from "@/lib/api";
+import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from "@/lib/ws-client";
 // #task:1773: the filtered `followed ∩ unread` threads dataset is a child key of
 // the All threads list. A viewer `unread_updated` (or a viewer-scope
 // `snapshot_required`) is the only remote signal for its membership changing, so
 // this module invalidates it alongside the unread badge caches.
-import { channelThreadsUnreadKey } from '@/features/channels/useChannelThreads';
-import { workspaceScopedQueryEnabled } from '@/features/workspaces/workspace-scoped-query';
+import { channelThreadsUnreadKey } from "@/features/channels/useChannelThreads";
+import { workspaceScopedQueryEnabled } from "@/features/workspaces/workspace-scoped-query";
 
 /** Debounced invalidate of every message-unread badge query (per-workspace
  *  `by_conversation` maps + the global `by_workspace` summary). The legacy
@@ -40,30 +36,25 @@ export function invalidateMessageUnreadQueries(qc: QueryClient): void {
   const timer = setTimeout(() => {
     messageUnreadInvalidationTimers.delete(qc);
     void qc.invalidateQueries({
-      predicate: query => {
+      predicate: (query) => {
         const key = query.queryKey;
         return (
-          Array.isArray(key) &&
-          key[0] === 'workspaces' &&
-          key[key.length - 1] === 'message-unread'
+          Array.isArray(key) && key[0] === "workspaces" && key[key.length - 1] === "message-unread"
         );
       },
     });
-    void qc.invalidateQueries({ queryKey: ['message-unread', 'summary'] });
+    void qc.invalidateQueries({ queryKey: ["message-unread", "summary"] });
   }, 100);
   messageUnreadInvalidationTimers.set(qc, timer);
 }
 
-const messageUnreadInvalidationTimers = new WeakMap<
-  QueryClient,
-  ReturnType<typeof setTimeout>
->();
+const messageUnreadInvalidationTimers = new WeakMap<QueryClient, ReturnType<typeof setTimeout>>();
 
 function isMessageUnreadUpdatedPayload(payload: unknown): boolean {
   return (
-    typeof payload === 'object' &&
+    typeof payload === "object" &&
     payload !== null &&
-    typeof (payload as { conversation_id?: unknown }).conversation_id === 'string'
+    typeof (payload as { conversation_id?: unknown }).conversation_id === "string"
   );
 }
 
@@ -78,11 +69,11 @@ function isMessageUnreadUpdatedPayload(payload: unknown): boolean {
  *  to the `useMessageUnreadCounts` queryKey — both build it here so they cannot
  *  drift. */
 export const messageUnreadByConversationKey = (workspaceId: string) =>
-  ['workspaces', workspaceId, 'message-unread'] as const;
+  ["workspaces", workspaceId, "message-unread"] as const;
 
 /** Query key for the global cross-workspace message-unread summary
  *  (`by_workspace`, `useMessageUnreadSummary`). */
-export const messageUnreadSummaryKey = ['message-unread', 'summary'] as const;
+export const messageUnreadSummaryKey = ["message-unread", "summary"] as const;
 
 /** Two unread pointers are equal iff they point at the same message (or both
  *  null). `message_id` is unique, so it alone decides — no need to compare seq /
@@ -110,19 +101,18 @@ function unreadPointerEqual(
 export function patchMessageUnreadByConversation(
   qc: QueryClient,
   payload: UnreadUpdatedMessagePayload,
-): 'patched' | 'cleared' | 'unchanged' | 'cold' {
+): "patched" | "cleared" | "unchanged" | "cold" {
   const cid = payload.conversation_id;
   const key = messageUnreadByConversationKey(payload.workspace_id);
   const prev = qc.getQueryData<MessageUnreadByConversationDto>(key);
-  if (!prev) return 'cold'; // whole-query not loaded → no-op
-  const countUnchanged =
-    (prev.by_conversation[cid] ?? 0) === payload.conversation_unread_count;
+  if (!prev) return "cold"; // whole-query not loaded → no-op
+  const countUnchanged = (prev.by_conversation[cid] ?? 0) === payload.conversation_unread_count;
   const totalUnchanged = prev.total === payload.workspace_unread_count;
   const pointerUnchanged = unreadPointerEqual(
     prev.latest_by_conversation[cid],
     payload.latest_unread,
   );
-  if (countUnchanged && totalUnchanged && pointerUnchanged) return 'unchanged';
+  if (countUnchanged && totalUnchanged && pointerUnchanged) return "unchanged";
   const by_conversation = { ...prev.by_conversation };
   if (payload.conversation_unread_count > 0) {
     by_conversation[cid] = payload.conversation_unread_count;
@@ -140,7 +130,7 @@ export function patchMessageUnreadByConversation(
     latest_by_conversation,
     total: payload.workspace_unread_count,
   });
-  return payload.conversation_unread_count > 0 ? 'patched' : 'cleared';
+  return payload.conversation_unread_count > 0 ? "patched" : "cleared";
 }
 
 /** S1 viewer-unread ingestor patch (#task:1284, doc §6) — authoritative UPSERT of
@@ -150,19 +140,19 @@ export function patchMessageUnreadByConversation(
 export function patchMessageUnreadSummary(
   qc: QueryClient,
   payload: UnreadUpdatedMessagePayload,
-): 'patched' | 'cleared' | 'unchanged' | 'cold' {
+): "patched" | "cleared" | "unchanged" | "cold" {
   const prev = qc.getQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey);
-  if (!prev) return 'cold';
+  if (!prev) return "cold";
   const wsId = payload.workspace_id;
   const count = payload.workspace_unread_count;
-  if ((prev.by_workspace[wsId] ?? 0) === count) return 'unchanged';
+  if ((prev.by_workspace[wsId] ?? 0) === count) return "unchanged";
   const by_workspace = { ...prev.by_workspace };
   if (count > 0) by_workspace[wsId] = count;
   else delete by_workspace[wsId];
   qc.setQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey, {
     by_workspace,
   });
-  return count > 0 ? 'patched' : 'cleared';
+  return count > 0 ? "patched" : "cleared";
 }
 
 /** Drop a whole workspace's message-unread contribution when the viewer loses
@@ -179,10 +169,7 @@ export function patchMessageUnreadSummary(
  *  Mirrors the #task:1284 in-place-patch discipline (targeted slice, never a
  *  whole-list invalidate). Idempotent: an absent summary key is left untouched
  *  and removing an unloaded by_conversation query is a no-op. */
-export function removeWorkspaceFromMessageUnread(
-  qc: QueryClient,
-  workspaceId: string,
-): void {
+export function removeWorkspaceFromMessageUnread(qc: QueryClient, workspaceId: string): void {
   const prev = qc.getQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey);
   if (prev && workspaceId in prev.by_workspace) {
     const by_workspace = { ...prev.by_workspace };
@@ -254,10 +241,7 @@ export function removeConversationFromMessageUnread(
  *  attribution comes from the key — no payload scan and no ambiguity. Feeds the
  *  foreign-workspace convergence path (a workspace the viewer is not currently
  *  looking at still owns badge state that must settle). */
-export function messageUnreadHeldChannelIds(
-  qc: QueryClient,
-  workspaceId: string,
-): string[] {
+export function messageUnreadHeldChannelIds(qc: QueryClient, workspaceId: string): string[] {
   const data = qc.getQueryData<MessageUnreadByConversationDto>(
     messageUnreadByConversationKey(workspaceId),
   );
@@ -279,21 +263,24 @@ export function messageUnreadHeldChannelIds(
  */
 export function useChannelUnreadCounts(workspaceId: string | null) {
   const qc = useQueryClient();
-  const queryKey = ['workspaces', workspaceId, 'unread-by-channel'] as const;
+  const queryKey = ["workspaces", workspaceId, "unread-by-channel"] as const;
 
   useEffect(() => {
     if (!workspaceId) return;
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
-      if (frame.type !== 'event') return;
+    const unsub = onWsFrame((frame) => {
+      if (frame.type !== "event") return;
       if (!isCurrentViewerScope(frame.scope)) return;
-      if (frame.kind === 'unread_updated' && isMessageUnreadUpdatedPayload(frame.payload)) {
+      if (frame.kind === "unread_updated" && isMessageUnreadUpdatedPayload(frame.payload)) {
         return;
       }
-      if (frame.kind !== 'notification' && frame.kind !== 'unread_updated') return;
+      if (frame.kind !== "notification" && frame.kind !== "unread_updated") return;
       qc.invalidateQueries({ queryKey });
     });
-    return () => { sub.unsubscribe(); unsub(); };
+    return () => {
+      sub.unsubscribe();
+      unsub();
+    };
   }, [qc, workspaceId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return useQuery({
@@ -318,12 +305,9 @@ export function useChannelUnreadCounts(workspaceId: string | null) {
  * see `useChannelsForWorkspace` for why absence must not be defaultable
  * (#task:2078).
  */
-export function useMessageUnreadCounts(
-  workspaceId: string | null,
-  workspaceResolved: boolean,
-) {
+export function useMessageUnreadCounts(workspaceId: string | null, workspaceResolved: boolean) {
   const qc = useQueryClient();
-  const queryKey = messageUnreadByConversationKey(workspaceId ?? 'none');
+  const queryKey = messageUnreadByConversationKey(workspaceId ?? "none");
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -333,12 +317,15 @@ export function useMessageUnreadCounts(
     // would defeat the patch's zero-refetch. Only a resume/epoch
     // `snapshot_required` still needs the authoritative refetch.
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
-      if (frame.type !== 'snapshot_required') return;
+    const unsub = onWsFrame((frame) => {
+      if (frame.type !== "snapshot_required") return;
       if (!isCurrentViewerScope(frame.scope)) return;
       invalidateMessageUnreadQueries(qc);
     });
-    return () => { sub.unsubscribe(); unsub(); };
+    return () => {
+      sub.unsubscribe();
+      unsub();
+    };
   }, [qc, workspaceId]);
 
   return useQuery({
@@ -369,23 +356,25 @@ export function useMessageUnreadSummary() {
     // `unread_updated` is patched in place by the viewer-unread ingestor
     // (#task:1284), no invalidate here (see useMessageUnreadCounts).
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
-      if (frame.type !== 'snapshot_required') return;
+    const unsub = onWsFrame((frame) => {
+      if (frame.type !== "snapshot_required") return;
       if (!isCurrentViewerScope(frame.scope)) return;
       invalidateMessageUnreadQueries(qc);
     });
-    return () => { sub.unsubscribe(); unsub(); };
+    return () => {
+      sub.unsubscribe();
+      unsub();
+    };
   }, [qc]);
 
   return useQuery({
     queryKey,
-    queryFn: () =>
-      api<{ by_workspace: Record<string, number> }>(apiPaths.messageUnreadSummary),
+    queryFn: () => api<{ by_workspace: Record<string, number> }>(apiPaths.messageUnreadSummary),
   });
 }
 
 export const conversationUnreadKey = (conversationId: string) =>
-  ['conversation', conversationId, 'unread'] as const;
+  ["conversation", conversationId, "unread"] as const;
 
 /**
  * Per-conversation per-viewer stream-unread read-model (#task:1226) — the
@@ -405,13 +394,13 @@ export const conversationUnreadKey = (conversationId: string) =>
 export function useConversationUnread(conversationId: string | null) {
   const qc = useQueryClient();
   const enabled = !!conversationId;
-  const queryKey = conversationUnreadKey(conversationId ?? 'none');
+  const queryKey = conversationUnreadKey(conversationId ?? "none");
 
   useEffect(() => {
     if (!conversationId) return;
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
-      if (frame.type === 'snapshot_required') {
+    const unsub = onWsFrame((frame) => {
+      if (frame.type === "snapshot_required") {
         if (!isCurrentViewerScope(frame.scope)) return;
         void qc.invalidateQueries({ queryKey });
         // #task:1773: the `followed ∩ unread` threads dataset's membership is a
@@ -423,9 +412,9 @@ export function useConversationUnread(conversationId: string | null) {
         void qc.invalidateQueries({ queryKey: channelThreadsUnreadKey(conversationId) });
         return;
       }
-      if (frame.type !== 'event') return;
+      if (frame.type !== "event") return;
       if (!isCurrentViewerScope(frame.scope)) return;
-      if (frame.kind === 'direct_pairs_changed') {
+      if (frame.kind === "direct_pairs_changed") {
         if (!isMessageUnreadUpdatedPayload(frame.payload)) return;
         const payload = frame.payload as { conversation_id: string };
         if (payload.conversation_id === conversationId) {
@@ -433,7 +422,7 @@ export function useConversationUnread(conversationId: string | null) {
         }
         return;
       }
-      if (frame.kind !== 'unread_updated') return;
+      if (frame.kind !== "unread_updated") return;
       if (!isMessageUnreadUpdatedPayload(frame.payload)) return;
       // Per-stream unread for a thread reply carries the parent CHANNEL's
       // conversation_id (threads share the channel conversation), so this match

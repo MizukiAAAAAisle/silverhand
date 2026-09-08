@@ -1,9 +1,12 @@
-import * as Popover from '@radix-ui/react-popover';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Eraser, Play, Power, RefreshCw, UserMinus } from 'lucide-react';
-import type { AgentDto } from '@silverhand/shared';
-import { useDirectPairs } from '@/features/direct-pairs/hooks';
-import { canControlDirectAgent, directAgentControlState } from '@/features/agents/direct-agent-control';
+import * as Popover from "@radix-ui/react-popover";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { AlertTriangle, Eraser, Play, Power, RefreshCw, UserMinus } from "lucide-react";
+import type { AgentDto } from "@silverhand/shared";
+import { useDirectPairs } from "@/features/direct-pairs/hooks";
+import {
+  canControlDirectAgent,
+  directAgentControlState,
+} from "@/features/agents/direct-agent-control";
 import {
   useChannelAgents,
   useChannelAgentRuntime,
@@ -11,40 +14,30 @@ import {
   useRemoveAgentFromChannel,
   useStartAgent,
   useStopAgent,
-} from '@/features/channels/hooks';
-import {
-  canEditAgentProfile,
-  canRemoveAgentFromChannel,
-} from '@/features/agents/permissions';
-import { useConversationById } from '@/features/conversations/useConversationById';
-import { useConversationPaneCapabilities } from '@/features/conversations/pane-capabilities-context';
+} from "@/features/channels/hooks";
+import { canEditAgentProfile, canRemoveAgentFromChannel } from "@/features/agents/permissions";
+import { useConversationById } from "@/features/conversations/useConversationById";
+import { useConversationPaneCapabilities } from "@/features/conversations/pane-capabilities-context";
 import {
   useAgentAvailability,
   useAgentRuntimeState,
   projectRosterMembership,
   useAgentPresence,
-} from '@/features/agents/hooks';
+} from "@/features/agents/hooks";
 import {
   presenceAuthorityFor,
   projectMemberRuntimeStatus,
-} from '@/features/agents/member-runtime-status';
+} from "@/features/agents/member-runtime-status";
 import {
   PRESENCE_TONE_DOT,
   projectPresence,
   type PresenceDisplay,
-} from '@/features/agents/presence-projection';
-import { useWorkspaceMemberLists } from '@/features/workspaces/hooks';
-import { useAgentAvatarObjectUrl } from '@/features/agents/avatar-hooks';
-import {
-  isBackendUnreachable,
-  isUpdateRequired,
-  useViewerUser,
-} from '@/features/me/hooks';
-import { Button } from '@/components/ui/button';
-import {
-  destructiveAction,
-  destructiveCancel,
-} from '@/features/common/DestructiveAction';
+} from "@/features/agents/presence-projection";
+import { useWorkspaceMemberLists } from "@/features/workspaces/hooks";
+import { useAgentAvatarObjectUrl } from "@/features/agents/avatar-hooks";
+import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/me/hooks";
+import { Button } from "@/components/ui/button";
+import { destructiveAction, destructiveCancel } from "@/features/common/DestructiveAction";
 import {
   Dialog,
   DialogContent,
@@ -52,17 +45,17 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { AgentAvatar } from './AgentAvatar';
-import { AVATAR_PX } from './avatar-scale';
+} from "@/components/ui/dialog";
+import { AgentAvatar } from "./AgentAvatar";
+import { AVATAR_PX } from "./avatar-scale";
 
 interface AgentInfoPopoverProps {
   agent: AgentDto;
   /** The element that triggers the popover (rendered via Radix
    *  `asChild`). */
   children: ReactNode;
-  side?: 'top' | 'bottom' | 'left' | 'right';
-  align?: 'start' | 'center' | 'end';
+  side?: "top" | "bottom" | "left" | "right";
+  align?: "start" | "center" | "end";
   /** When set, the card carries a presence line + (when crashed) a retry
    *  action. WHICH AUTHORITY answers the line is the placement's, not this
    *  prop's: a roster placement shows the run state of the session serving this
@@ -74,7 +67,7 @@ interface AgentInfoPopoverProps {
    *  closes on pointer-leave with a small grace window so the user
    *  can move into the popover content. Used by inline mention pills,
    *  message author/avatar controls, and the member strip. */
-  trigger?: 'click' | 'hover';
+  trigger?: "click" | "hover";
   /**
    * Avatar object URL resolved by the parent's batch hook.
    *
@@ -120,10 +113,10 @@ const HOVER_CLOSE_DELAY_MS = 120;
 export function AgentInfoPopover({
   agent,
   children,
-  side = 'bottom',
-  align = 'start',
+  side = "bottom",
+  align = "start",
   conversationId,
-  trigger = 'click',
+  trigger = "click",
   avatarObjectUrl,
 }: AgentInfoPopoverProps): JSX.Element {
   const [hoverOpen, setHoverOpen] = useState(false);
@@ -156,28 +149,24 @@ export function AgentInfoPopover({
   useEffect(() => () => clearTimer(), []);
 
   const scheduleOpen = (): void => {
-    if (trigger !== 'hover') return;
+    if (trigger !== "hover") return;
     clearTimer();
     timerRef.current = window.setTimeout(() => setHoverOpen(true), HOVER_OPEN_DELAY_MS);
   };
   const scheduleClose = (): void => {
-    if (trigger !== 'hover') return;
+    if (trigger !== "hover") return;
     clearTimer();
     timerRef.current = window.setTimeout(() => setHoverOpen(false), HOVER_CLOSE_DELAY_MS);
   };
 
   const rootProps =
-    trigger === 'hover'
+    trigger === "hover"
       ? { open: hoverOpen || managementDialogOpen, onOpenChange: setHoverOpen }
       : {};
 
   return (
     <Popover.Root {...rootProps}>
-      <Popover.Trigger
-        asChild
-        onPointerEnter={scheduleOpen}
-        onPointerLeave={scheduleClose}
-      >
+      <Popover.Trigger asChild onPointerEnter={scheduleOpen} onPointerLeave={scheduleClose}>
         {children}
       </Popover.Trigger>
       <Popover.Portal>
@@ -236,9 +225,7 @@ export function AgentInfoPopover({
                   />
                 ) : null}
               </div>
-              <div className="truncate font-mono text-xs text-text-muted">
-                @{agent.name}
-              </div>
+              <div className="truncate font-mono text-xs text-text-muted">@{agent.name}</div>
             </div>
             {/* Top-right icon-only actions. Always rendered when a
                 conversationId is in scope; AgentManagementActions
@@ -270,7 +257,11 @@ export function AgentInfoPopover({
               </div>
             ) : conversationId && !paneCaps.hasRoster ? (
               <div className="self-start">
-                <DirectAgentActions agent={agent} conversationId={conversationId} onDialogOpenChange={setManagementDialogOpen} />
+                <DirectAgentActions
+                  agent={agent}
+                  conversationId={conversationId}
+                  onDialogOpenChange={setManagementDialogOpen}
+                />
               </div>
             ) : null}
           </div>
@@ -301,16 +292,16 @@ function PresenceLine({ display }: { display: PresenceDisplay }): JSX.Element {
   return (
     <span
       className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted"
-      title={display.tone === 'failed' ? undefined : display.detail}
+      title={display.tone === "failed" ? undefined : display.detail}
       role="img"
       aria-label={display.a11yLabel}
     >
       <span
         data-status-pip
         className={
-          'size-1.5 rounded-[var(--pill-radius)] '
-          + PRESENCE_TONE_DOT[display.tone]
-          + (display.pulse ? ' motion-safe:animate-pulse' : '')
+          "size-1.5 rounded-[var(--pill-radius)] " +
+          PRESENCE_TONE_DOT[display.tone] +
+          (display.pulse ? " motion-safe:animate-pulse" : "")
         }
       />
       {display.label}
@@ -349,9 +340,9 @@ function PresenceInline({
   hasRoster: boolean;
 }): JSX.Element | null {
   switch (presenceAuthorityFor(hasRoster)) {
-    case 'roster_runtime':
+    case "roster_runtime":
       return <RosterMemberPresence agent={agent} conversationId={conversationId} />;
-    case 'global_presence':
+    case "global_presence":
       return <GlobalPresenceInline agent={agent} />;
   }
 }
@@ -372,7 +363,7 @@ function GlobalPresenceInline({ agent }: { agent: AgentDto }): JSX.Element | nul
   // `null` = no definite answer yet (availability pending / errored). Draw
   // nothing rather than assert a speculative status.
   if (presence === null) return null;
-  return <PresenceLine display={projectPresence({ scope: 'global', presence })} />;
+  return <PresenceLine display={projectPresence({ scope: "global", presence })} />;
 }
 
 /**
@@ -406,7 +397,7 @@ function RosterMemberPresence({
     runtime,
     agentId: agent.id,
   });
-  const display = projectPresence({ scope: 'conversation', runtime: status });
+  const display = projectPresence({ scope: "conversation", runtime: status });
   // `null` = `unknown`: the roster read has not settled, so there is no honest
   // word yet (this is the type narrowing too — `unknown` is the only status
   // without a display).
@@ -439,23 +430,20 @@ function AgentManagementActions({
   // message authors, header chips). Both queries are cached and only
   // mount when the popover content opens.
   const conversation = useConversationById(conversationId);
-  const { data: memberLists } = useWorkspaceMemberLists(
-    conversation.ref?.workspace_id ?? null,
-  );
+  const { data: memberLists } = useWorkspaceMemberLists(conversation.ref?.workspace_id ?? null);
   const [clearOpen, setClearOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
-  const row = conversationAgents.find(s => s.agent_id === agent.id);
+  const row = conversationAgents.find((s) => s.agent_id === agent.id);
   // The same projection the presence line reads, so "which row serves this agent
   // here" is decided once for this whole card (#task:2123). This is the CONTROL
   // question, not the display one — "is there a session to stop" — and it reads
   // the answer instead of re-finding the row.
   const runtimeStatus = projectMemberRuntimeStatus({
-    membership: 'member',
+    membership: "member",
     runtime: conversationRuntime,
     agentId: agent.id,
   });
-  const stoppable =
-    runtimeStatus.kind === 'session' && runtimeStatus.status !== 'idle';
+  const stoppable = runtimeStatus.kind === "session" && runtimeStatus.status !== "idle";
   if (!row) return null;
   const viewerForPermissions =
     viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
@@ -464,16 +452,12 @@ function AgentManagementActions({
   // wider governance action — agent owner OR workspace owner/admin
   // (#task:957, plan A: no per-channel owner concept).
   const canManageRuntime = canEditAgentProfile(viewerForPermissions, agent);
-  const canRemove = canRemoveAgentFromChannel(
-    viewerForPermissions,
-    agent,
-    memberLists?.viewerRole,
-  );
+  const canRemove = canRemoveAgentFromChannel(viewerForPermissions, agent, memberLists?.viewerRole);
   if (!canManageRuntime && !canRemove) return null;
 
   const pending = start.isPending || stop.isPending || clearSession.isPending;
   const agentLabel = `@${agent.name}`;
-  const convNoun = 'channel';
+  const convNoun = "channel";
   const setClearDialogOpen = (open: boolean): void => {
     setClearOpen(open);
     onDialogOpenChange(open);
@@ -580,9 +564,9 @@ function AgentManagementActions({
               Clear session for {agentLabel}
             </DialogTitle>
             <DialogDescription>
-              This removes only this conversation's CLI resume session for{' '}
-              {agentLabel}. MEMORY, notes, and queued deliveries are kept. The
-              next start will begin with a fresh CLI session.
+              This removes only this conversation's CLI resume session for {agentLabel}. MEMORY,
+              notes, and queued deliveries are kept. The next start will begin with a fresh CLI
+              session.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -602,7 +586,7 @@ function AgentManagementActions({
               disabled={clearSession.isPending}
               {...destructiveAction()}
             >
-              {clearSession.isPending ? 'Clearing...' : 'Clear session'}
+              {clearSession.isPending ? "Clearing..." : "Clear session"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -615,8 +599,7 @@ function AgentManagementActions({
               Remove {agentLabel} from this {convNoun}
             </DialogTitle>
             <DialogDescription>
-              {agentLabel} will no longer be part of this {convNoun}. You can
-              add it back anytime.
+              {agentLabel} will no longer be part of this {convNoun}. You can add it back anytime.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -636,7 +619,7 @@ function AgentManagementActions({
               disabled={removeFromChannel.isPending}
               {...destructiveAction()}
             >
-              {removeFromChannel.isPending ? 'Removing...' : 'Remove'}
+              {removeFromChannel.isPending ? "Removing..." : "Remove"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -645,15 +628,39 @@ function AgentManagementActions({
   );
 }
 
-function DirectAgentActions({ agent, conversationId, onDialogOpenChange }: { agent: AgentDto; conversationId: string; onDialogOpenChange: (open: boolean) => void }): JSX.Element | null {
+function DirectAgentActions({
+  agent,
+  conversationId,
+  onDialogOpenChange,
+}: {
+  agent: AgentDto;
+  conversationId: string;
+  onDialogOpenChange: (open: boolean) => void;
+}): JSX.Element | null {
   const { data: viewer } = useViewerUser();
-  const pair = useDirectPairs().find(pair => pair.conversation_id === conversationId);
-  const principal = viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
+  const pair = useDirectPairs().find((pair) => pair.conversation_id === conversationId);
+  const principal =
+    viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
   if (!canControlDirectAgent(principal, agent, pair)) return null;
-  return <DirectAgentRuntimeActions key={`${conversationId}:${agent.id}`} agent={agent} conversationId={conversationId} onDialogOpenChange={onDialogOpenChange} />;
+  return (
+    <DirectAgentRuntimeActions
+      key={`${conversationId}:${agent.id}`}
+      agent={agent}
+      conversationId={conversationId}
+      onDialogOpenChange={onDialogOpenChange}
+    />
+  );
 }
 
-function DirectAgentRuntimeActions({ agent, conversationId, onDialogOpenChange }: { agent: AgentDto; conversationId: string; onDialogOpenChange: (open: boolean) => void }): JSX.Element {
+function DirectAgentRuntimeActions({
+  agent,
+  conversationId,
+  onDialogOpenChange,
+}: {
+  agent: AgentDto;
+  conversationId: string;
+  onDialogOpenChange: (open: boolean) => void;
+}): JSX.Element {
   const { data: runtime } = useAgentRuntimeState(agent.id);
   const availability = useAgentAvailability(agent.id);
   const start = useStartAgent(conversationId);
@@ -663,7 +670,7 @@ function DirectAgentRuntimeActions({ agent, conversationId, onDialogOpenChange }
   const state = directAgentControlState(runtime, availability);
   const pending = start.isPending || stop.isPending || clearSession.isPending;
   const disabled = pending || !state.ready;
-  const action = state.startable ? 'Start' : 'Stop';
+  const action = state.startable ? "Start" : "Stop";
   const setClearDialogOpen = (open: boolean): void => {
     setClearOpen(open);
     onDialogOpenChange(open);
@@ -701,15 +708,30 @@ function DirectAgentRuntimeActions({ agent, conversationId, onDialogOpenChange }
           <DialogHeader>
             <DialogTitle>Clear session for @{agent.name}</DialogTitle>
             <DialogDescription>
-              The next start uses a fresh CLI session across all conversations. MEMORY, notes, and queued deliveries are kept.
+              The next start uses a fresh CLI session across all conversations. MEMORY, notes, and
+              queued deliveries are kept.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setClearDialogOpen(false)} disabled={pending} {...destructiveCancel()}>Cancel</Button>
-            <Button variant="danger" disabled={disabled} {...destructiveAction()} onClick={() => {
-              if (disabled) return;
-              clearSession.mutate(agent.id, { onSuccess: () => setClearDialogOpen(false) });
-            }}>{clearSession.isPending ? 'Clearing...' : 'Clear session'}</Button>
+            <Button
+              variant="outline"
+              onClick={() => setClearDialogOpen(false)}
+              disabled={pending}
+              {...destructiveCancel()}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              disabled={disabled}
+              {...destructiveAction()}
+              onClick={() => {
+                if (disabled) return;
+                clearSession.mutate(agent.id, { onSuccess: () => setClearDialogOpen(false) });
+              }}
+            >
+              {clearSession.isPending ? "Clearing..." : "Clear session"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

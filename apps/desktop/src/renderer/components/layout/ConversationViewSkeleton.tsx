@@ -23,16 +23,16 @@
  * are neutral utility tokens (`bg-bg-hover`) — a skeleton is chrome, never a
  * saturated status signal.
  */
-import { paneChrome } from './pane-chrome';
+import { paneChrome } from "./pane-chrome";
 
 // Per-row recipe: author-label width + the body-line widths beneath it. Hand-
 // varied so the block reads as a conversation, not a stack of identical bars.
 const ROWS: ReadonlyArray<{ author: string; lines: readonly string[] }> = [
-  { author: 'w-20', lines: ['w-[60%]', 'w-[38%]'] },
-  { author: 'w-28', lines: ['w-[74%]'] },
-  { author: 'w-16', lines: ['w-[68%]', 'w-[52%]', 'w-[30%]'] },
-  { author: 'w-24', lines: ['w-[46%]'] },
-  { author: 'w-20', lines: ['w-[64%]', 'w-[34%]'] },
+  { author: "w-20", lines: ["w-[60%]", "w-[38%]"] },
+  { author: "w-28", lines: ["w-[74%]"] },
+  { author: "w-16", lines: ["w-[68%]", "w-[52%]", "w-[30%]"] },
+  { author: "w-24", lines: ["w-[46%]"] },
+  { author: "w-20", lines: ["w-[64%]", "w-[34%]"] },
 ];
 
 /**
@@ -49,7 +49,7 @@ const ROWS: ReadonlyArray<{ author: string; lines: readonly string[] }> = [
  * suits a flex-col parent; pass `absolute inset-0` for a `relative` box, etc.
  */
 export function MessageRowsSkeleton({
-  className = 'min-h-0 flex-1',
+  className = "min-h-0 flex-1",
 }: {
   className?: string;
 } = {}): JSX.Element {
@@ -86,27 +86,27 @@ export function ConversationViewSkeleton(): JSX.Element {
       data-conversation-skeleton
     >
       {/* Header — matches ChannelView's `h-12` titlebar so the message area
-        * below starts at the same Y as the real view. Title block on the left,
-        * a member-strip cluster (square `size-6` chips, mirroring MemberStrip)
-        * pushed right. */}
+       * below starts at the same Y as the real view. Title block on the left,
+       * a member-strip cluster (square `size-6` chips, mirroring MemberStrip)
+       * pushed right. */}
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <div className="size-4 shrink-0 rounded-none bg-bg-hover" />
         <div className="h-3.5 w-36 rounded bg-bg-hover" />
         <div className="ml-auto flex items-center gap-[3px]">
-          {[0, 1, 2].map(i => (
+          {[0, 1, 2].map((i) => (
             <div key={i} className="size-6 shrink-0 rounded-none bg-bg-hover" />
           ))}
         </div>
       </header>
 
       {/* Message area — the shared pulse-rows block (MessageRowsSkeleton),
-        * also reused by the in-pane loading states in ChannelView / ThreadPanel
-        * so every "messages loading" surface reads identically. */}
+       * also reused by the in-pane loading states in ChannelView / ThreadPanel
+       * so every "messages loading" surface reads identically. */}
       <MessageRowsSkeleton />
 
       {/* Composer — reproduces the `<form>` footer (`border-t … px-3 py-3`)
-        * wrapping the bordered shell (`rounded-md border`), with the
-        * `min-h-[60px]` input body and a footer button row (`size-7`). */}
+       * wrapping the bordered shell (`rounded-md border`), with the
+       * `min-h-[60px]` input body and a footer button row (`size-7`). */}
       <div className="shrink-0 border-t border-border-subtle bg-bg-primary px-3 py-3">
         <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-floating">
           <div className="min-h-[60px] px-3 py-2">

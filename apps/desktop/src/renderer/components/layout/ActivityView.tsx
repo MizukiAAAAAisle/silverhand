@@ -1,37 +1,30 @@
-import { useMemo, useState } from 'react';
-import {
-  Activity as ActivityIcon,
-  AlertTriangle,
-  Check,
-} from 'lucide-react';
-import type { ActivityItemDto, MessageAuthorDto, AgentDto } from '@silverhand/shared';
-import { WorkspaceIcon } from '@/components/WorkspaceIcon';
-import { CollectionItemCard } from '@/components/layout/collection-item-card';
-import { ChannelIcon } from '@/components/ChannelIcon';
-import { ThreadIcon } from '@/components/icons/conversation-icons';
+import { useMemo, useState } from "react";
+import { Activity as ActivityIcon, AlertTriangle, Check } from "lucide-react";
+import type { ActivityItemDto, MessageAuthorDto, AgentDto } from "@silverhand/shared";
+import { WorkspaceIcon } from "@/components/WorkspaceIcon";
+import { CollectionItemCard } from "@/components/layout/collection-item-card";
+import { ChannelIcon } from "@/components/ChannelIcon";
+import { ThreadIcon } from "@/components/icons/conversation-icons";
 import {
   AuthorAvatarView,
   AuthorName,
   DeletedActorMarker,
-} from '@/components/chat/author-avatar-view';
-import { presentAuthor } from '@/components/chat/author-presentation';
-import type { AuthorAvatar } from '@/components/chat/author-presentation';
+} from "@/components/chat/author-avatar-view";
+import { presentAuthor } from "@/components/chat/author-presentation";
+import type { AuthorAvatar } from "@/components/chat/author-presentation";
 import {
   collectCounterpartAvatarSources,
   presentCounterpart,
-} from '@/features/direct-pairs/counterpart-presentation';
-import type { CounterpartPresentation } from '@/features/direct-pairs/counterpart-presentation';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import type { AgentAvatarSource } from '@/features/agents/avatar-hooks';
-import {
-  useActivity,
-  useClearActivityItem,
-} from '@/features/attention/hooks';
-import { activityItemSource } from '@/features/attention/observe';
-import { ListRowsSkeleton } from './ListRowsSkeleton';
-import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
-import { paneChrome } from './pane-chrome';
+} from "@/features/direct-pairs/counterpart-presentation";
+import type { CounterpartPresentation } from "@/features/direct-pairs/counterpart-presentation";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import type { AgentAvatarSource } from "@/features/agents/avatar-hooks";
+import { useActivity, useClearActivityItem } from "@/features/attention/hooks";
+import { activityItemSource } from "@/features/attention/observe";
+import { ListRowsSkeleton } from "./ListRowsSkeleton";
+import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import { paneChrome } from "./pane-chrome";
 
 /**
  * Activity — the human's "queue waiting on me" (#task:1227). Read-side
@@ -86,18 +79,18 @@ import { paneChrome } from './pane-chrome';
  * read-cleared), never a status mirror. See `docs/activity-lifecycle-v1.md`.
  */
 
-type FilterKey = 'all' | 'mention' | 'thread';
+type FilterKey = "all" | "mention" | "thread";
 
 const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'mention', label: 'Mentions' },
-  { key: 'thread', label: 'Threads' },
+  { key: "all", label: "All" },
+  { key: "mention", label: "Mentions" },
+  { key: "thread", label: "Threads" },
 ];
 
 /** Namespaced key into Activity's ONE avatar object-url batch. A face's identity
  *  is `{kind, id}` — users and agents are separate tables, so a bare `id` could
  *  collide and cross-wire two avatars. */
-function principalBatchKey(kind: 'agent' | 'user', id: string): string {
+function principalBatchKey(kind: "agent" | "user", id: string): string {
   return `${kind}:${id}`;
 }
 
@@ -111,18 +104,18 @@ function principalBatchKey(kind: 'agent' | 'user', id: string): string {
  *  `human` → avatar `user` spelling change lives, so it does not happen again
  *  here. */
 function avatarBatchKey(avatar: AuthorAvatar): string | null {
-  return avatar.variant === 'agent' || avatar.variant === 'user'
+  return avatar.variant === "agent" || avatar.variant === "user"
     ? principalBatchKey(avatar.variant, avatar.id)
     : null;
 }
 
 function matchesFilter(item: ActivityItemDto, key: FilterKey): boolean {
   switch (key) {
-    case 'all':
+    case "all":
       return true;
-    case 'mention':
-      return item.kind === 'mention';
-    case 'thread':
+    case "mention":
+      return item.kind === "mention";
+    case "thread":
       // A "Thread" item is anything located in a reply cluster, regardless of
       // kind — overlapping facet, not a partition (a thread @me matches both
       // Mentions and Threads). Single-select, so the user views one lens.
@@ -170,7 +163,7 @@ function LocationGlyph({
   counterpart: CounterpartPresentation | null;
   objectUrl: string | null;
 }): JSX.Element {
-  if (item.kind === 'agent_failed') {
+  if (item.kind === "agent_failed") {
     return <AlertTriangle className="size-3.5 shrink-0 text-error" />;
   }
   if (counterpart) {
@@ -230,7 +223,7 @@ function SenderMessageLine({
 }): JSX.Element {
   const presentation = sender ? presentAuthor(sender) : null;
   return (
-    <div className={'mt-1 flex items-center gap-2 ' + (className ?? '')}>
+    <div className={"mt-1 flex items-center gap-2 " + (className ?? "")}>
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         {sender && presentation ? (
           <>
@@ -247,9 +240,7 @@ function SenderMessageLine({
             </span>
           </>
         ) : null}
-        <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
-          {content}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-sm text-text-primary">{content}</span>
       </div>
     </div>
   );
@@ -258,7 +249,7 @@ function SenderMessageLine({
 function relTime(ts: number): string {
   const diff = Date.now() - ts;
   const m = Math.floor(diff / 60_000);
-  if (m < 1) return 'now';
+  if (m < 1) return "now";
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h`;
@@ -313,10 +304,10 @@ interface RowLocation {
 }
 
 function resolveRowLocation(
-  location: ActivityItemDto['location'],
+  location: ActivityItemDto["location"],
   workspaceRefById: ReadonlyMap<string, ActivityWorkspaceRef>,
 ): RowLocation {
-  if (location.kind === 'direct_pair') {
+  if (location.kind === "direct_pair") {
     const counterpart = presentCounterpart(location.counterpart);
     return {
       counterpart,
@@ -354,7 +345,7 @@ export function ActivityView({
   onJump,
 }: ActivityViewProps): JSX.Element {
   const { data, isLoading, isError } = useActivity();
-  const [filter, setFilter] = useState<FilterKey>('all');
+  const [filter, setFilter] = useState<FilterKey>("all");
 
   const items = data?.items ?? [];
 
@@ -383,10 +374,10 @@ export function ActivityView({
     // the dedup-by-id live in ONE place; Activity only adds the kind namespace its
     // shared batch needs (the collector has already split by exactly that axis).
     const dm = collectCounterpartAvatarSources(
-      items.flatMap(it => (it.location.kind === 'direct_pair' ? [it.location] : [])),
+      items.flatMap((it) => (it.location.kind === "direct_pair" ? [it.location] : [])),
     );
-    for (const a of dm.agents) byKey.set(principalBatchKey('agent', a.id), a.avatar_url);
-    for (const u of dm.users) byKey.set(principalBatchKey('user', u.id), u.avatar_url);
+    for (const a of dm.agents) byKey.set(principalBatchKey("agent", a.id), a.avatar_url);
+    for (const u of dm.users) byKey.set(principalBatchKey("user", u.id), u.avatar_url);
     return Array.from(byKey, ([id, avatar_url]) => ({ id, avatar_url }));
   }, [items]);
   // The hook keys its result map by the `id` we pass, so the namespaced key is
@@ -420,29 +411,24 @@ export function ActivityView({
     const c: Record<FilterKey, number> = { all: 0, mention: 0, thread: 0 };
     for (const it of items) {
       c.all += 1;
-      if (it.kind === 'mention') c.mention += 1;
+      if (it.kind === "mention") c.mention += 1;
       if (it.thread_root_id != null) c.thread += 1;
     }
     return c;
   }, [items]);
 
-  const filtered = useMemo(
-    () => items.filter(it => matchesFilter(it, filter)),
-    [items, filter],
-  );
-  const directed = filtered.filter(it => it.salience === 'directed');
-  const ambient = filtered.filter(it => it.salience === 'ambient');
+  const filtered = useMemo(() => items.filter((it) => matchesFilter(it, filter)), [items, filter]);
+  const directed = filtered.filter((it) => it.salience === "directed");
+  const ambient = filtered.filter((it) => it.salience === "ambient");
 
   return (
     <main
       className="flex h-full flex-1 flex-col bg-bg-chat"
-      style={{ ...paneChrome, overflow: 'hidden' }}
+      style={{ ...paneChrome, overflow: "hidden" }}
     >
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <ActivityIcon className="size-3.5 text-accent" />
-        <span className="font-serif text-sm font-semibold text-text-primary">
-          Activity
-        </span>
+        <span className="font-serif text-sm font-semibold text-text-primary">Activity</span>
         <span className="text-xs text-text-muted">{counts.all}</span>
       </header>
 
@@ -451,7 +437,7 @@ export function ActivityView({
           "Mark all read" action was removed from the UI — #task:1446 — pending a
           new home; `useMarkActivityAllRead` + the observe machinery are kept.) */}
       <div className="flex shrink-0 items-center gap-1.5 px-4 py-2">
-        {FILTERS.map(f => {
+        {FILTERS.map((f) => {
           const on = f.key === filter;
           return (
             <button
@@ -459,14 +445,14 @@ export function ActivityView({
               type="button"
               onClick={() => setFilter(f.key)}
               className={
-                'inline-flex items-center gap-1.5 border-[length:var(--control-border-width)] rounded-[var(--chip-radius)] px-2.5 py-1 text-xs font-medium transition-colors ' +
+                "inline-flex items-center gap-1.5 border-[length:var(--control-border-width)] rounded-[var(--chip-radius)] px-2.5 py-1 text-xs font-medium transition-colors " +
                 (on
-                  ? 'border-[color:var(--border-control-hover)] bg-[var(--bg-row-selected)] text-text-primary'
-                  : 'border-border bg-bg-floating text-text-muted hover:border-[color:var(--border-control-hover)] hover:text-text-primary')
+                  ? "border-[color:var(--border-control-hover)] bg-[var(--bg-row-selected)] text-text-primary"
+                  : "border-border bg-bg-floating text-text-muted hover:border-[color:var(--border-control-hover)] hover:text-text-primary")
               }
             >
               {f.label}
-              <span className={on ? 'opacity-100' : 'opacity-60'}>{counts[f.key]}</span>
+              <span className={on ? "opacity-100" : "opacity-60"}>{counts[f.key]}</span>
             </button>
           );
         })}
@@ -497,7 +483,7 @@ export function ActivityView({
             // whole queue is empty.
             <div className="flex flex-col items-center gap-1.5 py-16 text-center">
               <span className="font-serif text-base font-semibold text-text-secondary">
-                No {FILTERS.find(f => f.key === filter)?.label.toLowerCase()}
+                No {FILTERS.find((f) => f.key === filter)?.label.toLowerCase()}
               </span>
             </div>
           )
@@ -555,7 +541,7 @@ function ActivitySection({
         {label}
       </div>
       <ul className="space-y-2">
-        {items.map(item => (
+        {items.map((item) => (
           <ActivityRow
             key={item.id}
             item={item}
@@ -597,12 +583,8 @@ function ActivityRow({
   // plus the jump target all read from it (#task:2115).
   const location = resolveRowLocation(item.location, workspaceRefById);
   const isDirectPair = location.counterpart !== null;
-  const counterpartKey = location.counterpart
-    ? avatarBatchKey(location.counterpart.avatar)
-    : null;
-  const counterpartObjectUrl = counterpartKey
-    ? avatarUrls.get(counterpartKey) ?? null
-    : null;
+  const counterpartKey = location.counterpart ? avatarBatchKey(location.counterpart.avatar) : null;
+  const counterpartObjectUrl = counterpartKey ? (avatarUrls.get(counterpartKey) ?? null) : null;
 
   // Navigation needs a message anchor; agent_failed has none (pure read_at).
   const canJump = item.message_id != null;
@@ -639,7 +621,7 @@ function ActivityRow({
   //       itself about who this is.
   const sender = isDirectPair ? null : item.preview_sender;
   const senderKey = sender ? avatarBatchKey(presentAuthor(sender).avatar) : null;
-  const senderObjectUrl = senderKey ? avatarUrls.get(senderKey) ?? null : null;
+  const senderObjectUrl = senderKey ? (avatarUrls.get(senderKey) ?? null) : null;
   // The §5.3 source_ref-out for this item, resolved through the single routing
   // chokepoint (`activityItemSource`, keyed on KIND not salience):
   //   - mention / agent_failed → by `notification_id`
@@ -657,7 +639,7 @@ function ActivityRow({
   const countEl =
     item.unread_count != null && item.unread_count > 0 ? (
       <span className="shrink-0 rounded-[var(--control-radius)] bg-accent-soft px-1.5 py-px text-xs font-medium leading-tight tabular-nums text-accent">
-        {item.unread_count > 99 ? '99+' : item.unread_count} new
+        {item.unread_count > 99 ? "99+" : item.unread_count} new
       </span>
     ) : null;
 
@@ -669,7 +651,7 @@ function ActivityRow({
     // open-time mark-read, so clearing again here would be a redundant second
     // path. Deriving this from `clearSource.kind` (not the item's kind/salience)
     // keeps the decision in lockstep with the routing chokepoint.
-    if (clearSource?.kind === 'notification') {
+    if (clearSource?.kind === "notification") {
       clearItem.mutate(clearSource);
     }
     jump();
@@ -683,18 +665,16 @@ function ActivityRow({
           hook (no per-row left rail). A row hover is a utility signal → ink
           border, never the brand hue. */}
       <CollectionItemCard
-        role={canJump ? 'button' : undefined}
+        role={canJump ? "button" : undefined}
         tabIndex={canJump ? 0 : undefined}
         onClick={handleRowClick}
-        onKeyDown={e => {
-          if (canJump && (e.key === 'Enter' || e.key === ' ')) {
+        onKeyDown={(e) => {
+          if (canJump && (e.key === "Enter" || e.key === " ")) {
             e.preventDefault();
             handleRowClick();
           }
         }}
-        className={`group flex items-start gap-3 px-4 py-3 ${
-          canJump ? 'cursor-pointer' : ''
-        }`}
+        className={`group flex items-start gap-3 px-4 py-3 ${canJump ? "cursor-pointer" : ""}`}
       >
         <div className="min-w-0 flex-1">
           {/* row 1 — WHERE, per placement (#task:2115): a channel draws workspace
@@ -721,9 +701,7 @@ function ActivityRow({
               counterpart={location.counterpart}
               objectUrl={counterpartObjectUrl}
             />
-            <span className="min-w-0 shrink truncate text-text-secondary">
-              {location.label}
-            </span>
+            <span className="min-w-0 shrink truncate text-text-secondary">{location.label}</span>
             {/* A deleted endpoint keeps its row — the conversation still exists and
                 its unread still waits on the viewer — and says so through the SAME
                 quiet marker a byline uses, next to the kind-generic label
@@ -742,10 +720,7 @@ function ActivityRow({
               the focus and keeps primary ink (#task:1269 item 3). */}
           {hasRootLine ? (
             <div className="mt-1 flex items-center gap-2">
-              <ThreadIcon
-                aria-hidden
-                className="size-3.5 shrink-0 text-text-muted"
-              />
+              <ThreadIcon aria-hidden className="size-3.5 shrink-0 text-text-muted" />
               <span className="min-w-0 flex-1 truncate text-sm text-text-muted">
                 {item.thread_root_preview}
               </span>
@@ -787,7 +762,7 @@ function ActivityRow({
             type="button"
             title="Mark as read"
             aria-label="Mark as read"
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation();
               clearItem.mutate(clearSource);
             }}

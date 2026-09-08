@@ -1,4 +1,4 @@
-import { desktopDaemonLauncher } from './daemon-launcher';
+import { desktopDaemonLauncher } from "./daemon-launcher";
 import {
   app,
   BrowserWindow,
@@ -6,13 +6,13 @@ import {
   session as electronSession,
   shell,
   type MenuItemConstructorOptions,
-} from 'electron';
-import { execFileSync, spawn as spawnChildProcess } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { rm as fsRm } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+} from "electron";
+import { execFileSync, spawn as spawnChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { rm as fsRm } from "node:fs/promises";
+import { homedir } from "node:os";
+import { delimiter, join, resolve } from "node:path";
 import {
   AuthSessionResponseSchema,
   CLIENT_INFO_HEADER,
@@ -44,39 +44,39 @@ import {
   type ServerConnectionProfileView,
   type ServerInfo,
   type UserDto,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 import {
   createCategorizedLoggers,
   type CategorizedLoggers,
   type FileLogger,
-} from '@silverhand/shared/node-file-logger';
-import { startDesktopEmbeddedBackend } from './embedded-launcher.js';
+} from "@silverhand/shared/node-file-logger";
+import { startDesktopEmbeddedBackend } from "./embedded-launcher.js";
 import type {
   EmbeddedRustBackendHandle,
   EmbeddedRustBackendTerminalReason,
-} from './embedded-rust-backend.js';
+} from "./embedded-rust-backend.js";
 import {
   persistEmbeddedBackend,
   invalidateEmbeddedRuntime,
-} from './embedded-backend-publication.js';
-import { EmbeddedBackendOwner } from './embedded-backend-owner.js';
+} from "./embedded-backend-publication.js";
+import { EmbeddedBackendOwner } from "./embedded-backend-owner.js";
 const embeddedBackendOwner = new EmbeddedBackendOwner();
 import {
   DESKTOP_ALLOW_INSECURE_REMOTE,
   DESKTOP_REMOTE_ONLY,
   PACKAGED_DEFAULT_SERVER_URL,
-} from '../build-flags.js';
-import type { LocalHostWsAttachment } from '../backend-info-contract.js';
-import { describeLocalHostWsAttachment } from './local-host-ws-attachment.js';
+} from "../build-flags.js";
+import type { LocalHostWsAttachment } from "../backend-info-contract.js";
+import { describeLocalHostWsAttachment } from "./local-host-ws-attachment.js";
 import {
   enableNodeSystemCa,
   HostClient,
   OUTBOUND_PROTOCOL_VERSION,
   spawnDaemonChild,
   type DaemonHandle,
-} from '@silverhand/host';
-import { describeStartupFailure } from './startup-failure.js';
-import { showStartupFailureWindow } from './startup-failure-window.js';
+} from "@silverhand/host";
+import { describeStartupFailure } from "./startup-failure.js";
+import { showStartupFailureWindow } from "./startup-failure-window.js";
 import {
   electronUserDataPath,
   shouldRedirectElectronUserData,
@@ -85,20 +85,20 @@ import {
   writeServerConfig,
   invalidateEmbeddedServerUrl,
   desktopAppPaths,
-} from './config.js';
-import { resolveEffectiveBootProfile } from './desktop-build-config.js';
-import { desktopClientInfoHeaderValue } from './client-info.js';
-import { createRuntimeUpgradeMonitor } from './runtime-upgrade-monitor.js';
-import { resolveRendererEntry } from './renderer-entry.js';
-import { createGuardedIpcRegistrar } from './ipc/guarded-ipc.js';
-import { waitForDaemonGeneration } from './daemon-generation-attach.js';
-import { applyFatalExitToClaim } from './local-host-failure.js';
+} from "./config.js";
+import { resolveEffectiveBootProfile } from "./desktop-build-config.js";
+import { desktopClientInfoHeaderValue } from "./client-info.js";
+import { createRuntimeUpgradeMonitor } from "./runtime-upgrade-monitor.js";
+import { resolveRendererEntry } from "./renderer-entry.js";
+import { createGuardedIpcRegistrar } from "./ipc/guarded-ipc.js";
+import { waitForDaemonGeneration } from "./daemon-generation-attach.js";
+import { applyFatalExitToClaim } from "./local-host-failure.js";
 import {
   classifyMeFetchOutcome,
   executeHydrate,
   type HydrateOutcome,
   type SessionValidationResult,
-} from './auth-hydrate.js';
+} from "./auth-hydrate.js";
 import {
   buildHostClaimInput,
   loadOrCreateInstallationId,
@@ -109,13 +109,13 @@ import {
   assertApiProxyPath,
   writeDaemonHostConfig,
   type LocalHostClaimStatus,
-} from './local-host-claim.js';
-import { type ExpectedAttachWindow } from './outbound-attach.js';
+} from "./local-host-claim.js";
+import { type ExpectedAttachWindow } from "./outbound-attach.js";
 import {
   performOutboundReload,
   bindAttachmentAccessor,
   type OutboundReloadOutcome,
-} from './outbound-reload.js';
+} from "./outbound-reload.js";
 import {
   applyServerProfile,
   derivePartialApplyState,
@@ -123,20 +123,20 @@ import {
   type PartialApplyState,
   type ApplyServerProfileDeps,
   type ServerProfileApplyOutcome,
-} from './server-profile-apply.js';
-import { gracefullyDetachOutbound } from './outbound-detach.js';
+} from "./server-profile-apply.js";
+import { gracefullyDetachOutbound } from "./outbound-detach.js";
 import {
   clearServerConnectionProfile,
   readServerConnectionProfile,
   readServerConnectionProfileViewOrNull,
   writeServerConnectionProfile,
-} from './server-connection-profile.js';
+} from "./server-connection-profile.js";
 import {
   clearPersistedDesktopSession,
   loadPersistedDesktopSessionToken,
   persistDesktopSessionToken,
-} from './desktop-session-storage.js';
-import { extractViewerUserFromProxyResponse } from './profile-session-sync.js';
+} from "./desktop-session-storage.js";
+import { extractViewerUserFromProxyResponse } from "./profile-session-sync.js";
 import {
   decideBackendBootMode,
   evaluateProfileCommitGuard,
@@ -144,21 +144,21 @@ import {
   planBackendStartup,
   ProfileUnusableError,
   RemoteOnlyServerProfileRequiredError,
-} from './backend-boot-mode.js';
-import { buildRemoteBackendHandle, type RemoteBackendHandle } from './remote-backend-handle.js';
-import { probeServerInfo, type ProbeServerInfoResult } from './server-connection-test.js';
-import { fetchServerInfoWithRetry } from './fetch-server-info.js';
-import { registerEventWsDiagnosticIpcHandler } from './ipc/event-ws-diagnostics.js';
-import { registerSelectionExportIpcHandlers } from './ipc/selection-export.js';
-import { ContextualCloseCoordinator, type CloseTarget } from './contextual-close.js';
+} from "./backend-boot-mode.js";
+import { buildRemoteBackendHandle, type RemoteBackendHandle } from "./remote-backend-handle.js";
+import { probeServerInfo, type ProbeServerInfoResult } from "./server-connection-test.js";
+import { fetchServerInfoWithRetry } from "./fetch-server-info.js";
+import { registerEventWsDiagnosticIpcHandler } from "./ipc/event-ws-diagnostics.js";
+import { registerSelectionExportIpcHandlers } from "./ipc/selection-export.js";
+import { ContextualCloseCoordinator, type CloseTarget } from "./contextual-close.js";
 import {
   classifyOutboundProtocolCompatibility,
   type OutboundProtocolCompatibility,
-} from './outbound-protocol-compatibility.js';
+} from "./outbound-protocol-compatibility.js";
 import {
   configureRendererBackendNetwork,
   fetchBackendWithNetworkPolicy,
-} from './renderer-backend-network.js';
+} from "./renderer-backend-network.js";
 
 function backendFetch(input: string | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
@@ -170,12 +170,12 @@ function backendFetch(input: string | URL, init?: RequestInit): Promise<Response
   }
   return fetchBackendWithNetworkPolicy(fetch, input, { ...init, headers });
 }
-import { registerSurfaceIpcHandlers } from './ipc/surface-ipc.js';
+import { registerSurfaceIpcHandlers } from "./ipc/surface-ipc.js";
 
 const nodeSystemCaActivation = enableNodeSystemCa();
 
 type BackendHandle =
-  | { readonly kind: 'embedded'; readonly running: EmbeddedRustBackendHandle }
+  | { readonly kind: "embedded"; readonly running: EmbeddedRustBackendHandle }
   | RemoteBackendHandle;
 
 type DesktopHostProxyConfig = HostProxyConfig;
@@ -185,15 +185,15 @@ type DesktopHostProxyConfigResult =
   | {
       ok: false;
       code:
-        | 'not_local_host'
-        | 'unauthorized'
-        | 'host_not_found'
-        | 'host_not_active'
-        | 'host_revoked'
+        | "not_local_host"
+        | "unauthorized"
+        | "host_not_found"
+        | "host_not_active"
+        | "host_revoked"
         | typeof HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE
-        | 'daemon_unavailable'
-        | 'daemon_error'
-        | 'invalid_input';
+        | "daemon_unavailable"
+        | "daemon_error"
+        | "invalid_input";
       message?: string;
     };
 
@@ -202,7 +202,7 @@ let daemon: DaemonHandle | null = null;
 let hostClient: HostClient | null = null;
 
 if (shouldRedirectElectronUserData()) {
-  app.setPath('userData', electronUserDataPath());
+  app.setPath("userData", electronUserDataPath());
 }
 let logger: FileLogger | null = null;
 let loggers: CategorizedLoggers | null = null;
@@ -211,7 +211,7 @@ let userSessionToken: string | null = null;
 let userSessionUser: UserDto | null = null;
 
 const rendererEntry = resolveRendererEntry({
-  devServerUrl: process.env['ELECTRON_RENDERER_URL'],
+  devServerUrl: process.env["ELECTRON_RENDERER_URL"],
   mainDirname: __dirname,
 });
 
@@ -226,23 +226,23 @@ const guardedIpc = createGuardedIpcRegistrar({
 const runtimeUpgradeMonitor = createRuntimeUpgradeMonitor({
   probe: async () => (await fetchServerInfo()).desktop_api,
   notify: () => {
-    mainWindow?.webContents.send('epoch:update-required');
+    mainWindow?.webContents.send("epoch:update-required");
   },
   log: {
     info: (obj, msg) => logger?.info(obj, msg),
     warn: (obj, msg) => logger?.warn(obj, msg),
   },
 });
-let localHostClaim: LocalHostClaimStatus = { status: 'unclaimed', hostId: null };
+let localHostClaim: LocalHostClaimStatus = { status: "unclaimed", hostId: null };
 let rendererBackendResolvedProxy: string | null = null;
 
-let partialApplyState: PartialApplyState = { kind: 'fully_applied' };
+let partialApplyState: PartialApplyState = { kind: "fully_applied" };
 
 /** Set `SILVERHAND_HEADLESS=1` to boot the backend without a window.
  *  Useful for curl-driven smoke tests and integration scripts — see
  *  `pnpm dev:headless`. The process keeps the backend alive until
  *  SIGINT / SIGTERM. */
-const HEADLESS = process.env.SILVERHAND_HEADLESS === '1';
+const HEADLESS = process.env.SILVERHAND_HEADLESS === "1";
 
 function desktopAllowsInsecureRemote(): boolean {
   return DESKTOP_ALLOW_INSECURE_REMOTE || readAllowInsecureRemoteFlag(process.env);
@@ -258,16 +258,16 @@ interface RemoteDebuggingConfig {
 const remoteDebugging = configureRemoteDebugging();
 
 type DesktopAuthState =
-  | { status: 'authenticated'; signup_enabled: boolean; user: UserDto }
-  | { status: 'unauthenticated'; signup_enabled: boolean }
-  | { status: 'backend_unreachable'; server_url: string; message: string }
+  | { status: "authenticated"; signup_enabled: boolean; user: UserDto }
+  | { status: "unauthenticated"; signup_enabled: boolean }
+  | { status: "backend_unreachable"; server_url: string; message: string }
   | {
-      status: 'app_update_required';
+      status: "app_update_required";
       server_api_epoch: number;
       minimum_client_epoch: number;
     }
   | {
-      status: 'server_update_required';
+      status: "server_update_required";
       server_api_epoch: number;
       desktop_api_epoch: number;
     };
@@ -277,7 +277,7 @@ interface BackendProxyRequest {
   method?: string;
   headers?: Record<string, string>;
   bodyText?: string;
-  responseType?: 'text' | 'arrayBuffer';
+  responseType?: "text" | "arrayBuffer";
 }
 
 interface BackendProxyResponse {
@@ -319,21 +319,21 @@ type DesktopAuthResult =
  */
 function configureRemoteDebugging(): RemoteDebuggingConfig {
   const explicit = readRemoteDebugPortEnv();
-  const hasRendererDevServer = Boolean(process.env['ELECTRON_RENDERER_URL']);
+  const hasRendererDevServer = Boolean(process.env["ELECTRON_RENDERER_URL"]);
   if (!explicit && app.isPackaged) {
-    return { enabled: false, port: null, reason: 'packaged_env_absent' };
+    return { enabled: false, port: null, reason: "packaged_env_absent" };
   }
   if (!explicit && !hasRendererDevServer) {
-    return { enabled: false, port: null, reason: 'no_renderer_dev_server' };
+    return { enabled: false, port: null, reason: "no_renderer_dev_server" };
   }
 
-  const raw = explicit?.value ?? '9222';
+  const raw = explicit?.value ?? "9222";
   const value = raw.trim();
   if (/^(0|false|off|disabled)$/i.test(value)) {
     return {
       enabled: false,
       port: null,
-      reason: 'disabled_by_env',
+      reason: "disabled_by_env",
       envName: explicit?.name,
     };
   }
@@ -341,27 +341,27 @@ function configureRemoteDebugging(): RemoteDebuggingConfig {
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     console.warn(
-      `[main] invalid ${explicit?.name ?? 'default CDP port'}=${JSON.stringify(raw)}; CDP remote debugging disabled`,
+      `[main] invalid ${explicit?.name ?? "default CDP port"}=${JSON.stringify(raw)}; CDP remote debugging disabled`,
     );
     return {
       enabled: false,
       port: null,
-      reason: 'invalid_port',
+      reason: "invalid_port",
       envName: explicit?.name,
     };
   }
 
-  app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1');
-  app.commandLine.appendSwitch('remote-debugging-port', String(port));
+  app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
+  app.commandLine.appendSwitch("remote-debugging-port", String(port));
   process.stderr.write(`[silverhand] remote debugging on 127.0.0.1:${port}\n`);
   return { enabled: true, port, envName: explicit?.name };
 }
 
 function readRemoteDebugPortEnv(): { name: string; value: string } | null {
   const candidates = [
-    'SILVERHAND_REMOTE_DEBUG_PORT',
-    'SILVERHAND_CDP_PORT',
-    'SILVERHAND_REMOTE_DEBUGGING_PORT',
+    "SILVERHAND_REMOTE_DEBUG_PORT",
+    "SILVERHAND_CDP_PORT",
+    "SILVERHAND_REMOTE_DEBUGGING_PORT",
   ] as const;
   for (const name of candidates) {
     const value = process.env[name];
@@ -409,10 +409,10 @@ function appendExistingPathEntries(
  * runtime shims like `~/.local/bin/claude` without inventing PATH entries.
  */
 function patchPathFromLoginShell(): { ok: boolean; detail: string } {
-  if (!app.isPackaged || process.platform !== 'darwin') {
-    return { ok: false, detail: 'skipped (not packaged darwin)' };
+  if (!app.isPackaged || process.platform !== "darwin") {
+    return { ok: false, detail: "skipped (not packaged darwin)" };
   }
-  const userShell = process.env.SHELL || '/bin/zsh';
+  const userShell = process.env.SHELL || "/bin/zsh";
   try {
     // `-i -l -c`: interactive + login so rc/profile files run. Use
     // `printenv` (a real binary, not a shell builtin) instead of
@@ -422,8 +422,8 @@ function patchPathFromLoginShell(): { ok: boolean; detail: string } {
     // banner output (oh-my-zsh, fish greetings, etc.).
     const out = execFileSync(
       userShell,
-      ['-ilc', 'echo __PATH_BEGIN__; printenv PATH; echo __PATH_END__'],
-      { encoding: 'utf-8', timeout: 5_000, stdio: ['ignore', 'pipe', 'pipe'] },
+      ["-ilc", "echo __PATH_BEGIN__; printenv PATH; echo __PATH_END__"],
+      { encoding: "utf-8", timeout: 5_000, stdio: ["ignore", "pipe", "pipe"] },
     );
     const m = out.match(/__PATH_BEGIN__\s*\n([\s\S]*?)\n\s*__PATH_END__/);
     if (!m || !m[1]) {
@@ -433,17 +433,17 @@ function patchPathFromLoginShell(): { ok: boolean; detail: string } {
       };
     }
     const patched = appendExistingPathEntries(m[1].trim(), [
-      join(homedir(), '.local', 'bin'),
-      join(homedir(), '.npm-global', 'bin'),
-      join(homedir(), '.bun', 'bin'),
-      '/opt/homebrew/bin',
-      '/opt/homebrew/sbin',
-      '/usr/local/bin',
+      join(homedir(), ".local", "bin"),
+      join(homedir(), ".npm-global", "bin"),
+      join(homedir(), ".bun", "bin"),
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
     ]);
     process.env.PATH = patched.path;
     return {
       ok: true,
-      detail: `shell=${userShell}, len=${process.env.PATH.length}, added=${patched.added.join(':') || 'none'}`,
+      detail: `shell=${userShell}, len=${process.env.PATH.length}, added=${patched.added.join(":") || "none"}`,
     };
   } catch (err) {
     return {
@@ -496,15 +496,15 @@ function embeddedBootstrapPath(): string {
 }
 
 function requireBackendUrl(): string {
-  if (!backend) throw new Error('backend not ready');
-  return backend.kind === 'embedded' ? backend.running.url : backend.url;
+  if (!backend) throw new Error("backend not ready");
+  return backend.kind === "embedded" ? backend.running.url : backend.url;
 }
 
 function requireEmbeddedBackend(reason: string): EmbeddedRustBackendHandle {
   if (!backend) {
     throw new Error(`backend not ready (caller: ${reason})`);
   }
-  if (backend.kind !== 'embedded') {
+  if (backend.kind !== "embedded") {
     throw new Error(`embedded backend required but desktop is in remote mode (caller: ${reason})`);
   }
   return backend.running;
@@ -530,7 +530,7 @@ async function syncEventWsSessionCookie(token: string | null): Promise<void> {
   if (!backend) return;
   const url = eventWsCookieUrl();
   await electronSession.defaultSession.cookies.remove(url, EVENT_WS_SESSION_COOKIE).catch((err) => {
-    logger?.warn({ err }, 'failed to clear event websocket session cookie');
+    logger?.warn({ err }, "failed to clear event websocket session cookie");
   });
   if (!token) return;
   await electronSession.defaultSession.cookies
@@ -539,12 +539,12 @@ async function syncEventWsSessionCookie(token: string | null): Promise<void> {
       name: EVENT_WS_SESSION_COOKIE,
       value: token,
       httpOnly: true,
-      sameSite: 'strict',
-      secure: new URL(requireBackendUrl()).protocol === 'https:',
+      sameSite: "strict",
+      secure: new URL(requireBackendUrl()).protocol === "https:",
       path: apiPaths.eventWebSocket,
     })
     .catch((err) => {
-      logger?.warn({ err }, 'failed to set event websocket session cookie');
+      logger?.warn({ err }, "failed to set event websocket session cookie");
     });
 }
 
@@ -553,7 +553,7 @@ function installBackendEventWsOriginOverride(): void {
 
   const expectedOrigin = backendOrigin();
   const expectedUrl = new URL(apiPaths.eventWebSocket, requireBackendUrl());
-  expectedUrl.protocol = expectedUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  expectedUrl.protocol = expectedUrl.protocol === "https:" ? "wss:" : "ws:";
 
   const clientInfoHeader = desktopClientInfoHeaderValue(desktopAppPaths().installationId, logger);
 
@@ -583,13 +583,13 @@ function installBackendEventWsOriginOverride(): void {
     (details) => {
       logger?.warn(
         {
-          category: 'event_ws.network',
+          category: "event_ws.network",
           error: details.error,
           resource_type: details.resourceType,
           backend_origin: expectedOrigin,
           resolved_proxy: rendererBackendResolvedProxy,
         },
-        'event websocket network request failed',
+        "event websocket network request failed",
       );
     },
   );
@@ -636,9 +636,9 @@ function reseatCachedUserSessionFromProxy(
         cached_user_id: userSessionUser.id,
         response_user_id: user.id,
         path: request.path,
-        method: request.method ?? 'GET',
+        method: request.method ?? "GET",
       },
-      'viewer profile response returned a different user; keeping cached auth session user',
+      "viewer profile response returned a different user; keeping cached auth session user",
     );
     return;
   }
@@ -649,7 +649,7 @@ async function clearUserSession(): Promise<void> {
   userSessionToken = null;
   userSessionUser = null;
 
-  localHostClaim = { status: 'unclaimed', hostId: null };
+  localHostClaim = { status: "unclaimed", hostId: null };
 
   activeAttachWatchdog?.abort();
   activeAttachWatchdog = null;
@@ -660,13 +660,13 @@ async function clearUserSession(): Promise<void> {
   try {
     removeDaemonHostConfig(desktopAppPaths().desktop.computerBinding);
   } catch (err) {
-    logger?.warn({ err }, 'failed to remove daemon host config');
+    logger?.warn({ err }, "failed to remove daemon host config");
   }
 }
 
 async function clearUserSessionAfterUnauthorized(source: string): Promise<void> {
   if (!userSessionToken && !userSessionUser) return;
-  logger?.warn({ source }, 'desktop auth session rejected; clearing local session');
+  logger?.warn({ source }, "desktop auth session rejected; clearing local session");
   await clearUserSession();
 }
 
@@ -707,7 +707,7 @@ async function fetchRemoteCompatibilitySnapshot(): Promise<RemoteCompatibilitySn
       desktopApi: info.desktop_api,
     };
   } catch (err) {
-    logger?.debug({ err }, 'remote compatibility snapshot unavailable');
+    logger?.debug({ err }, "remote compatibility snapshot unavailable");
     return {
       outbound: classifyOutboundProtocolCompatibility({
         appProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
@@ -725,7 +725,7 @@ async function validateUserSessionToken(token: string): Promise<SessionValidatio
       headers: { Authorization: `Bearer ${token}` },
     });
   } catch (err) {
-    return classifyMeFetchOutcome({ kind: 'throw', error: err });
+    return classifyMeFetchOutcome({ kind: "throw", error: err });
   }
   // Only attempt to read the body when the status is 2xx — the
   // classifier doesn't need a body for non-2xx arms (it routes
@@ -736,7 +736,7 @@ async function validateUserSessionToken(token: string): Promise<SessionValidatio
     body = await res.json().catch(() => null);
   }
   return classifyMeFetchOutcome({
-    kind: 'response',
+    kind: "response",
     status: res.status,
     body,
   });
@@ -764,7 +764,7 @@ async function runHydrate(): Promise<HydrateOutcome> {
 
 async function hydrateDesktopSession(): Promise<boolean> {
   const outcome = await runHydrate();
-  return outcome === 'authenticated';
+  return outcome === "authenticated";
 }
 
 async function desktopAuthState(): Promise<DesktopAuthState> {
@@ -773,13 +773,13 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
     info = await fetchServerInfo();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const url = backendUrl('');
+    const url = backendUrl("");
     logger?.warn(
       { err, server_url: url },
-      'desktopAuthState: backend unreachable (server_info fetch failed)',
+      "desktopAuthState: backend unreachable (server_info fetch failed)",
     );
     return {
-      status: 'backend_unreachable',
+      status: "backend_unreachable",
       server_url: url,
       message,
     };
@@ -794,16 +794,16 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
       serverEpoch,
       minimumServerEpoch: MINIMUM_SERVER_API_EPOCH,
     });
-    if (compatibility === 'client_too_old') {
+    if (compatibility === "client_too_old") {
       return {
-        status: 'app_update_required',
+        status: "app_update_required",
         server_api_epoch: serverEpoch,
         minimum_client_epoch: advertised?.minimum_client_epoch ?? 0,
       };
     }
-    if (compatibility === 'server_too_old') {
+    if (compatibility === "server_too_old") {
       return {
-        status: 'server_update_required',
+        status: "server_update_required",
         server_api_epoch: serverEpoch,
         desktop_api_epoch: DESKTOP_SERVER_API_EPOCH,
       };
@@ -819,21 +819,21 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
   }
   if (userSessionToken && userSessionUser) {
     return {
-      status: 'authenticated',
+      status: "authenticated",
       signup_enabled: info.signup_enabled,
       user: userSessionUser,
     };
   }
 
   if (loadPersistedUserSessionToken()) {
-    const url = backendUrl('');
+    const url = backendUrl("");
     return {
-      status: 'backend_unreachable',
+      status: "backend_unreachable",
       server_url: url,
-      message: 'session validation pending — /api/me did not return a verdict',
+      message: "session validation pending — /api/me did not return a verdict",
     };
   }
-  return { status: 'unauthenticated', signup_enabled: info.signup_enabled };
+  return { status: "unauthenticated", signup_enabled: info.signup_enabled };
 }
 
 async function postAuthSession(
@@ -843,8 +843,8 @@ async function postAuthSession(
   let res: Response;
   try {
     res = await backendFetch(backendUrl(path), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     });
   } catch (err) {
@@ -852,8 +852,8 @@ async function postAuthSession(
     return {
       ok: false,
       status: 0,
-      statusText: 'Network Error',
-      bodyText: JSON.stringify({ error: 'backend_unreachable', message }),
+      statusText: "Network Error",
+      bodyText: JSON.stringify({ error: "backend_unreachable", message }),
     };
   }
   const text = await res.text();
@@ -870,8 +870,8 @@ async function postAuthSession(
     return {
       ok: false,
       status: 502,
-      statusText: 'Bad Gateway',
-      bodyText: JSON.stringify({ error: 'invalid auth response' }),
+      statusText: "Bad Gateway",
+      bodyText: JSON.stringify({ error: "invalid auth response" }),
     };
   }
   await storeUserSession(parsed.data.user_token, parsed.data.user);
@@ -880,18 +880,18 @@ async function postAuthSession(
 }
 
 async function bootstrapEmbeddedUserSession(): Promise<boolean> {
-  if (backend?.kind !== 'embedded') return false;
+  if (backend?.kind !== "embedded") return false;
 
   const path = embeddedBootstrapPath();
 
   if (!existsSync(path)) return false;
 
-  const token = readFileSync(path, 'utf8').trim();
+  const token = readFileSync(path, "utf8").trim();
   if (!token) return false;
 
   const res = await backendFetch(backendUrl(authPaths.embeddedBootstrap), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token }),
   });
   const text = await res.text();
@@ -899,7 +899,7 @@ async function bootstrapEmbeddedUserSession(): Promise<boolean> {
   if (!res.ok) {
     logger?.warn(
       { status: res.status, statusText: res.statusText },
-      'embedded bootstrap session request failed',
+      "embedded bootstrap session request failed",
     );
     return false;
   }
@@ -908,7 +908,7 @@ async function bootstrapEmbeddedUserSession(): Promise<boolean> {
   if (!parsed.success) {
     logger?.warn(
       { err: parsed.error.message },
-      'embedded bootstrap returned invalid auth response',
+      "embedded bootstrap returned invalid auth response",
     );
     return false;
   }
@@ -921,7 +921,7 @@ async function bootstrapEmbeddedUserSession(): Promise<boolean> {
 async function claimLocalHostForUserSession(): Promise<void> {
   const token = userSessionToken;
   if (!token || !backend) {
-    localHostClaim = { status: 'unclaimed', hostId: null };
+    localHostClaim = { status: "unclaimed", hostId: null };
     return;
   }
 
@@ -935,25 +935,25 @@ async function claimLocalHostForUserSession(): Promise<void> {
       existingConfig,
     });
     const res = await backendFetch(backendUrl(apiPaths.hostClaimOrCreate), {
-      method: 'POST',
+      method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
       body: JSON.stringify(claimInput),
     });
     const text = await res.text();
 
     if (res.status === 401) {
-      await clearUserSessionAfterUnauthorized('local host claim');
+      await clearUserSessionAfterUnauthorized("local host claim");
       return;
     }
     if (res.status === 409) {
       localHostClaim = {
-        status: 'revoked',
+        status: "revoked",
         hostId: existingConfig?.host_id ?? null,
       };
-      logger?.warn('local host claim failed: host revoked');
+      logger?.warn("local host claim failed: host revoked");
       return;
     }
     if (!res.ok) {
@@ -969,7 +969,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
       parsed.data.host_token ??
       (existingConfig?.host_id === parsed.data.host_id ? existingConfig.host_token : null);
     if (!hostToken) {
-      throw new Error('local host claim response omitted host_token without reusable config');
+      throw new Error("local host claim response omitted host_token without reusable config");
     }
 
     const localHostId = parsed.data.host_id;
@@ -989,7 +989,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
       ...(allowInsecureRemote ? { allow_insecure_remote: true } : {}),
       ...(profileVersion !== undefined ? { profile_version: profileVersion } : {}),
     });
-    localHostClaim = { status: 'claimed', hostId: localHostId };
+    localHostClaim = { status: "claimed", hostId: localHostId };
 
     // Fire-and-forget: the claim itself has succeeded; the outbound
     // attach is a parallel control-plane action. UI keeps showing
@@ -1003,10 +1003,10 @@ async function claimLocalHostForUserSession(): Promise<void> {
     });
   } catch (err) {
     localHostClaim = {
-      status: 'error',
+      status: "error",
       hostId: existingConfig?.host_id ?? localHostClaim.hostId,
     };
-    logger?.warn({ err }, 'local host claim failed');
+    logger?.warn({ err }, "local host claim failed");
   }
 }
 
@@ -1015,10 +1015,10 @@ async function logoutUserSession(): Promise<{ ok: true }> {
   await clearUserSession();
   if (token) {
     await backendFetch(backendUrl(authPaths.logout), {
-      method: 'POST',
+      method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     }).catch((err) => {
-      logger?.warn({ err }, 'desktop auth logout revoke failed');
+      logger?.warn({ err }, "desktop auth logout revoke failed");
     });
   }
   return { ok: true };
@@ -1029,31 +1029,31 @@ type DesktopHostMutationResult =
       ok: true;
       host: HostDto;
       local_host_id: string | null;
-      local_host_status: LocalHostClaimStatus['status'];
+      local_host_status: LocalHostClaimStatus["status"];
       local_host_ws_attachment: LocalHostWsAttachment;
       local_host_server_url: string | null;
     }
   | {
       ok: false;
       code:
-        | 'unauthorized'
-        | 'not_current_host'
-        | 'host_not_found'
-        | 'host_revoked'
-        | 'kind_not_supported'
-        | 'invalid_response'
-        | 'network_error';
+        | "unauthorized"
+        | "not_current_host"
+        | "host_not_found"
+        | "host_revoked"
+        | "kind_not_supported"
+        | "invalid_response"
+        | "network_error";
       message?: string;
     };
 
 function snapshotLocalHostInfo(): {
   local_host_id: string | null;
-  local_host_status: LocalHostClaimStatus['status'];
+  local_host_status: LocalHostClaimStatus["status"];
   local_host_ws_attachment: LocalHostWsAttachment;
   local_host_server_url: string | null;
 } {
   return {
-    local_host_id: localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
+    local_host_id: localHostClaim.status === "claimed" ? localHostClaim.hostId : null,
     local_host_status: localHostClaim.status,
     local_host_ws_attachment: describeLocalHostWsAttachment({
       hasLocalRegistryObserver: hasLocalRegistryObserver(),
@@ -1085,7 +1085,7 @@ async function triggerLocalHostOutboundAttach(input: {
   if (!client || !backend) {
     logger?.warn(
       { localHostId: input.localHostId },
-      'D3.a host_outbound_attach skipped — host client or backend not ready',
+      "D3.a host_outbound_attach skipped — host client or backend not ready",
     );
     return;
   }
@@ -1096,7 +1096,7 @@ async function triggerLocalHostOutboundAttach(input: {
   } catch (err) {
     logger?.warn(
       { err, localHostId: input.localHostId },
-      'D3.a host_outbound_attach IPC failed (transport)',
+      "D3.a host_outbound_attach IPC failed (transport)",
     );
     return;
   }
@@ -1108,7 +1108,7 @@ async function triggerLocalHostOutboundAttach(input: {
         reason: result.reason,
         message: result.message,
       },
-      'D3.a host_outbound_attach refused by daemon',
+      "D3.a host_outbound_attach refused by daemon",
     );
     return;
   }
@@ -1118,7 +1118,7 @@ async function triggerLocalHostOutboundAttach(input: {
       localHostId: input.localHostId,
       action: result.action,
     },
-    'host_outbound_attach ack',
+    "host_outbound_attach ack",
   );
 
   // Cancel any previously-running watchdog (rotate-token / re-login
@@ -1136,10 +1136,10 @@ async function triggerLocalHostOutboundAttach(input: {
 async function rotateHostToken(hostId: string): Promise<DesktopHostMutationResult> {
   const token = userSessionToken;
   if (!token || !backend) {
-    return { ok: false, code: 'unauthorized' };
+    return { ok: false, code: "unauthorized" };
   }
   if (!hostId) {
-    return { ok: false, code: 'host_not_found', message: 'missing host id' };
+    return { ok: false, code: "host_not_found", message: "missing host id" };
   }
   const daemonConfigPath = desktopAppPaths().desktop.computerBinding;
   const existingConfig = readDaemonHostConfig(daemonConfigPath);
@@ -1147,47 +1147,47 @@ async function rotateHostToken(hostId: string): Promise<DesktopHostMutationResul
   if (!existingConfig || existingConfig.host_id !== hostId) {
     return {
       ok: false,
-      code: 'not_current_host',
-      message: 'rotate is only supported for the host this desktop is currently bound to',
+      code: "not_current_host",
+      message: "rotate is only supported for the host this desktop is currently bound to",
     };
   }
 
   let res: Response;
   try {
     res = await backendFetch(backendUrl(apiPaths.hostRotateToken(hostId)), {
-      method: 'POST',
+      method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     });
   } catch (err) {
-    logger?.warn({ err }, 'host rotate-token request failed');
-    return { ok: false, code: 'network_error' };
+    logger?.warn({ err }, "host rotate-token request failed");
+    return { ok: false, code: "network_error" };
   }
   const text = await res.text();
   const body = parseJson(text);
   if (res.status === 401) {
-    await clearUserSessionAfterUnauthorized('host rotate');
-    return { ok: false, code: 'unauthorized' };
+    await clearUserSessionAfterUnauthorized("host rotate");
+    return { ok: false, code: "unauthorized" };
   }
   if (res.status === 404) {
-    return { ok: false, code: 'host_not_found' };
+    return { ok: false, code: "host_not_found" };
   }
   if (res.status === 409) {
     const code =
-      typeof body === 'object' && body !== null && 'error_code' in body
+      typeof body === "object" && body !== null && "error_code" in body
         ? String((body as { error_code: unknown }).error_code)
-        : 'host_revoked';
+        : "host_revoked";
     return {
       ok: false,
-      code: code === 'kind_not_supported' ? 'kind_not_supported' : 'host_revoked',
+      code: code === "kind_not_supported" ? "kind_not_supported" : "host_revoked",
     };
   }
   if (!res.ok) {
-    return { ok: false, code: 'network_error', message: `${res.status} ${res.statusText}` };
+    return { ok: false, code: "network_error", message: `${res.status} ${res.statusText}` };
   }
 
   const parsed = HostRotateTokenEmbeddedResponseSchema.safeParse(body);
   if (!parsed.success) {
-    return { ok: false, code: 'invalid_response' };
+    return { ok: false, code: "invalid_response" };
   }
 
   // Token bytes land here and ONLY here. Persist to daemon-config
@@ -1198,7 +1198,7 @@ async function rotateHostToken(hostId: string): Promise<DesktopHostMutationResul
     hostId: parsed.data.host_id,
     hostToken: parsed.data.host_token,
   });
-  localHostClaim = { status: 'claimed', hostId: parsed.data.host_id };
+  localHostClaim = { status: "claimed", hostId: parsed.data.host_id };
   return {
     ok: true,
     host: parsed.data.host,
@@ -1214,41 +1214,41 @@ async function rotateHostToken(hostId: string): Promise<DesktopHostMutationResul
 async function revokeHost(hostId: string): Promise<DesktopHostMutationResult> {
   const token = userSessionToken;
   if (!token || !backend) {
-    return { ok: false, code: 'unauthorized' };
+    return { ok: false, code: "unauthorized" };
   }
   if (!hostId) {
-    return { ok: false, code: 'host_not_found', message: 'missing host id' };
+    return { ok: false, code: "host_not_found", message: "missing host id" };
   }
 
   let res: Response;
   try {
     res = await backendFetch(backendUrl(apiPaths.hostRevoke(hostId)), {
-      method: 'POST',
+      method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     });
   } catch (err) {
-    logger?.warn({ err }, 'host revoke request failed');
-    return { ok: false, code: 'network_error' };
+    logger?.warn({ err }, "host revoke request failed");
+    return { ok: false, code: "network_error" };
   }
   const text = await res.text();
   const body = parseJson(text);
   if (res.status === 401) {
-    await clearUserSessionAfterUnauthorized('host revoke');
-    return { ok: false, code: 'unauthorized' };
+    await clearUserSessionAfterUnauthorized("host revoke");
+    return { ok: false, code: "unauthorized" };
   }
   if (res.status === 404) {
-    return { ok: false, code: 'host_not_found' };
+    return { ok: false, code: "host_not_found" };
   }
   if (!res.ok) {
     return {
       ok: false,
-      code: 'network_error',
+      code: "network_error",
       message: `${res.status} ${res.statusText}`,
     };
   }
   const parsed = HostRevokeResponseSchema.safeParse(body);
   if (!parsed.success) {
-    return { ok: false, code: 'invalid_response' };
+    return { ok: false, code: "invalid_response" };
   }
 
   // If we just revoked the host this desktop was bound to, drop the
@@ -1260,8 +1260,8 @@ async function revokeHost(hostId: string): Promise<DesktopHostMutationResult> {
     daemonConfigPath: desktopAppPaths().desktop.computerBinding,
     hostId,
   });
-  if (reconcile === 'cleared') {
-    localHostClaim = { status: 'revoked', hostId };
+  if (reconcile === "cleared") {
+    localHostClaim = { status: "revoked", hostId };
   }
   return {
     ok: true,
@@ -1278,10 +1278,10 @@ function normalizeDesktopHostProxyConfig(input: unknown): DesktopHostProxyConfig
 async function getHostProxyConfig(hostId: string): Promise<DesktopHostProxyConfigResult> {
   const token = userSessionToken;
   if (!token || !backend) {
-    return { ok: false, code: 'unauthorized' };
+    return { ok: false, code: "unauthorized" };
   }
   if (!hostId) {
-    return { ok: false, code: 'host_not_found', message: 'missing host id' };
+    return { ok: false, code: "host_not_found", message: "missing host id" };
   }
 
   let res: Response;
@@ -1292,15 +1292,15 @@ async function getHostProxyConfig(hostId: string): Promise<DesktopHostProxyConfi
   } catch (err) {
     logger?.warn(
       { err: err instanceof Error ? err.message : String(err), hostId },
-      'host proxy config get request failed',
+      "host proxy config get request failed",
     );
-    return { ok: false, code: 'daemon_error', message: networkErrorMessage(err) };
+    return { ok: false, code: "daemon_error", message: networkErrorMessage(err) };
   }
 
   const body = parseJson(await res.text());
   if (res.status === 401) {
-    await clearUserSessionAfterUnauthorized('host proxy config get');
-    return { ok: false, code: 'unauthorized' };
+    await clearUserSessionAfterUnauthorized("host proxy config get");
+    return { ok: false, code: "unauthorized" };
   }
   if (!res.ok) {
     return hostProxyConfigErrorResult(body, res.status, res.statusText);
@@ -1310,8 +1310,8 @@ async function getHostProxyConfig(hostId: string): Promise<DesktopHostProxyConfi
   if (!parsed.success) {
     return {
       ok: false,
-      code: 'daemon_error',
-      message: 'invalid proxy config response',
+      code: "daemon_error",
+      message: "invalid proxy config response",
     };
   }
   return { ok: true, config: parsed.data.config };
@@ -1323,36 +1323,36 @@ async function saveHostProxyConfig(input: {
 }): Promise<DesktopHostProxyConfigResult> {
   const token = userSessionToken;
   if (!token || !backend) {
-    return { ok: false, code: 'unauthorized' };
+    return { ok: false, code: "unauthorized" };
   }
   if (!input.hostId) {
-    return { ok: false, code: 'host_not_found', message: 'missing host id' };
+    return { ok: false, code: "host_not_found", message: "missing host id" };
   }
   const config = normalizeDesktopHostProxyConfig(input.config);
-  if (!config) return { ok: false, code: 'invalid_input' };
+  if (!config) return { ok: false, code: "invalid_input" };
 
   let res: Response;
   try {
     res = await backendFetch(backendUrl(apiPaths.hostProxyConfig(input.hostId)), {
-      method: 'PUT',
+      method: "PUT",
       headers: {
         Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
       body: JSON.stringify(config),
     });
   } catch (err) {
     logger?.warn(
       { err: err instanceof Error ? err.message : String(err), hostId: input.hostId },
-      'host proxy config set request failed',
+      "host proxy config set request failed",
     );
-    return { ok: false, code: 'daemon_error', message: networkErrorMessage(err) };
+    return { ok: false, code: "daemon_error", message: networkErrorMessage(err) };
   }
 
   const body = parseJson(await res.text());
   if (res.status === 401) {
-    await clearUserSessionAfterUnauthorized('host proxy config set');
-    return { ok: false, code: 'unauthorized' };
+    await clearUserSessionAfterUnauthorized("host proxy config set");
+    return { ok: false, code: "unauthorized" };
   }
   if (!res.ok) {
     return hostProxyConfigErrorResult(body, res.status, res.statusText);
@@ -1362,8 +1362,8 @@ async function saveHostProxyConfig(input: {
   if (!parsed.success) {
     return {
       ok: false,
-      code: 'daemon_error',
-      message: 'invalid proxy config response',
+      code: "daemon_error",
+      message: "invalid proxy config response",
     };
   }
   return { ok: true, config: parsed.data.config };
@@ -1374,22 +1374,22 @@ function hostProxyConfigErrorResult(
   status: number,
   statusText: string,
 ): DesktopHostProxyConfigResult {
-  const error = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
-  const code = typeof error.error_code === 'string' ? error.error_code : null;
-  const message = typeof error.error === 'string' ? error.error : `${status} ${statusText}`;
+  const error = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const code = typeof error.error_code === "string" ? error.error_code : null;
+  const message = typeof error.error === "string" ? error.error : `${status} ${statusText}`;
   switch (code) {
-    case 'host_not_found':
-      return { ok: false, code: 'host_not_found', message };
-    case 'host_not_active':
-      return { ok: false, code: 'host_not_active', message };
-    case 'host_revoked':
-      return { ok: false, code: 'host_revoked', message };
+    case "host_not_found":
+      return { ok: false, code: "host_not_found", message };
+    case "host_not_active":
+      return { ok: false, code: "host_not_active", message };
+    case "host_revoked":
+      return { ok: false, code: "host_revoked", message };
     case HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE:
       return { ok: false, code: HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE, message };
-    case 'invalid_input':
-      return { ok: false, code: 'invalid_input', message };
+    case "invalid_input":
+      return { ok: false, code: "invalid_input", message };
     default:
-      return { ok: false, code: 'daemon_error', message };
+      return { ok: false, code: "daemon_error", message };
   }
 }
 
@@ -1407,9 +1407,9 @@ async function saveServerUrlFromSettings(rawServerUrl: string): Promise<Outbound
     // round-trip-attempt log spam.
     return {
       ok: false,
-      kind: 'reload_rejected',
-      reason: 'not_attached',
-      message: 'backend or host client not ready',
+      kind: "reload_rejected",
+      reason: "not_attached",
+      message: "backend or host client not ready",
     };
   }
 
@@ -1427,7 +1427,7 @@ async function saveServerUrlFromSettings(rawServerUrl: string): Promise<Outbound
       getAttachment: bindAttachmentAccessor(controller),
       remoteMode: !hasLocalRegistryObserver(),
       currentLocalHostId: () =>
-        localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
+        localHostClaim.status === "claimed" ? localHostClaim.hostId : null,
       currentHostToken: () => readDaemonHostConfig(daemonConfigPath)?.host_token ?? null,
       currentProfileVersion: () => readDaemonHostConfig(daemonConfigPath)?.profile_version,
     },
@@ -1440,7 +1440,7 @@ async function saveServerUrlFromSettings(rawServerUrl: string): Promise<Outbound
   // rotate-token path (which also calls
   // `triggerLocalHostOutboundAttach` to spawn a fresh watchdog
   // and aborts the previous one inside that helper).
-  if (outcome.ok && outcome.kind === 'reloaded') {
+  if (outcome.ok && outcome.kind === "reloaded") {
     activeAttachWatchdog?.abort();
     activeAttachWatchdog = null;
   }
@@ -1450,17 +1450,17 @@ async function saveServerUrlFromSettings(rawServerUrl: string): Promise<Outbound
   // daemon / backend log entries.
   if (outcome.ok) {
     logger?.info(
-      { kind: outcome.kind, elapsedMs: 'elapsedMs' in outcome ? outcome.elapsedMs : null },
-      'D3.c settings:saveServerUrl ok',
+      { kind: outcome.kind, elapsedMs: "elapsedMs" in outcome ? outcome.elapsedMs : null },
+      "D3.c settings:saveServerUrl ok",
     );
   } else {
     logger?.warn(
       {
         kind: outcome.kind,
-        reason: 'reason' in outcome ? outcome.reason : null,
-        message: 'message' in outcome ? outcome.message : null,
+        reason: "reason" in outcome ? outcome.reason : null,
+        message: "message" in outcome ? outcome.message : null,
       },
-      'D3.c settings:saveServerUrl failed',
+      "D3.c settings:saveServerUrl failed",
     );
   }
 
@@ -1470,12 +1470,12 @@ async function saveServerUrlFromSettings(rawServerUrl: string): Promise<Outbound
 function proxyHeaders(input: Record<string, string> | undefined): Headers {
   const headers = new Headers();
   const blocked = new Set([
-    'authorization',
+    "authorization",
     X_SILVERHAND_PRINCIPAL_HEADER.toLowerCase(),
     X_SILVERHAND_LEGACY_USER_ID_HEADER.toLowerCase(),
-    'host',
-    'content-length',
-    'connection',
+    "host",
+    "content-length",
+    "connection",
   ]);
   for (const [name, value] of Object.entries(input ?? {})) {
     const key = name.toLowerCase();
@@ -1495,14 +1495,14 @@ function responseHeaders(headers: Headers): Record<string, string> {
 
 async function marshalBackendResponse(
   res: Response,
-  responseType: 'text' | 'arrayBuffer',
+  responseType: "text" | "arrayBuffer",
 ): Promise<BackendProxyResponse> {
   const base = {
     status: res.status,
     statusText: res.statusText,
     headers: responseHeaders(res.headers),
   };
-  if (responseType === 'arrayBuffer' && res.ok) {
+  if (responseType === "arrayBuffer" && res.ok) {
     return {
       ...base,
       bodyBytes: new Uint8Array(await res.arrayBuffer()),
@@ -1516,21 +1516,21 @@ async function proxyBackendRequest(input: BackendProxyRequest): Promise<BackendP
   if (!userSessionToken) {
     return {
       status: 401,
-      statusText: 'Unauthorized',
-      headers: { 'content-type': 'application/json' },
-      bodyText: JSON.stringify({ error: 'unauthorized' }),
+      statusText: "Unauthorized",
+      headers: { "content-type": "application/json" },
+      bodyText: JSON.stringify({ error: "unauthorized" }),
     };
   }
   const headers = proxyHeaders(input.headers);
-  headers.set('Authorization', `Bearer ${userSessionToken}`);
-  if (input.bodyText !== undefined && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
+  headers.set("Authorization", `Bearer ${userSessionToken}`);
+  if (input.bodyText !== undefined && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
 
   let res: Response;
   try {
     res = await backendFetch(backendUrl(input.path), {
-      method: input.method ?? 'GET',
+      method: input.method ?? "GET",
       headers,
       body: input.bodyText,
     });
@@ -1538,15 +1538,15 @@ async function proxyBackendRequest(input: BackendProxyRequest): Promise<BackendP
     const message = err instanceof Error ? err.message : String(err);
     return {
       status: 0,
-      statusText: 'Network Error',
-      headers: { 'content-type': 'application/json' },
-      bodyText: JSON.stringify({ error: 'backend_unreachable', message }),
+      statusText: "Network Error",
+      headers: { "content-type": "application/json" },
+      bodyText: JSON.stringify({ error: "backend_unreachable", message }),
     };
   }
   if (res.status === 401) {
-    await clearUserSessionAfterUnauthorized('backend request');
+    await clearUserSessionAfterUnauthorized("backend request");
   }
-  const response = await marshalBackendResponse(res, input.responseType ?? 'text');
+  const response = await marshalBackendResponse(res, input.responseType ?? "text");
   runtimeUpgradeMonitor.onRestResponse(response.status, response.bodyText);
   reseatCachedUserSessionFromProxy({ path: input.path, method: input.method }, response);
   return response;
@@ -1557,9 +1557,9 @@ async function proxyBackendUpload(input: BackendUploadRequest): Promise<BackendP
   if (!userSessionToken) {
     return {
       status: 401,
-      statusText: 'Unauthorized',
-      headers: { 'content-type': 'application/json' },
-      bodyText: JSON.stringify({ error: 'unauthorized' }),
+      statusText: "Unauthorized",
+      headers: { "content-type": "application/json" },
+      bodyText: JSON.stringify({ error: "unauthorized" }),
     };
   }
   const form = new FormData();
@@ -1569,7 +1569,7 @@ async function proxyBackendUpload(input: BackendUploadRequest): Promise<BackendP
   for (const file of input.files) {
     const bytes = Buffer.from(file.bytes);
     const blob = new Blob([bytes], {
-      type: file.contentType || 'application/octet-stream',
+      type: file.contentType || "application/octet-stream",
     });
     form.append(file.fieldName, blob, file.filename);
   }
@@ -1577,7 +1577,7 @@ async function proxyBackendUpload(input: BackendUploadRequest): Promise<BackendP
   let res: Response;
   try {
     res = await backendFetch(backendUrl(input.path), {
-      method: 'POST',
+      method: "POST",
       headers: { Authorization: `Bearer ${userSessionToken}` },
       body: form,
     });
@@ -1585,17 +1585,17 @@ async function proxyBackendUpload(input: BackendUploadRequest): Promise<BackendP
     const message = err instanceof Error ? err.message : String(err);
     return {
       status: 0,
-      statusText: 'Network Error',
-      headers: { 'content-type': 'application/json' },
-      bodyText: JSON.stringify({ error: 'backend_unreachable', message }),
+      statusText: "Network Error",
+      headers: { "content-type": "application/json" },
+      bodyText: JSON.stringify({ error: "backend_unreachable", message }),
     };
   }
   if (res.status === 401) {
-    await clearUserSessionAfterUnauthorized('backend upload');
+    await clearUserSessionAfterUnauthorized("backend upload");
   }
-  const response = await marshalBackendResponse(res, 'text');
+  const response = await marshalBackendResponse(res, "text");
   runtimeUpgradeMonitor.onRestResponse(response.status, response.bodyText);
-  reseatCachedUserSessionFromProxy({ path: input.path, method: 'POST' }, response);
+  reseatCachedUserSessionFromProxy({ path: input.path, method: "POST" }, response);
   return response;
 }
 
@@ -1606,7 +1606,7 @@ async function bootstrap(): Promise<void> {
     loggers = createCategorizedLoggers({
       dir: desktopAppPaths().logs,
       alsoConsole: !app.isPackaged,
-      base: { app: 'silverhand-desktop' },
+      base: { app: "silverhand-desktop" },
     });
     // Historical `logger` is just an alias for the system sink so we
     // don't double-create a `backend-<utc>.log` file.
@@ -1619,7 +1619,7 @@ async function bootstrap(): Promise<void> {
         pathPatch: pathResult,
         nodeSystemCa: nodeSystemCaActivation,
       },
-      'logger initialized',
+      "logger initialized",
     );
 
     const savedBootProfileView = readServerConnectionProfileViewOrNull({
@@ -1650,18 +1650,18 @@ async function bootstrap(): Promise<void> {
         effectiveBootProfile.warning.message,
       );
     }
-    if (effectiveBootProfile.source === 'packaged_default') {
+    if (effectiveBootProfile.source === "packaged_default") {
       logger.info(
         {
           serverUrl: effectiveBootProfile.profileView.server_url,
           remoteOnly: DESKTOP_REMOTE_ONLY,
           allowInsecureRemote: DESKTOP_ALLOW_INSECURE_REMOTE,
         },
-        'desktop packaged default server URL selected for boot',
+        "desktop packaged default server URL selected for boot",
       );
     }
     if (DESKTOP_REMOTE_ONLY && forceEmbedded) {
-      logger.warn({}, 'SILVERHAND_FORCE_EMBEDDED=1 ignored because this package is remote-only');
+      logger.warn({}, "SILVERHAND_FORCE_EMBEDDED=1 ignored because this package is remote-only");
     }
     const bootDecision = decideBackendBootMode({
       profileView: effectiveBootProfile.profileView,
@@ -1670,43 +1670,43 @@ async function bootstrap(): Promise<void> {
     });
 
     const startupPlan = planBackendStartup(bootDecision);
-    if (startupPlan.mode === 'refuse') {
+    if (startupPlan.mode === "refuse") {
       logger.error(
         {
           profileUrl: startupPlan.profileUrl,
           classifyMessage: startupPlan.classifyMessage,
         },
-        'profile present but classifier refused it, throwing (no silent embedded fallback)',
+        "profile present but classifier refused it, throwing (no silent embedded fallback)",
       );
 
       throw new ProfileUnusableError({
-        mode: 'profile_invalid',
+        mode: "profile_invalid",
         profileUrl: startupPlan.profileUrl,
         classifyMessage: startupPlan.classifyMessage,
       });
     }
-    if (DESKTOP_REMOTE_ONLY && startupPlan.mode !== 'remote') {
+    if (DESKTOP_REMOTE_ONLY && startupPlan.mode !== "remote") {
       logger.error(
         {
           startupPlan,
           packagedDefaultServerUrl: PACKAGED_DEFAULT_SERVER_URL,
           effectiveProfileSource: effectiveBootProfile.source,
         },
-        'remote-only desktop refused embedded backend startup',
+        "remote-only desktop refused embedded backend startup",
       );
       throw new RemoteOnlyServerProfileRequiredError(
-        startupPlan.mode === 'embedded'
+        startupPlan.mode === "embedded"
           ? `Boot decision landed on embedded/${startupPlan.embeddedReason}.`
-          : 'Boot decision did not land on remote mode.',
+          : "Boot decision did not land on remote mode.",
       );
     }
-    if (startupPlan.mode === 'remote') {
+    if (startupPlan.mode === "remote") {
       logger.info(
         {
           serverUrl: startupPlan.serverUrl,
           insecure: startupPlan.insecure,
         },
-        'boot decision: remote',
+        "boot decision: remote",
       );
       if (startupPlan.insecure) {
         logger.warn(
@@ -1715,7 +1715,7 @@ async function bootstrap(): Promise<void> {
             packagedAllowInsecureRemote: DESKTOP_ALLOW_INSECURE_REMOTE,
             envAllowInsecureRemote: readAllowInsecureRemoteFlag(process.env),
           },
-          'remote-mode boot admitted insecure http URL; see runbook §12 for production guidance',
+          "remote-mode boot admitted insecure http URL; see runbook §12 for production guidance",
         );
       }
     } else {
@@ -1723,7 +1723,7 @@ async function bootstrap(): Promise<void> {
         {
           reason: startupPlan.embeddedReason,
         },
-        'boot decision: embedded',
+        "boot decision: embedded",
       );
     }
     if (remoteDebugging.enabled) {
@@ -1731,14 +1731,14 @@ async function bootstrap(): Promise<void> {
         {
           port: remoteDebugging.port,
           url: `http://127.0.0.1:${remoteDebugging.port}`,
-          env: remoteDebugging.envName ?? 'dev-default',
+          env: remoteDebugging.envName ?? "dev-default",
         },
-        'CDP remote debugging enabled',
+        "CDP remote debugging enabled",
       );
     }
 
     const paths = daemonPaths();
-    if (startupPlan.mode === 'embedded') {
+    if (startupPlan.mode === "embedded") {
       await fsRm(paths.controlPlaneServerUrlPath, { force: true });
     }
     const daemonLauncher = resolveDaemonLauncher();
@@ -1755,7 +1755,7 @@ async function bootstrap(): Promise<void> {
       readyTimeoutMs: 30_000,
       proxyConfigPath: null,
       controlPlaneServerUrlPath:
-        startupPlan.mode === 'embedded' ? paths.controlPlaneServerUrlPath : null,
+        startupPlan.mode === "embedded" ? paths.controlPlaneServerUrlPath : null,
       localOutboundSocketPath: null,
       alsoStderr: !app.isPackaged,
     });
@@ -1765,7 +1765,7 @@ async function bootstrap(): Promise<void> {
         socketPath: daemon.socketPath,
         daemonVersion: daemon.daemonVersion,
       },
-      'silverhand-daemon spawned',
+      "silverhand-daemon spawned",
     );
     hostClient = new HostClient({ socketPath: paths.socketPath });
     try {
@@ -1776,16 +1776,16 @@ async function bootstrap(): Promise<void> {
       await daemon?.kill({ gracefulMs: 1_000 }).catch(() => undefined);
       daemon = null;
       throw new Error(
-        'silverhand-daemon: HostClient failed to connect to the spawned daemon. ' +
-          'There is no runtime fallback — daemon is the only supported runtime path. ' +
-          'Recovery: ensure silverhand-daemon is spawnable / its socket is reachable. ' +
+        "silverhand-daemon: HostClient failed to connect to the spawned daemon. " +
+          "There is no runtime fallback — daemon is the only supported runtime path. " +
+          "Recovery: ensure silverhand-daemon is spawnable / its socket is reachable. " +
           `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
     daemon.onExit((info) => {
       logger?.error(
         { kind: info.kind, reason: info.reason, code: info.code },
-        'silverhand-daemon exited fatally',
+        "silverhand-daemon exited fatally",
       );
       localHostClaim = applyFatalExitToClaim(localHostClaim, info);
     });
@@ -1795,7 +1795,7 @@ async function bootstrap(): Promise<void> {
       if (reattachedGenerations.has(info.instanceId)) {
         logger?.debug?.(
           { instanceId: info.instanceId, attempt: info.attempt },
-          'D3.b daemon generation hook: already reattached, skipping',
+          "D3.b daemon generation hook: already reattached, skipping",
         );
         return;
       }
@@ -1809,17 +1809,17 @@ async function bootstrap(): Promise<void> {
             startedAt: info.startedAt,
             attempt: info.attempt,
           },
-          'D3.b daemon generation changed (post-crash respawn)',
+          "D3.b daemon generation changed (post-crash respawn)",
         );
         const claim = localHostClaim;
-        if (claim.status !== 'claimed' || claim.hostId === null) {
+        if (claim.status !== "claimed" || claim.hostId === null) {
           // No active host claim yet — login flow has not run, or the
           // user is logged out. The post-login claim path will fire
           // its own `triggerLocalHostOutboundAttach` against the fresh
           // daemon when it runs.
           logger?.info(
             { instanceId: info.instanceId, status: claim.status },
-            'D3.b daemon generation changed but no active local host claim; skipping re-attach',
+            "D3.b daemon generation changed but no active local host claim; skipping re-attach",
           );
           return;
         }
@@ -1827,7 +1827,7 @@ async function bootstrap(): Promise<void> {
         if (!client) {
           logger?.warn(
             { instanceId: info.instanceId },
-            'daemon generation changed but hostClient is null; skipping re-attach',
+            "daemon generation changed but hostClient is null; skipping re-attach",
           );
           return;
         }
@@ -1840,14 +1840,14 @@ async function bootstrap(): Promise<void> {
                 reason: ready.reason,
                 err: ready.error,
               },
-              'host client did not reach expected daemon generation; skipping re-attach',
+              "host client did not reach expected daemon generation; skipping re-attach",
             );
             return;
           }
         } catch (err) {
           logger?.warn(
             { err, instanceId: info.instanceId },
-            'host client generation gate threw unexpectedly',
+            "host client generation gate threw unexpectedly",
           );
           return;
         }
@@ -1863,7 +1863,7 @@ async function bootstrap(): Promise<void> {
       })().catch((err) => {
         logger?.error(
           { err, instanceId: info.instanceId },
-          'D3.b daemon generation re-attach unexpectedly threw',
+          "D3.b daemon generation re-attach unexpectedly threw",
         );
       });
     });
@@ -1894,11 +1894,11 @@ async function bootstrap(): Promise<void> {
               blobsRoot: appPaths.embeddedServer.blobs,
               logDir: appPaths.logs,
               bootstrapTokenPath,
-              listen: { hostname: '127.0.0.1', port: 0 },
+              listen: { hostname: "127.0.0.1", port: 0 },
               // The Rust backend self-derives its finalized bound loopback origin into the
               // event-WS allowlist (TS parity); the launcher supplies the renderer dev
               // origin (when present) so a dev renderer's WS upgrade is allowed too.
-              allowedOrigins: rendererOrigin ? [rendererOrigin] : ['http://127.0.0.1:0'],
+              allowedOrigins: rendererOrigin ? [rendererOrigin] : ["http://127.0.0.1:0"],
               ...(daemonNpmSpec ? { daemonNpmSpec } : {}),
               disableSignup: false,
               apiEpoch: {
@@ -1942,27 +1942,27 @@ async function bootstrap(): Promise<void> {
             profileUrl: refusePlan.profileUrl,
             classifyMessage: refusePlan.classifyMessage,
           },
-          'refuse arm reached, throwing ProfileUnusableError',
+          "refuse arm reached, throwing ProfileUnusableError",
         );
         throw new ProfileUnusableError({
-          mode: 'profile_invalid',
+          mode: "profile_invalid",
           profileUrl: refusePlan.profileUrl,
           classifyMessage: refusePlan.classifyMessage,
         });
       },
     });
     if (embeddedBackendOwner.isStopping) {
-      if (startedBackend.kind === 'embedded')
+      if (startedBackend.kind === "embedded")
         await embeddedBackendOwner.close(startedBackend.running);
-      throw new Error('backend startup cancelled before main publication');
+      throw new Error("backend startup cancelled before main publication");
     }
     backend = startedBackend;
-    if (backend.kind === 'embedded') {
+    if (backend.kind === "embedded") {
       const handle = backend.running;
       handle.onTerminal((reason) => {
         void handlePostPublishEmbeddedFatal(handle, reason);
       });
-      if (!backend) throw new Error('embedded backend terminated during publication');
+      if (!backend) throw new Error("embedded backend terminated during publication");
     }
     installBackendEventWsOriginOverride();
     if (!HEADLESS) {
@@ -1974,8 +1974,8 @@ async function bootstrap(): Promise<void> {
 
     void runBootReconciliation();
   } catch (err) {
-    console.error('[main] bootstrap failed:', err);
-    logger?.error({ err }, 'bootstrap failed');
+    console.error("[main] bootstrap failed:", err);
+    logger?.error({ err }, "bootstrap failed");
     throw err;
   }
 }
@@ -1992,22 +1992,22 @@ async function runBootReconciliation(): Promise<void> {
       applyProfile: (profile) => runServerProfileApply(profile),
     });
     partialApplyState = state;
-    if (state.kind === 'partial_apply_pending') {
+    if (state.kind === "partial_apply_pending") {
       logger?.warn(
         {
           profileVersion: state.profileVersion,
           reason: state.reason,
           reloadRejectionReason: state.reloadRejectionReason,
         },
-        'boot reconciliation: partial_apply_pending — Retry button surfaced',
+        "boot reconciliation: partial_apply_pending — Retry button surfaced",
       );
-    } else if (state.kind === 'unusable_profile') {
+    } else if (state.kind === "unusable_profile") {
       logger?.warn(
         { reason: state.reason, detail: state.detail },
-        'boot reconciliation: unusable_profile — renderer should offer reset affordance',
+        "boot reconciliation: unusable_profile — renderer should offer reset affordance",
       );
     } else {
-      logger?.info({ kind: state.kind }, 'boot reconciliation: ok');
+      logger?.info({ kind: state.kind }, "boot reconciliation: ok");
     }
   } catch (err) {
     // Reconciliation failed unexpectedly. Leave `partialApplyState`
@@ -2018,7 +2018,7 @@ async function runBootReconciliation(): Promise<void> {
     // it — keeping this try/catch makes the swallow explicit.
     logger?.error(
       { err },
-      'boot reconciliation threw unexpectedly — leaving partialApplyState=fully_applied',
+      "boot reconciliation threw unexpectedly — leaving partialApplyState=fully_applied",
     );
   }
 }
@@ -2034,10 +2034,10 @@ function createWindow(): void {
     // just nudge them to vertically center inside the 36px bar).
     // Win/Linux keep the native frame for now — self-drawn min/max/close
     // is deferred (see docs/app-layout.md §0).
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : undefined,
-    trafficLightPosition: process.platform === 'darwin' ? { x: 12, y: 11 } : undefined,
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : undefined,
+    trafficLightPosition: process.platform === "darwin" ? { x: 12, y: 11 } : undefined,
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, "../preload/index.js"),
       sandbox: false,
       contextIsolation: true,
       zoomFactor: 1,
@@ -2046,19 +2046,19 @@ function createWindow(): void {
   mainWindow = win;
 
   // Mouse-wheel page zoom does not use the application menu.
-  win.webContents.on('zoom-changed', (event) => event.preventDefault());
+  win.webContents.on("zoom-changed", (event) => event.preventDefault());
 
-  win.on('ready-to-show', () => win.show());
-  win.on('closed', () => {
+  win.on("ready-to-show", () => win.show());
+  win.on("closed", () => {
     if (mainWindow === win) mainWindow = null;
   });
 
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url);
-    return { action: 'deny' };
+    return { action: "deny" };
   });
 
-  if (rendererEntry.kind === 'dev-server') {
+  if (rendererEntry.kind === "dev-server") {
     win.loadURL(rendererEntry.url);
   } else {
     win.loadFile(rendererEntry.filePath);
@@ -2071,7 +2071,7 @@ function createWindow(): void {
  * the standard roles plus the app-specific Settings and Setup entries.
  */
 function buildAppMenu(): Menu {
-  const isMac = process.platform === 'darwin';
+  const isMac = process.platform === "darwin";
 
   // macOS convention: "Settings…" lives in the App menu directly under
   // About, with the standard Cmd+, accelerator. Electron's
@@ -2081,24 +2081,24 @@ function buildAppMenu(): Menu {
     ? {
         label: app.name,
         submenu: [
-          { role: 'about' },
-          { type: 'separator' },
+          { role: "about" },
+          { type: "separator" },
           {
-            label: 'Settings…',
-            accelerator: 'CmdOrCtrl+,',
+            label: "Settings…",
+            accelerator: "CmdOrCtrl+,",
             click: () => openSettings(),
           },
-          { type: 'separator' },
-          { role: 'services' },
-          { type: 'separator' },
-          { role: 'hide' },
-          { role: 'hideOthers' },
-          { role: 'unhide' },
-          { type: 'separator' },
-          { role: 'quit' },
+          { type: "separator" },
+          { role: "services" },
+          { type: "separator" },
+          { role: "hide" },
+          { role: "hideOthers" },
+          { role: "unhide" },
+          { type: "separator" },
+          { role: "quit" },
         ],
       }
-    : { role: 'appMenu' };
+    : { role: "appMenu" };
 
   // ⌘W is a *contextual* Close (mac only), not an unconditional "Close
   // Window", so the item is named neutrally "Close": it closes the topmost
@@ -2116,11 +2116,11 @@ function buildAppMenu(): Menu {
   // File/Quit items or claim Ctrl+W. Mirrors the `appMenuItem` split above.
   const fileMenuItem: MenuItemConstructorOptions = isMac
     ? {
-        label: 'File',
+        label: "File",
         submenu: [
           {
-            label: 'Close',
-            accelerator: 'CmdOrCtrl+W',
+            label: "Close",
+            accelerator: "CmdOrCtrl+W",
             click: (_item, browserWindow) => {
               if (browserWindow instanceof BrowserWindow) {
                 handleContextualClose(browserWindow);
@@ -2129,25 +2129,25 @@ function buildAppMenu(): Menu {
           },
         ],
       }
-    : { role: 'fileMenu' };
+    : { role: "fileMenu" };
 
   const template: MenuItemConstructorOptions[] = [
     ...(isMac ? [appMenuItem] : []),
     fileMenuItem,
-    { role: 'editMenu' },
+    { role: "editMenu" },
     {
-      label: 'View',
+      label: "View",
       submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
-        { type: 'separator' },
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
         // Page zoom is unavailable. Previewers own content zoom without
         // changing the renderer zoom factor.
-        { role: 'togglefullscreen' },
+        { role: "togglefullscreen" },
       ],
     },
-    { role: 'windowMenu' },
+    { role: "windowMenu" },
   ];
   return Menu.buildFromTemplate(template);
 }
@@ -2168,10 +2168,10 @@ function openSettings(): void {
   win.show();
   win.focus();
   const send = (): void => {
-    if (!win.isDestroyed()) win.webContents.send('navigate:settings');
+    if (!win.isDestroyed()) win.webContents.send("navigate:settings");
   };
   if (win.webContents.isLoading()) {
-    win.webContents.once('did-finish-load', send);
+    win.webContents.once("did-finish-load", send);
   } else {
     send();
   }
@@ -2220,7 +2220,7 @@ function closeTargetFor(window: BrowserWindow): CloseTarget {
   return {
     webContentsId: window.webContents.id,
     isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
-    sendRequest: (reqId) => window.webContents.send('shortcut:contextual-close', reqId),
+    sendRequest: (reqId) => window.webContents.send("shortcut:contextual-close", reqId),
   };
 }
 
@@ -2230,17 +2230,17 @@ function handleContextualClose(triggeringWindow: BrowserWindow): void {
   contextualClose.begin(closeTargetFor(triggeringWindow));
 }
 
-guardedIpc.on('shortcut:contextual-close-result', (event, reqId: unknown, outcome: unknown) => {
-  if (typeof reqId !== 'string') return;
+guardedIpc.on("shortcut:contextual-close-result", (event, reqId: unknown, outcome: unknown) => {
+  if (typeof reqId !== "string") return;
   contextualClose.resolve(event.sender.id, reqId, outcome);
 });
 
 registerEventWsDiagnosticIpcHandler({ getLogger: () => logger, ipc: guardedIpc });
 
-guardedIpc.handle('backend:info', async () => {
+guardedIpc.handle("backend:info", async () => {
   if (!backend) return null;
 
-  if (backend.kind === 'embedded') {
+  if (backend.kind === "embedded") {
     // Embedded ships both sides from one tree: zero skew by construction,
     // no snapshot fetch and no runtime-promotion feed needed.
     return {
@@ -2264,47 +2264,47 @@ guardedIpc.handle('backend:info', async () => {
   };
 });
 
-guardedIpc.handle('auth:getState', () => desktopAuthState());
+guardedIpc.handle("auth:getState", () => desktopAuthState());
 
-guardedIpc.handle('auth:signup', (_event, input: AuthSignupInput) =>
+guardedIpc.handle("auth:signup", (_event, input: AuthSignupInput) =>
   postAuthSession(authPaths.signup, input),
 );
 
-guardedIpc.handle('auth:login', (_event, input: AuthLoginInput) =>
+guardedIpc.handle("auth:login", (_event, input: AuthLoginInput) =>
   postAuthSession(authPaths.login, input),
 );
 
-guardedIpc.handle('auth:logout', () => logoutUserSession());
+guardedIpc.handle("auth:logout", () => logoutUserSession());
 
-guardedIpc.handle('backend:request', (_event, input: BackendProxyRequest) =>
+guardedIpc.handle("backend:request", (_event, input: BackendProxyRequest) =>
   proxyBackendRequest(input),
 );
 
-guardedIpc.handle('backend:upload', (_event, input: BackendUploadRequest) =>
+guardedIpc.handle("backend:upload", (_event, input: BackendUploadRequest) =>
   proxyBackendUpload(input),
 );
 
-guardedIpc.handle('hosts:rotate', (_event, input: { hostId: string }) =>
-  rotateHostToken(input?.hostId ?? ''),
+guardedIpc.handle("hosts:rotate", (_event, input: { hostId: string }) =>
+  rotateHostToken(input?.hostId ?? ""),
 );
 
-guardedIpc.handle('hosts:revoke', (_event, input: { hostId: string }) =>
-  revokeHost(input?.hostId ?? ''),
+guardedIpc.handle("hosts:revoke", (_event, input: { hostId: string }) =>
+  revokeHost(input?.hostId ?? ""),
 );
 
-guardedIpc.handle('hosts:proxyConfig:get', (_event, input: { hostId: string }) =>
-  getHostProxyConfig(input?.hostId ?? ''),
+guardedIpc.handle("hosts:proxyConfig:get", (_event, input: { hostId: string }) =>
+  getHostProxyConfig(input?.hostId ?? ""),
 );
 
-guardedIpc.handle('hosts:proxyConfig:set', (_event, input: { hostId: string; config: unknown }) =>
+guardedIpc.handle("hosts:proxyConfig:set", (_event, input: { hostId: string; config: unknown }) =>
   saveHostProxyConfig({
-    hostId: input?.hostId ?? '',
+    hostId: input?.hostId ?? "",
     config: input?.config,
   }),
 );
 
-guardedIpc.handle('settings:saveServerUrl', (_event, input: { serverUrl: string }) =>
-  saveServerUrlFromSettings(input?.serverUrl ?? ''),
+guardedIpc.handle("settings:saveServerUrl", (_event, input: { serverUrl: string }) =>
+  saveServerUrlFromSettings(input?.serverUrl ?? ""),
 );
 
 /**
@@ -2321,20 +2321,20 @@ export type ProfileSaveWithTestResult =
     }
   | {
       ok: false;
-      phase: 'test';
+      phase: "test";
       test: ProbeServerInfoResult & { ok: false };
     }
   | {
       ok: false;
-      phase: 'commit_guard';
-      reason: 'remote_backend_not_yet_supported';
+      phase: "commit_guard";
+      reason: "remote_backend_not_yet_supported";
       message: string;
       test: ProbeServerInfoResult & { ok: true };
     }
   | {
       ok: false;
-      phase: 'write';
-      reason: 'write_failed';
+      phase: "write";
+      reason: "write_failed";
       detail?: string;
     };
 
@@ -2346,11 +2346,11 @@ export type PartialApplyRetryResult =
     }
   | {
       ok: false;
-      reason: 'no_profile';
+      reason: "no_profile";
     }
   | {
       ok: false;
-      reason: 'profile_unreadable';
+      reason: "profile_unreadable";
       detail: string;
     };
 
@@ -2366,7 +2366,7 @@ function buildServerProfileApplyDeps(): ApplyServerProfileDeps | null {
     writeDaemonHostConfig: (config) => writeDaemonHostConfig(daemonConfigPath, config),
     hostOutboundReload: () => client.hostOutboundReload(),
     getAttachment: bindAttachmentAccessor(controller),
-    currentLocalHostId: () => (localHostClaim.status === 'claimed' ? localHostClaim.hostId : null),
+    currentLocalHostId: () => (localHostClaim.status === "claimed" ? localHostClaim.hostId : null),
     currentHostToken: () => readDaemonHostConfig(daemonConfigPath)?.host_token ?? null,
   };
 }
@@ -2383,11 +2383,11 @@ async function runServerProfileApply(
     // structural-impossibility arm that matches this case (the legacy
     // outbound-reload path uses the same kind for the same reason).
     return {
-      kind: 'partial_apply_pending',
+      kind: "partial_apply_pending",
       profileVersion: profile.version,
-      reason: 'no_attachment_controller',
+      reason: "no_attachment_controller",
       reloadRejectionReason: null,
-      detail: 'backend or host client not ready',
+      detail: "backend or host client not ready",
     };
   }
   return applyServerProfile({ profile }, deps);
@@ -2395,11 +2395,11 @@ async function runServerProfileApply(
 
 function applyProfileToActiveRemoteBackend(input: {
   profile: ServerConnectionProfile;
-  testKind: (ProbeServerInfoResult & { ok: true })['kind'];
+  testKind: (ProbeServerInfoResult & { ok: true })["kind"];
 }): void {
-  if (!backend || backend.kind !== 'remote') return;
-  if (input.testKind === 'loopback_ok') return;
-  const insecure = input.testKind === 'insecure_dev_remote';
+  if (!backend || backend.kind !== "remote") return;
+  if (input.testKind === "loopback_ok") return;
+  const insecure = input.testKind === "insecure_dev_remote";
   if (backend.url === input.profile.server_url && backend.insecure === insecure) {
     return;
   }
@@ -2417,30 +2417,30 @@ function applyProfileToActiveRemoteBackend(input: {
       serverUrl: input.profile.server_url,
       insecure,
     },
-    'profile:saveWithTest retargeted active remote backend handle',
+    "profile:saveWithTest retargeted active remote backend handle",
   );
 }
 
 async function handleProfileSaveWithTest(
   input: { serverUrl: string } | undefined,
 ): Promise<ProfileSaveWithTestResult> {
-  const serverUrl = (input?.serverUrl ?? '').trim();
+  const serverUrl = (input?.serverUrl ?? "").trim();
   const allowInsecureRemote = desktopAllowsInsecureRemote();
   const test = await probeServerInfo({ serverUrl, allowInsecureRemote });
   if (!test.ok) {
-    logger?.warn({ kind: test.kind, serverUrl }, 'profile:saveWithTest test phase failed');
-    return { ok: false, phase: 'test', test };
+    logger?.warn({ kind: test.kind, serverUrl }, "profile:saveWithTest test phase failed");
+    return { ok: false, phase: "test", test };
   }
 
   const guard = evaluateProfileCommitGuard(test.kind);
   if (!guard.allow) {
     logger?.warn(
       { kind: test.kind, serverUrl, reason: guard.reason },
-      'profile:saveWithTest commit-guard refused',
+      "profile:saveWithTest commit-guard refused",
     );
     return {
       ok: false,
-      phase: 'commit_guard',
+      phase: "commit_guard",
       reason: guard.reason,
       message: guard.message,
       test,
@@ -2455,13 +2455,13 @@ async function handleProfileSaveWithTest(
   if (!writeResult.ok) {
     logger?.warn(
       { reason: writeResult.reason, serverUrl },
-      'profile:saveWithTest write phase failed',
+      "profile:saveWithTest write phase failed",
     );
     return {
       ok: false,
-      phase: 'write',
+      phase: "write",
       reason: writeResult.reason,
-      detail: 'detail' in writeResult ? writeResult.detail : undefined,
+      detail: "detail" in writeResult ? writeResult.detail : undefined,
     };
   }
   logger?.info(
@@ -2470,7 +2470,7 @@ async function handleProfileSaveWithTest(
       classification: test.kind,
       profileVersion: writeResult.profile.version,
     },
-    'profile:saveWithTest committed',
+    "profile:saveWithTest committed",
   );
 
   const applyOutcome = await runServerProfileApply(writeResult.profile);
@@ -2479,28 +2479,28 @@ async function handleProfileSaveWithTest(
     testKind: test.kind,
   });
   partialApplyState = derivePartialApplyState(applyOutcome, Date.now());
-  if (applyOutcome.kind === 'partial_apply_pending') {
+  if (applyOutcome.kind === "partial_apply_pending") {
     logger?.warn(
       {
         profileVersion: applyOutcome.profileVersion,
         reason: applyOutcome.reason,
         reloadRejectionReason: applyOutcome.reloadRejectionReason,
       },
-      'profile:saveWithTest partial_apply_pending',
+      "profile:saveWithTest partial_apply_pending",
     );
-  } else if (applyOutcome.kind === 'fully_applied') {
+  } else if (applyOutcome.kind === "fully_applied") {
     logger?.info(
       {
         profileVersion: applyOutcome.profileVersion,
         reloadKind: applyOutcome.reloadKind,
         elapsedMs: applyOutcome.elapsedMs,
       },
-      'profile:saveWithTest fully_applied',
+      "profile:saveWithTest fully_applied",
     );
   } else {
     logger?.info(
       { profileVersion: applyOutcome.profileVersion },
-      'profile:saveWithTest no_op_no_host_claim (pre-auth)',
+      "profile:saveWithTest no_op_no_host_claim (pre-auth)",
     );
   }
   return {
@@ -2517,73 +2517,73 @@ async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
     logger: logger ?? undefined,
   });
   if (!read.ok) {
-    if (read.reason === 'not_found') {
+    if (read.reason === "not_found") {
       logger?.warn(
         {},
-        'partialApply:retry — no committed profile (renderer triggered without a save)',
+        "partialApply:retry — no committed profile (renderer triggered without a save)",
       );
-      partialApplyState = { kind: 'no_profile' };
-      return { ok: false, reason: 'no_profile' };
+      partialApplyState = { kind: "no_profile" };
+      return { ok: false, reason: "no_profile" };
     }
 
     const detail = read.detail;
     logger?.warn(
       { reason: read.reason, detail },
-      'partialApply:retry — profile read failed → unusable_profile state',
+      "partialApply:retry — profile read failed → unusable_profile state",
     );
     partialApplyState = {
-      kind: 'unusable_profile',
+      kind: "unusable_profile",
       reason: read.reason,
       detail,
       lastReadAt: Date.now(),
     };
-    return { ok: false, reason: 'profile_unreadable', detail };
+    return { ok: false, reason: "profile_unreadable", detail };
   }
   const outcome = await runServerProfileApply(read.profile);
   partialApplyState = derivePartialApplyState(outcome, Date.now());
-  if (outcome.kind === 'partial_apply_pending') {
+  if (outcome.kind === "partial_apply_pending") {
     logger?.warn(
       {
         profileVersion: outcome.profileVersion,
         reason: outcome.reason,
         reloadRejectionReason: outcome.reloadRejectionReason,
       },
-      'partialApply:retry — still partial_apply_pending',
+      "partialApply:retry — still partial_apply_pending",
     );
   } else {
     logger?.info(
       { kind: outcome.kind, profileVersion: outcome.profileVersion },
-      'partialApply:retry — phase-2 succeeded',
+      "partialApply:retry — phase-2 succeeded",
     );
   }
   return { ok: true, outcome, state: partialApplyState };
 }
 
-guardedIpc.handle('profile:get', (): ServerConnectionProfileView | null =>
+guardedIpc.handle("profile:get", (): ServerConnectionProfileView | null =>
   readServerConnectionProfileViewOrNull({
     profilePath: desktopAppPaths().desktop.serverProfile,
     logger: logger ?? undefined,
   }),
 );
 
-guardedIpc.handle('profile:saveWithTest', (_event, input: { serverUrl: string }) =>
+guardedIpc.handle("profile:saveWithTest", (_event, input: { serverUrl: string }) =>
   handleProfileSaveWithTest(input),
 );
 
-guardedIpc.handle('profile:clear', () => {
+guardedIpc.handle("profile:clear", () => {
   const result = clearServerConnectionProfile({
     profilePath: desktopAppPaths().desktop.serverProfile,
     logger: logger ?? undefined,
   });
   if (result.ok) {
-    partialApplyState = { kind: 'no_profile' };
+    partialApplyState = { kind: "no_profile" };
   }
   return result;
 });
 
-guardedIpc.handle('partialApply:get', (): PartialApplyState => partialApplyState);
+guardedIpc.handle("partialApply:get", (): PartialApplyState => partialApplyState);
 
-guardedIpc.handle('partialApply:retry', (): Promise<PartialApplyRetryResult> =>
+guardedIpc.handle("partialApply:retry", (): Promise<PartialApplyRetryResult> =>
   handlePartialApplyRetry(),
 );
 
@@ -2604,7 +2604,7 @@ app
     if (HEADLESS) {
       // One-line machine-readable handshake on stdout. Test scripts pipe
       // and JSON.parse this. Human-readable extras go to stderr below.
-      const embedded = requireEmbeddedBackend('HEADLESS handshake (SILVERHAND_HEADLESS=1)');
+      const embedded = requireEmbeddedBackend("HEADLESS handshake (SILVERHAND_HEADLESS=1)");
 
       process.stdout.write(
         JSON.stringify({
@@ -2612,9 +2612,9 @@ app
           port: embedded.port,
           bootstrap_token_path: embeddedBootstrapPath(),
           silverhand_dir: silverhandDir(),
-        }) + '\n',
+        }) + "\n",
       );
-      console.error('[main] headless backend ready — Ctrl-C to stop');
+      console.error("[main] headless backend ready — Ctrl-C to stop");
       return;
     }
     const rendererNetwork = await configureRendererBackendNetwork({
@@ -2627,12 +2627,12 @@ app
         backend_origin: rendererNetwork.backendOrigin,
         resolved_proxy: rendererNetwork.resolvedProxy,
       },
-      'renderer backend network configured',
+      "renderer backend network configured",
     );
     Menu.setApplicationMenu(buildAppMenu());
     createWindow();
 
-    app.on('activate', () => {
+    app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
   })
@@ -2648,8 +2648,8 @@ app
  */
 function reportStartupFailure(err: unknown): void {
   const notice = describeStartupFailure(err);
-  console.error('[main] startup failed:', err);
-  logger?.error({ err, code: notice.code }, 'startup failed');
+  console.error("[main] startup failed:", err);
+  logger?.error({ err, code: notice.code }, "startup failed");
   if (HEADLESS) {
     // Headless is a test/CI harness: stderr above plus a non-zero exit
     // IS its failure surface. A window here would hang the harness.
@@ -2677,7 +2677,7 @@ async function handlePostPublishEmbeddedFatal(
     .own(() =>
       invalidateEmbeddedRuntime(reason, {
         isCurrent: () =>
-          !isShuttingDown && backend?.kind === 'embedded' && backend.running === handle,
+          !isShuttingDown && backend?.kind === "embedded" && backend.running === handle,
         invalidate: () => {
           backend = null;
         },
@@ -2695,18 +2695,18 @@ async function handlePostPublishEmbeddedFatal(
           ),
       }),
     )
-    .catch((err) => logger?.error({ err }, 'embedded backend runtime cleanup failed'));
+    .catch((err) => logger?.error({ err }, "embedded backend runtime cleanup failed"));
 }
 
-app.on('window-all-closed', () => {
+app.on("window-all-closed", () => {
   // In headless mode there are no windows to begin with — that signal
   // would quit the app immediately. Keep alive until SIGINT.
   if (HEADLESS) return;
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== "darwin") app.quit();
 });
 
 if (HEADLESS) {
-  for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, () => {
       console.error(`[main] received ${sig}, shutting down`);
       app.quit();
@@ -2725,7 +2725,7 @@ async function shutdown(): Promise<void> {
   // clean up — prevents the window from looking frozen.
   const pushProgress = (step: string): void => {
     try {
-      mainWindow?.webContents.send('shutdown:progress', step);
+      mainWindow?.webContents.send("shutdown:progress", step);
     } catch {
       /* window may already be destroyed — ignore */
     }
@@ -2736,7 +2736,7 @@ async function shutdown(): Promise<void> {
     // modes use the authenticated host WebSocket; main has no registry observer.
     // The daemon RPC has its own bounded shutdown budget.
     if (hostClient) {
-      const claimedHostId = localHostClaim.status === 'claimed' ? localHostClaim.hostId : null;
+      const claimedHostId = localHostClaim.status === "claimed" ? localHostClaim.hostId : null;
 
       const getAttachment = undefined;
       const detachOutcome = await gracefullyDetachOutbound({
@@ -2746,7 +2746,7 @@ async function shutdown(): Promise<void> {
       });
       logger?.info(
         {
-          kind: 'shutdown.outbound_detach',
+          kind: "shutdown.outbound_detach",
           rpc_ok: detachOutcome.rpc.ok,
           rpc_action: detachOutcome.rpc.ok ? detachOutcome.rpc.action : null,
           rpc_error: !detachOutcome.rpc.ok ? detachOutcome.rpc.error : null,
@@ -2757,14 +2757,14 @@ async function shutdown(): Promise<void> {
           budget_exhausted: detachOutcome.budgetExhausted,
           host_id: claimedHostId,
         },
-        'outbound detach hint result on shutdown',
+        "outbound detach hint result on shutdown",
       );
     }
   } catch (err) {
     // The helper itself never throws — this catch covers truly
     // unexpected exceptions (e.g. logger blowing up). Swallow so
     // the rest of shutdown still runs.
-    console.error('[main] outbound detach hint failed unexpectedly:', err);
+    console.error("[main] outbound detach hint failed unexpectedly:", err);
   }
 
   // Join unpublished startup and fatal cleanup as well as any published handle.
@@ -2772,9 +2772,9 @@ async function shutdown(): Promise<void> {
   await embeddedBackendOwner.shutdown();
   try {
     if (backend) {
-      pushProgress('Stopping agents…');
+      pushProgress("Stopping agents…");
       // Embedded owns a child process; remote has no local backend to reclaim.
-      if (backend.kind === 'embedded') {
+      if (backend.kind === "embedded") {
         try {
           await embeddedBackendOwner.close(backend.running);
         } finally {
@@ -2784,11 +2784,11 @@ async function shutdown(): Promise<void> {
       } else {
         await backend.close();
       }
-      pushProgress('Cleanup finished');
+      pushProgress("Cleanup finished");
       backend = null;
     }
   } catch (err) {
-    console.error('[main] backend.close() failed:', err);
+    console.error("[main] backend.close() failed:", err);
   }
   try {
     // Tear down host plumbing AFTER backend so any final pings during
@@ -2804,7 +2804,7 @@ async function shutdown(): Promise<void> {
       daemon = null;
     }
   } catch (err) {
-    console.error('[main] host shutdown failed:', err);
+    console.error("[main] host shutdown failed:", err);
   }
   try {
     // `logger` is just an alias for `loggers.system`; close it via the
@@ -2822,11 +2822,11 @@ async function shutdown(): Promise<void> {
       logger = null;
     }
   } catch (err) {
-    console.error('[main] logger.close() failed:', err);
+    console.error("[main] logger.close() failed:", err);
   }
 }
 
-app.on('before-quit', (event) => {
+app.on("before-quit", (event) => {
   // Async work in `before-quit` is silently dropped by Electron unless
   // we preventDefault and re-quit ourselves: the handler's returned
   // Promise is NOT awaited by the quit sequence, so without this guard
@@ -2852,7 +2852,7 @@ app.on('before-quit', (event) => {
   // 5s. The remaining margin covers detach and logging. This watchdog is an
   // emergency failed exit, never a substitute for the normal reclaim join.
   const watchdog = setTimeout(() => {
-    console.error('[main] shutdown watchdog fired; forcing exit');
+    console.error("[main] shutdown watchdog fired; forcing exit");
     app.exit(1);
   }, 25_000);
   watchdog.unref();

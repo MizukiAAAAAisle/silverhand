@@ -3,8 +3,8 @@ import {
   useQuery,
   useQueryClient,
   type InfiniteData,
-} from '@tanstack/react-query';
-import { useEffect, useMemo } from 'react';
+} from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
 import {
   type TaskBoardColumnDto,
   type TaskBoardCountsDto,
@@ -12,21 +12,21 @@ import {
   type TaskChangedEvent,
   type TaskStatus,
   type TaskSummaryDto,
-} from '@silverhand/shared';
-import { api } from '@/lib/api';
+} from "@silverhand/shared";
+import { api } from "@/lib/api";
 import {
   isCurrentViewerScope,
   onWsFrame,
   subscribeViewerScope,
   subscribeWsScope,
-} from '@/lib/ws-client';
-import { useWorkspaces } from '@/features/workspaces/hooks';
+} from "@/lib/ws-client";
+import { useWorkspaces } from "@/features/workspaces/hooks";
 import {
   boardAuthority,
   type BoardAuthority,
   type BoardCounts,
   type BoardFacets,
-} from './boardAuthority';
+} from "./boardAuthority";
 import {
   boardColumnKey,
   boardColumnPath,
@@ -36,13 +36,10 @@ import {
   boardFacetsPath,
   boardFilterKey,
   boardFilterParams,
-} from './boardQuery';
-import { columnVisibleCount, type ColumnWindow } from './columnWindow';
-import type { PersonOption, TaskFilters } from './taskFilters';
-import {
-  applyTaskChangedToProjections,
-  reconcileTaskStatusWrite,
-} from './taskProjection';
+} from "./boardQuery";
+import { columnVisibleCount, type ColumnWindow } from "./columnWindow";
+import type { PersonOption, TaskFilters } from "./taskFilters";
+import { applyTaskChangedToProjections, reconcileTaskStatusWrite } from "./taskProjection";
 
 /**
  * The task board's read layer (#task:1885 against the #task:1884 authority).
@@ -119,11 +116,10 @@ function useBoardColumn(
     enabled,
     initialPageParam: null,
     queryFn: ({ pageParam, signal }) =>
-      api<TaskBoardColumnDto>(
-        boardColumnPath(status, boardFilterParams(filters), pageParam),
-        { signal },
-      ),
-    getNextPageParam: lastPage => lastPage.next_cursor,
+      api<TaskBoardColumnDto>(boardColumnPath(status, boardFilterParams(filters), pageParam), {
+        signal,
+      }),
+    getNextPageParam: (lastPage) => lastPage.next_cursor,
   });
 
   const loadedPages = query.data?.pages.length ?? 0;
@@ -140,22 +136,14 @@ function useBoardColumn(
     if (loadedPages >= wantedPages) return;
     if (!hasNextPage || isFetchingNextPage) return;
     void fetchNextPage();
-  }, [
-    enabled,
-    loadedPages,
-    wantedPages,
-    hasNextPage,
-    isFetchingNextPage,
-    fetchNextPage,
-  ]);
+  }, [enabled, loadedPages, wantedPages, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   const items = useMemo(
-    () => query.data?.pages.flatMap(p => p.items) ?? EMPTY_ITEMS,
+    () => query.data?.pages.flatMap((p) => p.items) ?? EMPTY_ITEMS,
     [query.data],
   );
 
-  const { isLoading, isError, isFetching, dataUpdatedAt, errorUpdateCount, refetch } =
-    query;
+  const { isLoading, isError, isFetching, dataUpdatedAt, errorUpdateCount, refetch } = query;
 
   return useMemo(
     () => ({
@@ -209,29 +197,23 @@ export function useBoardColumns(args: {
   const pages = (status: TaskStatus) => window[status];
   const on = (status: TaskStatus) => enabled && !isCollapsed(status);
 
-  const todo = useBoardColumn('todo', filterKey, filters, on('todo'), pages('todo'));
+  const todo = useBoardColumn("todo", filterKey, filters, on("todo"), pages("todo"));
   const inProgress = useBoardColumn(
-    'in_progress',
+    "in_progress",
     filterKey,
     filters,
-    on('in_progress'),
-    pages('in_progress'),
+    on("in_progress"),
+    pages("in_progress"),
   );
   const inReview = useBoardColumn(
-    'in_review',
+    "in_review",
     filterKey,
     filters,
-    on('in_review'),
-    pages('in_review'),
+    on("in_review"),
+    pages("in_review"),
   );
-  const done = useBoardColumn('done', filterKey, filters, on('done'), pages('done'));
-  const closed = useBoardColumn(
-    'closed',
-    filterKey,
-    filters,
-    on('closed'),
-    pages('closed'),
-  );
+  const done = useBoardColumn("done", filterKey, filters, on("done"), pages("done"));
+  const closed = useBoardColumn("closed", filterKey, filters, on("closed"), pages("closed"));
 
   return useMemo(
     () => ({
@@ -263,9 +245,7 @@ export function boardColumnCanGrow(
   window: ColumnWindow,
   status: TaskStatus,
 ): boolean {
-  return (
-    column.items.length > columnVisibleCount(window, status) || !column.atEnd
-  );
+  return column.items.length > columnVisibleCount(window, status) || !column.atEnd;
 }
 
 /**
@@ -290,7 +270,7 @@ export function useBoardCounts(
       api<TaskBoardCountsDto>(boardCountsPath(boardFilterParams(filters)), {
         signal,
       }),
-    select: dto => dto.counts as BoardCounts,
+    select: (dto) => dto.counts as BoardCounts,
   });
   const { data, isError } = query;
   return useMemo(() => boardAuthority({ data, isError }), [data, isError]);
@@ -324,13 +304,10 @@ export function useBoardFacets(
   const query = useQuery({
     queryKey: boardFacetsKey(container),
     enabled,
-    queryFn: ({ signal }) =>
-      api<TaskBoardFacetsDto>(boardFacetsPath(container), { signal }),
+    queryFn: ({ signal }) => api<TaskBoardFacetsDto>(boardFacetsPath(container), { signal }),
     select: (dto): BoardFacets => {
-      const toOptions = (
-        people: TaskBoardFacetsDto['assignees'],
-      ): PersonOption[] =>
-        people.map(p => ({ person: { type: p.type, id: p.id }, name: p.name }));
+      const toOptions = (people: TaskBoardFacetsDto["assignees"]): PersonOption[] =>
+        people.map((p) => ({ person: { type: p.type, id: p.id }, name: p.name }));
       return {
         assignees: toOptions(dto.assignees),
         creators: toOptions(dto.creators),
@@ -387,30 +364,26 @@ export function useTaskBoardRealtime(): void {
   const qc = useQueryClient();
   useEffect(() => {
     const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
-      if (frame.type === 'snapshot_required') {
+    const unsub = onWsFrame((frame) => {
+      if (frame.type === "snapshot_required") {
         if (isCurrentViewerScope(frame.scope)) {
-          void qc.invalidateQueries({ queryKey: ['task-by-number'] });
-          void qc.invalidateQueries({ queryKey: ['tasks'] });
+          void qc.invalidateQueries({ queryKey: ["task-by-number"] });
+          void qc.invalidateQueries({ queryKey: ["tasks"] });
         }
         return;
       }
-      if (frame.type !== 'event') return;
-      if (frame.kind !== 'task_changed' || !isCurrentViewerScope(frame.scope)) {
+      if (frame.type !== "event") return;
+      if (frame.kind !== "task_changed" || !isCurrentViewerScope(frame.scope)) {
         return;
       }
       const payload = frame.payload as TaskChangedEvent;
       const outcome = applyTaskChangedToProjections(qc, payload);
-      if (
-        payload.kind === 'create' ||
-        payload.kind === 'claim' ||
-        payload.kind === 'unclaim'
-      ) {
+      if (payload.kind === "create" || payload.kind === "claim" || payload.kind === "unclaim") {
         // Facets are keyed per container, so refresh EVERY container's menus:
         // the changed task belongs to exactly one, but this listener does not
         // resolve which, and the prefix match covers them all (including the
         // All entry) in one call.
-        void qc.invalidateQueries({ queryKey: ['tasks', 'board', 'facets'] });
+        void qc.invalidateQueries({ queryKey: ["tasks", "board", "facets"] });
       }
       if (!outcome.needsReconcile) return;
       reconcileTaskStatusWrite(qc, outcome.projection, {
@@ -440,24 +413,24 @@ export function useTaskBoardRealtime(): void {
   // only when the membership actually changes (not on every list refetch that
   // returns equal ids in a fresh array).
   const workspaceScopeKey = useMemo(
-    () => [...workspaces.map(w => w.id)].sort().join(','),
+    () => [...workspaces.map((w) => w.id)].sort().join(","),
     [workspaces],
   );
   useEffect(() => {
-    const ids = workspaceScopeKey ? workspaceScopeKey.split(',') : [];
+    const ids = workspaceScopeKey ? workspaceScopeKey.split(",") : [];
     if (ids.length === 0) return;
-    const scopes = new Set(ids.map(id => `workspace:${id}`));
-    const subs = ids.map(id => subscribeWsScope(`workspace:${id}`));
-    const unsub = onWsFrame(frame => {
+    const scopes = new Set(ids.map((id) => `workspace:${id}`));
+    const subs = ids.map((id) => subscribeWsScope(`workspace:${id}`));
+    const unsub = onWsFrame((frame) => {
       // Both the live event and a post-reconnect `snapshot_required` on one of
       // these scopes can carry a missed rename, so both re-read.
       const hit =
-        (frame.type === 'event' &&
-          frame.kind === 'workspace_channels_changed' &&
+        (frame.type === "event" &&
+          frame.kind === "workspace_channels_changed" &&
           scopes.has(frame.scope)) ||
-        (frame.type === 'snapshot_required' && scopes.has(frame.scope));
+        (frame.type === "snapshot_required" && scopes.has(frame.scope));
       if (!hit) return;
-      void qc.invalidateQueries({ queryKey: ['tasks', 'board', 'column'] });
+      void qc.invalidateQueries({ queryKey: ["tasks", "board", "column"] });
     });
     return () => {
       for (const s of subs) s.unsubscribe();

@@ -6,32 +6,24 @@ import {
   type ButtonHTMLAttributes,
   type KeyboardEvent,
   type ReactNode,
-} from 'react';
-import * as Popover from '@radix-ui/react-popover';
-import {
-  Check,
-  ChevronDown,
-  Layers,
-  PenLine,
-  RotateCcw,
-  Search,
-  User,
-} from 'lucide-react';
-import { cn } from '@/lib/cn';
-import { WorkspaceIcon } from '@/components/WorkspaceIcon';
-import { ChannelIcon } from '@/components/ChannelIcon';
+} from "react";
+import * as Popover from "@radix-ui/react-popover";
+import { Check, ChevronDown, Layers, PenLine, RotateCcw, Search, User } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { WorkspaceIcon } from "@/components/WorkspaceIcon";
+import { ChannelIcon } from "@/components/ChannelIcon";
 import {
   PersonAvatar,
   usePersonDirectory,
   type PersonDirectory,
-} from '@/components/tasks/PersonAvatar';
-import { useRovingList } from '@/features/tasks/taskFilterKeyboard';
+} from "@/components/tasks/PersonAvatar";
+import { useRovingList } from "@/features/tasks/taskFilterKeyboard";
 import {
   mapBoardAuthority,
   personMenuState,
   type BoardAuthority,
   type BoardFacets,
-} from '@/features/tasks/boardAuthority';
+} from "@/features/tasks/boardAuthority";
 import {
   applyBoardScopeSelection,
   applyWorkspaceCascade,
@@ -46,7 +38,7 @@ import {
   type PersonOption,
   type TaskBoardContainerAxis,
   type TaskFilters,
-} from '@/features/tasks/taskFilters';
+} from "@/features/tasks/taskFilters";
 
 /** Rows for a population nobody has been told about yet — never rendered as an
  *  answer; the menu's footer says which non-answer it is. */
@@ -149,7 +141,7 @@ export function buildChannelFilterOptions(
       // (capability) fact: redundant wherever the container already said yes,
       // and wrong wherever it said no — a fixed-roster channel in a people-owned
       // workspace would have been filed under Agent Spaces (#task:2077).
-      group: c.fromAgentSpace ? 'agent_space' : 'workspace',
+      group: c.fromAgentSpace ? "agent_space" : "workspace",
       ...(c.sublabel !== undefined ? { sublabel: c.sublabel } : {}),
     });
   }
@@ -215,7 +207,7 @@ export function TaskFilterBar({
   // double as a placement display) and only the Assignee / From narrowing shows.
   // Everywhere else (`null` All, `workspace`, `agent_space`) is the selectable
   // workspace-like mode, where the scope + channel controls apply.
-  const scopeLocked = filters.container === 'direct_messages';
+  const scopeLocked = filters.container === "direct_messages";
 
   // Person avatars for the Assignee / From dropdowns (shiki #task:1441).
   // Resolved ONCE here (agents + users directories + their avatar object URLs)
@@ -242,20 +234,17 @@ export function TaskFilterBar({
   const visibleChannelOptions = useMemo(
     () =>
       filters.workspaceId
-        ? scope.channelOptions.filter(o => o.workspaceId === filters.workspaceId)
+        ? scope.channelOptions.filter((o) => o.workspaceId === filters.workspaceId)
         : scope.channelOptions,
     [scope.channelOptions, filters.workspaceId],
   );
   const channelWorkspaceId = useMemo(() => {
-    const byId = new Map(channelOptions.map(o => [o.id, o.workspaceId]));
+    const byId = new Map(channelOptions.map((o) => [o.id, o.workspaceId]));
     return (channelId: string): string | null => byId.get(channelId) ?? null;
   }, [channelOptions]);
 
   return (
-    <div
-      data-task-filter-bar
-      className={cn('flex flex-wrap items-center gap-1.5', className)}
-    >
+    <div data-task-filter-bar className={cn("flex flex-wrap items-center gap-1.5", className)}>
       {/* Coarsest axis first: WHICH container a task lives in. One grouped
           dropdown (#task:2041, shiki 2026-08-17) — an "All" row over two sections
           (Workspaces / Agent Spaces), each listing the concrete objects — so a
@@ -271,7 +260,7 @@ export function TaskFilterBar({
           workspaceOptions={workspaceOptions}
           containerValue={filters.container}
           workspaceValue={filters.workspaceId}
-          onSelect={selection =>
+          onSelect={(selection) =>
             onChange(applyBoardScopeSelection(filters, selection, channelWorkspaceId))
           }
           {...personDirectory}
@@ -287,26 +276,26 @@ export function TaskFilterBar({
           options={visibleChannelOptions}
           allChannelsLabel={allChannelsLabel}
           value={filters.channelId}
-          onChange={channelId => onChange({ ...filters, channelId })}
+          onChange={(channelId) => onChange({ ...filters, channelId })}
         />
       ) : null}
       <PersonFilterControl
         icon={<User className="size-3.5" />}
         label="Assignee"
         anyLabel="ALL"
-        population={mapBoardAuthority(people, f => f.assignees)}
+        population={mapBoardAuthority(people, (f) => f.assignees)}
         allowUnassigned={people.known && people.value.hasUnassigned}
         value={filters.assignee}
-        onChange={assignee => onChange({ ...filters, assignee })}
+        onChange={(assignee) => onChange({ ...filters, assignee })}
         {...personDirectory}
       />
       <PersonFilterControl
         icon={<PenLine className="size-3.5" />}
         label="From"
         anyLabel="ALL"
-        population={mapBoardAuthority(people, f => f.creators)}
+        population={mapBoardAuthority(people, (f) => f.creators)}
         value={filters.creator}
-        onChange={creator => onChange({ ...filters, creator })}
+        onChange={(creator) => onChange({ ...filters, creator })}
         {...personDirectory}
       />
       {dirty ? (
@@ -321,8 +310,8 @@ export function TaskFilterBar({
             // `--control-radius` (forza6 squares it to 0, warm rounds) and
             // the fill is the theme hover token, so it adapts per theme
             // (shiki #task:795).
-            'inline-flex items-center justify-center rounded-[var(--control-radius)] p-1.5',
-            'text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary',
+            "inline-flex items-center justify-center rounded-[var(--control-radius)] p-1.5",
+            "text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary",
           )}
         >
           <RotateCcw className="size-3.5" />
@@ -359,7 +348,7 @@ const TRIGGER_GLYPH_PX = 14;
  * bordered filters beside it in any theme.
  */
 export const FILTER_ROW_TRIGGER_BOX =
-  'h-auto px-2 py-1 text-[length:var(--text-meta)] border-[length:var(--control-border-width)] border-transparent';
+  "h-auto px-2 py-1 text-[length:var(--text-meta)] border-[length:var(--control-border-width)] border-transparent";
 
 const FilterTrigger = forwardRef<
   HTMLButtonElement,
@@ -374,8 +363,8 @@ const FilterTrigger = forwardRef<
       type="button"
       data-active={active || undefined}
       className={cn(
-        'flex max-w-[200px] items-center gap-1.5 rounded-[var(--control-radius)]',
-        'border-[length:var(--control-border-width)] px-2 py-1 text-[length:var(--text-meta)] transition-colors',
+        "flex max-w-[200px] items-center gap-1.5 rounded-[var(--control-radius)]",
+        "border-[length:var(--control-border-width)] px-2 py-1 text-[length:var(--text-meta)] transition-colors",
         // Hover always paints the theme's control hover border
         // (`--border-control-hover`: forza6 near-black ink / warm
         // accent / slack-dark `--border` 10% white). Note this is a
@@ -384,33 +373,25 @@ const FilterTrigger = forwardRef<
         // transparent` (sidebar bg veil expresses hover there), and
         // we don't want that to bleed into control triggers where the
         // border is the only hover signal (#task:912 review round 3).
-        'hover:border-[color:var(--border-control-hover)]',
+        "hover:border-[color:var(--border-control-hover)]",
         active
           ? // Non-default value → theme selected-row fill (forza6 festive
             // lime) + on-selected ink + the selected-row border colour
             // (`--border-row-selected`, same near-black as hover) so the
             // chip reads as a framed poster sticker, not a borderless fill
             // (shiki #task:790).
-            'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-text-on-selected'
-          : 'border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary',
+            "border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-text-on-selected"
+          : "border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary",
         className,
       )}
       {...props}
     >
-      <span
-        className={cn(
-          'shrink-0',
-          active ? 'text-text-on-selected' : 'text-text-muted',
-        )}
-      >
+      <span className={cn("shrink-0", active ? "text-text-on-selected" : "text-text-muted")}>
         {icon}
       </span>
       <span className="truncate">{children}</span>
       <ChevronDown
-        className={cn(
-          'size-3 shrink-0',
-          active ? 'text-text-on-selected' : 'text-text-muted',
-        )}
+        className={cn("size-3 shrink-0", active ? "text-text-on-selected" : "text-text-muted")}
       />
     </button>
   );
@@ -492,8 +473,8 @@ export function OptionRow({
         // surfaces stay in lock-step. The transparent border is kept only
         // to reserve layout space (no hover colour) so rows don't shift
         // (shiki #task:790).
-        'flex w-full items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 text-left text-xs transition-colors',
-        'border border-transparent hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
+        "flex w-full items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 text-left text-xs transition-colors",
+        "border border-transparent hover:bg-[var(--bg-option-hover)] hover:text-text-primary",
         // A real (non-default) current value = the app-wide selected-row
         // vocabulary (festive lime fill + on-selected ink), NOT the magenta
         // `accent-soft` tint. The ALL/All-channels default row stays plain
@@ -501,21 +482,21 @@ export function OptionRow({
         // Keyboard-highlighted (but not the current value) → neutral hover
         // fill, so mouse and keyboard share one visual language.
         activeSelected
-          ? 'bg-[var(--bg-row-selected)] text-text-on-selected'
+          ? "bg-[var(--bg-row-selected)] text-text-on-selected"
           : active
-            ? 'bg-[var(--bg-option-hover)] text-text-primary'
-            : 'text-text-secondary',
+            ? "bg-[var(--bg-option-hover)] text-text-primary"
+            : "text-text-secondary",
       )}
     >
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {selected ? (
         <Check
           className={cn(
-            'size-3.5 shrink-0',
+            "size-3.5 shrink-0",
             // Real selection → on-selected ink on the lime fill; the
             // neutral default current row → a muted check (no pink, no
             // lime) so it reads as "current" without the active look.
-            activeSelected ? 'text-text-on-selected' : 'text-text-muted',
+            activeSelected ? "text-text-on-selected" : "text-text-muted",
           )}
         />
       ) : null}
@@ -537,15 +518,13 @@ function ChannelFilter({
   onChange: (id: string | null) => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const selected = value ? options.find(o => o.id === value) ?? null : null;
+  const [query, setQuery] = useState("");
+  const selected = value ? (options.find((o) => o.id === value) ?? null) : null;
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return options;
     return options.filter(
-      o =>
-        o.label.toLowerCase().includes(q) ||
-        (o.sublabel?.toLowerCase().includes(q) ?? false),
+      (o) => o.label.toLowerCase().includes(q) || (o.sublabel?.toLowerCase().includes(q) ?? false),
     );
   }, [options, query]);
   // Order the options — regular-workspace channels first, then agent-space
@@ -557,11 +536,11 @@ function ChannelFilter({
   const sections = useMemo(
     () =>
       [
-        { key: 'workspace' as const, label: 'Workspaces' },
-        { key: 'agent_space' as const, label: 'Agent Spaces' },
+        { key: "workspace" as const, label: "Workspaces" },
+        { key: "agent_space" as const, label: "Agent Spaces" },
       ]
-        .map(s => ({ ...s, items: filtered.filter(o => o.group === s.key) }))
-        .filter(s => s.items.length > 0),
+        .map((s) => ({ ...s, items: filtered.filter((o) => o.group === s.key) }))
+        .filter((s) => s.items.length > 0),
     [filtered],
   );
 
@@ -569,7 +548,7 @@ function ChannelFilter({
   // the ALL row at index 0, then every section's items (Workspaces then Agent
   // Spaces), matching the visual order below so arrow keys walk the list as it
   // reads.
-  const flatOptions = useMemo(() => sections.flatMap(s => s.items), [sections]);
+  const flatOptions = useMemo(() => sections.flatMap((s) => s.items), [sections]);
   const optionIndex = useMemo(() => {
     const m = new Map<string, number>();
     flatOptions.forEach((o, i) => m.set(o.id, i + 1)); // +1: ALL occupies 0
@@ -581,7 +560,7 @@ function ChannelFilter({
     count: flatOptions.length + 1,
     open,
     resetKey: query,
-    onSelect: index => {
+    onSelect: (index) => {
       if (index === 0) onChange(null);
       else {
         const o = flatOptions[index - 1];
@@ -599,7 +578,7 @@ function ChannelFilter({
         selected={value === o.id}
         active={roving.activeIndex === index}
         id={optionId(index)}
-        optionRef={el => roving.registerItem(index, el)}
+        optionRef={(el) => roving.registerItem(index, el)}
         onHover={() => roving.setActiveIndex(index)}
         onSelect={() => {
           onChange(o.id);
@@ -626,9 +605,9 @@ function ChannelFilter({
   return (
     <Popover.Root
       open={open}
-      onOpenChange={next => {
+      onOpenChange={(next) => {
         setOpen(next);
-        if (!next) setQuery('');
+        if (!next) setQuery("");
       }}
     >
       <Popover.Trigger asChild>
@@ -642,13 +621,7 @@ function ChannelFilter({
           // of inflating to ~18px — identity AND alignment (shiki #task:1441
           // review). warm/slack carry no box chrome, so `md` (14px) is untouched
           // there.
-          icon={
-            <ChannelIcon
-              variant="sticker"
-              density="md"
-              className="task-filter-channel-hash"
-            />
-          }
+          icon={<ChannelIcon variant="sticker" density="md" className="task-filter-channel-hash" />}
           active={value !== null}
           aria-label="Channel"
         >
@@ -671,7 +644,7 @@ function ChannelFilter({
             <input
               autoFocus
               value={query}
-              onChange={e => setQuery(e.target.value)}
+              onChange={(e) => setQuery(e.target.value)}
               onKeyDown={roving.onKeyDown}
               role="combobox"
               aria-expanded={open}
@@ -691,7 +664,7 @@ function ChannelFilter({
               neutral
               active={roving.activeIndex === 0}
               id={optionId(0)}
-              optionRef={el => roving.registerItem(0, el)}
+              optionRef={(el) => roving.registerItem(0, el)}
               onHover={() => roving.setActiveIndex(0)}
               onSelect={() => {
                 onChange(null);
@@ -761,7 +734,7 @@ function BoardScopeFilter({
   // and roves over.
   const groups = useMemo(
     () =>
-      boardScopeGroups<WorkspaceOption>({ workspaces: workspaceOptions }).map(g => ({
+      boardScopeGroups<WorkspaceOption>({ workspaces: workspaceOptions }).map((g) => ({
         key: g.key,
         label: g.label,
         rows: g.workspaces.map((ws): ScopeRow => ({ id: ws.id, label: ws.label, ws })),
@@ -771,7 +744,7 @@ function BoardScopeFilter({
 
   // Flatten for roving focus: index 0 is the All row, then every selectable row
   // in section order.
-  const flatRows = useMemo(() => groups.flatMap(g => g.rows), [groups]);
+  const flatRows = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
   const optionIndex = useMemo(() => {
     const m = new Map<string, number>();
     flatRows.forEach((r, i) => m.set(r.id, i + 1)); // +1: All occupies 0
@@ -779,7 +752,7 @@ function BoardScopeFilter({
   }, [flatRows]);
 
   const selectionFor = (row: ScopeRow): BoardScopeSelection => ({
-    kind: 'workspace',
+    kind: "workspace",
     workspaceId: row.ws.id,
     container: workspaceBoardContainer(row.ws),
   });
@@ -789,8 +762,8 @@ function BoardScopeFilter({
   const roving = useRovingList({
     count: flatRows.length + 1,
     open,
-    onSelect: index => {
-      if (index === 0) onSelect({ kind: 'all' });
+    onSelect: (index) => {
+      if (index === 0) onSelect({ kind: "all" });
       else {
         const row = flatRows[index - 1];
         if (row) onSelect(selectionFor(row));
@@ -802,7 +775,7 @@ function BoardScopeFilter({
   // Trigger identity mirrors the selection: a workspace's own icon, or the generic
   // Layers for All — sized to the shared 14px control-glyph box so the trigger
   // never drifts taller than the row (#task:1437).
-  const selectedWs = flatRows.find(r => r.ws.id === workspaceValue);
+  const selectedWs = flatRows.find((r) => r.ws.id === workspaceValue);
   const triggerIcon = selectedWs ? (
     <WorkspaceIcon
       ownerAgentId={selectedWs.ws.owner_agent_id}
@@ -825,7 +798,7 @@ function BoardScopeFilter({
           active={containerValue !== null}
           aria-label="Board scope"
         >
-          {selectedWs?.label ?? 'All'}
+          {selectedWs?.label ?? "All"}
         </FilterTrigger>
       </Popover.Trigger>
       <FilterPanel
@@ -838,21 +811,21 @@ function BoardScopeFilter({
           neutral
           active={roving.activeIndex === 0}
           id={optionId(0)}
-          optionRef={el => roving.registerItem(0, el)}
+          optionRef={(el) => roving.registerItem(0, el)}
           onHover={() => roving.setActiveIndex(0)}
           onSelect={() => {
-            onSelect({ kind: 'all' });
+            onSelect({ kind: "all" });
             setOpen(false);
           }}
         >
           All
         </OptionRow>
-        {groups.map(group => (
+        {groups.map((group) => (
           <div key={group.key}>
             <div className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
               {group.label}
             </div>
-            {group.rows.map(row => {
+            {group.rows.map((row) => {
               const index = optionIndex.get(row.id) ?? -1;
               return (
                 <OptionRow
@@ -860,7 +833,7 @@ function BoardScopeFilter({
                   selected={row.ws.id === workspaceValue}
                   active={roving.activeIndex === index}
                   id={optionId(index)}
-                  optionRef={el => roving.registerItem(index, el)}
+                  optionRef={(el) => roving.registerItem(index, el)}
                   onHover={() => roving.setActiveIndex(index)}
                   onSelect={() => {
                     onSelect(selectionFor(row));
@@ -917,17 +890,17 @@ function PersonFilterControl({
   const state = personMenuState(population);
   const options = population.known ? population.value : NO_PEOPLE;
   const selectedName = options.find(
-    o => personFilterKey({ kind: 'person', person: o.person }) === personFilterKey(value),
+    (o) => personFilterKey({ kind: "person", person: o.person }) === personFilterKey(value),
   )?.name;
   // Value half of the trigger label. The trigger always renders
   // `${label}:${valuePart}` (e.g. "Assignee:ALL" / "From:@cindy") so the
   // dimension stays legible even at the default "ALL" state (shiki
   // #task:790) — the label is no longer carried by the icon alone.
   const valuePart =
-    value.kind === 'any'
+    value.kind === "any"
       ? anyLabel
-      : value.kind === 'unassigned'
-        ? 'No assignee'
+      : value.kind === "unassigned"
+        ? "No assignee"
         : // The filter shows the assignee's/creator's display name (the
           // denormalized `name` on the dto — NOT a handle), so it renders
           // plain, no `@`, matching every other assignee/creator DISPLAY
@@ -935,7 +908,7 @@ function PersonFilterControl({
           // show a real handle (mentions, composer, the assignee picker).
           selectedName
           ? selectedName
-          : 'Selected';
+          : "Selected";
 
   const choose = (next: PersonFilter): void => {
     onChange(next);
@@ -951,20 +924,20 @@ function PersonFilterControl({
   const unassignedIndex = allowUnassigned ? 1 : -1;
   const optionsBase = allowUnassigned ? 2 : 1;
   const actions: (() => void)[] = [
-    () => choose({ kind: 'any' }),
-    ...(allowUnassigned ? [() => choose({ kind: 'unassigned' })] : []),
-    ...options.map(o => () => choose({ kind: 'person', person: o.person })),
+    () => choose({ kind: "any" }),
+    ...(allowUnassigned ? [() => choose({ kind: "unassigned" })] : []),
+    ...options.map((o) => () => choose({ kind: "person", person: o.person })),
   ];
   const roving = useRovingList({
     count: actions.length,
     open,
-    onSelect: index => actions[index]?.(),
+    onSelect: (index) => actions[index]?.(),
   });
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
-        <FilterTrigger icon={icon} active={value.kind !== 'any'} aria-label={label}>
+        <FilterTrigger icon={icon} active={value.kind !== "any"} aria-label={label}>
           {`${label}:${valuePart}`}
         </FilterTrigger>
       </Popover.Trigger>
@@ -974,40 +947,40 @@ function PersonFilterControl({
         onKeyDown={roving.onKeyDown}
       >
         <OptionRow
-          selected={value.kind === 'any'}
+          selected={value.kind === "any"}
           neutral
           active={roving.activeIndex === anyIndex}
           id={optionId(anyIndex)}
-          optionRef={el => roving.registerItem(anyIndex, el)}
+          optionRef={(el) => roving.registerItem(anyIndex, el)}
           onHover={() => roving.setActiveIndex(anyIndex)}
-          onSelect={() => choose({ kind: 'any' })}
+          onSelect={() => choose({ kind: "any" })}
         >
           {anyLabel}
         </OptionRow>
         {allowUnassigned ? (
           <OptionRow
-            selected={value.kind === 'unassigned'}
+            selected={value.kind === "unassigned"}
             active={roving.activeIndex === unassignedIndex}
             id={optionId(unassignedIndex)}
-            optionRef={el => roving.registerItem(unassignedIndex, el)}
+            optionRef={(el) => roving.registerItem(unassignedIndex, el)}
             onHover={() => roving.setActiveIndex(unassignedIndex)}
-            onSelect={() => choose({ kind: 'unassigned' })}
+            onSelect={() => choose({ kind: "unassigned" })}
           >
             No assignee
           </OptionRow>
         ) : null}
         {options.map((o, i) => {
-          const key = personFilterKey({ kind: 'person', person: o.person });
+          const key = personFilterKey({ kind: "person", person: o.person });
           const index = optionsBase + i;
           return (
             <OptionRow
               key={key}
-              selected={value.kind === 'person' && personFilterKey(value) === key}
+              selected={value.kind === "person" && personFilterKey(value) === key}
               active={roving.activeIndex === index}
               id={optionId(index)}
-              optionRef={el => roving.registerItem(index, el)}
+              optionRef={(el) => roving.registerItem(index, el)}
               onHover={() => roving.setActiveIndex(index)}
-              onSelect={() => choose({ kind: 'person', person: o.person })}
+              onSelect={() => choose({ kind: "person", person: o.person })}
             >
               <span className="flex min-w-0 items-center gap-1.5">
                 <span className="shrink-0">
@@ -1024,13 +997,13 @@ function PersonFilterControl({
             </OptionRow>
           );
         })}
-        {state === 'ready' ? null : (
+        {state === "ready" ? null : (
           <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
-            {state === 'loading'
-              ? 'Loading…'
-              : state === 'failed'
-                ? 'Couldn’t load people'
-                : 'None yet'}
+            {state === "loading"
+              ? "Loading…"
+              : state === "failed"
+                ? "Couldn’t load people"
+                : "None yet"}
           </p>
         )}
       </FilterPanel>

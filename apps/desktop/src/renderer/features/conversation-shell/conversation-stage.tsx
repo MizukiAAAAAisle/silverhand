@@ -1,6 +1,6 @@
-import { SplitPane } from '@/components/layout/SplitPane';
-import { ConversationViewSkeleton } from '@/components/layout/ConversationViewSkeleton';
-import type { ConversationContent } from './conversation-content';
+import { SplitPane } from "@/components/layout/SplitPane";
+import { ConversationViewSkeleton } from "@/components/layout/ConversationViewSkeleton";
+import type { ConversationContent } from "./conversation-content";
 
 export function ConversationStage({
   content,

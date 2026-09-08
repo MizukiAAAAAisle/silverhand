@@ -6,19 +6,19 @@
  * regular shape is exactly the failure that grows a member picker (and posts
  * `member_*_ids` / `visibility`) inside a space that has no members.
  */
-import { describe, expect, it } from 'vitest';
-import { workspaceCapabilities } from './workspace-capabilities';
+import { describe, expect, it } from "vitest";
+import { workspaceCapabilities } from "./workspace-capabilities";
 
-describe('workspaceCapabilities', () => {
-  it('an agent space has no settable name, no members and no lifecycle', () => {
-    expect(workspaceCapabilities({ owner_agent_id: 'a-1' })).toEqual({
+describe("workspaceCapabilities", () => {
+  it("an agent space has no settable name, no members and no lifecycle", () => {
+    expect(workspaceCapabilities({ owner_agent_id: "a-1" })).toEqual({
       nameSettable: false,
       hasMembers: false,
       hasLifecycle: false,
     });
   });
 
-  it('a regular workspace has all three', () => {
+  it("a regular workspace has all three", () => {
     expect(workspaceCapabilities({ owner_agent_id: null })).toEqual({
       nameSettable: true,
       hasMembers: true,
@@ -26,7 +26,7 @@ describe('workspaceCapabilities', () => {
     });
   });
 
-  it('no container answers the regular shape (not the agent-space one)', () => {
+  it("no container answers the regular shape (not the agent-space one)", () => {
     // Deliberate: answering the agent-space shape would print "takes its name
     // from its agent" for a container that does not exist. Safe only because
     // every caller takes the workspace id from the same row (`App.tsx`), so an

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // The human task board is the viewer's cross-conversation aggregate, so its
 // `task_changed` refresh must ride the viewer's own private scope
@@ -43,32 +43,29 @@ import { fileURLToPath } from 'node:url';
 // Desktop test env is `node` (no jsdom/RTL), so — like the sibling fences — we
 // assert the source structure rather than render the hook.
 
-describe('board refresh: task_changed is viewer-scoped; workspace scope only invalidates', () => {
-  const source = readFileSync(
-    fileURLToPath(new URL('./useBoard.ts', import.meta.url)),
-    'utf8',
-  );
+describe("board refresh: task_changed is viewer-scoped; workspace scope only invalidates", () => {
+  const source = readFileSync(fileURLToPath(new URL("./useBoard.ts", import.meta.url)), "utf8");
   const projection = readFileSync(
-    fileURLToPath(new URL('./taskProjection.ts', import.meta.url)),
-    'utf8',
+    fileURLToPath(new URL("./taskProjection.ts", import.meta.url)),
+    "utf8",
   );
 
-  it('subscribes the current viewer scope as the task_changed carrier', () => {
-    expect(source).toContain('subscribeViewerScope()');
+  it("subscribes the current viewer scope as the task_changed carrier", () => {
+    expect(source).toContain("subscribeViewerScope()");
   });
 
-  it('gates task_changed frames on the current viewer scope', () => {
-    expect(source).toContain('isCurrentViewerScope(frame.scope)');
+  it("gates task_changed frames on the current viewer scope", () => {
+    expect(source).toContain("isCurrentViewerScope(frame.scope)");
   });
 
-  it('writes task data into the board cache in exactly one (viewer-gated) place', () => {
+  it("writes task data into the board cache in exactly one (viewer-gated) place", () => {
     // The single cache-writing call. Exactly one occurrence means no workspace-
     // scope handler can also apply a task snapshot — the security boundary. It is
     // the viewer-gated `payload`, so a task the viewer isn't a member of never
     // reaches the cache.
     const applierCalls = source.match(/applyTaskChangedToProjections\(/g) ?? [];
     expect(applierCalls).toHaveLength(1);
-    expect(source).toContain('applyTaskChangedToProjections(qc, payload)');
+    expect(source).toContain("applyTaskChangedToProjections(qc, payload)");
     // Count-of-one does NOT by itself prove WHERE that call sits: moving the
     // single applier into the §4-A workspace-scope handler would keep both the
     // count and the `isCurrentViewerScope` assertion above green, which is
@@ -77,16 +74,16 @@ describe('board refresh: task_changed is viewer-scoped; workspace scope only inv
     // task payload; the applier lives in the viewer block, before it. The marker
     // guard fails loudly if that comment is renamed, rather than slicing at -1
     // and passing vacuously.
-    const S4A_MARKER = '§4-A channel-name fact edge';
+    const S4A_MARKER = "§4-A channel-name fact edge";
     expect(source).toContain(S4A_MARKER);
     const afterS4A = source.slice(source.indexOf(S4A_MARKER));
-    expect(afterS4A).not.toContain('applyTaskChangedToProjections(');
+    expect(afterS4A).not.toContain("applyTaskChangedToProjections(");
     // …and that applier is still the one keeping the inline `#task:<n>` chips
     // coherent by exact key (the one path that also repairs a cached MISS).
-    expect(projection).toContain('applyTaskChangedToTaskByNumberCache(qc, event)');
+    expect(projection).toContain("applyTaskChangedToTaskByNumberCache(qc, event)");
   });
 
-  it('subscribes workspace scopes ONLY for the §4-A channel-name edge, and only to invalidate', () => {
+  it("subscribes workspace scopes ONLY for the §4-A channel-name edge, and only to invalidate", () => {
     // The board DOES subscribe workspace scopes now (channel-name liveness), but
     // the ONLY frame kind it acts on there is `workspace_channels_changed`, and
     // the ONLY side effect is a board-column re-read. No `task_changed` is matched

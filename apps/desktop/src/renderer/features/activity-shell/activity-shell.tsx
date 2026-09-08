@@ -1,11 +1,11 @@
-import { SectionShell } from '@/components/layout/SectionShell';
-import { SectionLayer } from '@/components/layout/SectionLayer';
-import { ActivityView } from '@/components/layout/ActivityView';
-import { VerticalSplitter } from '@/components/layout/VerticalSplitter';
-import { useResizableWidth } from '@/hooks/useResizableWidth';
-import type { ActivityShellModel } from '@/features/conversation-shell/conversation-shell-models';
-import type { ConversationContent } from '@/features/conversation-shell/conversation-content';
-import { ConversationStage } from '@/features/conversation-shell/conversation-stage';
+import { SectionShell } from "@/components/layout/SectionShell";
+import { SectionLayer } from "@/components/layout/SectionLayer";
+import { ActivityView } from "@/components/layout/ActivityView";
+import { VerticalSplitter } from "@/components/layout/VerticalSplitter";
+import { useResizableWidth } from "@/hooks/useResizableWidth";
+import type { ActivityShellModel } from "@/features/conversation-shell/conversation-shell-models";
+import type { ConversationContent } from "@/features/conversation-shell/conversation-content";
+import { ConversationStage } from "@/features/conversation-shell/conversation-stage";
 
 export function ActivityShell({
   model,
@@ -25,17 +25,17 @@ export function ActivityShell({
     handleJumpToMessageStable,
   } = model;
   const activityList = useResizableWidth({
-    storageKey: 'silverhand.layout.activity-list-width',
+    storageKey: "silverhand.layout.activity-list-width",
     defaultWidth: 360,
     min: 280,
     max: 560,
-    cssVar: '--activity-list-width',
+    cssVar: "--activity-list-width",
   });
 
   return (
     <>
-      {deferredSection === 'activity' && (
-        <SectionLayer visible={appSection !== 'chat'}>
+      {deferredSection === "activity" && (
+        <SectionLayer visible={appSection !== "chat"}>
           <SectionShell
             name="activity"
             fill={selectedChannelId == null}
@@ -59,7 +59,7 @@ export function ActivityShell({
             {selectedChannelId != null ? (
               <ConversationStage
                 content={content}
-                ready={appSection === 'activity'}
+                ready={appSection === "activity"}
                 fullscreen={fullscreen}
                 storageKey="silverhand.layout.activity-split-ratio"
               />

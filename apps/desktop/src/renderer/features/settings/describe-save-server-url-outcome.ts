@@ -1,4 +1,4 @@
-import type { DesktopSaveServerUrlResult } from '../../../preload/api';
+import type { DesktopSaveServerUrlResult } from "../../../preload/api";
 
 export interface SaveServerUrlBanner {
   /**
@@ -14,7 +14,7 @@ export interface SaveServerUrlBanner {
    *     either untouched or refused to swap. Renderer surfaces
    *     the actionable reason.
    */
-  tone: 'success' | 'info' | 'error';
+  tone: "success" | "info" | "error";
   /** Short headline. Imperative or status-form (≤ ~60 chars). */
   title: string;
   /**
@@ -36,23 +36,23 @@ export function describeSaveServerUrlOutcome(
 ): SaveServerUrlBanner {
   if (result.ok) {
     switch (result.kind) {
-      case 'reloaded':
+      case "reloaded":
         return {
-          tone: 'success',
-          title: 'Saved. Reconnected to the server.',
+          tone: "success",
+          title: "Saved. Reconnected to the server.",
           description: `Verified in ${formatMs(result.elapsedMs)}.`,
         };
-      case 'unchanged':
+      case "unchanged":
         // No-op write. The bytes were already what the user typed —
         // probably a "saved without changing anything" pass. The
         // copy explicitly avoids claiming connectivity status
         // (the existing connection is whatever it was before).
         return {
-          tone: 'info',
-          title: 'No changes — the address was already that value.',
-          description: '',
+          tone: "info",
+          title: "No changes — the address was already that value.",
+          description: "",
         };
-      case 'connectivity_unverified':
+      case "connectivity_unverified":
         // CRITICAL: Cindy `#task:634` review note 1 — this MUST
         // NOT be rendered as "Connected". The user's address is
         // saved (the daemon acked the reload); we just didn't
@@ -61,17 +61,16 @@ export function describeSaveServerUrlOutcome(
         // unreachable. Copy is deliberately "saved" + "reconnecting"
         // so the user knows to either wait or undo the change.
         return {
-          tone: 'info',
-          title: 'Saved. Reconnecting…',
+          tone: "info",
+          title: "Saved. Reconnecting…",
           description: `No connection was confirmed within ${formatMs(result.elapsedMs)}. The server may still be starting or unreachable.`,
           dismissOnReady: true,
         };
-      case 'reloaded_remote':
+      case "reloaded_remote":
         return {
-          tone: 'info',
-          title: 'Saved. Reconnecting…',
-          description:
-            'Watch “This computer” for the live connection status.',
+          tone: "info",
+          title: "Saved. Reconnecting…",
+          description: "Watch “This computer” for the live connection status.",
           dismissOnReady: true,
         };
       default: {
@@ -83,9 +82,9 @@ export function describeSaveServerUrlOutcome(
     }
   }
   switch (result.kind) {
-    case 'classify_rejected':
+    case "classify_rejected":
       return {
-        tone: 'error',
+        tone: "error",
         title: describeClassifyReason(result.reason),
         // Surface the classifier's raw message — it carries the
         // specific token that failed (e.g. the obfuscated IP, the
@@ -93,36 +92,33 @@ export function describeSaveServerUrlOutcome(
         // can't include without runtime substitution.
         description: result.message,
       };
-    case 'config_write_failed':
+    case "config_write_failed":
       return {
-        tone: 'error',
-        title: 'Could not save the address.',
-        description:
-          'Check that Silverhand can write to its app data folder, then try again.',
+        tone: "error",
+        title: "Could not save the address.",
+        description: "Check that Silverhand can write to its app data folder, then try again.",
       };
-    case 'reload_rejected': {
+    case "reload_rejected": {
       // The raw daemon message is deliberately NOT surfaced: it carries
       // implementation language (daemon / config / parse) that this
       // product surface must not show. The title already names the
       // failure; only retryable reasons get a short next-step line.
-      const retryable =
-        result.reason === 'config_unreadable' ||
-        result.reason === 'parse_failed';
+      const retryable = result.reason === "config_unreadable" || result.reason === "parse_failed";
       return {
-        tone: 'error',
+        tone: "error",
         title: describeReloadReason(result.reason),
-        description: retryable ? 'Try saving the address again.' : '',
+        description: retryable ? "Try saving the address again." : "",
       };
     }
-    case 'no_attachment_controller':
+    case "no_attachment_controller":
       // Mode-specific edge: the address was saved but this backend
       // mode lacks a controller to observe the resulting connection.
       // Bytes are saved; verification is structurally impossible. Raw
       // message withheld — it names an internal controller type.
       return {
-        tone: 'info',
-        title: 'Saved. Connection check is not available in this mode.',
-        description: 'The address was saved, but this build cannot verify the connection.',
+        tone: "info",
+        title: "Saved. Connection check is not available in this mode.",
+        description: "The address was saved, but this build cannot verify the connection.",
       };
     default: {
       const _exhaustive: never = result;
@@ -132,22 +128,19 @@ export function describeSaveServerUrlOutcome(
 }
 
 function describeClassifyReason(
-  reason: Extract<
-    DesktopSaveServerUrlResult,
-    { kind: 'classify_rejected' }
-  >['reason'],
+  reason: Extract<DesktopSaveServerUrlResult, { kind: "classify_rejected" }>["reason"],
 ): string {
   switch (reason) {
-    case 'malformed_url':
-      return 'Server URL is not a valid URL.';
-    case 'unsupported_scheme':
-      return 'Server URL must start with http:// or https://.';
-    case 'non_origin_url':
-      return 'Server URL must be an origin (scheme + host + port). Drop the path / query / fragment.';
-    case 'insecure_remote_http_disallowed':
-      return 'Server URL must use https:// for non-loopback addresses (or set SILVERHAND_ALLOW_INSECURE_REMOTE=1 for dev use).';
-    case 'obfuscated_loopback_disallowed':
-      return 'Server URL looks like a disguised loopback address (e.g. 0x7f000001 / [0:0:0:0:0:0:0:1]). Use a literal loopback host (127.0.0.1, localhost, [::1]) if loopback was intended.';
+    case "malformed_url":
+      return "Server URL is not a valid URL.";
+    case "unsupported_scheme":
+      return "Server URL must start with http:// or https://.";
+    case "non_origin_url":
+      return "Server URL must be an origin (scheme + host + port). Drop the path / query / fragment.";
+    case "insecure_remote_http_disallowed":
+      return "Server URL must use https:// for non-loopback addresses (or set SILVERHAND_ALLOW_INSECURE_REMOTE=1 for dev use).";
+    case "obfuscated_loopback_disallowed":
+      return "Server URL looks like a disguised loopback address (e.g. 0x7f000001 / [0:0:0:0:0:0:0:1]). Use a literal loopback host (127.0.0.1, localhost, [::1]) if loopback was intended.";
     default: {
       const _exhaustive: never = reason;
       return _exhaustive;
@@ -156,20 +149,17 @@ function describeClassifyReason(
 }
 
 function describeReloadReason(
-  reason: Extract<
-    DesktopSaveServerUrlResult,
-    { kind: 'reload_rejected' }
-  >['reason'],
+  reason: Extract<DesktopSaveServerUrlResult, { kind: "reload_rejected" }>["reason"],
 ): string {
   switch (reason) {
-    case 'not_attached':
-      return 'This computer is not connected yet — sign in first.';
-    case 'config_unreadable':
-      return 'Could not read the saved address. Retry the save.';
-    case 'parse_failed':
-      return 'Could not apply the saved address. Retry the save.';
-    case 'invalid_server_url':
-      return 'The saved address was rejected.';
+    case "not_attached":
+      return "This computer is not connected yet — sign in first.";
+    case "config_unreadable":
+      return "Could not read the saved address. Retry the save.";
+    case "parse_failed":
+      return "Could not apply the saved address. Retry the save.";
+    case "invalid_server_url":
+      return "The saved address was rejected.";
     default: {
       const _exhaustive: never = reason;
       return _exhaustive;

@@ -1,30 +1,27 @@
-import { useMemo, useState, type FormEvent } from 'react';
-import type { AgentDto, CreateWorkspaceInput, UserDto } from '@silverhand/shared';
+import { useMemo, useState, type FormEvent } from "react";
+import type { AgentDto, CreateWorkspaceInput, UserDto } from "@silverhand/shared";
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Input, Label } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
-import { describeApiError } from '@/lib/api-error-message';
-import {
-  NameAvailabilityHint,
-  useNameAvailability,
-} from '@/features/naming/useNameAvailability';
-import { useAgents } from '@/features/agents/hooks';
+} from "@/components/ui/dialog";
+import { Input, Label } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
+import { describeApiError } from "@/lib/api-error-message";
+import { NameAvailabilityHint, useNameAvailability } from "@/features/naming/useNameAvailability";
+import { useAgents } from "@/features/agents/hooks";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useViewerUser,
-} from '@/features/me/hooks';
-import { useUsers } from '@/features/users/hooks';
-import { MemberPicker, type MemberPickerCandidate } from './AgentPicker';
-import { useCreateWorkspace } from './hooks';
+} from "@/features/me/hooks";
+import { useUsers } from "@/features/users/hooks";
+import { MemberPicker, type MemberPickerCandidate } from "./AgentPicker";
+import { useCreateWorkspace } from "./hooks";
 
 interface CreateWorkspaceDialogProps {
   open: boolean;
@@ -50,7 +47,7 @@ export function CreateWorkspaceDialog({
   onOpenChange,
   onCreated,
 }: CreateWorkspaceDialogProps): JSX.Element {
-  const [name, setName] = useState('');
+  const [name, setName] = useState("");
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [selectedHumans, setSelectedHumans] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -59,23 +56,23 @@ export function CreateWorkspaceDialog({
   // initial `member_agent_ids`, and enrollment is the creator's call
   // (#task:1681). `?scope=owned` is the single authority for "mine" — the
   // renderer passes the flag and never re-filters client-side.
-  const { data: agents = [] } = useAgents({ scope: 'owned' });
+  const { data: agents = [] } = useAgents({ scope: "owned" });
   const { data: users = [] } = useUsers();
   const viewer = useViewerUser();
   const viewerUserId =
-    viewer.data
-    && !isRegistrationRequired(viewer.data)
-    && !isBackendUnreachable(viewer.data)
-    && !isUpdateRequired(viewer.data)
+    viewer.data &&
+    !isRegistrationRequired(viewer.data) &&
+    !isBackendUnreachable(viewer.data) &&
+    !isUpdateRequired(viewer.data)
       ? viewer.data.id
       : null;
   const createWorkspace = useCreateWorkspace();
   // onBlur name validation — format (shared WorkspaceNameSchema) + uniqueness
   // (regular workspaces, global; server probe). Mirrors CreateAgentDialog.
-  const nameCheck = useNameAvailability('workspace', name);
+  const nameCheck = useNameAvailability("workspace", name);
 
   const reset = () => {
-    setName('');
+    setName("");
     setSelectedAgents([]);
     setSelectedHumans([]);
     setError(null);
@@ -84,7 +81,7 @@ export function CreateWorkspaceDialog({
   const memberCandidates = useMemo<MemberPickerCandidate[]>(
     () => [
       ...agents.map((agent: AgentDto) => ({
-        kind: 'agent' as const,
+        kind: "agent" as const,
         agent,
       })),
       // The viewer is auto-added as a workspace member by the backend
@@ -96,15 +93,15 @@ export function CreateWorkspaceDialog({
       // dropdown or as a selected tag.
       ...users
         .filter((user: UserDto) => user.id !== viewerUserId)
-        .map((user: UserDto) => ({ kind: 'human' as const, user })),
+        .map((user: UserDto) => ({ kind: "human" as const, user })),
     ],
     [agents, users, viewerUserId],
   );
 
   const selectedMembers = useMemo(
     () => [
-      ...selectedAgents.map(id => `agent:${id}`),
-      ...selectedHumans.map(id => `human:${id}`),
+      ...selectedAgents.map((id) => `agent:${id}`),
+      ...selectedHumans.map((id) => `human:${id}`),
     ],
     [selectedAgents, selectedHumans],
   );
@@ -113,12 +110,12 @@ export function CreateWorkspaceDialog({
     const agentsNext: string[] = [];
     const humansNext: string[] = [];
     for (const value of values) {
-      const sep = value.indexOf(':');
+      const sep = value.indexOf(":");
       if (sep <= 0) continue;
       const kind = value.slice(0, sep);
       const id = value.slice(sep + 1);
-      if (kind === 'agent') agentsNext.push(id);
-      if (kind === 'human') humansNext.push(id);
+      if (kind === "agent") agentsNext.push(id);
+      if (kind === "human") humansNext.push(id);
     }
     setSelectedAgents(agentsNext);
     setSelectedHumans(humansNext);
@@ -128,7 +125,7 @@ export function CreateWorkspaceDialog({
     e.preventDefault();
     setError(null);
     if (!name.trim()) {
-      setError('Please enter a Workspace name');
+      setError("Please enter a Workspace name");
       return;
     }
     // Final format pass — arms the inline hint even on a field never blurred.
@@ -170,7 +167,7 @@ export function CreateWorkspaceDialog({
             <Input
               id="ch-name"
               value={name}
-              onChange={e => setName(e.target.value)}
+              onChange={(e) => setName(e.target.value)}
               onBlur={nameCheck.markTouched}
               aria-invalid={nameCheck.blocking || undefined}
               placeholder="my-frontend"
@@ -187,9 +184,7 @@ export function CreateWorkspaceDialog({
               </span>
             </Label>
             {memberCandidates.length === 0 ? (
-              <span className="text-xs text-text-muted">
-                No members available yet.
-              </span>
+              <span className="text-xs text-text-muted">No members available yet.</span>
             ) : (
               <MemberPicker
                 selectId="ch-add-member"
@@ -197,9 +192,7 @@ export function CreateWorkspaceDialog({
                 value={selectedMembers}
                 onChange={setSelectedMembers}
                 placeholder={
-                  selectedMembers.length === 0
-                    ? 'Select initial members…'
-                    : 'Add more members…'
+                  selectedMembers.length === 0 ? "Select initial members…" : "Add more members…"
                 }
                 allSelectedText="All members added"
               />
@@ -222,7 +215,7 @@ export function CreateWorkspaceDialog({
               disabled={createWorkspace.isPending || nameCheck.blocking}
               {...primaryAction()}
             >
-              {createWorkspace.isPending ? 'Creating…' : 'Create'}
+              {createWorkspace.isPending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>
         </form>
@@ -247,8 +240,7 @@ const WORKSPACE_CREATE_ERROR_MESSAGES: Record<string, string> = {
 function friendlyCreateWorkspaceError(err: unknown): string {
   return describeApiError(err, {
     actionLabel: "Couldn't create the workspace",
-    backendUnreachableMessage:
-      "Can't reach the backend. Check your connection and try again.",
+    backendUnreachableMessage: "Can't reach the backend. Check your connection and try again.",
     fallbackMessage: "Couldn't create the workspace. Please try again.",
     knownCodeMessages: WORKSPACE_CREATE_ERROR_MESSAGES,
   });

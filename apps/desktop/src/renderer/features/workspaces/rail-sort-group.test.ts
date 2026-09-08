@@ -13,15 +13,15 @@
  * v86). Before that it was the legacy `'dm'`; this expectation moved with the
  * migration, not ahead of it.
  */
-import { describe, expect, it } from 'vitest';
-import { railSortGroupOf } from './rail-sort-group';
+import { describe, expect, it } from "vitest";
+import { railSortGroupOf } from "./rail-sort-group";
 
-describe('railSortGroupOf', () => {
-  it('maps the agent space to the agent-space sort token', () => {
-    expect(railSortGroupOf({ owner_agent_id: 'agent-1' })).toBe('agent_space');
+describe("railSortGroupOf", () => {
+  it("maps the agent space to the agent-space sort token", () => {
+    expect(railSortGroupOf({ owner_agent_id: "agent-1" })).toBe("agent_space");
   });
 
-  it('leaves a people-owned workspace on its unchanged token', () => {
-    expect(railSortGroupOf({ owner_agent_id: null })).toBe('regular');
+  it("leaves a people-owned workspace on its unchanged token", () => {
+    expect(railSortGroupOf({ owner_agent_id: null })).toBe("regular");
   });
 });

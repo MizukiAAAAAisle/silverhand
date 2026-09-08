@@ -1,4 +1,4 @@
-import { isAgentSpace, type WorkspaceOwnership } from './workspace-ownership';
+import { isAgentSpace, type WorkspaceOwnership } from "./workspace-ownership";
 
 /**
  * STRUCTURAL capabilities of one workspace container — what the container itself

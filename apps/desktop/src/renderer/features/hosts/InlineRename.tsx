@@ -46,17 +46,10 @@
  * (`text-text-primary` / `text-text-muted` / `--control-radius`); no
  * new CSS.
  */
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type JSX,
-  type KeyboardEvent,
-} from 'react';
-import { Pencil, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/cn';
+import { useEffect, useId, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { Pencil, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cn";
 
 export interface InlineRenameProps {
   /** Current label rendered in display mode. May be `null` when no
@@ -113,14 +106,14 @@ export function InlineRename({
   onCommit,
 }: InlineRenameProps): JSX.Element {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   // Snapshot of the input contents at edit-mode entry. Used as the
   // no-op baseline so a silent blur after seeding from `fallbackForEdit`
   // does NOT promote the seed string into a persisted label.
-  const initialDraftRef = useRef<string>('');
+  const initialDraftRef = useRef<string>("");
   const errorId = useId();
 
   function enterEdit() {
@@ -134,20 +127,16 @@ export function InlineRename({
   function cancel() {
     if (pending) return;
     setEditing(false);
-    setDraft('');
+    setDraft("");
     setError(null);
   }
 
   async function commit() {
     if (pending) return;
-    const decision = decideRenameCommit(
-      draft,
-      initialDraftRef.current,
-      value,
-    );
+    const decision = decideRenameCommit(draft, initialDraftRef.current, value);
     if (!decision.commit) {
       setEditing(false);
-      setDraft('');
+      setDraft("");
       setError(null);
       return;
     }
@@ -156,21 +145,21 @@ export function InlineRename({
     try {
       await onCommit(decision.next);
       setEditing(false);
-      setDraft('');
+      setDraft("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save.');
+      setError(err instanceof Error ? err.message : "Could not save.");
     } finally {
       setPending(false);
     }
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       e.preventDefault();
       void commit();
       return;
     }
-    if (e.key === 'Escape') {
+    if (e.key === "Escape") {
       e.preventDefault();
       cancel();
     }
@@ -192,7 +181,7 @@ export function InlineRename({
             type="text"
             value={draft}
             disabled={pending}
-            onChange={e => setDraft(e.target.value)}
+            onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKeyDown}
             onBlur={() => void commit()}
             aria-label={ariaLabel}
@@ -212,7 +201,7 @@ export function InlineRename({
             // (forza6 = 2px, warm = 1px) so the focus stroke matches the
             // theme's chrome weight.
             className={cn(
-              'h-8 min-w-0 flex-1 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 leading-tight text-text-primary outline-none focus:border-accent disabled:opacity-60',
+              "h-8 min-w-0 flex-1 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 leading-tight text-text-primary outline-none focus:border-accent disabled:opacity-60",
             )}
           />
           <Button
@@ -222,7 +211,7 @@ export function InlineRename({
             // Prevent blur on the input from firing commit() before
             // our cancel — mouse down on a sibling button defaults to
             // blurring the focused input.
-            onMouseDown={e => {
+            onMouseDown={(e) => {
               e.preventDefault();
               cancel();
             }}
@@ -257,8 +246,8 @@ export function InlineRename({
         // since that's a UX cue ("this is a placeholder, not your
         // chosen name"), not a layout decision.
         className={cn(
-          'min-w-0 truncate rounded-[var(--control-radius)] px-1 py-0.5 text-left transition-colors',
-          isFallback ? 'text-text-muted italic' : 'text-text-primary',
+          "min-w-0 truncate rounded-[var(--control-radius)] px-1 py-0.5 text-left transition-colors",
+          isFallback ? "text-text-muted italic" : "text-text-primary",
         )}
       >
         {displayed}

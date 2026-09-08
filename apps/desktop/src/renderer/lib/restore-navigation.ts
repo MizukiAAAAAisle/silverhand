@@ -36,10 +36,10 @@
  * while every side effect stays in the effect.
  */
 
-import type { MessageUnreadPointerDto, MessageSeq } from '@silverhand/shared';
-import type { ChannelLayout } from '@/router';
-import { resolveChannelOpen } from '@/lib/channel-open';
-import { pickDefaultChannel } from '@/lib/archive-fallback';
+import type { MessageUnreadPointerDto, MessageSeq } from "@silverhand/shared";
+import type { ChannelLayout } from "@/router";
+import { resolveChannelOpen } from "@/lib/channel-open";
+import { pickDefaultChannel } from "@/lib/archive-fallback";
 
 export interface RestoreNavigationInputs {
   /** Route workspace id (`null` when the route has no workspace). */
@@ -72,18 +72,16 @@ export interface RestoreNavigationInputs {
 }
 
 export type RestoreNavigation =
-  | { kind: 'none' }
+  | { kind: "none" }
   /** Navigate to a bare channel URL. `reason` is for tests; the caller
    *  builds the same URL either way. */
-  | { kind: 'open-channel'; channelId: string; reason: 'jump' | 'fallback' }
+  | { kind: "open-channel"; channelId: string; reason: "jump" | "fallback" }
   /** Navigate to the remembered channel restoring its secondary-pane layout. */
-  | { kind: 'open-remembered'; channelId: string; layout: ChannelLayout | null }
+  | { kind: "open-remembered"; channelId: string; layout: ChannelLayout | null }
   /** Jump to a fresh unread thread in the remembered channel. */
-  | { kind: 'jump-unread'; channelId: string; messageId: string; threadRootId: string };
+  | { kind: "jump-unread"; channelId: string; messageId: string; threadRootId: string };
 
-export function resolveRestoreNavigation(
-  inputs: RestoreNavigationInputs,
-): RestoreNavigation {
+export function resolveRestoreNavigation(inputs: RestoreNavigationInputs): RestoreNavigation {
   const {
     workspaceId,
     selectedChannelId,
@@ -97,23 +95,22 @@ export function resolveRestoreNavigation(
     rememberedLayout,
   } = inputs;
 
-  if (!workspaceId) return { kind: 'none' };
-  if (selectedChannelId) return { kind: 'none' };
-  if (allChannels.length === 0) return { kind: 'none' };
+  if (!workspaceId) return { kind: "none" };
+  if (selectedChannelId) return { kind: "none" };
+  if (allChannels.length === 0) return { kind: "none" };
 
   // The single active-channel gate shared by the AUTO entries (remembered +
   // fallback). An archived channel is in `allChannels` (the union) but NOT here,
   // so no auto path can restore or default into it (#task:1413).
-  const isActiveChannel = (id: string): boolean =>
-    activeTopLevel.some(s => s.id === id);
+  const isActiveChannel = (id: string): boolean => activeTopLevel.some((s) => s.id === id);
 
   // 1. A jump asked for a specific channel — honor it instead of the
   //    remembered/default so Saved → jump doesn't snap back. A jump is an
   //    EXPLICIT user intent (Saved / search / Activity deep-link), so it MAY
   //    land on an archived channel — the one path allowed to, hence the full
   //    `allChannels` union here rather than the active gate.
-  if (jumpTargetChannelId && allChannels.some(s => s.id === jumpTargetChannelId)) {
-    return { kind: 'open-channel', channelId: jumpTargetChannelId, reason: 'jump' };
+  if (jumpTargetChannelId && allChannels.some((s) => s.id === jumpTargetChannelId)) {
+    return { kind: "open-channel", channelId: jumpTargetChannelId, reason: "jump" };
   }
 
   // 2. Remembered channel — unless it's the just-archived primary, gone, or
@@ -129,19 +126,19 @@ export function resolveRestoreNavigation(
       rememberedCloseWatermark,
       rememberedLayout,
     );
-    if (intent.kind === 'unread-thread') {
+    if (intent.kind === "unread-thread") {
       return {
-        kind: 'jump-unread',
+        kind: "jump-unread",
         channelId: rememberedChannelId,
         messageId: intent.messageId,
         threadRootId: intent.threadRootId,
       };
     }
-    return { kind: 'open-remembered', channelId: rememberedChannelId, layout: intent.layout };
+    return { kind: "open-remembered", channelId: rememberedChannelId, layout: intent.layout };
   }
 
   // 3. Default: first active top-level, excluding a just-archived primary.
   const fallbackId = pickDefaultChannel(activeTopLevel, excludeId);
-  if (!fallbackId) return { kind: 'none' };
-  return { kind: 'open-channel', channelId: fallbackId, reason: 'fallback' };
+  if (!fallbackId) return { kind: "none" };
+  return { kind: "open-channel", channelId: fallbackId, reason: "fallback" };
 }

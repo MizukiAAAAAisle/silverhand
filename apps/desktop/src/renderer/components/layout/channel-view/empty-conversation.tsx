@@ -1,4 +1,4 @@
-import { Inbox } from 'lucide-react';
+import { Inbox } from "lucide-react";
 
 /**
  * Conversation-canvas empty state. The message pane is a full-height surface, so
@@ -21,15 +21,10 @@ import { Inbox } from 'lucide-react';
  */
 export function EmptyConversation(): JSX.Element {
   return (
-    <div
-      className="absolute inset-0 flex items-center justify-center p-8"
-      data-conversation-empty
-    >
+    <div className="absolute inset-0 flex items-center justify-center p-8" data-conversation-empty>
       <div className="flex flex-col items-center gap-3 text-center">
         <Inbox className="size-7 shrink-0 text-text-muted/50" aria-hidden />
-        <p className="font-serif text-base font-semibold text-text-primary">
-          No messages yet
-        </p>
+        <p className="font-serif text-base font-semibold text-text-primary">No messages yet</p>
       </div>
     </div>
   );

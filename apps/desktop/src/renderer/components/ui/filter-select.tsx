@@ -1,8 +1,8 @@
-import { type ReactNode } from 'react';
-import * as Select from '@radix-ui/react-select';
-import { Check } from 'lucide-react';
-import { Label } from '@/components/ui/input';
-import { cn } from '@/lib/cn';
+import { type ReactNode } from "react";
+import * as Select from "@radix-ui/react-select";
+import { Check } from "lucide-react";
+import { Label } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
 
 /**
  * Shared building blocks for filter dropdowns built on the Radix `Select`
@@ -19,13 +19,13 @@ import { cn } from '@/lib/cn';
  * separate roving-focus helper instead (#task:1257).
  */
 export const FILTER_SELECT_TRIGGER_CLASS =
-  'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus data-[placeholder]:text-text-muted';
+  "flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus data-[placeholder]:text-text-muted";
 
 export const FILTER_SELECT_CONTENT_CLASS =
-  'z-[var(--z-in-dialog)] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[var(--select-content-radius)] border border-border bg-bg-floating shadow-popover';
+  "z-[var(--z-in-dialog)] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[var(--select-content-radius)] border border-border bg-bg-floating shadow-popover";
 
 export const FILTER_SELECT_ITEM_CLASS =
-  'relative flex cursor-default select-none items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary data-[disabled]:cursor-not-allowed data-[disabled]:text-text-muted data-[disabled]:opacity-60 data-[disabled]:data-[highlighted]:bg-transparent';
+  "relative flex cursor-default select-none items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary data-[disabled]:cursor-not-allowed data-[disabled]:text-text-muted data-[disabled]:opacity-60 data-[disabled]:data-[highlighted]:bg-transparent";
 
 /** Label-above-control layout for one filter dimension. */
 export function FilterBlock({
@@ -38,7 +38,7 @@ export function FilterBlock({
   children: ReactNode;
 }): JSX.Element {
   return (
-    <div className={cn('block min-w-0', className)}>
+    <div className={cn("block min-w-0", className)}>
       <Label className="mb-1 block">{label}</Label>
       {children}
     </div>
@@ -63,11 +63,7 @@ export function FilterSelectItem({
   children: ReactNode;
 }): JSX.Element {
   return (
-    <Select.Item
-      value={value}
-      disabled={disabled}
-      className={FILTER_SELECT_ITEM_CLASS}
-    >
+    <Select.Item value={value} disabled={disabled} className={FILTER_SELECT_ITEM_CLASS}>
       {icon ? <span className="shrink-0 text-text-muted">{icon}</span> : null}
       <Select.ItemText>
         <span className="truncate">{children}</span>

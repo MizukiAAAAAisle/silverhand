@@ -1,12 +1,12 @@
-import type { TaskChangedEvent, TaskDetailDto } from '@silverhand/shared';
-import { ApiError } from '@/lib/api';
+import type { TaskChangedEvent, TaskDetailDto } from "@silverhand/shared";
+import { ApiError } from "@/lib/api";
 
 /** React Query key for a single task's on-demand detail read, keyed by the
  *  task identity (`tasks.id`). Lives here (a pure module) so both the hooks
  *  and the realtime ingestor share one key shape without importing the React
  *  hooks module. */
 export const taskDetailKey = (taskId: string | null | undefined) =>
-  ['task-detail', taskId ?? null] as const;
+  ["task-detail", taskId ?? null] as const;
 
 /** Where "View in conversation" navigates. Same shape both task-board card
  *  surfaces already pass to their jump handler. */
@@ -44,13 +44,10 @@ export interface TaskJumpTarget {
  * asymmetry is a renderer-side naming debt, never an argument for renaming the
  * wire back.
  */
-export function resolveTaskJumpTarget(
-  detail: TaskDetailDto,
-): TaskJumpTarget | null {
-  if (detail.nav.kind === 'unavailable') return null;
+export function resolveTaskJumpTarget(detail: TaskDetailDto): TaskJumpTarget | null {
+  if (detail.nav.kind === "unavailable") return null;
   return {
-    workspaceId:
-      detail.place.kind === 'workspace' ? detail.place.workspace_id : undefined,
+    workspaceId: detail.place.kind === "workspace" ? detail.place.workspace_id : undefined,
     channelId: detail.nav.ref.conversation_id,
     threadRootId: detail.nav.ref.thread_root_id,
     messageId: detail.nav.ref.message_id,
@@ -76,14 +73,14 @@ export function resolveTaskJumpTarget(
  *     this on its own: the modal MUST carry its own Retry or the pointer is
  *     stuck until the user navigates (Cindy review).
  */
-export type TaskDetailFailure = 'not_found' | 'unreachable' | 'transient';
+export type TaskDetailFailure = "not_found" | "unreachable" | "transient";
 
 export function classifyTaskDetailFailure(error: unknown): TaskDetailFailure {
   if (error instanceof ApiError) {
-    if (error.kind === 'backend_unreachable') return 'unreachable';
-    if (error.status === 404) return 'not_found';
+    if (error.kind === "backend_unreachable") return "unreachable";
+    if (error.status === 404) return "not_found";
   }
-  return 'transient';
+  return "transient";
 }
 
 /**
@@ -96,11 +93,8 @@ export function classifyTaskDetailFailure(error: unknown): TaskDetailFailure {
  * chip for a deleted task) hits (Cindy review). Every other tier keeps the
  * client-wide behaviour: one automatic retry, then the panel's own Retry.
  */
-export function shouldRetryTaskDetail(
-  failureCount: number,
-  error: unknown,
-): boolean {
-  if (classifyTaskDetailFailure(error) === 'not_found') return false;
+export function shouldRetryTaskDetail(failureCount: number, error: unknown): boolean {
+  if (classifyTaskDetailFailure(error) === "not_found") return false;
   return failureCount < 1;
 }
 
@@ -134,15 +128,15 @@ export function shouldRetryTaskDetail(
  *                           expressible for any failure tier.
  */
 export type TaskDetailView =
-  | { kind: 'loading' }
-  | { kind: 'body'; detail: TaskDetailDto }
+  | { kind: "loading" }
+  | { kind: "body"; detail: TaskDetailDto }
   /** transient failure over a cached body — body + inline Retry. */
-  | { kind: 'body_with_retry'; detail: TaskDetailDto }
+  | { kind: "body_with_retry"; detail: TaskDetailDto }
   /** unreachable over a cached body — body as-is; the banner owns the signal. */
-  | { kind: 'body_stale'; detail: TaskDetailDto }
-  | { kind: 'not_found' }
-  | { kind: 'transient_empty' }
-  | { kind: 'unreachable_empty' };
+  | { kind: "body_stale"; detail: TaskDetailDto }
+  | { kind: "not_found" }
+  | { kind: "transient_empty" }
+  | { kind: "unreachable_empty" };
 
 export function resolveTaskDetailView(args: {
   failure: TaskDetailFailure | null;
@@ -151,17 +145,13 @@ export function resolveTaskDetailView(args: {
   const { failure, detail } = args;
   switch (failure) {
     case null:
-      return detail ? { kind: 'body', detail } : { kind: 'loading' };
-    case 'not_found':
-      return { kind: 'not_found' };
-    case 'transient':
-      return detail
-        ? { kind: 'body_with_retry', detail }
-        : { kind: 'transient_empty' };
-    case 'unreachable':
-      return detail
-        ? { kind: 'body_stale', detail }
-        : { kind: 'unreachable_empty' };
+      return detail ? { kind: "body", detail } : { kind: "loading" };
+    case "not_found":
+      return { kind: "not_found" };
+    case "transient":
+      return detail ? { kind: "body_with_retry", detail } : { kind: "transient_empty" };
+    case "unreachable":
+      return detail ? { kind: "body_stale", detail } : { kind: "unreachable_empty" };
   }
 }
 
@@ -181,16 +171,16 @@ export function resolveTaskDetailView(args: {
  * snapshot is wide enough to settle this projection by assignment.
  */
 export type TaskDetailFrame =
-  | { type: 'snapshot_required'; viewerScope: boolean }
+  | { type: "snapshot_required"; viewerScope: boolean }
   | {
-      type: 'event';
+      type: "event";
       viewerScope: boolean;
       kind: string;
       taskId: string | null;
-      taskKind: TaskChangedEvent['kind'] | null;
+      taskKind: TaskChangedEvent["kind"] | null;
     }
   /** Any other frame type — heartbeats, acks, unrelated envelopes. */
-  | { type: 'other' };
+  | { type: "other" };
 
 /**
  * Whether an open detail modal still has to RE-READ after this frame.
@@ -210,22 +200,19 @@ export type TaskDetailFrame =
  * twice is free and order-independent, whereas two owners of a REFETCH cost a
  * cancelled round trip each time. This function keeps that second half single.
  */
-export function shouldRefreshTaskDetail(
-  frame: TaskDetailFrame,
-  openTaskId: string,
-): boolean {
+export function shouldRefreshTaskDetail(frame: TaskDetailFrame, openTaskId: string): boolean {
   switch (frame.type) {
-    case 'snapshot_required':
+    case "snapshot_required":
       // Gap recovery: we may have missed this task's change while
       // disconnected, so re-read rather than trust what is cached — the one path
       // where nothing local can be trusted to be a projection of the authority.
       return frame.viewerScope;
-    case 'event':
+    case "event":
       if (!frame.viewerScope) return false;
-      if (frame.kind !== 'task_changed') return false;
+      if (frame.kind !== "task_changed") return false;
       if (frame.taskId !== openTaskId) return false;
-      return frame.taskKind === 'edit';
-    case 'other':
+      return frame.taskKind === "edit";
+    case "other":
       return false;
   }
 }

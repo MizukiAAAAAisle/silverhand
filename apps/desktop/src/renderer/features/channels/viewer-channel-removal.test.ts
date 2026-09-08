@@ -21,11 +21,11 @@
 //      revalidates an OBSERVED public-readable window, drops every unobserved
 //      (gate-closed) member-only key and never re-requests it; a `visibility-loss`
 //      discards even an observed one. Asserted as a cache/request contract.
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { QueryClient, QueryObserver } from '@tanstack/react-query';
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import type {
   MessageDto,
   NotificationDto,
@@ -33,31 +33,31 @@ import type {
   SearchDto,
   TaskDetailDto,
   TaskSummaryDto,
-} from '@silverhand/shared';
-import { activityKey } from '../attention/hooks';
-import { messageKey } from '../messages/hooks';
-import { removeChannelFromSaved, savedHeldChannelIds, savedKey } from '../saved/hooks';
-import { searchKey } from '../search/hooks';
+} from "@silverhand/shared";
+import { activityKey } from "../attention/hooks";
+import { messageKey } from "../messages/hooks";
+import { removeChannelFromSaved, savedHeldChannelIds, savedKey } from "../saved/hooks";
+import { searchKey } from "../search/hooks";
 import {
   boardColumnKey,
   boardCountsKey,
   boardFacetsKey,
   boardFilterKey,
-} from '../tasks/boardQuery';
-import { DEFAULT_TASK_FILTERS } from '../tasks/taskFilters';
-import { taskDetailKey } from '../tasks/taskDetail';
+} from "../tasks/boardQuery";
+import { DEFAULT_TASK_FILTERS } from "../tasks/taskFilters";
+import { taskDetailKey } from "../tasks/taskDetail";
 import {
   CHANNEL_WORKSPACE_ATTRIBUTION_SOURCES,
   channelWorkspaceConflicts,
   channelWorkspaceOf,
   clearChannelWorkspaceIndex,
   recordChannelWorkspace,
-} from './channel-workspace-index';
+} from "./channel-workspace-index";
 import {
   conversationUnreadKey,
   messageUnreadByConversationKey,
   messageUnreadSummaryKey,
-} from './message-unread';
+} from "./message-unread";
 import {
   handleViewerChannelRemoved,
   heldChannelIdsInWorkspace,
@@ -69,12 +69,12 @@ import {
   VIEWER_LOCAL_CHANNEL_READ_MODELS,
   type ChannelMembershipRow,
   type ChannelRemovalBaseline,
-} from './viewer-channel-removal';
+} from "./viewer-channel-removal";
 
-const WS = 'ws-1';
-const OTHER_WS = 'ws-2';
-const LOST = 'ch-lost';
-const KEPT = 'ch-kept';
+const WS = "ws-1";
+const OTHER_WS = "ws-2";
+const LOST = "ch-lost";
+const KEPT = "ch-kept";
 
 /** The board's default (All workspaces / all channels) filter key — the shape
  *  both task surfaces share. */
@@ -88,23 +88,23 @@ function message(id: string, conversationId: string): MessageDto {
   return {
     id,
     conversation_id: conversationId,
-    from_kind: 'user',
+    from_kind: "user",
     from_agent_id: null,
-    from_user_id: 'u-1',
+    from_user_id: "u-1",
     author: {
-      status: 'active',
-      kind: 'user',
-      id: 'u-1',
-      name: 'User',
-      display_name: 'User',
+      status: "active",
+      kind: "user",
+      id: "u-1",
+      name: "User",
+      display_name: "User",
       avatar_url: null,
       runtime: null,
     },
-    content: 'body',
+    content: "body",
     metadata: null,
     attachments: null,
     reactions: null,
-    seq: 3 as MessageDto['seq'],
+    seq: 3 as MessageDto["seq"],
     created_at: 1,
     thread_root_id: null,
     linked_task: null,
@@ -116,10 +116,10 @@ function savedRow(id: string, channelId: string, workspaceId = WS): SavedMessage
     id,
     message: message(`m-${id}`, channelId),
     place: {
-      kind: 'workspace_channel',
+      kind: "workspace_channel",
       conversation_id: channelId,
       workspace_id: workspaceId,
-      channel_name: 'channel',
+      channel_name: "channel",
     },
     saved_at: 2,
   };
@@ -132,7 +132,7 @@ function savedPairRow(id: string, conversationId: string): SavedMessageDto {
   return {
     id,
     message: message(`m-${id}`, conversationId),
-    place: { kind: 'direct_pair', conversation_id: conversationId },
+    place: { kind: "direct_pair", conversation_id: conversationId },
     saved_at: 2,
   };
 }
@@ -142,16 +142,16 @@ function taskRow(id: string, channelId: string, workspaceId = WS): TaskSummaryDt
     id,
     task_number: 7,
     place: {
-      kind: 'workspace',
+      kind: "workspace",
       conversation_id: channelId,
       workspace_id: workspaceId,
-      channel_name: 'channel',
+      channel_name: "channel",
     },
     thread_root_id: null,
-    status: 'todo',
-    title: 'a task',
+    status: "todo",
+    title: "a task",
     assignee: null,
-    creator: { type: 'user', id: 'u-1', name: 'shiki' },
+    creator: { type: "user", id: "u-1", name: "shiki" },
     created_at: 1,
     closed_at: null,
   };
@@ -160,35 +160,35 @@ function taskRow(id: string, channelId: string, workspaceId = WS): TaskSummaryDt
 function taskDetail(id: string, channelId: string, workspaceId = WS): TaskDetailDto {
   return {
     ...taskRow(id, channelId, workspaceId),
-    content: 'body',
+    content: "body",
     last_editor: null,
     last_edited_at: null,
     source_message_id: null,
-    nav: { kind: 'unavailable' },
+    nav: { kind: "unavailable" },
   };
 }
 
 function searchDto(channelId: string, workspaceId = WS): SearchDto {
   return {
     query: {
-      q: 'hello',
-      stream: 'all',
-      order: 'recency_desc',
+      q: "hello",
+      stream: "all",
+      order: "recency_desc",
       limit: 80,
     },
     results: [
       {
-        type: 'message',
+        type: "message",
         conversation: {
           id: channelId,
-          title: 'channel',
-          placement_kind: 'workspace',
+          title: "channel",
+          placement_kind: "workspace",
           workspace: {
             id: workspaceId,
-            name: 'Workspace',
+            name: "Workspace",
             owner_agent_id: null,
           },
-          roster_policy: 'open',
+          roster_policy: "open",
           channel_id: channelId,
           closed_at: null,
           created_at: 1,
@@ -204,8 +204,8 @@ function searchDto(channelId: string, workspaceId = WS): SearchDto {
 function notificationRow(id: string, channelId: string): NotificationDto {
   return {
     id,
-    kind: 'mention_self',
-    user_id: 'u-1',
+    kind: "mention_self",
+    user_id: "u-1",
     agent_id: null,
     workspace_id: WS,
     conversation_id: channelId,
@@ -225,11 +225,11 @@ function notificationRow(id: string, channelId: string): NotificationDto {
 // message-reactions) are deliberately NOT seeded here — the whole-cache invariant
 // does not apply to them; each has its own test below.
 const SEEDS: Record<string, (qc: QueryClient) => void> = {
-  activity: qc => {
+  activity: (qc) => {
     const item = (id: string, conversationId: string) => ({
       id,
-      kind: 'unread' as const,
-      salience: 'ambient' as const,
+      kind: "unread" as const,
+      salience: "ambient" as const,
       workspace_id: WS,
       conversation_id: conversationId,
       thread_root_id: null,
@@ -243,34 +243,34 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       unread_count: 1,
     });
     qc.setQueryData(activityKey(), {
-      items: [item('gone', LOST), item('keep', KEPT)],
+      items: [item("gone", LOST), item("keep", KEPT)],
     });
   },
-  'message-unread': qc => {
+  "message-unread": (qc) => {
     qc.setQueryData(messageUnreadByConversationKey(WS), {
       by_conversation: { [LOST]: 3, [KEPT]: 5 },
       latest_by_conversation: {
-        [LOST]: { message_id: 'm-lost', seq: 7, thread_root_id: null },
-        [KEPT]: { message_id: 'm-kept', seq: 9, thread_root_id: null },
+        [LOST]: { message_id: "m-lost", seq: 7, thread_root_id: null },
+        [KEPT]: { message_id: "m-kept", seq: 9, thread_root_id: null },
       },
       total: 8,
     });
     qc.setQueryData(messageUnreadSummaryKey, { by_workspace: { [WS]: 8 } });
   },
-  saved: qc => {
-    qc.setQueryData(savedKey, [savedRow('s-gone', LOST), savedRow('s-keep', KEPT)]);
+  saved: (qc) => {
+    qc.setQueryData(savedKey, [savedRow("s-gone", LOST), savedRow("s-keep", KEPT)]);
     // A second loaded variant (the Saved pane's filtered read) must be patched too.
-    qc.setQueryData([...savedKey, { workspace_id: WS }], [savedRow('s-gone-2', LOST)]);
+    qc.setQueryData([...savedKey, { workspace_id: WS }], [savedRow("s-gone-2", LOST)]);
   },
-  tasks: qc => {
+  tasks: (qc) => {
     // The board's three faces are the whole of this root now (#task:1892 retired
     // the fetch-all list): infinite pages of rows, and two server aggregates.
-    qc.setQueryData(boardColumnKey('todo', BOARD_FILTER_KEY), {
+    qc.setQueryData(boardColumnKey("todo", BOARD_FILTER_KEY), {
       pages: [
-        { status: 'todo', items: [taskRow('t-gone', LOST)], next_cursor: 'cur-1' },
-        { status: 'todo', items: [taskRow('t-keep', KEPT)], next_cursor: null },
+        { status: "todo", items: [taskRow("t-gone", LOST)], next_cursor: "cur-1" },
+        { status: "todo", items: [taskRow("t-keep", KEPT)], next_cursor: null },
       ],
-      pageParams: [null, 'cur-1'],
+      pageParams: [null, "cur-1"],
     });
     qc.setQueryData(boardCountsKey(BOARD_FILTER_KEY), {
       counts: { todo: 2, in_progress: 0, in_review: 0, done: 0, closed: 0 },
@@ -280,25 +280,25 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       creators: [],
       has_unassigned: true,
     });
-    qc.setQueryData(taskDetailKey('t-gone'), taskDetail('t-gone', LOST));
-    qc.setQueryData(taskDetailKey('t-keep'), taskDetail('t-keep', KEPT));
-    qc.setQueryData(['task-by-number', WS, 7], taskRow('t-gone', LOST));
-    qc.setQueryData(['task-by-number', WS, 8], taskRow('t-keep', KEPT));
+    qc.setQueryData(taskDetailKey("t-gone"), taskDetail("t-gone", LOST));
+    qc.setQueryData(taskDetailKey("t-keep"), taskDetail("t-keep", KEPT));
+    qc.setQueryData(["task-by-number", WS, 7], taskRow("t-gone", LOST));
+    qc.setQueryData(["task-by-number", WS, 8], taskRow("t-keep", KEPT));
   },
-  search: qc => {
-    qc.setQueryData([...searchKey, { q: 'hello' }], searchDto(LOST));
-    qc.setQueryData([...searchKey, { q: 'other' }], searchDto(KEPT));
+  search: (qc) => {
+    qc.setQueryData([...searchKey, { q: "hello" }], searchDto(LOST));
+    qc.setQueryData([...searchKey, { q: "other" }], searchDto(KEPT));
   },
-  messages: qc => {
+  messages: (qc) => {
     // `['messages', <messageId>]` — keyed by the MESSAGE, so layer 1's
     // position-1 sweep cannot see it; the row's `conversation_id` is what
     // attributes it, and that is always the parent channel-like conversation.
-    qc.setQueryData(messageKey('msg-gone'), {
-      message: message('msg-gone', LOST),
+    qc.setQueryData(messageKey("msg-gone"), {
+      message: message("msg-gone", LOST),
       agent_name: null,
     });
-    qc.setQueryData(messageKey('msg-keep'), {
-      message: message('msg-keep', KEPT),
+    qc.setQueryData(messageKey("msg-keep"), {
+      message: message("msg-keep", KEPT),
       agent_name: null,
     });
   },
@@ -312,17 +312,17 @@ function seedChannelKeyedSiblings(qc: QueryClient): void {
     qc.setQueryData(build(LOST), { seeded: LOST });
     qc.setQueryData(build(KEPT), { seeded: KEPT });
   };
-  both(cid => ['channels', cid, 'messages']);
-  both(cid => ['channels', cid, 'cluster', 'root-1', 'messages']);
-  both(cid => ['channels', cid, 'thread-followers', 'root-1']);
-  both(cid => ['channels', cid, 'threads-list']);
-  both(cid => ['channels', cid, 'attachments-list']);
-  both(cid => ['channels', cid, 'agents']);
-  both(cid => ['conversations', cid, 'agent-run-states']);
-  both(cid => ['conversations', cid, 'agent-activity', 'agent-1']);
-  both(cid => ['conversation-members', cid]);
-  both(cid => ['channel-detail', cid]);
-  both(cid => [...conversationUnreadKey(cid)]);
+  both((cid) => ["channels", cid, "messages"]);
+  both((cid) => ["channels", cid, "cluster", "root-1", "messages"]);
+  both((cid) => ["channels", cid, "thread-followers", "root-1"]);
+  both((cid) => ["channels", cid, "threads-list"]);
+  both((cid) => ["channels", cid, "attachments-list"]);
+  both((cid) => ["channels", cid, "agents"]);
+  both((cid) => ["conversations", cid, "agent-run-states"]);
+  both((cid) => ["conversations", cid, "agent-activity", "agent-1"]);
+  both((cid) => ["conversation-members", cid]);
+  both((cid) => ["channel-detail", cid]);
+  both((cid) => [...conversationUnreadKey(cid)]);
 }
 
 /** Structured reference check (no `JSON.stringify().includes()` — that
@@ -334,9 +334,9 @@ function stringReferences(value: string, channelId: string): boolean {
 }
 
 function valueReferences(value: unknown, channelId: string): boolean {
-  if (typeof value === 'string') return stringReferences(value, channelId);
-  if (Array.isArray(value)) return value.some(v => valueReferences(v, channelId));
-  if (value && typeof value === 'object') {
+  if (typeof value === "string") return stringReferences(value, channelId);
+  if (Array.isArray(value)) return value.some((v) => valueReferences(v, channelId));
+  if (value && typeof value === "object") {
     return Object.entries(value).some(
       ([k, v]) => stringReferences(k, channelId) || valueReferences(v, channelId),
     );
@@ -348,12 +348,10 @@ function cacheMentions(qc: QueryClient, channelId: string): boolean {
   return qc
     .getQueryCache()
     .getAll()
-    .some(q => {
+    .some((q) => {
       const inKey =
         Array.isArray(q.queryKey) &&
-        q.queryKey.some(
-          seg => typeof seg === 'string' && stringReferences(seg, channelId),
-        );
+        q.queryKey.some((seg) => typeof seg === "string" && stringReferences(seg, channelId));
       return inKey || valueReferences(q.state.data ?? null, channelId);
     });
 }
@@ -366,20 +364,20 @@ function seedAll(qc: QueryClient): void {
 const REMOVE_LOST = {
   workspaceId: WS,
   channelId: LOST,
-  mode: 'visibility-loss',
+  mode: "visibility-loss",
 } as const;
 
-describe('viewer-local channel removal contract (#task:1689)', () => {
+describe("viewer-local channel removal contract (#task:1689)", () => {
   // The channel→workspace attribution index is module state (an immutable fact
   // learned once per channel), so each test starts from an empty one.
   beforeEach(clearChannelWorkspaceIndex);
 
-  it('registry & seed set stay in lockstep (every read model is exercised)', () => {
-    const registered = VIEWER_LOCAL_CHANNEL_READ_MODELS.map(m => m.id).sort();
+  it("registry & seed set stay in lockstep (every read model is exercised)", () => {
+    const registered = VIEWER_LOCAL_CHANNEL_READ_MODELS.map((m) => m.id).sort();
     expect(Object.keys(SEEDS).sort()).toEqual(registered);
   });
 
-  for (const mode of ['visibility-loss', 'membership-loss'] as const) {
+  for (const mode of ["visibility-loss", "membership-loss"] as const) {
     it(`after a ${mode} the channel appears NOWHERE in the cache; survivor intact`, () => {
       const qc = new QueryClient();
       seedAll(qc);
@@ -398,16 +396,16 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
   // discard half; these pin the fork itself. The contract is a cache/request
   // contract on purpose — `Query.isActive()` and fetch counts, never a rendered
   // shape (@Cindy / @Alice, 2026-07-28).
-  describe('membership-loss keeps what is observed, drops what is not (#task:1697)', () => {
-    const MAINLINE = ['channels', LOST, 'messages'] as const;
+  describe("membership-loss keeps what is observed, drops what is not (#task:1697)", () => {
+    const MAINLINE = ["channels", LOST, "messages"] as const;
     // The member-only families, in the shape their hooks actually take when a
     // gate closes: some unmount, some stay mounted with a null id, i.e. an
     // `enabled: false` observer. Both are `inactive` by `Query.isActive()`.
     const MEMBER_ONLY = [
-      ['conversation-members', LOST],
-      ['channels', LOST, 'threads-list'],
-      ['channels', LOST, 'attachments-list'],
-      ['conversations', LOST, 'agent-run-states'],
+      ["conversation-members", LOST],
+      ["channels", LOST, "threads-list"],
+      ["channels", LOST, "attachments-list"],
+      ["conversations", LOST, "agent-run-states"],
     ] as const;
 
     /** Attach a real observer so the query's ACTIVITY is the thing under test.
@@ -434,14 +432,14 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       return { fetches: () => fetches, stop };
     }
 
-    it('an OBSERVED public-readable window keeps its data and revalidates in the background', async () => {
+    it("an OBSERVED public-readable window keeps its data and revalidates in the background", async () => {
       const qc = new QueryClient();
       const mainline = observe(qc, MAINLINE, { seeded: LOST });
 
       handleViewerChannelRemoved(qc, {
         workspaceId: WS,
         channelId: LOST,
-        mode: 'membership-loss',
+        mode: "membership-loss",
       });
 
       // The pane the viewer is still looking at never goes empty — that emptying
@@ -452,9 +450,9 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       mainline.stop();
     });
 
-    it('a member-only query whose gate has closed is DROPPED and never re-requested', async () => {
+    it("a member-only query whose gate has closed is DROPPED and never re-requested", async () => {
       const qc = new QueryClient();
-      const gated = MEMBER_ONLY.map(key => ({
+      const gated = MEMBER_ONLY.map((key) => ({
         key,
         probe: observe(qc, key, { any: key[1] }, false),
       }));
@@ -462,7 +460,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       handleViewerChannelRemoved(qc, {
         workspaceId: WS,
         channelId: LOST,
-        mode: 'membership-loss',
+        mode: "membership-loss",
       });
 
       for (const { key, probe } of gated) {
@@ -478,14 +476,14 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       }
     });
 
-    it('a visibility-loss discards even an OBSERVED window', () => {
+    it("a visibility-loss discards even an OBSERVED window", () => {
       const qc = new QueryClient();
       const mainline = observe(qc, MAINLINE, { seeded: LOST });
 
       handleViewerChannelRemoved(qc, {
         workspaceId: WS,
         channelId: LOST,
-        mode: 'visibility-loss',
+        mode: "visibility-loss",
       });
 
       // A private channel must not stay resolvable on any read path, and the
@@ -495,13 +493,13 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
     });
   });
 
-  describe('refetch equality per form (patch vs discard vs retain)', () => {
-    it('membership-filtered LISTS are patched, in the shape a refetch returns', () => {
+  describe("refetch equality per form (patch vs discard vs retain)", () => {
+    it("membership-filtered LISTS are patched, in the shape a refetch returns", () => {
       const qc = new QueryClient();
       seedAll(qc);
       handleViewerChannelRemoved(qc, REMOVE_LOST);
 
-      expect(qc.getQueryData(savedKey)).toEqual([savedRow('s-keep', KEPT)]);
+      expect(qc.getQueryData(savedKey)).toEqual([savedRow("s-keep", KEPT)]);
       expect(qc.getQueryData([...savedKey, { workspace_id: WS }])).toEqual([]);
       // The `tasks` entry is the same form, but its rows now live inside the
       // board's pages — patched in the test below.
@@ -510,78 +508,73 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
     // Three shapes share the `['tasks', …]` root, so the walk dispatches on
     // the KEY. Duck-typing them would either crash on the page object or,
     // worse, silently skip it and leave the lost channel's rows rendered.
-    it('board PAGES are patched; server aggregates are invalidated, not patched', () => {
+    it("board PAGES are patched; server aggregates are invalidated, not patched", () => {
       const qc = new QueryClient();
       seedAll(qc);
       const countsBefore = qc.getQueryData(boardCountsKey(BOARD_FILTER_KEY));
       handleViewerChannelRemoved(qc, REMOVE_LOST);
 
-      const column = qc.getQueryData(boardColumnKey('todo', BOARD_FILTER_KEY)) as {
+      const column = qc.getQueryData(boardColumnKey("todo", BOARD_FILTER_KEY)) as {
         pages: Array<{ items: TaskSummaryDto[]; next_cursor: string | null }>;
         pageParams: unknown[];
       };
-      expect(column.pages.map(p => p.items.map(t => t.id))).toEqual([[], ['t-keep']]);
+      expect(column.pages.map((p) => p.items.map((t) => t.id))).toEqual([[], ["t-keep"]]);
       // Cursors are positions in the surviving order, so paging still continues
       // where it left off — the page list is patched, not re-windowed.
-      expect(column.pageParams).toEqual([null, 'cur-1']);
-      expect(column.pages.map(p => p.next_cursor)).toEqual(['cur-1', null]);
+      expect(column.pageParams).toEqual([null, "cur-1"]);
+      expect(column.pages.map((p) => p.next_cursor)).toEqual(["cur-1", null]);
 
       // A `GROUP BY` result cannot be recomputed from what the client holds (a
       // local `−1` would invent a number), and nothing in the value says whether
       // it counted the lost channel — so it is marked for a re-read, keeping the
       // last authoritative value until the authority answers.
       expect(qc.getQueryData(boardCountsKey(BOARD_FILTER_KEY))).toEqual(countsBefore);
-      expect(qc.getQueryState(boardCountsKey(BOARD_FILTER_KEY))?.isInvalidated).toBe(
-        true,
-      );
+      expect(qc.getQueryState(boardCountsKey(BOARD_FILTER_KEY))?.isInvalidated).toBe(true);
       expect(qc.getQueryState(boardFacetsKey())?.isInvalidated).toBe(true);
     });
 
-    it('single-object reads of a now-unreadable task are DISCARDED, not trimmed', () => {      const qc = new QueryClient();
+    it("single-object reads of a now-unreadable task are DISCARDED, not trimmed", () => {
+      const qc = new QueryClient();
       seedAll(qc);
       handleViewerChannelRemoved(qc, REMOVE_LOST);
 
       // A refetch of these would FAIL (403), so an emptied-out body is a shape no
       // server response can produce; the query has to be gone.
-      expect(qc.getQueryState(taskDetailKey('t-gone'))).toBeUndefined();
-      expect(qc.getQueryState(['task-by-number', WS, 7])).toBeUndefined();
+      expect(qc.getQueryState(taskDetailKey("t-gone"))).toBeUndefined();
+      expect(qc.getQueryState(["task-by-number", WS, 7])).toBeUndefined();
       // The survivor's detail is untouched.
-      expect(qc.getQueryData(taskDetailKey('t-keep'))).toEqual(taskDetail('t-keep', KEPT));
-      expect(qc.getQueryData(['task-by-number', WS, 8])).toEqual(taskRow('t-keep', KEPT));
+      expect(qc.getQueryData(taskDetailKey("t-keep"))).toEqual(taskDetail("t-keep", KEPT));
+      expect(qc.getQueryData(["task-by-number", WS, 8])).toEqual(taskRow("t-keep", KEPT));
     });
 
-    it('a RANKED/CAPPED search set that mentions the channel is discarded; others stay', () => {
+    it("a RANKED/CAPPED search set that mentions the channel is discarded; others stay", () => {
       const qc = new QueryClient();
       seedAll(qc);
       handleViewerChannelRemoved(qc, REMOVE_LOST);
 
       // `total`/`truncated` describe a window computed WITH the removed rows, so
       // filtering rows out would leave a set no refetch can return.
-      expect(qc.getQueryState([...searchKey, { q: 'hello' }])).toBeUndefined();
-      expect(qc.getQueryData([...searchKey, { q: 'other' }])).toEqual(
-        searchDto(KEPT),
-      );
+      expect(qc.getQueryState([...searchKey, { q: "hello" }])).toBeUndefined();
+      expect(qc.getQueryData([...searchKey, { q: "other" }])).toEqual(searchDto(KEPT));
     });
 
-    it('notifications are RETAINED — the server does not membership-filter them', () => {
+    it("notifications are RETAINED — the server does not membership-filter them", () => {
       const qc = new QueryClient();
-      const listKey = ['notifications', 'list', { unread: false }];
+      const listKey = ["notifications", "list", { unread: false }];
       qc.setQueryData(listKey, {
-        notifications: [notificationRow('n-1', LOST), notificationRow('n-2', KEPT)],
+        notifications: [notificationRow("n-1", LOST), notificationRow("n-2", KEPT)],
       });
       handleViewerChannelRemoved(qc, REMOVE_LOST);
       // A local delete would diverge from a refetch (the notification repo filters
       // by RECIPIENT only) and be resurrected on the next fetch. Whether losing a
       // channel should clear its notifications is a backend domain decision.
       expect(qc.getQueryData(listKey)).toEqual({
-        notifications: [notificationRow('n-1', LOST), notificationRow('n-2', KEPT)],
+        notifications: [notificationRow("n-1", LOST), notificationRow("n-2", KEPT)],
       });
-      expect(VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION.notifications?.verdicts).toEqual([
-        'retained',
-      ]);
+      expect(VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION.notifications?.verdicts).toEqual(["retained"]);
     });
 
-    it('single-message caches of the lost channel are DISCARDED, by payload attribution', () => {
+    it("single-message caches of the lost channel are DISCARDED, by payload attribution", () => {
       const qc = new QueryClient();
       seedAll(qc);
       handleViewerChannelRemoved(qc, REMOVE_LOST);
@@ -590,22 +583,22 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       // it — and that is always the parent channel-like conversation, never a
       // thread. A refetch of this read would be refused after the loss, and a
       // single-object read has no filtered shape to patch to.
-      expect(qc.getQueryState(messageKey('msg-gone'))).toBeUndefined();
-      expect(qc.getQueryData(messageKey('msg-keep'))).toEqual({
-        message: message('msg-keep', KEPT),
+      expect(qc.getQueryState(messageKey("msg-gone"))).toBeUndefined();
+      expect(qc.getQueryData(messageKey("msg-keep"))).toEqual({
+        message: message("msg-keep", KEPT),
         agent_name: null,
       });
-      expect(VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION.messages?.verdicts).toEqual(['cleaned']);
+      expect(VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION.messages?.verdicts).toEqual(["cleaned"]);
       // The reaction aggregate shares the message-keyed FORM but not the reason:
       // its payload names no conversation, so this client cannot attribute it.
-      expect(VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION['message-reactions']?.verdicts).toEqual([
-        'retained',
+      expect(VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION["message-reactions"]?.verdicts).toEqual([
+        "retained",
       ]);
     });
   });
 
-  describe('unread arithmetic (total is recomputed, never guessed)', () => {
-    it('the patched map is refetch-shaped and its total is the sum of survivors', () => {
+  describe("unread arithmetic (total is recomputed, never guessed)", () => {
+    it("the patched map is refetch-shaped and its total is the sum of survivors", () => {
       const qc = new QueryClient();
       seedAll(qc);
       handleViewerChannelRemoved(qc, REMOVE_LOST);
@@ -615,7 +608,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       expect(qc.getQueryData(messageUnreadByConversationKey(WS))).toEqual({
         by_conversation: { [KEPT]: 5 },
         latest_by_conversation: {
-          [KEPT]: { message_id: 'm-kept', seq: 9, thread_root_id: null },
+          [KEPT]: { message_id: "m-kept", seq: 9, thread_root_id: null },
         },
         total: 5,
       });
@@ -624,7 +617,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       });
     });
 
-    it('a stale total is REPLACED by the survivor sum, not decremented by it', () => {
+    it("a stale total is REPLACED by the survivor sum, not decremented by it", () => {
       // #task:1689 blocker 4: the two caches are patched independently, so `total`
       // can be stale relative to `by_conversation`. Subtracting the lost count
       // would keep the lie (1 - 4 → 0) and hide four unread messages the viewer
@@ -659,7 +652,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       });
     });
 
-    it('an emptied map settles the rollup at 0 rather than a stale count', () => {
+    it("an emptied map settles the rollup at 0 rather than a stale count", () => {
       const qc = new QueryClient();
       qc.setQueryData(messageUnreadByConversationKey(WS), {
         by_conversation: { [LOST]: 4 },
@@ -679,7 +672,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
     });
   });
 
-  it('is idempotent and cold-safe: a second run / empty cache never throws', () => {
+  it("is idempotent and cold-safe: a second run / empty cache never throws", () => {
     const qc = new QueryClient();
     expect(() => handleViewerChannelRemoved(qc, REMOVE_LOST)).not.toThrow();
     seedAll(qc);
@@ -692,17 +685,15 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
     });
   });
 
-  describe('classification is registry-anchored (layer 3, not a drifting hand-list)', () => {
-    const FEATURES_DIR = fileURLToPath(new URL('..', import.meta.url));
+  describe("classification is registry-anchored (layer 3, not a drifting hand-list)", () => {
+    const FEATURES_DIR = fileURLToPath(new URL("..", import.meta.url));
     /** The three key shapes the codebase actually writes: a single-line `*Key`
      *  constant, a `*Key` FACTORY (`= (args) => [ 'root', … ]`, possibly spanning
      *  lines), and an inline `queryKey: ['root', …]`. */
     const KEY_ROOT = /(?:queryKey:|Key\s*=(?:[^=;]*?=>)?)\s*\[\s*'([\w-]+)'/g;
 
     function rootsIn(src: string): string[] {
-      return [...src.matchAll(KEY_ROOT)]
-        .map(m => m[1])
-        .filter((r): r is string => Boolean(r));
+      return [...src.matchAll(KEY_ROOT)].map((m) => m[1]).filter((r): r is string => Boolean(r));
     }
 
     function scanRoots(dir: string, into = new Set<string>()): Set<string> {
@@ -714,28 +705,28 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
         }
         if (!/\.tsx?$/.test(entry)) continue;
         if (/\.(test|type-test)\.tsx?$/.test(entry)) continue;
-        for (const root of rootsIn(readFileSync(path, 'utf8'))) into.add(root);
+        for (const root of rootsIn(readFileSync(path, "utf8"))) into.add(root);
       }
       return into;
     }
 
-    it('the scanner matches all three key shapes the codebase writes', () => {
+    it("the scanner matches all three key shapes the codebase writes", () => {
       // Fixture, not production source: this is the proof that the net's PATTERN
       // is right. The §12.1#9 residual stands — a key written in a shape not
       // listed here (computed root, key assembled from a variable) escapes it.
-      expect(rootsIn(`export const savedKey = ['saved'] as const;`)).toEqual(['saved']);
+      expect(rootsIn(`export const savedKey = ['saved'] as const;`)).toEqual(["saved"]);
       expect(
         rootsIn(
           `export const boardColumnKey = (status: TaskStatus, filterKey: string) =>\n  [\n    'tasks',\n    'board',\n  ];`,
         ),
-      ).toEqual(['tasks']);
+      ).toEqual(["tasks"]);
       expect(rootsIn(`  return useQuery({\n    queryKey: ['presence', ids],\n  });`)).toEqual([
-        'presence',
+        "presence",
       ]);
       expect(rootsIn(`const key = buildKey(root);`)).toEqual([]);
     });
 
-    it('every key root under features/** is classified, and every entry is real', () => {
+    it("every key root under features/** is classified, and every entry is real", () => {
       const scanned = scanRoots(FEATURES_DIR);
       const classified = Object.keys(VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION);
       expect(scanned.size).toBeGreaterThanOrEqual(30); // not vacuous
@@ -745,33 +736,31 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       expect([...scanned].sort()).toEqual(classified.sort());
     });
 
-    it('every classification carries at least one verdict and a reason', () => {
+    it("every classification carries at least one verdict and a reason", () => {
       for (const [root, c] of Object.entries(VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION)) {
         expect(c.verdicts.length, root).toBeGreaterThan(0);
         expect(c.reason.length, root).toBeGreaterThan(20);
       }
     });
 
-    it('`cleaned` roots and registry roots match in BOTH directions', () => {
-      const registryRoots = new Set(
-        VIEWER_LOCAL_CHANNEL_READ_MODELS.flatMap(m => [...m.roots]),
-      );
+    it("`cleaned` roots and registry roots match in BOTH directions", () => {
+      const registryRoots = new Set(VIEWER_LOCAL_CHANNEL_READ_MODELS.flatMap((m) => [...m.roots]));
       const cleanedRoots = new Set(
         Object.entries(VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION)
-          .filter(([, c]) => c.verdicts.includes('cleaned'))
+          .filter(([, c]) => c.verdicts.includes("cleaned"))
           .map(([root]) => root),
       );
       expect([...registryRoots].sort()).toEqual([...cleanedRoots].sort());
     });
 
-    it('every registry entry declares a key whose root it also claims', () => {
+    it("every registry entry declares a key whose root it also claims", () => {
       for (const rm of VIEWER_LOCAL_CHANNEL_READ_MODELS) {
         const root = Array.isArray(rm.key) ? rm.key[0] : rm.key;
         expect(rm.roots, rm.id).toContain(root);
       }
     });
 
-    it('the declared attribution carriers do not silently shrink', () => {
+    it("the declared attribution carriers do not silently shrink", () => {
       // A DON'T-SHRINK guard only. Enumerated from the recording side, it can
       // confirm that a declared carrier still records — it can NEVER see a
       // carrier that forgot to. That direction is covered by the two
@@ -785,10 +774,10 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
           }
           if (!/\.tsx?$/.test(entry)) continue;
           if (/\.(test|type-test)\.tsx?$/.test(entry)) continue;
-          const src = readFileSync(path, 'utf8');
+          const src = readFileSync(path, "utf8");
           if (!/recordChannelWorkspace(Rows)?\(/.test(src)) continue;
           // The index itself declares the functions; it is not a carrier.
-          if (path.endsWith('channels/channel-workspace-index.ts')) continue;
+          if (path.endsWith("channels/channel-workspace-index.ts")) continue;
           into.push(path.slice(FEATURES_DIR.length));
         }
         return into;
@@ -804,12 +793,12 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
   // records a binding. A list drawn from the modules that already record can only
   // confirm itself — that is how a second ref producer without a write-through
   // survived the first round of this contract.
-  describe('the conversation-ref read point is the only producer (independent enumeration)', () => {
+  describe("the conversation-ref read point is the only producer (independent enumeration)", () => {
     // Scan the WHOLE renderer tree, not just `features/**`: nothing stops a
     // producer from living in `components/`, `lib/`, or `App.tsx`, and a fence
     // narrower than the surface it protects is not a fence.
-    const RENDERER_SRC = fileURLToPath(new URL('../..', import.meta.url));
-    const READ_POINT = 'features/conversations/conversation-ref-query.ts';
+    const RENDERER_SRC = fileURLToPath(new URL("../..", import.meta.url));
+    const READ_POINT = "features/conversations/conversation-ref-query.ts";
     /** Verbs that may touch this key OUTSIDE the read point: eviction only. Stated
      *  as an allow-list, because "no `fetchQuery`" would miss `setQueryData` —
      *  which sends no request yet fills the same cache with no write-through. */
@@ -835,38 +824,36 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
 
     /** Code lines only — a comment that quotes the key or the path is prose. */
     function codeLines(src: string): string[] {
-      return src
-        .split('\n')
-        .filter(line => !/^\s*(\/\/|\/\*|\*)/.test(line));
+      return src.split("\n").filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line));
     }
 
-    const files = sourceFiles(RENDERER_SRC).map(path => ({
+    const files = sourceFiles(RENDERER_SRC).map((path) => ({
       rel: path.slice(RENDERER_SRC.length),
-      lines: codeLines(readFileSync(path, 'utf8')),
+      lines: codeLines(readFileSync(path, "utf8")),
     }));
 
-    it('scans a non-vacuous slice of the renderer', () => {
+    it("scans a non-vacuous slice of the renderer", () => {
       expect(files.length).toBeGreaterThan(100);
-      expect(files.map(f => f.rel)).toContain(READ_POINT);
+      expect(files.map((f) => f.rel)).toContain(READ_POINT);
     });
 
-    it('exactly one module builds the conversation-ref request', () => {
+    it("exactly one module builds the conversation-ref request", () => {
       const producers = files
-        .filter(f => f.lines.some(l => l.includes('apiPaths.conversationRef')))
-        .map(f => f.rel);
+        .filter((f) => f.lines.some((l) => l.includes("apiPaths.conversationRef")))
+        .map((f) => f.rel);
       expect(producers).toEqual([READ_POINT]);
     });
 
-    it('that module performs the attribution write-through', () => {
-      const src = readFileSync(join(RENDERER_SRC, READ_POINT), 'utf8');
+    it("that module performs the attribution write-through", () => {
+      const src = readFileSync(join(RENDERER_SRC, READ_POINT), "utf8");
       expect(src).toMatch(/recordChannelWorkspace\(/);
     });
 
-    it('no other module fills the conversation-ref cache — eviction verbs only', () => {
+    it("no other module fills the conversation-ref cache — eviction verbs only", () => {
       for (const file of files) {
         if (file.rel === READ_POINT) continue;
         const keyLines = file.lines.filter(
-          l => l.includes("['conversation-ref'") && KEY_USE.test(l),
+          (l) => l.includes("['conversation-ref'") && KEY_USE.test(l),
         );
         for (const line of keyLines) {
           // Asserted per call site, never with a spanning regex: a wide pattern
@@ -876,111 +863,110 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       }
     });
 
-    it('the key factory does not leave the read point', () => {
+    it("the key factory does not leave the read point", () => {
       // Closes the bypass the literal scans cannot see: an exported factory lets
       // `setQueryData(conversationRefQueryKey(id), …)` fill this cache while
       // mentioning neither the request path nor the raw key.
       const elsewhere = files
         .filter(
-          f => f.rel !== READ_POINT && f.lines.some(l => l.includes('conversationRefQueryKey')),
+          (f) => f.rel !== READ_POINT && f.lines.some((l) => l.includes("conversationRefQueryKey")),
         )
-        .map(f => f.rel);
+        .map((f) => f.rel);
       expect(elsewhere).toEqual([]);
       // …and it really is module-private, so the check above cannot be satisfied
       // by an import that simply does not exist yet.
-      const src = readFileSync(join(RENDERER_SRC, READ_POINT), 'utf8');
+      const src = readFileSync(join(RENDERER_SRC, READ_POINT), "utf8");
       expect(src).not.toMatch(/export\s+(const|function)\s+conversationRefQueryKey/);
     });
 
-    it('the eviction sites are real (the previous check is not vacuous)', () => {
+    it("the eviction sites are real (the previous check is not vacuous)", () => {
       const evicting = files
         .filter(
-          f =>
+          (f) =>
             f.rel !== READ_POINT &&
             f.lines.some(
-              l =>
-                l.includes("['conversation-ref'") && KEY_USE.test(l) && EVICTION_ONLY.test(l),
+              (l) => l.includes("['conversation-ref'") && KEY_USE.test(l) && EVICTION_ONLY.test(l),
             ),
         )
-        .map(f => f.rel);
-      expect(evicting).toContain('features/workspaces/hooks.ts');
+        .map((f) => f.rel);
+      expect(evicting).toContain("features/workspaces/hooks.ts");
     });
   });
 
-  describe('a contradicted binding is unusable, not first-write-wins', () => {
+  describe("a contradicted binding is unusable, not first-write-wins", () => {
     beforeEach(() => {
       clearChannelWorkspaceIndex();
     });
 
-    it('answers neither workspace once two carriers disagree', () => {
-      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    it("answers neither workspace once two carriers disagree", () => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
-        recordChannelWorkspace('ch-x', 'ws-a');
-        expect(channelWorkspaceOf('ch-x')).toBe('ws-a');
-        recordChannelWorkspace('ch-x', 'ws-b');
+        recordChannelWorkspace("ch-x", "ws-a");
+        expect(channelWorkspaceOf("ch-x")).toBe("ws-a");
+        recordChannelWorkspace("ch-x", "ws-b");
         // FALSIFIER for "keep the first value": this index decides which
         // channel-keyed caches a DESTRUCTIVE sweep may claim, so a confident
         // wrong answer is the one outcome that is not allowed.
-        expect(channelWorkspaceOf('ch-x')).toBeNull();
-        expect(channelWorkspaceOf('ch-x')).not.toBe('ws-a');
-        expect(channelWorkspaceOf('ch-x')).not.toBe('ws-b');
+        expect(channelWorkspaceOf("ch-x")).toBeNull();
+        expect(channelWorkspaceOf("ch-x")).not.toBe("ws-a");
+        expect(channelWorkspaceOf("ch-x")).not.toBe("ws-b");
         // …and it stays unusable, including if the first carrier repeats itself.
-        recordChannelWorkspace('ch-x', 'ws-a');
-        expect(channelWorkspaceOf('ch-x')).toBeNull();
+        recordChannelWorkspace("ch-x", "ws-a");
+        expect(channelWorkspaceOf("ch-x")).toBeNull();
         expect(spy).toHaveBeenCalledTimes(1);
       } finally {
         spy.mockRestore();
       }
     });
 
-    it('leaves the disagreement observable', () => {
-      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    it("leaves the disagreement observable", () => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
-        recordChannelWorkspace('ch-y', 'ws-a');
-        recordChannelWorkspace('ch-y', 'ws-b');
+        recordChannelWorkspace("ch-y", "ws-a");
+        recordChannelWorkspace("ch-y", "ws-b");
       } finally {
         spy.mockRestore();
       }
       expect(channelWorkspaceConflicts()).toEqual([
-        { channelId: 'ch-y', first: 'ws-a', second: 'ws-b' },
+        { channelId: "ch-y", first: "ws-a", second: "ws-b" },
       ]);
     });
 
-    it('agreement is a no-op, and an empty coordinate is skipped not synthesized', () => {
-      recordChannelWorkspace('ch-z', 'ws-a');
-      recordChannelWorkspace('ch-z', 'ws-a');
-      expect(channelWorkspaceOf('ch-z')).toBe('ws-a');
+    it("agreement is a no-op, and an empty coordinate is skipped not synthesized", () => {
+      recordChannelWorkspace("ch-z", "ws-a");
+      recordChannelWorkspace("ch-z", "ws-a");
+      expect(channelWorkspaceOf("ch-z")).toBe("ws-a");
       expect(channelWorkspaceConflicts()).toEqual([]);
       // A notification may carry a null workspace (`workspace_id` is nullable);
       // the carrier skips it rather than inventing one.
-      recordChannelWorkspace('ch-null', '');
-      expect(channelWorkspaceOf('ch-null')).toBeNull();
+      recordChannelWorkspace("ch-null", "");
+      expect(channelWorkspaceOf("ch-null")).toBeNull();
       expect(channelWorkspaceConflicts()).toEqual([]);
     });
 
-    it('a contradicted channel is dropped from the held set, never mis-attributed', () => {
-      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    it("a contradicted channel is dropped from the held set, never mis-attributed", () => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
-        recordChannelWorkspace('ch-mixed', WS);
-        recordChannelWorkspace('ch-mixed', OTHER_WS);
+        recordChannelWorkspace("ch-mixed", WS);
+        recordChannelWorkspace("ch-mixed", OTHER_WS);
       } finally {
         spy.mockRestore();
       }
       const qc = new QueryClient();
-      qc.setQueryData(['conversation-members', 'ch-mixed'], [{ id: 'm' }]);
+      qc.setQueryData(["conversation-members", "ch-mixed"], [{ id: "m" }]);
       expect([...heldChannelIdsInWorkspace(qc, WS)]).toEqual([]);
       expect([...heldChannelIdsInWorkspace(qc, OTHER_WS)]).toEqual([]);
     });
   });
 
-  describe('detection from the settled lists (read-path authoritative)', () => {
+  describe("detection from the settled lists (read-path authoritative)", () => {
     const row = (
       id: string,
       is_member: boolean | undefined,
-      visibility: 'public' | 'private' = 'private',
+      visibility: "public" | "private" = "private",
     ): ChannelMembershipRow => ({ id, is_member, visibility });
 
-    it('a member row that survives is not a loss', () => {
+    it("a member row that survives is not a loss", () => {
       expect(
         resolveChannelMembershipLosses({
           observed: [LOST],
@@ -990,7 +976,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       ).toEqual([]);
     });
 
-    it('archiving is not removal (§12.2#2)', () => {
+    it("archiving is not removal (§12.2#2)", () => {
       expect(
         resolveChannelMembershipLosses({
           observed: [LOST],
@@ -1000,7 +986,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       ).toEqual([]);
     });
 
-    it('an UNRESOLVED carrier never fires — this handler destroys caches', () => {
+    it("an UNRESOLVED carrier never fires — this handler destroys caches", () => {
       expect(
         resolveChannelMembershipLosses({
           observed: [LOST],
@@ -1010,77 +996,77 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       ).toEqual([]);
     });
 
-    it('gone from both lists → visibility-loss', () => {
+    it("gone from both lists → visibility-loss", () => {
       expect(
         resolveChannelMembershipLosses({
           observed: [LOST, KEPT],
           active: [row(KEPT, true)],
           archived: [],
         }),
-      ).toEqual([{ channelId: LOST, mode: 'visibility-loss' }]);
+      ).toEqual([{ channelId: LOST, mode: "visibility-loss" }]);
     });
 
-    it('a surviving PUBLIC row flipped to non-member → membership-loss (stays readable)', () => {
+    it("a surviving PUBLIC row flipped to non-member → membership-loss (stays readable)", () => {
       expect(
         resolveChannelMembershipLosses({
           observed: [LOST],
-          active: [row(LOST, false, 'public')],
+          active: [row(LOST, false, "public")],
           archived: [],
         }),
-      ).toEqual([{ channelId: LOST, mode: 'membership-loss' }]);
+      ).toEqual([{ channelId: LOST, mode: "membership-loss" }]);
     });
 
-    it('a surviving PRIVATE non-member row → visibility-loss (unreadable, leave it)', () => {
+    it("a surviving PRIVATE non-member row → visibility-loss (unreadable, leave it)", () => {
       expect(
         resolveChannelMembershipLosses({
           observed: [LOST],
-          active: [row(LOST, false, 'private')],
+          active: [row(LOST, false, "private")],
           archived: [],
         }),
-      ).toEqual([{ channelId: LOST, mode: 'visibility-loss' }]);
+      ).toEqual([{ channelId: LOST, mode: "visibility-loss" }]);
     });
 
-    it('a channel never observed as a member is never a loss', () => {
+    it("a channel never observed as a member is never a loss", () => {
       expect(
         resolveChannelMembershipLosses({
           observed: [],
-          active: [row(LOST, false, 'public')],
+          active: [row(LOST, false, "public")],
           archived: [],
         }),
       ).toEqual([]);
     });
 
-    it('the observed baseline includes archived memberships', () => {
-      expect(
-        observedMemberChannelIds([row(KEPT, true)], [row(LOST, true)]),
-      ).toEqual(new Set([KEPT, LOST]));
+    it("the observed baseline includes archived memberships", () => {
+      expect(observedMemberChannelIds([row(KEPT, true)], [row(LOST, true)])).toEqual(
+        new Set([KEPT, LOST]),
+      );
     });
 
-    it('the observed baseline excludes non-member and unresolved rows', () => {
+    it("the observed baseline excludes non-member and unresolved rows", () => {
       expect(
         observedMemberChannelIds(
-          [row('a', false, 'public'), row('b', undefined), row('c', true)],
+          [row("a", false, "public"), row("b", undefined), row("c", true)],
           [],
         ),
-      ).toEqual(new Set(['c']));
+      ).toEqual(new Set(["c"]));
     });
   });
 
-  describe('convergence, not `status` (#task:1689 blocker 1)', () => {
+  describe("convergence, not `status` (#task:1689 blocker 1)", () => {
     const member = (id: string): ChannelMembershipRow => ({
       id,
       is_member: true,
-      visibility: 'private',
+      visibility: "private",
     });
     /** The same row as the ARCHIVED listing returns it. Both shapes are pinned:
      *  since #task:1691 it carries `is_member`, and a row with the field absent
      *  (an older/unresolved carrier) must be inert rather than a loss. */
     const archivedRow = (id: string, withMemberFlag: boolean): ChannelMembershipRow =>
       withMemberFlag
-        ? { id, is_member: true, visibility: 'private' }
-        : { id, visibility: 'private' };
+        ? { id, is_member: true, visibility: "private" }
+        : { id, visibility: "private" };
 
-    it('only both-lists-settled-and-not-awaiting-refetch counts as converged', () => {
+    it("only both-lists-settled-and-not-awaiting-refetch counts as converged", () => {
       const base = {
         activeSettled: true,
         archivedSettled: true,
@@ -1098,7 +1084,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
 
     for (const withMemberFlag of [true, false]) {
       it(`archiving a channel mid-refetch fires nothing (archived row ${
-        withMemberFlag ? 'carries' : 'omits'
+        withMemberFlag ? "carries" : "omits"
       } is_member)`, () => {
         // Step 1 — baseline from a converged tick. A holder object, so the
         // sequence's carried state is read the way the hook's ref is.
@@ -1149,7 +1135,7 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       });
     }
 
-    it('FALSIFIER: a `status`-only gate would report a loss on the split-brain tick', () => {
+    it("FALSIFIER: a `status`-only gate would report a loss on the split-brain tick", () => {
       // The same step 3 with `converged: true` — which is what `status === "success"`
       // on both lists yields during the archived list's background refetch.
       const baseline: ChannelRemovalBaseline = {
@@ -1163,10 +1149,10 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
           active: [member(KEPT)],
           archived: [],
         }).losses,
-      ).toEqual([{ channelId: LOST, mode: 'visibility-loss' }]);
+      ).toEqual([{ channelId: LOST, mode: "visibility-loss" }]);
     });
 
-    it('a workspace switch only re-baselines; it can never report a loss', () => {
+    it("a workspace switch only re-baselines; it can never report a loss", () => {
       const decision = reduceChannelRemoval(
         { workspaceId: OTHER_WS, ids: new Set([LOST]) },
         { workspaceId: WS, converged: true, active: [member(KEPT)], archived: [] },
@@ -1185,14 +1171,14 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
   // `ChannelMembershipLoss` — destroying that pair's caches (and possibly moving
   // the pane) over a channel event that never touched it. Hence a fence rather
   // than trust in the narrowing.
-  describe('a DM save is never a channel holding (#task:2055)', () => {
-    const PAIR = 'conv-dm';
+  describe("a DM save is never a channel holding (#task:2055)", () => {
+    const PAIR = "conv-dm";
 
-    it('a direct_pair row is not reported as a held channel of any workspace', () => {
+    it("a direct_pair row is not reported as a held channel of any workspace", () => {
       const qc = new QueryClient();
       qc.setQueryData(savedKey, [
-        savedRow('s-channel', KEPT, OTHER_WS),
-        savedPairRow('s-dm', PAIR),
+        savedRow("s-channel", KEPT, OTHER_WS),
+        savedPairRow("s-dm", PAIR),
       ]);
 
       // The saved enumerator skips the arm outright…
@@ -1203,22 +1189,22 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       expect(heldChannelIdsInWorkspace(qc, WS)).toEqual(new Set());
     });
 
-    it('a channel removal leaves direct_pair rows untouched', () => {
+    it("a channel removal leaves direct_pair rows untouched", () => {
       const qc = new QueryClient();
-      qc.setQueryData(savedKey, [savedRow('s-gone', LOST), savedPairRow('s-dm', PAIR)]);
+      qc.setQueryData(savedKey, [savedRow("s-gone", LOST), savedPairRow("s-dm", PAIR)]);
 
       // Direct call first, then the whole entry path, so a regression is
       // attributed to the filter rather than to the sweep around it.
       removeChannelFromSaved(qc, LOST);
-      expect(qc.getQueryData(savedKey)).toEqual([savedPairRow('s-dm', PAIR)]);
+      expect(qc.getQueryData(savedKey)).toEqual([savedPairRow("s-dm", PAIR)]);
 
-      qc.setQueryData(savedKey, [savedRow('s-gone', LOST), savedPairRow('s-dm', PAIR)]);
+      qc.setQueryData(savedKey, [savedRow("s-gone", LOST), savedPairRow("s-dm", PAIR)]);
       handleViewerChannelRemoved(qc, REMOVE_LOST);
-      expect(qc.getQueryData(savedKey)).toEqual([savedPairRow('s-dm', PAIR)]);
+      expect(qc.getQueryData(savedKey)).toEqual([savedPairRow("s-dm", PAIR)]);
     });
   });
 
-  describe('a workspace the viewer is NOT looking at (#task:1689 blocker 2)', () => {
+  describe("a workspace the viewer is NOT looking at (#task:1689 blocker 2)", () => {
     // The foreign path inverts the direction: with no mounted lists there is no
     // observed member set, so the CACHES say which channels they still describe
     // and those ids are the `observed` input of the same resolver, evaluated
@@ -1226,15 +1212,15 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
     // WS-frame wiring around it lives in the hook.
     function seedForeignWorkspace(qc: QueryClient): void {
       qc.setQueryData(savedKey, [
-        savedRow('s-b-gone', LOST, OTHER_WS),
-        savedRow('s-b-keep', KEPT, OTHER_WS),
-        savedRow('s-a', 'ch-in-a', WS),
+        savedRow("s-b-gone", LOST, OTHER_WS),
+        savedRow("s-b-keep", KEPT, OTHER_WS),
+        savedRow("s-a", "ch-in-a", WS),
       ]);
-      qc.setQueryData(boardColumnKey('todo', BOARD_FILTER_KEY), {
+      qc.setQueryData(boardColumnKey("todo", BOARD_FILTER_KEY), {
         pages: [
           {
-            status: 'todo',
-            items: [taskRow('t-b-gone', LOST, OTHER_WS), taskRow('t-a', 'ch-in-a', WS)],
+            status: "todo",
+            items: [taskRow("t-b-gone", LOST, OTHER_WS), taskRow("t-a", "ch-in-a", WS)],
             next_cursor: null,
           },
         ],
@@ -1243,54 +1229,52 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       qc.setQueryData(messageUnreadByConversationKey(OTHER_WS), {
         by_conversation: { [LOST]: 2 },
         latest_by_conversation: {
-          [LOST]: { message_id: 'm', seq: 1, thread_root_id: null },
+          [LOST]: { message_id: "m", seq: 1, thread_root_id: null },
         },
         total: 2,
       });
       qc.setQueryData(messageUnreadSummaryKey, { by_workspace: { [OTHER_WS]: 2 } });
-      qc.setQueryData([...searchKey, { q: 'x' }], searchDto(LOST, OTHER_WS));
+      qc.setQueryData([...searchKey, { q: "x" }], searchDto(LOST, OTHER_WS));
     }
 
-    it('held ids are workspace-scoped: a channel of another workspace is not reported', () => {
+    it("held ids are workspace-scoped: a channel of another workspace is not reported", () => {
       const qc = new QueryClient();
       seedForeignWorkspace(qc);
       expect(heldChannelIdsInWorkspace(qc, OTHER_WS)).toEqual(new Set([LOST, KEPT]));
-      expect(heldChannelIdsInWorkspace(qc, WS)).toEqual(new Set(['ch-in-a']));
+      expect(heldChannelIdsInWorkspace(qc, WS)).toEqual(new Set(["ch-in-a"]));
     });
 
     // The board keeps its rows in PAGES and is the ONLY task surface that fetches
     // them (#task:1892 retired the flat list) — an enumeration that reads arrays
     // alone would report an empty held set and the non-selected workspace would
     // never converge.
-    it('held ids are enumerated from the board pages', () => {
+    it("held ids are enumerated from the board pages", () => {
       const qc = new QueryClient();
-      qc.setQueryData(boardColumnKey('todo', BOARD_FILTER_KEY), {
+      qc.setQueryData(boardColumnKey("todo", BOARD_FILTER_KEY), {
         pages: [
           {
-            status: 'todo',
-            items: [taskRow('t-b', LOST, OTHER_WS), taskRow('t-a', 'ch-in-a', WS)],
+            status: "todo",
+            items: [taskRow("t-b", LOST, OTHER_WS), taskRow("t-a", "ch-in-a", WS)],
             next_cursor: null,
           },
         ],
         pageParams: [null],
       });
       expect(heldChannelIdsInWorkspace(qc, OTHER_WS)).toEqual(new Set([LOST]));
-      expect(heldChannelIdsInWorkspace(qc, WS)).toEqual(new Set(['ch-in-a']));
+      expect(heldChannelIdsInWorkspace(qc, WS)).toEqual(new Set(["ch-in-a"]));
     });
 
-    it('a removal in the non-selected workspace converges WITHOUT navigating there', () => {
+    it("a removal in the non-selected workspace converges WITHOUT navigating there", () => {
       const qc = new QueryClient();
       seedForeignWorkspace(qc);
       // Authoritative re-read of B's two tables: LOST is gone, KEPT remains.
-      const active: ChannelMembershipRow[] = [
-        { id: KEPT, is_member: true, visibility: 'private' },
-      ];
+      const active: ChannelMembershipRow[] = [{ id: KEPT, is_member: true, visibility: "private" }];
       const losses = resolveChannelMembershipLosses({
         observed: heldChannelIdsInWorkspace(qc, OTHER_WS),
         active,
         archived: [],
       });
-      expect(losses).toEqual([{ channelId: LOST, mode: 'visibility-loss' }]);
+      expect(losses).toEqual([{ channelId: LOST, mode: "visibility-loss" }]);
       for (const loss of losses) {
         handleViewerChannelRemoved(qc, {
           workspaceId: OTHER_WS,
@@ -1300,16 +1284,16 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       }
       // B's projections are settled…
       expect(qc.getQueryData(savedKey)).toEqual([
-        savedRow('s-b-keep', KEPT, OTHER_WS),
-        savedRow('s-a', 'ch-in-a', WS),
+        savedRow("s-b-keep", KEPT, OTHER_WS),
+        savedRow("s-a", "ch-in-a", WS),
       ]);
       expect(
         (
-          qc.getQueryData(boardColumnKey('todo', BOARD_FILTER_KEY)) as {
+          qc.getQueryData(boardColumnKey("todo", BOARD_FILTER_KEY)) as {
             pages: Array<{ items: TaskSummaryDto[] }>;
           }
-        ).pages.map(p => p.items.map(t => t.id)),
-      ).toEqual([['t-a']]);
+        ).pages.map((p) => p.items.map((t) => t.id)),
+      ).toEqual([["t-a"]]);
       expect(qc.getQueryData(messageUnreadByConversationKey(OTHER_WS))).toEqual({
         by_conversation: {},
         latest_by_conversation: {},
@@ -1318,17 +1302,17 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       expect(qc.getQueryData(messageUnreadSummaryKey)).toEqual({
         by_workspace: { [OTHER_WS]: 0 },
       });
-      expect(qc.getQueryState([...searchKey, { q: 'x' }])).toBeUndefined();
+      expect(qc.getQueryState([...searchKey, { q: "x" }])).toBeUndefined();
       // …and the workspace the viewer IS looking at is untouched.
-      expect(cacheMentions(qc, 'ch-in-a')).toBe(true);
+      expect(cacheMentions(qc, "ch-in-a")).toBe(true);
     });
 
-    it('holding nothing for a channel means nothing to converge', () => {
+    it("holding nothing for a channel means nothing to converge", () => {
       const qc = new QueryClient();
       expect(heldChannelIdsInWorkspace(qc, OTHER_WS).size).toBe(0);
     });
 
-    describe('channel-KEYED state alone is enough to hold a foreign workspace', () => {
+    describe("channel-KEYED state alone is enough to hold a foreign workspace", () => {
       // Blocker 2, round 2: after B → A the viewer keeps B's `['channels', cid, …]`
       // family in cache. If B has no Saved / task / Activity / unread / search row,
       // a registry-only held set is EMPTY, the probe is skipped, and those caches
@@ -1341,33 +1325,34 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
         // record on the way in.
         recordChannelWorkspace(LOST, OTHER_WS);
         recordChannelWorkspace(KEPT, OTHER_WS);
-        recordChannelWorkspace('ch-in-a', WS);
-        for (const cid of [LOST, KEPT, 'ch-in-a']) {
-          qc.setQueryData(['channels', cid, 'messages'], { seeded: cid });
-          qc.setQueryData(['conversation-members', cid], { seeded: cid });
-          qc.setQueryData(['channel-detail', cid], { seeded: cid });
-          qc.setQueryData(['conversations', cid, 'agent-run-states'], { seeded: cid });
+        recordChannelWorkspace("ch-in-a", WS);
+        for (const cid of [LOST, KEPT, "ch-in-a"]) {
+          qc.setQueryData(["channels", cid, "messages"], { seeded: cid });
+          qc.setQueryData(["conversation-members", cid], { seeded: cid });
+          qc.setQueryData(["channel-detail", cid], { seeded: cid });
+          qc.setQueryData(["conversations", cid, "agent-run-states"], { seeded: cid });
         }
       }
 
-      it('FALSIFIER: with NO registry row for B, the held set is still B‑scoped', () => {
+      it("FALSIFIER: with NO registry row for B, the held set is still B‑scoped", () => {
         const qc = new QueryClient();
         seedChannelKeyedOnly(qc);
         // No Saved/tasks/unread/search/activity row exists at all — a
         // registry-only held set would be empty here and skip the probe.
         expect(heldChannelIdsInWorkspace(qc, OTHER_WS)).toEqual(new Set([LOST, KEPT]));
-        expect(heldChannelIdsInWorkspace(qc, WS)).toEqual(new Set(['ch-in-a']));
+        expect(heldChannelIdsInWorkspace(qc, WS)).toEqual(new Set(["ch-in-a"]));
       });
 
-      it('an unattributed channel id is NOT claimed by a workspace', () => {        // Attribution is identity, not a guess: a channel-keyed cache written
+      it("an unattributed channel id is NOT claimed by a workspace", () => {
+        // Attribution is identity, not a guess: a channel-keyed cache written
         // before any workspace-carrying DTO was seen belongs to no workspace here
         // (the §12.1#9 residual), and a key whose position 1 is not a channel
         // (`['workspaces', wsId, …]`, `['messages', msgId]`) is never claimed.
         const qc = new QueryClient();
-        qc.setQueryData(['channels', 'ch-unknown', 'messages'], { seeded: 1 });
-        qc.setQueryData(['workspaces', OTHER_WS, 'members'], { seeded: 1 });
-        qc.setQueryData(messageKey('msg-1'), {
-          message: message('msg-1', 'ch-unknown'),
+        qc.setQueryData(["channels", "ch-unknown", "messages"], { seeded: 1 });
+        qc.setQueryData(["workspaces", OTHER_WS, "members"], { seeded: 1 });
+        qc.setQueryData(messageKey("msg-1"), {
+          message: message("msg-1", "ch-unknown"),
           agent_name: null,
         });
         expect(heldChannelIdsInWorkspace(qc, OTHER_WS)).toEqual(new Set());
@@ -1378,18 +1363,18 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
         seedChannelKeyedOnly(qc);
         const losses = resolveChannelMembershipLosses({
           observed: heldChannelIdsInWorkspace(qc, OTHER_WS),
-          active: [{ id: KEPT, is_member: true, visibility: 'private' }],
+          active: [{ id: KEPT, is_member: true, visibility: "private" }],
           archived: [],
         });
-        expect(losses).toEqual([{ channelId: LOST, mode: 'visibility-loss' }]);
+        expect(losses).toEqual([{ channelId: LOST, mode: "visibility-loss" }]);
         handleViewerChannelRemoved(qc, {
           workspaceId: OTHER_WS,
           channelId: LOST,
-          mode: 'visibility-loss',
+          mode: "visibility-loss",
         });
         expect(cacheMentions(qc, LOST)).toBe(false);
         expect(cacheMentions(qc, KEPT)).toBe(true);
-        expect(cacheMentions(qc, 'ch-in-a')).toBe(true);
+        expect(cacheMentions(qc, "ch-in-a")).toBe(true);
       });
     });
   });

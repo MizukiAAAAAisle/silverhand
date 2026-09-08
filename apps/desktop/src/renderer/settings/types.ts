@@ -1,9 +1,4 @@
-export const THEME_IDS = [
-  'studio-light',
-  'forza6',
-  'slack-dark',
-  'iris',
-] as const;
+export const THEME_IDS = ["studio-light", "forza6", "slack-dark", "iris"] as const;
 export type ThemeId = (typeof THEME_IDS)[number];
 
 /** Theme ids that shipped under a previous name, mapped to the id that
@@ -20,7 +15,7 @@ export type ThemeId = (typeof THEME_IDS)[number];
  *  - `warm-script` → `studio-light` (#task:1656): the third slot kept its
  *    role (the calm bright workbench) but replaced the warm/book style. */
 export const LEGACY_THEME_IDS: Readonly<Record<string, ThemeId>> = {
-  'warm-script': 'studio-light',
+  "warm-script": "studio-light",
 };
 
 /** Override a theme's default markdown font family. `undefined` means
@@ -44,7 +39,7 @@ export interface AppearanceSettings {
 }
 
 export const DEFAULT_APPEARANCE: AppearanceSettings = {
-  theme: 'forza6',
+  theme: "forza6",
 };
 
 /** Allowed font-size range for the shared markdown override. Out-of-range

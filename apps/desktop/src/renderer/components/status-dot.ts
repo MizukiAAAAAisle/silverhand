@@ -1,4 +1,4 @@
-import type { ConversationAgentStatus } from '@silverhand/shared';
+import type { ConversationAgentStatus } from "@silverhand/shared";
 
 /**
  * ONE DOT GROUND for HUMAN presence, keyed by the run-state word a human's
@@ -16,8 +16,8 @@ import type { ConversationAgentStatus } from '@silverhand/shared';
  * depending on any one placement's folder.
  */
 export const STATUS_DOT: Record<ConversationAgentStatus, string> = {
-  active: 'bg-success',
-  starting: 'bg-warning',
-  crashed: 'bg-error',
-  idle: 'bg-text-muted/50',
+  active: "bg-success",
+  starting: "bg-warning",
+  crashed: "bg-error",
+  idle: "bg-text-muted/50",
 };

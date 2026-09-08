@@ -1,20 +1,20 @@
-import { SidePanelHeader } from '@/components/layout/SidePanelHeader';
-import { useEffect } from 'react';
-import { useUsers } from '@/features/users/hooks';
+import { SidePanelHeader } from "@/components/layout/SidePanelHeader";
+import { useEffect } from "react";
+import { useUsers } from "@/features/users/hooks";
 import {
   useViewerUser,
   isRegistrationRequired,
   isBackendUnreachable,
   isUpdateRequired,
-} from './hooks';
-import { HumanHeader } from './HumanHeader';
-import { HumanProfileCard } from './HumanProfileCard';
-import { paneChrome } from '@/components/layout/pane-chrome';
+} from "./hooks";
+import { HumanHeader } from "./HumanHeader";
+import { HumanProfileCard } from "./HumanProfileCard";
+import { paneChrome } from "@/components/layout/pane-chrome";
 
 interface HumanViewProps {
   /** Identifier from the URL (`/members/u/:userId`). */
   userId: string;
-  variant?: 'full' | 'side';
+  variant?: "full" | "side";
   onClose?: () => void;
   /** Called when the routed user is unreachable so the parent can
    *  navigate the right pane back to the agent fallback. */
@@ -34,7 +34,7 @@ interface HumanViewProps {
 export function HumanView({
   userId,
   onUnreachable,
-  variant = 'full',
+  variant = "full",
   onClose,
 }: HumanViewProps): JSX.Element {
   const viewer = useViewerUser();
@@ -67,13 +67,13 @@ export function HumanView({
         className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-base"
         style={paneChrome}
       >
-        {variant === 'side' ? (
+        {variant === "side" ? (
           <SidePanelHeader onClose={onClose}>
             <span className="text-sm text-text-muted">Profile</span>
           </SidePanelHeader>
         ) : null}
         <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
-          {isLoading ? 'Loading profile…' : 'Profile unavailable.'}
+          {isLoading ? "Loading profile…" : "Profile unavailable."}
         </div>
       </main>
     );
@@ -81,11 +81,11 @@ export function HumanView({
 
   return (
     <main
-      data-profile-host={variant === 'side' ? 'side' : 'human'}
+      data-profile-host={variant === "side" ? "side" : "human"}
       className="flex h-full flex-1 flex-col overflow-hidden bg-bg-base"
       style={paneChrome}
     >
-      <HumanHeader user={dto} compact={variant === 'side'} onClose={onClose} />
+      <HumanHeader user={dto} compact={variant === "side"} onClose={onClose} />
       <div className="min-w-0 flex-1 overflow-y-auto">
         <div className="human-profile-content">
           <HumanProfileCard user={dto} />

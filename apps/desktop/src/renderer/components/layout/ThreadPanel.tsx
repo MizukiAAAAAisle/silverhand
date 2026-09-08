@@ -1,30 +1,24 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUpRight, Bell, BellOff, Search } from 'lucide-react';
-import { ThreadIcon } from '@/components/icons/conversation-icons';
-import { authorGroupContinuations } from '@/components/chat/authorGrouping';
-import { groupMessages } from '@/components/chat/groupMessages';
-import { MessageItem } from '@/components/chat/MessageItem';
-import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
-import { InlineFindBar } from './InlineFindBar';
-import {
-  useInlineFindController,
-  useInlineFindHotkey,
-} from '@/features/search/useInlineFind';
-import type { AdvancedSearchSeed } from '@/features/search/advanced-search-seed';
-import type { SenderFilterValue } from '@/components/ui/sender-filter-select';
-import { SystemMessage } from '@/components/chat/SystemMessage';
-import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
-import { Composer } from '@/components/chat/Composer';
-import { SelectionQuoteToolbar } from '@/components/chat/SelectionQuoteToolbar';
-import { ChannelJoinBar } from '@/components/chat/ChannelJoinBar';
-import { MessageRowsSkeleton } from '@/components/layout/ConversationViewSkeleton';
-import {
-  SidePanelHeader,
-  SidePanelHeaderTitle,
-} from '@/components/layout/SidePanelHeader';
-import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
-import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
-import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, ArrowUpRight, Bell, BellOff, Search } from "lucide-react";
+import { ThreadIcon } from "@/components/icons/conversation-icons";
+import { authorGroupContinuations } from "@/components/chat/authorGrouping";
+import { groupMessages } from "@/components/chat/groupMessages";
+import { MessageItem } from "@/components/chat/MessageItem";
+import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
+import { InlineFindBar } from "./InlineFindBar";
+import { useInlineFindController, useInlineFindHotkey } from "@/features/search/useInlineFind";
+import type { AdvancedSearchSeed } from "@/features/search/advanced-search-seed";
+import type { SenderFilterValue } from "@/components/ui/sender-filter-select";
+import { SystemMessage } from "@/components/chat/SystemMessage";
+import { SystemActivityCluster } from "@/components/chat/SystemActivityCluster";
+import { Composer } from "@/components/chat/Composer";
+import { SelectionQuoteToolbar } from "@/components/chat/SelectionQuoteToolbar";
+import { ChannelJoinBar } from "@/components/chat/ChannelJoinBar";
+import { MessageRowsSkeleton } from "@/components/layout/ConversationViewSkeleton";
+import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/SidePanelHeader";
+import { useMessageRenderContext } from "@/components/chat/useMessageRenderContext";
+import { useMessageActionSurface } from "@/components/chat/useMessageActionSurface";
+import { MessageActionChrome } from "@/components/chat/MessageActionChrome";
 import {
   threadClusterShowsLoader,
   threadLiveMarkReadSeq,
@@ -33,11 +27,15 @@ import {
   threadReplyRows,
   threadTailIsVisible,
   threadVisibleReplySeq,
-} from './threadMarkRead';
-import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
-import { type JumpPhase, jumpWindowLockedForPhase, threadLocateAllowed } from '@/features/channels/messageJumpPhase';
-import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
-import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
+} from "./threadMarkRead";
+import type { WorkspaceChannelReference } from "@/components/chat/ConversationRef";
+import {
+  type JumpPhase,
+  jumpWindowLockedForPhase,
+  threadLocateAllowed,
+} from "@/features/channels/messageJumpPhase";
+import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import { TaskRefContextProvider } from "@/features/tasks/TaskRefContext";
 import {
   useFollowThread,
   useMarkThreadRead,
@@ -45,15 +43,15 @@ import {
   useThreadFollowers,
   useThreadRoot,
   useUnfollowThread,
-} from '@/features/channels/hooks';
-import { isCommittedMessage } from '@/features/channels/pending-message';
-import type { AttachmentSnapshot, MessageSeq } from '@silverhand/shared';
-import type { ComposerDirectory } from '@/features/conversations/pane-mode';
-import { useAgents } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useJoinChannel } from '@/features/workspaces/hooks';
-import type { ChannelGate } from '@/features/channels/membership';
-import { classifyTopShift } from '@/components/layout/messageListVirtualization';
+} from "@/features/channels/hooks";
+import { isCommittedMessage } from "@/features/channels/pending-message";
+import type { AttachmentSnapshot, MessageSeq } from "@silverhand/shared";
+import type { ComposerDirectory } from "@/features/conversations/pane-mode";
+import { useAgents } from "@/features/agents/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useJoinChannel } from "@/features/workspaces/hooks";
+import type { ChannelGate } from "@/features/channels/membership";
+import { classifyTopShift } from "@/components/layout/messageListVirtualization";
 
 interface ThreadPanelProps {
   /** Parent channel conversation. Replies live in this conversation with
@@ -208,10 +206,7 @@ export function ThreadPanel({
   // restricts the (channel-scoped) activity bubble to this thread's agents.
   // Thread follow is a member surface: a non-member's fetch is
   // disabled (null root), and the activity bubble then stays empty-allow-listed.
-  const followers = useThreadFollowers(
-    channelId,
-    canParticipate ? rootMessageId : null,
-  );
+  const followers = useThreadFollowers(channelId, canParticipate ? rootMessageId : null);
   const viewerFollowing = followers.data?.viewer_following ?? false;
   // Until we have an authoritative follower snapshot, restrict the
   // (channel-scoped) activity bubble to an EMPTY allow-list so it shows
@@ -258,7 +253,7 @@ export function ThreadPanel({
   // snapshot avatar or a neutral glyph. `agentAvatarUrls` (directory) stays the
   // source for the independent axis of inline `@handle` mention pills.
   const { agentAvatarUrls: authorAgentAvatarUrls, humanAvatarUrls: authorUserAvatarUrls } =
-    useAuthorAvatarObjectUrls(messages.map(m => (isCommittedMessage(m) ? m.author : null)));
+    useAuthorAvatarObjectUrls(messages.map((m) => (isCommittedMessage(m) ? m.author : null)));
 
   // ── Message actions (copy / share / multi-select export) ──────────────
   // Shared action surface — identical wiring to the channel pane
@@ -284,9 +279,9 @@ export function ThreadPanel({
   // can go stale unobserved, and roster is the wrong key for identity anyway.
   const parentChannelTitle = useMemo(() => {
     const c =
-      liveChannels.find(x => x.id === channelId) ??
-      archivedChannels.find(x => x.id === channelId);
-    return c ? c.title : parentTitle ?? null;
+      liveChannels.find((x) => x.id === channelId) ??
+      archivedChannels.find((x) => x.id === channelId);
+    return c ? c.title : (parentTitle ?? null);
   }, [liveChannels, archivedChannels, channelId, parentTitle]);
 
   // Drop any active selection when the cluster WINDOW is replaced (not just
@@ -309,11 +304,11 @@ export function ThreadPanel({
   const prevKeysRef = useRef<string[]>([]);
   useEffect(() => {
     if (messages.length === 0) return; // keep prevKeysRef across transient empties
-    const keys = messages.map(m => m.id);
+    const keys = messages.map((m) => m.id);
     const prevKeys = prevKeysRef.current;
     prevKeysRef.current = keys;
-    if (classifyTopShift(prevKeys, keys).kind === 'replace') {
-      setSelectionResetKey(v => v + 1);
+    if (classifyTopShift(prevKeys, keys).kind === "replace") {
+      setSelectionResetKey((v) => v + 1);
     }
   }, [messages]);
 
@@ -356,10 +351,7 @@ export function ThreadPanel({
   // stream applies, over the same post-clustering sequence. Computed from
   // `items` (replies only), so the separately pinned root above the divider is
   // never in the set and the first reply always leads its own group.
-  const authorContinuations = useMemo(
-    () => authorGroupContinuations(items),
-    [items],
-  );
+  const authorContinuations = useMemo(() => authorGroupContinuations(items), [items]);
 
   // Authoritative full reply count from the cut3-6 sidecar (kept live by
   // useThreadRoot) — NOT a count of currently-loaded rows, which would be
@@ -379,7 +371,7 @@ export function ThreadPanel({
     const el = scrollRef.current;
     if (!el) return;
     // Instant — same back-to-bottom command semantics as the channel.
-    el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+    el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
     pinBottomRef.current = true;
     setShowScrollBottom(false);
   }, []);
@@ -438,8 +430,7 @@ export function ThreadPanel({
   const findAvailable = findEnabled && canParticipate;
   const inlineFindNavigate = useCallback(
     (messageId: string) => {
-      const inWindow =
-        messageId === rootMessageId || messages.some(m => m.id === messageId);
+      const inWindow = messageId === rootMessageId || messages.some((m) => m.id === messageId);
       if (inWindow) {
         // Scope the lookup to THIS pane's root: the thread root is rendered in
         // BOTH the channel mainline and here with the same `id="msg-<root>"`, so
@@ -447,15 +438,13 @@ export function ThreadPanel({
         // and scroll the WRONG pane (Cindy). Message ids are URL-safe, so the
         // attribute selector needs no escaping — its job is the pane SCOPE (dodge
         // the duplicate global id), not char-escaping.
-        const node = findRootRef.current?.querySelector(
-          `[id="msg-${messageId}"]`,
-        );
+        const node = findRootRef.current?.querySelector(`[id="msg-${messageId}"]`);
         if (node) {
           // Hold position: stop follow-bottom from yanking away from the match
           // when the next reply arrives (mirrors the jump-locate effect).
           pinBottomRef.current = false;
           setShowScrollBottom(true);
-          node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          node.scrollIntoView({ block: "center", behavior: "smooth" });
           return;
         }
       }
@@ -470,7 +459,7 @@ export function ThreadPanel({
   );
   const find = useInlineFindController({
     conversationId: channelId,
-    stream: 'thread',
+    stream: "thread",
     threadRootId: rootMessageId,
     onNavigate: inlineFindNavigate,
     enabled: findAvailable,
@@ -490,7 +479,7 @@ export function ThreadPanel({
   useEffect(() => {
     pinBottomRef.current = true;
     setShowScrollBottom(false);
-    setSelectionResetKey(v => v + 1);
+    setSelectionResetKey((v) => v + 1);
   }, [rootMessageId]);
 
   // Mark this reply-cluster read once per open (#task:1226 surface 4, §9/§9.10).
@@ -507,7 +496,7 @@ export function ThreadPanel({
   // once-guard is therefore re-armed per open, never a permanent per-root lock,
   // so a stale cache can't lock it before the fresh fetch.
   // Human-attention only — writes the read cursor, never delivery/wake.
-  const openKeyRef = useRef('');
+  const openKeyRef = useRef("");
   const openedAtRef = useRef(0);
   const markedForOpenRef = useRef(false);
   // Thread mark-read forward-only gates. `null` = "nothing marked / in flight
@@ -627,14 +616,11 @@ export function ThreadPanel({
   // gate, so it lingers unread until the next message/scroll/reopen. Mirroring
   // visibility into state makes the return-to-visible transition a dependency
   // that re-fires the live-mark effect.
-  const [documentVisible, setDocumentVisible] = useState(
-    () => !document.hidden,
-  );
+  const [documentVisible, setDocumentVisible] = useState(() => !document.hidden);
   useEffect(() => {
     const onVisibility = (): void => setDocumentVisible(!document.hidden);
-    document.addEventListener('visibilitychange', onVisibility);
-    return () =>
-      document.removeEventListener('visibilitychange', onVisibility);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
 
   // VISIBLE-LIVE mark: a reply arriving while the panel is open + watched should
@@ -701,13 +687,7 @@ export function ThreadPanel({
         liveMarkTimerRef.current = null;
       }
     };
-  }, [
-    showScrollBottom,
-    documentVisible,
-    maxLoadedReplySeq,
-    isAtTail,
-    issueMarkRead,
-  ]);
+  }, [showScrollBottom, documentVisible, maxLoadedReplySeq, isAtTail, issueMarkRead]);
 
   // Flush a SEEN-but-unmarked tail reply when THIS open ends — the panel closes
   // (unmount) or switches to another thread — before the 300ms visible-live
@@ -766,10 +746,10 @@ export function ThreadPanel({
     const tryLocate = (): void => {
       const node = document.getElementById(`msg-${jumpMessageId}`);
       if (node) {
-        node.scrollIntoView({ block: 'center' });
-        node.classList.add('msg-jump-flash');
+        node.scrollIntoView({ block: "center" });
+        node.classList.add("msg-jump-flash");
         flashTimer = setTimeout(() => {
-          node.classList.remove('msg-jump-flash');
+          node.classList.remove("msg-jump-flash");
           onJumped?.();
         }, 3000);
         return;
@@ -795,8 +775,8 @@ export function ThreadPanel({
     };
   }, [jumpMessageId, jumpPhase, onJumped]);
 
-  const renderMessage = (m: typeof messages[number]): JSX.Element =>
-    isCommittedMessage(m) && m.from_kind === 'system' ? (
+  const renderMessage = (m: (typeof messages)[number]): JSX.Element =>
+    isCommittedMessage(m) && m.from_kind === "system" ? (
       <SystemMessage
         key={m.id}
         message={m}
@@ -830,9 +810,7 @@ export function ThreadPanel({
         agentAvatarUrls={agentAvatarUrls}
         userResolver={userResolver}
         searchQuery={find.highlightQuery}
-        searchActive={
-          find.activeMessageId != null && m.id === find.activeMessageId
-        }
+        searchActive={find.activeMessageId != null && m.id === find.activeMessageId}
         continuesPrevious={authorContinuations.has(m.id)}
         {...actions.rowActionProps(m)}
       />
@@ -840,161 +818,161 @@ export function ThreadPanel({
 
   return (
     <TaskRefContextProvider value={taskRefContext}>
-    <aside
-      ref={findRootRef}
-      data-pane="thread"
-      className="relative flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
-    >
-      <SidePanelHeader
-        onClose={onClose}
-        actions={
-          <>
-            {findAvailable ? (
-              <button
-                type="button"
-                data-sticker
-                data-sticker-size="md"
-                data-sticker-tone="neutral"
-                onClick={find.open ? find.close : find.openFind}
-                aria-label="Search this thread"
-                aria-pressed={find.open}
-                title="Search this thread"
-                className={
-                  'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
-                  (find.open
-                    ? 'bg-bg-hover text-text-primary'
-                    : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
-                }
-              >
-                <Search className="size-3.5" />
-              </button>
-            ) : null}
-            {followers.data && canParticipate ? (
-              <button
-                type="button"
-                data-sticker
-                data-sticker-size="md"
-                data-sticker-tone="neutral"
-                aria-label={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
-                aria-pressed={viewerFollowing}
-                title={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
-                onClick={toggleFollow}
-                disabled={followPending}
-                className={
-                  'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] hover:bg-bg-hover disabled:opacity-50 ' +
-                  (viewerFollowing
-                    ? 'text-text-primary hover:text-text-primary'
-                    : 'text-text-muted hover:text-text-primary')
-                }
-              >
-                {viewerFollowing ? (
-                  <BellOff className="size-3.5" />
-                ) : (
-                  <Bell className="size-3.5" />
-                )}
-              </button>
-            ) : null}
-            {onViewInChannel ? (
-              <button
-                type="button"
-                data-sticker
-                data-sticker-size="md"
-                data-sticker-tone="neutral"
-                aria-label="View in channel"
-                title="View in channel"
-                onClick={onViewInChannel}
-                className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
-              >
-                <ArrowUpRight className="size-3.5" />
-              </button>
-            ) : null}
-          </>
-        }
+      <aside
+        ref={findRootRef}
+        data-pane="thread"
+        className="relative flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
       >
-        <SidePanelHeaderTitle
-          icon={<ThreadIcon className="size-3.5 shrink-0 text-text-muted" />}
-          title={parentTitle || 'Thread'}
-          subtitle={
+        <SidePanelHeader
+          onClose={onClose}
+          actions={
             <>
-              Thread · {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
+              {findAvailable ? (
+                <button
+                  type="button"
+                  data-sticker
+                  data-sticker-size="md"
+                  data-sticker-tone="neutral"
+                  onClick={find.open ? find.close : find.openFind}
+                  aria-label="Search this thread"
+                  aria-pressed={find.open}
+                  title="Search this thread"
+                  className={
+                    "flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] " +
+                    (find.open
+                      ? "bg-bg-hover text-text-primary"
+                      : "text-text-muted hover:bg-bg-hover hover:text-text-primary")
+                  }
+                >
+                  <Search className="size-3.5" />
+                </button>
+              ) : null}
+              {followers.data && canParticipate ? (
+                <button
+                  type="button"
+                  data-sticker
+                  data-sticker-size="md"
+                  data-sticker-tone="neutral"
+                  aria-label={viewerFollowing ? "Unfollow thread" : "Follow thread"}
+                  aria-pressed={viewerFollowing}
+                  title={viewerFollowing ? "Unfollow thread" : "Follow thread"}
+                  onClick={toggleFollow}
+                  disabled={followPending}
+                  className={
+                    "flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] hover:bg-bg-hover disabled:opacity-50 " +
+                    (viewerFollowing
+                      ? "text-text-primary hover:text-text-primary"
+                      : "text-text-muted hover:text-text-primary")
+                  }
+                >
+                  {viewerFollowing ? (
+                    <BellOff className="size-3.5" />
+                  ) : (
+                    <Bell className="size-3.5" />
+                  )}
+                </button>
+              ) : null}
+              {onViewInChannel ? (
+                <button
+                  type="button"
+                  data-sticker
+                  data-sticker-size="md"
+                  data-sticker-tone="neutral"
+                  aria-label="View in channel"
+                  title="View in channel"
+                  onClick={onViewInChannel}
+                  className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                >
+                  <ArrowUpRight className="size-3.5" />
+                </button>
+              ) : null}
             </>
           }
-        />
-      </SidePanelHeader>
+        >
+          <SidePanelHeaderTitle
+            icon={<ThreadIcon className="size-3.5 shrink-0 text-text-muted" />}
+            title={parentTitle || "Thread"}
+            subtitle={
+              <>
+                Thread · {replyCount} {replyCount === 1 ? "reply" : "replies"}
+              </>
+            }
+          />
+        </SidePanelHeader>
 
-      {/* Inline find bar (#task:1335) — a header OVERLAY, not a flex sibling of
+        {/* Inline find bar (#task:1335) — a header OVERLAY, not a flex sibling of
           the reply scroller. Anchored just below the h-12 header (`top-12`) and
           out of flow (`absolute`) so opening / closing / typing never changes
           the scroller's height (shiki: 搜索框不应挤压对话流、不应触发重渲染).
           It drives only the search controller + overlay; the cluster window is
           untouched until the user navigates to a match (ensure-visible above). */}
-      {findAvailable && find.open ? (
-        <div className="absolute inset-x-0 top-12 z-[var(--z-sticky)]">
-          <InlineFindBar
-            controller={find}
-            onOpenAdvanced={() =>
-              onOpenAdvancedSearch?.({
-                query: find.query,
-                workspaceId: workspaceId ?? undefined,
-                sender: advancedSearchSender,
-              })
-            }
-            placeholder="Search this thread"
-          />
-        </div>
-      ) : null}
+        {findAvailable && find.open ? (
+          <div className="absolute inset-x-0 top-12 z-[var(--z-sticky)]">
+            <InlineFindBar
+              controller={find}
+              onOpenAdvanced={() =>
+                onOpenAdvancedSearch?.({
+                  query: find.query,
+                  workspaceId: workspaceId ?? undefined,
+                  sender: advancedSearchSender,
+                })
+              }
+              placeholder="Search this thread"
+            />
+          </div>
+        ) : null}
 
-      {rootCtx.isError ? (
-        // Root unavailable (404 / legacy thread target / fetch failure).
-        // Distinct from "no replies yet" — the thread can't be shown at
-        // all, and replying would have no valid target.
-        <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">
-          This message can't be loaded. It may have been deleted.
-        </div>
-      ) : rootCtx.isLoading && !rootCtx.root ? (
-        // Root still loading: the shared message skeleton under the thread
-        // header, matching every other conversation-loading surface.
-        <MessageRowsSkeleton />
-      ) : (
-        <div className="relative flex min-h-0 flex-1 flex-col">
-          <MessageActionChrome
-            surface={actions}
-            renderCtx={{
-              agentsByName,
-              humansByName,
-              channelsByName,
-              conversationRefsById,
-              agentAvatarUrls,
-              viewer,
-              viewerAvatarObjectUrl,
-            }}
-            workspaceId={workspaceId}
-            conversationId={channelId}
-            channelTitle={parentChannelTitle}
-          />
-          <div
-            ref={scrollRef}
-            onScroll={onScroll}
-            className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto px-1 py-2"
-          >
-            {/* Load earlier replies (between the root and the tail window). */}
-            {cluster.hasPreviousPage ? (
-              <button
-                type="button"
-                disabled={cluster.isFetchingPreviousPage}
-                onClick={() => void cluster.fetchPreviousPage()}
-                className="mx-auto mb-1 rounded px-2 py-1 text-xs text-text-muted hover:text-text-primary disabled:opacity-50"
-              >
-                {cluster.isFetchingPreviousPage ? 'Loading…' : 'Load earlier replies'}
-              </button>
-            ) : null}
+        {rootCtx.isError ? (
+          // Root unavailable (404 / legacy thread target / fetch failure).
+          // Distinct from "no replies yet" — the thread can't be shown at
+          // all, and replying would have no valid target.
+          <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">
+            This message can't be loaded. It may have been deleted.
+          </div>
+        ) : rootCtx.isLoading && !rootCtx.root ? (
+          // Root still loading: the shared message skeleton under the thread
+          // header, matching every other conversation-loading surface.
+          <MessageRowsSkeleton />
+        ) : (
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <MessageActionChrome
+              surface={actions}
+              renderCtx={{
+                agentsByName,
+                humansByName,
+                channelsByName,
+                conversationRefsById,
+                agentAvatarUrls,
+                viewer,
+                viewerAvatarObjectUrl,
+              }}
+              workspaceId={workspaceId}
+              conversationId={channelId}
+              channelTitle={parentChannelTitle}
+            />
+            <div
+              ref={scrollRef}
+              onScroll={onScroll}
+              className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto px-1 py-2"
+            >
+              {/* Load earlier replies (between the root and the tail window). */}
+              {cluster.hasPreviousPage ? (
+                <button
+                  type="button"
+                  disabled={cluster.isFetchingPreviousPage}
+                  onClick={() => void cluster.fetchPreviousPage()}
+                  className="mx-auto mb-1 rounded px-2 py-1 text-xs text-text-muted hover:text-text-primary disabled:opacity-50"
+                >
+                  {cluster.isFetchingPreviousPage ? "Loading…" : "Load earlier replies"}
+                </button>
+              ) : null}
 
-            {/* Root message — the cluster anchor, rendered inline as the
+              {/* Root message — the cluster anchor, rendered inline as the
                 first message in the stream. No longer pinned (#task:1050
                 item 1) so replies get the panel's full height. */}
-            {rootCtx.root ? renderMessage(rootCtx.root) : null}
+              {rootCtx.root ? renderMessage(rootCtx.root) : null}
 
-            {/* Root's bottom divider — sets the thread's originating message
+              {/* Root's bottom divider — sets the thread's originating message
                 (its subject) apart from the replies below it (#task:1735). It is
                 the SAME kind of element as the panel header's bottom rule (an
                 internal separator between stacked regions of one surface), so it
@@ -1008,96 +986,96 @@ export function ThreadPanel({
                 column even when the "No replies yet" empty state claims the
                 remaining height. Gated on the root so it reads as the root's own
                 bottom edge — present whether or not there are replies yet. */}
-            {rootCtx.root ? (
-              <div className="-mx-1 my-2 shrink-0 border-t border-border-subtle" />
-            ) : null}
+              {rootCtx.root ? (
+                <div className="-mx-1 my-2 shrink-0 border-t border-border-subtle" />
+              ) : null}
 
-            {threadClusterShowsLoader({
-              isLoading: cluster.isLoading,
-              jumpPhase,
-            }) ? (
-              // Loader only while there is genuinely nothing THIS open can render
-              // yet: a real in-flight fetch, OR a jump still `priming` (its
-              // around-window has not committed). Once the prime advances to
-              // `committed` the (still-locked) query's cache carries the
-              // around-window and we render it even though the jump isn't done —
-              // the controller keeps the window LOCKED until the visual
-              // locate/flash calls `onJumped → clearJump`, and hiding the
-              // messages would starve that locate of its DOM node.
-              // `threadClusterShowsLoader` is a pure projection of `jumpPhase`
-              // (committed-fact, zero wall-clock) — no deadlock (#task:1317).
-              <MessageRowsSkeleton />
-            ) : replyMessages.length === 0 ? (
-              <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">
-                No replies yet
-              </div>
-            ) : (
-              items.map(item => {
-                if (item.kind === 'cluster') {
-                  return (
-                    <SystemActivityCluster
-                      key={item.messages[0]?.id ?? 'cluster'}
-                      messages={item.messages}
-                      channelsByName={channelsByName}
-                      onOpenChannelRef={handleOpenChannelRef}
-                      conversationRefsById={conversationRefsById}
-                      onOpenConversationRef={onOpenConversationRef}
-                      humansByName={humansByName}
-                    />
-                  );
-                }
-                return renderMessage(item.message);
-              })
-            )}
-          </div>
+              {threadClusterShowsLoader({
+                isLoading: cluster.isLoading,
+                jumpPhase,
+              }) ? (
+                // Loader only while there is genuinely nothing THIS open can render
+                // yet: a real in-flight fetch, OR a jump still `priming` (its
+                // around-window has not committed). Once the prime advances to
+                // `committed` the (still-locked) query's cache carries the
+                // around-window and we render it even though the jump isn't done —
+                // the controller keeps the window LOCKED until the visual
+                // locate/flash calls `onJumped → clearJump`, and hiding the
+                // messages would starve that locate of its DOM node.
+                // `threadClusterShowsLoader` is a pure projection of `jumpPhase`
+                // (committed-fact, zero wall-clock) — no deadlock (#task:1317).
+                <MessageRowsSkeleton />
+              ) : replyMessages.length === 0 ? (
+                <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">
+                  No replies yet
+                </div>
+              ) : (
+                items.map((item) => {
+                  if (item.kind === "cluster") {
+                    return (
+                      <SystemActivityCluster
+                        key={item.messages[0]?.id ?? "cluster"}
+                        messages={item.messages}
+                        channelsByName={channelsByName}
+                        onOpenChannelRef={handleOpenChannelRef}
+                        conversationRefsById={conversationRefsById}
+                        onOpenConversationRef={onOpenConversationRef}
+                        humansByName={humansByName}
+                      />
+                    );
+                  }
+                  return renderMessage(item.message);
+                })
+              )}
+            </div>
 
-          {/* Back-to-bottom — same primitive as the channel (#task:1050
+            {/* Back-to-bottom — same primitive as the channel (#task:1050
               item 5). Appears once the user scrolls away from the tail. */}
-          {showScrollBottom || shouldResetToLatest ? (
-            <button
-              type="button"
-              data-scroll-bottom
-              data-sticker
-              data-sticker-size="lg"
-              data-sticker-tone="neutral"
-              aria-label={shouldResetToLatest ? 'Jump to latest reply' : 'Scroll to bottom'}
-              title={shouldResetToLatest ? 'Jump to latest reply' : 'Scroll to bottom'}
-              onClick={handleScrollBottomClick}
-              className="absolute bottom-4 left-1/2 z-[var(--z-sticky)] flex size-9 -translate-x-1/2 items-center justify-center rounded-[var(--pill-radius)] bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
-            >
-              <ArrowDown className="size-4" />
-            </button>
-          ) : null}
-        </div>
-      )}
+            {showScrollBottom || shouldResetToLatest ? (
+              <button
+                type="button"
+                data-scroll-bottom
+                data-sticker
+                data-sticker-size="lg"
+                data-sticker-tone="neutral"
+                aria-label={shouldResetToLatest ? "Jump to latest reply" : "Scroll to bottom"}
+                title={shouldResetToLatest ? "Jump to latest reply" : "Scroll to bottom"}
+                onClick={handleScrollBottomClick}
+                className="absolute bottom-4 left-1/2 z-[var(--z-sticky)] flex size-9 -translate-x-1/2 items-center justify-center rounded-[var(--pill-radius)] bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
+              >
+                <ArrowDown className="size-4" />
+              </button>
+            ) : null}
+          </div>
+        )}
 
-      <SelectionQuoteToolbar
-        boundaryRef={scrollRef}
-        draftKey={`${channelId}#cluster#${rootMessageId}`}
-      />
+        <SelectionQuoteToolbar
+          boundaryRef={scrollRef}
+          draftKey={`${channelId}#cluster#${rootMessageId}`}
+        />
 
-      {gate.showComposer ? (
-        <Composer
-          key={`${channelId}#cluster#${rootMessageId}`}
-          conversationId={channelId}
-          directory={directory}
-          threadRootId={rootMessageId}
-          disabled={closed || rootCtx.isError || !rootCtx.root}
-          archived={archived}
-          activityAgentIds={followerAgentIds}
-        />
-      ) : gate.showJoin ? (
-        // Resolved non-member browsing a public channel's thread: Join (the
-        // parent channel) replaces the reply composer. `unknown` (still
-        // resolving) shows NEITHER — a neutral state — so we never flash a Join
-        // affordance we might revoke.
-        <ChannelJoinBar
-          onJoin={() => joinChannel.mutate(channelId)}
-          joining={joinChannel.isPending}
-          channelTitle={parentChannelTitle}
-        />
-      ) : null}
-    </aside>
+        {gate.showComposer ? (
+          <Composer
+            key={`${channelId}#cluster#${rootMessageId}`}
+            conversationId={channelId}
+            directory={directory}
+            threadRootId={rootMessageId}
+            disabled={closed || rootCtx.isError || !rootCtx.root}
+            archived={archived}
+            activityAgentIds={followerAgentIds}
+          />
+        ) : gate.showJoin ? (
+          // Resolved non-member browsing a public channel's thread: Join (the
+          // parent channel) replaces the reply composer. `unknown` (still
+          // resolving) shows NEITHER — a neutral state — so we never flash a Join
+          // affordance we might revoke.
+          <ChannelJoinBar
+            onJoin={() => joinChannel.mutate(channelId)}
+            joining={joinChannel.isPending}
+            channelTitle={parentChannelTitle}
+          />
+        ) : null}
+      </aside>
     </TaskRefContextProvider>
   );
 }

@@ -1,12 +1,12 @@
-import type { AgentRunState } from '@silverhand/shared';
-import type { QueryClient } from '@tanstack/react-query';
-import { queryClient } from '@/lib/queryClient';
+import type { AgentRunState } from "@silverhand/shared";
+import type { QueryClient } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
 
 export const AGENT_RUN_STATES_GC_MS = 30 * 60_000;
 const TERMINAL_RUN_TOMBSTONE_TTL_MS = 5 * 60_000;
 
 export const agentRunStatesKey = (conversationId: string) =>
-  ['conversations', conversationId, 'agent-run-states'] as const;
+  ["conversations", conversationId, "agent-run-states"] as const;
 
 /** True when an agent-run-states reader (`useAgentRunStates`, or the Composer
  *  activity header) is mounted — the exact key has at least one active observer.
@@ -16,10 +16,7 @@ export const agentRunStatesKey = (conversationId: string) =>
  *  is alive. A non-terminal `agent_activity` bootstraps an incomplete one-row
  *  list, so it must not write with no reader; on the next mount the reader's
  *  `refetchOnMount: 'always'` reconciles the full snapshot regardless. */
-export function hasActiveAgentRunStatesReader(
-  qc: QueryClient,
-  conversationId: string,
-): boolean {
+export function hasActiveAgentRunStatesReader(qc: QueryClient, conversationId: string): boolean {
   const entry = qc
     .getQueryCache()
     .find({ queryKey: agentRunStatesKey(conversationId), exact: true });
@@ -30,10 +27,7 @@ export function hasActiveAgentRunStatesReader(
  *  move of `useAgentRunStates.onEvent`: a reconnect may have missed terminal /
  *  start events, so refetch the snapshot (the queryFn merges any newer live
  *  updates that arrived while the request was in flight). */
-export function invalidateAgentRunStates(
-  qc: QueryClient,
-  conversationId: string,
-): Promise<void> {
+export function invalidateAgentRunStates(qc: QueryClient, conversationId: string): Promise<void> {
   // Returns the invalidate Promise (reconcile-settle signal for the P2 snapshot
   // join, #1255 P2); strategy unchanged.
   return qc.invalidateQueries({ queryKey: agentRunStatesKey(conversationId) });
@@ -42,7 +36,7 @@ export function invalidateAgentRunStates(
 const terminalRunUpdatedAtByKey = new Map<string, number>();
 
 function isTerminalRunState(state: AgentRunState): boolean {
-  return state.status === 'idle' || state.status === 'failed';
+  return state.status === "idle" || state.status === "failed";
 }
 
 function terminalRunKey(state: AgentRunState): string {
@@ -73,12 +67,10 @@ export function applyAgentRunState(
   const current = previous ?? [];
 
   if (isTerminalRunState(state)) {
-    return current.filter(
-      s => !(s.agentId === state.agentId && s.runId === state.runId),
-    );
+    return current.filter((s) => !(s.agentId === state.agentId && s.runId === state.runId));
   }
 
-  const index = current.findIndex(s => s.agentId === state.agentId);
+  const index = current.findIndex((s) => s.agentId === state.agentId);
   if (index === -1) return [...current, state];
 
   const existing = current[index]!;
@@ -97,7 +89,7 @@ export function reconcileAgentRunStateSnapshot(
   snapshot: AgentRunState[],
   requestedAt: number,
 ): AgentRunState[] {
-  let next = snapshot.filter(state => !hasNewerTerminalRunState(state, requestedAt));
+  let next = snapshot.filter((state) => !hasNewerTerminalRunState(state, requestedAt));
 
   for (const state of previous ?? []) {
     if (state.updatedAt < requestedAt) continue;
@@ -121,7 +113,5 @@ export function applyAgentRunStateToCache(
   }
   if (isTerminalRunState(state) && !hasCachedState) return;
 
-  client.setQueryData<AgentRunState[]>(key, previous =>
-    applyAgentRunState(previous, state),
-  );
+  client.setQueryData<AgentRunState[]>(key, (previous) => applyAgentRunState(previous, state));
 }

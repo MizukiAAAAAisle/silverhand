@@ -1,27 +1,27 @@
-import { AtSign, Hash } from 'lucide-react';
-import type { Locator } from '@silverhand/shared';
-import { ThreadIcon } from '@/components/icons/conversation-icons';
-import { useDirectPairs } from '@/features/direct-pairs/hooks';
+import { AtSign, Hash } from "lucide-react";
+import type { Locator } from "@silverhand/shared";
+import { ThreadIcon } from "@/components/icons/conversation-icons";
+import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import {
   locatorChannelListWorkspaceId,
   resolveLocatorTarget,
   resolveLocatorWorkspaceId,
   type LocatorTarget,
-} from '@/features/conversations/locator-target';
+} from "@/features/conversations/locator-target";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useViewerUser,
-} from '@/features/me/hooks';
+} from "@/features/me/hooks";
 import {
   useArchivedChannelsForWorkspace,
   useChannelsForWorkspace,
   useWorkspaces,
-} from '@/features/workspaces/hooks';
-import { buildLocatorTargetUrl, useNav } from '@/router';
-import { faceLabel } from './ConversationRef';
-import { INLINE_REF_HOVER_CLASS } from './inline-ref-chip';
+} from "@/features/workspaces/hooks";
+import { buildLocatorTargetUrl, useNav } from "@/router";
+import { faceLabel } from "./ConversationRef";
+import { INLINE_REF_HOVER_CLASS } from "./inline-ref-chip";
 
 export function LocatorRef({ locator }: { locator: Locator }): JSX.Element {
   const nav = useNav();
@@ -31,10 +31,7 @@ export function LocatorRef({ locator }: { locator: Locator }): JSX.Element {
   // `workspaceResolved` is TRUE BY CONSTRUCTION here and never a guess: the only
   // non-null value this can carry came from a row in the viewer's workspace list.
   const live = useChannelsForWorkspace(channelListId, channelListId !== null);
-  const archived = useArchivedChannelsForWorkspace(
-    channelListId,
-    channelListId !== null,
-  );
+  const archived = useArchivedChannelsForWorkspace(channelListId, channelListId !== null);
   const viewer = useViewerUser();
   const pairs = useDirectPairs();
   // The viewer's HANDLE, and only when the viewer record is a real one: the three
@@ -42,10 +39,10 @@ export function LocatorRef({ locator }: { locator: Locator }): JSX.Element {
   // none of them can be an endpoint of a DM. Cold or degraded reads as "not an
   // endpoint" → inert sigil, which is the fail-closed direction.
   const viewerHandle =
-    viewer.data
-    && !isRegistrationRequired(viewer.data)
-    && !isBackendUnreachable(viewer.data)
-    && !isUpdateRequired(viewer.data)
+    viewer.data &&
+    !isRegistrationRequired(viewer.data) &&
+    !isBackendUnreachable(viewer.data) &&
+    !isUpdateRequired(viewer.data)
       ? viewer.data.name
       : null;
 
@@ -64,7 +61,7 @@ export function LocatorRef({ locator }: { locator: Locator }): JSX.Element {
     <LocatorChip
       locator={locator}
       target={target}
-      onOpen={t => nav.go(buildLocatorTargetUrl(t))}
+      onOpen={(t) => nav.go(buildLocatorTargetUrl(t))}
     />
   );
 }
@@ -77,11 +74,7 @@ export function LocatorRef({ locator }: { locator: Locator }): JSX.Element {
  * navigable. Drawing the inert form is therefore honest rather than degraded: the
  * reader still gets the full coordinate, which is the whole point of a locator.
  */
-export function LocatorRefStaticChip({
-  locator,
-}: {
-  locator: Locator;
-}): JSX.Element {
+export function LocatorRefStaticChip({ locator }: { locator: Locator }): JSX.Element {
   return <LocatorChip locator={locator} target={null} onOpen={undefined} />;
 }
 
@@ -98,7 +91,7 @@ function LocatorChip({
   const body = <LocatorSegments locator={locator} />;
 
   const shared =
-    'inline-flex max-w-[280px] items-center gap-1 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 align-baseline font-medium';
+    "inline-flex max-w-[280px] items-center gap-1 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 align-baseline font-medium";
 
   if (!target || !onOpen) {
     return (
@@ -112,7 +105,7 @@ function LocatorChip({
       </span>
     );
   }
-  const dim = target.kind === 'channel' && target.closed;
+  const dim = target.kind === "channel" && target.closed;
   return (
     <span
       role="button"
@@ -120,12 +113,12 @@ function LocatorChip({
       className={
         `${shared} cursor-pointer bg-accent-soft text-accent focus-outline ` +
         INLINE_REF_HOVER_CLASS +
-        (dim ? ' opacity-60' : '')
+        (dim ? " opacity-60" : "")
       }
       title={tooltip}
       data-locator-ref={locator.kind}
       data-locator-navigable="true"
-      onClick={event => {
+      onClick={(event) => {
         // The default action would follow the anchor's SANITIZED href, which is a
         // second navigation authority and the wrong one — see
         // `buildLocatorTargetUrl`.
@@ -133,8 +126,8 @@ function LocatorChip({
         event.stopPropagation();
         onOpen(target);
       }}
-      onKeyDown={event => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         event.stopPropagation();
         onOpen(target);
@@ -147,10 +140,10 @@ function LocatorChip({
 
 /** The sigil + label pairs, in the order the locator spells them. */
 function LocatorSegments({ locator }: { locator: Locator }): JSX.Element {
-  if (locator.kind === 'workspace') {
+  if (locator.kind === "workspace") {
     return <WorkspaceSegment name={locator.workspace.name} />;
   }
-  if (locator.kind === 'channel') {
+  if (locator.kind === "channel") {
     return (
       <>
         <WorkspaceSegment name={locator.workspace.name} />
@@ -198,13 +191,7 @@ function ThreadSegment(): JSX.Element {
   return <Segment sigil={<ThreadIcon className="size-3 shrink-0 self-center" />} label="thread" />;
 }
 
-function Segment({
-  sigil,
-  label,
-}: {
-  sigil: JSX.Element;
-  label: string;
-}): JSX.Element {
+function Segment({ sigil, label }: { sigil: JSX.Element; label: string }): JSX.Element {
   // Each segment aligns on its label's text baseline (`items-baseline`), with the
   // sigil `self-center`, so a multi-segment chip reads as one line; `items-center`
   // would align segments on synthesized baselines that differ between a letter and
@@ -224,15 +211,10 @@ function Segment({
  *  does; a thread renames the whole coordinate because the thread IS what a
  *  thread-bearing locator points at. */
 function locatorTooltip(locator: Locator): string {
-  if (locator.kind === 'workspace') return `Workspace · ${locator.workspace.name}`;
+  if (locator.kind === "workspace") return `Workspace · ${locator.workspace.name}`;
   const [kind, path] =
-    locator.kind === 'channel'
-      ? [faceLabel('channel'), `${locator.workspace.name} / ${locator.channel.title}`]
-      : [
-          faceLabel('direct_line'),
-          `${locator.endpoints[0]} & ${locator.endpoints[1]}`,
-        ];
-  return locator.threadRootId === null
-    ? `${kind} · ${path}`
-    : `Thread · ${path}`;
+    locator.kind === "channel"
+      ? [faceLabel("channel"), `${locator.workspace.name} / ${locator.channel.title}`]
+      : [faceLabel("direct_line"), `${locator.endpoints[0]} & ${locator.endpoints[1]}`];
+  return locator.threadRootId === null ? `${kind} · ${path}` : `Thread · ${path}`;
 }

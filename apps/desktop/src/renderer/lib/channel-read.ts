@@ -20,8 +20,8 @@
  * streamSourceAtSeq builder is the sole MessageSeq → ReadSeq bridge; retries
  * must not resolve a newer, unseen server head.
  */
-import type { MessageSeq } from '@silverhand/shared';
-import { ApiError } from './api';
+import type { MessageSeq } from "@silverhand/shared";
+import { ApiError } from "./api";
 
 export interface TailReadMark {
   channelId: string;
@@ -57,13 +57,19 @@ export function observeVisibleTail(
       await observe(mark);
       if (!cancelled) acknowledged(mark);
     } catch (error) {
-      const transient = error instanceof ApiError
-        ? error.status === 0 || error.status === 429 || error.status >= 500
-        : error instanceof TypeError; // fetch/network failure
+      const transient =
+        error instanceof ApiError
+          ? error.status === 0 || error.status === 429 || error.status >= 500
+          : error instanceof TypeError; // fetch/network failure
       if (cancelled || !transient || attempts >= delays.length) return;
-      timer = setTimeout(() => { void attempt(); }, delays[attempts++]);
+      timer = setTimeout(() => {
+        void attempt();
+      }, delays[attempts++]);
     }
   };
   void attempt();
-  return () => { cancelled = true; clearTimeout(timer); };
+  return () => {
+    cancelled = true;
+    clearTimeout(timer);
+  };
 }

@@ -1,16 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { toast } from 'sonner';
-import type { MessageDto } from '@silverhand/shared';
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import type { MessageDto } from "@silverhand/shared";
 import {
   useMessageSelection,
   type MessageSelectionHook,
-} from '@/components/chat/useMessageSelection';
-import { buildMarkdownTranscript } from '@/components/chat/markdownTranscript';
-import {
-  type CachedMessage,
-  isCommittedMessage,
-} from '@/features/channels/pending-message';
-import { useSavedMessageIds, useToggleSave } from '@/features/saved/hooks';
+} from "@/components/chat/useMessageSelection";
+import { buildMarkdownTranscript } from "@/components/chat/markdownTranscript";
+import { type CachedMessage, isCommittedMessage } from "@/features/channels/pending-message";
+import { useSavedMessageIds, useToggleSave } from "@/features/saved/hooks";
 
 /** Per-row action props spread onto `MessageItem` / `ChannelMessageItem`.
  *  A single bundle so neither call site can silently drop one — that
@@ -70,12 +67,7 @@ export function useMessageActionSurface(deps: {
    *  hidden. Copy / share (read-side export) are unaffected. */
   canSave?: boolean;
 }): MessageActionSurface {
-  const {
-    channelId,
-    windowResetVersion,
-    jumpToMessageId,
-    canSave = true,
-  } = deps;
+  const { channelId, windowResetVersion, jumpToMessageId, canSave = true } = deps;
   const savedIds = useSavedMessageIds();
   const { toggle: toggleSave } = useToggleSave();
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
@@ -95,17 +87,17 @@ export function useMessageActionSurface(deps: {
   useEffect(() => {
     if (!selection.active || imagePreviewOpen) return;
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (event.key !== "Escape" || event.defaultPrevented) return;
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) {
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) {
         return;
       }
       event.preventDefault();
       selection.exit();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, [selection, imagePreviewOpen]);
 
   // Every row action requires a committed server row: a pending optimistic
@@ -122,20 +114,15 @@ export function useMessageActionSurface(deps: {
   // Single-message copy: clipboard receives ONLY `message.content`. The
   // multi-message transcript (with sender headers) is the separate
   // `handleCopyMarkdownTranscript` path — same clipboard, different shape.
-  const handleCopyMarkdown = useCallback(
-    async (msg: CachedMessage): Promise<void> => {
-      if (!isCommittedMessage(msg)) return;
-      try {
-        await navigator.clipboard.writeText(msg.content);
-        toast.success('Copied to clipboard');
-      } catch (err) {
-        toast.error(
-          "Couldn't copy: " + (err instanceof Error ? err.message : String(err)),
-        );
-      }
-    },
-    [],
-  );
+  const handleCopyMarkdown = useCallback(async (msg: CachedMessage): Promise<void> => {
+    if (!isCommittedMessage(msg)) return;
+    try {
+      await navigator.clipboard.writeText(msg.content);
+      toast.success("Copied to clipboard");
+    } catch (err) {
+      toast.error("Couldn't copy: " + (err instanceof Error ? err.message : String(err)));
+    }
+  }, []);
   // Per-row Share: enter selection mode with this message preselected.
   // `enter` is idempotent — re-entering just adds another message.
   const handleShare = useCallback(
@@ -153,9 +140,7 @@ export function useMessageActionSurface(deps: {
       toast.success(`Copied ${snapshots.length} messages`);
       selection.exit();
     } catch (err) {
-      toast.error(
-        "Couldn't copy: " + (err instanceof Error ? err.message : String(err)),
-      );
+      toast.error("Couldn't copy: " + (err instanceof Error ? err.message : String(err)));
     }
   }, [selection]);
   const handleSaveImage = useCallback(() => {

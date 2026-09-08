@@ -1,16 +1,13 @@
-import type { LogicalSend } from '@/features/channels/logical-send';
-import type { AttachmentDto } from '@silverhand/shared';
+import type { LogicalSend } from "@/features/channels/logical-send";
+import type { AttachmentDto } from "@silverhand/shared";
 import {
   apiPaths,
   attachmentLabelKind,
   formatAttachmentLabel,
   parseAttachmentLabel,
-} from '@silverhand/shared';
-import { apiUpload, deleteAttachmentBestEffort } from './api';
-import {
-  releaseAttachmentPreview,
-  setAttachmentBlobUrl,
-} from './attachment-blob-cache';
+} from "@silverhand/shared";
+import { apiUpload, deleteAttachmentBestEffort } from "./api";
+import { releaseAttachmentPreview, setAttachmentBlobUrl } from "./attachment-blob-cache";
 
 export const MAX_DRAFTS = 10;
 
@@ -19,7 +16,7 @@ export type CachedPendingAttachment = {
   filename: string;
   size: number;
   contentType: string;
-  state: 'uploading' | 'done' | 'error';
+  state: "uploading" | "done" | "error";
   file?: File;
   previewUrl?: string;
   attachment?: AttachmentDto;
@@ -57,9 +54,7 @@ export type ComposerLabelSeq = { image: number; file: number };
 export function pendingAttachmentsBlockSend(
   pending: ReadonlyArray<CachedPendingAttachment>,
 ): boolean {
-  return pending.some(
-    item => item.state === 'uploading' || item.state === 'error',
-  );
+  return pending.some((item) => item.state === "uploading" || item.state === "error");
 }
 
 export type ComposerDraftSnapshot = {
@@ -79,12 +74,12 @@ export type ComposerDraftSnapshot = {
 
 export type ComposerDraftEvent =
   | {
-      type: 'attachment-patch';
+      type: "attachment-patch";
       attachmentKey: string;
       patch: Partial<CachedPendingAttachment>;
     }
-  | { type: 'attachment-remove'; attachmentKey: string }
-  | { type: 'clear' };
+  | { type: "attachment-remove"; attachmentKey: string }
+  | { type: "clear" };
 
 type ComposerDraftEntry = ComposerDraftSnapshot;
 type DraftListener = (event: ComposerDraftEvent) => void;
@@ -99,9 +94,7 @@ export function clearComposerSendAttempt(conversationId: string): void {
   if (entry) delete entry.sendAttempt;
 }
 
-export function readComposerDraft(
-  conversationId: string,
-): ComposerDraftSnapshot | null {
+export function readComposerDraft(conversationId: string): ComposerDraftSnapshot | null {
   const entry = drafts.get(conversationId);
   return entry ? cloneSnapshot(entry) : null;
 }
@@ -120,7 +113,7 @@ export function writeComposerDraft(snapshot: ComposerDraftSnapshot): void {
   };
   if (isEmptySnapshot(entry)) {
     cleanupEntry(snapshot.conversationId);
-    emit(snapshot.conversationId, { type: 'clear' });
+    emit(snapshot.conversationId, { type: "clear" });
     return;
   }
   drafts.set(snapshot.conversationId, entry);
@@ -138,22 +131,14 @@ export function writeComposerDraft(snapshot: ComposerDraftSnapshot): void {
  * number, not the freed one — otherwise a body reference the user already
  * typed could silently rebind to the new file.
  */
-export function assignAttachmentLabel(
-  conversationId: string,
-  contentType: string,
-): string {
+export function assignAttachmentLabel(conversationId: string, contentType: string): string {
   const entry = ensureEntry(conversationId);
   const kind = attachmentLabelKind(contentType);
-  const image = kind === 'Image';
+  const image = kind === "Image";
   const seq = entry.labelSeq ?? { image: 0, file: 0 };
-  const base = Math.max(
-    image ? seq.image : seq.file,
-    maxLiveOrdinal(entry.pending, image),
-  );
+  const base = Math.max(image ? seq.image : seq.file, maxLiveOrdinal(entry.pending, image));
   const next = base + 1;
-  entry.labelSeq = image
-    ? { image: next, file: seq.file }
-    : { image: seq.image, file: next };
+  entry.labelSeq = image ? { image: next, file: seq.file } : { image: seq.image, file: next };
   entry.updatedAt = Date.now();
   drafts.set(conversationId, entry);
   // Build through the shared generator so the composer's label form can never
@@ -166,7 +151,7 @@ export function clearComposerDraft(
   options: { sentAttachmentIds?: string[] } = {},
 ): void {
   cleanupEntry(conversationId, new Set(options.sentAttachmentIds ?? []));
-  emit(conversationId, { type: 'clear' });
+  emit(conversationId, { type: "clear" });
 }
 
 export function dropSentAttachmentsFromDraft(
@@ -176,7 +161,7 @@ export function dropSentAttachmentsFromDraft(
   const entry = drafts.get(conversationId);
   if (!entry || sentAttachmentKeys.length === 0) return;
   const sentKeys = new Set(sentAttachmentKeys);
-  entry.pending = entry.pending.filter(item => !sentKeys.has(item.key));
+  entry.pending = entry.pending.filter((item) => !sentKeys.has(item.key));
   // A send is a draft boundary: the label counter resets so the NEXT message
   // starts at #1 (#task:1324). detach alone is not enough — without this the
   // counter (e.g. 2 after sending Image #1, Image #2) would carry into the new
@@ -195,11 +180,7 @@ export function dropSentAttachmentsFromDraft(
   evictIfNeeded();
 }
 
-export function patchComposerDraftText(
-  conversationId: string,
-  text: string,
-  caret: number,
-): void {
+export function patchComposerDraftText(conversationId: string, text: string, caret: number): void {
   const entry = ensureEntry(conversationId);
   if (entry.text !== text) delete entry.sendAttempt;
   entry.text = text;
@@ -220,23 +201,20 @@ export function upsertComposerDraftAttachment(
   upsertAttachment(conversationId, attachment, true);
 }
 
-export function removeComposerDraftAttachment(
-  conversationId: string,
-  attachmentKey: string,
-): void {
+export function removeComposerDraftAttachment(conversationId: string, attachmentKey: string): void {
   const entry = drafts.get(conversationId);
   if (!entry) return;
-  const target = entry.pending.find(p => p.key === attachmentKey);
+  const target = entry.pending.find((p) => p.key === attachmentKey);
   if (!target) return;
   cleanupAttachment(conversationId, target);
-  entry.pending = entry.pending.filter(p => p.key !== attachmentKey);
+  entry.pending = entry.pending.filter((p) => p.key !== attachmentKey);
   entry.updatedAt = Date.now();
   if (isEmptySnapshot(entry)) {
     drafts.delete(conversationId);
   } else {
     drafts.set(conversationId, entry);
   }
-  emit(conversationId, { type: 'attachment-remove', attachmentKey });
+  emit(conversationId, { type: "attachment-remove", attachmentKey });
 }
 
 export function hasComposerDraftInFlightUpload(
@@ -266,23 +244,27 @@ export function startComposerDraftAttachmentUpload(input: {
   if (existing) return existing;
   const current = drafts
     .get(input.conversationId)
-    ?.pending.find(item => item.key === input.attachmentKey);
-  if (current?.state === 'done') {
+    ?.pending.find((item) => item.key === input.attachmentKey);
+  if (current?.state === "done") {
     return Promise.resolve();
   }
   abandonedUploads.delete(key);
 
-  upsertAttachment(input.conversationId, {
-    key: input.attachmentKey,
-    filename: input.file.name,
-    size: input.file.size,
-    contentType: input.file.type || 'application/octet-stream',
-    state: 'uploading',
-    file: input.file,
-    previewUrl: input.previewUrl,
-    label: input.label ?? current?.label,
-    error: undefined,
-  }, true);
+  upsertAttachment(
+    input.conversationId,
+    {
+      key: input.attachmentKey,
+      filename: input.file.name,
+      size: input.file.size,
+      contentType: input.file.type || "application/octet-stream",
+      state: "uploading",
+      file: input.file,
+      previewUrl: input.previewUrl,
+      label: input.label ?? current?.label,
+      error: undefined,
+    },
+    true,
+  );
 
   const promise = uploadAttachment(input, key);
   inFlightUploads.set(key, promise);
@@ -292,7 +274,7 @@ export function startComposerDraftAttachmentUpload(input: {
 export function cleanupAllComposerDrafts(): void {
   for (const conversationId of Array.from(drafts.keys())) {
     cleanupEntry(conversationId);
-    emit(conversationId, { type: 'clear' });
+    emit(conversationId, { type: "clear" });
   }
 }
 
@@ -336,7 +318,7 @@ async function uploadAttachment(
     const channelId = input.uploadChannelId ?? input.conversationId;
     const path = apiPaths.channelAttachments(channelId);
     const form = new FormData();
-    form.append('file', input.file, input.file.name);
+    form.append("file", input.file, input.file.name);
     const dto = await apiUpload<AttachmentDto>(path, form);
     if (abandonedUploads.has(key) || !hasAttachment(input.conversationId, input.attachmentKey)) {
       void deleteAttachmentBestEffort(dto.id);
@@ -351,7 +333,7 @@ async function uploadAttachment(
       input.conversationId,
       input.attachmentKey,
       {
-        state: 'done',
+        state: "done",
         attachment: dto,
         error: undefined,
       },
@@ -363,7 +345,7 @@ async function uploadAttachment(
         input.conversationId,
         input.attachmentKey,
         {
-          state: 'error',
+          state: "error",
           error: err instanceof Error ? err.message : String(err),
         },
         true,
@@ -375,14 +357,12 @@ async function uploadAttachment(
   }
 }
 
-function ensureEntry(
-  conversationId: string,
-): ComposerDraftEntry {
+function ensureEntry(conversationId: string): ComposerDraftEntry {
   const existing = drafts.get(conversationId);
   if (existing) return existing;
   const entry: ComposerDraftEntry = {
     conversationId,
-    text: '',
+    text: "",
     caret: 0,
     pending: [],
     updatedAt: Date.now(),
@@ -397,11 +377,11 @@ function upsertAttachment(
   shouldEmit: boolean,
 ): void {
   const entry = ensureEntry(conversationId);
-  const idx = entry.pending.findIndex(p => p.key === attachment.key);
+  const idx = entry.pending.findIndex((p) => p.key === attachment.key);
   if (idx === -1) {
     entry.pending = [...entry.pending, cloneAttachment(attachment)];
   } else {
-    entry.pending = entry.pending.map(p =>
+    entry.pending = entry.pending.map((p) =>
       p.key === attachment.key ? mergeAttachment(p, attachment) : p,
     );
   }
@@ -410,7 +390,7 @@ function upsertAttachment(
   evictIfNeeded();
   if (shouldEmit) {
     emit(conversationId, {
-      type: 'attachment-patch',
+      type: "attachment-patch",
       attachmentKey: attachment.key,
       patch: cloneAttachment(attachment),
     });
@@ -426,7 +406,7 @@ function patchAttachment(
   const entry = drafts.get(conversationId);
   if (!entry) return;
   let changed = false;
-  entry.pending = entry.pending.map(item => {
+  entry.pending = entry.pending.map((item) => {
     if (item.key !== attachmentKey) return item;
     changed = true;
     return mergeAttachment(item, { ...item, ...patch });
@@ -436,7 +416,7 @@ function patchAttachment(
   drafts.set(conversationId, entry);
   evictIfNeeded();
   if (shouldEmit) {
-    emit(conversationId, { type: 'attachment-patch', attachmentKey, patch });
+    emit(conversationId, { type: "attachment-patch", attachmentKey, patch });
   }
 }
 
@@ -445,14 +425,12 @@ function mergePending(
   incoming: CachedPendingAttachment[],
   existing: ComposerDraftEntry | undefined,
 ): CachedPendingAttachment[] {
-  const existingByKey = new Map(
-    (existing?.pending ?? []).map(item => [item.key, item] as const),
-  );
-  const incomingKeys = new Set(incoming.map(item => item.key));
+  const existingByKey = new Map((existing?.pending ?? []).map((item) => [item.key, item] as const));
+  const incomingKeys = new Set(incoming.map((item) => item.key));
   for (const item of existing?.pending ?? []) {
     if (!incomingKeys.has(item.key)) cleanupAttachment(conversationId, item);
   }
-  return incoming.map(item => {
+  return incoming.map((item) => {
     const previous = existingByKey.get(item.key);
     return previous ? mergeAttachment(previous, item) : cloneAttachment(item);
   });
@@ -466,7 +444,7 @@ function mergeAttachment(
   // snapshot or accidental retry must not downgrade it back to
   // uploading/error, otherwise the already-uploaded attachment id would
   // be orphaned and the user would see a false pending state.
-  if (previous.state === 'done' && incoming.state !== 'done') {
+  if (previous.state === "done" && incoming.state !== "done") {
     return cloneAttachment(previous);
   }
   return {
@@ -481,10 +459,7 @@ function mergeAttachment(
   };
 }
 
-function cleanupEntry(
-  conversationId: string,
-  sentAttachmentIds: Set<string> = new Set(),
-): void {
+function cleanupEntry(conversationId: string, sentAttachmentIds: Set<string> = new Set()): void {
   const entry = drafts.get(conversationId);
   if (!entry) return;
   for (const item of entry.pending) {
@@ -499,7 +474,7 @@ function cleanupAttachment(
   sentAttachmentIds: Set<string> = new Set(),
 ): void {
   const key = uploadKey(conversationId, item.key);
-  if (item.state === 'uploading' && inFlightUploads.has(key)) {
+  if (item.state === "uploading" && inFlightUploads.has(key)) {
     abandonedUploads.add(key);
   }
   const attachmentId = item.attachment?.id;
@@ -527,7 +502,7 @@ function evictIfNeeded(): void {
     }
     if (!oldestKey) return;
     cleanupEntry(oldestKey);
-    emit(oldestKey, { type: 'clear' });
+    emit(oldestKey, { type: "clear" });
   }
 }
 
@@ -536,9 +511,7 @@ function isEmptySnapshot(snapshot: ComposerDraftSnapshot): boolean {
 }
 
 function hasAttachment(conversationId: string, attachmentKey: string): boolean {
-  return drafts
-    .get(conversationId)
-    ?.pending.some(item => item.key === attachmentKey) ?? false;
+  return drafts.get(conversationId)?.pending.some((item) => item.key === attachmentKey) ?? false;
 }
 
 function emit(conversationId: string, event: ComposerDraftEvent): void {
@@ -555,11 +528,8 @@ function uploadKey(conversationId: string, attachmentKey: string): string {
  *  A secondary floor for the counter so it can't regress below a surviving
  *  label even if the persisted counter were somehow lost. Parses via the shared
  *  canonical parser so a non-canonical label is ignored, not misread. */
-function maxLiveOrdinal(
-  pending: ReadonlyArray<CachedPendingAttachment>,
-  image: boolean,
-): number {
-  const kind = image ? 'Image' : 'File';
+function maxLiveOrdinal(pending: ReadonlyArray<CachedPendingAttachment>, image: boolean): number {
+  const kind = image ? "Image" : "File";
   let max = 0;
   for (const item of pending) {
     const parsed = parseAttachmentLabel(item.label);
@@ -577,16 +547,8 @@ function reconcileLabelSeq(
   pending: ReadonlyArray<CachedPendingAttachment>,
 ): ComposerLabelSeq {
   return {
-    image: Math.max(
-      existing?.image ?? 0,
-      incoming?.image ?? 0,
-      maxLiveOrdinal(pending, true),
-    ),
-    file: Math.max(
-      existing?.file ?? 0,
-      incoming?.file ?? 0,
-      maxLiveOrdinal(pending, false),
-    ),
+    image: Math.max(existing?.image ?? 0, incoming?.image ?? 0, maxLiveOrdinal(pending, true)),
+    file: Math.max(existing?.file ?? 0, incoming?.file ?? 0, maxLiveOrdinal(pending, false)),
   };
 }
 
@@ -601,8 +563,6 @@ function cloneSnapshot(snapshot: ComposerDraftSnapshot): ComposerDraftSnapshot {
   };
 }
 
-function cloneAttachment(
-  attachment: CachedPendingAttachment,
-): CachedPendingAttachment {
+function cloneAttachment(attachment: CachedPendingAttachment): CachedPendingAttachment {
   return { ...attachment };
 }

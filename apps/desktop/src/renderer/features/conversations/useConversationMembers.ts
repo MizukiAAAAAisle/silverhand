@@ -1,25 +1,17 @@
-import { useEffect, useMemo } from 'react';
-import {
-  useQuery,
-  useQueryClient,
-  type UseQueryResult,
-} from '@tanstack/react-query';
+import { useEffect, useMemo } from "react";
+import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import {
   apiPaths,
   type ConversationMembersReadResponse,
   type ConversationMembersResponse,
   type MemberDto,
-} from '@silverhand/shared';
-import { ApiError, api } from '@/lib/api';
-import { onWsFrame } from '@/lib/ws-client';
-import { useInterest } from '@/features/realtime/interest-registry';
-import { wsConversationSideScope } from '@/hooks/useConversationStream';
+} from "@silverhand/shared";
+import { ApiError, api } from "@/lib/api";
+import { onWsFrame } from "@/lib/ws-client";
+import { useInterest } from "@/features/realtime/interest-registry";
+import { wsConversationSideScope } from "@/hooks/useConversationStream";
 
-export type ConversationMembersStatus =
-  | 'loading'
-  | 'resolved'
-  | 'unauthorized'
-  | 'not_found';
+export type ConversationMembersStatus = "loading" | "resolved" | "unauthorized" | "not_found";
 
 export interface ConversationMembersResult {
   status: ConversationMembersStatus;
@@ -48,21 +40,14 @@ const NO_REMOVABILITY: MemberRemovability = new Map();
  *  removability up by this key, NEVER by index — an optimistically filtered
  *  `members` cache holds a shorter array than its carrier (#task:1688). */
 export function memberDtoKey(member: MemberDto): string {
-  return member.kind === 'agent'
-    ? `agent:${member.agent_id}`
-    : `human:${member.user_id}`;
+  return member.kind === "agent" ? `agent:${member.agent_id}` : `human:${member.user_id}`;
 }
 
-export function canRemoveMember(
-  removability: MemberRemovability,
-  member: MemberDto,
-): boolean {
+export function canRemoveMember(removability: MemberRemovability, member: MemberDto): boolean {
   return removability.get(memberDtoKey(member)) === true;
 }
 
-function buildRemovability(
-  data: ConversationMembersReadResponse | undefined,
-): MemberRemovability {
+function buildRemovability(data: ConversationMembersReadResponse | undefined): MemberRemovability {
   // A response without the carrier (older backend) resolves to an empty map →
   // every row fail-closes to "not removable".
   if (!data?.member_removability) return NO_REMOVABILITY;
@@ -76,15 +61,14 @@ function buildRemovability(
 const MEMBERS_GC_MS = 5 * 60 * 1000;
 const MEMBERS_STALE_MS = 30 * 1000;
 
-const conversationMembersKey = (id: string) =>
-  ['conversation-members', id] as const;
+const conversationMembersKey = (id: string) => ["conversation-members", id] as const;
 
 /** Prefix of every conversation's roster key. Exported for the one thing a
  *  per-conversation key can't express: a profile write that changes a human's
  *  denormalized identity (`display_name` / `avatar_url`, which the backend
  *  re-derives from the users table on every read) has to reseat EVERY roster
  *  this session has cached, not just the visible channel's (#task:1701). */
-export const CONVERSATION_MEMBERS_KEY_PREFIX = ['conversation-members'] as const;
+export const CONVERSATION_MEMBERS_KEY_PREFIX = ["conversation-members"] as const;
 
 /**
  * Pure mapping from a React Query result into the renderer-facing
@@ -96,22 +80,19 @@ export const CONVERSATION_MEMBERS_KEY_PREFIX = ['conversation-members'] as const
  */
 export function mapConversationMembersResult(
   id: string | null,
-  query: Pick<
-    UseQueryResult<ConversationMembersResponse, Error>,
-    'data' | 'error' | 'isError'
-  >,
+  query: Pick<UseQueryResult<ConversationMembersResponse, Error>, "data" | "error" | "isError">,
 ): ConversationMembersResult {
-  if (!id) return { status: 'loading', members: [] };
+  if (!id) return { status: "loading", members: [] };
   if (query.isError) {
     const err = query.error;
     if (err instanceof ApiError) {
-      if (err.status === 404) return { status: 'not_found', members: [] };
-      if (err.status === 403) return { status: 'unauthorized', members: [] };
+      if (err.status === 404) return { status: "not_found", members: [] };
+      if (err.status === 403) return { status: "unauthorized", members: [] };
     }
-    return { status: 'loading', members: [] };
+    return { status: "loading", members: [] };
   }
-  if (query.data) return { status: 'resolved', members: query.data.members };
-  return { status: 'loading', members: [] };
+  if (query.data) return { status: "resolved", members: query.data.members };
+  return { status: "loading", members: [] };
 }
 
 /**
@@ -139,17 +120,14 @@ export function mapConversationMembersResult(
  * or another window doing the same. `snapshot_required` for the same
  * scope also triggers a refetch (epoch mismatch / replay gap).
  */
-export function useConversationMembers(
-  id: string | null,
-): ConversationMembersView {
+export function useConversationMembers(id: string | null): ConversationMembersView {
   const qc = useQueryClient();
   const query = useQuery<ConversationMembersReadResponse, Error>({
-    queryKey: id ? conversationMembersKey(id) : ['conversation-members', 'none'],
+    queryKey: id ? conversationMembersKey(id) : ["conversation-members", "none"],
     enabled: !!id,
     staleTime: MEMBERS_STALE_MS,
     gcTime: MEMBERS_GC_MS,
-    queryFn: () =>
-      api<ConversationMembersReadResponse>(apiPaths.conversationMembers(id!)),
+    queryFn: () => api<ConversationMembersReadResponse>(apiPaths.conversationMembers(id!)),
     // Don't auto-retry 403/404 — terminal for this hook.
     retry: (failureCount, err) => {
       if (err instanceof ApiError) {
@@ -170,12 +148,12 @@ export function useConversationMembers(
     // `conversation_members_changed` is a side-channel kind (#task:1255 P2
     // step-3) — match on the side scope, not the message stream.
     const scope = wsConversationSideScope(id);
-    const unsub = onWsFrame(frame => {
-      if (frame.type === 'event') {
+    const unsub = onWsFrame((frame) => {
+      if (frame.type === "event") {
         if (frame.scope !== scope) return;
-        if (frame.kind !== 'conversation_members_changed') return;
+        if (frame.kind !== "conversation_members_changed") return;
         void qc.invalidateQueries({ queryKey: conversationMembersKey(id) });
-      } else if (frame.type === 'snapshot_required' && frame.scope === scope) {
+      } else if (frame.type === "snapshot_required" && frame.scope === scope) {
         void qc.invalidateQueries({ queryKey: conversationMembersKey(id) });
       }
     });
@@ -192,6 +170,6 @@ export function useConversationMembers(
     ...roster,
     // Only a resolved roster carries removability; an errored/loading read
     // fail-closes every row.
-    removability: roster.status === 'resolved' ? removability : NO_REMOVABILITY,
+    removability: roster.status === "resolved" ? removability : NO_REMOVABILITY,
   };
 }

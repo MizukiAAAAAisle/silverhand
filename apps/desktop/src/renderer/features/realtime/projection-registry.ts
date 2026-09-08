@@ -1,21 +1,21 @@
-import type { QueryClient } from '@tanstack/react-query';
+import type { QueryClient } from "@tanstack/react-query";
 import type {
   MessageDto,
   MessageProjections,
   ThreadRootReplyCountPatch,
   ThreadSummaryInvariant,
-} from '@silverhand/shared';
+} from "@silverhand/shared";
 import {
   hasActiveMainlineReader,
   mergeMainlineReplyCount,
   mergeThreadRootReplyCount,
   openThreadRootReaderRoots,
-} from '@/features/channels/hooks';
+} from "@/features/channels/hooks";
 import {
   hasActiveChannelThreadsReader,
   invalidateChannelThreadsList,
   mergeThreadsListEntry,
-} from '@/features/channels/useChannelThreads';
+} from "@/features/channels/useChannelThreads";
 
 /**
  *  - `merged`              — a DISPLAYED projection was written synchronously with
@@ -41,10 +41,10 @@ import {
  *                           synchronous states only.
  */
 export type ProjectionDisposition =
-  | { status: 'merged' }
-  | { status: 'cold-absent-vacuous' }
-  | { status: 'pending-fallback'; settle: Promise<void> }
-  | { status: 'rejected'; error: unknown };
+  | { status: "merged" }
+  | { status: "cold-absent-vacuous" }
+  | { status: "pending-fallback"; settle: Promise<void> }
+  | { status: "rejected"; error: unknown };
 
 /** Map a disposition onto the per-effect promise the ingestor joins with
  *  `Promise.allSettled` to gate `markSatisfied` (§7 → `conversation-ingestor.ts`):
@@ -57,13 +57,13 @@ export type ProjectionDisposition =
  *   - `rejected` → a rejected promise (pins the floor). */
 export function dispositionSettle(d: ProjectionDisposition): Promise<void> | null {
   switch (d.status) {
-    case 'merged':
+    case "merged":
       return Promise.resolve();
-    case 'cold-absent-vacuous':
+    case "cold-absent-vacuous":
       return null;
-    case 'pending-fallback':
+    case "pending-fallback":
       return d.settle;
-    case 'rejected':
+    case "rejected":
       return Promise.reject(d.error);
   }
 }
@@ -91,8 +91,8 @@ function readReplyCount(
   if (openThreadRootReaderRoots(qc, channelId).includes(root_id)) {
     out.push(
       mergeThreadRootReplyCount(qc, channelId, root_id, reply_count)
-        ? { status: 'merged' }
-        : { status: 'cold-absent-vacuous' },
+        ? { status: "merged" }
+        : { status: "cold-absent-vacuous" },
     );
   }
 
@@ -101,8 +101,8 @@ function readReplyCount(
   if (hasActiveMainlineReader(qc, channelId)) {
     out.push(
       mergeMainlineReplyCount(qc, channelId, root_id, reply_count)
-        ? { status: 'merged' }
-        : { status: 'cold-absent-vacuous' },
+        ? { status: "merged" }
+        : { status: "cold-absent-vacuous" },
     );
   }
 
@@ -116,14 +116,12 @@ function readThreadsListEntry(
 ): ProjectionDisposition[] {
   if (!hasActiveChannelThreadsReader(qc, channelId)) return [];
   switch (mergeThreadsListEntry(qc, channelId, patch.entry)) {
-    case 'merged':
-      return [{ status: 'merged' }];
-    case 'cold-absent':
-      return [{ status: 'cold-absent-vacuous' }];
-    case 'off-page':
-      return [
-        { status: 'pending-fallback', settle: invalidateChannelThreadsList(qc, channelId) },
-      ];
+    case "merged":
+      return [{ status: "merged" }];
+    case "cold-absent":
+      return [{ status: "cold-absent-vacuous" }];
+    case "off-page":
+      return [{ status: "pending-fallback", settle: invalidateChannelThreadsList(qc, channelId) }];
   }
 }
 
@@ -136,9 +134,7 @@ function isReplyCountPatchValid(
   patch: ThreadRootReplyCountPatch | undefined,
   msg: MessageDto,
 ): boolean {
-  return (
-    patch != null && msg.thread_root_id !== null && patch.root_id === msg.thread_root_id
-  );
+  return patch != null && msg.thread_root_id !== null && patch.root_id === msg.thread_root_id;
 }
 
 function isThreadsListEntryValid(
@@ -157,16 +153,10 @@ export function validateMessageProjections(
   msg: MessageDto,
 ): MessageProjections {
   return {
-    thread_root_reply_count: isReplyCountPatchValid(
-      projections.thread_root_reply_count,
-      msg,
-    )
+    thread_root_reply_count: isReplyCountPatchValid(projections.thread_root_reply_count, msg)
       ? projections.thread_root_reply_count
       : undefined,
-    threads_list_entry: isThreadsListEntryValid(
-      projections.threads_list_entry,
-      msg,
-    )
+    threads_list_entry: isThreadsListEntryValid(projections.threads_list_entry, msg)
       ? projections.threads_list_entry
       : undefined,
   };
@@ -191,11 +181,7 @@ export function ingestMessageProjections(
   }
   if (projections.threads_list_entry) {
     out.push(
-      ...PROJECTION_READERS.threads_list_entry(
-        qc,
-        channelId,
-        projections.threads_list_entry,
-      ),
+      ...PROJECTION_READERS.threads_list_entry(qc, channelId, projections.threads_list_entry),
     );
   }
   return out;

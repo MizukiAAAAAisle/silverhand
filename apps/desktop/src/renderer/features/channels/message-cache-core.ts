@@ -4,18 +4,14 @@
 // replay-dedup fenced by hooks/realtime-ingestion-read-inert.test.ts (which now
 // reads THIS file for that slice). Leaf module — no dependency on sibling
 // channel modules.
-import type { InfiniteData } from '@tanstack/react-query';
-import type {
-  ConversationMessagesDto,
-  MessageDto,
-  MessageSeq,
-} from '@silverhand/shared';
-import { decodeMessageSeq } from '@silverhand/shared';
+import type { InfiniteData } from "@tanstack/react-query";
+import type { ConversationMessagesDto, MessageDto, MessageSeq } from "@silverhand/shared";
+import { decodeMessageSeq } from "@silverhand/shared";
 import {
   isPendingMessage,
   type CachedMessage,
   type PendingMessage,
-} from '@/features/channels/pending-message';
+} from "@/features/channels/pending-message";
 
 /** Page-param shape for the bidirectional infinite query.
  *  - `undefined` (the initial param) → fetch the latest window.
@@ -27,28 +23,27 @@ import {
  *  inferred page-param type stays `MessagesPageParam` end-to-end. */
 export type MessagesPageParam =
   | undefined
-  | { kind: 'before'; seq: number }
-  | { kind: 'after'; seq: number };
+  | { kind: "before"; seq: number }
+  | { kind: "after"; seq: number };
 
 /** A cached messages page. Identical to the wire {@link ConversationMessagesDto}
  *  except the message list may also hold optimistic {@link PendingMessage} rows
  *  (which the wire never carries). A server response widens into this freely
  *  (`MessageDto[]` ⊆ `CachedMessage[]`); only optimistic inserts add the pending
  *  variant. */
-export type CachedMessagesPage = Omit<ConversationMessagesDto, 'messages'> & {
+export type CachedMessagesPage = Omit<ConversationMessagesDto, "messages"> & {
   messages: CachedMessage[];
 };
 
 export type MessagesCache = InfiniteData<CachedMessagesPage, MessagesPageParam>;
 
-export const messagesKey = (cid: string) =>
-  ['channels', cid, 'messages'] as const;
+export const messagesKey = (cid: string) => ["channels", cid, "messages"] as const;
 /** Cache key for one reply cluster's window. A cluster lives in the same
  *  channel conversation as its root (rows with `thread_root_id = rootId`),
  *  so it is keyed off the channel id plus the root message id — distinct
  *  from the main-stream window (`messagesKey`) which excludes replies. */
 export const clusterMessagesKey = (cid: string, rootId: string) =>
-  ['channels', cid, 'cluster', rootId, 'messages'] as const;
+  ["channels", cid, "cluster", rootId, "messages"] as const;
 /** Cache key carrying the "this-open window fetch succeeded" epoch (ms) for a
  *  reply cluster (#task:1226 §9/§9.10). Written on the success path by both
  *  `useThreadCluster`'s queryFn AND `primeAround`'s around-target fetch, so a
@@ -56,18 +51,17 @@ export const clusterMessagesKey = (cid: string, rootId: string) =>
  *  Deliberately separate from `clusterMessagesKey` so `setQueryData` appends to
  *  the window (live reply / optimistic patch) never advance it. */
 export const clusterFetchEpochKey = (cid: string, rootId: string) =>
-  ['channels', cid, 'cluster', rootId, 'fetch-epoch'] as const;
+  ["channels", cid, "cluster", rootId, "fetch-epoch"] as const;
 /** Cache key for the thread pane's root row. The root message lives in the
  *  main stream, but ThreadPanel loads it through its own single-row window
  *  query so the pane can mount independently of the channel list. */
 export const threadRootKey = (cid: string, rootId: string) =>
-  ['channels', cid, 'thread-root', rootId] as const;
+  ["channels", cid, "thread-root", rootId] as const;
 /** Cache key for one reply cluster's human-follower state (cut3 slice B). */
 export const threadFollowersKey = (cid: string, rootId: string) =>
-  ['channels', cid, 'thread-followers', rootId] as const;
-export const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
-export const agentRuntimeKey = (cid: string) =>
-  ['channels', cid, 'agent-runtime'] as const;
+  ["channels", cid, "thread-followers", rootId] as const;
+export const agentsKey = (cid: string) => ["channels", cid, "agents"] as const;
+export const agentRuntimeKey = (cid: string) => ["channels", cid, "agent-runtime"] as const;
 /** Per-window UI-affordance fact (#task:1255 Stage-2): a live mainline message
  *  arrived while this window was NOT at tail, so the UI offers "scroll to
  *  latest" instead of lying with an append. It is NOT the message cache and NOT
@@ -77,12 +71,12 @@ export const agentRuntimeKey = (cid: string) =>
  *  which are explicit-helper writes of this affordance key, never a frame apply
  *  and never the message cache. See docs/renderer-event-ingestion-v1.md §5. */
 export const mainlineLiveGapKey = (cid: string) =>
-  ['channels', cid, 'live-gap', 'mainline'] as const;
+  ["channels", cid, "live-gap", "mainline"] as const;
 /** Per-cluster sibling of {@link mainlineLiveGapKey} (#task:1255 Stage-2 P1b):
  *  a live reply arrived while THIS cluster window was not at tail. Same
  *  contract — ingestor SETs, the reader view CLEARs on position changes. */
 export const clusterLiveGapKey = (cid: string, rootId: string) =>
-  ['channels', cid, 'cluster', rootId, 'live-gap'] as const;
+  ["channels", cid, "cluster", rootId, "live-gap"] as const;
 export const MESSAGE_PAGE_LIMIT = 100;
 export const AROUND_MESSAGE_LIMIT = 100;
 
@@ -94,7 +88,7 @@ export function makeMessagesCache(
 }
 
 export function cacheHasMessage(data: MessagesCache | undefined, messageId: string): boolean {
-  return data?.pages.some(page => page.messages.some(m => m.id === messageId)) ?? false;
+  return data?.pages.some((page) => page.messages.some((m) => m.id === messageId)) ?? false;
 }
 
 /** Whether a reply badge for `rootId` is on a loaded main-stream page — the
@@ -103,15 +97,12 @@ export function cacheHasMessage(data: MessagesCache | undefined, messageId: stri
  *  this: an ON-window root → invalidate → refetch the count; an OFF-window root
  *  → no-op, since the badge isn't displayed and the next window fetch re-derives
  *  the authoritative count when the user paginates to it (#task:1255 §4.1). */
-export function cacheHasRootOrKey(
-  data: MessagesCache | undefined,
-  rootId: string,
-): boolean {
+export function cacheHasRootOrKey(data: MessagesCache | undefined, rootId: string): boolean {
   return (
     data?.pages.some(
-      page =>
+      (page) =>
         Object.prototype.hasOwnProperty.call(page.reply_counts_by_root, rootId) ||
-        page.messages.some(m => m.id === rootId),
+        page.messages.some((m) => m.id === rootId),
     ) ?? false
   );
 }
@@ -169,9 +160,7 @@ export function appendToCache(
   return {
     ...data,
     pages: data.pages.map((page, index) =>
-      index === lastIndex
-        ? { ...page, messages: [...page.messages, msg] }
-        : page,
+      index === lastIndex ? { ...page, messages: [...page.messages, msg] } : page,
     ),
   };
 }
@@ -205,9 +194,9 @@ export function removeMessageFromCache(
   if (!data) return data;
   return {
     ...data,
-    pages: data.pages.map(page => ({
+    pages: data.pages.map((page) => ({
       ...page,
-      messages: page.messages.filter(m => m.id !== messageId),
+      messages: page.messages.filter((m) => m.id !== messageId),
     })),
   };
 }
@@ -218,10 +207,7 @@ export function removeMessageFromCache(
  *  insert always lands before the first pending row. An empty / page-less cache
  *  bootstraps via {@link appendMessageToCache} (which stamps the head). Callers
  *  own id-dedup — this helper does not check for an existing row. */
-function insertCommittedBySeq(
-  data: MessagesCache | undefined,
-  msg: MessageDto,
-): MessagesCache {
+function insertCommittedBySeq(data: MessagesCache | undefined, msg: MessageDto): MessagesCache {
   if (!data || data.pages.length === 0) {
     return appendMessageToCache(data, msg);
   }
@@ -310,12 +296,21 @@ export function rollbackOptimisticSend(
 
 /** Only this authenticated sender's exact logical send can replace a pending row. */
 export function reconcilePendingMessage(
-  data: MessagesCache | undefined, msg: MessageDto, userId: string | null,
+  data: MessagesCache | undefined,
+  msg: MessageDto,
+  userId: string | null,
 ): MessagesCache | undefined {
-  if (!userId || msg.from_kind !== 'user' || msg.from_user_id !== userId || !msg.client_message_id) return data;
-  const pending = data?.pages.flatMap(page => page.messages).find(row =>
-    isPendingMessage(row) && row.from_user_id === userId
-    && row.conversation_id === msg.conversation_id && row.thread_root_id === msg.thread_root_id
-    && row.client_message_id === msg.client_message_id);
+  if (!userId || msg.from_kind !== "user" || msg.from_user_id !== userId || !msg.client_message_id)
+    return data;
+  const pending = data?.pages
+    .flatMap((page) => page.messages)
+    .find(
+      (row) =>
+        isPendingMessage(row) &&
+        row.from_user_id === userId &&
+        row.conversation_id === msg.conversation_id &&
+        row.thread_root_id === msg.thread_root_id &&
+        row.client_message_id === msg.client_message_id,
+    );
   return pending ? replacePendingMessageInCache(data, pending.id, msg) : data;
 }

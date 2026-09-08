@@ -1,8 +1,8 @@
-import { join } from 'node:path';
+import { join } from "node:path";
 
 export type RendererEntry =
-  | { kind: 'dev-server'; url: string }
-  | { kind: 'packaged-file'; filePath: string };
+  | { kind: "dev-server"; url: string }
+  | { kind: "packaged-file"; filePath: string };
 
 export function resolveRendererEntry(input: {
   /** `process.env['ELECTRON_RENDERER_URL']` — present only under dev. */
@@ -22,15 +22,13 @@ export function resolveRendererEntry(input: {
     } catch {
       throw new Error(`renderer dev-server URL is not a valid URL: ${dev}`);
     }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error(
-        `renderer dev-server URL must be http(s), got ${parsed.protocol}`,
-      );
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error(`renderer dev-server URL must be http(s), got ${parsed.protocol}`);
     }
-    return { kind: 'dev-server', url: dev };
+    return { kind: "dev-server", url: dev };
   }
   return {
-    kind: 'packaged-file',
-    filePath: join(input.mainDirname, '../renderer/index.html'),
+    kind: "packaged-file",
+    filePath: join(input.mainDirname, "../renderer/index.html"),
   };
 }

@@ -1,4 +1,4 @@
-import type { WorkspaceRole } from '@silverhand/shared';
+import type { WorkspaceRole } from "@silverhand/shared";
 
 /**
  * Renderer mirror of the backend agent-capability EDIT gate (#task:1778,
@@ -34,11 +34,10 @@ export function canEditAgentCapabilities(args: {
   agentCreatedByUserId: string;
 }): boolean {
   // Governor: the admin threshold (owner outranks admin) — edits any agent.
-  const isGovernor = args.viewerRole === 'owner' || args.viewerRole === 'admin';
+  const isGovernor = args.viewerRole === "owner" || args.viewerRole === "admin";
   // Confirmed workspace member (the creator branch's floor). null = non-member
   // OR unresolved query → not a member → creator branch closed (fail-closed).
   const isMember = args.viewerRole != null;
-  const isCreator =
-    args.viewerUserId !== null && args.viewerUserId === args.agentCreatedByUserId;
+  const isCreator = args.viewerUserId !== null && args.viewerUserId === args.agentCreatedByUserId;
   return isGovernor || (isMember && isCreator);
 }

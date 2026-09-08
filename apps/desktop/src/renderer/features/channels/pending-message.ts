@@ -17,12 +17,7 @@
 // that must never be ordered against a real MessageSeq would invite the exact
 // mix the split removes.
 
-import type {
-  MessageAuthorDto,
-  MessageDto,
-  MessageSeq,
-  UserDto,
-} from '@silverhand/shared';
+import type { MessageAuthorDto, MessageDto, MessageSeq, UserDto } from "@silverhand/shared";
 
 /**
  * An optimistic message shown immediately on send, before the server ack. Has
@@ -30,7 +25,7 @@ import type {
  * plus a `pending: true` discriminant. Ordered to the tail by insertion, never
  * by a seq compare.
  */
-export type PendingMessage = Omit<MessageDto, 'seq'> & {
+export type PendingMessage = Omit<MessageDto, "seq"> & {
   readonly pending: true;
 };
 
@@ -41,11 +36,10 @@ export type CachedMessage = MessageDto | PendingMessage;
 
 /** Narrow to the optimistic side (no server seq). */
 export const isPendingMessage = (m: CachedMessage): m is PendingMessage =>
-  'pending' in m && m.pending === true;
+  "pending" in m && m.pending === true;
 
 /** Narrow to the committed side (has a `MessageSeq`). */
-export const isCommittedMessage = (m: CachedMessage): m is MessageDto =>
-  !isPendingMessage(m);
+export const isCommittedMessage = (m: CachedMessage): m is MessageDto => !isPendingMessage(m);
 
 /**
  * The author of an optimistic self-send: the CURRENT VIEWER, projected into a
@@ -70,13 +64,11 @@ export const isCommittedMessage = (m: CachedMessage): m is MessageDto =>
  * `kind:'user', runtime:null` arm. An agent viewer would take the agent arm,
  * but that branch is unreachable on this surface and deliberately not modelled.
  */
-export function optimisticSelfAuthor(
-  viewer: UserDto | null,
-): MessageAuthorDto | null {
+export function optimisticSelfAuthor(viewer: UserDto | null): MessageAuthorDto | null {
   if (!viewer) return null;
   return {
-    status: 'active',
-    kind: 'user',
+    status: "active",
+    kind: "user",
     id: viewer.id,
     name: viewer.name,
     display_name: viewer.display_name,
@@ -89,9 +81,7 @@ export function optimisticSelfAuthor(
  *  window holds no committed message. Pending rows are skipped — they have no
  *  MessageSeq, and a mark-read / tail gate must fire off a real ordinal, never
  *  a would-be optimistic value (§3.3/§3.5). */
-export const lastCommittedSeq = (
-  messages: readonly CachedMessage[],
-): MessageSeq | null => {
+export const lastCommittedSeq = (messages: readonly CachedMessage[]): MessageSeq | null => {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]!;
     if (isCommittedMessage(m)) return m.seq;

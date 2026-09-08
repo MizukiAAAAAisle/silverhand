@@ -1,7 +1,7 @@
-import type { ChildProcess } from 'node:child_process';
-import { spawn as spawnChildProcess } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { rm as fsRm } from 'node:fs/promises';
+import type { ChildProcess } from "node:child_process";
+import { spawn as spawnChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { rm as fsRm } from "node:fs/promises";
 
 import {
   composeRustBackendChildEnv,
@@ -9,15 +9,15 @@ import {
   type EmbeddedRustBackendConfig,
   type EmbeddedRustBackendDeps,
   type EmbeddedRustBackendHandle,
-} from './embedded-rust-backend.js';
-import { fetchServerInfoWithRetry } from './fetch-server-info.js';
-import { prepareEmbeddedStartup } from './embedded-startup-preparation.js';
+} from "./embedded-rust-backend.js";
+import { fetchServerInfoWithRetry } from "./fetch-server-info.js";
+import { prepareEmbeddedStartup } from "./embedded-startup-preparation.js";
 import {
   productionSidecarDeps,
   resolveBackendSidecarManifestPath,
   verifySidecar,
   type VerifiedSidecar,
-} from './rust-backend-sidecar.js';
+} from "./rust-backend-sidecar.js";
 
 /** A minimal logger shape (the desktop `FileLogger` satisfies it). */
 interface SeamLogger {
@@ -33,10 +33,15 @@ export function startDesktopEmbeddedBackend(
   return prepareEmbeddedStartup({
     cleanupTokens: () => deps.removeBootstrapToken(config.bootstrapTokenPath),
     verify: () => resolveAndVerifyEmbeddedSidecar(location),
-    launch: sidecar => startEmbeddedRustBackend(sidecar, {
-      ...config,
-      migrationPermission: process.env.SILVERHAND_MIGRATE,
-    }, deps),
+    launch: (sidecar) =>
+      startEmbeddedRustBackend(
+        sidecar,
+        {
+          ...config,
+          migrationPermission: process.env.SILVERHAND_MIGRATE,
+        },
+        deps,
+      ),
   });
 }
 
@@ -47,10 +52,7 @@ export async function resolveAndVerifyEmbeddedSidecar(location: {
   resourcesPath: string;
   appPath: string;
 }): Promise<VerifiedSidecar> {
-  return verifySidecar(
-    resolveBackendSidecarManifestPath(location),
-    productionSidecarDeps(),
-  );
+  return verifySidecar(resolveBackendSidecarManifestPath(location), productionSidecarDeps());
 }
 
 /**
@@ -70,12 +72,12 @@ function productionEmbeddedRustBackendDeps(
       const childEnv = composeRustBackendChildEnv(env, process.env);
       return spawnChildProcess(executablePath, [], {
         env: childEnv,
-        stdio: ['ignore', 'pipe', 'inherit'],
+        stdio: ["ignore", "pipe", "inherit"],
       });
     },
     probeReadyz: async (url, signal) => {
       try {
-        const res = await fetch(new URL('/readyz', url).toString(), { signal });
+        const res = await fetch(new URL("/readyz", url).toString(), { signal });
         return res.status === 200;
       } catch {
         return false;
@@ -84,7 +86,7 @@ function productionEmbeddedRustBackendDeps(
     probeServerInfoEpoch: async (url, signal) => {
       try {
         const info = await fetchServerInfoWithRetry({
-          url: new URL('/api/server/info', url).toString(),
+          url: new URL("/api/server/info", url).toString(),
           signal,
         });
         if (!info.desktop_api) return null;
@@ -97,14 +99,14 @@ function productionEmbeddedRustBackendDeps(
       }
     },
     mintGeneration: () => randomUUID(),
-    removeBootstrapToken: async path => {
+    removeBootstrapToken: async (path) => {
       await fsRm(path, { force: true });
       await fsRm(`${path}.tmp`, { force: true });
     },
     clock: {
       now: () => Date.now(),
-      sleep: ms =>
-        new Promise(resolve => {
+      sleep: (ms) =>
+        new Promise((resolve) => {
           setTimeout(resolve, ms);
         }),
     },

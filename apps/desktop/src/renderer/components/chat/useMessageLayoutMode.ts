@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from "react";
 
 /**
  * How chat messages are arranged horizontally.
@@ -18,25 +18,22 @@ import { useSyncExternalStore } from 'react';
  * on the writing window, which is why this preference used to need a manual
  * reload.
  */
-export type MessageLayoutMode = 'user-right' | 'all-left';
+export type MessageLayoutMode = "user-right" | "all-left";
 
 /** Presentation order for the Settings control — the shared list so the
  *  picker cannot drift from the type. Labels/icons stay in the consumer. */
-export const MESSAGE_LAYOUT_MODES: ReadonlyArray<MessageLayoutMode> = [
-  'all-left',
-  'user-right',
-];
+export const MESSAGE_LAYOUT_MODES: ReadonlyArray<MessageLayoutMode> = ["all-left", "user-right"];
 
 /** Same `silverhand:layout.*` family as the other renderer-local layout
  *  preferences (`sidebar-section`, `workspace-sidebar-visible`, …) — the key
  *  used to be dot-separated, which forked the convention for no reason
  *  (shiki 2026-08-06 「统一吧,这个只有我在用」; the rename resets the stored
  *  choice once, back to the default). */
-const STORAGE_KEY = 'silverhand:layout.message-mode';
-const DEFAULT_MODE: MessageLayoutMode = 'all-left';
+const STORAGE_KEY = "silverhand:layout.message-mode";
+const DEFAULT_MODE: MessageLayoutMode = "all-left";
 
 function parse(raw: string | null): MessageLayoutMode {
-  return raw === 'all-left' || raw === 'user-right' ? raw : DEFAULT_MODE;
+  return raw === "all-left" || raw === "user-right" ? raw : DEFAULT_MODE;
 }
 
 function readStored(): MessageLayoutMode {
@@ -67,14 +64,14 @@ function onStorage(event: StorageEvent): void {
  *  for the whole app however many rows are mounted. Covers writes from
  *  ANOTHER window; same-window writes go through `setMessageLayoutMode`. */
 function subscribe(listener: () => void): () => void {
-  if (listeners.size === 0 && typeof window !== 'undefined') {
-    window.addEventListener('storage', onStorage);
+  if (listeners.size === 0 && typeof window !== "undefined") {
+    window.addEventListener("storage", onStorage);
   }
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0 && typeof window !== 'undefined') {
-      window.removeEventListener('storage', onStorage);
+    if (listeners.size === 0 && typeof window !== "undefined") {
+      window.removeEventListener("storage", onStorage);
     }
   };
 }

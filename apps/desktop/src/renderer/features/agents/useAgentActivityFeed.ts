@@ -1,14 +1,14 @@
-import { useCallback, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { QueryClient } from '@tanstack/react-query';
-import { apiPaths } from '@silverhand/shared';
+import { useCallback, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
+import { apiPaths } from "@silverhand/shared";
 import type {
   ConversationActivityEvent,
   ConversationActivityListResponse,
-} from '@silverhand/shared';
-import { api } from '@/lib/api';
-import { wsConversationSideScope } from '@/hooks/useConversationStream';
-import { useInterest } from '@/features/realtime/interest-registry';
+} from "@silverhand/shared";
+import { api } from "@/lib/api";
+import { wsConversationSideScope } from "@/hooks/useConversationStream";
+import { useInterest } from "@/features/realtime/interest-registry";
 
 // #task:1255 Stage-2 P1c #2 — the agent activity feed (the `conversation_activity`
 // projection) moves off `AgentActivityTimeline`'s local `useState` into a React
@@ -39,7 +39,7 @@ export interface AgentActivityFeed {
  * rather than `undefined`, so distinct selections never collide on one key.
  */
 export const agentActivityKey = (conversationId: string, agentId: string) =>
-  ['conversations', conversationId, 'agent-activity', agentId] as const;
+  ["conversations", conversationId, "agent-activity", agentId] as const;
 
 /**
  * Merge two activity-event lists into one, sorted ascending by `id`,
@@ -86,8 +86,8 @@ function pickRicher(
 }
 
 function textLen(e: ConversationActivityEvent): number | null {
-  const v = (e.payload as Record<string, unknown> | null)?.['text'];
-  return typeof v === 'string' ? v.length : null;
+  const v = (e.payload as Record<string, unknown> | null)?.["text"];
+  return typeof v === "string" ? v.length : null;
 }
 
 /** True when an `AgentActivityTimeline(conversationId, agentId)` reader is
@@ -117,10 +117,8 @@ export function appendAgentActivityToCache(
   agentId: string,
   row: ConversationActivityEvent,
 ): void {
-  qc.setQueryData<AgentActivityFeed>(
-    agentActivityKey(conversationId, agentId),
-    prev =>
-      prev ? { ...prev, events: mergeActivityById(prev.events, [row]) } : prev,
+  qc.setQueryData<AgentActivityFeed>(agentActivityKey(conversationId, agentId), (prev) =>
+    prev ? { ...prev, events: mergeActivityById(prev.events, [row]) } : prev,
   );
 }
 
@@ -136,14 +134,14 @@ export function reconcileAgentActivityOnSnapshotRequired(
   conversationId: string,
 ): Promise<void> {
   return qc.invalidateQueries({
-    queryKey: ['conversations', conversationId, 'agent-activity'],
+    queryKey: ["conversations", conversationId, "agent-activity"],
   });
 }
 
 export interface UseAgentActivityFeed {
   events: ConversationActivityEvent[];
   nextBeforeId: number | null;
-  phase: 'loading' | 'ready' | 'error';
+  phase: "loading" | "ready" | "error";
   isLoadingMore: boolean;
   loadEarlier: () => Promise<void>;
 }
@@ -181,7 +179,7 @@ export function useAgentActivityFeed(
     // Live frames keep this current; always re-backfill on (re)mount to
     // reconcile a window that may have missed frames while unmounted.
     staleTime: Infinity,
-    refetchOnMount: 'always',
+    refetchOnMount: "always",
   });
 
   // Keep the WS scope INTEREST alive while the timeline is open (source scope is
@@ -200,7 +198,7 @@ export function useAgentActivityFeed(
       const res = await api<ConversationActivityListResponse>(
         `${apiPaths.conversationAgentActivity(conversationId, agentId)}?limit=${PAGE_SIZE}&before_id=${nextBeforeId}`,
       );
-      qc.setQueryData<AgentActivityFeed>(key, prev => ({
+      qc.setQueryData<AgentActivityFeed>(key, (prev) => ({
         // Prepend older rows; merge preserves ordering + dedupes overlap so a
         // live append that raced this page can't be lost or reordered.
         events: mergeActivityById(res.events, prev?.events ?? []),
@@ -214,11 +212,11 @@ export function useAgentActivityFeed(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, agentId, nextBeforeId, isLoadingMore]);
 
-  const phase: 'loading' | 'ready' | 'error' = query.isError
-    ? 'error'
+  const phase: "loading" | "ready" | "error" = query.isError
+    ? "error"
     : query.data === undefined
-      ? 'loading'
-      : 'ready';
+      ? "loading"
+      : "ready";
 
   return {
     events: query.data?.events ?? [],

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { ExternalLink, Loader2, Pencil } from 'lucide-react';
-import type { TaskDetailDto } from '@silverhand/shared';
+import { useEffect, useState } from "react";
+import { ExternalLink, Loader2, Pencil } from "lucide-react";
+import type { TaskDetailDto } from "@silverhand/shared";
 import {
   Dialog,
   DialogContent,
@@ -8,18 +8,18 @@ import {
   DialogHeader,
   DialogTitle,
   dialogCornerButtonClass,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { MiniIconButton } from '@/components/tasks/MiniIconButton';
-import { TaskDetailMetaPanel } from '@/components/tasks/TaskDetailMetaPanel';
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { MiniIconButton } from "@/components/tasks/MiniIconButton";
+import { TaskDetailMetaPanel } from "@/components/tasks/TaskDetailMetaPanel";
 import {
   FAILURE_COPY,
   InlineFieldEditor,
   useTaskWriteSlot,
   type EditingField,
-} from '@/components/tasks/taskDetailShared';
-import { Markdown } from '@/components/chat/Markdown';
-import { useTaskDetail } from '@/features/tasks/hooks';
+} from "@/components/tasks/taskDetailShared";
+import { Markdown } from "@/components/chat/Markdown";
+import { useTaskDetail } from "@/features/tasks/hooks";
 import {
   classifyTaskDetailFailure,
   resolveTaskDetailView,
@@ -27,9 +27,9 @@ import {
   type TaskDetailFailure,
   type TaskDetailView,
   type TaskJumpTarget,
-} from '@/features/tasks/taskDetail';
+} from "@/features/tasks/taskDetail";
 
-export type { TaskJumpTarget } from '@/features/tasks/taskDetail';
+export type { TaskJumpTarget } from "@/features/tasks/taskDetail";
 
 export interface TaskDetailDialogProps {
   /** Task identity to show, or null when the modal is closed. An ID, not a
@@ -91,14 +91,12 @@ export function TaskDetailDialog({
 }: TaskDetailDialogProps): JSX.Element {
   const open = taskId !== null;
   const detailQuery = useTaskDetail(taskId, { enabled: open });
-  const failure = detailQuery.isError
-    ? classifyTaskDetailFailure(detailQuery.error)
-    : null;
+  const failure = detailQuery.isError ? classifyTaskDetailFailure(detailQuery.error) : null;
   const view = resolveTaskDetailView({ failure, detail: detailQuery.data });
   // The body this view paints, if any. `not_found` deliberately paints none even
   // when a stale one is still cached — the server has just disowned it.
   const painted =
-    view.kind === 'body' || view.kind === 'body_with_retry' || view.kind === 'body_stale'
+    view.kind === "body" || view.kind === "body_with_retry" || view.kind === "body_stale"
       ? view.detail
       : null;
 
@@ -123,7 +121,7 @@ export function TaskDetailDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={next => {
+      onOpenChange={(next) => {
         // Blur-save is async: an outside-click / ✕ blurs the field (firing the
         // save) AND asks the dialog to close. (Escape doesn't reach here — the
         // editor cancels it and preventDefaults, so Radix never gets it.)
@@ -164,8 +162,8 @@ export function TaskDetailDialog({
         // the wide band would frame a sentence in a mostly-empty 900×300 box.
         className={
           resolved
-            ? 'flex max-h-[70vh] min-h-[300px] max-w-[900px] flex-col gap-0 p-0'
-            : 'flex max-w-[420px] flex-col gap-0 p-0'
+            ? "flex max-h-[70vh] min-h-[300px] max-w-[900px] flex-col gap-0 p-0"
+            : "flex max-w-[420px] flex-col gap-0 p-0"
         }
         // This dialog owns its padding (`p-0` + a bordered header at `px-5
         // py-4`), so the cluster keeps hugging the corner: its band is the
@@ -220,20 +218,20 @@ function TaskDetailContent({
   onRetry: () => void;
 }): JSX.Element | null {
   switch (view.kind) {
-    case 'loading':
+    case "loading":
       return <TaskDetailStatePanel failure={null} />;
-    case 'not_found':
+    case "not_found":
       return <TaskDetailStatePanel failure="not_found" />;
-    case 'unreachable_empty':
+    case "unreachable_empty":
       return <TaskDetailStatePanel failure="unreachable" />;
-    case 'transient_empty':
+    case "transient_empty":
       return <TaskDetailStatePanel failure="transient" onRetry={onRetry} />;
-    case 'body':
+    case "body":
     // `body_stale` is the SAME body: the connection is down, so the last read
     // is the best available truth and the one app-status banner already says
     // the connection is down. A second copy of that notice here would be a
     // second surface claiming one fact (Alice, #task:1462).
-    case 'body_stale':
+    case "body_stale":
       return (
         <TaskDetailBody
           detail={view.detail}
@@ -242,7 +240,7 @@ function TaskDetailContent({
           onStopEditing={onStopEditing}
         />
       );
-    case 'body_with_retry':
+    case "body_with_retry":
       return (
         <>
           {/* The refresh failed over a body we still hold. Nothing re-reads it
@@ -299,14 +297,12 @@ function TaskDetailStatePanel({
       <DialogTitle className="text-sm font-semibold leading-snug text-text-primary">
         {copy.header}
       </DialogTitle>
-      <DialogDescription className="text-sm text-text-muted">
-        {copy.body}
-      </DialogDescription>
+      <DialogDescription className="text-sm text-text-muted">{copy.body}</DialogDescription>
       {/* Retry ONLY for the transient tier: the query client is `retry: 1` with
           no focus refetch, so nothing else re-reads this — without a button the
           pointer is stuck. `not_found` is terminal and `unreachable` recovers
           through the app-status banner. */}
-      {failure === 'transient' && onRetry ? (
+      {failure === "transient" && onRetry ? (
         <Button
           type="button"
           variant="outline"
@@ -338,7 +334,6 @@ function TaskDetailBody({
   onEditField: (field: Exclude<EditingField, null>) => void;
   onStopEditing: () => void;
 }): JSX.Element {
-
   // The metadata sidebar's two writes share ONE dialog-local write slot with
   // the title/content editor (`useTaskWriteSlot`): while any of them is open or
   // in flight the others go inert. Without that, clicking Status during a title
@@ -364,7 +359,7 @@ function TaskDetailBody({
             三个 action button 有一些重叠"). 112px keeps a margin as the cluster
             grows. */}
         <div className="pr-28">
-          {editingField === 'title' ? (
+          {editingField === "title" ? (
             <>
               {/* Radix needs a DialogTitle for a11y even while the visible title
                   is swapped for the inline editor. */}
@@ -387,7 +382,7 @@ function TaskDetailBody({
                   icon={Pencil}
                   label="Edit title"
                   className="mt-0.5"
-                  onClick={() => onEditField('title')}
+                  onClick={() => onEditField("title")}
                 />
               ) : null}
             </div>
@@ -402,7 +397,7 @@ function TaskDetailBody({
           compact shell, so this column is always real content. */}
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-y-auto px-5 py-4">
-          {editingField === 'content' ? (
+          {editingField === "content" ? (
             <InlineFieldEditor
               taskId={detail.id}
               field="content"
@@ -430,7 +425,7 @@ function TaskDetailBody({
                   icon={Pencil}
                   label="Edit description"
                   className="mt-0.5"
-                  onClick={() => onEditField('content')}
+                  onClick={() => onEditField("content")}
                 />
               ) : null}
             </div>

@@ -1,24 +1,20 @@
-import { useMemo } from 'react';
-import * as Select from '@radix-ui/react-select';
-import { ChevronDown, Search as SearchIcon } from 'lucide-react';
-import type { AgentDto, UserDto } from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { AuthorAvatarView } from '@/components/chat/author-avatar-view';
-import { UNRESOLVED_AGENT_LABEL } from '@/components/chat/author-presentation';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
+import { useMemo } from "react";
+import * as Select from "@radix-ui/react-select";
+import { ChevronDown, Search as SearchIcon } from "lucide-react";
+import type { AgentDto, UserDto } from "@silverhand/shared";
+import { AgentAvatar } from "@/components/AgentAvatar";
+import { UserAvatar } from "@/components/UserAvatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
+import { AuthorAvatarView } from "@/components/chat/author-avatar-view";
+import { UNRESOLVED_AGENT_LABEL } from "@/components/chat/author-presentation";
+import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import {
   FilterSelectItem,
   FILTER_SELECT_TRIGGER_CLASS,
   FILTER_SELECT_CONTENT_CLASS,
-} from '@/components/ui/filter-select';
-import {
-  formatUserDisplayName,
-  getCurrentUserId,
-  type UserNameResolver,
-} from '@/lib/current-user';
+} from "@/components/ui/filter-select";
+import { formatUserDisplayName, getCurrentUserId, type UserNameResolver } from "@/lib/current-user";
 
 /**
  * Shared "filter by sender" dropdown — one control, one item design: Humans
@@ -40,15 +36,15 @@ import {
  * and `'all'` sends neither — "no sender filter" and "filtered to someone" stay
  * structurally distinguishable.
  */
-export type SenderFilterValue = 'all' | `user:${string}` | `agent:${string}`;
+export type SenderFilterValue = "all" | `user:${string}` | `agent:${string}`;
 
 /** Wire params for the selection — `{}` for the "all" sentinel. */
 export function parseSenderFilter(value: SenderFilterValue): {
   userId?: string;
   agentId?: string;
 } {
-  if (value.startsWith('user:')) return { userId: value.slice('user:'.length) };
-  if (value.startsWith('agent:')) return { agentId: value.slice('agent:'.length) };
+  if (value.startsWith("user:")) return { userId: value.slice("user:".length) };
+  if (value.startsWith("agent:")) return { agentId: value.slice("agent:".length) };
   return {};
 }
 
@@ -64,12 +60,12 @@ export function parseSenderFilter(value: SenderFilterValue): {
  * stale link degrades to "no sender filter" instead of a dead selection.
  */
 export function senderFilterToParam(value: SenderFilterValue): string | undefined {
-  return value === 'all' ? undefined : value;
+  return value === "all" ? undefined : value;
 }
 
 export function senderFilterFromParam(raw: string | null): SenderFilterValue | null {
   if (!raw) return null;
-  for (const prefix of ['user:', 'agent:'] as const) {
+  for (const prefix of ["user:", "agent:"] as const) {
     if (raw.startsWith(prefix) && raw.length > prefix.length) {
       return raw as SenderFilterValue;
     }
@@ -84,11 +80,8 @@ export function senderFilterFromParam(raw: string | null): SenderFilterValue | n
  * (#task:2114). Mapping it here keeps the `human` → `user:` translation in the
  * module that defines both sides of it.
  */
-export function senderFilterForEndpoint(
-  kind: 'human' | 'agent',
-  id: string,
-): SenderFilterValue {
-  return kind === 'agent' ? `agent:${id}` : `user:${id}`;
+export function senderFilterForEndpoint(kind: "human" | "agent", id: string): SenderFilterValue {
+  return kind === "agent" ? `agent:${id}` : `user:${id}`;
 }
 
 export function SenderFilterSelect({
@@ -97,7 +90,7 @@ export function SenderFilterSelect({
   users,
   userResolver,
   onChange,
-  ariaLabel = 'Sender filter',
+  ariaLabel = "Sender filter",
 }: {
   value: SenderFilterValue;
   agents: AgentDto[];
@@ -108,13 +101,7 @@ export function SenderFilterSelect({
 }): JSX.Element {
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const userAvatarUrls = useUserAvatarObjectUrls(users);
-  const selected = senderFilterLabel(
-    value,
-    agents,
-    userResolver,
-    agentAvatarUrls,
-    userAvatarUrls,
-  );
+  const selected = senderFilterLabel(value, agents, userResolver, agentAvatarUrls, userAvatarUrls);
   // Sort humans: viewer always first (when known), then alphabetic by
   // display name so the selector is stable.
   const viewerId = getCurrentUserId();
@@ -131,7 +118,7 @@ export function SenderFilterSelect({
   }, [users, viewerId]);
 
   return (
-    <Select.Root value={value} onValueChange={v => onChange(v as SenderFilterValue)}>
+    <Select.Root value={value} onValueChange={(v) => onChange(v as SenderFilterValue)}>
       <Select.Trigger aria-label={ariaLabel} className={FILTER_SELECT_TRIGGER_CLASS}>
         <span className="flex min-w-0 items-center gap-1.5">
           {selected.icon}
@@ -176,11 +163,9 @@ export function SenderFilterSelect({
                 // read-failure face wearing one face. Neither may claim the
                 // roster is empty, which it provably never is. It says only
                 // what both windows share: the list is not here.
-                <div className="px-2 py-1.5 text-xs italic text-text-muted">
-                  Unavailable
-                </div>
+                <div className="px-2 py-1.5 text-xs italic text-text-muted">Unavailable</div>
               ) : (
-                sortedUsers.map(user => (
+                sortedUsers.map((user) => (
                   <FilterSelectItem
                     key={user.id}
                     value={`user:${user.id}`}
@@ -191,7 +176,7 @@ export function SenderFilterSelect({
                         alt={user.display_name || user.name}
                       />
                     }
-                    suffix={user.id === viewerId ? 'you' : undefined}
+                    suffix={user.id === viewerId ? "you" : undefined}
                   >
                     {user.display_name || user.name}
                   </FilterSelectItem>
@@ -208,11 +193,9 @@ export function SenderFilterSelect({
                 // no agents), so this row is allowed to assert absence and stays
                 // verbatim (#task:2065, @Paul). Same shape, different claim —
                 // "both groups are empty-ish" is not a reason to unify them.
-                <div className="px-2 py-1.5 text-xs italic text-text-muted">
-                  No agents
-                </div>
+                <div className="px-2 py-1.5 text-xs italic text-text-muted">No agents</div>
               ) : (
-                agents.map(agent => (
+                agents.map((agent) => (
                   <FilterSelectItem
                     key={agent.id}
                     value={`agent:${agent.id}`}
@@ -245,8 +228,8 @@ function senderFilterLabel(
   agentAvatarUrls?: Map<string, string | null>,
   userAvatarUrls?: Map<string, string | null>,
 ): { label: string; icon: JSX.Element } {
-  if (value.startsWith('user:')) {
-    const userId = value.slice('user:'.length);
+  if (value.startsWith("user:")) {
+    const userId = value.slice("user:".length);
     // No unresolved arm here, on purpose: a human has no delete path today, so
     // the selected id is still a roster row and `formatUserDisplayName`'s own
     // id fallback is unreachable from this control. It is also the byline's
@@ -264,9 +247,9 @@ function senderFilterLabel(
       ),
     };
   }
-  if (value.startsWith('agent:')) {
-    const agentId = value.slice('agent:'.length);
-    const agent = agents.find(a => a.id === agentId);
+  if (value.startsWith("agent:")) {
+    const agentId = value.slice("agent:".length);
+    const agent = agents.find((a) => a.id === agentId);
     if (!agent) {
       // The selection outlived its directory row — the agent was deleted, or
       // the viewer lost the workspace that made it visible. Either way the
@@ -285,7 +268,7 @@ function senderFilterLabel(
         label: UNRESOLVED_AGENT_LABEL,
         icon: (
           <AuthorAvatarView
-            avatar={{ variant: 'neutral-agent' }}
+            avatar={{ variant: "neutral-agent" }}
             size={AVATAR_PX.xs}
             label={UNRESOLVED_AGENT_LABEL}
           />
@@ -305,5 +288,5 @@ function senderFilterLabel(
       ),
     };
   }
-  return { label: 'All senders', icon: <SearchIcon className="size-3.5" /> };
+  return { label: "All senders", icon: <SearchIcon className="size-3.5" /> };
 }

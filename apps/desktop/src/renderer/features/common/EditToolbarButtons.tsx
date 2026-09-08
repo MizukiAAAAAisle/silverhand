@@ -1,7 +1,7 @@
-import type { JSX } from 'react';
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/cn';
-import { primaryAction, primaryCancel } from './PrimaryAction';
+import type { JSX } from "react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cn";
+import { primaryAction, primaryCancel } from "./PrimaryAction";
 
 /**
  * Save / Cancel button pair for profile-card edit sessions (display
@@ -27,8 +27,7 @@ import { primaryAction, primaryCancel } from './PrimaryAction';
  *    the two halves peel by the same amount.
  */
 
-const EDIT_BUTTON_BORDER =
-  'border-[length:var(--control-border-width)] border-border-focus';
+const EDIT_BUTTON_BORDER = "border-[length:var(--control-border-width)] border-border-focus";
 
 export function CancelButton({
   onClick,
@@ -69,7 +68,7 @@ export function SaveButton({
       disabled={disabled || pending}
       {...primaryAction(cn(EDIT_BUTTON_BORDER))}
     >
-      {pending ? 'Saving…' : 'Save'}
+      {pending ? "Saving…" : "Save"}
     </Button>
   );
 }

@@ -1,10 +1,10 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   apiPaths,
   type AddConversationMemberInput,
   type ConversationMembersResponse,
-} from '@silverhand/shared';
-import { api } from '@/lib/api';
+} from "@silverhand/shared";
+import { api } from "@/lib/api";
 
 /**
  * Add a member (agent or human) to an open-roster conversation.
@@ -45,30 +45,27 @@ import { api } from '@/lib/api';
  * membership under the hood — that is what keeps the auto-enrolled
  * agent visible in the workspace roster without a reload.
  */
-export function useAddConversationMember(
-  conversationId: string | null,
-  workspaceId?: string,
-) {
+export function useAddConversationMember(conversationId: string | null, workspaceId?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: AddConversationMemberInput) => {
       if (!conversationId) {
-        throw new Error('no conversation selected');
+        throw new Error("no conversation selected");
       }
-      return api<ConversationMembersResponse>(
-        apiPaths.conversationMembers(conversationId),
-        { method: 'POST', body: JSON.stringify(input) },
-      );
+      return api<ConversationMembersResponse>(apiPaths.conversationMembers(conversationId), {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
     },
     onSuccess: () => {
       if (conversationId) {
         qc.invalidateQueries({
-          queryKey: ['conversation-members', conversationId],
+          queryKey: ["conversation-members", conversationId],
         });
       }
       if (workspaceId) {
         qc.invalidateQueries({
-          queryKey: ['workspaces', workspaceId, 'members'],
+          queryKey: ["workspaces", workspaceId, "members"],
         });
       }
     },

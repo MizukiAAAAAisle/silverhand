@@ -1,4 +1,4 @@
-import { ArrowDownToLine } from 'lucide-react';
+import { ArrowDownToLine } from "lucide-react";
 
 /**
  * Drop-target slot shown at the top of a kanban column's body while a task

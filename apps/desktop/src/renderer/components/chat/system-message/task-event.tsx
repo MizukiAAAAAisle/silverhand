@@ -5,10 +5,10 @@ import {
   type TaskSystemMetadataPartial,
   readTaskSystemMetadata,
   readTaskSystemMetadataPartial,
-} from '@silverhand/shared';
-import { formatUserDisplayName } from '@/lib/current-user';
-import { TaskRef } from '@/components/chat/TaskRef';
-import { type RendererProps, useUserResolver } from './shared';
+} from "@silverhand/shared";
+import { formatUserDisplayName } from "@/lib/current-user";
+import { TaskRef } from "@/components/chat/TaskRef";
+import { type RendererProps, useUserResolver } from "./shared";
 
 // ─── task event row ───────────────────────────────────────────────────
 export function TaskEventRow({ message }: RendererProps): JSX.Element {
@@ -28,19 +28,15 @@ export function TaskEventRow({ message }: RendererProps): JSX.Element {
   return <TaskEventLegacyFallback content={message.content} />;
 }
 
-function TaskEventRowEnriched({
-  meta,
-}: {
-  meta: TaskSystemMetadata;
-}): JSX.Element {
+function TaskEventRowEnriched({ meta }: { meta: TaskSystemMetadata }): JSX.Element {
   const userResolver = useUserResolver();
 
-  const actorLabel = meta.actor.kind === 'user'
-    ? formatUserDisplayName(meta.actor.id, userResolver) || meta.actor.name || 'user'
-    : meta.actor.name;
+  const actorLabel =
+    meta.actor.kind === "user"
+      ? formatUserDisplayName(meta.actor.id, userResolver) || meta.actor.name || "user"
+      : meta.actor.name;
 
-  const dotKind: TaskEventDotKind =
-    meta.subtype === 'task_unclaim' ? 'unclaim' : meta.task_status;
+  const dotKind: TaskEventDotKind = meta.subtype === "task_unclaim" ? "unclaim" : meta.task_status;
 
   return (
     <div className="flex items-center gap-2.5 px-4 py-1.5 text-text-secondary">
@@ -59,13 +55,15 @@ function TaskEventBody({
   actorLabel: string;
   meta: TaskSystemMetadata;
 }): JSX.Element {
-  if (subtype === 'task_status') {
+  if (subtype === "task_status") {
     return (
       <>
         <span className="font-medium text-text-primary">{actorLabel}</span>
         <span className="text-text-muted">moved</span>
         <TaskRef taskNumber={meta.task_number} />
-        <span className="text-text-muted" aria-hidden>→</span>
+        <span className="text-text-muted" aria-hidden>
+          →
+        </span>
         <TaskStatusPill status={meta.task_status} />
       </>
     );
@@ -85,23 +83,22 @@ function TaskEventBody({
   // A human assign also names the new owner, since that is the rest of the
   // write's content.
   const humanAssignmentWrite =
-    meta.actor.kind === 'user' &&
-    (subtype === 'task_claim' || subtype === 'task_unclaim');
+    meta.actor.kind === "user" && (subtype === "task_claim" || subtype === "task_unclaim");
   if (humanAssignmentWrite) {
     const assignee = meta.task_assignee;
     return (
       <>
         <span className="font-medium text-text-primary">{actorLabel}</span>
         <span className="text-text-muted">
-          {subtype === 'task_claim' ? 'assigned' : 'unassigned'}
+          {subtype === "task_claim" ? "assigned" : "unassigned"}
         </span>
         <TaskRef taskNumber={meta.task_number} />
-        {subtype === 'task_claim' && assignee ? (
+        {subtype === "task_claim" && assignee ? (
           <>
-            <span className="text-text-muted" aria-hidden>→</span>
-            <span className="font-medium text-text-primary">
-              {assignee.name}
+            <span className="text-text-muted" aria-hidden>
+              →
             </span>
+            <span className="font-medium text-text-primary">{assignee.name}</span>
           </>
         ) : null}
       </>
@@ -123,31 +120,28 @@ function TaskEventBody({
   // metadata snapshot degrades by itself, no migration. The agent-facing
   // narration derives its own wording from this same bit — neither face reads
   // the other's product.
-  const filedRemotely =
-    subtype === 'task_create' && meta.cross_conversation === true;
+  const filedRemotely = subtype === "task_create" && meta.cross_conversation === true;
   const verb =
-    subtype === 'task_create'
+    subtype === "task_create"
       ? filedRemotely
-        ? 'filed'
-        : 'created'
-      : subtype === 'task_claim'
-        ? 'claimed'
-        : subtype === 'task_edit'
-          ? 'edited'
-          : 'unclaimed';
+        ? "filed"
+        : "created"
+      : subtype === "task_claim"
+        ? "claimed"
+        : subtype === "task_edit"
+          ? "edited"
+          : "unclaimed";
   return (
     <>
       <span className="font-medium text-text-primary">{actorLabel}</span>
       <span className="text-text-muted">{verb}</span>
       <TaskRef taskNumber={meta.task_number} />
-      {filedRemotely ? (
-        <span className="text-text-muted">from another conversation</span>
-      ) : null}
+      {filedRemotely ? <span className="text-text-muted">from another conversation</span> : null}
     </>
   );
 }
 
-type TaskEventDotKind = TaskStatus | 'unclaim';
+type TaskEventDotKind = TaskStatus | "unclaim";
 
 function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
   // Status dots consume the board's per-status SOLID signal colour
@@ -157,12 +151,12 @@ function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
   // `-text`), so this single token reads correctly everywhere. `unclaim`
   // is not a status — it keeps a neutral dashed-hollow marker.
   const cls: Record<TaskEventDotKind, string> = {
-    todo: 'bg-[var(--task-status-todo-solid)]',
-    in_progress: 'bg-[var(--task-status-in-progress-solid)]',
-    in_review: 'bg-[var(--task-status-in-review-solid)]',
-    done: 'bg-[var(--task-status-done-solid)]',
-    closed: 'bg-[var(--task-status-closed-solid)]',
-    unclaim: 'border border-dashed border-text-muted/60 bg-transparent',
+    todo: "bg-[var(--task-status-todo-solid)]",
+    in_progress: "bg-[var(--task-status-in-progress-solid)]",
+    in_review: "bg-[var(--task-status-in-review-solid)]",
+    done: "bg-[var(--task-status-done-solid)]",
+    closed: "bg-[var(--task-status-closed-solid)]",
+    unclaim: "border border-dashed border-text-muted/60 bg-transparent",
   };
   return (
     <span
@@ -189,11 +183,11 @@ function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
  */
 function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
   const labels: Record<TaskStatus, string> = {
-    todo: 'todo',
-    in_progress: 'in progress',
-    in_review: 'in review',
-    done: 'done',
-    closed: 'closed',
+    todo: "todo",
+    in_progress: "in progress",
+    in_review: "in review",
+    done: "done",
+    closed: "closed",
   };
   return (
     <span
@@ -208,10 +202,7 @@ function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
 
 function TaskEventLegacyFallback({ content }: { content: string }): JSX.Element {
   return (
-    <div
-      className="px-4 py-1.5 text-center italic text-text-muted"
-      data-task-event-legacy="1"
-    >
+    <div className="px-4 py-1.5 text-center italic text-text-muted" data-task-event-legacy="1">
       {content}
     </div>
   );
@@ -227,35 +218,32 @@ function TaskEventLegacyFallback({ content }: { content: string }): JSX.Element 
  *  - body shows `{verb}` (create/claim/unclaim/edit) or `→ {pill}`
  *    (status); no actor pill.
  */
-function TaskEventRowDegraded({
-  meta,
-}: {
-  meta: TaskSystemMetadataPartial;
-}): JSX.Element {
-  const dotKind: TaskEventDotKind =
-    meta.subtype === 'task_unclaim' ? 'unclaim' : meta.task_status;
+function TaskEventRowDegraded({ meta }: { meta: TaskSystemMetadataPartial }): JSX.Element {
+  const dotKind: TaskEventDotKind = meta.subtype === "task_unclaim" ? "unclaim" : meta.task_status;
   return (
     <div
       className="flex items-center gap-2.5 px-4 py-1.5 text-text-secondary"
       data-task-event-degraded="1"
     >
       <TaskEventDot kind={dotKind} />
-      {meta.subtype === 'task_status' ? (
+      {meta.subtype === "task_status" ? (
         <>
           <TaskRef taskNumber={meta.task_number} />
-          <span className="text-text-muted" aria-hidden>→</span>
+          <span className="text-text-muted" aria-hidden>
+            →
+          </span>
           <TaskStatusPill status={meta.task_status} />
         </>
       ) : (
         <>
           <span className="text-text-muted">
-            {meta.subtype === 'task_create'
-              ? 'created'
-              : meta.subtype === 'task_claim'
-                ? 'claimed'
-                : meta.subtype === 'task_edit'
-                  ? 'edited'
-                  : 'unclaimed'}
+            {meta.subtype === "task_create"
+              ? "created"
+              : meta.subtype === "task_claim"
+                ? "claimed"
+                : meta.subtype === "task_edit"
+                  ? "edited"
+                  : "unclaimed"}
           </span>
           <TaskRef taskNumber={meta.task_number} />
         </>

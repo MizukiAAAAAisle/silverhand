@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode } from "react";
 
 /**
  * Visibility wrapper for a top-level NavRail section (chat / tasks / members /
@@ -48,7 +48,7 @@ export function SectionLayer({
   children: ReactNode;
 }): JSX.Element {
   return (
-    <div data-section-layer="" style={{ display: visible ? 'contents' : 'none' }}>
+    <div data-section-layer="" style={{ display: visible ? "contents" : "none" }}>
       {children}
     </div>
   );

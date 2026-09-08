@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { workspaceScopedQueryEnabled } from './workspace-scoped-query';
+import { describe, expect, it } from "vitest";
+import { workspaceScopedQueryEnabled } from "./workspace-scoped-query";
 
 /** #task:2078 successor to the retired `archivedChannelsEnabledForKind` guard.
  *
@@ -14,16 +14,16 @@ import { workspaceScopedQueryEnabled } from './workspace-scoped-query';
  *  id comes from the URL and the row from the workspace list query, so "id
  *  known, row not yet" is a reachable window — and collapsing the gate back to
  *  `!!workspaceId` fires every workspace-scoped read in it. */
-describe('workspaceScopedQueryEnabled', () => {
-  it('does not fire without a workspace id', () => {
+describe("workspaceScopedQueryEnabled", () => {
+  it("does not fire without a workspace id", () => {
     expect(workspaceScopedQueryEnabled(null, true)).toBe(false);
   });
 
-  it('does not fire while the container row is unresolved', () => {
-    expect(workspaceScopedQueryEnabled('w-1', false)).toBe(false);
+  it("does not fire while the container row is unresolved", () => {
+    expect(workspaceScopedQueryEnabled("w-1", false)).toBe(false);
   });
 
-  it('fires once the id and its resolved row are both in hand', () => {
-    expect(workspaceScopedQueryEnabled('w-1', true)).toBe(true);
+  it("fires once the id and its resolved row are both in hand", () => {
+    expect(workspaceScopedQueryEnabled("w-1", true)).toBe(true);
   });
 });

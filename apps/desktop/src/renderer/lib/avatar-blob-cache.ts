@@ -1,4 +1,4 @@
-import { fetchBackendBlob } from './api';
+import { fetchBackendBlob } from "./api";
 
 /**
  * App-session avatar blob cache (#task:1321) — keyed by the agent/user

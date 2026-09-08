@@ -25,10 +25,10 @@
  * in one order.
  */
 export type Tab =
-  | { kind: 'chat' }
-  | { kind: 'tasks' }
+  | { kind: "chat" }
+  | { kind: "tasks" }
   | {
-      kind: 'attachment';
+      kind: "attachment";
       /** The attachment's id — the whole identity of an attachment tab, so
        *  opening the same attachment twice de-dupes to one tab
        *  ({@link addTab}). */
@@ -39,7 +39,7 @@ export type Tab =
       contentType: string;
     }
   | {
-      kind: 'panel';
+      kind: "panel";
       /** Which conversation surface this tab hosts. The kind IS the whole
        *  identity, so one conversation holds at most one tab per surface and
        *  re-adding focuses the open one ({@link addTab}). Nothing about the
@@ -49,7 +49,7 @@ export type Tab =
     };
 
 /** The conversation surfaces that can be opened as a tab. */
-export type PanelTabKind = 'attachments' | 'threads' | 'members';
+export type PanelTabKind = "attachments" | "threads" | "members";
 
 /** Derived from a total map rather than a bare array, so adding a
  *  {@link PanelTabKind} without extending validation is a type error instead of
@@ -63,22 +63,21 @@ const PANEL_TAB_KINDS = {
 function isPanelTabKind(value: unknown): value is PanelTabKind {
   // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so a persisted
   // `"toString"` would validate as a surface and mount a blank tab.
-  return typeof value === 'string' && Object.hasOwn(PANEL_TAB_KINDS, value);
+  return typeof value === "string" && Object.hasOwn(PANEL_TAB_KINDS, value);
 }
 
-
 /** The builtin kinds, in their default leading order. */
-const BUILTIN_KINDS = ['chat', 'tasks'] as const;
+const BUILTIN_KINDS = ["chat", "tasks"] as const;
 type BuiltinKind = (typeof BUILTIN_KINDS)[number];
 
 /** The default order for a conversation with no persisted layout. */
-export const DEFAULT_TABS: readonly Tab[] = [{ kind: 'chat' }, { kind: 'tasks' }];
+export const DEFAULT_TABS: readonly Tab[] = [{ kind: "chat" }, { kind: "tasks" }];
 
 /** True for tabs the viewer may close. Builtins are non-removable; custom tabs
  *  (attachment previewers and panel surfaces) can be removed from a
  *  conversation. */
 export function isRemovable(tab: Tab): boolean {
-  return tab.kind === 'attachment' || tab.kind === 'panel';
+  return tab.kind === "attachment" || tab.kind === "panel";
 }
 
 /**
@@ -88,9 +87,9 @@ export function isRemovable(tab: Tab): boolean {
  */
 export function tabKey(tab: Tab): string {
   switch (tab.kind) {
-    case 'attachment':
+    case "attachment":
       return `attachment:${tab.attachmentId}`;
-    case 'panel':
+    case "panel":
       return `panel:${tab.panel}`;
     default:
       return tab.kind;
@@ -100,7 +99,7 @@ export function tabKey(tab: Tab): string {
 /** The key of the leading tab in an order. */
 export function firstTabKey(tabs: readonly Tab[]): string {
   const first = tabs[0];
-  return first ? tabKey(first) : 'chat';
+  return first ? tabKey(first) : "chat";
 }
 
 /**
@@ -135,7 +134,7 @@ export function normalizeTabs(tabs: readonly Tab[]): Tab[] {
  */
 export function addTab(tabs: readonly Tab[], next: Tab): Tab[] {
   const nextKey = tabKey(next);
-  if (tabs.some(t => tabKey(t) === nextKey)) return tabs as Tab[];
+  if (tabs.some((t) => tabKey(t) === nextKey)) return tabs as Tab[];
   return [...tabs, next];
 }
 
@@ -146,9 +145,9 @@ export function addTab(tabs: readonly Tab[], next: Tab): Tab[] {
  * the attachment and its data are untouched.
  */
 export function removeTab(tabs: readonly Tab[], key: string): Tab[] {
-  const target = tabs.find(t => tabKey(t) === key);
+  const target = tabs.find((t) => tabKey(t) === key);
   if (!target || !isRemovable(target)) return tabs as Tab[];
-  return tabs.filter(t => tabKey(t) !== key);
+  return tabs.filter((t) => tabKey(t) !== key);
 }
 
 /**
@@ -157,11 +156,7 @@ export function removeTab(tabs: readonly Tab[], key: string): Tab[] {
  * removed. Both ends are clamped into range; an out-of-range or no-op move
  * returns the list unchanged.
  */
-export function reorderTabs(
-  tabs: readonly Tab[],
-  fromIndex: number,
-  toIndex: number,
-): Tab[] {
+export function reorderTabs(tabs: readonly Tab[], fromIndex: number, toIndex: number): Tab[] {
   const from = Math.trunc(fromIndex);
   const to = Math.trunc(toIndex);
   if (from === to || from < 0 || from >= tabs.length || to < 0 || to >= tabs.length) {
@@ -184,7 +179,7 @@ export function resolveActiveTabKey(
   tabs: readonly Tab[],
   desiredKey: string | null | undefined,
 ): string {
-  if (desiredKey && tabs.some(t => tabKey(t) === desiredKey)) return desiredKey;
+  if (desiredKey && tabs.some((t) => tabKey(t) === desiredKey)) return desiredKey;
   return firstTabKey(tabs);
 }
 
@@ -195,7 +190,7 @@ export function resolveActiveTabKey(
  * value can never mint a broken tab.
  */
 export function parseTab(value: unknown): Tab | null {
-  if (!value || typeof value !== 'object') return null;
+  if (!value || typeof value !== "object") return null;
   const v = value as {
     kind?: unknown;
     attachmentId?: unknown;
@@ -203,21 +198,21 @@ export function parseTab(value: unknown): Tab | null {
     contentType?: unknown;
     panel?: unknown;
   };
-  if (v.kind === 'chat' || v.kind === 'tasks') return { kind: v.kind };
-  if (v.kind === 'attachment') {
-    if (typeof v.attachmentId !== 'string' || v.attachmentId.length === 0) return null;
-    if (typeof v.filename !== 'string' || v.filename.length === 0) return null;
-    if (typeof v.contentType !== 'string') return null;
+  if (v.kind === "chat" || v.kind === "tasks") return { kind: v.kind };
+  if (v.kind === "attachment") {
+    if (typeof v.attachmentId !== "string" || v.attachmentId.length === 0) return null;
+    if (typeof v.filename !== "string" || v.filename.length === 0) return null;
+    if (typeof v.contentType !== "string") return null;
     return {
-      kind: 'attachment',
+      kind: "attachment",
       attachmentId: v.attachmentId,
       filename: v.filename,
       contentType: v.contentType,
     };
   }
-  if (v.kind === 'panel') {
+  if (v.kind === "panel") {
     if (!isPanelTabKind(v.panel)) return null;
-    return { kind: 'panel', panel: v.panel };
+    return { kind: "panel", panel: v.panel };
   }
   return null;
 }
@@ -239,8 +234,8 @@ export function parseTabs(value: unknown): Tab[] {
  *  customized. */
 export function isDefaultTabs(tabs: readonly Tab[]): boolean {
   return (
-    tabs.length === DEFAULT_TABS.length
-    && tabs.every((t, i) => tabKey(t) === tabKey(DEFAULT_TABS[i] as Tab))
+    tabs.length === DEFAULT_TABS.length &&
+    tabs.every((t, i) => tabKey(t) === tabKey(DEFAULT_TABS[i] as Tab))
   );
 }
 

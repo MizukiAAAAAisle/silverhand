@@ -1,5 +1,9 @@
-import type { ConversationActivityEvent, AgentStreamActivityEvent, ToolOutcome } from '@silverhand/shared';
-import { decodeTargetForDisplay } from '@silverhand/shared';
+import type {
+  ConversationActivityEvent,
+  AgentStreamActivityEvent,
+  ToolOutcome,
+} from "@silverhand/shared";
+import { decodeTargetForDisplay } from "@silverhand/shared";
 
 export type ActivityEvent = ConversationActivityEvent | AgentStreamActivityEvent;
 
@@ -8,17 +12,15 @@ export type ActivityEvent = ConversationActivityEvent | AgentStreamActivityEvent
 /** Collapse an absolute home path to `~/…` so `Read /Users/x/work/a.ts`
  *  reads as `Read ~/work/a.ts`. Best-effort, macOS + linux home shapes. */
 export function abbreviateHome(p: string): string {
-  return p
-    .replace(/\/Users\/[^/\s]+\//g, '~/')
-    .replace(/\/home\/[^/\s]+\//g, '~/');
+  return p.replace(/\/Users\/[^/\s]+\//g, "~/").replace(/\/home\/[^/\s]+\//g, "~/");
 }
 
 // ── tool_call presentation ─────────────────────────────────────────────────
 
 export type ToolDetail =
-  | { kind: 'code'; text: string }
-  | { kind: 'json'; text: string }
-  | { kind: 'diff'; removed: string; added: string };
+  | { kind: "code"; text: string }
+  | { kind: "json"; text: string }
+  | { kind: "diff"; removed: string; added: string };
 
 export interface ToolPresentation {
   /** Verb shown bold, e.g. `Bash`, `Read`, `Edit`, `silverhand task status`. */
@@ -30,25 +32,25 @@ export interface ToolPresentation {
 }
 
 function asRecord(input: unknown): Record<string, unknown> | null {
-  return input !== null && typeof input === 'object' && !Array.isArray(input)
+  return input !== null && typeof input === "object" && !Array.isArray(input)
     ? (input as Record<string, unknown>)
     : null;
 }
 
 function s(rec: Record<string, unknown> | null, key: string): string | null {
   const v = rec?.[key];
-  return typeof v === 'string' ? v : null;
+  return typeof v === "string" ? v : null;
 }
 
 function jsonDetail(input: unknown): ToolDetail | null {
   if (input === null || input === undefined) return null;
-  if (typeof input === 'string') {
-    return input.length > 0 ? { kind: 'code', text: input } : null;
+  if (typeof input === "string") {
+    return input.length > 0 ? { kind: "code", text: input } : null;
   }
   try {
     const text = JSON.stringify(input, null, 2);
-    if (!text || text === '{}' || text === 'null' || text === '[]') return null;
-    return { kind: 'json', text };
+    if (!text || text === "{}" || text === "null" || text === "[]") return null;
+    return { kind: "json", text };
   } catch {
     return null;
   }
@@ -70,9 +72,7 @@ function jsonDetail(input: unknown): ToolDetail | null {
  */
 function unwrapShellLauncher(command: string): string {
   const trimmed = command.trim();
-  const m = /^(?:\S*\/)?(?:zsh|bash|sh)\s+-[a-z]*c[a-z]*\s+(['"])([\s\S]*)$/i.exec(
-    trimmed,
-  );
+  const m = /^(?:\S*\/)?(?:zsh|bash|sh)\s+-[a-z]*c[a-z]*\s+(['"])([\s\S]*)$/i.exec(trimmed);
   if (!m) return trimmed;
   let inner = m[2]!;
   if (inner.endsWith(m[1]!)) inner = inner.slice(0, -1);
@@ -100,7 +100,7 @@ function commandEnd(inner: string, start: number): number {
       quote = c;
       continue;
     }
-    if (c === ';' || c === '&' || c === '|' || c === '(') return i;
+    if (c === ";" || c === "&" || c === "|" || c === "(") return i;
   }
   return inner.length;
 }
@@ -138,8 +138,8 @@ function findSilverhandCommand(
       atCmdPos = false;
       continue;
     }
-    if (c === ' ' || c === '\t') continue;
-    if (c === ';' || c === '&' || c === '|' || c === '(') {
+    if (c === " " || c === "\t") continue;
+    if (c === ";" || c === "&" || c === "|" || c === "(") {
       atCmdPos = true;
       continue;
     }
@@ -160,7 +160,7 @@ function findSilverhandCommand(
   return null;
 }
 
-const TASK_NUMBER_VERBS = new Set(['detail', 'status', 'claim', 'unclaim', 'edit']);
+const TASK_NUMBER_VERBS = new Set(["detail", "status", "claim", "unclaim", "edit"]);
 
 /**
  * Extract the task number a `silverhand task <verb> …` action targets, given
@@ -181,14 +181,11 @@ const TASK_NUMBER_VERBS = new Set(['detail', 'status', 'claim', 'unclaim', 'edit
  * booleans and telling value-flags from boolean ones here would rebuild the
  * whole parser. Returns null when there is no operand. Pure — branch-tested.
  */
-export function taskNumberFromCommand(
-  verb: string | undefined,
-  args: string,
-): string | null {
+export function taskNumberFromCommand(verb: string | undefined, args: string): string | null {
   const flag = /--task-number[=\s]+(\d+)/.exec(args)?.[1];
   if (flag !== undefined) return flag;
   if (verb === undefined || !TASK_NUMBER_VERBS.has(verb)) return null;
-  const first = args.trimStart().split(/\s+/)[0] ?? '';
+  const first = args.trimStart().split(/\s+/)[0] ?? "";
   return /^\d+$/.test(first) ? first : null;
 }
 
@@ -198,18 +195,18 @@ function presentSilverhandCli(command: string): ToolPresentation | null {
   if (!found) return null;
   const { noun, verb: verbTok, args } = found;
   const cap = noun.charAt(0).toUpperCase() + noun.slice(1);
-  let label = verbTok ? `${cap} ${verbTok.replace(/-/g, ' ')}` : cap;
+  let label = verbTok ? `${cap} ${verbTok.replace(/-/g, " ")}` : cap;
 
   let arg: string | null = null;
-  if (noun === 'task') {
+  if (noun === "task") {
     const num = taskNumberFromCommand(verbTok, args);
     const status =
-      verbTok === 'status' ? (/--status[=\s]+([a-z_]+)/.exec(args)?.[1] ?? null) : null;
-    if (verbTok === 'status' && status) label = 'Task update';
+      verbTok === "status" ? (/--status[=\s]+([a-z_]+)/.exec(args)?.[1] ?? null) : null;
+    if (verbTok === "status" && status) label = "Task update";
     if (num && status) arg = `#${num} → ${status}`;
     else if (num) arg = `#${num}`;
     else if (status) arg = `→ ${status}`;
-  } else if (noun === 'message' && verbTok === 'send') {
+  } else if (noun === "message" && verbTok === "send") {
     // A send's destination is its one scannable operand — surface the `--target`
     // value after the label so the row reads `Message send → <target>`. The body
     // (heredoc / STDIN) is deliberately omitted: the summary is where it went,
@@ -237,107 +234,107 @@ export function presentToolCall(name: string, input: unknown): ToolPresentation 
   const rec = asRecord(input);
   const n = name.toLowerCase();
 
-  if (n === 'bash' || n === 'shell') {
-    const verb = n === 'shell' ? 'Shell' : 'Bash';
-    const command = s(rec, 'command') ?? (typeof input === 'string' ? input : null);
+  if (n === "bash" || n === "shell") {
+    const verb = n === "shell" ? "Shell" : "Bash";
+    const command = s(rec, "command") ?? (typeof input === "string" ? input : null);
     if (command !== null) {
       const cli = presentSilverhandCli(command);
       if (cli) return cli;
       const abbr = abbreviateHome(command.trim());
-      if (abbr.includes('\n')) {
-        return { verb, arg: null, detail: { kind: 'code', text: abbr } };
+      if (abbr.includes("\n")) {
+        return { verb, arg: null, detail: { kind: "code", text: abbr } };
       }
       return { verb, arg: abbr.length > 0 ? abbr : null, detail: null };
     }
     return { verb, arg: null, detail: jsonDetail(input) };
   }
 
-  if (n === 'read') {
-    const fp = s(rec, 'file_path') ?? s(rec, 'path');
-    if (fp) return { verb: 'Read', arg: abbreviateHome(fp), detail: null };
+  if (n === "read") {
+    const fp = s(rec, "file_path") ?? s(rec, "path");
+    if (fp) return { verb: "Read", arg: abbreviateHome(fp), detail: null };
   }
 
-  if (n === 'edit' || n === 'multiedit') {
-    const fp = s(rec, 'file_path') ?? s(rec, 'path');
-    const oldS = s(rec, 'old_string');
-    const newS = s(rec, 'new_string');
+  if (n === "edit" || n === "multiedit") {
+    const fp = s(rec, "file_path") ?? s(rec, "path");
+    const oldS = s(rec, "old_string");
+    const newS = s(rec, "new_string");
     if (fp && (oldS !== null || newS !== null)) {
       return {
-        verb: 'Edit',
+        verb: "Edit",
         arg: abbreviateHome(fp),
-        detail: { kind: 'diff', removed: oldS ?? '', added: newS ?? '' },
+        detail: { kind: "diff", removed: oldS ?? "", added: newS ?? "" },
       };
     }
-    if (fp) return { verb: 'Edit', arg: abbreviateHome(fp), detail: jsonDetail(input) };
+    if (fp) return { verb: "Edit", arg: abbreviateHome(fp), detail: jsonDetail(input) };
   }
 
-  if (n === 'write') {
-    const fp = s(rec, 'file_path') ?? s(rec, 'path');
-    const content = s(rec, 'content');
+  if (n === "write") {
+    const fp = s(rec, "file_path") ?? s(rec, "path");
+    const content = s(rec, "content");
     if (fp) {
       return {
-        verb: 'Write',
+        verb: "Write",
         arg: abbreviateHome(fp),
-        detail: content !== null ? { kind: 'diff', removed: '', added: content } : null,
+        detail: content !== null ? { kind: "diff", removed: "", added: content } : null,
       };
     }
   }
 
   // codex file_change — `{ path, kind: 'add'|'modify'|'delete' }`
-  if (n === 'file_change') {
-    const p = s(rec, 'path');
-    const kind = s(rec, 'kind');
+  if (n === "file_change") {
+    const p = s(rec, "path");
+    const kind = s(rec, "kind");
     if (p) {
       return {
-        verb: 'Edit',
-        arg: `${abbreviateHome(p)}${kind ? ` (${kind})` : ''}`,
+        verb: "Edit",
+        arg: `${abbreviateHome(p)}${kind ? ` (${kind})` : ""}`,
         detail: null,
       };
     }
   }
 
-  if (n === 'grep') {
-    const pattern = s(rec, 'pattern');
-    const path = s(rec, 'path');
+  if (n === "grep") {
+    const pattern = s(rec, "pattern");
+    const path = s(rec, "path");
     if (pattern !== null) {
       return {
-        verb: 'Grep',
-        arg: `${pattern}${path ? ` in ${abbreviateHome(path)}` : ''}`,
+        verb: "Grep",
+        arg: `${pattern}${path ? ` in ${abbreviateHome(path)}` : ""}`,
         detail: null,
       };
     }
   }
 
-  if (n === 'glob') {
-    const pattern = s(rec, 'pattern');
-    const path = s(rec, 'path');
+  if (n === "glob") {
+    const pattern = s(rec, "pattern");
+    const path = s(rec, "path");
     if (pattern !== null) {
       return {
-        verb: 'Glob',
-        arg: `${pattern}${path ? ` in ${abbreviateHome(path)}` : ''}`,
+        verb: "Glob",
+        arg: `${pattern}${path ? ` in ${abbreviateHome(path)}` : ""}`,
         detail: null,
       };
     }
   }
 
-  if (n === 'task') {
-    const desc = s(rec, 'description') ?? s(rec, 'subagent_type');
-    return { verb: 'Task', arg: desc, detail: desc ? null : jsonDetail(input) };
+  if (n === "task") {
+    const desc = s(rec, "description") ?? s(rec, "subagent_type");
+    return { verb: "Task", arg: desc, detail: desc ? null : jsonDetail(input) };
   }
 
-  if (n === 'skill') {
-    const cmd = s(rec, 'command') ?? s(rec, 'skill');
-    return { verb: 'Skill', arg: cmd, detail: cmd ? null : jsonDetail(input) };
+  if (n === "skill") {
+    const cmd = s(rec, "command") ?? s(rec, "skill");
+    return { verb: "Skill", arg: cmd, detail: cmd ? null : jsonDetail(input) };
   }
 
-  if (n === 'webfetch') {
-    const url = s(rec, 'url');
-    if (url) return { verb: 'Fetch', arg: url, detail: null };
+  if (n === "webfetch") {
+    const url = s(rec, "url");
+    if (url) return { verb: "Fetch", arg: url, detail: null };
   }
 
-  if (n === 'websearch' || n === 'web_search') {
-    const q = s(rec, 'query');
-    if (q !== null) return { verb: 'Search', arg: q, detail: null };
+  if (n === "websearch" || n === "web_search") {
+    const q = s(rec, "query");
+    if (q !== null) return { verb: "Search", arg: q, detail: null };
   }
 
   // Unknown / MCP / malformed input → raw name + pretty JSON.
@@ -348,15 +345,15 @@ export function presentToolCall(name: string, input: unknown): ToolPresentation 
 
 export type ActivityDisplayItem =
   | {
-      type: 'group';
+      type: "group";
       key: string;
-      kind: 'thinking' | 'text';
+      kind: "thinking" | "text";
       text: string;
       representative: ActivityEvent;
       count: number;
     }
   | {
-      type: 'event';
+      type: "event";
       key: string;
       event: ActivityEvent;
       /** "This operation finished." Set on a `tool_call` whose matching
@@ -375,13 +372,13 @@ export type ActivityDisplayItem =
 
 function textOf(e: ActivityEvent): string {
   const p = e.payload as Record<string, unknown> | null;
-  const v = p?.['text'];
-  return typeof v === 'string' ? v : '';
+  const v = p?.["text"];
+  return typeof v === "string" ? v : "";
 }
 
 function callIdOf(e: ActivityEvent): string | null {
-  const v = (e.payload as Record<string, unknown> | null)?.['tool_call_id'];
-  return typeof v === 'string' ? v : null;
+  const v = (e.payload as Record<string, unknown> | null)?.["tool_call_id"];
+  return typeof v === "string" ? v : null;
 }
 
 /** A `tool_output`'s classified outcome. Anything missing or unrecognised —
@@ -389,18 +386,16 @@ function callIdOf(e: ActivityEvent): string | null {
  *  reads as the neutral `completed`: a finished call is never upgraded to a
  *  provable `success` it did not record. */
 function outcomeOf(e: ActivityEvent): ToolOutcome {
-  const v = (e.payload as Record<string, unknown> | null)?.['outcome'];
-  return v === 'success' || v === 'failed' || v === 'cancelled' ? v : 'completed';
+  const v = (e.payload as Record<string, unknown> | null)?.["outcome"];
+  return v === "success" || v === "failed" || v === "cancelled" ? v : "completed";
 }
 
 function sessionIdOf(e: ActivityEvent): string | null {
-  const v = (e.payload as Record<string, unknown> | null)?.['session_id'];
-  return typeof v === 'string' && v.length > 0 ? v : null;
+  const v = (e.payload as Record<string, unknown> | null)?.["session_id"];
+  return typeof v === "string" && v.length > 0 ? v : null;
 }
 
-export function coalesceActivity(
-  events: ReadonlyArray<ActivityEvent>,
-): ActivityDisplayItem[] {
+export function coalesceActivity(events: ReadonlyArray<ActivityEvent>): ActivityDisplayItem[] {
   // Call ids can recur across runs; only the nearest preceding call owns an outcome.
   const calls = new Map<string, number>();
   const outcomeByRow = new Map<number, ToolOutcome>();
@@ -408,8 +403,8 @@ export function coalesceActivity(
   for (const e of events) {
     const id = callIdOf(e);
     if (id === null) continue;
-    if (e.kind === 'tool_call') calls.set(id, e.id);
-    else if (e.kind === 'tool_output') {
+    if (e.kind === "tool_call") calls.set(id, e.id);
+    else if (e.kind === "tool_output") {
       const callRow = calls.get(id);
       if (callRow !== undefined) {
         outcomeByRow.set(callRow, outcomeOf(e));
@@ -423,9 +418,9 @@ export function coalesceActivity(
   {
     const openStarts: number[] = [];
     for (const e of events) {
-      if (e.kind === 'compaction_started') {
+      if (e.kind === "compaction_started") {
         openStarts.push(e.id);
-      } else if (e.kind === 'compaction_finished') {
+      } else if (e.kind === "compaction_finished") {
         const startId = openStarts.shift();
         if (startId !== undefined) {
           compactionDoneStartIds.add(startId);
@@ -438,23 +433,23 @@ export function coalesceActivity(
   const out: ActivityDisplayItem[] = [];
   const seenSessionIds = new Set<string>();
   let run: ActivityEvent[] = [];
-  let runKind: 'thinking' | 'text' | null = null;
+  let runKind: "thinking" | "text" | null = null;
 
   const flush = (): void => {
     if (run.length === 0) return;
     const first = run[0]!;
-    const text = run.map(textOf).join('');
+    const text = run.map(textOf).join("");
     // Codex ends a turn with an empty assistant `text` block; it used to render
     // as a bare "(message)" placeholder — pure noise. A whitespace-only text
     // group carries nothing, so drop it. `thinking` is kept even when empty: the
     // "Thinking" label is itself the fact that a reasoning pass happened.
-    if (runKind === 'text' && text.trim().length === 0) {
+    if (runKind === "text" && text.trim().length === 0) {
       run = [];
       runKind = null;
       return;
     }
     out.push({
-      type: 'group',
+      type: "group",
       key: `g${first.id}`,
       kind: runKind!,
       text,
@@ -466,7 +461,7 @@ export function coalesceActivity(
   };
 
   for (const e of events) {
-    if (e.kind === 'thinking' || e.kind === 'text') {
+    if (e.kind === "thinking" || e.kind === "text") {
       if (runKind === e.kind) {
         run.push(e);
       } else {
@@ -479,21 +474,21 @@ export function coalesceActivity(
 
     flush();
 
-    if (e.kind === 'tool_output') {
+    if (e.kind === "tool_output") {
       // Folded into its tool_call → drop. Orphan (its call paged out by
       // retention) → light row that still carries the verdict: a failed/cancelled
       // orphan is the only surviving record of that outcome, so it must not
       // render as a neutral success.
       if (foldedOutputs.has(e.id)) continue;
-      out.push({ type: 'event', key: String(e.id), event: e, outcome: outcomeOf(e) });
+      out.push({ type: "event", key: String(e.id), event: e, outcome: outcomeOf(e) });
       continue;
     }
 
-    if (e.kind === 'tool_call') {
+    if (e.kind === "tool_call") {
       const outcome = outcomeByRow.get(e.id);
       const completed = outcome !== undefined;
       out.push({
-        type: 'event',
+        type: "event",
         key: String(e.id),
         event: e,
         completed,
@@ -502,11 +497,11 @@ export function coalesceActivity(
       continue;
     }
 
-    if (e.kind === 'compaction_started') {
+    if (e.kind === "compaction_started") {
       // Loading until a finished pairs in, then `completed` flips it to the
       // done marker (the paired finished is dropped below).
       out.push({
-        type: 'event',
+        type: "event",
         key: String(e.id),
         event: e,
         completed: compactionDoneStartIds.has(e.id),
@@ -514,21 +509,21 @@ export function coalesceActivity(
       continue;
     }
 
-    if (e.kind === 'compaction_finished') {
+    if (e.kind === "compaction_finished") {
       // Folded into its started → drop. Orphan → standalone done row.
       if (foldedFinishedIds.has(e.id)) continue;
-      out.push({ type: 'event', key: String(e.id), event: e });
+      out.push({ type: "event", key: String(e.id), event: e });
       continue;
     }
 
-    if (e.kind === 'turn_end') {
+    if (e.kind === "turn_end") {
       // A turn boundary is not a user-facing activity fact — it rendered as a
       // "Turn ended" line that only added noise between real events. The turn's
       // real outcome shows on its tool calls (✓) and assistant text. Drop it.
       continue;
     }
 
-    if (e.kind === 'session_init') {
+    if (e.kind === "session_init") {
       // Some runtimes re-announce the SAME session on every turn (stream-json
       // emits one per `system/init` frame). Keep only the first row per distinct
       // session_id — a repeat carries no new fact. An id-less init can't be
@@ -538,11 +533,11 @@ export function coalesceActivity(
         if (seenSessionIds.has(sid)) continue;
         seenSessionIds.add(sid);
       }
-      out.push({ type: 'event', key: String(e.id), event: e });
+      out.push({ type: "event", key: String(e.id), event: e });
       continue;
     }
 
-    out.push({ type: 'event', key: String(e.id), event: e });
+    out.push({ type: "event", key: String(e.id), event: e });
   }
   flush();
   return out;

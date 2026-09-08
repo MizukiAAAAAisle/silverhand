@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { runtimeCatalogEntry, type AgentDto } from '@silverhand/shared';
+import { describe, expect, it } from "vitest";
+import { runtimeCatalogEntry, type AgentDto } from "@silverhand/shared";
 import {
   buildSwitchPayload,
   buildTuningPatch,
@@ -11,23 +11,23 @@ import {
   modelDraftAfterCommit,
   routeRuntimeConfigSave,
   type RuntimeConfigDraft,
-} from './RuntimeConfigEditor';
+} from "./RuntimeConfigEditor";
 
 const baseAgent: AgentDto = {
-  id: 'a-1',
-  host_id: 'h-1',
-  host_label: 'MacBook',
-  name: 'alice',
-  display_name: 'Alice',
-  runtime: 'codex',
-  session_scope: 'conversation',
-  model: 'gpt-5-codex',
-  reasoning_effort: 'high',
+  id: "a-1",
+  host_id: "h-1",
+  host_label: "MacBook",
+  name: "alice",
+  display_name: "Alice",
+  runtime: "codex",
+  session_scope: "conversation",
+  model: "gpt-5-codex",
+  reasoning_effort: "high",
   fast_mode: true,
   avatar_url: null,
   description: null,
-  created_by_user_id: 'u-1',
-  materialization_status: 'active',
+  created_by_user_id: "u-1",
+  materialization_status: "active",
   materialization_failed_code: null,
   materialization_failed_at: null,
   deletion_started_at: null,
@@ -35,18 +35,18 @@ const baseAgent: AgentDto = {
   updated_at: 0,
 };
 
-describe('draftFromAgent', () => {
-  it('hydrates every draft position from the persisted agent', () => {
+describe("draftFromAgent", () => {
+  it("hydrates every draft position from the persisted agent", () => {
     expect(draftFromAgent(baseAgent)).toEqual({
-      runtime: 'codex',
-      modelChoice: 'specify',
-      modelValue: 'gpt-5-codex',
-      reasoning: 'high',
-      fastMode: 'true',
+      runtime: "codex",
+      modelChoice: "specify",
+      modelValue: "gpt-5-codex",
+      reasoning: "high",
+      fastMode: "true",
     });
   });
 
-  it('maps null model to `default`, null reasoning/fast_mode to `__default__` (when supported)', () => {
+  it("maps null model to `default`, null reasoning/fast_mode to `__default__` (when supported)", () => {
     expect(
       draftFromAgent({
         ...baseAgent,
@@ -55,299 +55,295 @@ describe('draftFromAgent', () => {
         fast_mode: null,
       }),
     ).toEqual({
-      runtime: 'codex',
-      modelChoice: 'default',
-      modelValue: '',
-      reasoning: '__default__',
-      fastMode: '__default__',
+      runtime: "codex",
+      modelChoice: "default",
+      modelValue: "",
+      reasoning: "__default__",
+      fastMode: "__default__",
     });
   });
 
-  it('leaves unsupported tuning slots as `\'\'` (claude has no reasoning/fast_mode)', () => {
+  it("leaves unsupported tuning slots as `''` (claude has no reasoning/fast_mode)", () => {
     const d = draftFromAgent({
       ...baseAgent,
-      runtime: 'claude',
+      runtime: "claude",
       reasoning_effort: null,
       fast_mode: null,
     });
-    expect(d.reasoning).toBe('');
-    expect(d.fastMode).toBe('');
+    expect(d.reasoning).toBe("");
+    expect(d.fastMode).toBe("");
   });
 });
 
-describe('draftAfterRuntimeChange', () => {
-  it('resets tuning to the unset state when the target differs from the agent runtime', () => {
-    const next = draftAfterRuntimeChange(baseAgent, 'claude');
+describe("draftAfterRuntimeChange", () => {
+  it("resets tuning to the unset state when the target differs from the agent runtime", () => {
+    const next = draftAfterRuntimeChange(baseAgent, "claude");
     expect(next).toEqual({
-      runtime: 'claude',
-      modelChoice: 'unset',
-      modelValue: '',
-      reasoning: '',
-      fastMode: '',
+      runtime: "claude",
+      modelChoice: "unset",
+      modelValue: "",
+      reasoning: "",
+      fastMode: "",
     });
   });
 
-  it('re-hydrates from the agent when the target equals the current runtime (undo)', () => {
+  it("re-hydrates from the agent when the target equals the current runtime (undo)", () => {
     // User picked a different runtime (draft is now blanked), then picked
     // the ORIGINAL back — should restore the persisted tuning, not stay
     // blank.
     const initial = draftFromAgent(baseAgent);
-    const restored = draftAfterRuntimeChange(baseAgent, 'codex');
+    const restored = draftAfterRuntimeChange(baseAgent, "codex");
     expect(restored).toEqual(initial);
   });
 });
 
-describe('canSaveRuntimeConfig', () => {
-  it('rejects an unchanged draft (nothing to save)', () => {
-    expect(canSaveRuntimeConfig(baseAgent, draftFromAgent(baseAgent))).toBe(
-      false,
-    );
+describe("canSaveRuntimeConfig", () => {
+  it("rejects an unchanged draft (nothing to save)", () => {
+    expect(canSaveRuntimeConfig(baseAgent, draftFromAgent(baseAgent))).toBe(false);
   });
 
-  it('rejects a draft with unset modelChoice after a runtime switch', () => {
-    const d = draftAfterRuntimeChange(baseAgent, 'claude');
+  it("rejects a draft with unset modelChoice after a runtime switch", () => {
+    const d = draftAfterRuntimeChange(baseAgent, "claude");
     expect(canSaveRuntimeConfig(baseAgent, d)).toBe(false);
   });
 
-  it('rejects a `specify` model with blank value', () => {
+  it("rejects a `specify` model with blank value", () => {
     const d: RuntimeConfigDraft = {
-      runtime: 'claude',
-      modelChoice: 'specify',
-      modelValue: '   ',
-      reasoning: '',
-      fastMode: '',
+      runtime: "claude",
+      modelChoice: "specify",
+      modelValue: "   ",
+      reasoning: "",
+      fastMode: "",
     };
     expect(canSaveRuntimeConfig(baseAgent, d)).toBe(false);
   });
 
-  it('rejects when target supports reasoning but reasoning is `\'\'`', () => {
+  it("rejects when target supports reasoning but reasoning is `''`", () => {
     const d: RuntimeConfigDraft = {
-      runtime: 'codex',
-      modelChoice: 'default',
-      modelValue: '',
-      reasoning: '',
-      fastMode: '__default__',
+      runtime: "codex",
+      modelChoice: "default",
+      modelValue: "",
+      reasoning: "",
+      fastMode: "__default__",
     };
     // Also has to be dirty; force by tweaking model relative to base.
     expect(canSaveRuntimeConfig(baseAgent, d)).toBe(false);
   });
 
-  it('accepts an all-defaults runtime switch (every field explicitly chosen)', () => {
+  it("accepts an all-defaults runtime switch (every field explicitly chosen)", () => {
     const d: RuntimeConfigDraft = {
-      runtime: 'claude',
-      modelChoice: 'default',
-      modelValue: '',
-      reasoning: '',
-      fastMode: '',
+      runtime: "claude",
+      modelChoice: "default",
+      modelValue: "",
+      reasoning: "",
+      fastMode: "",
     };
     expect(canSaveRuntimeConfig(baseAgent, d)).toBe(true);
   });
 
-  it('accepts a tuning-only diff (model changes, runtime unchanged)', () => {
+  it("accepts a tuning-only diff (model changes, runtime unchanged)", () => {
     const d: RuntimeConfigDraft = {
       ...draftFromAgent(baseAgent),
-      modelValue: 'gpt-6-codex',
+      modelValue: "gpt-6-codex",
     };
     expect(canSaveRuntimeConfig(baseAgent, d)).toBe(true);
   });
 
-  it('accepts Ultra only for a compatible explicit Codex model', () => {
+  it("accepts Ultra only for a compatible explicit Codex model", () => {
     const compatible: RuntimeConfigDraft = {
       ...draftFromAgent(baseAgent),
-      modelValue: 'gpt-5.6-sol',
-      reasoning: 'ultra',
+      modelValue: "gpt-5.6-sol",
+      reasoning: "ultra",
     };
     expect(canSaveRuntimeConfig(baseAgent, compatible)).toBe(true);
     expect(
       canSaveRuntimeConfig(baseAgent, {
         ...compatible,
-        modelValue: 'gpt-5.6-luna',
+        modelValue: "gpt-5.6-luna",
       }),
     ).toBe(false);
   });
 });
 
-describe('draftIsDirty', () => {
-  it('false when draft matches agent', () => {
+describe("draftIsDirty", () => {
+  it("false when draft matches agent", () => {
     expect(draftIsDirty(baseAgent, draftFromAgent(baseAgent))).toBe(false);
   });
-  it('true when runtime changes', () => {
-    expect(
-      draftIsDirty(baseAgent, { ...draftFromAgent(baseAgent), runtime: 'claude' }),
-    ).toBe(true);
+  it("true when runtime changes", () => {
+    expect(draftIsDirty(baseAgent, { ...draftFromAgent(baseAgent), runtime: "claude" })).toBe(true);
   });
-  it('true when only tuning drifts', () => {
+  it("true when only tuning drifts", () => {
     expect(
       draftIsDirty(baseAgent, {
         ...draftFromAgent(baseAgent),
-        fastMode: 'false',
+        fastMode: "false",
       }),
     ).toBe(true);
   });
 });
 
-describe('routeRuntimeConfigSave', () => {
-  it('routes a runtime change to the transition endpoint (switch)', () => {
+describe("routeRuntimeConfigSave", () => {
+  it("routes a runtime change to the transition endpoint (switch)", () => {
     const d: RuntimeConfigDraft = {
-      runtime: 'claude',
-      modelChoice: 'default',
-      modelValue: '',
-      reasoning: '',
-      fastMode: '',
+      runtime: "claude",
+      modelChoice: "default",
+      modelValue: "",
+      reasoning: "",
+      fastMode: "",
     };
     const r = routeRuntimeConfigSave(baseAgent, d);
-    expect(r.kind).toBe('switch');
-    if (r.kind !== 'switch') return;
+    expect(r.kind).toBe("switch");
+    if (r.kind !== "switch") return;
     expect(r.payload).toEqual({
-      runtime: 'claude',
+      runtime: "claude",
       model: null,
       reasoning_effort: null,
       fast_mode: null,
     });
   });
 
-  it('routes a tuning-only diff to PATCH (only changed fields)', () => {
+  it("routes a tuning-only diff to PATCH (only changed fields)", () => {
     const d: RuntimeConfigDraft = {
       ...draftFromAgent(baseAgent),
-      fastMode: 'false',
+      fastMode: "false",
     };
     const r = routeRuntimeConfigSave(baseAgent, d);
-    expect(r.kind).toBe('patch');
-    if (r.kind !== 'patch') return;
+    expect(r.kind).toBe("patch");
+    if (r.kind !== "patch") return;
     expect(r.payload).toEqual({ fast_mode: false });
     // Runtime is `z.never()` in PATCH schema — must not be included.
-    expect(r.payload).not.toHaveProperty('runtime');
+    expect(r.payload).not.toHaveProperty("runtime");
   });
 
-  it('returns `nothing` for an unchanged draft', () => {
+  it("returns `nothing` for an unchanged draft", () => {
     const r = routeRuntimeConfigSave(baseAgent, draftFromAgent(baseAgent));
-    expect(r.kind).toBe('nothing');
+    expect(r.kind).toBe("nothing");
   });
 });
 
-describe('buildSwitchPayload — supported/unsupported gating', () => {
-  it('forces fast_mode to null when target has no fast_mode support', () => {
+describe("buildSwitchPayload — supported/unsupported gating", () => {
+  it("forces fast_mode to null when target has no fast_mode support", () => {
     const d: RuntimeConfigDraft = {
-      runtime: 'claude',
-      modelChoice: 'default',
-      modelValue: '',
+      runtime: "claude",
+      modelChoice: "default",
+      modelValue: "",
       // stale from a previous codex pick — must be forced null.
-      reasoning: '',
-      fastMode: 'true',
+      reasoning: "",
+      fastMode: "true",
     };
     expect(buildSwitchPayload(d).fast_mode).toBeNull();
   });
 
-  it('forces reasoning_effort to null when target has no reasoning support', () => {
+  it("forces reasoning_effort to null when target has no reasoning support", () => {
     const d: RuntimeConfigDraft = {
-      runtime: 'opencode',
-      modelChoice: 'default',
-      modelValue: '',
-      reasoning: 'high',
-      fastMode: '',
+      runtime: "opencode",
+      modelChoice: "default",
+      modelValue: "",
+      reasoning: "high",
+      fastMode: "",
     };
     expect(buildSwitchPayload(d).reasoning_effort).toBeNull();
   });
 
-  it('trims a specify model value', () => {
+  it("trims a specify model value", () => {
     const d: RuntimeConfigDraft = {
-      runtime: 'codex',
-      modelChoice: 'specify',
-      modelValue: '  gpt-5-codex  ',
-      reasoning: 'high',
-      fastMode: 'true',
+      runtime: "codex",
+      modelChoice: "specify",
+      modelValue: "  gpt-5-codex  ",
+      reasoning: "high",
+      fastMode: "true",
     };
-    expect(buildSwitchPayload(d).model).toBe('gpt-5-codex');
+    expect(buildSwitchPayload(d).model).toBe("gpt-5-codex");
   });
 });
 
-describe('buildTuningPatch — only diffed fields', () => {
-  it('includes model=null when switching to driver default', () => {
+describe("buildTuningPatch — only diffed fields", () => {
+  it("includes model=null when switching to driver default", () => {
     const d: RuntimeConfigDraft = {
       ...draftFromAgent(baseAgent),
-      modelChoice: 'default',
-      modelValue: '',
+      modelChoice: "default",
+      modelValue: "",
     };
     expect(buildTuningPatch(baseAgent, d)).toEqual({ model: null });
   });
 
-  it('omits fields that did not change', () => {
+  it("omits fields that did not change", () => {
     // Only reasoning changes.
     const d: RuntimeConfigDraft = {
       ...draftFromAgent(baseAgent),
-      reasoning: 'low',
+      reasoning: "low",
     };
-    expect(buildTuningPatch(baseAgent, d)).toEqual({ reasoning_effort: 'low' });
+    expect(buildTuningPatch(baseAgent, d)).toEqual({ reasoning_effort: "low" });
   });
 
-  it('respects target capabilities — never patches unsupported fields', () => {
+  it("respects target capabilities — never patches unsupported fields", () => {
     const claudeAgent: AgentDto = {
       ...baseAgent,
-      runtime: 'claude',
+      runtime: "claude",
       reasoning_effort: null,
       fast_mode: null,
     };
     // A stale draft carries `fastMode='true'` from a previous UI state —
     // but claude doesn't support it, so it must never reach the patch.
     const d: RuntimeConfigDraft = {
-      runtime: 'claude',
-      modelChoice: 'specify',
-      modelValue: 'sonnet',
-      reasoning: '',
-      fastMode: 'true',
+      runtime: "claude",
+      modelChoice: "specify",
+      modelValue: "sonnet",
+      reasoning: "",
+      fastMode: "true",
     };
     const patch = buildTuningPatch(claudeAgent, d);
-    expect(patch).toEqual({ model: 'sonnet' });
-    expect(patch).not.toHaveProperty('fast_mode');
-    expect(patch).not.toHaveProperty('reasoning_effort');
+    expect(patch).toEqual({ model: "sonnet" });
+    expect(patch).not.toHaveProperty("fast_mode");
+    expect(patch).not.toHaveProperty("reasoning_effort");
   });
 });
 
-describe('describeSwitchToast', () => {
-  it('returns success tone on zero failures', () => {
-    expect(describeSwitchToast('codex', 0).tone).toBe('success');
+describe("describeSwitchToast", () => {
+  it("returns success tone on zero failures", () => {
+    expect(describeSwitchToast("codex", 0).tone).toBe("success");
   });
-  it('returns warning tone with singular for one failure', () => {
-    const r = describeSwitchToast('claude', 1);
-    expect(r.tone).toBe('warning');
+  it("returns warning tone with singular for one failure", () => {
+    const r = describeSwitchToast("claude", 1);
+    expect(r.tone).toBe("warning");
     expect(r.message).toMatch(/1 conversation\b/);
   });
-  it('returns warning tone with plural for many failures', () => {
-    const r = describeSwitchToast('claude', 3);
-    expect(r.tone).toBe('warning');
+  it("returns warning tone with plural for many failures", () => {
+    const r = describeSwitchToast("claude", 3);
+    expect(r.tone).toBe("warning");
     expect(r.message).toMatch(/3 conversations/);
   });
 });
 
-describe('modelDraftAfterCommit — unified Combobox commit mapping', () => {
+describe("modelDraftAfterCommit — unified Combobox commit mapping", () => {
   const seed: RuntimeConfigDraft = {
-    runtime: 'codex',
-    modelChoice: 'unset',
-    modelValue: '',
-    reasoning: '__default__',
-    fastMode: '__default__',
+    runtime: "codex",
+    modelChoice: "unset",
+    modelValue: "",
+    reasoning: "__default__",
+    fastMode: "__default__",
   };
 
-  it('picks driver default when the dropdown sentinel comes through', () => {
-    expect(modelDraftAfterCommit(seed, 'Use driver default')).toEqual({
+  it("picks driver default when the dropdown sentinel comes through", () => {
+    expect(modelDraftAfterCommit(seed, "Use driver default")).toEqual({
       ...seed,
-      modelChoice: 'default',
-      modelValue: '',
+      modelChoice: "default",
+      modelValue: "",
     });
   });
-  it('specify + empty commit → unset (user cleared what they typed)', () => {
+  it("specify + empty commit → unset (user cleared what they typed)", () => {
     const specifying: RuntimeConfigDraft = {
       ...seed,
-      modelChoice: 'specify',
-      modelValue: 'gpt-5-codex',
+      modelChoice: "specify",
+      modelValue: "gpt-5-codex",
     };
-    expect(modelDraftAfterCommit(specifying, '')).toEqual({
+    expect(modelDraftAfterCommit(specifying, "")).toEqual({
       ...specifying,
-      modelChoice: 'unset',
-      modelValue: '',
+      modelChoice: "unset",
+      modelValue: "",
     });
   });
-  it('default + empty commit → stays default (bare focus→blur must not demote)', () => {
+  it("default + empty commit → stays default (bare focus→blur must not demote)", () => {
     // Regression lock for #1472 round-3 Cindy HIGH: Combobox onBlur fires
     // onCommit(''), and a default draft's input value is empty by design
     // (placeholder = "Using driver default"). Without the guard, a user
@@ -355,74 +351,74 @@ describe('modelDraftAfterCommit — unified Combobox commit mapping', () => {
     // lose their driver-default pick.
     const defaulting: RuntimeConfigDraft = {
       ...seed,
-      modelChoice: 'default',
-      modelValue: '',
+      modelChoice: "default",
+      modelValue: "",
     };
-    expect(modelDraftAfterCommit(defaulting, '')).toEqual(defaulting);
+    expect(modelDraftAfterCommit(defaulting, "")).toEqual(defaulting);
   });
-  it('unset + empty commit → stays unset (no-op)', () => {
-    expect(modelDraftAfterCommit(seed, '')).toEqual(seed);
+  it("unset + empty commit → stays unset (no-op)", () => {
+    expect(modelDraftAfterCommit(seed, "")).toEqual(seed);
   });
-  it('whitespace-only commit follows the same rule (trimmed empty)', () => {
+  it("whitespace-only commit follows the same rule (trimmed empty)", () => {
     const defaulting: RuntimeConfigDraft = {
       ...seed,
-      modelChoice: 'default',
+      modelChoice: "default",
     };
     // Whitespace-only from `default` still preserves default — trimmed
     // empty is empty for state-transition purposes too.
-    expect(modelDraftAfterCommit(defaulting, '   ')).toEqual(defaulting);
+    expect(modelDraftAfterCommit(defaulting, "   ")).toEqual(defaulting);
     const specifying: RuntimeConfigDraft = {
       ...seed,
-      modelChoice: 'specify',
-      modelValue: 'x',
+      modelChoice: "specify",
+      modelValue: "x",
     };
-    expect(modelDraftAfterCommit(specifying, '   ')).toEqual({
+    expect(modelDraftAfterCommit(specifying, "   ")).toEqual({
       ...specifying,
-      modelChoice: 'unset',
-      modelValue: '',
+      modelChoice: "unset",
+      modelValue: "",
     });
   });
-  it('any other value goes to specify with the trimmed model id', () => {
-    expect(modelDraftAfterCommit(seed, '  gpt-4o  ')).toEqual({
+  it("any other value goes to specify with the trimmed model id", () => {
+    expect(modelDraftAfterCommit(seed, "  gpt-4o  ")).toEqual({
       ...seed,
-      modelChoice: 'specify',
-      modelValue: 'gpt-4o',
+      modelChoice: "specify",
+      modelValue: "gpt-4o",
     });
   });
-  it('preserves unrelated draft fields (runtime, reasoning, fastMode) verbatim', () => {
+  it("preserves unrelated draft fields (runtime, reasoning, fastMode) verbatim", () => {
     const before: RuntimeConfigDraft = {
-      runtime: 'claude',
-      modelChoice: 'default',
-      modelValue: '',
-      reasoning: 'high',
-      fastMode: '',
+      runtime: "claude",
+      modelChoice: "default",
+      modelValue: "",
+      reasoning: "high",
+      fastMode: "",
     };
-    expect(modelDraftAfterCommit(before, 'sonnet')).toEqual({
-      runtime: 'claude',
-      modelChoice: 'specify',
-      modelValue: 'sonnet',
-      reasoning: 'high',
-      fastMode: '',
+    expect(modelDraftAfterCommit(before, "sonnet")).toEqual({
+      runtime: "claude",
+      modelChoice: "specify",
+      modelValue: "sonnet",
+      reasoning: "high",
+      fastMode: "",
     });
   });
 
-  it('clears Ultra for a newly incompatible model instead of downgrading it', () => {
+  it("clears Ultra for a newly incompatible model instead of downgrading it", () => {
     const ultra: RuntimeConfigDraft = {
-      runtime: 'codex',
-      modelChoice: 'specify',
-      modelValue: 'gpt-5.6-sol',
-      reasoning: 'ultra',
-      fastMode: '__default__',
+      runtime: "codex",
+      modelChoice: "specify",
+      modelValue: "gpt-5.6-sol",
+      reasoning: "ultra",
+      fastMode: "__default__",
     };
-    expect(modelDraftAfterCommit(ultra, 'gpt-5.6-luna')).toEqual({
+    expect(modelDraftAfterCommit(ultra, "gpt-5.6-luna")).toEqual({
       ...ultra,
-      modelValue: 'gpt-5.6-luna',
-      reasoning: '',
+      modelValue: "gpt-5.6-luna",
+      reasoning: "",
     });
-    expect(modelDraftAfterCommit(ultra, 'gpt-5.6-terra')).toEqual({
+    expect(modelDraftAfterCommit(ultra, "gpt-5.6-terra")).toEqual({
       ...ultra,
-      modelValue: 'gpt-5.6-terra',
-      reasoning: '',
+      modelValue: "gpt-5.6-terra",
+      reasoning: "",
     });
   });
 });
@@ -430,50 +426,47 @@ describe('modelDraftAfterCommit — unified Combobox commit mapping', () => {
 // #task:1486 — reasoning validity is decided by the STATIC product table
 // (Ultra only for gpt-5.6-sol). No host catalog is fetched; the pure helpers
 // gate Save and clear a now-invalid value on model commit from that table.
-describe('canSaveRuntimeConfig / modelDraftAfterCommit — static reasoning table (#task:1486)', () => {
-  it('Ultra opens Save on gpt-5.6-sol, blocks it on a non-sol model', () => {
+describe("canSaveRuntimeConfig / modelDraftAfterCommit — static reasoning table (#task:1486)", () => {
+  it("Ultra opens Save on gpt-5.6-sol, blocks it on a non-sol model", () => {
     const solUltra: RuntimeConfigDraft = {
-      runtime: 'codex',
-      modelChoice: 'specify',
-      modelValue: 'gpt-5.6-sol',
-      reasoning: 'ultra',
-      fastMode: 'true',
+      runtime: "codex",
+      modelChoice: "specify",
+      modelValue: "gpt-5.6-sol",
+      reasoning: "ultra",
+      fastMode: "true",
     };
     expect(canSaveRuntimeConfig(baseAgent, solUltra)).toBe(true);
     expect(
       canSaveRuntimeConfig(baseAgent, {
         ...solUltra,
-        modelValue: 'gpt-5.6-terra',
+        modelValue: "gpt-5.6-terra",
       }),
     ).toBe(false);
   });
 
-  it('model commit off a sol model clears a now-invalid Ultra', () => {
+  it("model commit off a sol model clears a now-invalid Ultra", () => {
     const ultra: RuntimeConfigDraft = {
-      runtime: 'codex',
-      modelChoice: 'specify',
-      modelValue: 'gpt-5.6-sol',
-      reasoning: 'ultra',
-      fastMode: 'true',
+      runtime: "codex",
+      modelChoice: "specify",
+      modelValue: "gpt-5.6-sol",
+      reasoning: "ultra",
+      fastMode: "true",
     };
-    const committed = modelDraftAfterCommit(ultra, 'gpt-5.6-terra');
-    expect(committed.modelValue).toBe('gpt-5.6-terra');
-    expect(committed.reasoning).toBe('');
+    const committed = modelDraftAfterCommit(ultra, "gpt-5.6-terra");
+    expect(committed.modelValue).toBe("gpt-5.6-terra");
+    expect(committed.reasoning).toBe("");
   });
 
-  it('baseline High stays valid across a model commit', () => {
-    const committed = modelDraftAfterCommit(
-      draftFromAgent(baseAgent),
-      'gpt-5.6-terra',
-    );
-    expect(committed.reasoning).toBe('high');
+  it("baseline High stays valid across a model commit", () => {
+    const committed = modelDraftAfterCommit(draftFromAgent(baseAgent), "gpt-5.6-terra");
+    expect(committed.reasoning).toBe("high");
     expect(
       canSaveRuntimeConfig(baseAgent, {
-        runtime: 'codex',
-        modelChoice: 'specify',
-        modelValue: 'gpt-5.6-terra',
-        reasoning: 'high',
-        fastMode: 'true',
+        runtime: "codex",
+        modelChoice: "specify",
+        modelValue: "gpt-5.6-terra",
+        reasoning: "high",
+        fastMode: "true",
       }),
     ).toBe(true);
   });
@@ -482,77 +475,57 @@ describe('canSaveRuntimeConfig / modelDraftAfterCommit — static reasoning tabl
 // Source fence — the root editor <div> must own Escape at capture phase.
 // A bubble-phase handler is swallowed by Radix Select.Trigger before it
 // reaches the root, trapping Esc when focus sits on any Select.
-describe('RuntimeConfigEditor source invariants', () => {
-  it('owns Escape at capture phase so Radix Select cannot swallow it', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { fileURLToPath } = await import('node:url');
-    const path = await import('node:path');
+describe("RuntimeConfigEditor source invariants", () => {
+  it("owns Escape at capture phase so Radix Select cannot swallow it", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const path = await import("node:path");
     const src = readFileSync(
-      path.join(
-        fileURLToPath(new URL('./RuntimeConfigEditor.tsx', import.meta.url)),
-      ),
-      'utf8',
+      path.join(fileURLToPath(new URL("./RuntimeConfigEditor.tsx", import.meta.url))),
+      "utf8",
     );
     // Same capture handler must branch on `Escape` and call `cancel()` —
     // a stray capture handler that doesn't touch Esc would otherwise let
     // the assertion pass.
-    expect(src).toMatch(
-      /onKeyDownCapture=\{[\s\S]*?e\.key\s*===\s*'Escape'[\s\S]*?cancel\(\)/,
-    );
+    expect(src).toMatch(/onKeyDownCapture=\{[\s\S]*?e\.key\s*===\s*'Escape'[\s\S]*?cancel\(\)/);
     expect(src).not.toMatch(/onKeyDown=\{[^}]*Escape/);
     // Root capture must skip while the confirm dialog is open, otherwise
     // Esc inside the dialog would fall through to `cancel()` and drop the
     // editor draft. Radix Dialog owns Escape when `pendingSwitch !== null`.
-    expect(src).toMatch(
-      /onKeyDownCapture=\{[\s\S]*?pendingSwitch\s*===\s*null[\s\S]*?Escape/,
-    );
+    expect(src).toMatch(/onKeyDownCapture=\{[\s\S]*?pendingSwitch\s*===\s*null[\s\S]*?Escape/);
   });
 
-  it('routes `switch` through `pendingSwitch` state (does not mutate inline)', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { fileURLToPath } = await import('node:url');
-    const path = await import('node:path');
+  it("routes `switch` through `pendingSwitch` state (does not mutate inline)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const path = await import("node:path");
     const src = readFileSync(
-      path.join(
-        fileURLToPath(new URL('./RuntimeConfigEditor.tsx', import.meta.url)),
-      ),
-      'utf8',
+      path.join(fileURLToPath(new URL("./RuntimeConfigEditor.tsx", import.meta.url))),
+      "utf8",
     );
     // onSave's switch branch stashes the payload rather than firing the
     // mutation directly.
-    expect(src).toMatch(
-      /route\.kind\s*===\s*'switch'[\s\S]*?setPendingSwitch\(route\.payload\)/,
-    );
+    expect(src).toMatch(/route\.kind\s*===\s*'switch'[\s\S]*?setPendingSwitch\(route\.payload\)/);
     // The mutation is only invoked from the confirm path (runSwitch).
-    expect(src).toMatch(
-      /async function runSwitch[\s\S]*?switchMut\.mutateAsync\(payload\)/,
-    );
+    expect(src).toMatch(/async function runSwitch[\s\S]*?switchMut\.mutateAsync\(payload\)/);
     // Dialog gate visibility ties to `pendingSwitch !== null`.
-    expect(src).toMatch(
-      /SwitchRuntimeConfirmDialog[\s\S]*?open=\{pendingSwitch\s*!==\s*null\}/,
-    );
+    expect(src).toMatch(/SwitchRuntimeConfirmDialog[\s\S]*?open=\{pendingSwitch\s*!==\s*null\}/);
     // Switch errors flow into the dialog so they render above the modal
     // instead of behind it.
-    expect(src).toMatch(
-      /SwitchRuntimeConfirmDialog[\s\S]*?errorMessage=\{switchErrorMessage\}/,
-    );
+    expect(src).toMatch(/SwitchRuntimeConfirmDialog[\s\S]*?errorMessage=\{switchErrorMessage\}/);
     // Focus must return to the Runtime Select trigger when the dialog
     // closes, otherwise focus drops to `<body>` and the parent-capture
     // Escape path stops receiving keydown events.
-    expect(src).toMatch(
-      /SwitchRuntimeConfirmDialog[\s\S]*?returnFocusRef=\{runtimeTriggerRef\}/,
-    );
+    expect(src).toMatch(/SwitchRuntimeConfirmDialog[\s\S]*?returnFocusRef=\{runtimeTriggerRef\}/);
   });
 
-  it('P1-2: catalog / availability probe LIFECYCLE is edit-only', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { fileURLToPath } = await import('node:url');
-    const path = await import('node:path');
+  it("P1-2: catalog / availability probe LIFECYCLE is edit-only", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const path = await import("node:path");
     const src = readFileSync(
-      path.join(
-        fileURLToPath(new URL('./RuntimeConfigEditor.tsx', import.meta.url)),
-      ),
-      'utf8',
+      path.join(fileURLToPath(new URL("./RuntimeConfigEditor.tsx", import.meta.url))),
+      "utf8",
     );
     // Save gates on the static product table via the pure helper (2-arg, no
     // host catalog threaded in).
@@ -565,42 +538,69 @@ describe('RuntimeConfigEditor source invariants', () => {
   });
 });
 
-describe('Pi runtime configuration', () => {
+describe("Pi runtime configuration", () => {
   const draft: RuntimeConfigDraft = {
-    runtime: 'pi', modelChoice: 'default', modelValue: '',
-    reasoning: '__default__', fastMode: '',
+    runtime: "pi",
+    modelChoice: "default",
+    modelValue: "",
+    reasoning: "__default__",
+    fastMode: "",
   };
 
-  it('serializes CLI defaults and discards unsupported fast mode', () => {
+  it("serializes CLI defaults and discards unsupported fast mode", () => {
     expect(canSaveRuntimeConfig(baseAgent, draft)).toBe(true);
-    expect(buildSwitchPayload({ ...draft, fastMode: 'true' })).toEqual({
-      runtime: 'pi', model: null, reasoning_effort: null, fast_mode: null,
+    expect(buildSwitchPayload({ ...draft, fastMode: "true" })).toEqual({
+      runtime: "pi",
+      model: null,
+      reasoning_effort: null,
+      fast_mode: null,
     });
-    expect(runtimeCatalogEntry('pi').supportsProfileMcp).toBe(false);
-    expect(runtimeCatalogEntry('pi').supportsFastMode).toBe(false);
+    expect(runtimeCatalogEntry("pi").supportsProfileMcp).toBe(false);
+    expect(runtimeCatalogEntry("pi").supportsFastMode).toBe(false);
   });
 
-  it.each(['off', 'minimal', 'low', 'medium', 'high'])('serializes %s reasoning with a free-text model', reasoning => {
-    const configured = { ...draft, modelChoice: 'specify' as const, modelValue: ' provider/model-id ', reasoning };
-    expect(canSaveRuntimeConfig(baseAgent, configured)).toBe(true);
-    expect(buildSwitchPayload(configured)).toEqual({
-      runtime: 'pi', model: 'provider/model-id', reasoning_effort: reasoning, fast_mode: null,
+  it.each(["off", "minimal", "low", "medium", "high"])(
+    "serializes %s reasoning with a free-text model",
+    (reasoning) => {
+      const configured = {
+        ...draft,
+        modelChoice: "specify" as const,
+        modelValue: " provider/model-id ",
+        reasoning,
+      };
+      expect(canSaveRuntimeConfig(baseAgent, configured)).toBe(true);
+      expect(buildSwitchPayload(configured)).toEqual({
+        runtime: "pi",
+        model: "provider/model-id",
+        reasoning_effort: reasoning,
+        fast_mode: null,
+      });
+    },
+  );
+
+  it("rejects foreign reasoning and resets tuning across runtime changes", () => {
+    expect(canSaveRuntimeConfig(baseAgent, { ...draft, reasoning: "ultra" })).toBe(false);
+    expect(canSaveRuntimeConfig(baseAgent, { ...draft, reasoning: "none" })).toBe(false);
+    expect(draftAfterRuntimeChange(baseAgent, "pi")).toEqual({
+      runtime: "pi",
+      modelChoice: "unset",
+      modelValue: "",
+      reasoning: "",
+      fastMode: "",
     });
+    expect(draftAfterRuntimeChange(baseAgent, "codex")).toEqual(draftFromAgent(baseAgent));
   });
 
-  it('rejects foreign reasoning and resets tuning across runtime changes', () => {
-    expect(canSaveRuntimeConfig(baseAgent, { ...draft, reasoning: 'ultra' })).toBe(false);
-    expect(canSaveRuntimeConfig(baseAgent, { ...draft, reasoning: 'none' })).toBe(false);
-    expect(draftAfterRuntimeChange(baseAgent, 'pi')).toEqual({
-      runtime: 'pi', modelChoice: 'unset', modelValue: '', reasoning: '', fastMode: '',
-    });
-    expect(draftAfterRuntimeChange(baseAgent, 'codex')).toEqual(draftFromAgent(baseAgent));
-  });
-
-  it('patches an existing Pi agent without carrying unsupported tuning', () => {
-    const agent = { ...baseAgent, runtime: 'pi' as const, model: null, reasoning_effort: null, fast_mode: null };
-    const next = { ...draftFromAgent(agent), reasoning: 'minimal' };
+  it("patches an existing Pi agent without carrying unsupported tuning", () => {
+    const agent = {
+      ...baseAgent,
+      runtime: "pi" as const,
+      model: null,
+      reasoning_effort: null,
+      fast_mode: null,
+    };
+    const next = { ...draftFromAgent(agent), reasoning: "minimal" };
     expect(canSaveRuntimeConfig(agent, next)).toBe(true);
-    expect(buildTuningPatch(agent, next)).toEqual({ reasoning_effort: 'minimal' });
+    expect(buildTuningPatch(agent, next)).toEqual({ reasoning_effort: "minimal" });
   });
 });

@@ -1,7 +1,7 @@
-import { ClipboardCopy, Download } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { neutralAction } from '@/features/common/ControlInkBorder';
-import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
+import { ClipboardCopy, Download } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { neutralAction } from "@/features/common/ControlInkBorder";
+import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
 
 /**
  * Top bar shown while MessageList is in multi-select mode — the "share messages
@@ -45,9 +45,7 @@ export function SelectionToolbar({
       aria-label="Message selection"
       className="flex items-center justify-between gap-3 border-b border-border-subtle bg-bg-floating px-3 py-2 text-xs text-text-primary"
     >
-      <span className="font-medium">
-        {count === 0 ? 'None selected' : `${count} selected`}
-      </span>
+      <span className="font-medium">{count === 0 ? "None selected" : `${count} selected`}</span>
       <div className="flex items-center gap-2">
         <SelectionActionButton rank="cancel" label="Cancel" onClick={onCancel} />
         <SelectionActionButton
@@ -84,16 +82,16 @@ export function SelectionActionButton({
   onClick,
 }: SelectionActionButtonProps): JSX.Element {
   const rankProps =
-    rank === 'primary'
-      ? primaryAction('gap-1')
-      : rank === 'cancel'
-        ? primaryCancel('gap-1')
-        : neutralAction('gap-1');
+    rank === "primary"
+      ? primaryAction("gap-1")
+      : rank === "cancel"
+        ? primaryCancel("gap-1")
+        : neutralAction("gap-1");
   return (
     <Button
       type="button"
       size="xs"
-      variant={rank === 'primary' ? 'default' : 'outline'}
+      variant={rank === "primary" ? "default" : "outline"}
       onClick={onClick}
       disabled={disabled}
       title={label}
@@ -109,7 +107,7 @@ export function SelectionActionButton({
 interface SelectionActionButtonProps {
   /** `primary` = the commit (filled), `secondary` = framed neutral peer,
    *  `cancel` = the way out. */
-  rank: 'primary' | 'secondary' | 'cancel';
+  rank: "primary" | "secondary" | "cancel";
   icon?: React.ReactNode;
   label: string;
   disabled?: boolean;

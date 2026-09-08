@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 /**
  * Keyboard behaviour for the task filter dropdowns (#task:1257).
@@ -21,10 +15,7 @@ import {
  * keyboard/focus/Esc-Enter) without collapsing the searchable channel picker
  * into a non-searchable Select.
  */
-export type RovingAction =
-  | { type: 'move'; index: number }
-  | { type: 'select' }
-  | null;
+export type RovingAction = { type: "move"; index: number } | { type: "select" } | null;
 
 /**
  * True while an IME composition owns the keystroke — both the modern
@@ -35,10 +26,7 @@ export type RovingAction =
  * drift, or a call site could `preventDefault` a keystroke the reducer bypasses
  * (or vice versa) and steal a candidate commit from the IME.
  */
-export function isImeComposing(e: {
-  isComposing?: boolean;
-  keyCode?: number;
-}): boolean {
+export function isImeComposing(e: { isComposing?: boolean; keyCode?: number }): boolean {
   return Boolean(e.isComposing) || e.keyCode === 229;
 }
 
@@ -66,16 +54,16 @@ export function rovingKeyAction(
   if (composing) return null;
   if (count <= 0) return null;
   switch (key) {
-    case 'ArrowDown':
-      return { type: 'move', index: (current + 1) % count };
-    case 'ArrowUp':
-      return { type: 'move', index: (current - 1 + count) % count };
-    case 'Home':
-      return inTextField ? null : { type: 'move', index: 0 };
-    case 'End':
-      return inTextField ? null : { type: 'move', index: count - 1 };
-    case 'Enter':
-      return { type: 'select' };
+    case "ArrowDown":
+      return { type: "move", index: (current + 1) % count };
+    case "ArrowUp":
+      return { type: "move", index: (current - 1 + count) % count };
+    case "Home":
+      return inTextField ? null : { type: "move", index: 0 };
+    case "End":
+      return inTextField ? null : { type: "move", index: count - 1 };
+    case "Enter":
+      return { type: "select" };
     default:
       return null;
   }
@@ -120,12 +108,12 @@ export function useRovingList({
 
   // Clamp when the list shrinks past the current highlight (filtering).
   useEffect(() => {
-    setActiveIndex(i => (i > count - 1 ? Math.max(0, count - 1) : i));
+    setActiveIndex((i) => (i > count - 1 ? Math.max(0, count - 1) : i));
   }, [count]);
 
   // Keep the highlighted row visible.
   useEffect(() => {
-    itemsRef.current[activeIndex]?.scrollIntoView({ block: 'nearest' });
+    itemsRef.current[activeIndex]?.scrollIntoView({ block: "nearest" });
   }, [activeIndex]);
 
   const registerItem = useCallback((index: number, el: HTMLElement | null) => {
@@ -135,13 +123,12 @@ export function useRovingList({
   const onKeyDown = useCallback(
     (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
-      const inTextField =
-        target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
+      const inTextField = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
       const composing = isImeComposing(e.nativeEvent);
       const action = rovingKeyAction(e.key, activeIndex, count, inTextField, composing);
       if (!action) return;
       e.preventDefault();
-      if (action.type === 'move') setActiveIndex(action.index);
+      if (action.type === "move") setActiveIndex(action.index);
       else onSelect(activeIndex);
     },
     [activeIndex, count, onSelect],

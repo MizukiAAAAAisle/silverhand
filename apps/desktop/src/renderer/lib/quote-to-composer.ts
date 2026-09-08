@@ -17,7 +17,7 @@
  * message with source-location semantics and is a separate feature.
  */
 
-const QUOTE_EVENT = 'silverhand:quote-to-composer';
+const QUOTE_EVENT = "silverhand:quote-to-composer";
 
 interface QuoteToComposerDetail {
   draftKey: string;
@@ -34,10 +34,7 @@ export function requestQuoteToComposer(draftKey: string, text: string): void {
 }
 
 /** Subscribe the composer at `draftKey` to inbound quote requests. */
-export function onQuoteToComposer(
-  draftKey: string,
-  handler: (text: string) => void,
-): () => void {
+export function onQuoteToComposer(draftKey: string, handler: (text: string) => void): () => void {
   const listener = (event: Event): void => {
     const detail = (event as CustomEvent<QuoteToComposerDetail>).detail;
     if (detail && detail.draftKey === draftKey) handler(detail.text);
@@ -54,10 +51,10 @@ export function onQuoteToComposer(
  */
 export function buildQuoteBlock(text: string): string {
   return text
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map(line => (line.length > 0 ? `> ${line}` : '>'))
-    .join('\n');
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => (line.length > 0 ? `> ${line}` : ">"))
+    .join("\n");
 }
 
 /**
@@ -77,10 +74,10 @@ export function spliceQuoteIntoDraft(
   const before = draft.slice(0, clamped);
   const after = draft.slice(clamped);
   const block = buildQuoteBlock(quotedText);
-  const lead = before.length > 0 && !before.endsWith('\n') ? '\n' : '';
+  const lead = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
   // A single trailing newline when the quote butts up against following
   // text, otherwise a blank line to separate the quote from the reply.
-  const trail = after.startsWith('\n') ? '\n' : '\n\n';
+  const trail = after.startsWith("\n") ? "\n" : "\n\n";
   const insertion = `${lead}${block}${trail}`;
   const nextCaret = (before + insertion).length;
   return { text: before + insertion + after, caret: nextCaret };

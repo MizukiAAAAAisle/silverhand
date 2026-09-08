@@ -1,4 +1,4 @@
-import type { RuntimeAvailabilityState } from '@silverhand/shared';
+import type { RuntimeAvailabilityState } from "@silverhand/shared";
 
 // Pure decision core for the create-dialog runtime picker (#task:1376). Kept
 // out of the component so the load-bearing rule — detection may *disable* a
@@ -9,11 +9,11 @@ import type { RuntimeAvailabilityState } from '@silverhand/shared';
 
 /** UI mode of the runtime section for the currently-selected computer. */
 export type RuntimePickerMode =
-  | 'no-host' // no computer chosen yet — nothing to probe
-  | 'offline' // chosen computer unavailable — collapse into availability gate
-  | 'probing' // a fresh probe is in flight
-  | 'probe-failed' // the probe itself errored (transport = unknown-for-all)
-  | 'detected'; // fresh catalog for an available host — states authoritative
+  | "no-host" // no computer chosen yet — nothing to probe
+  | "offline" // chosen computer unavailable — collapse into availability gate
+  | "probing" // a fresh probe is in flight
+  | "probe-failed" // the probe itself errored (transport = unknown-for-all)
+  | "detected"; // fresh catalog for an available host — states authoritative
 
 /** Fold the async signals into one mode. Order matters — earlier branches
  *  short-circuit later ones:
@@ -32,12 +32,12 @@ export function deriveRuntimePickerMode(input: {
   isLoading: boolean;
   isError: boolean;
 }): RuntimePickerMode {
-  if (!input.hasHost) return 'no-host';
-  if (input.isHostAvailabilityLoading) return 'probing';
-  if (!input.hostAvailable) return 'offline';
-  if (input.isLoading) return 'probing';
-  if (input.isError) return 'probe-failed';
-  return 'detected';
+  if (!input.hasHost) return "no-host";
+  if (input.isHostAvailabilityLoading) return "probing";
+  if (!input.hostAvailable) return "offline";
+  if (input.isLoading) return "probing";
+  if (input.isError) return "probe-failed";
+  return "detected";
 }
 
 /** A runtime chip is disabled ONLY when a fresh probe of an available host
@@ -48,7 +48,7 @@ export function runtimeChipDisabled(
   mode: RuntimePickerMode,
   state: RuntimeAvailabilityState | undefined,
 ): boolean {
-  return mode === 'detected' && state === 'absent';
+  return mode === "detected" && state === "absent";
 }
 
 /** Section-level hint. Only `offline` / `probe-failed` carry one — `probing`
@@ -56,9 +56,9 @@ export function runtimeChipDisabled(
  *  never stack redundant lines (and never spend attention on filler copy). */
 export function runtimeSectionHint(mode: RuntimePickerMode): string | null {
   switch (mode) {
-    case 'offline':
-      return 'Connect the computer to detect runtimes';
-    case 'probe-failed':
+    case "offline":
+      return "Connect the computer to detect runtimes";
+    case "probe-failed":
       return "Couldn't check runtimes — use Recheck";
     default:
       return null;
