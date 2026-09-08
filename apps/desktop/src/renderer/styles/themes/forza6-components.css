@@ -81,9 +81,7 @@
   border: none;
 }
 [data-theme='forza6'] button[data-sticker] {
-  transition:
-    transform 120ms ease,
-    box-shadow 120ms ease;
+  transition: transform 120ms ease, box-shadow 120ms ease;
 }
 [data-theme='forza6'] button[data-sticker]:hover:not(:disabled) {
   transform: translateY(-1px);
@@ -237,7 +235,7 @@
   border-color: var(--forza6-ink);
 }
 
-/* ── Chat header action cluster — layout only ─────────────────────── */
+/* ── Chat header action cluster — layout only ─── */
 [data-theme='forza6'] [data-channel-actions] {
   border: 0;
   border-radius: var(--control-radius);

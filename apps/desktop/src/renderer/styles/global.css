@@ -16,8 +16,8 @@
 /* Forza6-only component-layer specialization. Every selector inside is
    `[data-theme='forza6']`-scoped; studio-light + slack-dark are pixel-
    identical before and after this import. Must come AFTER forza6.css so
-   token re-assignments inside it (`--bg-channels-sidebar` deep teal etc.)
-   beat the PR-1 light-pink defaults. */
+   token re-assignments inside it.
+*/
 @import './themes/forza6-components.css';
 
 @theme inline {
@@ -79,20 +79,9 @@
 
   --font-sans: var(--font-sans);
   --font-serif: var(--font-serif);
-  /* The `font-mono` utility follows the user's Appearance code-font
-     override (`--appearance-code-font`, set on the document root by
-     applyAppearanceOverrides), falling back to the theme mono primitive
-     `--font-mono` when unset. Without this, every monospace chrome bit
-     (chat @handles, task `#nnn`, conversation ids, activity-bubble pids)
-     stayed locked to the theme mono and ignored the Appearance →
-     code-font setting (shiki). The override slot has its own namespace
-     (`--appearance-*`) so its role is unambiguous and never confused
-     with the theme primitive. */
   --font-mono: var(--appearance-code-font, var(--font-mono));
   --font-display: var(--font-display);
 
-  /* New tokens introduced by forza6 — see docs/design-new-theme.md §3.
-     Every theme MUST define these explicitly (no fallback leak). */
   --color-accent-2: var(--accent-2);
   --color-text-on-accent-2: var(--text-on-accent-2);
   --color-bg-structure-dark: var(--bg-structure-dark);
@@ -107,9 +96,6 @@
   --sidebar-width: 240px;
   --titlebar-sidebar-toggle-left: 78px;
   --titlebar-controls-safe-width: 138px;
-  /* Per-conversation view-tab strip height. ONE authority: the tab bar reads it
-     as its height and the find-bar overlay anchors below it via calc, so the two
-     never drift when the strip is retuned (#task:2121). */
   --conversation-tab-strip-height: 30px;
 }
 
@@ -135,17 +121,7 @@
   --z-lightbox-chrome: 91;
 }
 
-/* ── Micro type-scale ──
-   The three sub-`text-xs` steps Tailwind has no name for. 12px+ stays on
-   the native scale (text-xs 12 / text-sm 14 / text-base 16 / text-lg 18);
-   these three fill the gap below it so a badge / meta line / dense label
-   stops reaching for a magic `text-[Npx]`. badge(10) micro caps & counts ·
-   meta(11) timestamps & secondary meta · strong(13) the emphatic step
-   between meta and text-sm. Non-themable; global type rhythm. Kept in a
-   plain `:root` (not `@theme`) and consumed as `text-[length:var(--text-*)]`
-   — same as the z-index ladder — so a live edit hot-reloads (an `@theme`
-   block change does NOT re-run Tailwind's theme in electron-vite dev, which
-   silently drops the utilities and every site falls back to inherited 16px). */
+/* ── Micro type-scale ── */
 :root {
   --text-badge: 10px;
   --text-meta: 11px;
@@ -204,7 +180,7 @@ body,
 }
 ::-webkit-scrollbar-thumb {
   background: var(--bg-hover);
-  border-radius: 3px;
+  border-radius: 0px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--bg-active);
@@ -215,7 +191,6 @@ body,
   background: var(--border);
 }
 
-/* Opt-in: hide the scrollbar entirely while keeping the area scrollable. */
 .scrollbar-hide {
   scrollbar-width: none;
 }
