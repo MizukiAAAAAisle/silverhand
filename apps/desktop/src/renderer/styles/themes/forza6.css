@@ -110,7 +110,7 @@
   --task-num: var(--brand-primary);
   --text-nav-rail: var(--forza6-ink);
   --text-nav-rail-hover: var(--forza6-ink);
-  --bg-nav-rail-hover: var(--forza6-lime-pale);
+  --bg-nav-hover: var(--forza6-lime-pale);
   --bg-nav-selected: var(--forza6-lime);
   --text-nav-selected: var(--forza6-ink);
   --bg-sidebar-row-hover: color-mix(in srgb, var(--forza6-lime) 28%, var(--forza6-paper));

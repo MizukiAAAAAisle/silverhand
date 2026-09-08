@@ -64,6 +64,7 @@
   --color-text-on-success: var(--text-on-success);
   --color-text-on-warning: var(--text-on-warning);
   --color-text-on-error: var(--text-on-error);
+  --color-bg-nav-hover: var(--bg-nav-hover);
   --color-bg-nav-selected: var(--bg-nav-selected);
   --color-text-nav-selected: var(--text-nav-selected);
   --color-text-on-selected: var(--text-on-selected);
@@ -462,7 +463,7 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
 }
 .nav-rail__item:hover:not([aria-current="page"]) {
   border-color: var(--border-nav-rail-hover);
-  background: var(--bg-nav-rail-hover);
+  background: var(--bg-nav-hover);
   color: var(--text-nav-rail-hover);
 }
 .nav-rail__item[aria-current="page"] {

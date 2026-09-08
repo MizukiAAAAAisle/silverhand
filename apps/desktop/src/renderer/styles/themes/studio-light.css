@@ -108,7 +108,7 @@
 
   --text-nav-rail: #98a1b5;
   --text-nav-rail-hover: #f7f9fc;
-  --bg-nav-rail-hover: rgba(247, 249, 252, 0.08);
+  --bg-nav-hover: rgba(247, 249, 252, 0.08);
 
   /* Sidebar row state — */
   --sidebar-row-border-width: 1px;

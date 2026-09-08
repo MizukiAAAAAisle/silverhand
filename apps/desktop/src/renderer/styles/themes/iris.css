@@ -128,7 +128,7 @@
   --text-on-brand: #ffffff;
   --text-nav-rail: #4e4739;
   --text-nav-rail-hover: #1f1a12;
-  --bg-nav-rail-hover: rgba(31, 26, 18, 0.06);
+  --bg-nav-hover: rgba(31, 26, 18, 0.06);
   --bg-nav-rail: transparent;
 
   /* Sidebar row state */

@@ -103,7 +103,7 @@
   --text-on-brand: #ffffff;
   --text-nav-rail: #b9bbbe;
   --text-nav-rail-hover: #ffffff;
-  --bg-nav-rail-hover: rgba(255, 255, 255, 0.06);
+  --bg-nav-hover: rgba(255, 255, 255, 0.06);
 
   /* ── Sidebar row state ── */
   --sidebar-row-border-width: 2px;
