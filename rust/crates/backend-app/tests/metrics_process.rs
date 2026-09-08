@@ -242,6 +242,96 @@ async fn executable_metrics_preserve_wire_boundaries_and_track_real_work() {
     assert!(text.contains("process_resident_memory_bytes"));
     assert!(text.contains("silverhand_tokio_scheduling_delay_seconds"));
 
+    // Malformed ready versions share one bounded bucket and never create a
+    // per-host admission failure. Unrelated frames must not enter that bucket.
+    let versions = [
+        Some(json!(-1)),
+        Some(json!(10.5)),
+        None,
+        Some(json!(101)),
+        Some(json!("unbounded-private-version")),
+        Some(json!(null)),
+    ];
+    let mut expected_invalid = 0.;
+    for (index, offered) in versions.into_iter().chain([Some(json!(7))]).enumerate() {
+        let (status, invitation) = request(api, "POST", "/api/hosts", Some(token), "{}");
+        assert_eq!(status, 200);
+        let invitation: Value = serde_json::from_str(&invitation).unwrap();
+        let case_host = invitation["host_id"].as_str().unwrap();
+        let case_secret = invitation["connect_token"].as_str().unwrap();
+
+        let mut frame = json!({
+            "direction": "daemon_to_server",
+            "type": "event",
+            "kind": if index == 6 { "unknown_event" } else { "ready" },
+        });
+        if let Some(offered) = offered {
+            frame["protocol_version"] = offered;
+        }
+        let mut upgrade = format!("ws://{api}{path}").into_client_request().unwrap();
+        upgrade.headers_mut().insert(
+            "authorization",
+            format!("Bearer {case_secret}").parse().unwrap(),
+        );
+        let (mut socket, _) = tokio_tungstenite::connect_async(upgrade).await.unwrap();
+        socket
+            .send(Message::Text(frame.to_string().into()))
+            .await
+            .unwrap();
+
+        let close = tokio::time::timeout(Duration::from_secs(3), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(close, Message::Close(_)),
+            "case {index}: {close:?}"
+        );
+        drop(socket);
+
+        if index < 6 {
+            expected_invalid += 1.;
+        }
+        let scrape = request(metrics, "GET", "/metrics", None, "").1;
+        assert_eq!(
+            sample(
+                &scrape,
+                "silverhand_host_ws_protocol_mismatch_total{",
+                &["actual_version=\"invalid\""]
+            ),
+            expected_invalid,
+            "case {index}"
+        );
+        let mismatch_total: f64 = scrape
+            .lines()
+            .filter(|line| line.starts_with("silverhand_host_ws_protocol_mismatch_total{"))
+            .map(|line| {
+                line.split_whitespace()
+                    .last()
+                    .unwrap()
+                    .parse::<f64>()
+                    .unwrap()
+            })
+            .sum();
+        assert_eq!(mismatch_total, expected_invalid + 1., "case {index}");
+        assert!(!scrape.contains("unbounded-private-version"));
+
+        let (status, state) = request(
+            api,
+            "GET",
+            &format!("/api/hosts/{case_host}/status"),
+            Some(token),
+            "",
+        );
+        assert_eq!(status, 200, "{state}");
+        let state: Value = serde_json::from_str(&state).unwrap();
+        assert!(
+            state.get("admission_failure").is_none(),
+            "case {index}: {state}"
+        );
+    }
+
     let mut valid_request = format!("ws://{api}{path}").into_client_request().unwrap();
     valid_request
         .headers_mut()
@@ -249,11 +339,24 @@ async fn executable_metrics_preserve_wire_boundaries_and_track_real_work() {
     let (mut valid_ws, _) = tokio_tungstenite::connect_async(valid_request)
         .await
         .unwrap();
-    valid_ws.send(Message::Text(json!({
-        "direction":"daemon_to_server", "type":"event", "kind":"ready", "protocol_version":version,
-        "daemon_version":"metrics-test", "daemon_id":"private-daemon", "instance_id":"metrics-instance",
-        "host_descriptor":{"name":"Private host","kind":"remote"}, "capabilities":[], "daemon_pid":42, "started_at":100
-    }).to_string().into())).await.unwrap();
+    let valid_ready = json!({
+        "direction": "daemon_to_server",
+        "type": "event",
+        "kind": "ready",
+        "protocol_version": version,
+        "daemon_version": "metrics-test",
+        "daemon_id": "private-daemon",
+        "instance_id": "metrics-instance",
+        "host_descriptor": {"name": "Private host", "kind": "remote"},
+        "capabilities": [],
+        "daemon_pid": 42,
+        "started_at": 100,
+    });
+    valid_ws
+        .send(Message::Text(valid_ready.to_string().into()))
+        .await
+        .unwrap();
+
     for attempt in 0..100 {
         text = request(metrics, "GET", "/metrics", None, "").1;
         if sample(

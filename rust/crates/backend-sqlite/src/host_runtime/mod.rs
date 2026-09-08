@@ -352,12 +352,17 @@ impl RevokeComputerUnitOfWork for SqliteHostRuntimeStore {
         // Unconditional, on a repeat revoke too: every live credential dies at `at`. Only
         // revoked_at is written — nothing here is superseded, so a consumed_at would
         // describe a dead credential to the verifier as one inside a grace window.
-        crate::foundation::statement_metrics::statement("host_credentials.revoke_for_host", "run", sqlx::query(
-            "UPDATE host_credentials SET revoked_at = ? WHERE host_id = ? AND revoked_at IS NULL",
+        crate::foundation::statement_metrics::statement(
+            "host_credentials.revoke_for_host",
+            "run",
+            sqlx::query(
+                "UPDATE host_credentials SET revoked_at = ? WHERE host_id = ? AND revoked_at IS NULL",
+            )
+            .bind(at)
+            .bind(&computer)
+            .execute(&mut *tx),
         )
-        .bind(at)
-        .bind(&computer)
-        .execute(&mut *tx)).await
+        .await
         .map_err(PersistenceFailure::from_source)?;
 
         let row = crate::foundation::statement_metrics::statement(

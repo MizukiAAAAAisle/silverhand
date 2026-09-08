@@ -1583,14 +1583,25 @@ async fn connection(
             }
             inbound = socket.recv() => match inbound {
                 Some(Ok(Message::Text(text))) => {
-                    if let Some(offered) = offered_ready_protocol_version(&text)
-                        && offered != OUTBOUND_PROTOCOL_VERSION
+                    let offered = offered_ready_protocol_version(&text);
+                    if let Some(version) = offered
+                        && version != OfferedReadyVersion::Readable(OUTBOUND_PROTOCOL_VERSION)
                     {
+                        let actual = match version {
+                            OfferedReadyVersion::Readable(value) => value.to_string(),
+                            OfferedReadyVersion::Invalid => "invalid".to_owned(),
+                        };
                         metrics::counter!(
                             "silverhand_host_ws_protocol_mismatch_total",
-                            "actual_version" => offered.to_string(),
+                            "actual_version" => actual,
                             "supported_version" => OUTBOUND_PROTOCOL_VERSION.to_string(),
                         ).increment(1);
+                    }
+
+                    // Only actionable numeric versions change per-host admission state.
+                    if let Some(OfferedReadyVersion::Readable(offered)) = offered
+                        && offered != OUTBOUND_PROTOCOL_VERSION
+                    {
                         admission.incompatible(
                             &host_id,
                             &connection_id,
@@ -1830,24 +1841,17 @@ struct CommandResponseFrame {
     error: Option<Value>,
 }
 
-/// The `protocol_version` a `ready` frame OFFERS, read at the envelope level.
-///
-/// This has to exist separately from [`parse_daemon_frame`] because the only daemon
-/// population it describes is the one whose `ready` frame this server's current
-/// schema rejects: an older daemon does not merely carry a different number, it
-/// carries a different frame (no `instance_id`, for one). Deciding the mismatch
-/// after the strict parse would mean the refusal is never recorded for exactly the
-/// build the human needs to be told to upgrade.
-///
-/// The vocabulary is closed on purpose:
-///
-///  - a readable version that is not ours is an actionable refusal, recorded;
-///  - our own version is not this function's business — the strict schema decides,
-///    and a frame that fails it records nothing;
-///  - anything else (not an envelope, not an integer, negative, out of range)
-///    yields `None` and falls through to the strict parse, because a version we
-///    cannot read is a corrupt dialer that may retry successfully.
-fn offered_ready_protocol_version(raw: &str) -> Option<u32> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OfferedReadyVersion {
+    Readable(u32),
+    Invalid,
+}
+
+/// Inspect the ready envelope before strict schema parsing so old or malformed
+/// ready frames remain observable. Invalid versions use one fixed metric bucket;
+/// only readable incompatible versions may change per-host admission state.
+/// Non-ready frames are outside this observation and return `None`.
+fn offered_ready_protocol_version(raw: &str) -> Option<OfferedReadyVersion> {
     let value = serde_json::from_str::<Value>(raw).ok()?;
     if value.get("direction").and_then(Value::as_str) != Some("daemon_to_server")
         || value.get("type").and_then(Value::as_str) != Some("event")
@@ -1855,9 +1859,16 @@ fn offered_ready_protocol_version(raw: &str) -> Option<u32> {
     {
         return None;
     }
-    u32::try_from(value.get("protocol_version")?.as_u64()?)
-        .ok()
-        .filter(|version| *version <= MAX_READABLE_PROTOCOL_VERSION)
+    let version = value
+        .get("protocol_version")
+        .and_then(Value::as_u64)
+        .and_then(|version| u32::try_from(version).ok())
+        .filter(|version| *version <= MAX_READABLE_PROTOCOL_VERSION);
+
+    Some(match version {
+        Some(version) => OfferedReadyVersion::Readable(version),
+        None => OfferedReadyVersion::Invalid,
+    })
 }
 
 fn parse_daemon_frame(raw: &str) -> Result<DaemonFrame, DaemonFrameError> {
@@ -3402,22 +3413,21 @@ mod tests {
         assert!(parse_daemon_frame(&old_schema).is_err());
         assert_eq!(
             offered_ready_protocol_version(&old_schema),
-            Some(OUTBOUND_PROTOCOL_VERSION - 1)
+            Some(OfferedReadyVersion::Readable(OUTBOUND_PROTOCOL_VERSION - 1))
         );
 
         // Our own version is the strict schema's business, not this probe's.
         assert_eq!(
             offered_ready_protocol_version(&ready().to_string()),
-            Some(OUTBOUND_PROTOCOL_VERSION)
+            Some(OfferedReadyVersion::Readable(OUTBOUND_PROTOCOL_VERSION))
         );
 
-        // Out of range: not treated as a version, so nothing is recorded — and the
-        // strict arm stays reachable for it, which is where it is refused.
+        // Out-of-range versions remain observable as invalid without admission state.
         let mut unreadable = ready();
         unreadable["protocol_version"] = json!(MAX_READABLE_PROTOCOL_VERSION + 1);
         assert_eq!(
             offered_ready_protocol_version(&unreadable.to_string()),
-            None
+            Some(OfferedReadyVersion::Invalid)
         );
         assert!(matches!(
             parse_daemon_frame(&unreadable.to_string()),
@@ -3429,14 +3439,17 @@ mod tests {
             frame["protocol_version"] = unreadable_version.clone();
             assert_eq!(
                 offered_ready_protocol_version(&frame.to_string()),
-                None,
+                Some(OfferedReadyVersion::Invalid),
                 "{unreadable_version} is not a readable protocol version"
             );
         }
 
         let mut absent = ready();
         absent.as_object_mut().unwrap().remove("protocol_version");
-        assert_eq!(offered_ready_protocol_version(&absent.to_string()), None);
+        assert_eq!(
+            offered_ready_protocol_version(&absent.to_string()),
+            Some(OfferedReadyVersion::Invalid)
+        );
 
         // Not a `ready` envelope at all, and not JSON at all.
         let mut other_kind = ready();
