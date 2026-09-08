@@ -33,6 +33,8 @@ use tokio::{
 
 use crate::{foundation::bearer::strict_bearer_credential, foundation::error};
 
+use super::daemon_metrics::{self, ObservedDaemonSocket};
+
 use self::command::{CapabilityRefusalAdmission, EncodedDaemonCommand, IssuedDaemonCommandKind};
 
 include!(concat!(env!("OUT_DIR"), "/daemon_admission.rs"));
@@ -881,24 +883,43 @@ impl DaemonAttachment {
         timeout: Duration,
     ) -> Result<Value, CommandDispatchError> {
         let (kind, params, capability_refusal) = command.into_wire_parts();
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .ok_or(CommandDispatchError::TimedOut)?;
-        let (response, receive) = oneshot::channel();
-        self.commands
-            .try_send(ConnectionControl::Command(CommandRequest {
-                kind,
-                params,
-                capability_refusal,
-                deadline,
-                response,
-            }))
-            .map_err(|_| CommandDispatchError::ProvenNotDispatched)?;
-        match tokio::time::timeout_at(deadline, receive).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(CommandDispatchError::Ambiguous),
-            Err(_) => Err(CommandDispatchError::TimedOut),
+        let started = Instant::now();
+        let result = async {
+            let deadline = Instant::now()
+                .checked_add(timeout)
+                .ok_or(CommandDispatchError::TimedOut)?;
+            let (response, receive) = oneshot::channel();
+            self.commands
+                .try_send(ConnectionControl::Command(CommandRequest {
+                    kind,
+                    params,
+                    capability_refusal,
+                    deadline,
+                    response,
+                }))
+                .map_err(|_| CommandDispatchError::ProvenNotDispatched)?;
+            match tokio::time::timeout_at(deadline, receive).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) => Err(CommandDispatchError::Ambiguous),
+                Err(_) => Err(CommandDispatchError::TimedOut),
+            }
         }
+        .await;
+        let outcome = match &result {
+            Ok(_) => "ok",
+            Err(CommandDispatchError::TimedOut) => "timeout",
+            Err(CommandDispatchError::ProvenNotDispatched | CommandDispatchError::Ambiguous) => {
+                "disconnected"
+            }
+            Err(_) => "error",
+        };
+        metrics::histogram!(
+            "silverhand_daemon_command_duration_seconds",
+            "command" => kind.as_wire(),
+            "outcome" => outcome,
+        )
+        .record(started.elapsed().as_secs_f64());
+        result
     }
 }
 
@@ -1137,17 +1158,39 @@ impl OwningHostDataPlane {
         let host = command.custody.host;
         let expected_instance = command.custody.instance;
         let expected_connection_id = command.custody.connection_id;
-        let attachment = self
-            .registry
-            .attachment(host.as_str())
-            .map_err(|_| HostDataPlaneFailure::RegistryUnavailable)?
-            .ok_or(HostDataPlaneFailure::NoCurrentDaemon)?;
-        if attachment.connection_id != expected_connection_id {
-            return Err(HostDataPlaneFailure::ConnectionGenerationMismatch);
-        }
-        if attachment.daemon_instance != expected_instance {
-            return Err(HostDataPlaneFailure::DaemonInstanceMismatch);
-        }
+        let started = Instant::now();
+        let admitted = (|| {
+            let attachment = self
+                .registry
+                .attachment(host.as_str())
+                .map_err(|_| HostDataPlaneFailure::RegistryUnavailable)?
+                .ok_or(HostDataPlaneFailure::NoCurrentDaemon)?;
+            if attachment.connection_id != expected_connection_id {
+                return Err(HostDataPlaneFailure::ConnectionGenerationMismatch);
+            }
+            if attachment.daemon_instance != expected_instance {
+                return Err(HostDataPlaneFailure::DaemonInstanceMismatch);
+            }
+
+            Ok(attachment)
+        })();
+        let attachment = match admitted {
+            Ok(attachment) => attachment,
+            Err(error) => {
+                let outcome = if matches!(error, HostDataPlaneFailure::RegistryUnavailable) {
+                    "error"
+                } else {
+                    "disconnected"
+                };
+                metrics::histogram!(
+                    "silverhand_daemon_command_duration_seconds",
+                    "command" => command.command.kind().as_wire(),
+                    "outcome" => outcome,
+                )
+                .record(started.elapsed().as_secs_f64());
+                return Err(error);
+            }
+        };
         let result = dispatch_attachment(&attachment, command.command, command.timeout)
             .await
             .map_err(HostDataPlaneFailure::from_dispatch)?;
@@ -1232,7 +1275,7 @@ async fn next_connection_input(
 /// custody revocation. Cancelling the in-flight send is conservatively ambiguous;
 /// the close is then written and no further business command is dequeued.
 async fn send_command_interruptibly(
-    socket: &mut WebSocket,
+    socket: &mut ObservedDaemonSocket,
     close: &mut watch::Receiver<Option<ConnectionClose>>,
     connection_id: &str,
     message: Message,
@@ -1255,7 +1298,7 @@ async fn send_command_interruptibly(
 }
 
 struct WebSocketCommandSink<'a> {
-    socket: &'a mut WebSocket,
+    socket: &'a mut ObservedDaemonSocket,
     close: &'a mut watch::Receiver<Option<ConnectionClose>>,
     connection_id: &'a str,
 }
@@ -1273,7 +1316,7 @@ impl CommandWireSink for WebSocketCommandSink<'_> {
     }
 }
 
-async fn send_connection_close(socket: &mut WebSocket, close: ConnectionClose) {
+async fn send_connection_close(socket: &mut ObservedDaemonSocket, close: ConnectionClose) {
     let _ = socket
         .send(Message::Close(Some(CloseFrame {
             code: 1001,
@@ -1284,9 +1327,17 @@ async fn send_connection_close(socket: &mut WebSocket, close: ConnectionClose) {
 
 async fn daemon_websocket(
     State(state): State<DaemonWebsocketState>,
-    websocket: WebSocketUpgrade,
+    websocket: Result<WebSocketUpgrade, axum::extract::ws::rejection::WebSocketUpgradeRejection>,
     headers: HeaderMap,
 ) -> Response {
+    daemon_metrics::connection("upgrade", "attempt");
+    let websocket = match websocket {
+        Ok(websocket) => websocket,
+        Err(error) => {
+            daemon_metrics::connection("upgrade", "invalid_upgrade");
+            return error.into_response();
+        }
+    };
     let DaemonWebsocketState {
         transport,
         authentication,
@@ -1297,6 +1348,7 @@ async fn daemon_websocket(
         runtime_events,
     } = state;
     let Some(token) = strict_bearer_credential(&headers) else {
+        daemon_metrics::connection("upgrade", "auth_401");
         return StatusCode::UNAUTHORIZED.into_response();
     };
     let authenticated = authentication
@@ -1307,7 +1359,10 @@ async fn daemon_websocket(
         owner_user_id,
     } = match authenticated {
         Ok(Some(authenticated)) => authenticated,
-        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Ok(None) => {
+            daemon_metrics::connection("upgrade", "auth_401");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
         Err(cause) => {
             tracing::error!(
                 error_chain = crate::foundation::safe_log_field::safe_display(
@@ -1315,6 +1370,7 @@ async fn daemon_websocket(
                 ),
                 "daemon host credential authentication failed"
             );
+            daemon_metrics::connection("upgrade", "error");
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
         }
     };
@@ -1325,12 +1381,17 @@ async fn daemon_websocket(
         .reserve(&host_id, commands.clone(), close)
     {
         Ok(id) => id,
-        Err(ReserveConnectionError::Occupied) => return StatusCode::CONFLICT.into_response(),
+        Err(ReserveConnectionError::Occupied) => {
+            daemon_metrics::connection("upgrade", "already_connected");
+            return StatusCode::CONFLICT.into_response();
+        }
         Err(ReserveConnectionError::Closing) => {
+            daemon_metrics::connection("upgrade", "server_closing");
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
         Err(ReserveConnectionError::Exhausted | ReserveConnectionError::Poisoned) => {
             tracing::error!("daemon attachment registry reservation failed");
+            daemon_metrics::connection("upgrade", "error");
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
         }
     };
@@ -1366,7 +1427,7 @@ struct AuthenticatedHostConnection {
 
 #[allow(clippy::too_many_arguments)]
 async fn connection(
-    mut socket: WebSocket,
+    socket: WebSocket,
     transport: DaemonTransport,
     admission: Arc<dyn DaemonProtocolAdmission>,
     hydration: Arc<dyn DaemonRuntimeHydration>,
@@ -1378,6 +1439,7 @@ async fn connection(
     mut commands: mpsc::Receiver<ConnectionControl>,
     mut close: watch::Receiver<Option<ConnectionClose>>,
 ) {
+    let mut socket = ObservedDaemonSocket::new(socket);
     let AuthenticatedHostConnection {
         host_id,
         owner_user_id,
@@ -1524,6 +1586,11 @@ async fn connection(
                     if let Some(offered) = offered_ready_protocol_version(&text)
                         && offered != OUTBOUND_PROTOCOL_VERSION
                     {
+                        metrics::counter!(
+                            "silverhand_host_ws_protocol_mismatch_total",
+                            "actual_version" => offered.to_string(),
+                            "supported_version" => OUTBOUND_PROTOCOL_VERSION.to_string(),
+                        ).increment(1);
                         admission.incompatible(
                             &host_id,
                             &connection_id,
@@ -1568,6 +1635,7 @@ async fn connection(
                                 daemon_instance: instance.clone(),
                                 host_name: host_descriptor.name,
                             };
+                            socket.ready(protocol_version);
                             compatible = Some(ready.clone());
                             let attachment = AttachedHostDataPlane::new(DaemonAttachment {
                                 host_id: host_id.clone(),
@@ -2149,6 +2217,56 @@ mod tests {
                 .push(serde_json::from_str(&frame).unwrap());
             InterruptibleSend::Sent
         }
+    }
+
+    #[tokio::test]
+    async fn command_metrics_observe_timeout_success_and_disconnection_once() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new()
+            .set_buckets(&[0.001, 0.01])
+            .unwrap()
+            .build_recorder();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+        let (commands, mut receive) = mpsc::channel(32);
+        let attachment = DaemonAttachment {
+            host_id: "private-host-id".to_owned(),
+            connection_id: "private-connection-id".to_owned(),
+            daemon_instance: DaemonInstanceId::parse("instance-test").unwrap(),
+            host_name: "private-name".into(),
+            commands,
+        };
+        let encode = || command::host_status(json!({}));
+        let timed_out = attachment.command(encode(), Duration::from_millis(5)).await;
+        assert!(matches!(timed_out, Err(CommandDispatchError::TimedOut)));
+        let _ = receive.recv().await.unwrap();
+        let respond = async {
+            let ConnectionControl::Command(request) = receive.recv().await.unwrap() else {
+                panic!("command expected")
+            };
+            request.response.send(Ok(json!({"ok":true}))).unwrap();
+        };
+        let (success, ()) = tokio::join!(
+            attachment.command(encode(), Duration::from_secs(1)),
+            respond
+        );
+        assert!(success.is_ok());
+        drop(receive);
+        assert!(matches!(
+            attachment.command(encode(), Duration::from_secs(1)).await,
+            Err(CommandDispatchError::ProvenNotDispatched)
+        ));
+        let text = recorder.handle().render();
+        for outcome in ["timeout", "ok", "disconnected"] {
+            let line = text
+                .lines()
+                .find(|line| {
+                    line.starts_with("silverhand_daemon_command_duration_seconds_count{")
+                        && line.contains(&format!("outcome=\"{outcome}\""))
+                })
+                .unwrap();
+            assert!(line.contains("command=\"host_status\""));
+            assert!(line.ends_with(" 1"));
+        }
+        assert!(!text.contains("private-"));
     }
 
     #[tokio::test(start_paused = true)]

@@ -1,254 +1,86 @@
-# Server Env Config
+# Rust Server Environment Configuration
 
-Stage D1.a introduces `@silverhand/server`, the standalone Node server
-entrypoint used for remote control-plane deployments. Embedded desktop now uses
-the same server package through `startEmbeddedSilverhandServer(...)`; the only
-runtime difference is explicit config (`mode='embedded'` plus a daemon
-`HostClient`) versus standalone config (`mode='standalone'`, no host runtime).
-
-## Runtime Modes
-
-- `embedded`: Electron main owns host-derived paths and the local
-  `silverhand-daemon` connection, then calls `startEmbeddedSilverhandServer`.
-  `/auth/embedded-bootstrap` is mounted only in this mode and still requires
-  loopback, one-shot token, and `serverConfig.mode === 'embedded'`.
-- `standalone`: `silverhand-server` owns data/control-plane state only. Agent
-  runtime, spawn files, local workspace path materialization, and daemon
-  outbound remain D2. Routes that would require host work fail loudly with
-  `code: "host_runtime_disabled"` instead of silently dropping work. Work-intent
-  routes return `409`; read-only runtime availability probes return `503`.
+The executable is `silverhand-backend` (`rust/crates/backend-app`). Both Desktop
+and standalone deployment launch this binary with explicit paths and a deployment
+profile. The former Node `SILVERHAND_LISTEN`, `SILVERHAND_DATA_DIR`,
+`SILVERHAND_EVENT_WS_ALLOWED_ORIGINS`, and `SILVERHAND_LOG_LEVEL` variables are
+not Rust configuration aliases.
 
 ## Variables
 
-| Variable | Default | Validation | Source in Boot Log |
-| --- | --- | --- | --- |
-| `SILVERHAND_LISTEN` | `127.0.0.1:8080` | `host:port` or `[ipv6]:port`; port `0..65535` | `listen.source` |
-| `SILVERHAND_DATA_DIR` | `/var/lib/silverhand` | absolute path | `dataDir.source` |
-| `SILVERHAND_DISABLE_SIGNUP` | `0` | `0` or `1` | `disableSignup.source` |
-| `SILVERHAND_LOG_LEVEL` | `info` | `error`, `warn`, `info`, or `debug` | `logLevel.source` |
-| `SILVERHAND_MIGRATE` | standalone: `0`; embedded desktop: `1` | `0` or `1` | `migrate.source` |
-| `SILVERHAND_METRICS_LISTEN` | unset (disabled) | loopback `host:port` or `[ipv6]:port` only | `metricsListen.source` |
-| `SILVERHAND_EVENT_WS_ALLOWED_ORIGINS` | unset (empty) | comma-separated `http(s)` origins, each with no path/query/fragment; no wildcards | `eventWsAllowedOrigins.source` |
+| Variable | Contract |
+| --- | --- |
+| `SILVERHAND_DEPLOYMENT_PROFILE` | Required: `embedded` or `remote-only`. The latter advertises deployment mode `standalone`. |
+| `SILVERHAND_DATABASE_PATH` | Required, nonempty path to the SQLite database file. |
+| `SILVERHAND_BLOBS_ROOT` | Required, nonempty blob directory path. |
+| `SILVERHAND_LOG_DIR` | Required, writable diagnostic and categorized audit log directory. |
+| `SILVERHAND_LISTEN_ADDR` | Required numeric IP socket address, e.g. `0.0.0.0:8080` or `[::1]:8080`. |
+| `SILVERHAND_ALLOWED_ORIGINS` | Required, nonempty comma-separated event WebSocket origin allowlist. Use the actual client-facing HTTPS origin. |
+| `SILVERHAND_METRICS_LISTEN` | Optional; unset or empty disables metrics. Numeric loopback IP socket only, e.g. `127.0.0.1:9464` or `[::1]:9464`. Wildcards, LAN addresses and DNS names are rejected. Port 0 is allowed for isolated callers. |
+| `SILVERHAND_DISABLE_SIGNUP` | Remote-only: unset/empty or `0` enables signup; `1` disables it; other values fail. Embedded preserves the launcher contract: only exact `1` disables signup. |
+| `SILVERHAND_MIGRATE` | `0` or `1`; defaults to `0` for remote-only, `1` for embedded. Fresh databases initialize without an upgrade opt-in. |
+| `SILVERHAND_DAEMON_NPM_SPEC` | Optional explicit daemon package specification. |
+| `SILVERHAND_BOOTSTRAP_TOKEN_PATH` | Optional launcher-owned token file; armed only for embedded on actual loopback bind. |
+| `SILVERHAND_STARTUP_GENERATION` | Optional launcher correlation token. Emits one stdout `bound` frame containing the actual API address; not a readiness claim. |
+| `RUST_LOG` | Tracing filter; defaults to the ERROR floor, with the existing activity-retention summary directive. |
 
-`source` is `default` when the process used the default and `env` when the
-variable was supplied. Invalid values fail before the HTTP listener starts.
+Use absolute paths in service configuration. `SILVERHAND_ALLOWED_ORIGINS` is a
+security allowlist, not the backend bind address or a topology advertisement.
+Embedded composition also permits its actual bound loopback origin.
 
-Set `SILVERHAND_EVENT_WS_ALLOWED_ORIGINS` to the public `Origin`(s) that
-browsers/Electron use to reach this server when it sits behind a reverse proxy,
-sandbox ingress, or any public URL. It is a **security allowlist** for the
-authenticated event WebSocket — a legit desktop sends `Origin` = the origin it
-reaches the backend at (pinned by the desktop main process), and a page from any
-other origin is rejected. This is deliberately **not** derived from the server's
-own bind URL, and it is **not** a topology hint: the server never advertises its
-own reach origin, and connect commands are assembled desktop-side from the URL
-the desktop is connected to (see `docs/orchestration-boundary-v1.md §4.3`).
-Embedded desktop needs no value here — it seeds its loopback origin
-automatically at bind time. Multiple origins are comma-separated:
-`https://app.example.com,https://alt.example.com`.
+## Listener and readiness contract
 
-## Data Layout
+`GET /api/health` is liveness. `/readyz` checks migrations, the bound API listener,
+a real `BEGIN IMMEDIATE`/rollback write probe and, for standalone, outbound fanout
+installation. A failed check returns 503.
 
-`SILVERHAND_DATA_DIR` is the persistent state root. The default is
-`/var/lib/silverhand`; systemd, pm2, and bare Node deployments should mount or
-back up this directory as one state unit:
+Metrics has an independent listener. Only its `GET /metrics` exports Prometheus
+text; `/metrics` on the API listener refuses every method with 403 even when
+metrics is disabled. Never expose port 9464 through public ingress.
 
-- `silverhand.db`
-- `silverhand.db-wal` / `silverhand.db-shm` when SQLite WAL is active
-- `blobs/`
-- `workspaces/`
-- `logs/`
+A configured metrics bind failure aborts startup before database preparation.
+The executable owns the exporter and its upkeep; unexpected exporter termination
+requests application shutdown and produces a failing process exit. SIGTERM and
+SIGINT drain the existing application shutdown path and close both listeners.
+See [Server Observability](server-observability.md).
 
-`silverhand.db`, `silverhand.db-wal`, and `silverhand.db-shm` must live on the
-same volume and filesystem. Do not split the SQLite sidecar files across
-separate bind mounts; WAL mode relies on same-directory locking semantics.
+## Data and upgrades
 
-`blobs/`, `workspaces/`, and `logs/` may be split in a future layout, but D1.b's
-deployment contract treats the whole data root as one state unit. V1 standalone
-is single-replica SQLite/WAL only.
+SQLite and its WAL/SHM files stay on the same filesystem. There is one server
+owner of the data directory. Do not open a running user's database with an
+external SQLite client for inspection or backup.
 
-Carrying an embedded-mode DB into standalone mode is unsupported in V1:
-standalone control-plane mode does not reconcile embedded daemon runtime state,
-and old schedules may target a disabled host runtime.
+The shared migration plan (`packages/shared/src/backend-migration-plan.json`)
+and `backend-sqlite/src/foundation/database_startup.rs` define Rust's upgrade
+contract. Startup refuses unknown/newer, too-old or inconsistent ledgers. Existing
+standalone databases require `SILVERHAND_MIGRATE=1` to advance. Preparation holds
+SQLite exclusive locking across backup and step commits; it does not use the old
+Node migration-lock directory. A pre-upgrade backup copies the database parent
+and uses SQLite `VACUUM INTO` for a consistent database before migration. Blob
+roots outside that parent need their own deployment backup coverage. Retention is
+operator-owned; an older binary may require the matching pre-upgrade data backup.
 
-## Schema Migrations
+Do not run the former Node admin recovery commands against a Rust-owned live
+database. Rust's executable currently has no matching admin subcommand contract.
 
-The DB has **one** number an operator needs: the **schema epoch**. A release moves
-it at most once, so "this build ships schema epoch N" is the whole compatibility
-statement, and startup messages, the `Migration applied` log line and the
-backup/restore story all name it.
+## Standalone example
 
-A release implements that move with any number of internal **migration steps**.
-Steps are an implementation detail — each is one exclusive transaction, so an
-interrupted upgrade resumes at step granularity — but they are what the
-`_migrations` ledger records, and messages print them next to the epoch so a
-stopped upgrade can be located exactly. A database that is only partway through an
-epoch still reports the PREVIOUS epoch, because it has not reached the new one.
-
-Fresh installs initialize the current epoch without an opt-in. Existing
-databases behave differently by deployment mode:
-
-- If `silverhand.db` is already at the epoch this build ships,
-  startup is idempotent: no backup and no migration.
-- Embedded desktop defaults to auto-upgrade because it is a single-user local DB.
-  The same backup/lock/fail-loud migration runner still applies. Set
-  `SILVERHAND_MIGRATE=0` only for debugging when you want startup to stop before
-  applying pending migrations.
-- Standalone server defaults to operator opt-in. If `silverhand.db` is older
-  than the epoch this build ships, startup fails by default with
-  a message that includes the detected epoch and step, the target epoch and step,
-  the sibling backup path pattern, and `SILVERHAND_MIGRATE=1`.
-- When migration is allowed (`SILVERHAND_MIGRATE=1`, or embedded default),
-  startup first checkpoints WAL, copies the entire
-  data directory to a sibling backup directory named
-  `<data_dir>-backup-<utc>/`, then applies pending migrations. Example:
-  `/var/lib/silverhand` backs up to `/var/lib/silverhand-backup-20260526T140000Z/`.
-  Runtime-only filesystem nodes such as Unix sockets, FIFOs, and device nodes
-  are skipped because they are not restorable Silverhand state.
-- One backup per **startup migration run**, never one per step — and a resumed
-  partial upgrade is a new run, so it backs up again. That is the chosen
-  contract: each attempt captures the mid-epoch state the previous backup could
-  not, while the first backup stays the pre-upgrade rollback target. Retention is
-  operator-owned, so a start that crash-loops mid-upgrade leaves one backup
-  directory per attempt; watch disk on the volume holding `<data_dir>`'s parent.
-- If backup copy fails, migrations do not run and startup exits non-zero.
-- If the DB is past the newest step this binary knows, startup always
-  fails, even with `SILVERHAND_MIGRATE=1`; restore a compatible backup instead
-  of running an older binary against a newer DB. The check is on the step, not the
-  epoch, so it also catches a database a newer binary upgraded only partway —
-  there both binaries report the same epoch and only the step order differs.
-- Two different refusals exist for a database that is too old, and the message
-  says which one you hit:
-  - **below the baseline step** — a safety refusal. The baseline migration is a
-    full `CREATE`, so a populated pre-baseline database must upgrade through an
-    intermediate release rather than have this build rebuild its tables.
-  - **below the oldest supported schema epoch** — a policy refusal. The upgrade
-    path exists; this release just does not promise it. Support is declared as an
-    epoch (`MIN_SUPPORTED_SCHEMA_EPOCH`) because that is the unit the promise is
-    made in, and the step floor the runner compares against is derived from it.
-- If the ledger is not a legal prefix of this build's steps — a step is missing
-  below one that was applied, or a step this build does not define was applied —
-  startup fails with `schema_ledger_inconsistent` and applies nothing. The
-  upgrade order is then unknown, and guessing it would replay a step on top of a
-  schema already past it. Restore the pre-upgrade backup.
-
-Backup retention is operator-owned. Silverhand creates a new timestamped
-sibling directory for every opted-in migration and does not prune older backups.
-Startup and admin commands hold a sibling `<data_dir>.migration.lock` directory
-only for the migration phase so concurrent upgrade attempts fail fast.
-If startup fails with `migration_locked` after a crashed migration attempt,
-manually remove the lock directory shown in the error message before retrying.
-
-### Freezing an epoch at release (maintainers)
-
-The manifest lives in `packages/shared/src/db/schema-epochs.ts`. Its fence
-(`packages/shared/tests/schema-epochs.test.ts`) proves that the epochs claim
-exactly the steps this build defines and that **at most one** epoch is open, so a
-single unshipped build cannot move the outward number twice. It cannot prove that
-an already-released epoch was never extended — nothing in the tree knows where a
-released boundary used to be, and a second in-repo copy of that boundary would
-only move the claim to another file. Freezing is therefore a release action:
-
-1. Ship the build. Then, in one commit, set the epoch's `released: true` and
-   record `releasedIn` — the published commit or tag that shipped it, verified at
-   that moment, not assumed. This mirrors how the desktop↔server API epoch
-   records its precondition (`docs/desktop-server-api-epoch.md §3`).
-2. The next schema change appends a NEW entry with `released: false` and puts its
-   step there. Extending a released epoch's `lastStep` instead is the mistake this
-   step exists to prevent, and review of that diff is what catches it.
-3. Adding a step without extending or opening an epoch fails the fence, as does
-   an epoch range claiming a step no migration defines.
-
-## Health And Readiness
-
-- `GET /api/health`: liveness only. It keeps the existing public shape and
-  returns 200 when the process can answer HTTP.
-- `GET /readyz`: readiness. It returns 200 only after migrations have been
-  applied, the listen socket is ready, and a DB write probe succeeds. Otherwise
-  it returns 503 with per-check booleans.
-
-Use `/readyz` for process supervisors that support readiness checks. Do not use
-`/api/health` as a traffic-readiness signal.
-
-When `SILVERHAND_METRICS_LISTEN` is set, the standalone process also exposes
-`GET /metrics` on a separate loopback-only listener. Keep it outside public
-Nginx routing. See `docs/server-observability.md` for Prometheus/Grafana setup,
-label-cardinality rules, and same-ECS resource limits.
-
-## Native Dependencies
-
-Route 1 V1 ships a Node server package, not an official server image. Operators
-running it under systemd, pm2, or a bare Node process must install with Node 24
-and ensure native dependencies such as `better-sqlite3` are built for that Node
-ABI. If the deployment target differs from the build machine, rebuild native
-dependencies on the target host before starting the service.
-
-## Admin Recovery
-
-Admin recovery is CLI-only; there are no `/admin/*` HTTP routes in V1.
-
-Reset a registered user's password against the configured data dir:
+Create and secure the directories before launch, then supply the deployment's
+actual paths and origin:
 
 ```bash
-SILVERHAND_DATA_DIR=/var/lib/silverhand \
-silverhand-server admin reset-password --email shiki@example.com
-```
-
-By default the command reads the new password from a masked TTY prompt. For
-non-interactive recovery, pass a one-shot owner-only file:
-
-```bash
-umask 177
-read -r -s NEW_SILVERHAND_PASSWORD
-printf '%s\n' "$NEW_SILVERHAND_PASSWORD" > /tmp/silverhand-new-password
-unset NEW_SILVERHAND_PASSWORD
-SILVERHAND_DATA_DIR=/var/lib/silverhand \
-silverhand-server admin reset-password \
-  --email shiki@example.com \
-  --password-from-file /tmp/silverhand-new-password
-```
-
-`--password` is intentionally unsupported so shell history never captures the
-secret. `--password-from-file` requires no group/other permissions and unlinks
-the file after reading it. Successful reset updates the credential through the
-normal password service, revokes every active session for that user, and writes
-an audit line to `logs/cli-<utc>.log` with `admin_op`, `user_email`, `success`,
-and `ts` fields. Unknown email fails with `user_not_found`; admin never creates
-users.
-
-Admin commands use the same SQLite database and acquire a write lock with
-fail-fast semantics. If another process is writing the DB, the command exits
-non-zero with `db_locked`; retry after the write lock is free. If another
-startup or admin process is in the migration phase, the command exits
-non-zero with `migration_locked`.
-
-## Examples
-
-Local standalone process:
-
-```bash
-SILVERHAND_LISTEN=127.0.0.1:8080 \
-SILVERHAND_DATA_DIR=/var/lib/silverhand \
-SILVERHAND_DISABLE_SIGNUP=1 \
-SILVERHAND_LOG_LEVEL=info \
+SILVERHAND_DEPLOYMENT_PROFILE=remote-only \
+SILVERHAND_DATABASE_PATH=/var/lib/silverhand/silverhand.db \
+SILVERHAND_BLOBS_ROOT=/var/lib/silverhand/blobs \
+SILVERHAND_LOG_DIR=/var/log/silverhand \
+SILVERHAND_LISTEN_ADDR=127.0.0.1:8080 \
+SILVERHAND_ALLOWED_ORIGINS=https://silverhand.example.com \
 SILVERHAND_METRICS_LISTEN=127.0.0.1:9464 \
-pnpm --filter @silverhand/server start
+SILVERHAND_DISABLE_SIGNUP=1 \
+/path/to/silverhand-backend
 ```
 
-Standalone opt-in schema upgrade:
-
-```bash
-SILVERHAND_MIGRATE=1 \
-SILVERHAND_DATA_DIR=/var/lib/silverhand \
-pnpm --filter @silverhand/server start
-```
-
-Ephemeral test boot:
-
-```bash
-SILVERHAND_LISTEN=127.0.0.1:0 \
-SILVERHAND_DATA_DIR=/tmp/silverhand-server-test \
-pnpm --filter @silverhand/server start
-```
-
-Standalone mode does not write `bootstrap_token_path` and does not mount
-`/auth/embedded-bootstrap`; signup/login are the only human auth entrypoints.
+Build for the target CPU and Linux ABI; a macOS binary cannot run on ECS. Build,
+staging, backup and the authorized service cutover are separate operations. The
+[deployment checklist](rust-server-ecs-deployment-checklist.md) points to the ECS
+operating manual. This configuration document is not a production deployment record.

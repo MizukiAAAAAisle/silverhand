@@ -1491,6 +1491,10 @@ pub(super) async fn compose_after_audit(
             // indistinguishable 404.
             .merge(embedded_bootstrap_router)
             .merge(readyz_router)
+            .route(
+                "/metrics",
+                axum::routing::any(|| async { axum::http::StatusCode::FORBIDDEN }),
+            )
             // The one app/proxy request-body ceiling (128 MiB resource cap), applied
             // as the OUTERMOST layer over the fully-composed router — ahead of every
             // auth perimeter and domain check, and covering both deployment arms since
@@ -1498,6 +1502,9 @@ pub(super) async fn compose_after_audit(
             // tighter in-stream caps; this only bounds the outer envelope.
             .layer(axum::middleware::from_fn(
                 crate::foundation::request_perimeter::enforce_request_body_ceiling,
+            ))
+            .layer(axum::middleware::from_fn(
+                crate::foundation::observability::observe_http,
             )),
         boot,
         event_controller,

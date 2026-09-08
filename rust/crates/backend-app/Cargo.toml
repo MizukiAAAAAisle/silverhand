@@ -10,11 +10,15 @@ name = "silverhand-backend"
 path = "src/main.rs"
 
 [dependencies]
+metrics.workspace = true
+metrics-process = "=2.4.3"
+metrics-exporter-prometheus.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 axum.workspace = true
 futures-util.workspace = true
 http-body-util.workspace = true
+http-body = "=1.0.1"
 serde_json.workspace = true
 silverhand-backend-core.workspace = true
 silverhand-backend-filesystem.workspace = true

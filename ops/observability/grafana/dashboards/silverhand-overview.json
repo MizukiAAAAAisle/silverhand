@@ -50,7 +50,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Node process memory",
+      "title": "Rust process memory",
       "id": 4,
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
       "fieldConfig": { "defaults": { "unit": "bytes" } },
@@ -61,28 +61,19 @@
           "refId": "A"
         },
         {
-          "expr": "nodejs_heap_size_used_bytes{job=\"silverhand\"}",
-          "legendFormat": "heap used",
+          "expr": "process_virtual_memory_bytes{job=\"silverhand\"}",
+          "legendFormat": "virtual",
           "refId": "B"
         }
       ]
     },
     {
       "type": "timeseries",
-      "title": "Event loop",
+      "title": "Tokio scheduling delay",
       "id": 5,
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
       "targets": [
-        {
-          "expr": "nodejs_eventloop_lag_p99_seconds{job=\"silverhand\"}",
-          "legendFormat": "delay p99 seconds",
-          "refId": "A"
-        },
-        {
-          "expr": "silverhand_nodejs_event_loop_utilization_ratio",
-          "legendFormat": "utilization",
-          "refId": "B"
-        }
+        { "expr": "silverhand_tokio_scheduling_delay_seconds{job=\"silverhand\"}", "legendFormat": "timer delay", "refId": "A" }
       ]
     },
     {

@@ -125,18 +125,26 @@ impl SqliteHostResourcesColdRead {
     ) -> Result<Option<HostResourcesFacts>, HostResourcesColdReadError> {
         let mut tx = self.pool.begin_with(DEFERRED_READ_BEGIN).await?;
 
-        let ownership_row = sqlx::query(SELECT_COMPUTER_OWNERSHIP)
-            .bind(computer.as_str())
-            .fetch_optional(&mut *tx)
-            .await?;
+        let ownership_row = crate::foundation::statement_metrics::statement(
+            "hosts.get_resource_ownership",
+            "get",
+            sqlx::query(SELECT_COMPUTER_OWNERSHIP)
+                .bind(computer.as_str())
+                .fetch_optional(&mut *tx),
+        )
+        .await?;
         let Some(ownership_row) = ownership_row else {
             tx.commit().await?;
             return Ok(None);
         };
-        let agent_rows = sqlx::query(SELECT_HOST_AGENT_RESOURCES)
-            .bind(computer.as_str())
-            .fetch_all(&mut *tx)
-            .await?;
+        let agent_rows = crate::foundation::statement_metrics::statement(
+            "hosts.list_agent_resources",
+            "all",
+            sqlx::query(SELECT_HOST_AGENT_RESOURCES)
+                .bind(computer.as_str())
+                .fetch_all(&mut *tx),
+        )
+        .await?;
 
         tx.commit().await?;
 

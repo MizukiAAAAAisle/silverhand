@@ -198,6 +198,7 @@ use thiserror::Error;
 use tokio::{net::TcpListener, sync::oneshot};
 
 mod foundation;
+use foundation::observability;
 
 mod application_orchestration;
 pub use application_orchestration::conversation_debug_layer::production_json_layer;
@@ -269,6 +270,7 @@ const fn const_parse_i64(value: &str) -> i64 {
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
+    metrics_listen: Option<SocketAddr>,
     database_path: PathBuf,
     allow_schema_upgrade: bool,
     blobs_root: PathBuf,
@@ -349,6 +351,7 @@ impl AppConfig {
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
         Ok(Self {
+            metrics_listen: None,
             database_path,
             allow_schema_upgrade: deployment_profile == DeploymentProfile::Embedded,
             blobs_root,
@@ -409,6 +412,8 @@ impl AppConfig {
             deployment_profile,
             env::var("SILVERHAND_MIGRATE").ok().as_deref(),
         )?;
+        let metrics_listen =
+            observability::parse_listen(env::var("SILVERHAND_METRICS_LISTEN").ok().as_deref())?;
         Self::new(
             database_path,
             blobs_root,
@@ -421,7 +426,10 @@ impl AppConfig {
             bootstrap_token_path,
             startup_generation,
         )
-        .map(|config| config.with_schema_upgrade(allow_schema_upgrade))
+        .map(|mut config| {
+            config.metrics_listen = metrics_listen;
+            config.with_schema_upgrade(allow_schema_upgrade)
+        })
     }
 
     pub fn with_schema_upgrade(mut self, allow: bool) -> Self {
@@ -505,6 +513,8 @@ fn parse_signup_enabled(
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
+    #[error("SILVERHAND_METRICS_LISTEN must be a loopback IP socket address")]
+    InvalidMetricsListen,
     #[error("required environment variable {0} is missing or empty")]
     MissingEnvironment(&'static str),
     #[error("database path must not be empty")]
@@ -838,11 +848,43 @@ async fn remove_stale_bootstrap_token(path: &Path) {
 }
 
 pub async fn run(config: AppConfig) -> Result<(), StartupError> {
+    // Reserve the private endpoint before any database migration or app composition.
+    let metrics = observability::prepare_metrics(&config).await?;
     let (listener, app) = application_orchestration::bind_and_prepare(&config).await?;
-    // The bound listener is the bootstrap decision witness; `serve` establishes
-    // `listen_ready` from that SAME socket. A failed bind never minted a token, and a
-    // post-bind prepare failure released the socket before returning.
-    serve(listener, app, shutdown_signal()).await
+    match metrics {
+        None => serve(listener, app, shutdown_signal()).await,
+        Some(metrics) => {
+            let (stop, stopped) = oneshot::channel();
+            let mut exporter = tokio::spawn(metrics.serve_metrics(stopped));
+            let mut exporter_finished = false;
+            let result = serve(listener, app, async {
+                tokio::select! {
+                    result = shutdown_signal() => result,
+                    result = &mut exporter => {
+                        exporter_finished = true;
+                        Err(std::io::Error::other(format!("metrics listener terminated: {result:?}")))
+                    }
+                }
+            }).await;
+            let _ = stop.send(());
+            if !exporter_finished {
+                match tokio::time::timeout(std::time::Duration::from_secs(5), &mut exporter).await {
+                    Ok(Ok(Ok(()))) => {}
+                    Ok(other) if result.is_ok() => {
+                        return Err(StartupError::Serve(std::io::Error::other(format!(
+                            "metrics shutdown failed: {other:?}"
+                        ))));
+                    }
+                    Err(_) => {
+                        exporter.abort();
+                        let _ = exporter.await;
+                    }
+                    _ => {}
+                }
+            }
+            result
+        }
+    }
 }
 
 pub async fn serve<F, E>(

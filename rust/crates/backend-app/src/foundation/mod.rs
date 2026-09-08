@@ -7,3 +7,5 @@
 //! composition context or the cfg-test schema support.
 
 pub(crate) mod request_perimeter;
+
+pub(crate) mod observability;

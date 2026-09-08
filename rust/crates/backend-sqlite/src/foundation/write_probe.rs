@@ -58,17 +58,32 @@ impl SqliteWriteProbe {
     }
 
     async fn take_and_release_write_lock(&self) -> Result<(), SqliteWriteProbeError> {
-        let transaction = self.pool.begin_with(IMMEDIATE_WRITE_BEGIN).await?;
-        transaction.rollback().await?;
+        let transaction = super::statement_metrics::statement(
+            "readiness.begin_immediate",
+            "run",
+            self.pool.begin_with(IMMEDIATE_WRITE_BEGIN),
+        )
+        .await?;
+        super::statement_metrics::statement("readiness.rollback", "run", transaction.rollback())
+            .await?;
         Ok(())
     }
 }
 
 impl WriteProbe for SqliteWriteProbe {
     async fn probe_write(&self) -> Result<(), PersistenceFailure> {
-        self.take_and_release_write_lock()
-            .await
-            .map_err(PersistenceFailure::from_source)
+        let started = std::time::Instant::now();
+        let result = self.take_and_release_write_lock().await;
+        let error = result
+            .as_ref()
+            .err()
+            .map(|SqliteWriteProbeError::Sql(error)| error);
+        metrics::histogram!(
+            "silverhand_db_readiness_probe_duration_seconds",
+            "outcome" => super::statement_metrics::outcome(error),
+        )
+        .record(started.elapsed().as_secs_f64());
+        result.map_err(PersistenceFailure::from_source)
     }
 }
 

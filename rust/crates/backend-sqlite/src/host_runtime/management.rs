@@ -58,11 +58,15 @@ impl UpdateComputerUnitOfWork for SqliteHostRuntimeStore {
             .begin_root_write()
             .await
             .map_err(PersistenceFailure::from_source)?;
-        let row = sqlx::query(SELECT_COMPUTER)
-            .bind(computer.as_str())
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(PersistenceFailure::from_source)?;
+        let row = crate::foundation::statement_metrics::statement(
+            "hosts.get_by_id",
+            "get",
+            sqlx::query(SELECT_COMPUTER)
+                .bind(computer.as_str())
+                .fetch_optional(&mut *tx),
+        )
+        .await
+        .map_err(PersistenceFailure::from_source)?;
         let record = row
             .as_ref()
             .map(row_to_computer_record)
@@ -77,24 +81,32 @@ impl UpdateComputerUnitOfWork for SqliteHostRuntimeStore {
                 display_label,
                 finalized_at,
             } => {
-                sqlx::query(
-                    "UPDATE hosts SET display_label = ?, \
+                crate::foundation::statement_metrics::statement(
+                    "hosts.update_display_label",
+                    "run",
+                    sqlx::query(
+                        "UPDATE hosts SET display_label = ?, \
                      finalized_at = COALESCE(finalized_at, ?) WHERE id = ?",
+                    )
+                    .bind(display_label)
+                    .bind(finalized_at)
+                    .bind(computer.as_str())
+                    .execute(&mut *tx),
                 )
-                .bind(display_label)
-                .bind(finalized_at)
-                .bind(computer.as_str())
-                .execute(&mut *tx)
                 .await
                 .map_err(PersistenceFailure::from_source)?;
-                let row = sqlx::query(SELECT_COMPUTER)
-                    .bind(computer.as_str())
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(PersistenceFailure::from_source)?
-                    .ok_or_else(|| {
-                        PersistenceFailure::from_source(HostManagementStoreError::ComputerVanished)
-                    })?;
+                let row = crate::foundation::statement_metrics::statement(
+                    "hosts.get_by_id",
+                    "get",
+                    sqlx::query(SELECT_COMPUTER)
+                        .bind(computer.as_str())
+                        .fetch_optional(&mut *tx),
+                )
+                .await
+                .map_err(PersistenceFailure::from_source)?
+                .ok_or_else(|| {
+                    PersistenceFailure::from_source(HostManagementStoreError::ComputerVanished)
+                })?;
                 let committed =
                     row_to_computer_record(&row).map_err(PersistenceFailure::from_source)?;
                 UpdateComputerTransaction::Committed {
@@ -120,22 +132,30 @@ impl HostStatusStoredReadModel for SqliteHostRuntimeStore {
             .begin()
             .await
             .map_err(PersistenceFailure::from_source)?;
-        let row = sqlx::query(SELECT_COMPUTER)
-            .bind(computer.as_str())
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(PersistenceFailure::from_source)?;
+        let row = crate::foundation::statement_metrics::statement(
+            "hosts.get_by_id",
+            "get",
+            sqlx::query(SELECT_COMPUTER)
+                .bind(computer.as_str())
+                .fetch_optional(&mut *tx),
+        )
+        .await
+        .map_err(PersistenceFailure::from_source)?;
         let Some(row) = row else {
             tx.commit().await.map_err(PersistenceFailure::from_source)?;
             return Ok(None);
         };
         let stored_computer =
             row_to_computer_record(&row).map_err(PersistenceFailure::from_source)?;
-        let rows = sqlx::query(SELECT_STATUS_AGENTS)
-            .bind(computer.as_str())
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(PersistenceFailure::from_source)?;
+        let rows = crate::foundation::statement_metrics::statement(
+            "hosts.list_status_agents",
+            "all",
+            sqlx::query(SELECT_STATUS_AGENTS)
+                .bind(computer.as_str())
+                .fetch_all(&mut *tx),
+        )
+        .await
+        .map_err(PersistenceFailure::from_source)?;
         let agents = rows
             .iter()
             .map(decode_status_agent)

@@ -16,14 +16,15 @@
 //!
 //! Doors (staged composition tree from #2266):
 //!
-//! 1. bind — `TcpListener::bind` : one production reference, direct callee of
+//! 1. bind — `TcpListener::bind` : one public-listener reference, direct callee of
 //!    `acquire_bound_listener`; its non-cloneable witness flows through the sealed
-//!    preparation links, with `bind_and_prepare` called once by `run`.
+//!    preparation links, with `bind_and_prepare` called once by `run`. The optional
+//!    private metrics bind is sealed separately under `prepare_metrics`.
 //! 2. bootstrap — one `provision` call from `compose_after_audit`; its raw
 //!    `write_bootstrap_token_file` reference occurs exactly once inside `provision`.
 //! 3. finalize — one production `PreparedApp { .. }` struct literal in the consuming
 //!    `commit` door, and one root `Router::new` in `compose_after_audit`. The merge chain
-//!    is NOT pinned.
+//!    is NOT pinned. Metrics owns one distinct router under `serve_metrics`.
 
 use std::{
     fs,
@@ -46,6 +47,8 @@ pub struct Crate {
 /// onto two different name sets.
 const CHAIN_LINKS: &[(&str, &str)] = &[
     ("bind_and_prepare", "run"),
+    ("prepare_metrics", "run"),
+    ("bind_metrics_listener", "prepare_metrics"),
     ("acquire_bound_listener", "bind_and_prepare"),
     ("prepare_bound_listener", "bind_and_prepare"),
     ("prepare_bound_listener_observed", "prepare_bound_listener"),
@@ -596,7 +599,10 @@ fn assert_single_sealed_occurrence(
     what: &str,
     expected_fn: &str,
 ) {
-    let occ = occurrences(krate, kind);
+    assert_sealed_occurrences(occurrences(krate, kind), door, what, expected_fn);
+}
+
+fn assert_sealed_occurrences(occ: Vec<Occurrence>, door: &str, what: &str, expected_fn: &str) {
     for o in &occ {
         assert!(
             o.rejected.is_none(),
@@ -625,14 +631,29 @@ fn assert_single_sealed_occurrence(
 }
 
 fn check_bind(krate: &Crate) {
-    // Terminal: one TcpListener::bind in the only constructor of the bound witness.
-    assert_single_sealed_occurrence(
-        krate,
-        RefKind::TcpListenerBind,
+    // The public app and optional private metrics endpoint have separate sealed
+    // owners. Adding metrics must not weaken the one public-listener witness.
+    let (metrics, public): (Vec<_>, Vec<_>) = occurrences(krate, RefKind::TcpListenerBind)
+        .into_iter()
+        .partition(|o| {
+            o.function == "bind_metrics_listener"
+                && o.path
+                    .ends_with("backend-app/src/foundation/observability/mod.rs")
+        });
+    assert_sealed_occurrences(
+        public,
         "bind",
         "TcpListener::bind",
         "acquire_bound_listener",
     );
+    if !metrics.is_empty() {
+        assert_sealed_occurrences(
+            metrics,
+            "metrics bind",
+            "TcpListener::bind",
+            "bind_metrics_listener",
+        );
+    }
     // Intermediate link: bind_and_prepare called exactly once, sealed, by `run`. Using the
     // NamedFn kind seals `bind_and_prepare` itself against a function-value/alias second
     // path (e.g. `let second = bind_and_prepare; second(config).await`).
@@ -781,11 +802,15 @@ fn check_finalize(krate: &Crate) {
         c.owners[0].1,
         c.owners[0].2
     );
-    assert_single_sealed_occurrence(
-        krate,
-        RefKind::RouterNew,
-        "finalize",
-        "Router::new",
-        "compose_after_audit",
-    );
+    let (metrics, public): (Vec<_>, Vec<_>) = occurrences(krate, RefKind::RouterNew)
+        .into_iter()
+        .partition(|o| {
+            o.function == "serve_metrics"
+                && o.path
+                    .ends_with("backend-app/src/foundation/observability/mod.rs")
+        });
+    assert_sealed_occurrences(public, "finalize", "Router::new", "compose_after_audit");
+    if !metrics.is_empty() {
+        assert_sealed_occurrences(metrics, "metrics router", "Router::new", "serve_metrics");
+    }
 }

@@ -21,13 +21,13 @@ groups:
         annotations:
           summary: Silverhand HTTP 5xx ratio is above 1%
 
-      - alert: SilverhandEventLoopDelayHigh
-        expr: nodejs_eventloop_lag_p99_seconds{job="silverhand"} > 0.1
+      - alert: SilverhandTokioSchedulingDelayHigh
+        expr: silverhand_tokio_scheduling_delay_seconds{job="silverhand"} > 0.1
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: Silverhand event-loop p99 delay is above 100ms
+          summary: Silverhand Tokio timer scheduling delay is above 100ms
 
       - alert: SilverhandSqliteContention
         expr: |

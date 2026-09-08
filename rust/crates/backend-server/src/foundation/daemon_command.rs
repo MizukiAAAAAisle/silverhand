@@ -101,6 +101,12 @@ pub(crate) struct EncodedDaemonCommand {
 }
 
 impl EncodedDaemonCommand {
+    /// Read-only identity for observations before custody admission. Payload and
+    /// refusal admission remain sealed until the transport consumes the command.
+    pub(super) fn kind(&self) -> IssuedDaemonCommandKind {
+        self.kind
+    }
+
     fn with_capabilities(
         kind: IssuedDaemonCommandKind,
         params: Value,

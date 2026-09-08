@@ -17,3 +17,5 @@ pub mod database_startup;
 pub mod host_agent_store;
 pub mod scope_event;
 pub mod write_probe;
+
+pub(crate) mod statement_metrics;

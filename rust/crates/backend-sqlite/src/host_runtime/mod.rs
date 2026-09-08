@@ -80,7 +80,12 @@ impl SqliteHostRuntimeStore {
     /// so an eligibility read and the write it guards cannot straddle another writer's
     /// commit.
     async fn begin_root_write(&self) -> Result<Transaction<'_, Sqlite>, sqlx::Error> {
-        self.pool.begin_with(ROOT_WRITE_BEGIN).await
+        crate::foundation::statement_metrics::statement(
+            "hosts.begin_immediate",
+            "run",
+            self.pool.begin_with(ROOT_WRITE_BEGIN),
+        )
+        .await
     }
 
     async fn create_transaction(
@@ -89,39 +94,50 @@ impl SqliteHostRuntimeStore {
         credential: NewLongLivedCredential,
     ) -> Result<(), HostInviteWriteError> {
         let mut tx = self.begin_root_write().await.map_err(persistence)?;
-        let name_exists: i64 =
+        let name_exists: i64 = crate::foundation::statement_metrics::statement(
+            "hosts.name_exists",
+            "get",
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM hosts WHERE name = ?)")
                 .bind(host.name())
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(persistence)?;
+                .fetch_one(&mut *tx),
+        )
+        .await
+        .map_err(persistence)?;
         if name_exists != 0 {
             return Err(HostInviteWriteError::DuplicateHostName);
         }
 
-        sqlx::query(
-            "INSERT INTO hosts
+        crate::foundation::statement_metrics::statement(
+            "hosts.create",
+            "run",
+            sqlx::query(
+                "INSERT INTO hosts
                 (id, name, kind, user_id, installation_id, last_seen_at, revoked_at,
                  created_at, display_label, activated_at, finalized_at, provisioning_source)
              VALUES (?, ?, 'remote', ?, NULL, NULL, NULL, ?, NULL, NULL, NULL, 'user_invite')",
+            )
+            .bind(host.id())
+            .bind(host.name())
+            .bind(host.user_id().as_str())
+            .bind(host.created_at())
+            .execute(&mut *tx),
         )
-        .bind(host.id())
-        .bind(host.name())
-        .bind(host.user_id().as_str())
-        .bind(host.created_at())
-        .execute(&mut *tx)
         .await
         .map_err(persistence)?;
 
-        sqlx::query(
-            "INSERT INTO host_credentials
+        crate::foundation::statement_metrics::statement(
+            "host_credentials.create",
+            "run",
+            sqlx::query(
+                "INSERT INTO host_credentials
                 (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
              VALUES (?, ?, ?, 'long_lived', NULL, NULL, NULL)",
+            )
+            .bind(credential.id())
+            .bind(credential.host_id())
+            .bind(credential.token_hash())
+            .execute(&mut *tx),
         )
-        .bind(credential.id())
-        .bind(credential.host_id())
-        .bind(credential.token_hash())
-        .execute(&mut *tx)
         .await
         .map_err(persistence)?;
 
@@ -145,16 +161,20 @@ impl HostCredentialLookup for SqliteHostRuntimeStore {
         &self,
         token_hash: String,
     ) -> Result<Option<CredentialAuthState>, PersistenceFailure> {
-        let row = sqlx::query(
-            "SELECT c.id AS credential_id, c.host_id, c.kind, c.expires_at,
+        let row = crate::foundation::statement_metrics::statement(
+            "host_credentials.lookup_by_token_hash",
+            "get",
+            sqlx::query(
+                "SELECT c.id AS credential_id, c.host_id, c.kind, c.expires_at,
                     c.consumed_at, c.revoked_at AS credential_revoked_at,
                     h.user_id AS host_user_id, h.revoked_at AS host_revoked_at
                FROM host_credentials c
                JOIN hosts h ON h.id = c.host_id
               WHERE c.token_hash = ?",
+            )
+            .bind(token_hash)
+            .fetch_optional(&self.pool),
         )
-        .bind(token_hash)
-        .fetch_optional(&self.pool)
         .await
         .map_err(PersistenceFailure::from_source)?;
         row.map(|row| -> Result<CredentialAuthState, sqlx::Error> {
@@ -193,17 +213,21 @@ impl ComputerReadModel for SqliteHostRuntimeStore {
         &self,
         owner: UserId,
     ) -> Result<Vec<ComputerRecord>, PersistenceFailure> {
-        let rows = sqlx::query(
-            "SELECT id, name, kind, created_at, user_id, installation_id, last_seen_at,
+        let rows = crate::foundation::statement_metrics::statement(
+            "hosts.list_for_user",
+            "all",
+            sqlx::query(
+                "SELECT id, name, kind, created_at, user_id, installation_id, last_seen_at,
                     revoked_at, display_label, activated_at, provisioning_source, finalized_at
                FROM hosts
               WHERE user_id = ?
                 AND NOT (provisioning_source = 'user_invite' AND finalized_at IS NULL)
               ORDER BY (CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END) ASC,
                        created_at ASC",
+            )
+            .bind(owner.as_str())
+            .fetch_all(&self.pool),
         )
-        .bind(owner.as_str())
-        .fetch_all(&self.pool)
         .await
         .map_err(PersistenceFailure::from_source)?;
         rows.iter()
@@ -216,14 +240,18 @@ impl ComputerReadModel for SqliteHostRuntimeStore {
         &self,
         computer: HostId,
     ) -> Result<Option<ComputerRecord>, PersistenceFailure> {
-        let row = sqlx::query(
-            "SELECT id, name, kind, created_at, user_id, installation_id, last_seen_at,
+        let row = crate::foundation::statement_metrics::statement(
+            "hosts.get_by_id",
+            "get",
+            sqlx::query(
+                "SELECT id, name, kind, created_at, user_id, installation_id, last_seen_at,
                     revoked_at, display_label, activated_at, provisioning_source, finalized_at
                FROM hosts
               WHERE id = ?",
+            )
+            .bind(computer.as_str())
+            .fetch_optional(&self.pool),
         )
-        .bind(computer.as_str())
-        .fetch_optional(&self.pool)
         .await
         .map_err(PersistenceFailure::from_source)?;
         row.as_ref()
@@ -309,35 +337,41 @@ impl RevokeComputerUnitOfWork for SqliteHostRuntimeStore {
 
         // The tombstone moves once: only a still-live row takes the stamp, and how many
         // rows that reached is whether THIS call ended custody.
-        let tombstone =
+        let tombstone = crate::foundation::statement_metrics::statement(
+            "hosts.revoke",
+            "run",
             sqlx::query("UPDATE hosts SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
                 .bind(at)
                 .bind(&computer)
-                .execute(&mut *tx)
-                .await
-                .map_err(PersistenceFailure::from_source)?;
+                .execute(&mut *tx),
+        )
+        .await
+        .map_err(PersistenceFailure::from_source)?;
         let custody_ended_now = tombstone.rows_affected() > 0;
 
         // Unconditional, on a repeat revoke too: every live credential dies at `at`. Only
         // revoked_at is written — nothing here is superseded, so a consumed_at would
         // describe a dead credential to the verifier as one inside a grace window.
-        sqlx::query(
+        crate::foundation::statement_metrics::statement("host_credentials.revoke_for_host", "run", sqlx::query(
             "UPDATE host_credentials SET revoked_at = ? WHERE host_id = ? AND revoked_at IS NULL",
         )
         .bind(at)
         .bind(&computer)
-        .execute(&mut *tx)
-        .await
+        .execute(&mut *tx)).await
         .map_err(PersistenceFailure::from_source)?;
 
-        let row = sqlx::query(
-            "SELECT id, name, kind, created_at, user_id, installation_id, last_seen_at,
+        let row = crate::foundation::statement_metrics::statement(
+            "hosts.get_by_id",
+            "get",
+            sqlx::query(
+                "SELECT id, name, kind, created_at, user_id, installation_id, last_seen_at,
                     revoked_at, display_label, activated_at, provisioning_source, finalized_at
                FROM hosts
               WHERE id = ?",
+            )
+            .bind(&computer)
+            .fetch_optional(&mut *tx),
         )
-        .bind(&computer)
-        .fetch_optional(&mut *tx)
         .await
         .map_err(PersistenceFailure::from_source)?;
 
@@ -370,42 +404,49 @@ impl CredentialIssueUnitOfWork for SqliteHostRuntimeStore {
         // The verdict is re-asked under the lock from a fresh read: a host revoked
         // between a route's pre-lock hint and this write is refused here, and the
         // authority for the refusal is the core rule, not a second copy of it.
-        let facts = sqlx::query("SELECT user_id, revoked_at FROM hosts WHERE id = ?")
-            .bind(credential.host_id())
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(PersistenceFailure::from_source)?
-            .map(
-                |row| -> Result<HostCredentialEligibilityFacts, sqlx::Error> {
-                    let user_id = row
-                        .try_get::<Option<String>, _>("user_id")?
-                        .map(|raw| {
-                            UserId::parse(raw)
-                                .map_err(|source| sqlx::Error::Decode(Box::new(source)))
-                        })
-                        .transpose()?;
-                    Ok(HostCredentialEligibilityFacts {
-                        user_id,
-                        revoked_at: row.try_get("revoked_at")?,
+        let facts = crate::foundation::statement_metrics::statement(
+            "hosts.get_auth_state",
+            "get",
+            sqlx::query("SELECT user_id, revoked_at FROM hosts WHERE id = ?")
+                .bind(credential.host_id())
+                .fetch_optional(&mut *tx),
+        )
+        .await
+        .map_err(PersistenceFailure::from_source)?
+        .map(
+            |row| -> Result<HostCredentialEligibilityFacts, sqlx::Error> {
+                let user_id = row
+                    .try_get::<Option<String>, _>("user_id")?
+                    .map(|raw| {
+                        UserId::parse(raw).map_err(|source| sqlx::Error::Decode(Box::new(source)))
                     })
-                },
-            )
-            .transpose()
-            .map_err(PersistenceFailure::from_source)?;
+                    .transpose()?;
+                Ok(HostCredentialEligibilityFacts {
+                    user_id,
+                    revoked_at: row.try_get("revoked_at")?,
+                })
+            },
+        )
+        .transpose()
+        .map_err(PersistenceFailure::from_source)?;
 
         if let Err(refusal) = judge_credential_eligibility(facts.as_ref()) {
             return Ok(Err(refusal));
         }
 
-        sqlx::query(
-            "INSERT INTO host_credentials
+        crate::foundation::statement_metrics::statement(
+            "host_credentials.create",
+            "run",
+            sqlx::query(
+                "INSERT INTO host_credentials
                 (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
              VALUES (?, ?, ?, 'long_lived', NULL, NULL, NULL)",
+            )
+            .bind(credential.id())
+            .bind(credential.host_id())
+            .bind(credential.token_hash())
+            .execute(&mut *tx),
         )
-        .bind(credential.id())
-        .bind(credential.host_id())
-        .bind(credential.token_hash())
-        .execute(&mut *tx)
         .await
         .map_err(PersistenceFailure::from_source)?;
 
@@ -413,19 +454,23 @@ impl CredentialIssueUnitOfWork for SqliteHostRuntimeStore {
         // overwrites an earlier consumed_at, so a token already inside its grace window
         // keeps the instant it was first superseded.
         if let Some(sweep) = sweep {
-            sqlx::query(
-                "UPDATE host_credentials
+            crate::foundation::statement_metrics::statement(
+                "host_credentials.supersede",
+                "run",
+                sqlx::query(
+                    "UPDATE host_credentials
                     SET revoked_at = ?, consumed_at = COALESCE(consumed_at, ?)
                   WHERE host_id = ?
                     AND id <> ?
                     AND kind = 'long_lived'
                     AND revoked_at IS NULL",
+                )
+                .bind(sweep.revoked_at())
+                .bind(sweep.consumed_at())
+                .bind(credential.host_id())
+                .bind(credential.id())
+                .execute(&mut *tx),
             )
-            .bind(sweep.revoked_at())
-            .bind(sweep.consumed_at())
-            .bind(credential.host_id())
-            .bind(credential.id())
-            .execute(&mut *tx)
             .await
             .map_err(PersistenceFailure::from_source)?;
         }
@@ -441,8 +486,11 @@ impl HostCredentialInventory for SqliteHostRuntimeStore {
         computer: HostId,
         now: i64,
     ) -> Result<bool, PersistenceFailure> {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)
+        let count: i64 = crate::foundation::statement_metrics::statement(
+            "host_credentials.has_active_long_lived",
+            "get",
+            sqlx::query_scalar(
+                "SELECT COUNT(*)
                FROM host_credentials cred
                JOIN hosts h ON h.id = cred.host_id
               WHERE cred.host_id = ?
@@ -452,10 +500,11 @@ impl HostCredentialInventory for SqliteHostRuntimeStore {
                 AND (cred.expires_at IS NULL OR cred.expires_at > ?)
                 AND h.revoked_at IS NULL
                 AND h.user_id IS NOT NULL",
+            )
+            .bind(computer.as_str())
+            .bind(now)
+            .fetch_one(&self.pool),
         )
-        .bind(computer.as_str())
-        .bind(now)
-        .fetch_one(&self.pool)
         .await
         .map_err(PersistenceFailure::from_source)?;
         Ok(count > 0)
@@ -476,24 +525,32 @@ impl ClaimLocalComputerUnitOfWork for SqliteHostRuntimeStore {
         // Both facts are read under the writer lock, so a row a concurrent claim from the
         // same installation could create cannot appear between a read and the write it
         // conditions — the difference between one computer for a machine and two.
-        let claimed: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM hosts
+        let claimed: Option<String> = crate::foundation::statement_metrics::statement(
+            "hosts.get_by_user_installation",
+            "get",
+            sqlx::query_scalar(
+                "SELECT id FROM hosts
               WHERE user_id = ? AND installation_id = ? AND revoked_at IS NULL",
+            )
+            .bind(attempt.owner().as_str())
+            .bind(attempt.installation_id())
+            .fetch_optional(&mut *tx),
         )
-        .bind(attempt.owner().as_str())
-        .bind(attempt.installation_id())
-        .fetch_optional(&mut *tx)
         .await
         .map_err(claim_persistence)?;
-        let unclaimed_local: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM hosts
+        let unclaimed_local: Option<String> = crate::foundation::statement_metrics::statement(
+            "hosts.get_unclaimed_local",
+            "get",
+            sqlx::query_scalar(
+                "SELECT id FROM hosts
               WHERE name = 'local'
                 AND kind = 'local'
                 AND user_id IS NULL
                 AND installation_id IS NULL
                 AND revoked_at IS NULL",
+            )
+            .fetch_optional(&mut *tx),
         )
-        .fetch_optional(&mut *tx)
         .await
         .map_err(claim_persistence)?;
 
@@ -512,12 +569,16 @@ impl ClaimLocalComputerUnitOfWork for SqliteHostRuntimeStore {
             // Reuse touches nothing but the last-seen stamp: custody, activation and the
             // chosen name all stay as this installation already left them.
             LocalClaimWrite::TouchLastSeen(touch) => {
-                sqlx::query("UPDATE hosts SET last_seen_at = ? WHERE id = ?")
-                    .bind(attempt.at())
-                    .bind(touch.computer().as_str())
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(claim_persistence)?;
+                crate::foundation::statement_metrics::statement(
+                    "hosts.touch_last_seen",
+                    "run",
+                    sqlx::query("UPDATE hosts SET last_seen_at = ? WHERE id = ?")
+                        .bind(attempt.at())
+                        .bind(touch.computer().as_str())
+                        .execute(&mut *tx),
+                )
+                .await
+                .map_err(claim_persistence)?;
                 touch.computer().as_str().to_owned()
             }
             // Adoption binds owner and installation and finishes activation, but COALESCE
@@ -525,8 +586,11 @@ impl ClaimLocalComputerUnitOfWork for SqliteHostRuntimeStore {
             // this instant. The label write is separate and conditional: `None` means the
             // caller sent no label, so a reclaim never blanks a name the user chose.
             LocalClaimWrite::Adopt(adopt) => {
-                sqlx::query(
-                    "UPDATE hosts
+                crate::foundation::statement_metrics::statement(
+                    "hosts.bind_to_user_installation",
+                    "run",
+                    sqlx::query(
+                        "UPDATE hosts
                         SET user_id = ?,
                             installation_id = ?,
                             last_seen_at = ?,
@@ -534,23 +598,28 @@ impl ClaimLocalComputerUnitOfWork for SqliteHostRuntimeStore {
                             finalized_at = COALESCE(finalized_at, ?),
                             provisioning_source = 'app_install'
                       WHERE id = ?",
+                    )
+                    .bind(attempt.owner().as_str())
+                    .bind(attempt.installation_id())
+                    .bind(attempt.at())
+                    .bind(attempt.at())
+                    .bind(attempt.at())
+                    .bind(adopt.computer().as_str())
+                    .execute(&mut *tx),
                 )
-                .bind(attempt.owner().as_str())
-                .bind(attempt.installation_id())
-                .bind(attempt.at())
-                .bind(attempt.at())
-                .bind(attempt.at())
-                .bind(adopt.computer().as_str())
-                .execute(&mut *tx)
                 .await
                 .map_err(claim_persistence)?;
                 if let Some(label) = adopt.display_label() {
-                    sqlx::query("UPDATE hosts SET display_label = ? WHERE id = ?")
-                        .bind(label)
-                        .bind(adopt.computer().as_str())
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(claim_persistence)?;
+                    crate::foundation::statement_metrics::statement(
+                        "hosts.update_display_label",
+                        "run",
+                        sqlx::query("UPDATE hosts SET display_label = ? WHERE id = ?")
+                            .bind(label)
+                            .bind(adopt.computer().as_str())
+                            .execute(&mut *tx),
+                    )
+                    .await
+                    .map_err(claim_persistence)?;
                 }
                 adopt.computer().as_str().to_owned()
             }
@@ -559,31 +628,38 @@ impl ClaimLocalComputerUnitOfWork for SqliteHostRuntimeStore {
             // revoked filter; a taken name is the one outcome reported back rather than
             // resolved, letting the ladder try its next candidate.
             LocalClaimWrite::Register(register) => {
-                let taken: i64 =
+                let taken: i64 = crate::foundation::statement_metrics::statement(
+                    "hosts.name_exists",
+                    "get",
                     sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM hosts WHERE name = ?)")
                         .bind(register.name())
-                        .fetch_one(&mut *tx)
-                        .await
-                        .map_err(claim_persistence)?;
+                        .fetch_one(&mut *tx),
+                )
+                .await
+                .map_err(claim_persistence)?;
                 if taken != 0 {
                     return Err(LocalClaimWriteError::DuplicateComputerName);
                 }
-                sqlx::query(
-                    "INSERT INTO hosts
+                crate::foundation::statement_metrics::statement(
+                    "hosts.create",
+                    "run",
+                    sqlx::query(
+                        "INSERT INTO hosts
                         (id, name, kind, user_id, installation_id, last_seen_at, revoked_at,
                          created_at, display_label, activated_at, finalized_at, provisioning_source)
                      VALUES (?, ?, 'local', ?, ?, ?, NULL, ?, ?, ?, ?, 'app_install')",
+                    )
+                    .bind(register.id())
+                    .bind(register.name())
+                    .bind(attempt.owner().as_str())
+                    .bind(attempt.installation_id())
+                    .bind(attempt.at())
+                    .bind(attempt.at())
+                    .bind(register.display_label())
+                    .bind(attempt.at())
+                    .bind(attempt.at())
+                    .execute(&mut *tx),
                 )
-                .bind(register.id())
-                .bind(register.name())
-                .bind(attempt.owner().as_str())
-                .bind(attempt.installation_id())
-                .bind(attempt.at())
-                .bind(attempt.at())
-                .bind(register.display_label())
-                .bind(attempt.at())
-                .bind(attempt.at())
-                .execute(&mut *tx)
                 .await
                 .map_err(claim_persistence)?;
                 register.id().to_owned()
@@ -593,14 +669,18 @@ impl ClaimLocalComputerUnitOfWork for SqliteHostRuntimeStore {
         // The computer as it stands AFTER the write, re-read in the same transaction:
         // adoption keeps stamps this attempt did not set, so projecting from the attempt
         // would report a shape the row does not have.
-        let row = sqlx::query(
-            "SELECT id, name, kind, created_at, user_id, installation_id, last_seen_at,
+        let row = crate::foundation::statement_metrics::statement(
+            "hosts.get_by_id",
+            "get",
+            sqlx::query(
+                "SELECT id, name, kind, created_at, user_id, installation_id, last_seen_at,
                     revoked_at, display_label, activated_at, provisioning_source, finalized_at
                FROM hosts
               WHERE id = ?",
+            )
+            .bind(&target)
+            .fetch_one(&mut *tx),
         )
-        .bind(&target)
-        .fetch_one(&mut *tx)
         .await
         .map_err(claim_persistence)?;
         let record = row_to_computer_record(&row).map_err(claim_persistence)?;

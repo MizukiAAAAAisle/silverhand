@@ -87,3 +87,24 @@ SQLite 保持单实例运行权威。无需仅为进程自动恢复引入 Kubern
 - [systemd service 配置文档源码](https://github.com/systemd/systemd/blob/main/man/systemd.service.xml)
 - [Axum graceful shutdown 示例](https://github.com/tokio-rs/axum/blob/main/examples/graceful-shutdown/src/main.rs)
 - [Tokio JoinError：任务取消与 panic](https://docs.rs/tokio/latest/tokio/task/struct.JoinError.html)
+
+## Rust observability 部署衔接
+
+Rust 的 metrics 实现、ops 配置和隔离验证先独立 review，再进行服务切换。
+观测代码通过不代表 ECS 已部署；运行实例仍以只读现场检查为准。
+
+- 保持 Prometheus 的 `silverhand` target 为 `127.0.0.1:9464`，保留现有
+  `silverhand_*` 应用指标、labels 和 buckets。主 API `/metrics` 必须为 403。
+- 环境改用 [Rust server env contract](server-env-config.md)，明确数据库、
+  blobs、日志根、API bind、allowed origins 和 deployment profile；不能直接
+  把旧 Node 环境快照当作 Rust 配置。敏感值只进入权限受控的部署文件。
+- 随 Rust 切换更新 overview dashboard 和 alert rules；Node heap/event-loop
+  面板及告警已换成真实进程指标与 Tokio scheduling delay，不应提前覆盖仍跑
+  Node 的生产观测配置。规则先通过 promtool，再安装到实际配置路径。
+- 日志目录使用 `SILVERHAND_LOG_DIR`；每日 14 文件保留与旧 ECS 七日清理
+  必须明确协调。logrotate 模板仅承担 100 MiB 尺寸兜底，不代表磁盘硬配额。
+- 启动验收包括私有 metrics、Prometheus target up、一次真实 readiness probe
+  的 histogram、新进程 RSS、host ready/close/协议 mismatch 与 daemon timeout
+  数据。Node 专属序列为空不是 Rust 的故障，也不能用 Node 名伪报 Tokio 指标。
+- ECS_OPERATIONS.md 的当前部署记录在实际切换时更新；候选 commit、checksum、
+  unit/env、备份和回滚版本成套冻结，不把本清单当作上线证明。

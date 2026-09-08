@@ -1,5 +1,6 @@
-/var/lib/silverhand/logs/*.log {
-  daily
+# Replace this example root with SILVERHAND_LOG_DIR. Size fallback only;
+# Rust diagnostics own daily rollover and 14-file retention.
+/var/log/silverhand/*.log {
   size 100M
   rotate 7
   missingok

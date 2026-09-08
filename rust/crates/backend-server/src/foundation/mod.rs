@@ -31,3 +31,5 @@ pub mod server_info;
 pub(crate) mod wire_admission;
 pub(crate) mod wire_coerce;
 pub(crate) mod wire_patch;
+
+mod daemon_metrics;
