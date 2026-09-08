@@ -15,7 +15,7 @@ const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g,
 describe("SettingsShell — Account owns the profile editor, not Computer lifecycle", () => {
   it("composes the shared viewer profile editor instead of re-implementing it", () => {
     // Profile editing lives in Account (#task:1846), but the `/api/me`
-    // wiring stays in `features/me/ViewerProfileEditor` — one owner for
+    // wiring stays in `features/settings-shell/components/viewer-profile-editor` — one owner for
     // the mutations, whichever pane hosts it.
     expect(CODE).toMatch(/ViewerProfileEditor/);
     expect(CODE).not.toMatch(/\buseUpdateProfile\b/);

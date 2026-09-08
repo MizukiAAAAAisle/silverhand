@@ -29,19 +29,22 @@ import {
   messageReactorsKey,
   recoverCommittedReactionsAfterWrite,
 } from "@/features/channels/reaction-hooks";
-import { clearCurrentUser, setCurrentUserId } from "@/lib/current-user";
+import { clearCurrentUser, setCurrentUserId } from "@/features/session/current-user";
 import {
   __resetAttachmentBlobCacheForTest,
   readAttachmentToken,
-} from "@/lib/attachment-blob-cache";
-import { taskBoardCacheScope, taskByNumberKey } from "@/features/tasks/useTaskByNumber";
-import { taskDetailKey } from "@/features/tasks/taskDetail";
+} from "@/features/attachments/attachment-blob-cache";
+import {
+  taskBoardCacheScope,
+  taskByNumberKey,
+} from "@/features/task-shell/hooks/use-task-by-number";
+import { taskDetailKey } from "@/features/task-shell/model/task-detail";
 import { channelThreadsKey, channelThreadsUnreadKey } from "@/features/channels/useChannelThreads";
 import {
   channelAttachmentsKey,
   channelAttachmentSendersKey,
 } from "@/features/channels/useChannelAttachments";
-import { agentRunStatesKey } from "@/lib/agentRunStateCache";
+import { agentRunStatesKey } from "@/features/agent-shell/model/agent-run-state-cache";
 import { eventWsClient } from "@/lib/ws-client";
 import {
   clearPendingAgentStatusPatches,

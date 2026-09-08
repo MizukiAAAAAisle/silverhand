@@ -6,7 +6,7 @@ import {
   readTaskSystemMetadata,
   readTaskSystemMetadataPartial,
 } from "@silverhand/shared";
-import { formatUserDisplayName } from "@/lib/current-user";
+import { formatUserDisplayName } from "@/features/session/current-user";
 import { TaskRef } from "@/components/chat/TaskRef";
 import { type RendererProps, useUserResolver } from "./shared";
 

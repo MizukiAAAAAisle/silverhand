@@ -38,9 +38,9 @@ import {
 } from "@/features/agent-shell/model/presence-projection";
 import { useWorkspaceMemberLists } from "@/features/workspaces/hooks";
 import { useAgentAvatarObjectUrl } from "@/features/agent-shell/hooks/avatar-hooks";
-import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/me/hooks";
+import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/session/hooks";
 import { Button } from "@/components/ui/button";
-import { destructiveAction, destructiveCancel } from "@/features/common/DestructiveAction";
+import { destructiveAction, destructiveCancel } from "@/components/common/destructive-action";
 import {
   Dialog,
   DialogContent,

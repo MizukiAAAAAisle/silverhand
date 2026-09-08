@@ -483,7 +483,7 @@ function read(relative: string): string {
 }
 
 describe("the pane gates its roster reads on the capability (the wiring half)", () => {
-  const viewSource = read("../../components/layout/ChannelView.tsx");
+  const viewSource = read("../conversation-shell/components/channel-view.tsx");
   const popoverSource = read("../../components/AgentInfoPopover.tsx");
 
   it("computes ONE roster target and hands it to BOTH roster reads", () => {

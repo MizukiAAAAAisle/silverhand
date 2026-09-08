@@ -24,11 +24,14 @@ import { Combobox } from "@/components/ui/combobox";
 import { Label } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import { describeApiError } from "@/lib/api-error-message";
-import { CancelButton, SaveButton } from "@/features/common/EditToolbarButtons";
+import { CancelButton, SaveButton } from "@/components/common/edit-toolbar-buttons";
 import { SwitchRuntimeConfirmDialog } from "./switch-runtime-confirm-dialog";
 import { useSwitchAgentRuntime, useUpdateAgent } from "../hooks/hooks";
-import { useHostAvailabilityMap, useHostRuntimeCatalog } from "@/features/hosts/hooks";
-import { isComputerAvailable } from "@/features/hosts/host-display";
+import {
+  useHostAvailabilityMap,
+  useHostRuntimeCatalog,
+} from "@/features/computer-shell/hooks/hooks";
+import { isComputerAvailable } from "@/features/computer-shell/model/host-display";
 import {
   deriveRuntimePickerMode,
   runtimeChipDisabled,

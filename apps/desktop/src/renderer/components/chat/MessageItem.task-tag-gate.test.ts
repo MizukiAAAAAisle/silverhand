@@ -58,19 +58,19 @@ describe("MessageTaskTag — status-picker mutation is member-gated", () => {
 describe("canMutateLinkedTask is threaded on the write axis", () => {
   it("defaults fail-closed in MessageItem and the list", () => {
     expect(read("./MessageItem.tsx")).toContain("canMutateLinkedTask = false");
-    expect(read("../layout/channel-view/message-list.tsx")).toContain(
-      "canMutateLinkedTask = false",
-    );
+    expect(
+      read("../../features/conversation-shell/components/channel-view/message-list.tsx"),
+    ).toContain("canMutateLinkedTask = false");
   });
 
   it("ChannelView gates it on membership write access (gate.allowMutations)", () => {
-    expect(read("../layout/ChannelView.tsx")).toContain(
+    expect(read("../../features/conversation-shell/components/channel-view.tsx")).toContain(
       "canMutateLinkedTask={!closed && !isArchived && gate.allowMutations}",
     );
   });
 
   it("ThreadPanel gates it on membership write access (gate.allowMutations)", () => {
-    expect(read("../layout/ThreadPanel.tsx")).toContain(
+    expect(read("../../features/conversation-shell/components/thread-panel.tsx")).toContain(
       "canMutateLinkedTask={!closed && !archived && gate.allowMutations}",
     );
   });

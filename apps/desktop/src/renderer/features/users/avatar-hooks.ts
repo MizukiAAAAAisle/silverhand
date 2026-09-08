@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { getAvatarBlobUrl, loadAvatarBlobUrl } from "@/lib/avatar-blob-cache";
+import { getAvatarBlobUrl, loadAvatarBlobUrl } from "@/features/identity/avatar-blob-cache";
 import { useUsersById } from "./hooks";
 
 /**
@@ -7,7 +7,7 @@ import { useUsersById } from "./hooks";
  * (`apps/desktop/src/renderer/features/agent-shell/hooks/avatar-hooks.ts`): turn a stored
  * `avatar_url` (or a user id resolved against the directory) into a browser
  * object URL by delegating to the app-session avatar cache
- * (`@/lib/avatar-blob-cache`), which owns the URL's lifetime and fetches each
+ * (`@/features/identity/avatar-blob-cache`), which owns the URL's lifetime and fetches each
  * `avatar_url` exactly once per renderer session (#task:1321). These hooks never
  * revoke.
  *
@@ -25,7 +25,7 @@ import { useUsersById } from "./hooks";
  * placeholder — there is no second-class error state for missing avatars.
  *
  * The viewer's own avatar still has its own hook (`useViewerAvatarObjectUrl` in
- * `features/me/hooks.ts`) — that path keys off the auth-resolved dto rather than
+ * `features/session/hooks.ts`) — that path keys off the auth-resolved dto rather than
  * the public directory — but it now shares the same session cache.
  */
 

@@ -4,7 +4,7 @@ import { AppContextMenu, AppContextMenuItem } from "@/components/menus/AppContex
 import { useWorkspaceMemberLists } from "@/features/workspaces/hooks";
 import { canLeaveWorkspace } from "@/features/workspaces/workspace-permissions";
 import { LeaveWorkspaceConfirmDialog } from "@/features/workspaces/LeaveWorkspaceConfirmDialog";
-import { WorkspaceMuteMenuItem } from "../../../components/layout/ChannelAttentionSurfaces";
+import { WorkspaceMuteMenuItem } from "../../conversation-shell/components/channel-attention-surfaces";
 
 /**
  * The container row's right-click menu — the container species' menu, mounted on

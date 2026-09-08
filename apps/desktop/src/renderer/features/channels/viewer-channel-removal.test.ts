@@ -43,9 +43,9 @@ import {
   boardCountsKey,
   boardFacetsKey,
   boardFilterKey,
-} from "../tasks/boardQuery";
-import { DEFAULT_TASK_FILTERS } from "../tasks/taskFilters";
-import { taskDetailKey } from "../tasks/taskDetail";
+} from "../task-shell/model/board-query";
+import { DEFAULT_TASK_FILTERS } from "../task-shell/model/task-filters";
+import { taskDetailKey } from "../task-shell/model/task-detail";
 import {
   CHANNEL_WORKSPACE_ATTRIBUTION_SOURCES,
   channelWorkspaceConflicts,
@@ -690,7 +690,7 @@ describe("viewer-local channel removal contract (#task:1689)", () => {
     /** The three key shapes the codebase actually writes: a single-line `*Key`
      *  constant, a `*Key` FACTORY (`= (args) => [ 'root', … ]`, possibly spanning
      *  lines), and an inline `queryKey: ['root', …]`. */
-    const KEY_ROOT = /(?:queryKey:|Key\s*=(?:[^=;]*?=>)?)\s*\[\s*'([\w-]+)'/g;
+    const KEY_ROOT = /(?:queryKey:|Key\s*=(?:[^=;]*?=>)?)\s*\[\s*["']([\w-]+)["']/g;
 
     function rootsIn(src: string): string[] {
       return [...src.matchAll(KEY_ROOT)].map((m) => m[1]).filter((r): r is string => Boolean(r));
@@ -724,6 +724,15 @@ describe("viewer-local channel removal contract (#task:1689)", () => {
         "presence",
       ]);
       expect(rootsIn(`const key = buildKey(root);`)).toEqual([]);
+    });
+
+    it.each(["'", '"'])("scans multiline roots with %s quotes", (quote) => {
+      const literal = `${quote}new-root${quote}`;
+      expect(rootsIn(`const sampleKey = [\n ${literal}\n];`)).toEqual(["new-root"]);
+      expect(rootsIn(`queryKey: [\n ${literal}, value\n]`)).toEqual(["new-root"]);
+      expect(rootsIn(`const sampleKey = (id: string) => [\n ${literal}, id\n];`)).toEqual([
+        "new-root",
+      ]);
     });
 
     it("every key root under features/** is classified, and every entry is real", () => {
@@ -802,11 +811,35 @@ describe("viewer-local channel removal contract (#task:1689)", () => {
     /** Verbs that may touch this key OUTSIDE the read point: eviction only. Stated
      *  as an allow-list, because "no `fetchQuery`" would miss `setQueryData` —
      *  which sends no request yet fills the same cache with no write-through. */
-    const EVICTION_ONLY = /invalidateQueries|removeQueries/;
-    /** A line USES the key when a react-query verb or a `queryKey:` position sits
-     *  on it. Without this, prose that quotes the key shape (the classification
-     *  table's `reason` strings) would be read as a call site. */
-    const KEY_USE = /queryKey|Queries\(|QueryData|fetchQuery|ensureQueryData|prefetchQuery/;
+    function conversationRefCalls(source: string): string[] {
+      return [
+        ...source.matchAll(
+          /\b(\w+)\s*(?:<[^;()]*>)?\s*\(\s*(?:\{[^{};]*?\bqueryKey\s*:\s*)?\[\s*(["'])conversation-ref\2/g,
+        ),
+      ].map((match) => match[1]!);
+    }
+    const EVICTION_VERBS = new Set(["invalidateQueries", "removeQueries"]);
+
+    it.each(["'", '"'])(
+      "detects writes and eviction across line breaks with %s quotes",
+      (quote) => {
+        const key = `[\n ${quote}conversation-ref${quote}, id\n]`;
+        for (const verb of [
+          "setQueryData",
+          "fetchQuery",
+          "ensureQueryData",
+          "prefetchQuery",
+          "invalidateQueries",
+          "removeQueries",
+        ]) {
+          const argument = verb === "setQueryData" ? `${key}, value` : `{\n queryKey: ${key}\n}`;
+          expect(conversationRefCalls(`qc.${verb}(\n${argument}\n);`)).toEqual([verb]);
+          expect(EVICTION_VERBS.has(verb)).toBe(
+            ["invalidateQueries", "removeQueries"].includes(verb),
+          );
+        }
+      },
+    );
 
     function sourceFiles(dir: string, into: string[] = []): string[] {
       for (const entry of readdirSync(dir)) {
@@ -852,13 +885,8 @@ describe("viewer-local channel removal contract (#task:1689)", () => {
     it("no other module fills the conversation-ref cache — eviction verbs only", () => {
       for (const file of files) {
         if (file.rel === READ_POINT) continue;
-        const keyLines = file.lines.filter(
-          (l) => l.includes("['conversation-ref'") && KEY_USE.test(l),
-        );
-        for (const line of keyLines) {
-          // Asserted per call site, never with a spanning regex: a wide pattern
-          // matches across statements and reads green while the hole is open.
-          expect(line.trim(), `${file.rel}: ${line.trim()}`).toMatch(EVICTION_ONLY);
+        for (const verb of conversationRefCalls(file.lines.join("\n"))) {
+          expect(EVICTION_VERBS.has(verb), `${file.rel}: ${verb}`).toBe(true);
         }
       }
     });
@@ -884,9 +912,7 @@ describe("viewer-local channel removal contract (#task:1689)", () => {
         .filter(
           (f) =>
             f.rel !== READ_POINT &&
-            f.lines.some(
-              (l) => l.includes("['conversation-ref'") && KEY_USE.test(l) && EVICTION_ONLY.test(l),
-            ),
+            conversationRefCalls(f.lines.join("\n")).some((verb) => EVICTION_VERBS.has(verb)),
         )
         .map((f) => f.rel);
       expect(evicting).toContain("features/workspaces/hooks.ts");

@@ -23,7 +23,10 @@ import { FavoritesGroup } from "./favorites-panel";
 import { DirectMessagesGroup } from "./direct-messages-panel";
 import { useStarMembership } from "@/features/favorites/hooks";
 import { OUTER_GLYPH_INSET, sidebarRowStateClass } from "../../../components/layout/sidebar-shared";
-import { partitionRailWorkspaces, type SelectedConversation } from "@/lib/home-grouping";
+import {
+  partitionRailWorkspaces,
+  type SelectedConversation,
+} from "@/features/chat-shell/model/home-grouping";
 import { Sidebar } from "../../../components/layout/sidebar";
 
 interface ChatSidebarProps {
@@ -90,7 +93,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
   // star was a second one, applied on top of the drag, and it is gone). Archived
   // workspaces are dropped outright (#task:1889): the top-level `Archived` entry is
   // the one archive index. `props.workspaces` is the RAW full visible set; these are
-  // the home projections (see lib/home-grouping).
+  // the home projections (see features/chat-shell/model/home-grouping).
   //
   // `allVisibleIds` comes out of the SAME call, not a second derivation: it is
   // STARRED's freshness scope (every workspace the viewer can see, archived

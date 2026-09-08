@@ -17,8 +17,8 @@ import {
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
-import { CONTROL_HOVER_LIFT } from "@/features/common/ControlInkBorder";
-import { destructiveAction, DESTRUCTIVE_TRIGGER } from "@/features/common/DestructiveAction";
+import { CONTROL_HOVER_LIFT } from "@/components/common/control-ink-border";
+import { destructiveAction, DESTRUCTIVE_TRIGGER } from "@/components/common/destructive-action";
 import { cn } from "@/lib/cn";
 import { useAppearance } from "@/hooks/useAppearance";
 import {
@@ -33,24 +33,28 @@ import {
   isUpdateRequired,
   useLogout,
   useViewerUser,
-} from "@/features/me/hooks";
-import { ViewerProfileEditor } from "@/features/me/ViewerProfileEditor";
-import { SettingsHeading } from "../settings/SettingsHeading";
+} from "@/features/session/hooks";
+import { ViewerProfileEditor } from "@/features/settings-shell/components/viewer-profile-editor";
+import { SettingsHeading } from "./components/settings-heading";
 import {
   DEFAULT_MARKDOWN_FONT_SIZE,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
   THEME_IDS,
   type ThemeId,
-} from "@/settings/types";
-import { CODE_FONT_PRESETS, PROSE_FONT_PRESETS, type FontPreset } from "@/settings/font-presets";
+} from "@/features/appearance/types";
+import {
+  CODE_FONT_PRESETS,
+  PROSE_FONT_PRESETS,
+  type FontPreset,
+} from "@/features/appearance/font-presets";
 import {
   SETTINGS_SECTIONS,
   persistSettingsSection,
   readSettingsSection,
   type SettingsSection,
-} from "../settings/settings-section";
-import { ConnectionPane } from "../settings/ConnectionPane";
+} from "./model/settings-section";
+import { ConnectionPane } from "./components/connection-pane";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import { Sidebar } from "@/components/layout/sidebar";
 

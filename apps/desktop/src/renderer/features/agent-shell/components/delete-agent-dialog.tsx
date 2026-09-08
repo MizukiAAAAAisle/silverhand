@@ -8,7 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { destructiveAction, destructiveCancel } from "@/features/common/DestructiveAction";
+import { destructiveAction, destructiveCancel } from "@/components/common/destructive-action";
 import { friendlyDeleteAgentError } from "../model/delete-agent-error";
 import { useDeleteAgent } from "../hooks/hooks";
 

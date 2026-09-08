@@ -1,7 +1,7 @@
 import { ClipboardCopy, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { neutralAction } from "@/features/common/ControlInkBorder";
-import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
+import { neutralAction } from "@/components/common/control-ink-border";
+import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 
 /**
  * Top bar shown while MessageList is in multi-select mode — the "share messages

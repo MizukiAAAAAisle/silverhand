@@ -11,9 +11,12 @@ import { SystemMessage } from "./SystemMessage";
 import type { ChannelReference } from "./ChannelRef";
 import type { WorkspaceChannelReference } from "./ConversationRef";
 import { AUTHORED_HREF_PROP, PLUGIN_LINK_PROP } from "./reference-href";
-import { TaskRefContextProvider } from "@/features/tasks/TaskRefContext";
-import { taskBoardCacheScope, taskByNumberKey } from "@/features/tasks/useTaskByNumber";
-import { setCurrentUserId } from "@/lib/current-user";
+import { TaskRefContextProvider } from "@/features/task-shell/components/task-ref-context";
+import {
+  taskBoardCacheScope,
+  taskByNumberKey,
+} from "@/features/task-shell/hooks/use-task-by-number";
+import { setCurrentUserId } from "@/features/session/current-user";
 
 // Tests pass actor ids through SystemMessage rendering and assert the
 // renderer maps the viewer's id to "@you". Under the post pre-ship

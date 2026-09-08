@@ -9,7 +9,10 @@ import type {
 } from "@silverhand/shared";
 import { apiPaths } from "@silverhand/shared";
 import { api } from "@/lib/api";
-import type { FavoritesWatchScope, StarMembership } from "@/lib/home-grouping";
+import type {
+  FavoritesWatchScope,
+  StarMembership,
+} from "@/features/chat-shell/model/home-grouping";
 import {
   isCurrentViewerScope,
   onWsFrame,

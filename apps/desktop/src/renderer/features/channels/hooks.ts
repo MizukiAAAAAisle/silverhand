@@ -59,17 +59,17 @@ import {
 import { api, ApiError, apiUpload } from "@/lib/api";
 import { channelThreadsKey } from "@/features/channels/useChannelThreads";
 import { conversationUnreadKey } from "@/features/channels/message-unread";
-import { getCurrentUserId } from "@/lib/current-user";
-import { getHydratedViewer } from "@/features/me/hooks";
+import { getCurrentUserId } from "@/features/session/current-user";
+import { getHydratedViewer } from "@/features/session/hooks";
 import { useInterest } from "@/features/realtime/interest-registry";
 import { applyCommittedMessage } from "@/features/realtime/conversation-ingestor";
 import {
   AGENT_RUN_STATES_GC_MS,
   agentRunStatesKey,
   reconcileAgentRunStateSnapshot,
-} from "@/lib/agentRunStateCache";
+} from "@/features/agent-shell/model/agent-run-state-cache";
 import { wsConversationScope, wsConversationSideScope } from "@/hooks/useConversationStream";
-import { clusterInitialFetchEnabled } from "@/components/layout/threadMarkRead";
+import { clusterInitialFetchEnabled } from "@/features/conversation-shell/model/thread-mark-read";
 import {
   mainlineStreamSourceHead,
   postObserve,

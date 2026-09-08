@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { focusManager, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { clearCurrentUser, setCurrentUserId } from "@/lib/current-user";
+import { clearCurrentUser, setCurrentUserId } from "@/features/session/current-user";
 import {
   profileMessageCountsKey,
   profileMessageCountsOptions,

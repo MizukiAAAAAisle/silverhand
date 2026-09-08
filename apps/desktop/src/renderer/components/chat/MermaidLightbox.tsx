@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X, ZoomIn, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { neutralAction } from "@/features/common/ControlInkBorder";
+import { neutralAction } from "@/components/common/control-ink-border";
 import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
 
 interface MermaidLightboxProps {

@@ -1,7 +1,11 @@
 import type { AppSection } from "@/components/layout/NavRail";
 import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
-import type { DirectPairAuthority } from "@/lib/chat-place-restore";
-import { resolveJumpNav, resolveJumpRoute, jumpBasePath } from "@/lib/message-jump-nav";
+import type { DirectPairAuthority } from "@/features/chat-shell/model/chat-place-restore";
+import {
+  resolveJumpNav,
+  resolveJumpRoute,
+  jumpBasePath,
+} from "@/features/conversation-shell/model/message-jump-nav";
 import { withThreadQuery } from "@/router";
 
 export interface MessageJumpEnvironment {

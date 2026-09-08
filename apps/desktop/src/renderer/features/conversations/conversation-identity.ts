@@ -37,7 +37,7 @@
  *
  * NOTE on retained rows. This module renders from rows it holds even while a
  * refetch is in flight — the opposite of {@link
- * import('@/lib/chat-place-restore').directPairAuthorityFromQuery}, which
+ * import('@/features/chat-shell/model/chat-place-restore').directPairAuthorityFromQuery}, which
  * collapses retained rows to `pending` on purpose. The two are asking different
  * questions: RESTORE routes the viewer somewhere and a navigation cannot be
  * taken back, so it may only act on a re-answered list; LABELLING draws a chip

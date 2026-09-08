@@ -1,9 +1,9 @@
-import { getCurrentUserId } from "@/lib/current-user";
+import { getCurrentUserId } from "@/features/session/current-user";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { resizeTextarea } from "@/components/chat/Composer";
-import { EmptyConversation } from "@/components/layout/channel-view/empty-conversation";
-import { ConversationHeaderIdentity } from "@/components/layout/channel-view/conversation-header-identity";
+import { EmptyConversation } from "@/features/conversation-shell/components/channel-view/empty-conversation";
+import { ConversationHeaderIdentity } from "@/features/conversation-shell/components/channel-view/conversation-header-identity";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import { ApiError } from "@/lib/api";
 import { useAgent } from "@/features/agent-shell/hooks/hooks";

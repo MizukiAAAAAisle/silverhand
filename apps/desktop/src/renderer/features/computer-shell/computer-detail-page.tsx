@@ -1,5 +1,5 @@
 import type { HostDto } from "@silverhand/shared";
-import { HostDetailView } from "@/features/hosts/HostDetailView";
+import { HostDetailView } from "@/features/computer-shell/components/host-detail-view";
 import { DirectoryPlaceholder } from "@/components/layout/directory-shell";
 
 export function ComputerDetailPage({

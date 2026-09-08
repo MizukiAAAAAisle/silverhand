@@ -11,7 +11,7 @@ import {
   readThreadAnchorMetadata,
 } from "@silverhand/shared";
 import { makeUserNameResolver } from "@/features/users/hooks";
-import { formatUserDisplayName } from "@/lib/current-user";
+import { formatUserDisplayName } from "@/features/session/current-user";
 import { Markdown } from "@/components/chat/Markdown";
 import { ConversationRef } from "@/components/chat/ConversationRef";
 import type { WorkspaceChannelReference } from "@/components/chat/ConversationRef";

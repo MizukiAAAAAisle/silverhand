@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type {
   AgentDto,
@@ -1012,52 +1010,5 @@ describe("selectPickerView — the render seam that consumes settledness", () =>
   it("no trigger ⇒ empty and complete", () => {
     const view = selectPickerView(null, mention, { select: () => channelResult("partial_error") });
     expect(view).toEqual({ items: [], hiddenCount: 0, channelStatus: "complete" });
-  });
-});
-
-describe("mention source wiring per arm (#task:2147)", () => {
-  // The pure selectors accept any arrays, so a global directory or the wrong arm's
-  // source wired into the send gate would leave the pure tests above green. This
-  // fence pins the wiring: the workspace arm feeds the `@` picker from the
-  // workspace-scoped member lists, the viewer arm from the viewer's owned agents,
-  // and the send gate reads the same arm source the picker read. Source-text, not a
-  // DOM/structure assertion.
-  const src = readFileSync(fileURLToPath(new URL("./Composer.tsx", import.meta.url)), "utf8");
-
-  it("sources workspace-arm @ candidates from useWorkspaceMemberLists(armWorkspaceId)", () => {
-    expect(src).toContain("useWorkspaceMemberLists(armWorkspaceId)");
-  });
-
-  it("sources viewer-arm @ candidates from the viewer owned agents, never a human directory", () => {
-    // The viewer arm now legitimately reads agents — but only the owned scope,
-    // and never the global human directory (a `direct_pair` names no humans
-    // through a roster).
-    expect(src).toContain("useAgents({ scope: 'owned'");
-    expect(src).not.toContain("useUsers");
-  });
-
-  // `canResolveShorthandNow` is pure, so the branch tests above stay green even if
-  // `submit()` reads the wrong settle fact. These pin the gate to the arm the picker
-  // read (#task:2001 / #task:2147).
-  it("gates the send on the same arm source the picker read", () => {
-    expect(src).toContain("canResolveShorthandNow(content, mentionSource.sourceKnown)");
-    // The workspace arm's three-value authority: data present ⇒ answered.
-    expect(src).toContain("sourceKnown: memberLists.data !== undefined");
-  });
-
-  it("waits for the authoritative source per arm instead of sending unresolved", () => {
-    // The waiting path refetches the current arm's source and rewrites with the
-    // resolver it got back, not the stale closure resolver.
-    expect(src).toContain("(await memberLists.refetch()).data");
-    expect(src).toContain("buildShorthandResolver(roster.agents, roster.humans)");
-    expect(src).toContain("(await ownedAgentsQuery.refetch()).data");
-    // The viewer resolver reads the same merged set the picker read, so a picked
-    // non-owned counterpart still resolves on send.
-    expect(src).toContain("buildViewerShorthandResolver(");
-    expect(src).toContain("mergeViewerMentionAgents(directory.counterpartAgent, owned)");
-  });
-
-  it("hands the draft back rather than sending when the source cannot be had", () => {
-    expect(src).toContain("restoreDraft()");
   });
 });

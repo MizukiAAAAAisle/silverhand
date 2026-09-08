@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { useBackendInfoSnapshot, useHostsQuery } from "@/features/hosts/hooks";
-import { NewComputerDialog } from "@/features/hosts/NewComputerDialog";
+import { useBackendInfoSnapshot, useHostsQuery } from "@/features/computer-shell/hooks/hooks";
+import { NewComputerDialog } from "@/features/computer-shell/components/new-computer-dialog";
 import { DirectoryShell, type DirectoryLifecycle } from "@/components/layout/directory-shell";
 import { ComputerSidebarShell } from "./computer-sidebar-shell";
 import { ComputerDetailPage } from "./computer-detail-page";

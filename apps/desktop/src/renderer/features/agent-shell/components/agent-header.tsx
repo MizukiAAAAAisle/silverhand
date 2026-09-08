@@ -1,4 +1,4 @@
-import { ProfileHeaderContent } from "@/features/common/profile-header-content";
+import { ProfileHeaderContent } from "@/features/profile/profile-header-content";
 import { useState, type ReactNode } from "react";
 import { MessageSquare, Power, Trash2 } from "lucide-react";
 import type { AgentDto, AgentRuntimeStateDto } from "@silverhand/shared";
@@ -6,8 +6,8 @@ import { AgentAvatar } from "@/components/AgentAvatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { SidePanelHeader } from "@/components/layout/SidePanelHeader";
 import { Button } from "@/components/ui/button";
-import { neutralAction } from "@/features/common/ControlInkBorder";
-import { destructiveAction, DESTRUCTIVE_TRIGGER } from "@/features/common/DestructiveAction";
+import { neutralAction } from "@/components/common/control-ink-border";
+import { destructiveAction, DESTRUCTIVE_TRIGGER } from "@/components/common/destructive-action";
 import { useAgentPresence, useStopAgent } from "../hooks/hooks";
 import { projectPresence, PRESENCE_TONE_DOT } from "../model/presence-projection";
 import { useAgentAvatarObjectUrl } from "../hooks/avatar-hooks";

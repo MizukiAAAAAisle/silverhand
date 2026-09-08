@@ -1,5 +1,11 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import { addTab, removeTab, reorderTabs, tabKey, type Tab } from "@/lib/conversation-tabs";
+import {
+  addTab,
+  removeTab,
+  reorderTabs,
+  tabKey,
+  type Tab,
+} from "@/features/conversation-shell/model/conversation-tabs";
 import {
   getConversationTabs,
   getConversationActiveTab,
@@ -7,7 +13,7 @@ import {
   recordConversationTabs,
   recordConversationActiveTab,
   subscribeConversationTabs,
-} from "@/lib/place-memory";
+} from "@/features/app-shell/place-memory";
 
 export interface ConversationTabsController {
   /** Shared functional tabs combined with this conversation's file tabs. */

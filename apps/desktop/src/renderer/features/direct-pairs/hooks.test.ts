@@ -658,7 +658,7 @@ describe("the live-discovery subscription is mounted once, by the session", () =
     // handed to the pane rather than dropped.
     expect(controllerSource).toContain("directPairPaneProps(");
     expect(contentSource).toContain("notFound: read.directPairNotFound");
-    expect(read("../../components/layout/ChannelView.tsx")).toContain("props.notFound");
+    expect(read("../conversation-shell/components/channel-view.tsx")).toContain("props.notFound");
   });
 });
 

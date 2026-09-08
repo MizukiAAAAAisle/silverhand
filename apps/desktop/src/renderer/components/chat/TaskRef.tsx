@@ -1,9 +1,9 @@
-import { taskChannelLabel } from "../../features/tasks/taskPlace.js";
+import { taskChannelLabel } from "../../features/task-shell/model/task-place.js";
 import { useState } from "react";
-import { useTaskByNumber } from "@/features/tasks/useTaskByNumber";
-import { useTaskRefContext } from "@/features/tasks/TaskRefContext";
-import { useUpdateTaskStatus } from "@/features/tasks/hooks";
-import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
+import { useTaskByNumber } from "@/features/task-shell/hooks/use-task-by-number";
+import { useTaskRefContext } from "@/features/task-shell/components/task-ref-context";
+import { useUpdateTaskStatus } from "@/features/task-shell/hooks/hooks";
+import { TaskStatusBadge } from "@/features/task-shell/components/task-status-badge";
 import { HoverPopover } from "./HoverPopover";
 import { useRelativeTime } from "./useRelativeTime";
 import type { TaskSummaryDto, TaskStatus } from "@silverhand/shared";

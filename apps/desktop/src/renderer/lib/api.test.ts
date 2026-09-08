@@ -208,7 +208,7 @@ describe("ApiError — D4.a Commit 5d-fixup (Cindy P1-2): backend_unreachable ki
 
   it("ApiError constructor accepts explicit kind argument (forward-compat for callers)", async () => {
     // Direct construction — used by `authResultToUser` in
-    // features/me/hooks.ts to forward a `result.status === 0`
+    // features/session/hooks.ts to forward a `result.status === 0`
     // signup/login result through the same typed channel.
     const err = new ApiError(0, "Network Error", "{}", "backend_unreachable");
     expect(err.kind).toBe("backend_unreachable");

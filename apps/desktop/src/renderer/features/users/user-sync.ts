@@ -2,8 +2,8 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { UserChangedEventSchema, type ServerFrame } from "@silverhand/shared";
 import { invalidateIdentityCarrierCaches } from "@/features/identity/identity-carrier-caches";
-import { reseatViewerFromBackend } from "@/features/me/hooks";
-import { getCurrentUserId } from "@/lib/current-user";
+import { reseatViewerFromBackend } from "@/features/session/hooks";
+import { getCurrentUserId } from "@/features/session/current-user";
 import { onWsFrame, subscribeWsScope } from "@/lib/ws-client";
 
 /**

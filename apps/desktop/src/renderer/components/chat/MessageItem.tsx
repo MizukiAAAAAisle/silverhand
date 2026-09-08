@@ -22,12 +22,16 @@ import {
   getAttachmentBlobUrl,
   loadAttachmentBlobUrl,
   useAttachmentBlobToken,
-} from "@/lib/attachment-blob-cache";
-import { formatUserDisplayName, isCurrentUserId, type UserNameResolver } from "@/lib/current-user";
+} from "@/features/attachments/attachment-blob-cache";
+import {
+  formatUserDisplayName,
+  isCurrentUserId,
+  type UserNameResolver,
+} from "@/features/session/current-user";
 import { Lightbox } from "./Lightbox";
 import { saveAttachmentToDisk } from "./save-attachment";
 import { openAttachmentExternally } from "./open-attachment";
-import { attachmentPreviewKind } from "@/lib/attachment-preview";
+import { attachmentPreviewKind } from "@/features/attachments/attachment-preview";
 import { Markdown } from "./Markdown";
 import {
   presentAuthor,
@@ -49,8 +53,8 @@ import {
   StatusPicker,
   taskStatusLabel,
   TASK_STATUS_ICON,
-} from "@/components/tasks/TaskStatusBadge";
-import { useUpdateTaskStatus } from "@/features/tasks/hooks";
+} from "@/features/task-shell/components/task-status-badge";
+import { useUpdateTaskStatus } from "@/features/task-shell/hooks/hooks";
 import { useToggleReaction } from "@/features/channels/reaction-hooks";
 import { useMessageLayoutMode } from "./useMessageLayoutMode";
 

@@ -2,7 +2,7 @@ import type { AgentDto, AttachmentSnapshot, MessageDto, UserDto } from "@silverh
 import { resolveAttachmentLabels } from "@silverhand/shared";
 import { FileText, Hash } from "lucide-react";
 import { AVATAR_PX } from "@/components/avatar-scale";
-import { getAttachmentBlobUrl } from "@/lib/attachment-blob-cache";
+import { getAttachmentBlobUrl } from "@/features/attachments/attachment-blob-cache";
 import { AuthorAvatarView, AuthorName } from "./author-avatar-view";
 import { authorStateLabel, presentAuthor } from "./author-presentation";
 import { continuesAuthorGroup } from "./authorGrouping";

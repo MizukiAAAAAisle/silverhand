@@ -1,30 +1,68 @@
-import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+import { MessageDtoSchema } from "@silverhand/shared";
 import { CLUSTERABLE_SUBTYPES } from "@/components/chat/groupMessages";
+import { TaskEventRow } from "./task-event";
 
-describe('task-event row — task_edit renders as an "edited" verb, not a status move', () => {
-  const source = readFileSync(fileURLToPath(new URL("./task-event.tsx", import.meta.url)), "utf8");
+vi.mock("./shared", () => ({ useUserResolver: () => () => "User" }));
+vi.mock("@/components/chat/TaskRef", () => ({
+  TaskRef: ({ taskNumber }: { taskNumber: number }) => `#${taskNumber}`,
+}));
 
-  it("maps task_edit to its own verb in both the enriched and degraded rows", () => {
-    // Two ternaries (enriched `TaskEventBody` + `TaskEventRowDegraded`) each
-    // need the explicit `task_edit` case ahead of the `'unclaimed'` fallback.
-    const enrichedCase = source.includes("subtype === 'task_edit'");
-    const degradedCase = source.includes("meta.subtype === 'task_edit'");
-    expect(enrichedCase).toBe(true);
-    expect(degradedCase).toBe(true);
-    expect(source).toContain("'edited'");
+function text(subtype: "task_edit" | "task_status", enriched: boolean) {
+  const metadata = {
+    subtype,
+    task_number: 42,
+    task_status: "in_progress",
+    ...(enriched
+      ? {
+          task_id: "task-a",
+          task_title: "Example",
+          task_assignee: null,
+          actor: { kind: "agent", id: "agent-a", name: "Agent" },
+        }
+      : {}),
+  };
+  const message = MessageDtoSchema.parse({
+    id: "message",
+    conversation_id: "channel",
+    from_kind: "system",
+    from_agent_id: null,
+    from_user_id: null,
+    author: null,
+    content: "legacy content",
+    metadata,
+    attachments: null,
+    reactions: null,
+    seq: 1,
+    created_at: 1,
+    thread_root_id: null,
+    linked_task: null,
   });
-
-  it("never routes task_edit through the status-transition (pill) shape", () => {
-    // The ONLY `→ pill` path is the status early-return; task_edit is not
-    // task_status, so it must not appear as a status-pill subtype branch.
-    expect(source).not.toContain("subtype === 'task_edit'\n    ) {");
-    // The status pill is reserved for the single `task_status` branch.
-    expect(source).toContain("if (subtype === 'task_status')");
-  });
-
-  it("clusters task_edit with the rest of the task_* lifecycle family", () => {
+  return renderToStaticMarkup(createElement(TaskEventRow, { message })).replace(/<[^>]+>/g, " ");
+}
+describe("task event meaning", () => {
+  it.each([false, true])(
+    "an edit says edited without claiming a status move (enriched=%s)",
+    (enriched) => {
+      const content = text("task_edit", enriched);
+      expect(content).toContain("edited");
+      expect(content).toContain("#42");
+      expect(content).not.toContain("→");
+      expect(content).not.toContain("in progress");
+    },
+  );
+  it.each([false, true])(
+    "a status event does report the status transition (enriched=%s)",
+    (enriched) => {
+      const content = text("task_status", enriched);
+      expect(content).toContain("→");
+      expect(content).toContain("in progress");
+      expect(content).not.toContain("edited");
+    },
+  );
+  it("clusters task edits with lifecycle events", () => {
     expect(CLUSTERABLE_SUBTYPES.has("task_edit")).toBe(true);
   });
 });

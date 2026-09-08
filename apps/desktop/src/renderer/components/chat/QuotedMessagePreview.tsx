@@ -3,7 +3,7 @@ import { ThreadIcon } from "@/components/icons/conversation-icons";
 import type { MessageDto } from "@silverhand/shared";
 import { useMessage } from "@/features/messages/hooks";
 import { useUsersById, makeUserNameResolver } from "@/features/users/hooks";
-import { formatUserDisplayName } from "@/lib/current-user";
+import { formatUserDisplayName } from "@/features/session/current-user";
 import { Markdown } from "./Markdown";
 import { useRelativeTime } from "./useRelativeTime";
 

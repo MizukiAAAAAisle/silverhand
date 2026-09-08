@@ -4,11 +4,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "./Markdown";
-import { TaskRefContextProvider } from "@/features/tasks/TaskRefContext";
-import { useTaskByNumber } from "@/features/tasks/useTaskByNumber";
+import { TaskRefContextProvider } from "@/features/task-shell/components/task-ref-context";
+import { useTaskByNumber } from "@/features/task-shell/hooks/use-task-by-number";
 import { highlightText } from "@/features/chat-shell/search-panel";
-vi.mock("@/features/tasks/useTaskByNumber", async (orig) => ({
-  ...(await orig<typeof import("@/features/tasks/useTaskByNumber")>()),
+vi.mock("@/features/task-shell/hooks/use-task-by-number", async (orig) => ({
+  ...(await orig<typeof import("@/features/task-shell/hooks/use-task-by-number")>()),
   useTaskByNumber: vi.fn(() => ({ data: null, isLoading: true, isError: false })),
 }));
 beforeEach(() => vi.clearAllMocks());
@@ -38,8 +38,16 @@ function render(taskReferences?: "raw" | "resolve", text = content) {
 
 describe("task numbers stay literal outside chat", () => {
   it.each([
-    ["description dialog", "../tasks/TaskDetailDialog.tsx", "detail.content"],
-    ["description side panel", "../tasks/TaskDetailPanel.tsx", "detail.content"],
+    [
+      "description dialog",
+      "../../features/task-shell/components/task-detail-dialog.tsx",
+      "detail.content",
+    ],
+    [
+      "description side panel",
+      "../../features/task-shell/components/task-detail-panel.tsx",
+      "detail.content",
+    ],
     ["saved message", "../../features/chat-shell/saved-list-view.tsx", "item.message.content"],
   ])("%s opts into raw task text even inside a chat task context", (_, path, expression) => {
     const source = readFileSync(new URL(path, import.meta.url), "utf8");

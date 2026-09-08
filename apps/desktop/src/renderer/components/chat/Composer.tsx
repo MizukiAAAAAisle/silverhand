@@ -1,4 +1,4 @@
-import { getCurrentUserId } from "@/lib/current-user";
+import { getCurrentUserId } from "@/features/session/current-user";
 import { createLogicalSend, type LogicalSend } from "@/features/channels/logical-send";
 import {
   Fragment,
@@ -51,7 +51,7 @@ import {
   isRegistrationRequired,
   isUpdateRequired,
   useViewerUser,
-} from "@/features/me/hooks";
+} from "@/features/session/hooks";
 import {
   assignAttachmentLabel,
   clearComposerDraft,
@@ -68,8 +68,8 @@ import {
   writeComposerDraft,
   type CachedPendingAttachment,
   type ComposerDraftSnapshot,
-} from "@/lib/composer-draft-cache";
-import { onQuoteToComposer, spliceQuoteIntoDraft } from "@/lib/quote-to-composer";
+} from "@/features/messages/composer-draft-cache";
+import { onQuoteToComposer, spliceQuoteIntoDraft } from "@/features/messages/quote-to-composer";
 import { Lightbox } from "./Lightbox";
 import { ComposerActivityHeader } from "./ComposerActivityHeader";
 

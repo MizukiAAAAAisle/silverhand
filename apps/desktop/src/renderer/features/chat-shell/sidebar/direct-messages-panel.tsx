@@ -11,7 +11,7 @@ import {
   presentCounterpart,
 } from "@/features/direct-pairs/counterpart-presentation";
 import { mergeDirectLineRows, type DirectLineRow } from "@/features/direct-pairs/direct-line-rows";
-import { channelRowBadge } from "@/lib/attention-mode";
+import { channelRowBadge } from "@/features/attention/attention-mode";
 import {
   ConversationRowLayout,
   SidebarSection,

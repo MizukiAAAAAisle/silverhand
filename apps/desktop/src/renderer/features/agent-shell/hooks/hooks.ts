@@ -618,7 +618,7 @@ export function useUpdateAgent(agentId: string | null) {
  * real QueryClient with a seeded run-state query (Cindy #1470 review).
  *
  * The run-state keys are `['conversations', conversationId, 'agent-run-states']`
- * — see `lib/agentRunStateCache.ts::agentRunStatesKey` (the single authority;
+ * — see `features/agent-shell/model/agent-run-state-cache.ts::agentRunStatesKey` (the single authority;
  * `features/channels/hooks.ts::useAgentRunStates` calls into it). A bare
  * `['conversations']` prefix would over-fire against every conversation-scoped
  * query, so we use a structured predicate that matches only run-state slots.
@@ -672,7 +672,7 @@ export function useSwitchAgentRuntime(agentId: string | null) {
 
 /**
  * POST /api/agents/:id/avatar (multipart). Mirrors `useUploadAvatar` in
- * `features/me/hooks.ts` but for agents.
+ * `features/session/hooks.ts` but for agents.
  *
  * The route is gated by `canEditAgent` (creator-or-system) — non-creator
  * humans get 403, which `apiUpload` surfaces as `ApiError`. The renderer

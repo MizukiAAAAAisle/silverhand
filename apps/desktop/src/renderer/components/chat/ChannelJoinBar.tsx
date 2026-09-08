@@ -1,5 +1,5 @@
 import { LogIn } from "lucide-react";
-import { primaryAction } from "@/features/common/PrimaryAction";
+import { primaryAction } from "@/components/common/primary-action";
 
 export function ChannelJoinBar({
   onJoin,

@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AttachmentHtmlPreview } from "./AttachmentHtmlPreview";
-import { HTML_PREVIEW_CSP } from "@/lib/html-preview-csp";
+import { HTML_PREVIEW_CSP } from "@/features/attachments/html-preview-csp";
 
 /**
  * Security fence for the real HTML preview carrier. SSR markup is tested rather

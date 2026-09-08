@@ -11,10 +11,10 @@ import { AppContextMenu } from "@/components/menus/AppContextMenu";
 import { ChannelRowMenuItems } from "./channel-row-menu-items";
 import { useFavorites, useUnstarFavorite } from "@/features/favorites/hooks";
 import { useAttentionModesAcrossWorkspaces } from "@/features/attention/hooks";
-import type { FavoritesWatchScope } from "@/lib/home-grouping";
+import type { FavoritesWatchScope } from "@/features/chat-shell/model/home-grouping";
 import { useArchiveChannel, useChannelDetail, useSetSortMode } from "@/features/workspaces/hooks";
-import { channelRowBadge } from "@/lib/attention-mode";
-import { conversationSelectionTier } from "@/lib/rail-selection";
+import { channelRowBadge } from "@/features/attention/attention-mode";
+import { conversationSelectionTier } from "@/features/chat-shell/model/rail-selection";
 import { sortModeOf } from "@/lib/viewer-sort";
 import { SortModeMenu } from "@/components/layout/SortModeMenu";
 import {

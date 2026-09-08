@@ -13,7 +13,7 @@ import {
   isRegistrationRequired,
   isUpdateRequired,
   useViewerUser,
-} from "@/features/me/hooks";
+} from "@/features/session/hooks";
 import {
   useArchivedChannelsForWorkspace,
   useChannelsForWorkspace,

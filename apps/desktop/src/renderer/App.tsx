@@ -18,14 +18,14 @@ import {
   isUpdateRequired,
   useRuntimeEpochPromotion,
   useViewerUser,
-} from "@/features/me/hooks";
-import { RegistrationGate } from "@/features/me/RegistrationGate";
-import { BackendUnreachableGate } from "@/features/me/BackendUnreachableGate";
-import { UpdateRequiredGate } from "@/features/me/UpdateRequiredGate";
-import { AppStatusBanner } from "@/features/me/AppStatusBanner";
+} from "@/features/session/hooks";
+import { RegistrationGate } from "@/features/app-shell/registration-gate";
+import { BackendUnreachableGate } from "@/features/app-shell/backend-unreachable-gate";
+import { UpdateRequiredGate } from "@/features/app-shell/update-required-gate";
+import { AppStatusBanner } from "@/features/app-shell/app-status-banner";
 import { SettingsShell } from "@/features/settings-shell/settings-shell";
-import { shouldSecondaryFullscreen } from "@/lib/secondary-pane";
-import { LAST_CHANNEL_KEY, clearPlaceMemory } from "@/lib/place-memory";
+import { shouldSecondaryFullscreen } from "@/features/conversation-shell/model/secondary-pane";
+import { LAST_CHANNEL_KEY, clearPlaceMemory } from "@/features/app-shell/place-memory";
 import { toasterTypedIcons } from "@/lib/toast-icons";
 
 export { LAST_CHANNEL_KEY, clearPlaceMemory };

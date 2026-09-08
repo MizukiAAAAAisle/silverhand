@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { applyAppearanceOverrides } from "@/settings/apply";
-import { parseAppearanceJson } from "@/settings/parse";
+import { applyAppearanceOverrides } from "@/features/appearance/apply";
+import { parseAppearanceJson } from "@/features/appearance/parse";
 import {
   DEFAULT_APPEARANCE,
   FONT_SIZE_MAX,
@@ -8,7 +8,7 @@ import {
   type AppearanceSettings,
   type MarkdownTextSettings,
   type ThemeId,
-} from "@/settings/types";
+} from "@/features/appearance/types";
 
 const STORAGE_KEY = "silverhand:appearance";
 

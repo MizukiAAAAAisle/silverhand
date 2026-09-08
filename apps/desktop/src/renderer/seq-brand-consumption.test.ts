@@ -130,7 +130,7 @@ describe("seq-brand renderer consumption fences (#task:1267 §6)", () => {
       // #task:1292: appendPendingMessage's §3.3 provisional-head decode moved
       // here with the append trio.
       "features/channels/message-cache-core.ts",
-      "lib/place-memory.ts",
+      "features/app-shell/place-memory.ts",
     ]);
     const offenders = FILES.filter(
       (f) => f.code.includes("decodeMessageSeq(") && !ALLOWED.has(f.rel),

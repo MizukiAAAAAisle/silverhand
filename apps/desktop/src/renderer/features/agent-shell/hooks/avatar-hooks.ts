@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { getAvatarBlobUrl, loadAvatarBlobUrl } from "@/lib/avatar-blob-cache";
+import { getAvatarBlobUrl, loadAvatarBlobUrl } from "@/features/identity/avatar-blob-cache";
 
 /**
  * Avatar fetch hooks for agents. Both flavors resolve an `avatar_url` (relative
  * `?v=`-versioned path baked into `AgentDto`) into a browser object URL by
- * delegating to the app-session avatar cache (`@/lib/avatar-blob-cache`).
+ * delegating to the app-session avatar cache (`@/features/identity/avatar-blob-cache`).
  *
  * The session cache — not the component — owns the object URL's lifetime: the
  * same `avatar_url` is fetched exactly once per renderer session and reused

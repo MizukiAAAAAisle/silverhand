@@ -3,9 +3,12 @@ import { DirectorySidebar } from "@/components/layout/directory-shell";
 import { Monitor, Plus } from "lucide-react";
 import type { HostDto } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
-import { computerCopy } from "@/features/hosts/computer-copy";
-import { useHostStatusQuery } from "@/features/hosts/hooks";
-import { describeHostStatus, type HostStatusTone } from "@/features/hosts/host-status-presentation";
+import { computerCopy } from "@/features/computer-shell/model/computer-copy";
+import { useHostStatusQuery } from "@/features/computer-shell/hooks/hooks";
+import {
+  describeHostStatus,
+  type HostStatusTone,
+} from "@/features/computer-shell/model/host-status-presentation";
 import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
 
 export interface ComputerSidebarShellProps {

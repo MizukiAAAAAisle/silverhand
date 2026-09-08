@@ -6,15 +6,18 @@ import { useAgents, useAgentPresence } from "@/features/agent-shell/hooks/hooks"
 import { projectPresence } from "@/features/agent-shell/model/presence-projection";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { CreateAgentDialog } from "@/features/agent-shell/components/create-agent-dialog";
-import { useHostsQuery } from "@/features/hosts/hooks";
-import { hostDisplayName, UNKNOWN_COMPUTER_LABEL } from "@/features/hosts/host-display";
+import { useHostsQuery } from "@/features/computer-shell/hooks/hooks";
+import {
+  hostDisplayName,
+  UNKNOWN_COMPUTER_LABEL,
+} from "@/features/computer-shell/model/host-display";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useViewerAvatarObjectUrl,
   useViewerUser,
-} from "@/features/me/hooks";
+} from "@/features/session/hooks";
 import { useUsers } from "@/features/users/hooks";
 import { usePresenceById, presenceDotStatus } from "@/features/presence/hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
@@ -22,7 +25,7 @@ import { AgentAvatar } from "@/components/AgentAvatar";
 import { UserAvatar } from "@/components/UserAvatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { Button } from "@/components/ui/button";
-import { CURRENT_USER_SUBTITLE } from "@/lib/current-user";
+import { CURRENT_USER_SUBTITLE } from "@/features/session/current-user";
 import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
 
 interface AgentSidebarShellProps {

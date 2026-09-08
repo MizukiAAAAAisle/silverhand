@@ -5,7 +5,7 @@ import {
   AppContextMenuSeparator,
   AppContextMenuSub,
 } from "@/components/menus/AppContextMenu";
-import { ChannelAttentionMenuItems } from "../../../components/layout/ChannelAttentionSurfaces";
+import { ChannelAttentionMenuItems } from "../../conversation-shell/components/channel-attention-surfaces";
 import { copyConversationName } from "../../../components/layout/sidebar-shared";
 
 /** Sidebar placement changes star state, never channel management capabilities. */

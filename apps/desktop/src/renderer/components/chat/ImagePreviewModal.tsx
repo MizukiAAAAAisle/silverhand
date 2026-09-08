@@ -5,12 +5,12 @@ import { X } from "lucide-react";
 import { toPng } from "html-to-image";
 import { toast } from "sonner";
 import type { AgentDto, MessageDto, TaskSummaryDto, UserDto } from "@silverhand/shared";
-import { loadAttachmentBlobUrl } from "@/lib/attachment-blob-cache";
+import { loadAttachmentBlobUrl } from "@/features/attachments/attachment-blob-cache";
 import {
   taskBoardCacheScope,
   taskByNumberKey,
   type TaskRefCoord,
-} from "@/features/tasks/useTaskByNumber";
+} from "@/features/task-shell/hooks/use-task-by-number";
 import { MessageScreenshotView } from "./MessageScreenshotView";
 import { extractMermaidSources, isDarkTheme, renderMermaidSvg } from "./MermaidDiagram";
 import { suggestImageFilename } from "./markdownTranscript";

@@ -41,7 +41,7 @@
 | Supervisor (host) | `packages/host/src/daemon/supervisor/` | **当前** run-state owner：维护 per (conv, agent) 的 `AgentRunState`，聚合 thinking/text 片段为尾窗 `activitySnippet`，跟踪 compaction，处理 turn 边界 resolve，并在 raw `agent_event` fanout 前压缩大 `tool_call.input`（下文历史图里的 `ConversationManager` 已迁到这里） |
 | Bus | `packages/backend/src/ws/scope-event-bus.ts` | 把 `agent_activity` payload 路由到 `conversation:{conversationId}` scope，replay buffer 200 条 |
 | WS Client | `apps/desktop/src/renderer/lib/ws-client.ts` | 单 socket 多 scope，断线 resume；scope 不匹配的 frame 不投递给该 hook |
-| Cache | `apps/desktop/src/renderer/lib/agentRunStateCache.ts` | per-conversation TanStack Query cache，按 (agentId) 去重，终态 tombstone TTL 5 分钟防 stale snapshot 复活 |
+| Cache | `apps/desktop/src/renderer/features/agent-shell/model/agent-run-state-cache.ts` | per-conversation TanStack Query cache，按 (agentId) 去重，终态 tombstone TTL 5 分钟防 stale snapshot 复活 |
 | UI | `apps/desktop/src/renderer/components/chat/AgentActivityBubble.tsx` | 渲染 composer 上方的 activity strip；每个 in-flight agent 一个 chip，包含 phase snippet / compaction 状态 / elapsed / 工具总数，并可跳回最近 user message |
 
 ---
@@ -319,7 +319,7 @@ suite was retired when run-state ownership moved to the host supervisor.)
 - `emits one tool_output per fileChange entry on completion` — 验证 fileChange 按 `changes` 数等量配对。
 - `clears pending tool counts on turn/completed to bound state across turns` — 验证 turn 边界清表、late completed 不复活。
 
-`apps/desktop/src/renderer/lib/agentRunStateCache.test.ts`：
+`apps/desktop/src/renderer/features/agent-shell/model/agent-run-state-cache.test.ts`：
 
 - `keeps per-conversation cache writes isolated` — 跨 conversation 不串。
 - `does not let an older run replace a newer run for the same agent` — replace 顺序判定。
@@ -350,7 +350,7 @@ suite was retired when run-state ownership moved to the host supervisor.)
 ```bash
 pnpm --filter @silverhand/host exec vitest run tests/supervisor.test.ts
 pnpm --filter @silverhand/backend exec vitest run tests/runtime/run-state-cache.test.ts
-pnpm --filter @silverhand/desktop exec vitest run src/renderer/lib/agentRunStateCache.test.ts
+pnpm --filter @silverhand/desktop exec vitest run src/renderer/features/agent-shell/model/agent-run-state-cache.test.ts
 pnpm --filter @silverhand/backend typecheck
 pnpm --filter @silverhand/desktop typecheck
 ```

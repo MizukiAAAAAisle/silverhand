@@ -1,4 +1,4 @@
-import { useProfileHeroSize } from "@/features/common/use-profile-hero-size";
+import { useProfileHeroSize } from "@/features/profile/use-profile-hero-size";
 import { ProfileMessageActivity } from "@/features/profile/ProfileMessageActivity";
 import { useState, type JSX } from "react";
 import "./agent-profile-hero.css";
@@ -7,18 +7,18 @@ import type { AgentDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { cn } from "@/lib/cn";
-import { MetadataList, ProfileSection } from "@/features/common/ProfileSummarySections";
+import { MetadataList, ProfileSection } from "@/features/profile/profile-summary-sections";
 import { useUpdateAgent } from "../hooks/hooks";
 import { useAgentAvatarObjectUrl } from "../hooks/avatar-hooks";
 import { canEditAgentProfile } from "../model/permissions";
 import { EditableAgentAvatar } from "./editable-agent-avatar";
-import { EditPencilButton } from "@/features/common/EditPencilButton";
-import { InlineText } from "@/features/common/InlineText";
-import { rejectDisplayName } from "@/features/common/display-name";
+import { EditPencilButton } from "@/components/common/edit-pencil-button";
+import { InlineText } from "@/components/common/inline-text";
+import { rejectDisplayName } from "@/features/identity/display-name";
 import { InlineTextarea } from "./inline-textarea";
 import { RuntimeConfigEditor } from "./runtime-config-editor";
-import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/me/hooks";
-import { UNKNOWN_COMPUTER_LABEL } from "@/features/hosts/host-display";
+import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/session/hooks";
+import { UNKNOWN_COMPUTER_LABEL } from "@/features/computer-shell/model/host-display";
 
 interface AgentProfileCardProps {
   agent: AgentDto;

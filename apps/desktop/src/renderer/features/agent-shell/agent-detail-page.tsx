@@ -1,5 +1,5 @@
 import { AgentView } from "@/features/agent-shell/components/agent-view";
-import { HumanView } from "@/features/me/HumanView";
+import { HumanView } from "@/features/profile/human-view";
 import { DirectoryPlaceholder } from "@/components/layout/directory-shell";
 
 export interface AgentNavigation {

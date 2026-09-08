@@ -4,10 +4,10 @@ import { useDirectPairsSync } from "@/features/direct-pairs/hooks";
 import { usePresenceSync } from "@/features/presence/hooks";
 import { useAgentSync } from "@/features/agent-shell/model/agent-sync";
 import { useUserSync } from "@/features/users/user-sync";
-import { useHostConnectionSync } from "@/features/hosts/host-connection-sync";
+import { useHostConnectionSync } from "@/features/computer-shell/model/host-connection-sync";
 import { useConversationIngestor } from "@/features/realtime/conversation-ingestor";
 import { useViewerUnreadIngestor } from "@/features/realtime/viewer-unread-ingestor";
-import { cleanupAllComposerDrafts } from "@/lib/composer-draft-cache";
+import { cleanupAllComposerDrafts } from "@/features/messages/composer-draft-cache";
 
 // App-shell orchestration effects, lifted out of `RegisteredAppShell` so the
 // shell stays a thin composition root. Each hook preserves the exact call

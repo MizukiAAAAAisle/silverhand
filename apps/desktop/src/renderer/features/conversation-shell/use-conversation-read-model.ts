@@ -23,8 +23,11 @@ import {
   type ChannelListItem,
 } from "@/features/workspaces/hooks";
 import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
-import { directPairAuthorityFromQuery, type DirectPairAuthority } from "@/lib/chat-place-restore";
-import { type ConversationPointer } from "@/lib/secondary-pane";
+import {
+  directPairAuthorityFromQuery,
+  type DirectPairAuthority,
+} from "@/features/chat-shell/model/chat-place-restore";
+import { type ConversationPointer } from "@/features/conversation-shell/model/secondary-pane";
 import { useRouteState } from "@/router";
 import { isWorkspacePlaced } from "@silverhand/shared";
 import { useCallback, useDeferredValue, useMemo } from "react";

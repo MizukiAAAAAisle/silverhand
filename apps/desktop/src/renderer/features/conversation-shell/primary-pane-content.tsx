@@ -1,4 +1,4 @@
-import { ChannelView } from "@/components/layout/ChannelView";
+import { ChannelView } from "@/features/conversation-shell/components/channel-view";
 import { DirectPairDraftPane } from "@/features/direct-pairs/DirectPairDraftPane";
 import type { PrimaryPaneModel } from "./pane-render-models";
 

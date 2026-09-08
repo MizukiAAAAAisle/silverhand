@@ -1,6 +1,6 @@
 import { forwardRef, type ComponentProps, type HTMLAttributes } from "react";
 import { ChannelIcon } from "@/components/ChannelIcon";
-import type { RowBadge } from "@/lib/attention-mode";
+import type { RowBadge } from "@/features/attention/attention-mode";
 import {
   ConversationRowLayout,
   MutedMarker,

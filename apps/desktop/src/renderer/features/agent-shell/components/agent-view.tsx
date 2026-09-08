@@ -27,7 +27,7 @@ import {
   canManageAgentSchedules,
   canViewAgentFiles,
 } from "../model/permissions";
-import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/me/hooks";
+import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/session/hooks";
 import { paneChrome } from "@/components/layout/pane-chrome";
 
 const SECTION_STORAGE_KEY = "silverhand:layout.agent-section";

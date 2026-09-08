@@ -10,7 +10,10 @@ import type {
 import type { DirectPairPaneProps } from "@/features/direct-pairs/hooks";
 import type { AdvancedSearchSeed } from "@/features/search/advanced-search-seed";
 import type { ChannelListItem } from "@/features/workspaces/hooks";
-import type { SecondaryDescriptor, SecondaryViewInputs } from "@/lib/secondary-pane";
+import type {
+  SecondaryDescriptor,
+  SecondaryViewInputs,
+} from "@/features/conversation-shell/model/secondary-pane";
 import type { RouteState } from "@/router";
 import type { ConversationVisibility } from "@silverhand/shared";
 import type { PaneAttachmentRequest } from "./conversation-shell-models";

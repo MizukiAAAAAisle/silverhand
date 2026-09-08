@@ -2,11 +2,11 @@ import { useContextualCloseResponder } from "@/features/app-shell/keyboard-short
 import { useSecondaryPaneModel } from "@/features/app-shell/secondary-pane-model";
 import { useMarkMessageChannelRead } from "@/features/channels/hooks";
 import { mountsMemberOnlyPanel } from "@/features/channels/membership";
-import { resolveTaskDetailSurface } from "@/features/tasks/task-detail-surface";
+import { resolveTaskDetailSurface } from "@/features/task-shell/model/task-detail-surface";
 import {
   selectSecondaryViewInputs,
   selectSidebarSelectedConversationId,
-} from "@/lib/secondary-pane";
+} from "@/features/conversation-shell/model/secondary-pane";
 import { useNav, useRouteState } from "@/router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {

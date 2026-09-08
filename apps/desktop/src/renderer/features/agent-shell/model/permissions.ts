@@ -1,5 +1,5 @@
 import type { AgentDto, MeResponse, WorkspaceRole } from "@silverhand/shared";
-import { isRegistrationRequired } from "@/features/me/hooks";
+import { isRegistrationRequired } from "@/features/session/hooks";
 
 /**
  * Renderer-side mirror of `canEditAgent` (creator branch only).

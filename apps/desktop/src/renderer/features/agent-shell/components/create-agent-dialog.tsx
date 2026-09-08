@@ -17,7 +17,7 @@ import {
 import { Combobox } from "@/components/ui/combobox";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
+import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 import { cn } from "@/lib/cn";
 import { describeApiError } from "@/lib/api-error-message";
 import { NameAvailabilityHint, useNameAvailability } from "@/features/naming/useNameAvailability";
@@ -25,9 +25,9 @@ import {
   useHostAvailabilityMap,
   useHostRuntimeCatalog,
   useHostsQuery,
-} from "@/features/hosts/hooks";
-import { isComputerAvailable } from "@/features/hosts/host-display";
-import { ComputerPicker } from "@/features/hosts/ComputerPicker";
+} from "@/features/computer-shell/hooks/hooks";
+import { isComputerAvailable } from "@/features/computer-shell/model/host-display";
+import { ComputerPicker } from "@/features/computer-shell/components/computer-picker";
 import { useCreateAgent } from "../hooks/hooks";
 import {
   deriveRuntimePickerMode,

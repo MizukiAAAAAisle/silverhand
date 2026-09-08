@@ -4,7 +4,7 @@ import { messageReactorsKeyPrefix } from "@/features/channels/reaction-hooks";
 import { CONVERSATION_MEMBERS_KEY_PREFIX } from "@/features/conversations/useConversationMembers";
 import { directPairsKey } from "@/features/direct-pairs/hooks";
 import { favoritesKey } from "@/features/favorites/hooks";
-import { hostResourcesKeyPrefix, hostStatusKeyPrefix } from "@/features/hosts/hooks";
+import { hostResourcesKeyPrefix, hostStatusKeyPrefix } from "@/features/computer-shell/hooks/hooks";
 import { savedKey } from "@/features/saved/hooks";
 import { searchKey } from "@/features/search/hooks";
 import { usersKey } from "@/features/users/hooks";

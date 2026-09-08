@@ -1,6 +1,6 @@
 import { deriveNavRailDots } from "@/components/layout/NavRail";
-import { useBackendInfoSnapshot } from "@/features/hosts/hooks";
-import { useTaskBoardRealtime } from "@/features/tasks/useBoard";
+import { useBackendInfoSnapshot } from "@/features/computer-shell/hooks/hooks";
+import { useTaskBoardRealtime } from "@/features/task-shell/hooks/use-board";
 import {
   useAppShellGlobalSync,
   useComposerDraftCleanup,

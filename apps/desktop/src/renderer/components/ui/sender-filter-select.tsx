@@ -14,7 +14,11 @@ import {
   FILTER_SELECT_TRIGGER_CLASS,
   FILTER_SELECT_CONTENT_CLASS,
 } from "@/components/ui/filter-select";
-import { formatUserDisplayName, getCurrentUserId, type UserNameResolver } from "@/lib/current-user";
+import {
+  formatUserDisplayName,
+  getCurrentUserId,
+  type UserNameResolver,
+} from "@/features/session/current-user";
 
 /**
  * Shared "filter by sender" dropdown — one control, one item design: Humans

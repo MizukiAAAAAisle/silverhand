@@ -5,7 +5,10 @@ import type { MessageJumpTarget } from "@/features/channels/useMessageJumpContro
 import type { UnreadCounts } from "@/features/notifications/hooks";
 import type { WorkspaceListItem } from "@/features/workspaces/hooks";
 import type { SidebarPane } from "@/hooks/useSidebarPane";
-import type { ConversationPointer, SecondaryDescriptor } from "@/lib/secondary-pane";
+import type {
+  ConversationPointer,
+  SecondaryDescriptor,
+} from "@/features/conversation-shell/model/secondary-pane";
 import type { ChatView, RouteState, useNav } from "@/router";
 import type {
   AgentDto,

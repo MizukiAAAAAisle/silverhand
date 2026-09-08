@@ -53,7 +53,7 @@ vi.mock("@/features/channels/useViewerChannelRemovalSync", () => ({
 vi.mock("@/features/app-shell/selection-persistence", () => ({
   useSelectionPersistenceEffects: vi.fn(),
 }));
-vi.mock("@/lib/place-memory", () => ({
+vi.mock("@/features/app-shell/place-memory", () => ({
   lastChannelByWorkspace: h.memory,
   persistLastChannel: h.persist,
   getLastWorkspaceId: () => null,

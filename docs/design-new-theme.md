@@ -36,7 +36,7 @@ apps/desktop/src/renderer/
 
 1. **新建 `styles/themes/nordic.css`** —— 复制一份现有 theme 文件（例如 `studio-light.css`）当骨架，把选择器改成 `[data-theme='nordic']`，把每个 token 的值替换成本主题的色值（保持变量名不变）。**不要漏 token**，对照 §3 表逐一填。
 2. **`styles/global.css` 顶部加一行**：`@import "./themes/nordic.css";`
-3. **`settings/types.ts` 的 `ThemeId` 联合类型加一项**：`... | 'nordic'`
+3. **`features/appearance/types.ts` 的 `ThemeId` 联合类型加一项**：`... | 'nordic'`
 4. **`settings/sections/AppearanceSection.tsx` 的 `THEMES` 数组加一项**，提供 4 色预览（bg / surface / text / accent）和一句中文 `hint`
 5. 重启 dev server，进 Settings → Appearance，切到 nordic，逐屏走查（见 §6 自检清单）
 
@@ -182,11 +182,11 @@ apps/desktop/src/renderer/
 
 **当前值**：forza6 / slack-dark 共享"主操作 = 牛油果绿"（#task:1623）—— 浅段 `#9CBF5C` + 墨字（forza6 靠 2px 墨框给边界，slack 靠深底）；中段 olive drab 是死区：白字 3.81 不过、墨字 4.50 贴线。**studio-light 例外，CTA 直接吃 `--accent`（深蓝 `#2F5AD0`）**（#task:1656）：绿在那个主题里是 **agent 身份色**，CTA 再吃绿就是一个 hue 两个语义。→ 这个 token 的选值判据是"这个主题里还有哪个 hue 没被别的语义占"，不是"三主题统一"。
 
-**主 CTA 的形状走一个 hook，且它是「一对」**：`primaryAction()` / `primaryCancel()`（`features/common/PrimaryAction.ts`）分别挂 `[data-primary-action='commit'|'cancel']`，consumer 只出 motion + layout，主题在 `[data-theme='...'] [data-primary-action='commit']` 里画 identity（forza6 = 2px 墨框 + 直角 + 硬投影 + hover 揭起）。新增主 CTA 直接消费它，别再造第二份配方。
+**主 CTA 的形状走一个 hook，且它是「一对」**：`primaryAction()` / `primaryCancel()`（`components/common/primary-action.ts`）分别挂 `[data-primary-action='commit'|'cancel']`，consumer 只出 motion + layout，主题在 `[data-theme='...'] [data-primary-action='commit']` 里画 identity（forza6 = 2px 墨框 + 直角 + 硬投影 + hover 揭起）。新增主 CTA 直接消费它，别再造第二份配方。
 
 Cancel 必须跟着一起换：commit 有框有填充有投影、Cancel 是裸 ghost 时，一个弹窗读起来是「一个按钮 + 一个文字」而不是「一个决定的两个答案」（shiki 2026-07-26）。`primaryCancel()` 出的就是全 app 唯一那份中性 framed surface `CONTROL_SURFACE_BUTTON`，并且**跟 `destructiveCancel()` 共用同一条主题规则** —— Cancel 回答绿色 Create 和红色 Delete 长得一样是刻意的：两个弹窗之间变的是「哪个 commit 在喊」，不是「出口长什么样」。用 `variant="outline"`，`ghost` 没有自己的纸给框落。
 
-**海报动作有三个 rank**：`primaryAction()`（填充 commit）/ `destructiveAction()`（红框）/ `neutralAction()`（墨框中性，`features/common/ControlInkBorder.ts` → `[data-neutral-action]`）。**可逆的状态变更**（Workspace Settings 的 Archive、Computer 的 Disconnect、Log out）是 neutral：不给填充（填充是 primary 的语义），但要有家族的框 + hover 抬起 + forza6 的墨贴纸。反例就是它们原来的样子 —— 夹在绿贴纸和红贴纸之间、唯一没有框和投影的按钮。
+**海报动作有三个 rank**：`primaryAction()`（填充 commit）/ `destructiveAction()`（红框）/ `neutralAction()`（墨框中性，`components/common/control-ink-border.ts` → `[data-neutral-action]`）。**可逆的状态变更**（Workspace Settings 的 Archive、Computer 的 Disconnect、Log out）是 neutral：不给填充（填充是 primary 的语义），但要有家族的框 + hover 抬起 + forza6 的墨贴纸。反例就是它们原来的样子 —— 夹在绿贴纸和红贴纸之间、唯一没有框和投影的按钮。
 
 neutral 按密度分级，不一刀切：输入框旁的图标按钮（Browse、行内编辑的 ✓/✕）和 `h-6` 微型 chip（MCP pane 的 Reload / Check config）**故意保持安静**，给 24px 控件挂海报贴纸是用力过重。判据是「它是独立的一次动作，还是某个输入框 / 密集列表的附件」。`[data-host-action='neutral']` 与 `[data-channel-settings-action]` 是同 rank 的旧别名，渲染一致，碰到那两个 surface 时再并入。
 

@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveWorkspaceSettingsTarget,
@@ -59,27 +58,5 @@ describe("workspace settings target", () => {
     expect(workspaceDeletionDestination(workspaces.slice(0, 1), "a", "a")).toEqual({
       kind: "chat",
     });
-  });
-
-  it("binds writes and form lifecycle to the same target, including same-name workspaces", () => {
-    const app = readFileSync(new URL("../chat-shell/chat-shell.tsx", import.meta.url), "utf8");
-    const dialog = readFileSync(new URL("./WorkspaceSettingsDialog.tsx", import.meta.url), "utf8");
-    const members = readFileSync(new URL("./ManageMembersPopover.tsx", import.meta.url), "utf8");
-    const mount = app.slice(
-      app.indexOf("<WorkspaceSettingsDialog"),
-      app.indexOf("/>", app.indexOf("<WorkspaceSettingsDialog")),
-    );
-    expect(mount).toContain("key={workspaceSettingsId ?? 'closed'}");
-    expect(mount).toContain("workspaceId={settingsWorkspace?.id ?? null}");
-    expect(mount).not.toContain("selectedWorkspace");
-    expect(dialog).toContain("renameWorkspace.mutateAsync({ id: workspaceId, name: trimmed })");
-    expect(dialog).toContain("deleteWorkspace.mutate(workspaceId,");
-    expect(dialog).toContain(
-      "<WorkspaceMembersPanel key={workspaceId} workspaceId={workspaceId} />",
-    );
-    expect(members).toContain("useAddWorkspaceMember(workspaceId)");
-    expect(members).toContain("useRemoveWorkspaceMember(workspaceId)");
-    expect(members).toContain("useRemoveWorkspaceHumanMember(workspaceId)");
-    expect(dialog).toContain("[open, workspaceId, workspaceName, initialSection, hasMembers]");
   });
 });

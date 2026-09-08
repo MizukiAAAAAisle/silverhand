@@ -8,8 +8,8 @@ import {
   FILTER_SELECT_CONTENT_CLASS,
 } from "@/components/ui/filter-select";
 import { cn } from "@/lib/cn";
-import { ProfileSection } from "@/features/common/ProfileSummarySections";
-import { getCurrentUserId } from "@/lib/current-user";
+import { ProfileSection } from "@/features/profile/profile-summary-sections";
+import { getCurrentUserId } from "@/features/session/current-user";
 import { messageActivityRange, messageActivityYears } from "./message-activity-calendar";
 import { MessageActivityCalendar } from "./MessageActivityCalendar";
 import {

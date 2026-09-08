@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { MessageDto } from "@silverhand/shared";
-import { getCurrentUserId } from "@/lib/current-user";
+import { getCurrentUserId } from "@/features/session/current-user";
 import type { PreparedSendBody } from "./hooks";
 import { messagesKey, clusterMessagesKey, type MessagesCache } from "./message-cache-core";
 

@@ -1,22 +1,33 @@
 import { memo, useCallback, useMemo, useState } from "react";
 import { Plus } from "lucide-react";
-import { TaskIcon } from "@/components/tasks/TaskIcon";
-import { useUpdateTaskStatus } from "@/features/tasks/hooks";
-import { useKanbanColumnCollapse } from "@/features/tasks/useKanbanColumnCollapse";
-import { useTaskFilterOptions } from "@/features/tasks/useTaskFilterOptions";
-import { activeTaskCount, boardCountLabel, totalTaskCount } from "@/features/tasks/boardAuthority";
-import { useBoardColumns, useBoardCounts, useBoardFacets } from "@/features/tasks/useBoard";
-import { useColumnWindow } from "@/features/tasks/useColumnWindow";
-import { DEFAULT_TASK_FILTERS, type TaskFilters } from "@/features/tasks/taskFilters";
-import { TaskBoardColumns } from "@/components/tasks/TaskBoardColumns";
-import { TaskFilterBar, FILTER_ROW_TRIGGER_BOX } from "@/components/tasks/TaskFilterBar";
+import { TaskIcon } from "@/features/task-shell/components/task-icon";
+import { useUpdateTaskStatus } from "@/features/task-shell/hooks/hooks";
+import { useKanbanColumnCollapse } from "@/features/task-shell/hooks/use-kanban-column-collapse";
+import { useTaskFilterOptions } from "@/features/task-shell/hooks/use-task-filter-options";
+import {
+  activeTaskCount,
+  boardCountLabel,
+  totalTaskCount,
+} from "@/features/task-shell/model/board-authority";
+import {
+  useBoardColumns,
+  useBoardCounts,
+  useBoardFacets,
+} from "@/features/task-shell/hooks/use-board";
+import { useColumnWindow } from "@/features/task-shell/hooks/use-column-window";
+import { DEFAULT_TASK_FILTERS, type TaskFilters } from "@/features/task-shell/model/task-filters";
+import { TaskBoardColumns } from "@/features/task-shell/components/task-board-columns";
+import {
+  TaskFilterBar,
+  FILTER_ROW_TRIGGER_BOX,
+} from "@/features/task-shell/components/task-filter-bar";
 import {
   CreateTaskDialog,
   useCreateTaskSubmit,
   type CreateTaskTarget,
-} from "@/components/tasks/CreateTaskDialog";
+} from "@/features/task-shell/components/create-task-dialog";
 import { Button } from "@/components/ui/button";
-import { primaryAction } from "@/features/common/PrimaryAction";
+import { primaryAction } from "@/components/common/primary-action";
 import { paneChrome } from "@/components/layout/pane-chrome";
 
 /** Keep the board memoized independently of dialog route changes. */

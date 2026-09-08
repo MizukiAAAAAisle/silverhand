@@ -6,13 +6,13 @@ import {
   selectVisibleConversations,
   type ConversationPointer,
   type SecondaryDescriptor,
-} from "@/lib/secondary-pane";
+} from "@/features/conversation-shell/model/secondary-pane";
 
 /**
  * Secondary-pane view model, lifted out of `RegisteredAppShell`.
  *
  * The right-hand pane is driven by `?side=<id>` (overlay). The selectors in
- * `lib/secondary-pane` resolve it into:
+ * `features/conversation-shell/model/secondary-pane` resolve it into:
  *   - `secondaryDescriptor`  what the right pane renders (resolved channel, an
  *     unresolved placeholder, or null).
  *   - `visibleConversations` { primary, secondary } — drives message read-cursor

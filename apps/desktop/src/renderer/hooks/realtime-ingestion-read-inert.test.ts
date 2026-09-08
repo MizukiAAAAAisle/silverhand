@@ -264,7 +264,9 @@ describe("channel membership/runtime readers — gate-(b) fence (#task:2026)", (
 
 describe("ChannelView — read-cursor cache-driven / gate-(b) (#task:1255 P1c)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../components/layout/ChannelView.tsx", import.meta.url)),
+    fileURLToPath(
+      new URL("../features/conversation-shell/components/channel-view.tsx", import.meta.url),
+    ),
     "utf8",
   );
 
@@ -279,7 +281,7 @@ describe("ChannelView — read-cursor cache-driven / gate-(b) (#task:1255 P1c)",
 
   it("marks read off the mainline tail, not frame arrival (cache-driven)", () => {
     // The decision is the pure `nextTailReadMark` helper (unit-tested in
-    // lib/channel-read.test.ts), and the old arrival-driven handler is gone.
+    // features/conversation-shell/model/channel-read.test.ts), and the old arrival-driven handler is gone.
     expect(source).toContain("nextTailReadMark(");
     expect(source).not.toContain("onStreamEvent");
   });

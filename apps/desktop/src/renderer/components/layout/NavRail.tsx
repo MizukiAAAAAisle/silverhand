@@ -1,6 +1,6 @@
 import { type JSX, type ReactNode } from "react";
 import { Activity, MessagesSquare, Monitor, Settings, Users } from "lucide-react";
-import { TaskIcon } from "@/components/tasks/TaskIcon";
+import { TaskIcon } from "@/features/task-shell/components/task-icon";
 import { PANE_RADIUS, paneChrome } from "./pane-chrome";
 
 /**

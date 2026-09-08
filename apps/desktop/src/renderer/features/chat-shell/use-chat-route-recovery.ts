@@ -23,11 +23,14 @@ import {
   lastChannelByWorkspace,
   recordChannelLayout,
   recordCloseWatermark,
-} from "@/lib/place-memory";
-import { resolveChatPlaceRestore, type DirectPairAuthority } from "@/lib/chat-place-restore";
+} from "@/features/app-shell/place-memory";
+import {
+  resolveChatPlaceRestore,
+  type DirectPairAuthority,
+} from "@/features/chat-shell/model/chat-place-restore";
 
-import { pickWorkspaceToRestore } from "@/lib/workspace-restore";
-import { resolveRestoreNavigation } from "@/lib/restore-navigation";
+import { pickWorkspaceToRestore } from "@/features/chat-shell/model/workspace-restore";
+import { resolveRestoreNavigation } from "@/features/app-shell/restore-navigation";
 
 import type { RefObject } from "react";
 import type { WorkspaceListItem } from "@/features/workspaces/hooks";

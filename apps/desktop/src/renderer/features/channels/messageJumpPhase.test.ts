@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { jumpWindowLockedForPhase, threadLocateAllowed } from "./messageJumpPhase";
-import { threadClusterShowsLoader } from "@/components/layout/threadMarkRead";
+import { threadClusterShowsLoader } from "@/features/conversation-shell/model/thread-mark-read";
 
 // These blocks hang on the SINGLE window-lock / locate predicates that every
 // consumer imports (#task:1317, Cindy blocking): the jump controller's

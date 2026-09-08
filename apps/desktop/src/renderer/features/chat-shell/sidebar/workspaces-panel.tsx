@@ -25,13 +25,13 @@ import {
 } from "../../../components/layout/sidebar-shared";
 import { WorkspaceChannels } from "./workspace-channels";
 import { WorkspaceContextMenu } from "./workspace-context-menu";
-import { agentSpaceRecognitionName } from "@/lib/workspace-name";
+import { agentSpaceRecognitionName } from "@/features/workspaces/workspace-name";
 import {
   branchHoldsSelectedRow,
   collapsedGroupRevealBranches,
   isWorkspaceAwake,
   type SelectedConversation,
-} from "@/lib/home-grouping";
+} from "@/features/chat-shell/model/home-grouping";
 import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
 
 export interface WorkspaceItem {

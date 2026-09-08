@@ -29,7 +29,7 @@ import {
 import { cn } from "@/lib/cn";
 import { ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { ProfileSection } from "@/features/common/ProfileSummarySections";
+import { ProfileSection } from "@/features/profile/profile-summary-sections";
 import { useAgentProfileMcp, useMcpProbe } from "../hooks/hooks";
 
 interface AgentMcpPaneProps {

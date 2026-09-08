@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
+import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 import { describeApiError } from "@/lib/api-error-message";
 import { NameAvailabilityHint, useNameAvailability } from "@/features/naming/useNameAvailability";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
@@ -18,7 +18,7 @@ import {
   isRegistrationRequired,
   isUpdateRequired,
   useViewerUser,
-} from "@/features/me/hooks";
+} from "@/features/session/hooks";
 import { useUsers } from "@/features/users/hooks";
 import { MemberPicker, type MemberPickerCandidate } from "./AgentPicker";
 import { useCreateWorkspace } from "./hooks";

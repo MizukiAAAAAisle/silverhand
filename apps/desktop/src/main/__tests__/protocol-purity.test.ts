@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import desktopPackage from "../../../package.json";
 
@@ -9,7 +9,10 @@ const preloadRoot = fileURLToPath(new URL("../../preload", import.meta.url));
 const rendererRoot = fileURLToPath(new URL("../../renderer", import.meta.url));
 const desktopRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
-const allowedBackendImports = ["HostWsAttachment"];
+const allowedBackendImports = [
+  { path: "outbound-attach.ts", symbol: "HostWsAttachment", typeOnly: true },
+  { path: "outbound-reload.ts", symbol: "HostWsAttachment", typeOnly: true },
+];
 
 const allowedServerImports: string[] = [];
 
@@ -71,48 +74,35 @@ function stripComments(value: string): string {
   return value.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 }
 
-function importedPackageSymbols(source: SourceFile, packageName: string): string[] {
-  const escapedPackageName = packageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const symbols: string[] = [];
-  const statements = source.content.matchAll(
-    new RegExp(
-      `import\\s+(?:type\\s+)?\\{([^;]*?)\\}\\s+from\\s+['"]${escapedPackageName}['"]`,
-      "g",
-    ),
+function packageImportSites(source: SourceFile, packageName: string) {
+  const sites: Array<{ path: string; symbol: string; typeOnly: boolean }> = [];
+  const escaped = packageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const statements = new RegExp(
+    `^\\s*import\\s+(?:([^;]*?)\\s+from\\s+)?["'](${escaped}(?:/[^"']*)?)["']`,
+    "gms",
   );
-  for (const match of statements) {
-    for (const part of stripComments(match[1] ?? "").split(",")) {
-      const symbol = part
-        .trim()
-        .replace(/^type\s+/, "")
-        .split(/\s+as\s+/)[0]
-        ?.trim();
-      if (symbol) symbols.push(symbol);
+  for (const match of source.content.matchAll(statements)) {
+    const clause = stripComments(match[1] ?? "").trim();
+    const named = /^(type\s+)?\{([^{}]*)\}$/.exec(clause);
+    const path = relative(mainRoot, source.path);
+    if (!named || match[2] !== packageName) {
+      sites.push({ path, symbol: `UNPARSED:${source.path}`, typeOnly: false });
+      continue;
+    }
+    for (const entry of named[2]!.split(",").filter((value) => value.trim())) {
+      const symbol = /^(type\s+)?([\w$]+)(?:\s+as\s+[\w$]+)?$/.exec(entry.trim());
+      sites.push({
+        path,
+        symbol: symbol?.[2] ?? `UNPARSED:${source.path}`,
+        typeOnly: Boolean(named[1] || symbol?.[1]),
+      });
     }
   }
-  const allBackendImports = [
-    ...source.content.matchAll(
-      new RegExp(`import\\s+[^;]*from\\s+['"]${escapedPackageName}(?:\\/[^'"]*)?['"]`, "g"),
-    ),
-  ];
-  const unsupportedBackendImports = [
-    ...source.content.matchAll(
-      new RegExp(
-        `import\\s+(?:type\\s+)?(?:\\*\\s+as\\s+\\w+|[A-Za-z_$][\\w$]*(?:\\s*,\\s*(?:\\*\\s+as\\s+\\w+|\\{[^;]*\\}))?)\\s+from\\s+['"]${escapedPackageName}(?:\\/[^'"]*)?['"]`,
-        "g",
-      ),
-    ),
-    ...source.content.matchAll(
-      new RegExp(`import\\s+['"]${escapedPackageName}(?:\\/[^'"]*)?['"]`, "g"),
-    ),
-  ];
-  if (unsupportedBackendImports.length > 0) {
-    symbols.push(`UNPARSED:${source.path}`);
-  }
-  if (allBackendImports.length > 0 && symbols.length === 0) {
-    symbols.push(`UNPARSED:${source.path}`);
-  }
-  return symbols;
+  return sites;
+}
+
+function importedPackageSymbols(source: SourceFile, packageName: string): string[] {
+  return packageImportSites(source, packageName).map((site) => site.symbol);
 }
 
 describe("desktop protocol purity catalogue", () => {
@@ -132,10 +122,37 @@ describe("desktop protocol purity catalogue", () => {
     expect(imports).toContain("UNPARSED:example.ts");
   });
 
+  it.each(["'", '"'])("recognizes type-only and forbidden import sites with %s quotes", (quote) => {
+    const scan = (content: string) =>
+      packageImportSites(
+        { path: join(mainRoot, "outbound-attach.ts"), content },
+        "@silverhand/backend",
+      );
+    expect(
+      scan(`import type {\n HostWsAttachment,\n} from ${quote}@silverhand/backend${quote};`),
+    ).toEqual([allowedBackendImports[0]]);
+    expect(
+      scan(`import { HostWsAttachment } from ${quote}@silverhand/backend${quote};`)[0]?.typeOnly,
+    ).toBe(false);
+    expect(
+      scan(
+        `import { type HostWsAttachment as Attachment } from ${quote}@silverhand/backend${quote};`,
+      )[0]?.typeOnly,
+    ).toBe(true);
+    for (const clause of ["* as backend from ", "backend from ", ""]) {
+      expect(scan(`import ${clause}${quote}@silverhand/backend${quote};`)[0]?.symbol).toContain(
+        "UNPARSED:",
+      );
+    }
+    expect(scan(`import { unknownSymbol } from ${quote}@silverhand/backend${quote};`)).not.toEqual([
+      allowedBackendImports[0],
+    ]);
+  });
+
   it("keeps direct @silverhand/backend imports fenced to the embedded boot path allowlist", () => {
     const imports = sourceFiles(mainRoot, new Set([".ts"]))
-      .flatMap((source) => importedPackageSymbols(source, "@silverhand/backend"))
-      .sort();
+      .flatMap((source) => packageImportSites(source, "@silverhand/backend"))
+      .sort((a, b) => a.path.localeCompare(b.path));
 
     expect(imports).toEqual(allowedBackendImports);
   });
@@ -151,8 +168,8 @@ describe("desktop protocol purity catalogue", () => {
   it("bundles shared utilities without a TS server build dependency", () => {
     const config = readFileSync(join(desktopRoot, "electron.vite.config.ts"), "utf8");
 
-    expect(config).toMatch(/const workspaceDeps = \[[\s\S]*'@silverhand\/shared'[\s\S]*\];/);
-    expect(config).not.toContain("'@silverhand/server'");
+    expect(config).toMatch(/const workspaceDeps = \[[\s\S]*["']@silverhand\/shared["'][\s\S]*\];/);
+    expect(config).not.toMatch(/["']@silverhand\/server["']/);
   });
 
   it("both profiles use the same shared Node logger without a server stub", () => {
@@ -179,14 +196,16 @@ describe("desktop protocol purity catalogue", () => {
     // The stub carries NO value import of the embedded packages/modules — only `import
     // type` is allowed (erased at build). Assert there is no non-type import of the
     // forbidden specifiers.
-    expect(seamStub).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+'@silverhand\/backend'/m);
-    expect(seamStub).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+'@silverhand\/server'/m);
+    expect(seamStub).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+["']@silverhand\/backend["']/m);
+    expect(seamStub).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+["']@silverhand\/server["']/m);
     // Real index.ts imports the embedded runtime through the seam, not the value modules
     // directly (the only remaining `embedded-rust-backend`/`rust-backend-sidecar` mentions
     // in index.ts must be `import type`).
     const indexSrc = readFileSync(join(mainRoot, "index.ts"), "utf8");
-    expect(indexSrc).toMatch(/from '\.\/embedded-launcher\.js'/);
-    expect(indexSrc).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+'\.\/rust-backend-sidecar\.js'/m);
+    expect(indexSrc).toMatch(/from\s+["']\.\/embedded-launcher\.js["']/);
+    expect(indexSrc).not.toMatch(
+      /^import\s+\{[^}]*\}\s+from\s+["']\.\/rust-backend-sidecar\.js["']/m,
+    );
   });
 
   it("remote-only package config excludes embedded backend/native runtime packages", () => {

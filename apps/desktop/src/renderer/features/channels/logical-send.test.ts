@@ -9,7 +9,7 @@ import {
   type MessageSendAck,
 } from "@silverhand/shared";
 import { api, apiUpload } from "@/lib/api";
-import { setCurrentUserId, clearCurrentUser } from "@/lib/current-user";
+import { setCurrentUserId, clearCurrentUser } from "@/features/session/current-user";
 import { eventWsClient } from "@/lib/ws-client";
 import { ingestConversationFrame } from "@/features/realtime/conversation-ingestor";
 import { createLogicalSend, prepareLogicalSend, type LogicalSend } from "./logical-send";
@@ -22,7 +22,7 @@ import {
   writeComposerDraft,
   patchComposerDraftText,
   clearComposerDraft,
-} from "@/lib/composer-draft-cache";
+} from "@/features/messages/composer-draft-cache";
 const mock = vi.hoisted(() => ({ qc: null as unknown as QueryClient }));
 vi.mock("@/lib/api", async (original) => ({
   ...(await original<typeof import("@/lib/api")>()),

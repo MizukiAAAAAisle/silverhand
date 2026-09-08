@@ -5,7 +5,7 @@ import {
   type ProfileMessageCounts,
 } from "@silverhand/shared";
 import { api } from "@/lib/api";
-import { getCurrentUserId } from "@/lib/current-user";
+import { getCurrentUserId } from "@/features/session/current-user";
 
 export type ProfileMessageSubject = ProfileMessageCounts["subject"];
 

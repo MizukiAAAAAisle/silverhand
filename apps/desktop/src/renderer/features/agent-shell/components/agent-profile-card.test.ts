@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentDto, UserDto } from "@silverhand/shared";
 import { AgentProfileCard } from "./agent-profile-card";
-import { setCurrentUserId } from "@/lib/current-user";
+import { setCurrentUserId } from "@/features/session/current-user";
 
 vi.mock("@/features/profile/ProfileMessageActivity", () => ({
   ProfileMessageActivity: () => null,

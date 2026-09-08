@@ -16,8 +16,8 @@ import {
   isUpdateRequired,
   useViewerAvatarObjectUrl,
   useViewerUser,
-} from "@/features/me/hooks";
-import type { UserNameResolver } from "@/lib/current-user";
+} from "@/features/session/hooks";
+import type { UserNameResolver } from "@/features/session/current-user";
 
 import type { ChannelReference } from "./ChannelRef";
 

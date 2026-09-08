@@ -1,13 +1,13 @@
-import type { HumanView } from "@/features/me/HumanView";
+import type { HumanView } from "@/features/profile/human-view";
 import type { ComponentProps } from "react";
 import type { DirectPairDraftPane } from "@/features/direct-pairs/DirectPairDraftPane";
-import type { ChannelView } from "@/components/layout/ChannelView";
+import type { ChannelView } from "@/features/conversation-shell/components/channel-view";
 import type { AgentView } from "@/features/agent-shell/components/agent-view";
-import type { ChannelAttachmentsPanel } from "@/components/layout/ChannelAttachmentsPanel";
-import type { TaskDetailPanel } from "@/components/tasks/TaskDetailPanel";
-import type { SideUnresolvedPlaceholder } from "@/components/layout/SideUnresolvedPlaceholder";
-import type { ThreadPanel } from "@/components/layout/ThreadPanel";
-import type { ChannelThreadsPanel } from "@/components/layout/ChannelThreadsPanel";
+import type { ChannelAttachmentsPanel } from "@/features/conversation-shell/components/channel-attachments-panel";
+import type { TaskDetailPanel } from "@/features/task-shell/components/task-detail-panel";
+import type { SideUnresolvedPlaceholder } from "@/features/conversation-shell/components/side-unresolved-placeholder";
+import type { ThreadPanel } from "@/features/conversation-shell/components/thread-panel";
+import type { ChannelThreadsPanel } from "@/features/conversation-shell/components/channel-threads-panel";
 import type { ConversationPaneCapabilities } from "@/features/conversations/pane-mode";
 export type DraftPaneProps = Pick<
   ComponentProps<typeof DirectPairDraftPane>,

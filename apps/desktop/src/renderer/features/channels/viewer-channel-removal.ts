@@ -52,9 +52,9 @@ import {
 } from "@/features/attention/hooks";
 import { removeChannelFromSaved, savedHeldChannelIds, savedKey } from "@/features/saved/hooks";
 import { removeChannelFromSearch, searchHeldChannelIds, searchKey } from "@/features/search/hooks";
-import { removeChannelFromTasks, tasksHeldChannelIds } from "@/features/tasks/hooks";
-import { boardColumnKey, boardFilterKey } from "@/features/tasks/boardQuery";
-import { DEFAULT_TASK_FILTERS } from "@/features/tasks/taskFilters";
+import { removeChannelFromTasks, tasksHeldChannelIds } from "@/features/task-shell/hooks/hooks";
+import { boardColumnKey, boardFilterKey } from "@/features/task-shell/model/board-query";
+import { DEFAULT_TASK_FILTERS } from "@/features/task-shell/model/task-filters";
 import {
   messageUnreadHeldChannelIds,
   messageUnreadSummaryKey,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Copy, TextQuote } from "lucide-react";
-import { clampToolbarCenterX, requestQuoteToComposer } from "@/lib/quote-to-composer";
+import { clampToolbarCenterX, requestQuoteToComposer } from "@/features/messages/quote-to-composer";
 
 /**
  * Floating Quote / Copy toolbar for a text selection inside a message
@@ -13,7 +13,7 @@ import { clampToolbarCenterX, requestQuoteToComposer } from "@/lib/quote-to-comp
  *    `[data-message-body]` — so selecting chrome (author, timestamp,
  *    action bar) or dragging into the composer never triggers it.
  *  - **Quote** routes the selected text to the composer at `draftKey` as
- *    a Markdown blockquote (pure renderer — see `lib/quote-to-composer`).
+ *    a Markdown blockquote (pure renderer — see `features/messages/quote-to-composer`).
  *  - **Copy** writes the selected text to the clipboard.
  *  - Shows on `mouseup` (drag-select settled) or shift+`keyup` (keyboard
  *    select); hides when the selection collapses, on scroll / resize (the

@@ -6,8 +6,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { MessageDto, TaskSummaryDto } from "@silverhand/shared";
 import { decodeMessageSeq } from "@silverhand/shared";
 import { SystemActivityCluster } from "./SystemActivityCluster";
-import { TaskRefContextProvider } from "@/features/tasks/TaskRefContext";
-import { taskBoardCacheScope, taskByNumberKey } from "@/features/tasks/useTaskByNumber";
+import { TaskRefContextProvider } from "@/features/task-shell/components/task-ref-context";
+import {
+  taskBoardCacheScope,
+  taskByNumberKey,
+} from "@/features/task-shell/hooks/use-task-by-number";
 
 /** Minimal MessageDto factory — same shape as Markdown.test's helper,
  *  duplicated locally so the cluster tests don't reach into another

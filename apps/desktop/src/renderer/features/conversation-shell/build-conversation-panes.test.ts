@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { channelGateFor } from "@/features/channels/membership";
 import { inheritedPaneCapabilities } from "@/features/conversations/pane-mode";
-import { selectSecondaryViewInputs } from "@/lib/secondary-pane";
+import { selectSecondaryViewInputs } from "@/features/conversation-shell/model/secondary-pane";
 import type { ConversationPaneDescriptor } from "@/features/conversations/pane-descriptor";
 import type {
   PaneContentRoute,

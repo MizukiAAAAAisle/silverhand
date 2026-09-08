@@ -26,9 +26,12 @@ import {
 } from "@/features/workspaces/hooks";
 import { useMessageUnreadCounts } from "@/features/channels/message-unread";
 import { useWorkspaceAttentionModes } from "@/features/attention/hooks";
-import { channelRowBadge, type RowBadge } from "@/lib/attention-mode";
+import { channelRowBadge, type RowBadge } from "@/features/attention/attention-mode";
 import { sortModeOf } from "@/lib/viewer-sort";
-import { collapsedRevealRows, excludeStarredChannels } from "@/lib/home-grouping";
+import {
+  collapsedRevealRows,
+  excludeStarredChannels,
+} from "@/features/chat-shell/model/home-grouping";
 
 interface ChannelNode {
   id: string;

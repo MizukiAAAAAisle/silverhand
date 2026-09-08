@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { htmlPreviewSrcDoc, readPinchDelta } from "@/lib/html-preview-csp";
+import { htmlPreviewSrcDoc, readPinchDelta } from "@/features/attachments/html-preview-csp";
 
 export function AttachmentHtmlPreview({
   html,

@@ -11,14 +11,14 @@ import {
 } from "@/components/ui/dialog";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
+import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 import { cn } from "@/lib/cn";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useViewerUser,
-} from "@/features/me/hooks";
+} from "@/features/session/hooks";
 import { MemberPicker, type MemberPickerCandidate } from "./AgentPicker";
 import { useCreateChannel, useWorkspaceMemberLists } from "./hooks";
 import type { WorkspaceCapabilities } from "./workspace-capabilities";

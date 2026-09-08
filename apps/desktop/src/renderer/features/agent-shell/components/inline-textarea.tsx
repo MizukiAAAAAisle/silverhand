@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { cn } from "@/lib/cn";
-import { CancelButton, SaveButton } from "@/features/common/EditToolbarButtons";
+import { CancelButton, SaveButton } from "@/components/common/edit-toolbar-buttons";
 
 /**
  * Inline edit textarea for a nullable long-form string (agent description,

@@ -23,7 +23,7 @@ import type {
 } from "@silverhand/shared";
 import { apiPaths } from "@silverhand/shared";
 import { api } from "@/lib/api";
-import { resolveEffectiveAttentionMode } from "@/lib/attention-mode";
+import { resolveEffectiveAttentionMode } from "@/features/attention/attention-mode";
 import { activityItemSource, postObserve } from "./observe";
 import {
   reconcileUnreadAfterObserveIfRealtimeUnavailable,

@@ -4,7 +4,7 @@ import { AgentAvatar } from "@/components/AgentAvatar";
 import { UserAvatar } from "@/components/UserAvatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { dropdownPanelProps } from "@/components/ui/dropdownPanel";
-import { SEARCH_FIELD_FRAME } from "@/features/common/ControlInkBorder";
+import { SEARCH_FIELD_FRAME } from "@/components/common/control-ink-border";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { cn } from "@/lib/cn";

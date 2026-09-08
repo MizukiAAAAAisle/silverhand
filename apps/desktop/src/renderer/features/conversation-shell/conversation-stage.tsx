@@ -1,5 +1,5 @@
 import { SplitPane } from "@/components/layout/SplitPane";
-import { ConversationViewSkeleton } from "@/components/layout/ConversationViewSkeleton";
+import { ConversationViewSkeleton } from "@/features/conversation-shell/components/conversation-view-skeleton";
 import type { ConversationContent } from "./conversation-content";
 
 export function ConversationStage({

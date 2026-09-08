@@ -8,7 +8,7 @@ import {
   readSessionClearedMetadata,
 } from "@silverhand/shared";
 import { useMessage } from "@/features/messages/hooks";
-import { formatUserDisplayName, isCurrentUserId } from "@/lib/current-user";
+import { formatUserDisplayName, isCurrentUserId } from "@/features/session/current-user";
 import { Markdown } from "@/components/chat/Markdown";
 import { presentAuthor } from "@/components/chat/author-presentation";
 import { AuthorName } from "@/components/chat/author-avatar-view";

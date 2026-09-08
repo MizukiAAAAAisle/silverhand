@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { getCurrentUserId } from "@/lib/current-user";
+import { getCurrentUserId } from "@/features/session/current-user";
 import { agentStreamCache } from "../model/agent-stream-cache";
 
 const signedOut = {

@@ -26,8 +26,11 @@ import type {
   TaskChangedEvent,
 } from "@silverhand/shared";
 import { onWsFrame, eventWsClient } from "@/lib/ws-client";
-import { bumpAttachmentBlobEpoch, bumpAttachmentRevision } from "@/lib/attachment-blob-cache";
-import { getCurrentUserId } from "@/lib/current-user";
+import {
+  bumpAttachmentBlobEpoch,
+  bumpAttachmentRevision,
+} from "@/features/attachments/attachment-blob-cache";
+import { getCurrentUserId } from "@/features/session/current-user";
 import {
   appendAgentActivityToCache,
   hasActiveAgentActivityReader,
@@ -37,7 +40,7 @@ import {
   applyAgentRunStateToCache,
   hasActiveAgentRunStatesReader,
   invalidateAgentRunStates,
-} from "@/lib/agentRunStateCache";
+} from "@/features/agent-shell/model/agent-run-state-cache";
 import {
   hasActiveChannelThreadsReader,
   invalidateChannelThreadsList,
@@ -75,7 +78,7 @@ import {
 } from "@/features/channels/hooks";
 import type { ConversationAgentStatusPatch } from "@/features/channels/hooks";
 import { applyCommittedReactionFromEvent } from "@/features/channels/reaction-hooks";
-import { applyTaskChangedToTaskByNumberCache } from "@/features/tasks/useTaskByNumber";
+import { applyTaskChangedToTaskByNumberCache } from "@/features/task-shell/hooks/use-task-by-number";
 import {
   dispositionSettle,
   ingestMessageProjections,

@@ -8,7 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
+import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 import { useLeaveWorkspace } from "./hooks";
 
 /**

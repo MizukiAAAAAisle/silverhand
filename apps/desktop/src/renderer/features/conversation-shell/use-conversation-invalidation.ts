@@ -16,9 +16,9 @@ import {
 } from "@/features/channels/useViewerChannelRemovalSync";
 
 import { useNav, useRouteState } from "@/router";
-import { lastChannelByWorkspace, persistLastChannel } from "@/lib/place-memory";
+import { lastChannelByWorkspace, persistLastChannel } from "@/features/app-shell/place-memory";
 
-import { pickFallbackAfterArchive } from "@/lib/archive-fallback";
+import { pickFallbackAfterArchive } from "@/features/chat-shell/model/archive-fallback";
 
 export interface RemovedPrimary {
   workspaceId: string;

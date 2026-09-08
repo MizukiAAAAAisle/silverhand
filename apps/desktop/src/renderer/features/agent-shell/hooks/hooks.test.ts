@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { AGENT_AVAILABILITY_CHANGED_EVENT, AGENT_PRESENCE_CHANGED_EVENT } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
-import { agentRunStatesKey } from "@/lib/agentRunStateCache";
+import { agentRunStatesKey } from "@/features/agent-shell/model/agent-run-state-cache";
 import {
   agentAvailabilityRetry,
   applySwitchAgentRuntimeSideEffects,
@@ -282,7 +282,7 @@ describe("projectGlobalPresence", () => {
  * participates in, so `onSuccess` must invalidate every conversation-scoped
  * agent-run-states query — not just the agent's own detail row. Cindy's
  * #1470 review caught two previous drift versions of this predicate; the
- * test seeds real keys (from `lib/agentRunStateCache::agentRunStatesKey`,
+ * test seeds real keys (from `features/agent-shell/model/agent-run-state-cache::agentRunStatesKey`,
  * the single authority) and asserts they get marked invalid.
  */
 describe("applySwitchAgentRuntimeSideEffects", () => {
