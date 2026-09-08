@@ -293,10 +293,6 @@
   opacity: 1;
 }
 
-[data-theme="studio-light"] .navigation-row.sidebar-row-border {
-  border-color: transparent;
-}
-
 [data-theme="studio-light"] [data-conversation-hash-icon] {
   display: inline-block;
   margin-right: 0.1em;
