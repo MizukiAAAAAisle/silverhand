@@ -232,7 +232,7 @@ export function SidebarSection({
         expanded={expanded}
         onToggle={() => toggleExpanded()}
       />
-      {body ? <ul className="space-y-1">{body}</ul> : null}
+      {body ? <ul className={collapsible ? "space-y-1 pl-3" : "space-y-1"}>{body}</ul> : null}
     </section>
   );
 }
