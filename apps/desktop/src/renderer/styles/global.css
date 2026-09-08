@@ -64,6 +64,7 @@
   --color-text-on-success: var(--text-on-success);
   --color-text-on-warning: var(--text-on-warning);
   --color-text-on-error: var(--text-on-error);
+  --color-bg-nav-selected: var(--bg-nav-selected);
   --color-text-nav-selected: var(--text-nav-selected);
   --color-text-on-selected: var(--text-on-selected);
 
@@ -466,7 +467,7 @@ aside[data-sidebar] .sidebar-row-border:not(.text-text-nav-selected):hover {
 }
 .nav-rail__item[aria-current="page"] {
   border-color: var(--border-nav-rail-selected);
-  background: var(--bg-nav-rail-selected);
+  background: var(--bg-nav-selected);
   color: var(--text-nav-selected);
 }
 .nav-rail__item[aria-current="page"]::before {

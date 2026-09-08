@@ -43,7 +43,7 @@
   --hljs-selection-text: #1f1a12;
 
   /* Reset optional painting slots so the default theme cannot leak into this theme. */
-  --bg-nav-rail-selected: var(--bg-selected);
+  --bg-nav-selected: var(--bg-selected);
   --bg-neutral-action-hover: var(--bg-option-hover);
   --bg-primary-action-hover: var(--bg-control-primary-hover);
   --bg-sidebar-row-hover: var(--bg-row-hover);
