@@ -170,7 +170,7 @@ export function SavedListView({
 
   return (
     <main
-      className="flex h-full flex-1 flex-col bg-bg-chat"
+      className="flex h-full flex-1 flex-col bg-bg-base"
       style={{ ...paneChrome, overflow: "hidden" }}
     >
       <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle px-4">

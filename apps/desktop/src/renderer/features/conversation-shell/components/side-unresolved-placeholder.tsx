@@ -74,7 +74,7 @@ export function SideUnresolvedPlaceholder({
       : conversationId;
   const copy = STATUS_COPY[status];
   return (
-    <main className="flex h-full min-w-0 flex-1 flex-col bg-bg-chat" style={paneChrome}>
+    <main className="flex h-full min-w-0 flex-1 flex-col bg-bg-base" style={paneChrome}>
       <header className="flex h-(--titlebar-height,44px) shrink-0 items-center justify-between border-b border-border px-3">
         <div className="min-w-0 flex-1 truncate text-sm font-medium text-text-muted">
           {copy.header}

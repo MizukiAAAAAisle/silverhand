@@ -52,7 +52,7 @@ apps/desktop/src/renderer/
 
 | Token | 含义 | 选值原则 |
 |---|---|---|
-| `--bg-base` | 全局窗口底色 | 主基调；不应刺眼纯色（除非纯白/纯黑是刻意的风格选择）|
+| `--bg-base` | 全局窗口及会话 / Saved / Search 主读区底色 | 主基调；不应刺眼纯色（除非纯白/纯黑是刻意的风格选择）|
 | `--bg-primary` | 一级区域底（sidebar、main column 容器） | 比 base 略深一档 |
 | `--bg-elevated` | 二级容器（卡片休眠态、segment control 容器、设置面板小块） | 再深一档 |
 | `--bg-surface` | 三级容器（嵌套面板）| 再深一档；可与 elevated 接近 |
@@ -60,7 +60,6 @@ apps/desktop/src/renderer/
 | `--bg-active` | 按下/激活态、segment control 容器 | 再深一档 |
 | `--bg-selected` | **导航激活态**（sidebar 列表当前项、tab 当前项、segment 当前段） | 必须能从 `--bg-primary` 中明显跳出（≥ 5% 亮度差） |
 | `--bg-floating` | **浮层 / 卡片表面**（popover、菜单、对话框、展开后的卡片） | 永远是"内容表面"，通常是主题里**最亮**的一档 |
-| `--bg-chat` | **Chat 主读区**（会话 / Saved / Search 的 main 区域） | 独立于 `--bg-base`；base 可作为全局 frame，chat 应按阅读舒适度单独取值 |
 | `--bg-app` | App frame 底色（panel card 之间露出的底） | 比 sidebar/card 表面沉一档；必须与 titlebar 背景协调 |
 | `--bg-island` | 岛屿底色（代码块、JSON、终端、表格） | 中性灰，与主基调形成材质对比 |
 | `--bg-island-deep` | 表头、嵌套岛屿 | 比 island 略深 |
@@ -121,7 +120,7 @@ apps/desktop/src/renderer/
 
 **`--bg-structure-dark` / `--text-on-dark-pop` 使用边界**（不要泄漏成普通装饰色）：
 - `--bg-structure-dark` 仅承担**结构层** —— 容器、tab/segment 当前段、进度槽、卡片 header、titlebar tint、workspace-tile、NavRail dock notch。**禁止**做"任意按钮黑底"或"chat 主区分隔条"。
-- `--text-on-dark-pop` 仅在**深色 chrome 或黑结构**上用 —— currency / 等级 / 短 metadata 数字。**禁止**进入 `--bg-chat` 浅白读区，否则破坏阅读层级。
+- `--text-on-dark-pop` 仅在**深色 chrome 或黑结构**上用 —— currency / 等级 / 短 metadata 数字。**禁止**进入 浅色正文读区，否则破坏阅读层级。
 
 ### 3.2 文字
 

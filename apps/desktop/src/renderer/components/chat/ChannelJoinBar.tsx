@@ -12,7 +12,7 @@ export function ChannelJoinBar({
 }): JSX.Element {
   const label = channelTitle ? `Join #${channelTitle}` : "Join channel";
   return (
-    <div className="shrink-0 border-t border-border-subtle bg-bg-chat px-3 py-3">
+    <div className="shrink-0 border-t border-border-subtle bg-bg-base px-3 py-3">
       <button
         type="button"
         data-channel-join

@@ -16,7 +16,7 @@
  * Deliberately data-free and cheap (no queries, no real rows, no avatar fetch,
  * one shared `animate-pulse`) — it must render in well under a frame. The shape
  * mirrors the real ChannelView 1:1 so the swap to the live view never jumps the
- * layout: same `<main>` shell (card radius/shadow + `bg-bg-chat`), an `h-12`
+ * layout: same `<main>` shell (card radius/shadow + `bg-bg-base`), an `h-12`
  * header with a member-strip cluster, message rows using ChannelView's exact
  * `flex items-start gap-3 px-2 py-1.5` rhythm with `size-8` square avatars, and
  * a composer that reproduces the `border-t` footer + bordered shell. All bars
@@ -80,7 +80,7 @@ export function MessageRowsSkeleton({
 export function ConversationViewSkeleton(): JSX.Element {
   return (
     <main
-      className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
+      className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-base"
       style={paneChrome}
       aria-hidden
       data-conversation-skeleton

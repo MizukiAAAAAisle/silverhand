@@ -986,7 +986,7 @@ export function Composer({
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       className={
-        "shrink-0 border-t border-border-subtle bg-bg-chat px-3 py-3 " +
+        "shrink-0 border-t border-border-subtle bg-bg-base px-3 py-3 " +
         (dragOver ? "[outline:2px_solid_var(--border-focus)] -outline-offset-2" : "")
       }
     >

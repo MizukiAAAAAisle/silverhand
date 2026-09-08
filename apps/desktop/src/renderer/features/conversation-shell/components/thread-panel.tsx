@@ -821,7 +821,7 @@ export function ThreadPanel({
       <aside
         ref={findRootRef}
         data-pane="thread"
-        className="relative flex h-full min-h-0 w-full flex-col bg-(--bg-chat,transparent)"
+        className="relative flex h-full min-h-0 w-full flex-col bg-bg-base"
       >
         <SidePanelHeader
           onClose={onClose}

@@ -308,7 +308,7 @@ export function SplitPane({
               contain: "layout paint",
               borderRadius: PANE_RADIUS,
             }}
-            className="flex h-full min-w-0 flex-1 overflow-hidden bg-bg-chat"
+            className="flex h-full min-w-0 flex-1 overflow-hidden bg-bg-base"
           >
             {contentMounted ? right : null}
           </div>

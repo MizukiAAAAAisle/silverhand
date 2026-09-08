@@ -86,7 +86,6 @@
   --bg-option-hover: var(--bg-hover);
   --bg-selected: #ffffff;
   --bg-floating: #ffffff;
-  --bg-chat: #ffffff;
   /* message-row 的 framed（hover / saved / replying / 搜索命中）洗色 */
   --studio-light-bg-message-framed: #f5f8fc;
 

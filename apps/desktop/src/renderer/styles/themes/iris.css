@@ -86,7 +86,6 @@
      for a quiet recess; a black alpha stays un-tinted on the white pane. */
   --activity-params-bg: oklab(0 0 0 / 0.05);
   --bg-primary: #ffffff;
-  --bg-chat: #ffffff;
   --bg-channels-sidebar: #ffffff;
   --bg-floating: #ffffff;
   --bg-elevated: #f6f4f0;

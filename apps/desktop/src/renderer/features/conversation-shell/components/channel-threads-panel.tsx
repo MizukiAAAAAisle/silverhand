@@ -56,10 +56,7 @@ export function ChannelThreadsPanel({
   onOpenThread,
 }: ChannelThreadsPanelProps): JSX.Element {
   return (
-    <aside
-      data-pane="threads-list"
-      className="flex h-full min-h-0 w-full flex-col bg-(--bg-chat,transparent)"
-    >
+    <aside data-pane="threads-list" className="flex h-full min-h-0 w-full flex-col bg-bg-base">
       <SidePanelHeader onClose={onClose}>
         <SidePanelHeaderTitle
           icon={<ThreadIcon className="size-3.5 shrink-0 text-text-muted" />}

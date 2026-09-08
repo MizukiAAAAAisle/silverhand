@@ -108,10 +108,7 @@ export function ChannelAttachmentsPanel({
   nowMs,
 }: ChannelAttachmentsPanelProps): JSX.Element {
   return (
-    <aside
-      data-pane="attachments-list"
-      className="flex h-full min-h-0 w-full flex-col bg-(--bg-chat,transparent)"
-    >
+    <aside data-pane="attachments-list" className="flex h-full min-h-0 w-full flex-col bg-bg-base">
       <SidePanelHeader onClose={onClose}>
         <SidePanelHeaderTitle
           icon={<Paperclip className="size-3.5 shrink-0 text-text-muted" />}
@@ -317,7 +314,7 @@ export function ChannelAttachmentsContent({
             firstItemIndex={attachWindow.firstItemIndex}
             groupCounts={groupCounts}
             groupContent={(index) => (
-              <div className="bg-(--bg-chat,var(--bg-app))">
+              <div className="bg-bg-base">
                 <div className="pb-1 pt-2 text-(length:--text-badge) font-medium uppercase tracking-wide text-text-muted">
                   {groups[index]?.label ?? ""}
                 </div>

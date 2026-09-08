@@ -254,7 +254,7 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
       // "reopen" is a real retry rather than advice we can't honour.
       return (
         <main
-          className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-chat text-sm text-text-muted"
+          className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
           style={paneChrome}
         >
           Couldn&apos;t load this conversation — reopen it to retry.
@@ -267,7 +267,7 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
       // "Select a channel" is true here.
       return (
         <main
-          className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-chat text-sm text-text-muted"
+          className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
           style={paneChrome}
         >
           This conversation isn&apos;t available to you.
@@ -276,7 +276,7 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
     }
     return (
       <main
-        className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-chat text-sm text-text-muted"
+        className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
         style={paneChrome}
       >
         Select a channel
@@ -851,7 +851,7 @@ function ActiveChannelView({
       <ConversationPaneCapabilitiesProvider value={paneCaps}>
         <main
           ref={findRootRef}
-          className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
+          className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-base"
           style={paneChrome}
         >
           <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">

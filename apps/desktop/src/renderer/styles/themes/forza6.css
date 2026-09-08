@@ -85,7 +85,6 @@
   --bg-option-hover: var(--forza6-lime-pale);
   --bg-selected: var(--brand-primary);
   --bg-floating: #ffffff;
-  --bg-chat: #ffffff;
   --bg-app: var(--forza6-poster-teal);
   --frame-padding: 4px;
   --pane-gap: 4px;
@@ -328,7 +327,7 @@
   /* `--text-on-dark-pop` — fluorescent yellow metadata.
      Roles (review-locked):
        currency / level numbers / counters that sit ON dark chrome or
-       black structure. NEVER on `--bg-chat` or any light surface — the
+       black structure. NEVER on `--bg-base` or any light surface — the
        contrast disappears and the festival HUD vibe breaks. */
   --text-on-dark-pop: var(--forza6-yellow);
 }
