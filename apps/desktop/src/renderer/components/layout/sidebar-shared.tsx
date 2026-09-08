@@ -6,7 +6,7 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from "react";
-import { BellOff, ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { BellOff, ChevronDown, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 
@@ -221,7 +221,7 @@ export function SidebarSection({
   const body = showBody ? children : collapsedContent;
 
   return (
-    <section className="group/sectionscope px-1.5 pb-3">
+    <section className="group/sectionscope px-1.5 pb-6">
       <SidebarSectionHeader
         label={label}
         icon={icon}
@@ -249,12 +249,7 @@ interface SectionHeaderProps {
   onToggle?: () => void;
 }
 
-/**
- * The section-header row, extracted so non-`SidebarSection` surfaces (the
- * channel sidebar's fixed header, #task:1146) get the IDENTICAL treatment —
- * muted tracking-wider label + count on the left, an `action` slot (or `+`
- * add button) on the right. Stateless: collapse state is owned by the caller.
- */
+/** Collapse state belongs to the caller; this header only presents it. */
 export function SidebarSectionHeader({
   label,
   icon,
@@ -265,113 +260,29 @@ export function SidebarSectionHeader({
   expanded = true,
   onToggle,
 }: SectionHeaderProps): JSX.Element {
-  // A COLLAPSIBLE section that carries an icon is a tree container row (shiki's
-  // Slack reference, #task:1889): the icon slot keeps the section's IDENTITY and
-  // the collapse STATE rides in a trailing caret (see `caret`), so the header sits
-  // on the section glyph column with the tool rows instead of paying a separate
-  // chevron gutter — which is what lets Search / Saved / Archived line up with
-  // STARRED / WORKSPACES / DM.
-  //
-  // Both collapsible callers (STARRED, WORKSPACES / DM) pass an icon, so the
-  // icon-less fallback below has no consumer today; it stays as the API's
-  // answer for a collapsible section that has no glyph to swap.
-  const swapGlyph = collapsible && icon !== undefined;
+  // Keep menu actions visible while keyboard-focused or portaled menus are open.
+  const actionReveal =
+    collapsible && icon !== undefined
+      ? "flex items-center transition-opacity opacity-0 " +
+        "group-hover/sectionscope:opacity-100 [&:has(:focus-visible)]:opacity-100 " +
+        "[&:has([data-state=open])]:opacity-100"
+      : "flex items-center";
 
-  // The right-side actions (sort menu, `+`) of a TREE GROUP are hover-revealed,
-  // not permanent (shiki, 2026-08-08): three sections' worth of always-on chrome
-  // competed with the rows for the eye, and these are arrange-once controls. The
-  // reveal scope is the WHOLE group — header or any child — because the sort menu
-  // is what you reach for while reading the list, not while reading the label; the
-  // `group/sectionscope` marker therefore lives on `SidebarSection`'s `<section>`,
-  // which is why this only applies to the tree groups (the panels that render a
-  // permanent `+` keep it).
-  //
-  // `[&:has(:focus-visible)]` and NOT `focus-within`: Chromium focuses a button on
-  // mousedown, so `focus-within` would pin the actions on after any click. The same
-  // trap is why the caret below keys off `group-focus-visible`, not `group-focus`.
-  // `[&:has([data-state=open])]` keeps them up while their own menu is open — by
-  // then the pointer has left the group.
-  const actionReveal = swapGlyph
-    ? "flex items-center transition-opacity opacity-0 " +
-      "group-hover/sectionscope:opacity-100 [&:has(:focus-visible)]:opacity-100 " +
-      "[&:has([data-state=open])]:opacity-100"
-    : "flex items-center";
-  // The collapse affordance, #task:1948. A PERMANENT state hint, not a button:
-  // until now the only sign that a section collapsed was a disclosure triangle
-  // that replaced the identity glyph on hover, so "this can be collapsed" was
-  // invisible until you already pointed at it (shiki, comparing against a
-  // reference sidebar with always-on chevrons: 「组头前那个 chevron 直接说明这一段
-  // 能收起来」). It is deliberately NOT the permanent triangle that was rejected in
-  // #task:1889 (docs/app-layout.md §3): that one wanted its OWN column, which
-  // would have pushed every channel 12px further into an already narrow list.
-  // This one trails the label inside the existing box and costs no column.
-  //
-  // Loudness: it inherits the header's muted ink and rests at 70% — the volume
-  // this header already uses for its count (`text-text-muted/70`), so the hint
-  // sits one step under the label instead of introducing a third value. It lifts
-  // to full muted while the pointer is on the header, which is now the header's
-  // hover feedback: no background, no border, no ink change on the label itself
-  // (shiki, 2026-08-08 — a group header is a label, not a row).
-  //
-  // ONE glyph rotating, not two glyphs swapping: `aria-hidden` because the
-  // button's `aria-expanded` already states it, and the rotation is what carries
-  // the state visually, so the caret must not also be a second hit area.
-  const caret = (
-    <span
-      aria-hidden
-      data-sidebar-section-caret
-      className={
-        "inline-flex shrink-0 items-center opacity-70 transition-opacity " +
-        "group-hover/section:opacity-100 group-focus-visible/sectiontoggle:opacity-100"
-      }
-    >
-      <ChevronDown
-        className={
-          "size-3 transition-transform duration-150 " + (expanded ? "rotate-0" : "-rotate-90")
-        }
-      />
-    </span>
-  );
-  // lucide's caret pair is the icon-less fallback's affordance (see `swapGlyph`);
-  // the panels' own headers (Members / Computers / Settings) are not collapsible
-  // at all and render icon + label with no disclosure glyph.
-  const fallbackChevron = expanded ? (
-    <ChevronDown className="size-3.5" />
-  ) : (
-    <ChevronRight className="size-3.5" />
-  );
-
-  const headerInner = swapGlyph ? (
+  const headerInner = (
     <span className="flex min-w-0 items-center gap-2">
-      {/* The identity glyph STAYS PUT now (#task:1948). It used to cross-fade into
-          a disclosure triangle on hover, which needed a two-layer wrapper where
-          the theme hook had to sit on the inner element — forza6 paints
-          `[data-sidebar-section-icon]` at `opacity: .7`, i.e. the same
-          specificity as Tailwind's `group-hover:opacity-0`, so with the hook on
-          the animated element the theme won and both glyphs showed at once
-          (shiki: forza6 下 hover 时两个图标重叠, 2026-08-08). With state moved to
-          the caret there is no fade left to lose that race, and the section keeps
-          exactly one glyph per job: identity in the slot, state in the caret. */}
-      <span
-        data-sidebar-section-icon
-        className="inline-flex size-4 shrink-0 items-center justify-center"
-      >
-        {icon}
-      </span>
-      <span className="truncate">
-        {label}
-        {typeof count === "number" ? (
-          <span data-sidebar-count className="ml-1 text-text-muted/70">
-            {count}
-          </span>
-        ) : null}
-      </span>
-      {caret}
-    </span>
-  ) : (
-    <span className="flex items-center gap-1">
-      {collapsible ? <span className="text-text-muted">{fallbackChevron}</span> : null}
-      {icon ? (
+      {collapsible ? (
+        <span
+          aria-hidden
+          data-sidebar-section-caret
+          className="inline-flex size-4 shrink-0 items-center justify-center"
+        >
+          <ChevronDown
+            className={
+              "size-3 transition-transform duration-150 " + (expanded ? "rotate-0" : "-rotate-90")
+            }
+          />
+        </span>
+      ) : icon ? (
         <span
           data-sidebar-section-icon
           className="inline-flex shrink-0 items-center text-text-muted"
@@ -379,31 +290,22 @@ export function SidebarSectionHeader({
           {icon}
         </span>
       ) : null}
-      <span>
-        {label}
-        {typeof count === "number" ? (
-          <span data-sidebar-count className="ml-1 text-text-muted/70">
-            {count}
-          </span>
-        ) : null}
-      </span>
+      <span className="truncate">{label}</span>
+      {typeof count === "number" ? (
+        <span data-sidebar-count className="shrink-0 font-medium text-text-muted/70">
+          {count}
+        </span>
+      ) : null}
     </span>
   );
 
   return (
     <header
+      data-sidebar-group-heading={collapsible ? "" : undefined}
       className={
-        // The GROUP rung of the sidebar's two-rung type ladder: `font-bold` here
-        // against `font-medium` on every ROW (workspace / channel / STARRED / the
-        // Search-Saved-Archived entries), and `text-text-muted` against a row's
-        // `text-text-secondary` — weight AND ink both separate the two levels
-        // (shiki, 2026-08-10). Ink deliberately goes DOWN as weight goes up: muted
-        // is chrome ink, and it is the pair that stays visibly apart in all four
-        // themes, whereas primary-vs-secondary collapses inside forza6's sidebar
-        // (both are pinned to near-black there). Size stays 12px — a label is not
-        // content (shiki: 「分组标题…保持 12」).
-        "mb-1 flex items-stretch justify-between text-xs font-bold tracking-wider text-text-muted " +
-        (swapGlyph ? "group/section" : "")
+        collapsible
+          ? "mb-2 flex items-stretch justify-between text-xs font-bold tracking-wide text-text-primary"
+          : "mb-1 flex items-stretch justify-between text-xs font-bold tracking-wider text-text-muted"
       }
     >
       {collapsible ? (
@@ -411,17 +313,7 @@ export function SidebarSectionHeader({
           type="button"
           onClick={onToggle}
           className={
-            "group/sectiontoggle flex flex-1 items-center h-6 text-left " +
-            // A GROUP HEADER is a label, not a row. Its only hover feedback is the
-            // caret lifting to full muted — no background, no border, no ink change
-            // on the label (shiki, 2026-08-08). Hence `sidebar-row-gutter`, which
-            // reserves the row stroke for column alignment but carries none of the
-            // row state paint (`.sidebar-row-border:hover` is a lime fill in
-            // forza6). The icon-less fallback is off the tree column, so it keeps
-            // its own padding + hover ink.
-            (swapGlyph
-              ? "sidebar-row-gutter " + OUTER_GLYPH_INSET
-              : "px-2 hover:text-text-secondary")
+            "flex min-w-0 flex-1 items-center h-6 text-left sidebar-row-gutter " + OUTER_GLYPH_INSET
           }
           aria-expanded={expanded}
         >
