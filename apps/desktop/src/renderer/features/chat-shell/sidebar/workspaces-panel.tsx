@@ -187,7 +187,7 @@ function WorkspaceRow(
   return (
     <div
       className={cn(
-        "sidebar-row-gutter group/ws flex h-7 w-full items-center pr-2",
+        "sidebar-row-gutter group/ws flex h-7 w-full items-center",
         OUTER_GLYPH_INSET,
         props.mode === "caption"
           ? "text-text-muted"
@@ -322,9 +322,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
                 // branch gets a caption — but passed THROUGH `WorkspaceChannels` so it
                 // renders only when that branch's reveal is non-empty. A wake-gate-lit
                 // branch whose only loud row is STARRED (or whose row queries are
-                // loading/failed) then shows nothing at all, never an orphan title
-                // (@Cindy MUST FIX — same "signal with no row" failure as the branch
-                // level).
+                // loading/failed) then shows nothing at all, never an orphan title.
                 revealCaption={
                   branchHoldsSelectedRow(w.id, selected) ? undefined : (
                     <WorkspaceCaption workspace={w} ctx={ctx} />
@@ -401,13 +399,6 @@ function SortableWorkspaceItem({
     <li
       ref={setNodeRef}
       style={sortableItemStyle({ transform, transition, isDragging })}
-      // `group/wsbranch` spans the header row AND its channels: the row's
-      // right-side actions (sort, `+`) are revealed by pointing anywhere in the
-      // BRANCH, not just at its header (shiki, 2026-08-08) — same reveal scope
-      // the group headers use, one level down. The header keeps its own narrower
-      // `group/ws` for the collapse caret (#task:1948): a disclosure hint lighting
-      // up on the parent while the pointer is on a child would say the wrong thing
-      // about what is under the cursor.
       className="touch-none group/wsbranch"
     >
       <WorkspaceBranch
@@ -419,27 +410,6 @@ function SortableWorkspaceItem({
   );
 }
 
-/**
- * One workspace: its header row plus, when expanded, its channel children.
- *
- * The header is pure CHROME (#task:1889, shiki: 「workspace 应该永远不能高亮」) —
- * a collapse toggle and a right-click menu. It does NOT navigate, does NOT change
- * the titlebar context and NEVER highlights, so the tree has exactly one FILL and
- * it always belongs to the open conversation. Hierarchy is carried by one 16px
- * indent step (children sit on the child glyph column), the lighter ink and the
- * absence of the row vocabulary (no ink frame) — the header's own glyph slot is
- * the collapse control's home on hover, so no column is spent on a chevron.
- *
- * Collapse state persists per workspace under the shared section vocabulary
- * (`silverhand:layout.sidebar-section.ws.<id>`), so the shape of the tree survives
- * a restart. It starts COLLAPSED and only an explicit click changes it — the stored
- * bit means "I want this open", never "I have been here" (see `holdsSelection`
- * below). Opening a channel in a collapsed branch does not expand it; the branch
- * keeps that one row on screen by itself, and a collapsed branch with `loud` unread
- * also pokes those rows out (`collapsed` render + `pokeUnread`, #task:1939) — both DERIVED, so the
- * FILL and the unread stay reachable without pinning the branch open, writing
- * `expanded`, or handing the header a stand-in marker.
- */
 function WorkspaceBranch({
   workspace,
   ctx,
@@ -547,20 +517,10 @@ function WorkspaceHeaderRow({
   );
 }
 
-/** A row can flip the workspace mute suppressor when it is a people-owned,
- *  non-archived workspace. An agent space is structurally un-mutable — directed-grade
- *  traffic has no ambient floor to silence, and the DB trigger forbids the row —
- *  and an archived workspace isn't being listened to at all. */
 function canMuteWorkspace(workspace: WorkspaceItem): boolean {
   return !isAgentSpace(workspace) && !workspace.archived;
 }
 
-/** Self-leave is offered in the row menu on the SAME structural footing as mute
- *  — an active people-owned workspace — so the menu always keeps the always-present
- *  Mute item and never renders empty (the owner-rejection role gate is resolved
- *  downstream, inside the menu). An agent space has no membership to leave, and an
- *  archived workspace (which since #task:1889 isn't in this tree anyway) leaves
- *  through Settings. */
 function canLeaveWorkspaceRow(workspace: WorkspaceItem): boolean {
   return !isAgentSpace(workspace) && !workspace.archived;
 }

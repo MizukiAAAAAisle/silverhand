@@ -5,7 +5,7 @@ import {
   ConversationRowLayout,
   MutedMarker,
   UnreadBadge,
-} from "../../../components/layout/sidebar-shared";
+} from "@/components/layout/sidebar-shared";
 
 interface ChannelRowProps extends Omit<HTMLAttributes<HTMLDivElement>, "children" | "onSelect"> {
   selected: boolean;

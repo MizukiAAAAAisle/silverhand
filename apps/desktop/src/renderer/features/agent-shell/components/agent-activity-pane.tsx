@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowUpRight } from "lucide-react";
 import type {
   AgentDto,
   AgentRuntimeParticipation,
@@ -16,8 +15,6 @@ interface AgentActivityPaneProps {
   agentId: string;
   sessionScope: AgentDto["session_scope"];
   state: AgentRuntimeStateDto | undefined;
-  /** Jump the main view to this conversation (open in chat). */
-  onOpenConversation?: (s: AgentRuntimeParticipation) => void;
 }
 
 interface RosterGroups {
@@ -76,7 +73,6 @@ export function AgentActivityPane(props: AgentActivityPaneProps): JSX.Element {
 function ConversationActivityPane({
   agentId,
   state,
-  onOpenConversation,
 }: AgentActivityPaneProps): JSX.Element {
   const rows = state?.visible_participations ?? [];
   const seats = state?.seats ?? [];
@@ -99,10 +95,6 @@ function ConversationActivityPane({
 
   return (
     <div className="flex min-h-0 flex-1">
-      {/* master: conversation rail. `data-agent-activity` is a theme-neutral
-          container hook (describes the DOM role, no theme word): forza6 scopes
-          the quiet resting `#`/`@` glyph to this dense nav list + the channel
-          sidebar, while sparse content lists keep the sticker (#task:1441). */}
       <aside
         data-agent-activity
         className="flex w-56 shrink-0 flex-col border-r border-border-subtle bg-bg-base"
@@ -110,7 +102,7 @@ function ConversationActivityPane({
         <div className="flex-1 overflow-y-auto px-1.5 py-2">
           {groups.active.length === 0 && groups.recent.length === 0 ? (
             <p className="px-2 py-6 text-center text-(length:--text-meta) text-text-muted">
-              Not in any channel yet.
+              Not in any channel.
             </p>
           ) : (
             <>
@@ -119,14 +111,12 @@ function ConversationActivityPane({
                 rows={groups.active}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
-                onOpen={onOpenConversation}
               />
               <RosterGroup
                 label="Recent"
                 rows={groups.recent}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
-                onOpen={onOpenConversation}
               />
             </>
           )}
@@ -154,13 +144,11 @@ function RosterGroup({
   rows,
   selectedId,
   onSelect,
-  onOpen,
 }: {
   label: string;
   rows: AgentRuntimeParticipation[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onOpen?: (s: AgentRuntimeParticipation) => void;
 }): JSX.Element | null {
   if (rows.length === 0) return null;
   return (
@@ -175,7 +163,6 @@ function RosterGroup({
             row={row}
             selected={row.conversation_id === selectedId}
             onSelect={onSelect}
-            onOpen={onOpen}
             live={label === "Active"}
           />
         ))}
@@ -223,13 +210,11 @@ function RosterItem({
   row,
   selected,
   onSelect,
-  onOpen,
   live,
 }: {
   row: AgentRuntimeParticipation;
   selected: boolean;
   onSelect: (id: string) => void;
-  onOpen?: (s: AgentRuntimeParticipation) => void;
   live: boolean;
 }): JSX.Element {
   // A CONVERSATION-level verdict on conversation-level facts — see
@@ -260,17 +245,6 @@ function RosterItem({
           />
         ) : null}
       </button>
-      {onOpen ? (
-        <button
-          type="button"
-          onClick={() => onOpen(row)}
-          title="Open in chat"
-          aria-label="Open in chat"
-          className="absolute right-1.5 top-1/2 hidden -translate-y-1/2 place-items-center p-1 text-text-muted transition-colors hover:text-text-primary group-hover/row:grid"
-        >
-          <ArrowUpRight className="size-3.5" />
-        </button>
-      ) : null}
     </li>
   );
 }

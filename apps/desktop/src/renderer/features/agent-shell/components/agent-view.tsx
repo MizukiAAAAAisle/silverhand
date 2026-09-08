@@ -59,10 +59,6 @@ interface AgentViewProps {
   /** Called after a successful delete so the parent can navigate
    *  away (back to channels, typically). */
   onDeleted: () => void;
-  /** Click "Open" on a conversation row → switch the main view to that
-   *  channel/thread. Optional: if not provided, the column is
-   *  still shown but rows aren't actionable. */
-  onOpenConversation?: (s: AgentRuntimeParticipation) => void;
   /** full only: open a row of the Chats list in the ordinary chat surface. Only
    *  offered for a conversation the VIEWER takes part in — the verdict is made
    *  inside the pane; this is the navigation half of it. `workspaceId: null` is a
@@ -90,7 +86,6 @@ interface AgentViewProps {
 export function AgentView({
   agentId,
   onDeleted,
-  onOpenConversation,
   onOpenChat,
   onMessageAgent,
   variant = "full",
@@ -158,7 +153,7 @@ export function AgentView({
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
         style={{ ...paneChrome, overflow: "hidden" }}
       >
-        Loading agent…
+        Loading agent
       </main>
     );
   }
@@ -214,15 +209,6 @@ export function AgentView({
     >
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {effectiveSection === "workspace" ? (
-          // Workspace pane manages its own scrolling — file tree and
-          // preview each scroll internally. The outer column must NOT
-          // add a vertical scrollbar of its own (would defeat the
-          // two-internal-scroll design and chop the pane off below
-          // the fold). #task:812.
-          //
-          // Inset is the shared `AGENT_PANE_INSET` (12px, one authority for
-          // every section pane — #task:2116, shiki: 统一成 workspace nav 的
-          // padding). This pane is the reference the others were unified to.
           <div className={cn("flex min-h-0 flex-1 flex-col", AGENT_PANE_INSET)}>
             {canViewFiles ? (
               <AgentWorkspacePane agentId={agent.id} />
@@ -231,24 +217,14 @@ export function AgentView({
             )}
           </div>
         ) : effectiveSection === "activity" ? (
-          // Activity owns its scrolling for both the shared stream and conversation rail.
           <AgentActivityPane
             sessionScope={agent.session_scope}
             agentId={agent.id}
             state={runtimeQuery.data}
-            onOpenConversation={onOpenConversation}
           />
         ) : effectiveSection === "chats" ? (
-          // The agent's conversations as one full-width list (#task:2040,
-          // shiki). It owns its own scroll and its own padded inset, like the
-          // panes above. Gated above: effectiveSection can only be 'chats'
-          // when canAuditChats is true — the LIST is owner-audit; whether a
-          // row can be walked into is a separate, viewer-scoped judgment the
-          // pane makes.
           <AgentChatsPane agentId={agent.id} onOpenChat={onOpenChat} />
         ) : (
-          // Reserve scrollbar width only for profile editing; MCP and
-          // schedules retain their full width.
           <div
             className={cn(
               "flex-1 overflow-y-auto",
@@ -275,8 +251,6 @@ export function AgentView({
   );
 }
 
-// ── side-panel variant (#task:1189) ─────────────────────────────────────────
-
 const SIDE_SECTION_STORAGE_KEY = "silverhand:layout.agent-side-section";
 
 interface SideSectionItem {
@@ -285,12 +259,6 @@ interface SideSectionItem {
   icon: typeof Activity;
 }
 
-// Activity is first because the dock's whole reason to exist is watching a
-// channel's activity beside the chat (shiki #task:1189). Workspace shows the
-// current workspace's L2 memory in a compact single-column form (#task:1191) —
-// the wide two-column file browser lives on the full members page; it sits after
-// Profile (shiki). MCP (raw config) stays full-page-only: a wide power-user
-// surface that doesn't belong in a narrow dock.
 const SIDE_SECTIONS: ReadonlyArray<SideSectionItem> = [
   { id: "activity", label: "Activity", icon: Activity },
   { id: "profile", label: "Profile", icon: User },

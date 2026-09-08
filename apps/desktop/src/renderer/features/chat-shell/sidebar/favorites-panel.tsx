@@ -205,18 +205,6 @@ function FavoriteRow({
     positionalUnread: item.unread_count ?? 0,
     directedUnread: attention?.directed_unread_count ?? 0,
   });
-  // A silenced row says so without being right-clicked: a MutedMarker rides beside
-  // the name (shiki 2026-08-09), matching the workspace row and the parent list's
-  // `ChannelRow`. Mute is the marker ALONE — the name keeps its full colour (shiki
-  // 2026-08-09). A directed badge still stands out at the trailing edge.
-  //
-  // The marker reads the channel's OWN stored tier, so it stays a SEPARATE test
-  // from `effectiveMode` above rather than reusing it (#task:1952, shiki
-  // 2026-08-10): a workspace suppressor is one fact and is drawn once on the
-  // workspace row, so repainting it per child was noise. `effectiveMode` must keep
-  // feeding the badge — swapping that shared variable to the stored tier would
-  // make a muted workspace's `all`-tier rows count positional unread as `loud`
-  // again (a behaviour regression, not one fewer icon). Same split as `ChannelRow`.
   const isSilenced = attention?.mode === "mute";
 
   const row = (

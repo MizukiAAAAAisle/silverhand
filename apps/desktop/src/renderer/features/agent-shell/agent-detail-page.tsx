@@ -29,7 +29,6 @@ export function AgentDetailPage({
         agentId={agentId}
         onDeleted={onExit}
         onMessageAgent={onMessageAgent}
-        onOpenConversation={(seat) => onOpenConversation(seat.channel_id, seat.workspace_id)}
         onOpenChat={(target) => onOpenConversation(target.conversationId, target.workspaceId)}
       />
     );

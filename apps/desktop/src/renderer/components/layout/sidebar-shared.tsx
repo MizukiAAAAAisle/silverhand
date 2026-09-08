@@ -113,7 +113,7 @@ export function SidebarSection({
   const body = showBody ? children : collapsedContent;
 
   return (
-    <section className="group/sectionscope pb-3">
+    <section className="group/sectionscope pb-2">
       <SidebarSectionHeader
         label={label}
         icon={icon}
@@ -349,7 +349,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         )}
       >
         {icon ? (
-          <span className="inline-flex shrink-0 items-center leading-none text-text-muted">
+          <span className="inline-flex shrink-0 items-center leading-none">
             {icon}
           </span>
         ) : null}
@@ -362,14 +362,6 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         >
           <span className="truncate">{title}</span>
           {stacked ? (
-            // Stacked rows ALWAYS reserve the subtitle line so every row in
-            // the group is the same height — a computer with no lifecycle
-            // label (an active user-added one; per the two-axis lexicon
-            // "active carries no standalone label") must not collapse to a
-            // shorter single-line row beside the local "this computer" row
-            // (shiki dogfood: inconsistent heights). The nbsp holds the
-            // line box when there's no subtitle; this is also the slot
-            // per-row availability (Online / Offline) fills once enabled.
             <span className="truncate text-xs text-text-muted">{subtitle ?? " "}</span>
           ) : subtitle ? (
             <span className="truncate text-xs text-text-muted">{subtitle}</span>

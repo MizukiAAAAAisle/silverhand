@@ -234,7 +234,6 @@ function str(payload: Record<string, unknown> | null, key: string): string | nul
 
 interface KindVisual {
   Icon: typeof Wrench;
-  /** lucide stroke color class for the glyph + rail node */
   tone: "neutral" | "accent" | "error" | "warning" | "muted";
 }
 
@@ -247,9 +246,6 @@ function visualForKind(kind: ConversationEventKind): KindVisual {
     case "tool_call":
       return { Icon: Wrench, tone: "neutral" };
     case "tool_output":
-      // Orphan only (folded outputs never reach EventRow). A neutral "returned"
-      // glyph, NOT a check — the verdict rides a per-outcome trailing mark so a
-      // failed orphan never leads with a success icon.
       return { Icon: CornerDownLeft, tone: "muted" };
     case "shell":
       return { Icon: Terminal, tone: "neutral" };
@@ -259,11 +255,6 @@ function visualForKind(kind: ConversationEventKind): KindVisual {
     case "parsed_event_dropped":
       return { Icon: Ban, tone: "warning" };
     case "message_stale":
-      // #task:2099, glyph + tone fixed by Norman: staleness is a "your view of
-      // the conversation expired" TIME fact, so History — not AlertTriangle
-      // (owned by error/stderr) and not a retry glyph. `warning` matches
-      // `parsed_event_dropped`, the other "something did not get through" row,
-      // instead of inventing a tier between neutral and error.
       return { Icon: History, tone: "warning" };
     case "api_response":
       // Default = the waiting/ready queue lifecycle (hourglass). The
@@ -273,9 +264,6 @@ function visualForKind(kind: ConversationEventKind): KindVisual {
     case "session_init":
       return { Icon: Power, tone: "muted" };
     case "message_received":
-      // An inbound delivery the runtime accepted (#task:2146) — a real input
-      // fact, so neutral (not the muted lifecycle tone session_init uses). Inbox
-      // reads as "received", distinct from MessageSquare (assistant `text`).
       return { Icon: Inbox, tone: "neutral" };
     case "compaction_started":
     case "compaction_finished":
