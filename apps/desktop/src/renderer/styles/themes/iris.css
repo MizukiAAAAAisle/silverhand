@@ -73,7 +73,7 @@
   --range-thumb-shadow: initial;
   --range-track-bg: initial;
   --range-track-height: initial;
-  --text-nav-rail-selected: var(--text-on-selected);
+  --text-nav-selected: var(--text-on-selected);
 
   /* ── 底纸：渐变 ── */
   --app-paper: linear-gradient(to bottom, #e6e6b6, #c4d0da);

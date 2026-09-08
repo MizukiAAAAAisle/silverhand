@@ -73,7 +73,7 @@
   --range-thumb-shadow: initial;
   --range-track-bg: initial;
   --range-track-height: initial;
-  --text-nav-rail-selected: var(--text-on-brand);
+  --text-nav-selected: var(--text-on-brand);
 
   /* ── Backgrounds ── */
   --bg-base: #f2f5f9;
@@ -293,13 +293,13 @@
   opacity: 1;
 }
 
-[data-theme="studio-light"] aside[data-sidebar] .sidebar-row-border.text-text-on-selected,
+[data-theme="studio-light"] aside[data-sidebar] .sidebar-row-border.text-text-nav-selected,
 [data-theme="studio-light"] [data-row-selected].sidebar-row-border.text-text-on-selected {
   position: relative;
   border-color: transparent;
   box-shadow: 0 1px 2px rgba(var(--shadow-base), 0.1);
 }
-[data-theme="studio-light"] aside[data-sidebar] .sidebar-row-border.text-text-on-selected::before,
+[data-theme="studio-light"] aside[data-sidebar] .sidebar-row-border.text-text-nav-selected::before,
 [data-theme="studio-light"] [data-row-selected].sidebar-row-border.text-text-on-selected::before {
   content: "";
   position: absolute;
@@ -315,7 +315,7 @@
 
 [data-theme="studio-light"]
   aside[data-sidebar]
-  .sidebar-row-border:not(.text-text-on-selected):hover,
+  .sidebar-row-border:not(.text-text-nav-selected):hover,
 [data-theme="studio-light"] .sidebar-row-border:not([data-row-selected]):hover {
   border-color: transparent;
 }

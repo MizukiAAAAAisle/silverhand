@@ -64,6 +64,7 @@
   --color-text-on-success: var(--text-on-success);
   --color-text-on-warning: var(--text-on-warning);
   --color-text-on-error: var(--text-on-error);
+  --color-text-nav-selected: var(--text-nav-selected);
   --color-text-on-selected: var(--text-on-selected);
 
   --color-overlay-backdrop: var(--overlay-backdrop);
@@ -441,14 +442,14 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   opacity: 0.5;
 }
 
-aside[data-sidebar] .sidebar-row-border.text-text-on-selected {
+aside[data-sidebar] .sidebar-row-border.text-text-nav-selected {
   border-color: var(--border-row-selected);
 }
-aside[data-sidebar] .sidebar-row-border:not(.text-text-on-selected):hover {
+aside[data-sidebar] .sidebar-row-border:not(.text-text-nav-selected):hover {
   border-color: var(--border-row-hover);
 }
 
-/* Navigation states have their own palette, independent of sidebar rows. */
+/* Rail and sidebar navigation share selected text; their surfaces remain independent. */
 .nav-rail {
   border-right: var(--nav-rail-border-width) solid var(--nav-rail-border-color);
 }
@@ -466,7 +467,7 @@ aside[data-sidebar] .sidebar-row-border:not(.text-text-on-selected):hover {
 .nav-rail__item[aria-current="page"] {
   border-color: var(--border-nav-rail-selected);
   background: var(--bg-nav-rail-selected);
-  color: var(--text-nav-rail-selected);
+  color: var(--text-nav-selected);
 }
 .nav-rail__item[aria-current="page"]::before {
   content: "";

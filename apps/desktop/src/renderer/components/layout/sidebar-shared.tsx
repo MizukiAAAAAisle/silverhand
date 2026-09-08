@@ -69,7 +69,7 @@ export const NESTED_GLYPH_INSET = "pl-3";
 
 export function sidebarRowStateClass(selected: boolean | undefined): string {
   return selected
-    ? "border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected"
+    ? "border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-nav-selected"
     : "border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,transparent)] hover:text-text-primary";
 }
 

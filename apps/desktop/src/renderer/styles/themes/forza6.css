@@ -112,7 +112,7 @@
   --text-nav-rail-hover: var(--forza6-ink);
   --bg-nav-rail-hover: var(--forza6-lime-pale);
   --bg-nav-rail-selected: var(--forza6-lime);
-  --text-nav-rail-selected: var(--forza6-ink);
+  --text-nav-selected: var(--forza6-ink);
   --bg-sidebar-row-hover: color-mix(in srgb, var(--forza6-lime) 28%, var(--forza6-paper));
   --bg-neutral-action-hover: var(--bg-floating);
   --sidebar-row-border-width: 2px;

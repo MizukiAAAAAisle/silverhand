@@ -20,20 +20,20 @@
   --bg-elevated: rgba(0, 0, 0, 0.1);
 }
 
-[data-theme="forza6"] aside[data-sidebar] .sidebar-row-border.text-text-on-selected {
+[data-theme="forza6"] aside[data-sidebar] .sidebar-row-border.text-text-nav-selected {
   --text-primary: var(--forza6-ink);
   --text-secondary: var(--forza6-ink);
   --text-muted: rgba(0, 0, 0, 0.62);
   box-shadow: var(--forza6-poster-shadow-xl);
 }
 
-[data-theme="forza6"] aside[data-sidebar] .sidebar-row-border:not(.text-text-on-selected):hover {
+[data-theme="forza6"] aside[data-sidebar] .sidebar-row-border:not(.text-text-nav-selected):hover {
   box-shadow: var(--forza6-poster-shadow);
 }
 
 [data-theme="forza6"]
   aside[data-sidebar]
-  .sidebar-row-border.text-text-on-selected
+  .sidebar-row-border.text-text-nav-selected
   .bg-success:not([data-status-pip]) {
   background-color: var(--forza6-ink);
 }

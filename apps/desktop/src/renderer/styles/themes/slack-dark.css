@@ -74,7 +74,7 @@
   --range-thumb-shadow: initial;
   --range-track-bg: initial;
   --range-track-height: initial;
-  --text-nav-rail-selected: var(--text-on-selected);
+  --text-nav-selected: var(--text-on-selected);
 
   /* ── Backgrounds (cool blue-black ladder) ── */
   --bg-base: #1a1d21;
