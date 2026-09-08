@@ -38,7 +38,6 @@ interface ChannelNode {
   title: string;
   roster_policy: "open" | "fixed";
   visibility: ConversationVisibility;
-  closed_at: number | null;
   starred_at: number | null;
   archived_at: number | null;
   created_at: number;
@@ -134,7 +133,6 @@ export function WorkspaceChannels({
       roster_policy: s.roster_policy,
       visibility: s.visibility,
       is_member: s.is_member,
-      closed_at: s.closed_at,
       starred_at: starredAt.get(s.id) ?? null,
       archived_at: s.archived_at,
       created_at: s.created_at,
@@ -327,7 +325,6 @@ function WorkspaceChannelRow({
   workspaceMuted: boolean | undefined;
   draggable?: boolean;
 }): JSX.Element {
-  const isClosed = channel.closed_at !== null;
   const isArchived = channel.archived_at !== null;
 
   const badge = channelNodeBadge(channel, attention, unreadCount);
@@ -342,7 +339,6 @@ function WorkspaceChannelRow({
       onSelect={onClick}
       channelTitle={channel.title}
       visibility={channel.roster_policy === "open" ? channel.visibility : undefined}
-      closed={isClosed}
       muted={isSilenced}
       badge={badge}
     />
