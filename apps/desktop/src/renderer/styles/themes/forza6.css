@@ -5,7 +5,6 @@
 :root,
 [data-theme="forza6"] {
   /* Theme palette */
-  --forza6-carrier-channels: #f6f7f1;
   --forza6-code-deep: color-mix(in srgb, var(--forza6-code-island) 70%, #000);
   --forza6-code-island: #07111f;
   --forza6-cyan: #22b7e0;
@@ -93,13 +92,10 @@
   --warning-surface: #fdf3c2;
 
   /* Navigation and rows */
-  --bg-channels-sidebar: color-mix(in oklab, var(--brand-primary) 8%, var(--bg-base));
   --bg-nav-hover: var(--forza6-lime-pale);
   --bg-nav-rail: var(--forza6-paper);
   --bg-nav-selected: var(--forza6-lime);
-  --bg-row-hover: color-mix(in oklab, var(--brand-primary) 22%, var(--bg-channels-sidebar));
   --bg-row-selected: var(--forza6-lime);
-  --bg-sidebar-row-hover: color-mix(in srgb, var(--forza6-lime) 28%, var(--forza6-paper));
   --border-nav-rail-hover: var(--forza6-ink);
   --border-nav-rail-selected: var(--forza6-ink);
   --border-row-hover: var(--forza6-ink);

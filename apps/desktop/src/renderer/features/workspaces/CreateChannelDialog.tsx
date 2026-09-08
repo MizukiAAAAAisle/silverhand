@@ -307,13 +307,7 @@ function VisibilitySelect({
                 "flex items-center justify-center gap-1.5 rounded-(--control-radius) border-(length:--control-border-width) px-3 py-1.5 text-xs font-medium transition-colors",
                 selected
                   ? "border-(--border-row-selected) bg-(--bg-row-selected) text-text-on-selected"
-                  : // Resting matches the member chips below (bg-base + subtle
-                    // border). Hover is the canonical control-hover recipe: an
-                    // ink border (`--border-control-hover` — dark ink in warm,
-                    // near-black in forza6, neutral in slack) plus the shared
-                    // selectable-option fill (`--bg-option-hover` — forza6 pale
-                    // lime, warm/slack neutral). NOT `--bg-row-hover`, which is a
-                    // magenta brand tint in forza6.
+                  : // Options use control hover colors independently of navigation.
                     "border-border-subtle bg-bg-base text-text-secondary hover:border-(--border-control-hover) hover:bg-(--bg-option-hover) hover:text-text-primary",
               )}
             >

@@ -71,13 +71,10 @@
   --warning-surface: rgba(236, 178, 46, 0.15);
 
   /* Navigation and rows */
-  --bg-channels-sidebar: #19171d;
   --bg-nav-hover: rgba(255, 255, 255, 0.06);
   --bg-nav-rail: #19171d;
   --bg-nav-selected: var(--bg-selected);
-  --bg-row-hover: rgba(255, 255, 255, 0.06);
   --bg-row-selected: var(--brand-primary);
-  --bg-sidebar-row-hover: var(--bg-row-hover);
   --border-nav-rail-hover: transparent;
   --border-nav-rail-selected: transparent;
   --border-row-hover: transparent;

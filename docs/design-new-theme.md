@@ -64,15 +64,14 @@ apps/desktop/src/renderer/
 | `--bg-island` | 岛屿底色（代码块、JSON、终端、表格） | 中性灰，与主基调形成材质对比 |
 | `--bg-island-deep` | 表头、嵌套岛屿 | 比 island 略深 |
 | `--bg-nav-rail` | NavRail（最左 icon 栏）底色 | 主题最强的一档信号色，或退化成 `var(--bg-primary)`（详见 §9） |
-| `--bg-channels-sidebar` | 侧栏列表面底色（侧栏树 / members / computers / activity / settings nav） | 与 nav-rail 同色家族、saturation 低一档；或退化 |
-| `--bg-nav-rail-hover` | NavRail icon hover 底色 | 与 `--bg-nav-rail` 成对；深色 nav 用浅混色，浅色 nav 用深混色 |
 | `--bg-row-selected` | Workspace / Channel / Search / Saved row 选中底色 | 必须从 sidebar 底色中跳出 |
-| `--bg-row-hover` | 同一组 row 的 hover 底色 | selected 的弱一级，不应比 selected 更抢眼 |
+| `--bg-nav-selected` | NavRail 与 sidebar row 选中底色 | 当前所在的导航位置 |
+| `--bg-nav-hover` | NavRail 与 sidebar row hover 底色 | selected 的弱一级，不应比 selected 更抢眼 |
 | `--bg-option-hover` | 可选项（下拉/列表 option）的 hover 预览底 | 与 row-hover 分开的 token，别默认复用 |
 
 **关键规则 1：`--bg-selected` ≠ `--bg-floating`**。两者是有意拆分的 token —— 若某主题下它们凑巧同值（例如某浅底主题都是纯白），可以，但不能默认复用；否则 `bg-elevated` 容器里的激活态会消失（参见 §4.3 配对表）。
 
-**关键规则 2：三个 sidebar token 是 per-theme 可选项**。"留白派"主题让它们全部 `var(--bg-primary)`，左侧 chrome 一片同色。"梯度派"主题让它们沿一条 oklab 色线递减 —— 见 §9。**新主题里这三个 token 必须给值**（哪怕都退化到 `var(--bg-primary)`），否则切换主题时 NavRail / sidebar 会瞬变成透明黑。
+**关键规则 2：侧栏容器使用 `--bg-base`**。导航 hover / selected 分别使用 `--bg-nav-hover` / `--bg-nav-selected`；各主题显式定义，避免继承默认主题值。
 
 **关键规则 3：默认主题同时挂在 `:root` 上，新增 token 不能依赖 fallback。** 只要组件开始读取某个 CSS var，其它主题也必须显式定义同名 token；否则会继承默认主题值，出现"切主题后还用旧主题的 row border / 不该出现的 NavRail icon 色"这类泄漏。这条是本节所有"MUST 全部显式定义"约束的根因，`appearance.test.ts` 的 cascade 断言锁它。
 
@@ -97,7 +96,7 @@ apps/desktop/src/renderer/
 | `--text-on-brand` | `--brand-primary` 背景上的文字 / icon | 与 brand 成对维护对比度 |
 | `--text-nav-rail` | NavRail 默认 icon 色 | 深色 nav 用浅字，浅色 nav 用深字；必须显式定义 |
 | `--text-nav-rail-hover` | NavRail hover icon 色 | 通常比默认更实 |
-| `--bg-nav-rail-hover` | NavRail icon hover 底色 | 与 NavRail 底色、icon 色一起按主题成组定义 |
+| `--bg-nav-hover` | NavRail icon hover 底色 | 与 NavRail 底色、icon 色一起按主题成组定义 |
 | `--bg-task-tag` | Message header 后的 task tag 底色 | 主题化的高显著 chip，通常从 `--brand-primary` 派生，不要复用 warning |
 | `--text-on-task-tag` | task tag 上的文字 / icon | 与 `--bg-task-tag` 成对维护对比度 |
 | `--border-task-tag` | task tag 描边 | 与 task tag 底色同族，提供边缘清晰度 |
@@ -493,8 +492,8 @@ NavRail 项 / channel / DM / session 这种**一级导航 row**，用同一套�
 | 状态 | border color | background | 视觉读法 |
 |---|---|---|---|
 | default | 透明占位边 | 无 | 占位边但不可见 |
-| hover | `--border-row-hover` | `--bg-row-hover` | selected 的弱一级预演 |
-| selected | `--border-row-selected` | `--bg-row-selected` | 当前所在 |
+| hover | `--border-row-hover` | `--bg-nav-hover` | selected 的弱一级预演 |
+| selected | `--border-row-selected` | `--bg-nav-selected` | 当前所在 |
 
 **三个关键设计点**：
 
@@ -564,7 +563,7 @@ forza6 是首个走"token + component skin"两层的主题，不只是换色。�
    - **L1 — Raw palette（唯一允许 hex 的地方）。** forza6.css 顶部 `--forza6-*` 原始色相块是品牌/festival 色相**唯一**可以写裸 hex 字面量的地方。改一个色相只改这里一处。（`--forza6-syntax-*` / `--forza6-indigo-*` 是 code-island 子系统的 theme-private raw，同属 L1。）冷中性 bg 阶梯和深饱和语义变体不是 festival 品牌色，暂不强制入 raw palette。
    - **L2 — 语义 token 全走 `var(--forza6-*)` 衍生。** forza6.css 的 `[data-theme='forza6']` **单个** root 块里，每个语义 token（`--brand-primary` / `--accent` / `--bg-row-selected` / `--task-status-*` / `--border-focus`…）的值都是 `var(--forza6-*)` 或其 alpha / `color-mix` 衍生，**不内嵌品牌 hex**。语义 token 名保持区分（per-role alias），值指向同一 raw 但不合并。alpha 形是允许的例外。
    - **L3 — `forza6-components.css` 0 hex（例外：data-uri / alpha / 几何）。** 组件特化层只读语义 token（必要时读 L1 raw，如 sidebar carrier），**不写品牌 hex 字面量**，也**不再有第二个 root-level token 重定义块** —— root token 的唯一定义点是 forza6.css。例外仅：SVG data-uri 里的 `rgba()`、纯 alpha 叠层、几何尺寸。
-2. **Lazy variable substitution**：核心 token 用 `color-mix(in oklab, brand X%, var(--bg-channels-sidebar))` 类公式定义一次，scope 切换自动重新解析。Sidebar token 在 `aside[data-sidebar]` 局部 redefine，root 不受影响。
+2. **Scoped painting**：Sidebar 在 `aside[data-sidebar]` 内覆盖文字与通用 hover 色；容器背景统一使用 `--bg-base`，导航状态由 `--bg-nav-hover` / `--bg-nav-selected` 控制。
 3. **Specificity > Tailwind utility**：`[data-theme='forza6'] [hook]` selector 是 (0,2,0)，稳赢 Tailwind utility (0,1,0)，不需要 `!important`。
 4. **Hover→Selected 硬度递进**：hover（浅 lime + 黑边）→ selected（实心 lime + 黑边 + notch）→ inline（lime sticker 方角）→ send（magenta sticker + display caps）→ status badge → `#` 大号 magenta。每一档比上一档"更硬"。
 5. **Status 配色阶梯**：todo 中性黑边 / in_progress HUD live cyan / in_review 高注意 magenta / done passed muted green。lime 不进工作流状态色（避免和 done/pass 撞语义）。

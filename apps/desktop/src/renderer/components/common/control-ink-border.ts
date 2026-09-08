@@ -23,15 +23,14 @@ export const CONTROL_HOVER_TRANSITION =
 export const CONTROL_HOVER_LIFT = `${CONTROL_HOVER_TRANSITION} hover:-translate-y-px`;
 
 /** The hover colour pair of the neutral surface, shared by its lifting and
- *  still variants: the canonical control-hover tokens, never `--bg-row-hover`
- *  (forza6 paints that magenta). */
+ *  still variants. */
 const CONTROL_SURFACE_HOVER =
   "hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-neutral-action-hover,var(--bg-option-hover))]";
 
 /**
  * The neutral framed SURFACE of the poster-control family: token frame, the
- * canonical control-hover pair (`--border-control-hover` + `--bg-option-hover`,
- * never `--bg-row-hover` — forza6 paints that magenta), and the 1px lift.
+ * canonical control-hover pair (`--border-control-hover` + `--bg-option-hover`),
+ * and the 1px lift.
  *
  * One recipe on purpose: the page-footer neutral action and the Cancel peer of a
  * destructive commit must be the same surface, or a dialog answers its trigger

@@ -72,13 +72,10 @@
   --warning-surface: #fdf0dc;
 
   /* Navigation and rows */
-  --bg-channels-sidebar: #f2f5f9;
   --bg-nav-hover: rgba(31, 26, 18, 0.06);
   --bg-nav-rail: #1b2030;
   --bg-nav-selected: var(--studio-light-brand-bar);
-  --bg-row-hover: #e9eef6;
   --bg-row-selected: #ffffff;
-  --bg-sidebar-row-hover: var(--bg-row-hover);
   --border-nav-rail-hover: transparent;
   --border-nav-rail-selected: transparent;
   --border-row-hover: transparent;

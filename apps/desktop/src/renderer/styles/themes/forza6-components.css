@@ -145,8 +145,6 @@
 /* Hooks: Navigation and unread */
 
 [data-theme="forza6"] aside[data-sidebar] {
-  --bg-channels-sidebar: var(--forza6-carrier-channels);
-  --bg-row-hover: var(--bg-sidebar-row-hover);
   --text-primary: var(--forza6-ink);
   --text-secondary: var(--forza6-ink);
   --text-muted: #586865;
