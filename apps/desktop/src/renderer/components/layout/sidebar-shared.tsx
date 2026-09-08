@@ -362,9 +362,23 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         >
           <span className="truncate">{title}</span>
           {stacked ? (
-            <span className="truncate text-xs text-text-muted">{subtitle ?? " "}</span>
+            <span
+              className={cn(
+                "truncate text-xs",
+                selected ? "text-text-nav-selected" : "text-text-muted",
+              )}
+            >
+              {subtitle ?? " "}
+            </span>
           ) : subtitle ? (
-            <span className="truncate text-xs text-text-muted">{subtitle}</span>
+            <span
+              className={cn(
+                "truncate text-xs",
+                selected ? "text-text-nav-selected" : "text-text-muted",
+              )}
+            >
+              {subtitle}
+            </span>
           ) : null}
         </span>
         {badge && badge > 0 ? (

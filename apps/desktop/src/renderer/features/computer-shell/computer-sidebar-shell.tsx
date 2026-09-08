@@ -141,7 +141,7 @@ function AppManagedBadge(): JSX.Element {
   return (
     <span
       data-computer-app-managed
-      className="rounded-(--control-radius) border border-border-subtle px-1 text-(length:--text-badge) font-semibold uppercase tracking-wide text-text-muted"
+      className="rounded-(--control-radius) border border-border-subtle px-1 text-(length:--text-badge) font-semibold uppercase tracking-wide"
     >
       {computerCopy.appManaged}
     </span>
