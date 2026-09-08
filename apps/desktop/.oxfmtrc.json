@@ -6,7 +6,7 @@
   "endOfLine": "lf",
   "insertFinalNewline": true,
   "semi": true,
-  "singleQuote": true,
+  "singleQuote": false,
   "jsxSingleQuote": false,
   "trailingComma": "all",
   "arrowParens": "always",
