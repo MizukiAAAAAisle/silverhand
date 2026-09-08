@@ -443,10 +443,10 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   opacity: 0.5;
 }
 
-aside[data-sidebar] .sidebar-row-border.text-text-nav-selected {
+.sidebar-row-border.navigation-row.text-text-nav-selected {
   border-color: var(--border-row-selected);
 }
-aside[data-sidebar] .sidebar-row-border:not(.text-text-nav-selected):hover {
+.sidebar-row-border.navigation-row:not(.text-text-nav-selected):hover {
   border-color: var(--border-row-hover);
 }
 

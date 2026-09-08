@@ -8,6 +8,7 @@ import type {
   ConversationPlacementKind,
 } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
+import { sidebarRowStateClass } from "@/components/layout/sidebar-shared";
 import { ConversationGlyph } from "@/components/ConversationGlyph";
 import { AgentActivityTimeline, AgentStreamActivityTimeline } from "./agent-activity-timeline";
 
@@ -242,33 +243,13 @@ function RosterItem({
         aria-current={selected ? "true" : undefined}
         data-row-selected={selected || undefined}
         className={cn(
-          // Content-area list row (NOT inside aside[data-sidebar]), so it
-          // drives forza6 colours via the global row-state tokens directly —
-          // `border-accent` would resolve to brand pink and clash with the
-          // lime selection ground. `sidebar-row-border` carries the per-theme
-          // border width (forza6 = 2px). No `transition-colors`: selection is
-          // a discrete committed state, instant switch (#task:1162).
           "sidebar-row-border flex w-full items-center gap-1.5 border py-1 pl-2 pr-7 text-left",
-          // Foreground pairs with the `--bg-row-selected` fill via
-          // `text-text-on-selected` (same row vocabulary as WorkspaceChannels /
-          // WorkspacesPanel): forza6 = ink-on-lime, warm = text-primary,
-          // slack = white. The `.text-text-on-selected` border/shadow CSS is
-          // `aside[data-sidebar]`-scoped, so on this content-area row the class
-          // is purely the colour utility — border/bg stay the inline tokens.
-          selected
-            ? "border-(--border-row-selected,var(--accent)) bg-(--bg-row-selected,var(--bg-selected)) font-semibold text-text-on-selected"
-            : "border-transparent text-text-secondary hover:border-(--border-row-hover,var(--accent)) hover:text-text-primary",
+          sidebarRowStateClass(selected),
         )}
       >
-        {/* Conversation roster row identity. The `data-channel-icon` sticker
-            hook (forza6 paints the ink-bordered `#`/`@` chip; the
-            `data-row-selected` ancestor adds the heavier lift on the lime
-            selected row) is owned by ConversationGlyph, not hand-written here
-            (#task:1438). On a selected row the glyph flips to
-            `--text-on-selected` so it stays legible on the fill. */}
         <ConversationGlyph
           kind={glyphKind}
-          className={selected ? "text-text-on-selected" : "text-text-muted"}
+          className={selected ? "text-text-nav-selected" : "text-text-muted"}
         />
         <span className="min-w-0 flex-1 truncate text-xs">{row.channel_title}</span>
         {live ? (
