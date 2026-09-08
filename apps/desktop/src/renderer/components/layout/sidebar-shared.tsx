@@ -221,7 +221,7 @@ export function SidebarSection({
   const body = showBody ? children : collapsedContent;
 
   return (
-    <section className="group/sectionscope px-1.5 pb-6">
+    <section className="group/sectionscope px-1.5 pb-3">
       <SidebarSectionHeader
         label={label}
         icon={icon}
@@ -304,7 +304,7 @@ export function SidebarSectionHeader({
       data-sidebar-group-heading={collapsible ? "" : undefined}
       className={
         collapsible
-          ? "mb-2 flex items-stretch justify-between text-xs font-bold tracking-wide text-text-primary"
+          ? "mb-1 flex items-stretch justify-between text-xs font-bold tracking-wide text-text-primary"
           : "mb-1 flex items-stretch justify-between text-xs font-bold tracking-wider text-text-muted"
       }
     >
