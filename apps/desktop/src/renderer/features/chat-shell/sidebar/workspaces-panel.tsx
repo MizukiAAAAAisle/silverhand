@@ -10,6 +10,7 @@ import {
   Plus,
   Settings,
 } from "lucide-react";
+import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { WorkspaceIcon } from "@/components/WorkspaceIcon";
 import {
@@ -185,13 +186,13 @@ function WorkspaceRow(
 
   return (
     <div
-      className={
-        "sidebar-row-gutter group/ws flex h-7 w-full items-center pr-2 " +
-        OUTER_GLYPH_INSET +
-        (props.mode === "caption"
-          ? " text-text-muted"
-          : " text-text-secondary hover:text-text-primary")
-      }
+      className={cn(
+        "sidebar-row-gutter group/ws flex h-7 w-full items-center pr-2",
+        OUTER_GLYPH_INSET,
+        props.mode === "caption"
+          ? "text-text-muted"
+          : "text-text-secondary hover:text-text-primary",
+      )}
     >
       {props.mode === "caption" ? (
         <span className="flex min-w-0 flex-1 items-center text-xs font-medium">{identity}</span>
@@ -215,10 +216,10 @@ function WorkspaceRow(
               className="ml-1 inline-flex shrink-0 items-center text-text-muted opacity-0 transition-opacity group-hover/ws:opacity-100 group-focus-visible/wstoggle:opacity-100"
             >
               <ChevronDown
-                className={
-                  "size-3 transition-transform duration-150 " +
-                  (props.expanded ? "rotate-0" : "-rotate-90")
-                }
+                className={cn(
+                  "size-3 transition-transform duration-150",
+                  props.expanded ? "rotate-0" : "-rotate-90",
+                )}
               />
             </span>
           </button>
@@ -496,10 +497,11 @@ function WorkspaceHeaderRow({
   const icon = rowIconFor(workspace, ctx);
   const unread = workspace.unread;
 
-  const hoverOnly =
-    "opacity-0 transition-opacity group-hover/wsbranch:opacity-100 " +
-    "focus-visible:opacity-100 [&:has(:focus-visible)]:opacity-100 " +
-    "[&:has([data-state=open])]:opacity-100";
+  const hoverOnly = cn(
+    "opacity-0 transition-opacity group-hover/wsbranch:opacity-100",
+    "focus-visible:opacity-100 [&:has(:focus-visible)]:opacity-100",
+    "[&:has([data-state=open])]:opacity-100",
+  );
 
   const row = (
     <WorkspaceRow
