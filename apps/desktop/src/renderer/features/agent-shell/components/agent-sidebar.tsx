@@ -83,7 +83,7 @@ export function AgentSectionTabs<T extends string>({
   onChange: (section: T) => void;
 }): JSX.Element {
   return (
-    <nav aria-label="Agent sections" className="agent-section-tabs">
+    <nav aria-label="Agent sections" className="agent-section-tabs scrollbar-hide">
       {sections.map((item) => {
         const selected = item.id === active;
         const Icon = item.icon;

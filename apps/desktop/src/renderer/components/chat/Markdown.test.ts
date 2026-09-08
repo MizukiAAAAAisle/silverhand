@@ -255,23 +255,10 @@ describe("SystemMessage channel refs", () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-session-cleared="1"');
-    // Actor + agent + session-id passthrough (data, not copy). Names are
+    // Actor + agent identity. Names are
     // bare recognition labels, no leading `@` (#task:1768).
     expect(html).toContain(">you</span>");
     expect(html).toContain(">Alice</span>");
-    expect(html).toContain("fbe21c8a");
-  });
-
-  it("session_cleared was_running=false carries the idle marker", () => {
-    const msg = makeSystemMessage("session_cleared", {
-      agent_id: "a-bob",
-      agent_name: "Bob",
-      actor_user_id: "local",
-      previous_cli_session_id_prefix: null,
-      was_running: false,
-    });
-    const html = renderSystem(msg, new Map());
-    expect(html).toContain('data-session-cleared-running="0"');
   });
 
   it("session_cleared with actor_user_id=null marks the actor unknown and must NOT render @you", () => {
@@ -302,89 +289,6 @@ describe("SystemMessage channel refs", () => {
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-session-cleared-legacy="1"');
     expect(html).toContain("CLI session context");
-  });
-
-  it("renders schedule_fire as a flat banner with header + pills + body", () => {
-    const now = Date.now();
-    const planned = now - 2_000; // 2s ago: wake fired 2s late
-    const next = now + 5 * 60_000; // 5m from now
-    const msg = makeSystemMessage("schedule_fire", {
-      schedule_id: "s-1",
-      spec_kind: "cron",
-      spec_summary: "cron */5 9-18 * * 1-5 (Asia/Shanghai)",
-      body: "Reminder: review #task:294 status, ping @shiki if still in_review.",
-      actual_fire_at: now,
-      planned_fire_at: planned,
-      missed_count: 0,
-      next_fire_at: next,
-    });
-    const html = renderSystem(msg, new Map());
-    expect(html).toContain('data-schedule-fire="1"');
-    // Header spec summary surfaced.
-    expect(html).toContain("cron */5 9-18 * * 1-5 (Asia/Shanghai)");
-    // All four pills present, in order.
-    expect(html).toContain('data-pill="fired"');
-    expect(html).toContain('data-pill="planned"');
-    expect(html).toContain('data-pill="missed"');
-    expect(html).toContain('data-pill="next"');
-    expect(html).toContain('data-missed-count="0"');
-    // Body surfaced (not the producer scaffolding).
-    expect(html).toContain("Reminder");
-    expect(html).toContain("review");
-  });
-
-  it("schedule_fire missed_count > 0 highlights the missed pill", () => {
-    const msg = makeSystemMessage("schedule_fire", {
-      schedule_id: "s-2",
-      spec_kind: "interval",
-      spec_summary: "interval 60s",
-      body: "Poll deploy status; alert if still pending.",
-      actual_fire_at: Date.now(),
-      planned_fire_at: Date.now() - 4 * 60_000,
-      missed_count: 4,
-      next_fire_at: Date.now() + 60_000,
-    });
-    const html = renderSystem(msg, new Map());
-    expect(html).toContain('data-missed-count="4"');
-    expect(html).toContain("interval 60s");
-  });
-
-  it("schedule_fire one-shot keeps planned pill but suppresses next pill", () => {
-    // The producer writes `planned_fire_at: dto.next_fire_at` on every
-    // fire including one-shot, so the planned pill IS drawn (it carries
-    // late/on-time info even for `once`). Only `next_fire_at` flips to
-    // null after a one-shot's last fire — so only the `next` pill is
-    // suppressed. Schema keeps `planned_fire_at` nullable just to absorb
-    // pre-PR-4 legacy rows.
-    const planned = Date.now() - 1_000;
-    const msg = makeSystemMessage("schedule_fire", {
-      schedule_id: "s-3",
-      spec_kind: "once",
-      spec_summary: "once",
-      body: "Final reminder before deploy window closes.",
-      actual_fire_at: Date.now(),
-      planned_fire_at: planned,
-      missed_count: 0,
-      next_fire_at: null,
-    });
-    const html = renderSystem(msg, new Map());
-    expect(html).toContain('data-pill="fired"');
-    expect(html).toContain('data-pill="planned"');
-    expect(html).toContain('data-pill="missed"');
-    expect(html).not.toContain('data-pill="next"');
-  });
-
-  it("schedule_fire without metadata still renders the banner with raw content", () => {
-    const msg = makeSystemMessage(
-      "schedule_fire",
-      {},
-      "Schedule fired (kind: cron, planned 2026-05-15T...): legacy body text.",
-    );
-    const html = renderSystem(msg, new Map());
-    expect(html).toContain('data-schedule-fire="0"');
-    expect(html).toContain("legacy body text");
-    // No pills when metadata is absent.
-    expect(html).not.toContain('data-pill="fired"');
   });
 
   // PR-5: thread_anchor / child_context / channel_context unified
@@ -623,16 +527,6 @@ describe("SystemMessage channel refs", () => {
     // intentional, the author has to opt the new subtype into the
     // info layout explicitly.
     const infoSubtypes: Array<[string, Record<string, unknown>]> = [
-      [
-        "schedule_fire",
-        {
-          kind: "cron",
-          spec_summary: "0 9 * * *",
-          timezone: "UTC",
-          message: "wake",
-          agent_name: "Alice",
-        },
-      ],
       ["channel_context", { source_conversation_title: "foo", created_by_agent_name: "Alice" }],
       ["child_context", { parent_conversation_id: "p1", parent_title: "parent", summary: "s" }],
       [

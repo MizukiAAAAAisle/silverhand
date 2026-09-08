@@ -29,6 +29,7 @@
   --color-bg-active: var(--bg-active);
   --color-bg-selected: var(--bg-selected);
   --color-bg-floating: var(--bg-floating);
+  --color-bg-message-context: var(--bg-message-context);
   --color-bg-island: var(--bg-island);
   --color-bg-island-deep: var(--bg-island-deep);
   --color-bg-inset: var(--bg-inset);

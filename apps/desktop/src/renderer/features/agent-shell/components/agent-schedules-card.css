@@ -1,0 +1,55 @@
+.agent-schedules {
+  container: agent-schedules / inline-size;
+}
+
+.schedule-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 16px;
+}
+
+.schedule-title {
+  grid-area: 1 / 1;
+}
+
+.schedule-cancel {
+  grid-area: 1 / 2;
+}
+
+.schedule-metadata {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  min-width: 0;
+}
+
+.schedule-timezone {
+  overflow-wrap: anywhere;
+}
+
+@container agent-schedules (max-width: 480px) {
+  .schedule-card {
+    padding: 12px;
+    gap: 8px;
+  }
+
+  .schedule-title {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .schedule-metadata {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: start;
+    gap: 8px;
+  }
+
+  .schedule-timing {
+    flex-wrap: wrap;
+  }
+}

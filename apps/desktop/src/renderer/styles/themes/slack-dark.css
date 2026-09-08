@@ -127,6 +127,7 @@
 
   /* Floating surfaces and shadows */
   --bg-floating: #2c2d30;
+  --bg-message-context: color-mix(in srgb, var(--chip-bg) 50%, transparent);
   --floating-border: 1px solid rgba(255, 255, 255, 0.1);
   --floating-item-radius: var(--radius-sm);
   --floating-radius: var(--radius-md);

@@ -34,6 +34,8 @@ export function MentionCcCard({
   onOpenChannelRef,
   humansByName,
 }: RendererProps): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+
   const meta = (message.metadata ?? {}) as Record<string, unknown>;
 
   const workspaceName =
@@ -84,7 +86,7 @@ export function MentionCcCard({
       ? formatUserDisplayName(sourceFromUserId ?? fetched?.message.from_user_id, userResolver)
       : sourceFromKind === "agent" || fetched?.message.from_kind === "agent"
         ? "an agent"
-        : "someone";
+        : null;
 
   // In-card nav to the origin conversation. The `mention_external`
   // notification for this same mention anchors at the SOURCE message
@@ -132,19 +134,19 @@ export function MentionCcCard({
   ) : null;
 
   return (
-    <div className="border-l-2 border-accent/60 bg-bg-floating/60 px-3 py-2">
-      <div className="mb-1 flex items-center gap-1.5 text-xs text-text-muted">
-        <AtSign className="size-3.5" />
+    <div className="w-full min-w-0 max-w-full px-4 py-2 [contain:inline-size]">
+      <div className="flex flex-wrap items-center justify-center gap-2 text-center text-xs leading-5 text-text-muted">
+        <AtSign aria-hidden className="size-3.5 shrink-0" />
         {collapseByline ? (
-          <span>{sourceLocationNode}</span>
+          <span>Mention in {sourceLocationNode}</span>
         ) : (
           <span>
-            mentioned by{" "}
             {sourcePresentation ? (
               <AuthorName presentation={sourcePresentation} className="text-text-secondary" />
-            ) : (
+            ) : sourceFallbackLabel ? (
               <span className="text-text-secondary">{sourceFallbackLabel}</span>
-            )}
+            ) : null}
+            {sourcePresentation || sourceFallbackLabel ? " mentioned" : "Mention"}
             {sourceLocationNode ? (
               <>
                 {" in "}
@@ -153,44 +155,37 @@ export function MentionCcCard({
             ) : null}
           </span>
         )}
+        <button
+          type="button"
+          className="w-24 shrink-0 whitespace-nowrap text-text-secondary underline-offset-2 hover:text-text-primary hover:underline"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "Hide message" : "View message"}
+        </button>
       </div>
-      {original ? (
-        <div className="text-text-primary">
-          <Markdown
-            content={original}
-            conversationRefsById={conversationRefsById}
-            onOpenConversationRef={onOpenConversationRef}
-            channelsByName={channelsByName}
-            onOpenChannelRef={onOpenChannelRef}
-            humansByName={humansByName}
-          />
+      {expanded ? (
+        <div className="mt-3 w-full min-w-0 max-w-full overflow-x-auto wrap-anywhere rounded-(--control-radius) bg-bg-message-context px-3 py-2 text-left text-text-primary">
+          {original ? (
+            <Markdown
+              content={original}
+              conversationRefsById={conversationRefsById}
+              onOpenConversationRef={onOpenConversationRef}
+              channelsByName={channelsByName}
+              onOpenChannelRef={onOpenChannelRef}
+              humansByName={humansByName}
+            />
+          ) : (
+            <div className="text-xs text-text-muted">(loading original…)</div>
+          )}
         </div>
-      ) : (
-        <div className="text-xs text-text-muted">(loading original…)</div>
-      )}
+      ) : null}
     </div>
   );
 }
 
 // ─── session_cleared audit row ────────────────────────────────────────
 
-/**
- * `session_cleared` is an audit event ("user reset @Alice's CLI session
- * context"). The previous renderer wrapped it as a destructive toast
- * (red border + bg-error tint + Eraser icon), which clashed with the
- * message stream's IM aesthetic — sessions don't get *deleted*, they
- * get *reset*. PR-3 swaps the toast for a single muted inline row
- * with a `RotateCcw` (counter-clockwise reset arrow) icon and
- * structured metadata pieces (actor · agent · prev session prefix ·
- * was-running flag) so the row reads as a one-line audit entry, not a
- * warning popup.
- *
- * Renderer chain:
- *  - Full metadata (`SessionClearedMetadata`): structured row.
- *  - Missing/legacy metadata: degraded muted row carrying
- *    `message.content` so legacy DB rows still display something
- *    sensible.
- */
 export function SessionClearedCard({
   message,
   conversationRefsById,
@@ -203,11 +198,11 @@ export function SessionClearedCard({
   if (meta) return <SessionClearedRow meta={meta} />;
   return (
     <div
-      className="flex items-center gap-2 px-4 py-1 text-text-muted"
+      className="flex items-center justify-center gap-2 px-4 py-1 text-center text-text-muted"
       data-session-cleared-legacy="1"
     >
       <RotateCcw aria-hidden className="size-3.5 shrink-0 opacity-60" />
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0">
         <Markdown
           content={message.content}
           conversationRefsById={conversationRefsById}
@@ -234,7 +229,7 @@ function SessionClearedRow({ meta }: { meta: SessionClearedMetadata }): JSX.Elem
     : "a user";
   return (
     <div
-      className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-4 py-1 text-text-muted"
+      className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 px-4 py-1 text-center text-text-muted"
       data-session-cleared="1"
     >
       <RotateCcw aria-hidden className="size-3.5 shrink-0 opacity-60" />
@@ -247,25 +242,6 @@ function SessionClearedRow({ meta }: { meta: SessionClearedMetadata }): JSX.Elem
       <span>reset</span>
       <span className="font-medium text-text-primary">{meta.agent_name}</span>
       <span>'s session context</span>
-      {meta.previous_cli_session_id_prefix ? (
-        <>
-          <span aria-hidden className="text-text-muted/60">
-            ·
-          </span>
-          <span>
-            prev{" "}
-            <code className="rounded bg-bg-elevated px-1 font-mono text-(length:--text-meta) text-text-secondary">
-              {meta.previous_cli_session_id_prefix}
-            </code>
-          </span>
-        </>
-      ) : null}
-      <span aria-hidden className="text-text-muted/60">
-        ·
-      </span>
-      <span data-session-cleared-running={meta.was_running ? "1" : "0"}>
-        was {meta.was_running ? "running" : "idle"}
-      </span>
     </div>
   );
 }
@@ -279,30 +255,33 @@ export function OnboardingRow({
   humansByName,
 }: RendererProps): JSX.Element {
   const [expanded, setExpanded] = useState(false);
+
   return (
-    <button
-      type="button"
-      onClick={() => setExpanded((v) => !v)}
-      className={
-        "group flex w-full items-start gap-2 px-2 py-1 text-left text-text-muted " +
-        (expanded ? "bg-bg-floating" : "rounded hover:bg-bg-hover")
-      }
-      aria-expanded={expanded}
+    <div
+      className="w-full min-w-0 rounded-(--control-radius) bg-bg-message-context px-3 py-2 text-left text-text-muted"
       data-onboarding-row="1"
     >
-      <ChevronRight
-        className={
-          "mt-0.75 size-3 shrink-0 text-text-muted/60 transition-transform " +
-          (expanded ? "rotate-90" : "")
-        }
-      />
-      <span
-        className="mt-0.5 inline-flex shrink-0 items-center rounded px-1.5 py-px text-(length:--text-badge) font-semibold uppercase tracking-wider text-accent bg-accent-soft"
-        data-onboarding-badge="1"
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="mb-1 flex items-center gap-2 rounded-(--control-radius) hover:text-text-primary"
+        aria-expanded={expanded}
       >
-        Onboarding
-      </span>
-      <div className={"min-w-0 flex-1 " + (expanded ? "" : "truncate")}>
+        <ChevronRight
+          aria-hidden
+          className={
+            "size-3 shrink-0 text-text-muted/60 transition-transform " +
+            (expanded ? "rotate-90" : "")
+          }
+        />
+        <span
+          className="inline-flex items-center text-(length:--text-badge) font-semibold uppercase tracking-wider text-accent"
+          data-onboarding-badge="1"
+        >
+          Onboarding
+        </span>
+      </button>
+      <div className={"w-full min-w-0 " + (expanded ? "" : "truncate")}>
         {expanded ? (
           <Markdown
             content={message.content}
@@ -316,7 +295,7 @@ export function OnboardingRow({
           <span>{firstLine(message.content)}</span>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 

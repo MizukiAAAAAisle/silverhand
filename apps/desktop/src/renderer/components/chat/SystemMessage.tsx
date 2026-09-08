@@ -7,7 +7,7 @@ import {
 import type { ChannelReference } from "./ChannelRef";
 import type { WorkspaceChannelReference } from "./ConversationRef";
 import { type SystemMessageRenderer, GenericNarrationFallback } from "./system-message/shared";
-import { ScheduleFireBanner } from "./system-message/schedule-fire";
+import { ScheduleFireRow } from "./system-message/schedule-fire";
 import { TaskEventRow } from "./system-message/task-event";
 import {
   ChannelContextCard,
@@ -118,8 +118,7 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
   task_edit: TaskEventRow,
   // P0 (PR-3): inline audit row + RotateCcw icon (no longer a toast).
   session_cleared: SessionClearedCard,
-  // P1 (PR-4): flat banner with left warning accent + actionable pills.
-  schedule_fire: ScheduleFireBanner,
+  schedule_fire: ScheduleFireRow,
   // P1 (PR-5): unified context-card series — shared chrome (left
   // accent line + kind tag + source chip + collapsible body), color
   // per kind. Each subtype renderer parses its enriched metadata and

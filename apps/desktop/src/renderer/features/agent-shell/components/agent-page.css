@@ -7,8 +7,12 @@
 
 .agent-section-tabs {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
   align-items: center;
   gap: 0 4px;
   padding: 0 8px;
@@ -17,11 +21,11 @@
 
 .agent-section-tab {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
   padding: 8px 10px;
   border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
   color: var(--text-muted);
   font-size: 12px;
   white-space: nowrap;

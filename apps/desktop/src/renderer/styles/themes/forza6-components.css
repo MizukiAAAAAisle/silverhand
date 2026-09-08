@@ -368,7 +368,8 @@
   font-weight: 700;
 }
 
-[data-theme="forza6"] [data-panel-card="row"] {
+[data-theme="forza6"] [data-panel-card="row"],
+[data-theme="forza6"] [data-panel-card="schedule"] {
   border: var(--panel-border-width) solid var(--border-subtle);
   transition:
     border-color 150ms ease,
@@ -376,15 +377,32 @@
     color 150ms ease;
 }
 
+[data-theme="forza6"] [data-panel-card="schedule"] {
+  transition:
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease,
+    box-shadow 150ms ease;
+}
+
+[data-theme="forza6"] [data-panel-card="schedule"]:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--forza6-poster-shadow);
+}
+
 [data-theme="forza6"] [data-panel-card="placeholder"] {
   border: var(--panel-border-width) solid var(--forza6-ink);
   border-style: dashed;
 }
 
-[data-theme="forza6"] [data-panel-card="row"]:hover {
+[data-theme="forza6"] [data-panel-card="row"]:hover,
+[data-theme="forza6"] [data-panel-card="schedule"]:hover {
   border-color: var(--forza6-ink);
-  background-color: var(--forza6-lime-pale);
   color: var(--forza6-ink);
+}
+
+[data-theme="forza6"] [data-panel-card="row"]:hover {
+  background-color: var(--forza6-lime-pale);
 }
 
 [data-theme="forza6"] [data-panel-card="profile-section"] {
