@@ -1,65 +1,121 @@
-/* ================================================================
-   Theme: Iris
-   ================================================================ */
-
+/* Theme: iris
+   Tokens follow the same module order across themes. Keep explicit initial values
+   to prevent inheritance from the default theme. */
 [data-theme="iris"] {
-  /* Task references: prose and system activity retain distinct emphasis. */
-  --task-ref-font: initial;
-  --task-ref-weight: 500;
-  --task-ref-number-font: initial;
-  --task-ref-number-weight: initial;
-  --task-ref-number-tracking: initial;
-  --task-ref-color: var(--accent);
-  --task-ref-line-height: initial;
-  --task-ref-hover-decoration: underline;
-  --task-ref-marker: transparent;
-  --task-ref-marker-hover: transparent;
-  --task-ref-activity-marker: transparent;
-  --task-ref-activity-color: var(--text-secondary);
-  --task-ref-activity-hover-color: var(--text-on-accent);
-  --task-ref-activity-hover-bg: var(--accent);
-  --task-ref-activity-padding: 0.375rem;
-  --task-ref-activity-margin: -0.125rem;
+  /* Typography and motion */
+  --chrome-label-tracking: 0.07em;
+  --chrome-label-transform: uppercase;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --font-chrome-label: var(--font-sans);
+  --font-display: var(--font-sans);
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-serif: var(--font-sans);
 
-  /* App navigation chrome. */
-  --nav-rail-border-width: 0px;
-  --nav-rail-border-color: transparent;
-  --nav-rail-item-border-width: 2px;
-  --border-nav-rail-selected: transparent;
-  --border-nav-rail-hover: transparent;
-  --nav-rail-indicator-display: none;
-  --nav-rail-indicator-color: transparent;
+  /* Application frame and panes */
+  --app-paper: linear-gradient(to bottom, #e6e6b6, #c4d0da);
+  --bg-app: transparent;
+  --card-radius: 12px;
+  --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
+  --frame-padding: 8px;
+  --iris-shadow-sheet:
+    0 1px 2px rgba(var(--shadow-base), 0.06), 0 6px 20px rgba(var(--shadow-base), 0.07);
+  --pane-gap: 0px;
+  --pane-radius: 0;
+  --pane-shadow: none;
+  --splitter-bg: transparent;
+  --splitter-hover-bg: rgba(31, 26, 18, 0.16);
+  --titlebar-border: transparent;
 
-  /* Code syntax palette. */
-  --hljs-base: var(--text-island);
-  --hljs-keyword: #d73a49;
-  --hljs-string: #032f62;
-  --hljs-number: #005cc5;
-  --hljs-comment: #6a737d;
-  --hljs-meta: #6f42c1;
-  --hljs-addition: #22863a;
-  --hljs-deletion: #b31d28;
-  --hljs-selection-bg: #d5d5eb;
-  --hljs-selection-text: #1f1a12;
+  /* Surface, text and border foundations */
+  --bg-active: #efebe3;
+  --bg-base: #ffffff;
+  --bg-elevated: #f6f4f0;
+  --bg-hover: #f5f2ec;
+  --bg-primary: #ffffff;
+  --bg-selected: rgba(31, 26, 18, 0.07);
+  --bg-structure-dark: #2a2519;
+  --bg-surface: #f1eee8;
+  --border: rgba(31, 26, 18, 0.14);
+  --border-focus: rgba(31, 26, 18, 0.34);
+  --border-subtle: rgba(31, 26, 18, 0.07);
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 6px;
+  --radius-xl: 20px;
+  --text-inverse: #fdfcfa;
+  --text-muted: #756d63;
+  --text-on-dark-pop: #c3a0f2;
+  --text-on-selected: var(--text-primary);
+  --text-on-structure: #fdfcfa;
+  --text-primary: #1f1a12;
+  --text-secondary: #5a5145;
 
-  /* Reset optional painting slots so the default theme cannot leak into this theme. */
+  /* Brand and semantic colors */
+  --accent: #6d28c9;
+  --accent-2: var(--accent);
+  --accent-glow: rgba(109, 40, 201, 0.2);
+  --accent-hover: #5c1faf;
+  --accent-soft: rgba(109, 40, 201, 0.12);
+  --brand-primary: #6d28c9;
+  --error: #b3382c;
+  --error-soft: rgba(179, 56, 44, 0.08);
+  --success: #2f7043;
+  --success-soft: rgba(47, 112, 67, 0.1);
+  --text-on-accent: #ffffff;
+  --text-on-accent-2: var(--text-on-accent);
+  --text-on-brand: #ffffff;
+  --text-on-error: #ffffff;
+  --text-on-success: #ffffff;
+  --text-on-warning: #ffffff;
+  --warning: #b46500;
+  --warning-soft: rgba(180, 101, 0, 0.1);
+  --warning-surface: #fdf3e2;
+
+  /* Navigation and rows */
+  --bg-channels-sidebar: #ffffff;
+  --bg-nav-hover: rgba(31, 26, 18, 0.06);
+  --bg-nav-rail: transparent;
   --bg-nav-selected: var(--bg-selected);
-  --bg-neutral-action-hover: var(--bg-option-hover);
-  --bg-primary-action-hover: var(--bg-control-primary-hover);
+  --bg-row-hover: rgba(31, 26, 18, 0.05);
+  --bg-row-selected: var(--accent-soft);
   --bg-sidebar-row-hover: var(--bg-row-hover);
-  --code-block-border-width: 1px;
-  --composer-border-color: initial;
-  --composer-border-width: initial;
-  --composer-shadow: initial;
-  --composer-shadow-focus: initial;
-  --composer-transition: initial;
+  --border-nav-rail-hover: transparent;
+  --border-nav-rail-selected: transparent;
+  --border-row-hover: transparent;
+  --border-row-selected: transparent;
+  --nav-rail-border-color: transparent;
+  --nav-rail-border-width: 0px;
+  --nav-rail-indicator-color: transparent;
+  --nav-rail-indicator-display: none;
+  --nav-rail-item-border-width: 2px;
+  --row-radius: 10px;
+  --sidebar-row-border-width: 1px;
+  --text-nav-rail: #4e4739;
+  --text-nav-rail-hover: #1f1a12;
+  --text-nav-selected: var(--text-on-selected);
+
+  /* Controls and actions */
+  --bg-control-primary: #6d28c9;
+  --bg-control-primary-hover: #5c1faf;
+  --bg-neutral-action-hover: var(--bg-option-hover);
+  --bg-option-hover: var(--bg-hover);
+  --bg-primary-action-hover: var(--bg-control-primary-hover);
+  --border-control-hover: rgba(31, 26, 18, 0.28);
+  --control-border-width: 1px;
+  --control-radius: 8px;
   --field-border-color: initial;
   --field-disabled-border-color: initial;
   --field-disabled-shadow: initial;
   --field-shadow: initial;
   --field-shadow-focus: initial;
   --field-transition: initial;
-  --panel-border-width: 1px;
+  --select-content-radius: 8px;
+  --select-item-radius: 6px;
+  --tab-segment-radius: 6px;
+  --text-on-control-primary: #ffffff;
+
+  /* Range controls */
   --range-cursor: initial;
   --range-focus-color: initial;
   --range-focus-offset: initial;
@@ -73,224 +129,124 @@
   --range-thumb-shadow: initial;
   --range-track-bg: initial;
   --range-track-height: initial;
-  --text-nav-selected: var(--text-on-selected);
 
-  /* ── 底纸：渐变 ── */
-  --app-paper: linear-gradient(to bottom, #e6e6b6, #c4d0da);
-  --bg-app: transparent;
-
-  /* ── 白纸 ── */
-  --bg-base: #ffffff;
-  /* Activity params recess: a faint neutral ink wash over the `--bg-base` pane
-     (see forza6). `--bg-surface` here is a warm beige that read as too saturated
-     for a quiet recess; a black alpha stays un-tinted on the white pane. */
-  --activity-params-bg: oklab(0 0 0 / 0.05);
-  --bg-primary: #ffffff;
-  --bg-channels-sidebar: #ffffff;
+  /* Floating surfaces and shadows */
   --bg-floating: #ffffff;
-  --bg-elevated: #f6f4f0;
-  --bg-surface: #f1eee8;
-  --bg-hover: #f5f2ec;
-  --bg-active: #efebe3;
-
-  --iris-bg-message-framed: #faf8f4;
-  --bg-option-hover: var(--bg-hover);
-  --bg-selected: rgba(31, 26, 18, 0.07);
-
-  /* ── 白纸的几何与抬起 ── */
-  --frame-padding: 8px;
-  --pane-gap: 0px;
-  --card-radius: 12px;
-  --iris-shadow-sheet:
-    0 1px 2px rgba(var(--shadow-base), 0.06), 0 6px 20px rgba(var(--shadow-base), 0.07);
-
-  --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
-
-  /* ── Sheet：pane 级 chrome 归零（本主题独有的结构）── */
-  --pane-radius: 0;
-  --pane-shadow: none;
-
-  /* splitter：轨道的负边距由 `VerticalSplitter` 从 `--pane-gap` 现算
-     （`(gap + 4px) / -2`），主题不再各写一份 `--splitter-offset` —— 改了 gap 忘了
-     改偏移就是这次的 bug。gap = 0 ⇒ 偏移 -2px，4px 轨道**跨在缝上**（两侧各压 2px），
-     两个面板真正贴合：chat header 的 border-bottom 一路走到缝上，与竖线闭合。
-     轨道静息透明，那条 1px 分栏线由文件末尾的伪元素画在轨道中线 = 缝上；
-     hover 的 4px 墨洗读作"这条线变粗了"，正是可拖边界该有的反馈。
-     `--splitter-hover-bg` **必须显式给**：组件的 fallback 是 `var(--accent)`，
-     紫落在分栏条上读作"看这条线！"—— splitter 是 utility（原则 3）。 */
-  --splitter-bg: transparent;
-  --splitter-hover-bg: rgba(31, 26, 18, 0.16);
-  --titlebar-border: transparent;
-
-  /* ── Brand / NavRail ── */
-  --brand-primary: #6d28c9;
-  --text-on-brand: #ffffff;
-  --text-nav-rail: #4e4739;
-  --text-nav-rail-hover: #1f1a12;
-  --bg-nav-hover: rgba(31, 26, 18, 0.06);
-  --bg-nav-rail: transparent;
-
-  /* Sidebar row state */
-  --sidebar-row-border-width: 1px;
-  --bg-row-selected: var(--accent-soft);
-  --bg-row-hover: rgba(31, 26, 18, 0.05);
-
-  /* ── Islands ── */
-  --bg-island: #f6f4f0;
-  --bg-island-deep: #f1eee8;
-  --code-block-header-bg: #ffffff;
-  --mermaid-diagram-bg: var(--bg-island);
-
-  --text-primary: #1f1a12;
-  --text-secondary: #5a5145;
-  --text-muted: #756d63;
-  --activity-meta: oklab(0 0 0 / 0.4);
-  --text-inverse: #fdfcfa;
-  --text-island: #1f1a12;
-  --text-inline-code: #4a4235;
-
-  --bg-inline-code: #f4f1ea;
-  --border-inline-code: none;
-  --inline-code-radius: var(--chip-radius);
-
-  --task-status-todo-bg: transparent;
-  --task-status-todo-text: var(--text-muted);
-  --task-status-todo-border: 1px solid var(--border);
-  --task-status-in-progress-bg: var(--warning-soft);
-  --task-status-in-progress-text: var(--warning);
-  --task-status-in-progress-border: 1px solid color-mix(in oklab, var(--warning) 45%, transparent);
-  --task-status-in-review-bg: var(--accent);
-  --task-status-in-review-text: var(--text-on-accent);
-  --task-status-in-review-border: 1px solid transparent;
-  --task-status-done-bg: var(--success-soft);
-  --task-status-done-text: var(--success);
-  --task-status-done-border: 1px solid color-mix(in oklab, var(--success) 45%, transparent);
-  --task-status-closed-bg: transparent;
-  --task-status-closed-text: var(--text-muted);
-  --task-status-closed-border: 1px solid var(--border-subtle);
-
-  --task-status-todo-solid: var(--task-status-todo-text);
-  --task-status-in-progress-solid: var(--task-status-in-progress-text);
-  --task-status-in-review-solid: var(--accent);
-  --task-status-done-solid: var(--task-status-done-text);
-  --task-status-closed-solid: var(--task-status-closed-text);
-
-  /* ── Floating frame ── */
   --floating-border: 1px solid var(--border);
-  --floating-radius: 14px;
   --floating-item-radius: 8px;
+  --floating-radius: 14px;
+  --overlay-backdrop: rgba(31, 26, 18, 0.3);
+  --shadow-base: 31, 26, 18;
+  --shadow-button: none;
+  --shadow-modal: 0 8px 28px -10px rgba(var(--shadow-base), 0.22);
+  --shadow-popover: 0 4px 14px -4px rgba(var(--shadow-base), 0.16);
 
-  /* ── Row-state border（整族留空）── */
-  --border-row-hover: transparent;
-  --border-row-selected: transparent;
-
-  --border-control-hover: rgba(31, 26, 18, 0.28);
-
-  /* ── Chrome label utility ── */
-  --font-chrome-label: var(--font-sans);
-  --chrome-label-tracking: 0.07em;
-  --chrome-label-transform: uppercase;
-
-  /* ── Radii ── */
-  --row-radius: 10px;
-  --control-radius: 8px;
-  --chip-radius: 6px;
-  --pill-radius: 9999px;
-  --task-status-radius: 9999px;
-  --select-content-radius: 8px;
-  --select-item-radius: 6px;
-  --tab-segment-radius: 6px;
-  --control-border-width: 1px;
-
+  /* Identity and profile */
+  --border-avatar: var(--border-subtle);
+  --border-avatar-width: 1px;
   --profile-section-radius: var(--card-radius);
-  --message-bubble-radius: var(--card-radius);
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+  --message-activity-color: var(--accent);
+  --message-activity-radius: 4px;
 
-  /* 消息底行 chip（反应 chip + thread-reply pill 同族）：中性墨洗，自己的反应
-     用 `--accent-soft` 表达"这条是我"，不做颜色反转。 */
+  /* Messages and activity */
+  --activity-meta: oklab(0 0 0 / 0.4);
+  --activity-params-bg: oklab(0 0 0 / 0.05);
   --chip-bg: rgba(31, 26, 18, 0.06);
   --chip-bg-hover: rgba(31, 26, 18, 0.11);
+  --chip-radius: 6px;
+  --iris-bg-message-framed: #faf8f4;
+  --message-bubble-radius: var(--card-radius);
+  --pill-radius: 9999px;
+  --system-message-size: 12px;
   --thread-preview-bg: var(--chip-bg);
   --thread-preview-bg-hover: var(--chip-bg-hover);
-  /* 摘要墨比回复者名低一档（`--text-muted` 在这层洗上 4.52:1，#task:1973 起过
-     AA 了，但它是墨阶梯最淡的一档、不是"朝底色褪"的那支，仍不用它）。 */
   --thread-preview-text: oklab(0 0 0 / 0.6);
-
-  /* ── Primary control surface (CTA) ── */
-  --bg-control-primary: #6d28c9;
-  --bg-control-primary-hover: #5c1faf;
-  --text-on-control-primary: #ffffff;
-
-  /* ── Accent = Iris 紫（action / state 唯一入口）── */
-  --accent: #6d28c9;
-  --accent-soft: rgba(109, 40, 201, 0.12);
-  --accent-hover: #5c1faf;
-  --accent-glow: rgba(109, 40, 201, 0.2);
   --unread: var(--accent);
 
+  /* Composer */
+  --composer-border-color: initial;
+  --composer-border-width: initial;
+  --composer-shadow: initial;
+  --composer-shadow-focus: initial;
+  --composer-transition: initial;
+
+  /* Markdown, code and diagrams */
+  --bg-inline-code: #f4f1ea;
+  --bg-island: #f6f4f0;
+  --bg-island-deep: #f1eee8;
+  --border-inline-code: none;
+  --border-island: rgba(31, 26, 18, 0.1);
+  --code-block-border-width: 1px;
+  --code-block-header-bg: #ffffff;
+  --inline-code-radius: var(--chip-radius);
+  --md-code-size: 14px;
+  --md-prose-size: 14px;
+  --mermaid-diagram-bg: var(--bg-island);
+  --text-inline-code: #4a4235;
+  --text-island: #1f1a12;
+
+  /* Syntax highlighting */
+  --hljs-addition: #22863a;
+  --hljs-base: var(--text-island);
+  --hljs-comment: #6a737d;
+  --hljs-deletion: #b31d28;
+  --hljs-keyword: #d73a49;
+  --hljs-meta: #6f42c1;
+  --hljs-number: #005cc5;
+  --hljs-selection-bg: #d5d5eb;
+  --hljs-selection-text: #1f1a12;
+  --hljs-string: #032f62;
+
+  /* Task references and search */
   --search-hit-bg: #ffe9a3;
   --search-hit-bg-active: #ffd75e;
   --search-hit-text: #1f1a12;
+  --task-ref-activity-color: var(--text-secondary);
+  --task-ref-activity-hover-bg: var(--accent);
+  --task-ref-activity-hover-color: var(--text-on-accent);
+  --task-ref-activity-margin: -0.125rem;
+  --task-ref-activity-marker: transparent;
+  --task-ref-activity-padding: 0.375rem;
+  --task-ref-color: var(--accent);
+  --task-ref-font: initial;
+  --task-ref-hover-decoration: underline;
+  --task-ref-line-height: initial;
+  --task-ref-marker: transparent;
+  --task-ref-marker-hover: transparent;
+  --task-ref-number-font: initial;
+  --task-ref-number-tracking: initial;
+  --task-ref-number-weight: initial;
+  --task-ref-weight: 500;
 
-  /* ── Semantic ── */
-  --success: #2f7043;
-  --success-soft: rgba(47, 112, 67, 0.1);
-  --warning: #b46500;
-  --warning-soft: rgba(180, 101, 0, 0.1);
-  /* soft warning CALLOUT */
-  --warning-surface: #fdf3e2;
-  --error: #b3382c;
-  --error-soft: rgba(179, 56, 44, 0.08);
+  /* Task status */
+  --task-status-closed-bg: transparent;
+  --task-status-closed-border: 1px solid var(--border-subtle);
+  --task-status-closed-solid: var(--task-status-closed-text);
+  --task-status-closed-text: var(--text-muted);
+  --task-status-done-bg: var(--success-soft);
+  --task-status-done-border: 1px solid color-mix(in oklab, var(--success) 45%, transparent);
+  --task-status-done-solid: var(--task-status-done-text);
+  --task-status-done-text: var(--success);
+  --task-status-in-progress-bg: var(--warning-soft);
+  --task-status-in-progress-border: 1px solid color-mix(in oklab, var(--warning) 45%, transparent);
+  --task-status-in-progress-solid: var(--task-status-in-progress-text);
+  --task-status-in-progress-text: var(--warning);
+  --task-status-in-review-bg: var(--accent);
+  --task-status-in-review-border: 1px solid transparent;
+  --task-status-in-review-solid: var(--accent);
+  --task-status-in-review-text: var(--text-on-accent);
+  --task-status-radius: 9999px;
+  --task-status-todo-bg: transparent;
+  --task-status-todo-border: 1px solid var(--border);
+  --task-status-todo-solid: var(--task-status-todo-text);
+  --task-status-todo-text: var(--text-muted);
 
-  /* ── Borders ── */
-  --border: rgba(31, 26, 18, 0.14);
-  --border-subtle: rgba(31, 26, 18, 0.07);
-  --border-island: rgba(31, 26, 18, 0.1);
-  --border-focus: rgba(31, 26, 18, 0.34);
-  --border-avatar: var(--border-subtle);
-  --border-avatar-width: 1px;
-
-  /* ── On-color foregrounds ── */
-  --text-on-accent: #ffffff;
-  --text-on-success: #ffffff;
-  --text-on-warning: #ffffff;
-  --text-on-error: #ffffff;
-  --text-on-selected: var(--text-primary);
-
-  /* ── Overlay ── */
-  --overlay-backdrop: rgba(31, 26, 18, 0.3);
-
-  /* ── Shadows ── */
-  --shadow-base: 31, 26, 18;
-  --shadow-popover: 0 4px 14px -4px rgba(var(--shadow-base), 0.16);
-  --shadow-modal: 0 8px 28px -10px rgba(var(--shadow-base), 0.22);
-  --shadow-button: none;
-
-  /* ── Fonts ── */
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  --font-serif: var(--font-sans);
-  --font-display: var(--font-sans);
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
-
-  /* ── Markdown body defaults ── */
-  --md-prose-size: 14px;
-  --md-code-size: 14px;
-  --system-message-size: 12px;
-
-  /* ── Motion ── */
-  --ease: cubic-bezier(0.4, 0, 0.2, 1);
-
-  --accent-2: var(--accent);
-  --text-on-accent-2: var(--text-on-accent);
-  --bg-structure-dark: #2a2519;
-  --text-on-structure: #fdfcfa;
-  --text-on-dark-pop: #c3a0f2;
+  /* Panel geometry */
+  --panel-border-width: 1px;
 }
 
-/* ── 白纸：一张纸装下 sidebar + main ── */
+/* Hooks: Application frame */
+
 [data-theme="iris"] [data-section-sheet] {
   background-color: var(--bg-base);
   border-radius: var(--card-radius);
@@ -315,6 +271,8 @@
   border-right: 1px solid var(--border);
 }
 
+/* Hooks: Identity */
+
 [data-theme="iris"] [data-workspace-icon] {
   background-color: var(--text-secondary);
   color: var(--text-on-structure);
@@ -327,9 +285,7 @@
   margin-right: 0.1em;
 }
 
-[data-theme="iris"] [data-modal-shell] {
-  border-width: 0;
-}
+/* Hooks: Messages and composer */
 
 [data-theme="iris"] .system-activity-cluster {
   border-inline-start: none;
@@ -343,15 +299,10 @@
 [data-theme="iris"] [data-message-row] {
   border-width: 1px;
 }
+
 [data-theme="iris"] [data-message-row].border-accent {
   border-color: rgba(var(--shadow-base), 0.14);
   background-color: var(--iris-bg-message-framed);
-}
-
-[data-theme="iris"] [data-collection-card]:hover {
-  background-color: var(--bg-hover);
-  box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.12);
-  transform: translateY(-1px);
 }
 
 [data-theme="iris"] [data-composer-shell]:focus-within {
@@ -359,21 +310,34 @@
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
+/* Hooks: Tasks */
+
 [data-theme="iris"] [data-tasks-column] {
   background-color: var(--bg-elevated);
   border-color: var(--border);
 }
+
 [data-theme="iris"] [data-tasks-board] [data-task-number] {
   background: var(--bg-floating);
   border-color: var(--border);
   box-shadow: var(--card-shadow);
 }
+
 [data-theme="iris"] [data-tasks-board] [data-task-number]:hover {
   border-color: var(--border-control-hover);
   box-shadow: var(--shadow-popover);
 }
 
-[data-theme="iris"] {
-  --message-activity-color: var(--accent);
-  --message-activity-radius: 4px;
+/* Hooks: Panels and collections */
+
+[data-theme="iris"] [data-collection-card]:hover {
+  background-color: var(--bg-hover);
+  box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.12);
+  transform: translateY(-1px);
+}
+
+/* Hooks: Floating surfaces and actions */
+
+[data-theme="iris"] [data-modal-shell] {
+  border-width: 0;
 }

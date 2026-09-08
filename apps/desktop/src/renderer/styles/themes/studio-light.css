@@ -1,65 +1,120 @@
-/* ================================================================
-   Theme: Studio Light
-   ================================================================ */
+/* Theme: studio-light
+   Tokens follow the same module order across themes. Keep explicit initial values
+   to prevent inheritance from the default theme. */
 
 [data-theme="studio-light"] {
-  /* Task references: prose and system activity retain distinct emphasis. */
-  --task-ref-font: initial;
-  --task-ref-weight: 500;
-  --task-ref-number-font: initial;
-  --task-ref-number-weight: initial;
-  --task-ref-number-tracking: initial;
-  --task-ref-color: var(--accent);
-  --task-ref-line-height: initial;
-  --task-ref-hover-decoration: underline;
-  --task-ref-marker: transparent;
-  --task-ref-marker-hover: transparent;
-  --task-ref-activity-marker: transparent;
-  --task-ref-activity-color: var(--text-secondary);
-  --task-ref-activity-hover-color: var(--text-on-accent);
-  --task-ref-activity-hover-bg: var(--accent);
-  --task-ref-activity-padding: 0.375rem;
-  --task-ref-activity-margin: -0.125rem;
+  /* Theme palette */
+  --studio-light-brand-bar: #2f5ad0;
 
-  /* App navigation chrome. */
-  --nav-rail-border-width: 0px;
-  --nav-rail-border-color: transparent;
-  --nav-rail-item-border-width: 2px;
-  --border-nav-rail-selected: transparent;
-  --border-nav-rail-hover: transparent;
-  --nav-rail-indicator-display: none;
-  --nav-rail-indicator-color: transparent;
+  /* Typography and motion */
+  --chrome-label-tracking: 0.07em;
+  --chrome-label-transform: uppercase;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --font-chrome-label: var(--font-sans);
+  --font-display: var(--font-sans);
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-serif: var(--font-sans);
 
-  /* Code syntax palette. */
-  --hljs-base: var(--text-island);
-  --hljs-keyword: #d73a49;
-  --hljs-string: #032f62;
-  --hljs-number: #005cc5;
-  --hljs-comment: #6a737d;
-  --hljs-meta: #6f42c1;
-  --hljs-addition: #22863a;
-  --hljs-deletion: #b31d28;
-  --hljs-selection-bg: #c8def5;
-  --hljs-selection-text: #1b2233;
+  /* Application frame and panes */
+  --bg-app: #dee3eb;
+  --card-radius: 8px;
+  --card-shadow: 0 1px 3px rgba(var(--shadow-base), 0.08);
+  --frame-padding: 8px;
+  --pane-gap: 8px;
+  --splitter-bg: transparent;
+  --splitter-hover-bg: rgba(17, 23, 37, 0.28);
+  --titlebar-border: transparent;
 
-  /* Reset optional painting slots so the default theme cannot leak into this theme. */
+  /* Surface, text and border foundations */
+  --bg-active: #dee3eb;
+  --bg-base: #ffffff;
+  --bg-elevated: #e6ebf3;
+  --bg-hover: #e9eef6;
+  --bg-primary: #edf1f7;
+  --bg-selected: #ffffff;
+  --bg-structure-dark: #1b2030;
+  --bg-surface: #dee3eb;
+  --border: rgba(17, 23, 37, 0.11);
+  --border-focus: rgba(17, 23, 37, 0.32);
+  --border-subtle: rgba(17, 23, 37, 0.07);
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 6px;
+  --radius-xl: 20px;
+  --text-inverse: #f7f9fc;
+  --text-muted: #616a7f;
+  --text-on-dark-pop: #9db6f7;
+  --text-on-selected: var(--text-primary);
+  --text-on-structure: #f2f5f9;
+  --text-primary: #111725;
+  --text-secondary: #495064;
+
+  /* Brand and semantic colors */
+  --accent: #2f5ad0;
+  --accent-2: var(--accent);
+  --accent-glow: rgba(47, 90, 208, 0.28);
+  --accent-hover: #2549b4;
+  --accent-soft: rgba(47, 90, 208, 0.1);
+  --brand-primary: #2f5ad0;
+  --error: #c0362c;
+  --error-soft: rgba(192, 54, 44, 0.08);
+  --success: #0a7256;
+  --success-soft: rgba(10, 114, 86, 0.09);
+  --text-on-accent: #ffffff;
+  --text-on-accent-2: var(--text-on-accent);
+  --text-on-brand: #ffffff;
+  --text-on-error: #ffffff;
+  --text-on-success: #ffffff;
+  --text-on-warning: #ffffff;
+  --warning: #b46500;
+  --warning-soft: rgba(180, 101, 0, 0.1);
+  --warning-surface: #fdf0dc;
+
+  /* Navigation and rows */
+  --bg-channels-sidebar: #f2f5f9;
+  --bg-nav-hover: rgba(31, 26, 18, 0.06);
+  --bg-nav-rail: #1b2030;
   --bg-nav-selected: var(--studio-light-brand-bar);
-  --bg-neutral-action-hover: var(--bg-option-hover);
-  --bg-primary-action-hover: var(--bg-control-primary-hover);
+  --bg-row-hover: #e9eef6;
+  --bg-row-selected: #ffffff;
   --bg-sidebar-row-hover: var(--bg-row-hover);
-  --code-block-border-width: 1px;
-  --composer-border-color: initial;
-  --composer-border-width: initial;
-  --composer-shadow: initial;
-  --composer-shadow-focus: initial;
-  --composer-transition: initial;
+  --border-nav-rail-hover: transparent;
+  --border-nav-rail-selected: transparent;
+  --border-row-hover: transparent;
+  --border-row-selected: transparent;
+  --nav-rail-border-color: transparent;
+  --nav-rail-border-width: 0px;
+  --nav-rail-indicator-color: transparent;
+  --nav-rail-indicator-display: none;
+  --nav-rail-item-border-width: 2px;
+  --row-radius: var(--radius-sm);
+  --sidebar-row-border-width: 1px;
+  --text-nav-rail: #98a1b5;
+  --text-nav-rail-hover: #f7f9fc;
+  --text-nav-selected: var(--text-on-brand);
+
+  /* Controls and actions */
+  --bg-control-primary: #2f5ad0;
+  --bg-control-primary-hover: #2549b4;
+  --bg-neutral-action-hover: var(--bg-option-hover);
+  --bg-option-hover: var(--bg-hover);
+  --bg-primary-action-hover: var(--bg-control-primary-hover);
+  --border-control-hover: color-mix(in oklab, var(--text-primary) 26%, transparent);
+  --control-border-width: 1px;
+  --control-radius: 6px;
   --field-border-color: initial;
   --field-disabled-border-color: initial;
   --field-disabled-shadow: initial;
   --field-shadow: initial;
   --field-shadow-focus: initial;
   --field-transition: initial;
-  --panel-border-width: 1px;
+  --select-content-radius: 6px;
+  --select-item-radius: 4px;
+  --tab-segment-radius: 4px;
+  --text-on-control-primary: #ffffff;
+
+  /* Range controls */
   --range-cursor: initial;
   --range-focus-color: initial;
   --range-focus-offset: initial;
@@ -73,208 +128,123 @@
   --range-thumb-shadow: initial;
   --range-track-bg: initial;
   --range-track-height: initial;
-  --text-nav-selected: var(--text-on-brand);
 
-  /* ── Backgrounds ── */
-  --bg-base: #ffffff;
-  --activity-params-bg: oklab(0 0 0 / 0.05);
-  --bg-primary: #edf1f7;
-  --bg-elevated: #e6ebf3;
-  --bg-surface: #dee3eb;
-  --bg-hover: #e9eef6;
-  --bg-active: #dee3eb;
-  --bg-option-hover: var(--bg-hover);
-  --bg-selected: #ffffff;
+  /* Floating surfaces and shadows */
   --bg-floating: #ffffff;
-  /* message-row 的 framed（hover / saved / replying / 搜索命中）洗色 */
-  --studio-light-bg-message-framed: #f5f8fc;
-
-  /* ── Card-style frame ── */
-  --bg-app: #dee3eb;
-  --frame-padding: 8px;
-
-  --pane-gap: 8px;
-  --card-radius: 8px;
-  --card-shadow: 0 1px 3px rgba(var(--shadow-base), 0.08);
-  --splitter-bg: transparent;
-
-  --splitter-hover-bg: rgba(17, 23, 37, 0.28);
-  --titlebar-border: transparent;
-
-  --brand-primary: #2f5ad0;
-  --studio-light-brand-bar: #2f5ad0;
-  --text-on-brand: #ffffff;
-
-  --text-nav-rail: #98a1b5;
-  --text-nav-rail-hover: #f7f9fc;
-  --bg-nav-hover: rgba(31, 26, 18, 0.06);
-
-  /* Sidebar row state — */
-  --sidebar-row-border-width: 1px;
-  --bg-row-selected: #ffffff;
-  --bg-row-hover: #e9eef6;
-
-  /* ── Nav rail / sidebar ── */
-  --bg-nav-rail: #1b2030;
-  --bg-channels-sidebar: #f2f5f9;
-
-  /* ── Islands ── */
-  --bg-island: #f5f5f5;
-  --bg-island-deep: #dde3ec;
-  --code-block-header-bg: #ffffff;
-  --mermaid-diagram-bg: var(--bg-island);
-
-  /* ── Text ── */
-  --text-primary: #111725;
-  --text-secondary: #495064;
-  --text-muted: #616a7f;
-  --activity-meta: oklab(0 0 0 / 0.4);
-  --text-inverse: #f7f9fc;
-  --text-island: #1b2233;
-  --text-inline-code: #39415a;
-
-  --bg-inline-code: #ecf1f7;
-  --border-inline-code: none;
-  --inline-code-radius: var(--radius-sm);
-
-  --task-status-todo-bg: transparent;
-  --task-status-todo-text: var(--text-muted);
-  --task-status-todo-border: 1px solid var(--border);
-  --task-status-in-progress-bg: var(--warning-soft);
-  --task-status-in-progress-text: var(--warning);
-  --task-status-in-progress-border: 1px solid color-mix(in oklab, var(--warning) 45%, transparent);
-  --task-status-in-review-bg: var(--accent);
-  --task-status-in-review-text: var(--text-on-accent);
-  --task-status-in-review-border: 1px solid transparent;
-
-  --task-status-done-bg: var(--success-soft);
-  --task-status-done-text: var(--success);
-  --task-status-done-border: 1px solid color-mix(in oklab, var(--success) 45%, transparent);
-
-  --task-status-todo-solid: var(--task-status-todo-text);
-  --task-status-in-progress-solid: var(--task-status-in-progress-text);
-  --task-status-in-review-solid: var(--accent);
-  --task-status-done-solid: var(--task-status-done-text);
-  --task-status-closed-solid: var(--task-status-closed-text);
-
-  /* ── Floating frame ── */
   --floating-border: 1px solid var(--border);
-  --floating-radius: var(--radius-md);
   --floating-item-radius: var(--radius-sm);
+  --floating-radius: var(--radius-md);
+  --overlay-backdrop: rgba(17, 23, 37, 0.36);
+  --shadow-base: 17, 23, 37;
+  --shadow-button: none;
+  --shadow-modal: 0 6px 20px -8px rgba(var(--shadow-base), 0.18);
+  --shadow-popover: 0 4px 12px -4px rgba(var(--shadow-base), 0.14);
 
-  /* ── Row-state border color ── */
-  --border-row-hover: transparent;
-  --border-row-selected: transparent;
-
-  /* ── Control hover border ── */
-  --border-control-hover: color-mix(in oklab, var(--text-primary) 26%, transparent);
-
-  /* ── Chrome label utility  ── */
-  --font-chrome-label: var(--font-sans);
-  --chrome-label-tracking: 0.07em;
-  --chrome-label-transform: uppercase;
-
-  /* ── Row radius ── */
-  --row-radius: var(--radius-sm);
-
-  /* ── Profile section radius ── */
+  /* Identity and profile */
+  --border-avatar: var(--border-subtle);
+  --border-avatar-width: 1px;
   --profile-section-radius: var(--card-radius);
+  --message-activity-color: var(--accent);
+  --message-activity-radius: 3px;
 
-  /* ── Own-message bubble radius  ── */
-  --message-bubble-radius: var(--card-radius);
-
-  --control-radius: 6px;
-  --chip-radius: 4px;
-  --pill-radius: 9999px;
-  --task-status-radius: 9999px;
+  /* Messages and activity */
+  --activity-meta: oklab(0 0 0 / 0.4);
+  --activity-params-bg: oklab(0 0 0 / 0.05);
   --chip-bg: rgba(17, 23, 37, 0.06);
   --chip-bg-hover: rgba(17, 23, 37, 0.11);
+  --chip-radius: 4px;
+  --message-bubble-radius: var(--card-radius);
+  --pill-radius: 9999px;
+  --studio-light-bg-message-framed: #f5f8fc;
+  --system-message-size: 12px;
   --thread-preview-bg: var(--chip-bg);
   --thread-preview-bg-hover: var(--chip-bg-hover);
   --thread-preview-text: oklab(0 0 0 / 0.6);
-
-  --task-status-closed-bg: transparent;
-  --task-status-closed-text: var(--text-muted);
-  --task-status-closed-border: 1px solid var(--border-subtle);
-
-  --control-border-width: 1px;
-  --select-content-radius: 6px;
-  --select-item-radius: 4px;
-  --tab-segment-radius: 4px;
-
-  --bg-control-primary: #2f5ad0;
-  --bg-control-primary-hover: #2549b4;
-  --text-on-control-primary: #ffffff;
-
-  --accent: #2f5ad0;
-  --accent-soft: rgba(47, 90, 208, 0.1);
-  --accent-hover: #2549b4;
-  --accent-glow: rgba(47, 90, 208, 0.28);
-
   --unread: var(--accent);
 
+  /* Composer */
+  --composer-border-color: initial;
+  --composer-border-width: initial;
+  --composer-shadow: initial;
+  --composer-shadow-focus: initial;
+  --composer-transition: initial;
+
+  /* Markdown, code and diagrams */
+  --bg-inline-code: #ecf1f7;
+  --bg-island: #f5f5f5;
+  --bg-island-deep: #dde3ec;
+  --border-inline-code: none;
+  --border-island: rgba(17, 23, 37, 0.1);
+  --code-block-border-width: 1px;
+  --code-block-header-bg: #ffffff;
+  --inline-code-radius: var(--radius-sm);
+  --md-code-size: 14px;
+  --md-prose-size: 14px;
+  --mermaid-diagram-bg: var(--bg-island);
+  --text-inline-code: #39415a;
+  --text-island: #1b2233;
+
+  /* Syntax highlighting */
+  --hljs-addition: #22863a;
+  --hljs-base: var(--text-island);
+  --hljs-comment: #6a737d;
+  --hljs-deletion: #b31d28;
+  --hljs-keyword: #d73a49;
+  --hljs-meta: #6f42c1;
+  --hljs-number: #005cc5;
+  --hljs-selection-bg: #c8def5;
+  --hljs-selection-text: #1b2233;
+  --hljs-string: #032f62;
+
+  /* Task references and search */
   --search-hit-bg: #ffe9a3;
   --search-hit-bg-active: #ffd75e;
   --search-hit-text: #111725;
+  --task-ref-activity-color: var(--text-secondary);
+  --task-ref-activity-hover-bg: var(--accent);
+  --task-ref-activity-hover-color: var(--text-on-accent);
+  --task-ref-activity-margin: -0.125rem;
+  --task-ref-activity-marker: transparent;
+  --task-ref-activity-padding: 0.375rem;
+  --task-ref-color: var(--accent);
+  --task-ref-font: initial;
+  --task-ref-hover-decoration: underline;
+  --task-ref-line-height: initial;
+  --task-ref-marker: transparent;
+  --task-ref-marker-hover: transparent;
+  --task-ref-number-font: initial;
+  --task-ref-number-tracking: initial;
+  --task-ref-number-weight: initial;
+  --task-ref-weight: 500;
 
-  --success: #0a7256;
-  --success-soft: rgba(10, 114, 86, 0.09);
-  --warning: #b46500;
-  --warning-soft: rgba(180, 101, 0, 0.1);
+  /* Task status */
+  --task-status-closed-bg: transparent;
+  --task-status-closed-border: 1px solid var(--border-subtle);
+  --task-status-closed-solid: var(--task-status-closed-text);
+  --task-status-closed-text: var(--text-muted);
+  --task-status-done-bg: var(--success-soft);
+  --task-status-done-border: 1px solid color-mix(in oklab, var(--success) 45%, transparent);
+  --task-status-done-solid: var(--task-status-done-text);
+  --task-status-done-text: var(--success);
+  --task-status-in-progress-bg: var(--warning-soft);
+  --task-status-in-progress-border: 1px solid color-mix(in oklab, var(--warning) 45%, transparent);
+  --task-status-in-progress-solid: var(--task-status-in-progress-text);
+  --task-status-in-progress-text: var(--warning);
+  --task-status-in-review-bg: var(--accent);
+  --task-status-in-review-border: 1px solid transparent;
+  --task-status-in-review-solid: var(--accent);
+  --task-status-in-review-text: var(--text-on-accent);
+  --task-status-radius: 9999px;
+  --task-status-todo-bg: transparent;
+  --task-status-todo-border: 1px solid var(--border);
+  --task-status-todo-solid: var(--task-status-todo-text);
+  --task-status-todo-text: var(--text-muted);
 
-  --warning-surface: #fdf0dc;
-  --error: #c0362c;
-  --error-soft: rgba(192, 54, 44, 0.08);
-
-  --border: rgba(17, 23, 37, 0.11);
-  --border-subtle: rgba(17, 23, 37, 0.07);
-  --border-island: rgba(17, 23, 37, 0.1);
-  --border-focus: rgba(17, 23, 37, 0.32);
-  --border-avatar: var(--border-subtle);
-  --border-avatar-width: 1px;
-
-  /* ── On-color foregrounds ── */
-  --text-on-accent: #ffffff;
-  --text-on-success: #ffffff;
-  --text-on-warning: #ffffff;
-  --text-on-error: #ffffff;
-  --text-on-selected: var(--text-primary);
-
-  /* ── Overlay ── */
-  --overlay-backdrop: rgba(17, 23, 37, 0.36);
-
-  /* ── Shadows ── */
-  --shadow-base: 17, 23, 37;
-  --shadow-popover: 0 4px 12px -4px rgba(var(--shadow-base), 0.14);
-  --shadow-modal: 0 6px 20px -8px rgba(var(--shadow-base), 0.18);
-  --shadow-button: none;
-
-  /* ── Radii ── */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
-
-  /* ── Fonts ── */
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  --font-serif: var(--font-sans);
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
-
-  /* ── Markdown body defaults ── */
-  --md-prose-size: 14px;
-  --md-code-size: 14px;
-  --system-message-size: 12px;
-
-  /* ── Motion ── */
-  --ease: cubic-bezier(0.4, 0, 0.2, 1);
-
-  --font-display: var(--font-sans);
-  --accent-2: var(--accent);
-  --text-on-accent-2: var(--text-on-accent);
-  --bg-structure-dark: #1b2030;
-  --text-on-structure: #f2f5f9;
-  --text-on-dark-pop: #9db6f7;
+  /* Panel geometry */
+  --panel-border-width: 1px;
 }
+
+/* Hooks: Identity */
 
 [data-theme="studio-light"] [data-workspace-icon] {
   background-color: var(--text-secondary);
@@ -282,6 +252,13 @@
   border-radius: var(--chip-radius);
   font-size: 11px;
 }
+
+[data-theme="studio-light"] [data-conversation-hash-icon] {
+  display: inline-block;
+  margin-right: 0.1em;
+}
+
+/* Hooks: Messages and composer */
 
 [data-theme="studio-light"] .system-activity-cluster {
   border-inline-start: none;
@@ -292,28 +269,14 @@
   opacity: 1;
 }
 
-[data-theme="studio-light"] [data-conversation-hash-icon] {
-  display: inline-block;
-  margin-right: 0.1em;
-}
-
-[data-theme="studio-light"] [data-modal-shell] {
-  border-width: 0;
-}
-
 [data-theme="studio-light"] [data-message-task-tag] {
   border: none;
-}
-
-[data-theme="studio-light"] [data-collection-card]:hover {
-  background-color: var(--bg-hover);
-  box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.12);
-  transform: translateY(-1px);
 }
 
 [data-theme="studio-light"] [data-message-row] {
   border-width: 1px;
 }
+
 [data-theme="studio-light"] [data-message-row].border-accent {
   border-color: rgba(var(--shadow-base), 0.16);
   background-color: var(--studio-light-bg-message-framed);
@@ -324,21 +287,34 @@
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
+/* Hooks: Tasks */
+
 [data-theme="studio-light"] [data-tasks-board] [data-task-number] {
   background: var(--bg-floating);
   border-color: var(--border);
   box-shadow: var(--card-shadow);
 }
+
 [data-theme="studio-light"] [data-tasks-board] [data-task-number]:hover {
   border-color: var(--border-row-hover);
   box-shadow: var(--shadow-popover);
 }
+
 [data-theme="studio-light"] [data-tasks-column] {
   background-color: var(--bg-elevated);
   border-color: var(--border);
 }
 
-[data-theme="studio-light"] {
-  --message-activity-color: var(--accent);
-  --message-activity-radius: 3px;
+/* Hooks: Panels and collections */
+
+[data-theme="studio-light"] [data-collection-card]:hover {
+  background-color: var(--bg-hover);
+  box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.12);
+  transform: translateY(-1px);
+}
+
+/* Hooks: Floating surfaces and actions */
+
+[data-theme="studio-light"] [data-modal-shell] {
+  border-width: 0;
 }

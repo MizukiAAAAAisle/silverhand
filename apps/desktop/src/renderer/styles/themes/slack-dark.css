@@ -1,66 +1,119 @@
-/* ================================================================
-   Theme: Slack Dark
-   ================================================================ */
+/* Theme: slack-dark
+   Tokens follow the same module order across themes. Keep explicit initial values
+   to prevent inheritance from the default theme. */
 
 [data-theme="slack-dark"] {
-  /* Task references: prose and system activity retain distinct emphasis. */
-  --task-ref-font: initial;
-  --task-ref-weight: 500;
-  --task-ref-number-font: initial;
-  --task-ref-number-weight: initial;
-  --task-ref-number-tracking: initial;
-  --task-ref-color: var(--accent);
-  --task-ref-line-height: initial;
-  --task-ref-hover-decoration: underline;
-  --task-ref-marker: transparent;
-  --task-ref-marker-hover: transparent;
-  --task-ref-activity-marker: transparent;
-  --task-ref-activity-color: var(--text-secondary);
-  --task-ref-activity-hover-color: var(--text-on-accent);
-  --task-ref-activity-hover-bg: var(--accent);
-  --task-ref-activity-padding: 0.375rem;
-  --task-ref-activity-margin: -0.125rem;
+  /* Typography and motion */
+  --chrome-label-tracking: 0.05em;
+  --chrome-label-transform: uppercase;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --font-chrome-label: var(--font-sans);
+  --font-display: var(--font-sans);
+  --font-mono: "Hack", "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Lato", "PingFang SC",
+    "Hiragino Sans GB", sans-serif;
+  --font-serif: var(--font-sans);
 
-  /* App navigation chrome. */
-  --nav-rail-border-width: 0px;
-  --nav-rail-border-color: transparent;
-  --nav-rail-item-border-width: 2px;
-  --border-nav-rail-selected: transparent;
-  --border-nav-rail-hover: transparent;
-  --nav-rail-indicator-display: none;
-  --nav-rail-indicator-color: transparent;
+  /* Application frame and panes */
+  --bg-app: #350d36;
+  --card-radius: 8px;
+  --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.4);
+  --frame-padding: 8px;
+  --pane-gap: 8px;
+  --splitter-bg: transparent;
+  --splitter-hover-bg: rgba(255, 255, 255, 0.24);
+  --titlebar-border: transparent;
 
-  /* Code syntax palette. */
-  --hljs-base: var(--text-island);
-  --hljs-keyword: #ff7b72;
-  --hljs-string: #a5d6ff;
-  --hljs-number: #79c0ff;
-  --hljs-comment: #8b949e;
-  --hljs-meta: #d2a8ff;
-  --hljs-addition: #7ee787;
-  --hljs-deletion: #ffa198;
-  --hljs-selection-bg: #264f78;
-  --hljs-selection-text: #ffffff;
+  /* Surface, text and border foundations */
+  --bg-active: #36363b;
+  --bg-base: #1a1d21;
+  --bg-elevated: #232529;
+  --bg-hover: #27242c;
+  --bg-primary: #1a1d21;
+  --bg-selected: var(--brand-primary);
+  --bg-structure-dark: #0e1013;
+  --bg-surface: #2c2d30;
+  --border: rgba(255, 255, 255, 0.1);
+  --border-focus: var(--accent);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --radius-lg: 10px;
+  --radius-md: 6px;
+  --radius-sm: 4px;
+  --radius-xl: 14px;
+  --text-inverse: #1a1d21;
+  --text-muted: #949497;
+  --text-on-dark-pop: var(--accent);
+  --text-on-selected: #ffffff;
+  --text-on-structure: var(--text-primary);
+  --text-primary: #e2e3e3;
+  --text-secondary: #bababb;
 
-  /* Reset optional painting slots so the default theme cannot leak into this theme. */
+  /* Brand and semantic colors */
+  --accent: #1d9bd1;
+  --accent-2: var(--accent);
+  --accent-glow: rgba(29, 155, 209, 0.3);
+  --accent-hover: #4fb7dc;
+  --accent-soft: rgba(29, 155, 209, 0.14);
+  --brand-primary: #1164a3;
+  --error: #e01e5a;
+  --error-soft: rgba(224, 30, 90, 0.14);
+  --success: #2ebb85;
+  --success-soft: rgba(46, 187, 133, 0.14);
+  --text-on-accent: #0f1419;
+  --text-on-accent-2: var(--text-on-accent);
+  --text-on-brand: #ffffff;
+  --text-on-error: #ffffff;
+  --text-on-success: #0f1419;
+  --text-on-warning: #0f1419;
+  --warning: #ecb22e;
+  --warning-soft: rgba(236, 178, 46, 0.14);
+  --warning-surface: rgba(236, 178, 46, 0.15);
+
+  /* Navigation and rows */
+  --bg-channels-sidebar: #19171d;
+  --bg-nav-hover: rgba(255, 255, 255, 0.06);
+  --bg-nav-rail: #19171d;
   --bg-nav-selected: var(--bg-selected);
-  --bg-neutral-action-hover: var(--bg-option-hover);
-  --bg-primary-action-hover: var(--bg-control-primary-hover);
+  --bg-row-hover: rgba(255, 255, 255, 0.06);
+  --bg-row-selected: var(--brand-primary);
   --bg-sidebar-row-hover: var(--bg-row-hover);
-  --code-block-border-width: 1px;
-  --code-block-header-bg: var(--bg-island-deep);
-  --composer-border-color: initial;
-  --composer-border-width: initial;
-  --composer-shadow: initial;
-  --composer-shadow-focus: initial;
-  --composer-transition: initial;
+  --border-nav-rail-hover: transparent;
+  --border-nav-rail-selected: transparent;
+  --border-row-hover: transparent;
+  --border-row-selected: transparent;
+  --nav-rail-border-color: transparent;
+  --nav-rail-border-width: 0px;
+  --nav-rail-indicator-color: transparent;
+  --nav-rail-indicator-display: none;
+  --nav-rail-item-border-width: 2px;
+  --row-radius: 6px;
+  --sidebar-row-border-width: 2px;
+  --text-nav-rail: #b9bbbe;
+  --text-nav-rail-hover: #ffffff;
+  --text-nav-selected: var(--text-on-selected);
+
+  /* Controls and actions */
+  --bg-control-primary: #9cbf5c;
+  --bg-control-primary-hover: #a8c770;
+  --bg-neutral-action-hover: var(--bg-option-hover);
+  --bg-option-hover: var(--bg-hover);
+  --bg-primary-action-hover: var(--bg-control-primary-hover);
+  --border-control-hover: var(--border);
+  --control-border-width: 1px;
+  --control-radius: 6px;
   --field-border-color: initial;
   --field-disabled-border-color: initial;
   --field-disabled-shadow: initial;
   --field-shadow: initial;
   --field-shadow-focus: initial;
   --field-transition: initial;
-  --panel-border-width: 1px;
+  --select-content-radius: 6px;
+  --select-item-radius: 4px;
+  --tab-segment-radius: 4px;
+  --text-on-control-primary: #0a0a0a;
+
+  /* Range controls */
   --range-cursor: initial;
   --range-focus-color: initial;
   --range-focus-offset: initial;
@@ -74,240 +127,129 @@
   --range-thumb-shadow: initial;
   --range-track-bg: initial;
   --range-track-height: initial;
-  --text-nav-selected: var(--text-on-selected);
 
-  /* ── Backgrounds (cool blue-black ladder) ── */
-  --bg-base: #1a1d21;
-  --bg-primary: #1a1d21;
-  --bg-elevated: #232529;
-  --bg-surface: #2c2d30;
-  --bg-hover: #27242c;
-  --bg-active: #36363b;
-  --bg-option-hover: var(--bg-hover);
-  --bg-selected: var(--brand-primary);
+  /* Floating surfaces and shadows */
   --bg-floating: #2c2d30;
+  --floating-border: 1px solid rgba(255, 255, 255, 0.1);
+  --floating-item-radius: var(--radius-sm);
+  --floating-radius: var(--radius-md);
+  --overlay-backdrop: rgba(0, 0, 0, 0.55);
+  --shadow-base: 0, 0, 0;
+  --shadow-button: 0 1px 2px 0 rgba(var(--shadow-base), 0.2);
+  --shadow-modal: 0 25px 50px -12px rgba(var(--shadow-base), 0.6);
+  --shadow-popover:
+    0 8px 24px -8px rgba(var(--shadow-base), 0.5), 0 2px 6px -2px rgba(var(--shadow-base), 0.3);
 
-  /* ── Card frame ── */
-  --bg-app: #350d36;
-  --frame-padding: 8px;
-  --pane-gap: 8px;
-  --card-radius: 8px;
-  --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.4);
+  /* Identity and profile */
+  --border-avatar: rgba(255, 255, 255, 0.12);
+  --border-avatar-width: 1px;
+  --profile-section-radius: var(--card-radius);
+  --message-activity-color: var(--accent);
+  --message-activity-radius: 3px;
 
-  --splitter-bg: transparent;
-  --splitter-hover-bg: rgba(255, 255, 255, 0.24);
-  --titlebar-border: transparent;
-
-  --brand-primary: #1164a3;
-  --text-on-brand: #ffffff;
-  --text-nav-rail: #b9bbbe;
-  --text-nav-rail-hover: #ffffff;
-  --bg-nav-hover: rgba(255, 255, 255, 0.06);
-
-  /* ── Sidebar row state ── */
-  --sidebar-row-border-width: 2px;
-  --bg-row-selected: var(--brand-primary);
-  --bg-row-hover: rgba(255, 255, 255, 0.06);
-
-  --bg-nav-rail: #19171d;
-  --bg-channels-sidebar: #19171d;
-
-  /* ── Islands (code blocks) ── */
-  --bg-island: #1e1e22;
-  --bg-island-deep: #181b1e;
-
-  --mermaid-diagram-bg: var(--bg-island);
-
-  --text-primary: #e2e3e3;
-  --text-secondary: #bababb;
-  --text-muted: #949497;
+  /* Messages and activity */
   --activity-meta: oklab(1 0 0 / 0.4);
   --activity-params-bg: var(--bg-elevated);
-  --text-inverse: #1a1d21; /* dark text，反色用 — 浅底场景下 */
-  --text-island: #d1d2d3;
-  --text-inline-code: #e8912d;
-
-  /* ── Inline-code chip ── */
-  --bg-inline-code: rgba(232, 145, 45, 0.12);
-  --border-inline-code: 1px solid rgba(232, 145, 45, 0.28);
-  --inline-code-radius: var(--radius-sm);
-
-  --task-status-todo-bg: rgba(171, 171, 173, 0.16);
-  --task-status-todo-text: #ababad;
-  --task-status-todo-border: 1px solid rgba(255, 255, 255, 0.1);
-  --task-status-in-progress-bg: rgba(236, 178, 46, 0.18);
-  --task-status-in-progress-text: #ecb22e;
-  --task-status-in-progress-border: 1px solid rgba(236, 178, 46, 0.4);
-  --task-status-in-review-bg: rgba(29, 155, 209, 0.2);
-  --task-status-in-review-text: #4fbfe0;
-  --task-status-in-review-border: 1px solid rgba(29, 155, 209, 0.4);
-  --task-status-done-bg: rgba(46, 187, 133, 0.18);
-  --task-status-done-text: #2ebb85;
-  --task-status-done-border: 1px solid rgba(46, 187, 133, 0.4);
-
-  --task-status-todo-solid: var(--task-status-todo-text);
-  --task-status-in-progress-solid: var(--task-status-in-progress-text);
-  --task-status-in-review-solid: var(--task-status-in-review-text);
-  --task-status-done-solid: var(--task-status-done-text);
-  --task-status-closed-solid: var(--task-status-closed-text);
-  --task-status-closed-bg: transparent;
-  --task-status-closed-text: var(--text-muted);
-  --task-status-closed-border: 1px solid var(--border-subtle);
-
-  /* ── Floating frame ── */
-  --floating-border: 1px solid rgba(255, 255, 255, 0.1);
-  --floating-radius: var(--radius-md);
-  --floating-item-radius: var(--radius-sm);
-
-  /* ── Row-state border color ── */
-  --border-row-hover: transparent;
-  --border-row-selected: transparent;
-
-  /* ── Control hover border */
-  --border-control-hover: var(--border);
-
-  /* ── Chrome label ── */
-  --font-chrome-label: var(--font-sans);
-  --chrome-label-tracking: 0.05em;
-  --chrome-label-transform: uppercase;
-
-  --row-radius: 6px;
-
-  --profile-section-radius: var(--card-radius);
-
-  --message-bubble-radius: var(--card-radius);
-
-  --control-radius: 6px;
-  --chip-radius: 4px;
-
-  --pill-radius: 9999px;
-
-  --task-status-radius: 9999px;
-
   --chip-bg: rgba(255, 255, 255, 0.06);
   --chip-bg-hover: rgba(255, 255, 255, 0.12);
-
+  --chip-radius: 4px;
+  --message-bubble-radius: var(--card-radius);
+  --pill-radius: 9999px;
+  --system-message-size: 12px;
   --thread-preview-bg: var(--chip-bg);
   --thread-preview-bg-hover: var(--chip-bg-hover);
   --thread-preview-text: oklab(1 0 0 / 0.5);
-
-  --control-border-width: 1px;
-
-  --select-content-radius: 6px;
-  --select-item-radius: 4px;
-
-  --tab-segment-radius: 4px;
-
-  --bg-control-primary: #9cbf5c;
-  --bg-control-primary-hover: #a8c770;
-  --text-on-control-primary: #0a0a0a;
-
-  --accent: #1d9bd1;
-  --accent-soft: rgba(29, 155, 209, 0.14);
-  --accent-hover: #4fb7dc; /* hover 抬亮一档 */
-  --accent-glow: rgba(29, 155, 209, 0.3);
-
   --unread: var(--accent);
 
+  /* Composer */
+  --composer-border-color: initial;
+  --composer-border-width: initial;
+  --composer-shadow: initial;
+  --composer-shadow-focus: initial;
+  --composer-transition: initial;
+
+  /* Markdown, code and diagrams */
+  --bg-inline-code: rgba(232, 145, 45, 0.12);
+  --bg-island: #1e1e22;
+  --bg-island-deep: #181b1e;
+  --border-inline-code: 1px solid rgba(232, 145, 45, 0.28);
+  --border-island: rgba(255, 255, 255, 0.08);
+  --code-block-border-width: 1px;
+  --code-block-header-bg: var(--bg-island-deep);
+  --inline-code-radius: var(--radius-sm);
+  --md-code-size: 14px;
+  --md-prose-size: 14px;
+  --mermaid-diagram-bg: var(--bg-island);
+  --text-inline-code: #e8912d;
+  --text-island: #d1d2d3;
+
+  /* Syntax highlighting */
+  --hljs-addition: #7ee787;
+  --hljs-base: var(--text-island);
+  --hljs-comment: #8b949e;
+  --hljs-deletion: #ffa198;
+  --hljs-keyword: #ff7b72;
+  --hljs-meta: #d2a8ff;
+  --hljs-number: #79c0ff;
+  --hljs-selection-bg: #264f78;
+  --hljs-selection-text: #ffffff;
+  --hljs-string: #a5d6ff;
+
+  /* Task references and search */
   --search-hit-bg: #d9c158;
   --search-hit-bg-active: #f0d970;
   --search-hit-text: #1a1712;
+  --task-ref-activity-color: var(--text-secondary);
+  --task-ref-activity-hover-bg: var(--accent);
+  --task-ref-activity-hover-color: var(--text-on-accent);
+  --task-ref-activity-margin: -0.125rem;
+  --task-ref-activity-marker: transparent;
+  --task-ref-activity-padding: 0.375rem;
+  --task-ref-color: var(--accent);
+  --task-ref-font: initial;
+  --task-ref-hover-decoration: underline;
+  --task-ref-line-height: initial;
+  --task-ref-marker: transparent;
+  --task-ref-marker-hover: transparent;
+  --task-ref-number-font: initial;
+  --task-ref-number-tracking: initial;
+  --task-ref-number-weight: initial;
+  --task-ref-weight: 500;
 
-  /* ── Semantic ── */
-  --success: #2ebb85;
-  --success-soft: rgba(46, 187, 133, 0.14);
-  --warning: #ecb22e;
-  --warning-soft: rgba(236, 178, 46, 0.14);
-  --warning-surface: rgba(236, 178, 46, 0.15);
-  --error: #e01e5a;
-  --error-soft: rgba(224, 30, 90, 0.14);
+  /* Task status */
+  --task-status-closed-bg: transparent;
+  --task-status-closed-border: 1px solid var(--border-subtle);
+  --task-status-closed-solid: var(--task-status-closed-text);
+  --task-status-closed-text: var(--text-muted);
+  --task-status-done-bg: rgba(46, 187, 133, 0.18);
+  --task-status-done-border: 1px solid rgba(46, 187, 133, 0.4);
+  --task-status-done-solid: var(--task-status-done-text);
+  --task-status-done-text: #2ebb85;
+  --task-status-in-progress-bg: rgba(236, 178, 46, 0.18);
+  --task-status-in-progress-border: 1px solid rgba(236, 178, 46, 0.4);
+  --task-status-in-progress-solid: var(--task-status-in-progress-text);
+  --task-status-in-progress-text: #ecb22e;
+  --task-status-in-review-bg: rgba(29, 155, 209, 0.2);
+  --task-status-in-review-border: 1px solid rgba(29, 155, 209, 0.4);
+  --task-status-in-review-solid: var(--task-status-in-review-text);
+  --task-status-in-review-text: #4fbfe0;
+  --task-status-radius: 9999px;
+  --task-status-todo-bg: rgba(171, 171, 173, 0.16);
+  --task-status-todo-border: 1px solid rgba(255, 255, 255, 0.1);
+  --task-status-todo-solid: var(--task-status-todo-text);
+  --task-status-todo-text: #ababad;
 
-  /* ── Borders ── */
-  --border: rgba(255, 255, 255, 0.1);
-  --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-island: rgba(255, 255, 255, 0.08);
-  --border-focus: var(--accent);
-  --border-avatar: rgba(255, 255, 255, 0.12);
-  --border-avatar-width: 1px;
-
-  --text-on-accent: #0f1419; /* near-black on #1D9BD1 ≈ 6.97:1 AA */
-  --text-on-success: #0f1419; /* near-black on #2EBB85 ≈ 7.32:1 AAA */
-  --text-on-warning: #0f1419; /* near-black on #ECB22E ≈ 9.45:1 AAA */
-  --text-on-error: #ffffff; /* white on #E01E5A ≈ 4.84:1 AA */
-  --text-on-selected: #ffffff; /* white on brand-blue selected ≈ 6.04:1 AA */
-
-  /* ── Overlay ── */
-  --overlay-backdrop: rgba(0, 0, 0, 0.55);
-
-  /* ── Shadows ── */
-  --shadow-base: 0, 0, 0;
-  --shadow-popover:
-    0 8px 24px -8px rgba(var(--shadow-base), 0.5), 0 2px 6px -2px rgba(var(--shadow-base), 0.3);
-  --shadow-modal: 0 25px 50px -12px rgba(var(--shadow-base), 0.6);
-  --shadow-button: 0 1px 2px 0 rgba(var(--shadow-base), 0.2);
-
-  /* ── Radii ── */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-xl: 14px;
-
-  /* ── Fonts ── */
-  --font-sans:
-    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Lato", "PingFang SC",
-    "Hiragino Sans GB", sans-serif;
-  --font-serif: var(--font-sans);
-  --font-mono: "Hack", "JetBrains Mono", "SF Mono", ui-monospace, monospace;
-
-  /* ── Markdown body sizes (cross-theme baseline) ── */
-  --md-prose-size: 14px;
-  --md-code-size: 14px;
-  --system-message-size: 12px;
-
-  /* ── Motion ── */
-  --ease: cubic-bezier(0.4, 0, 0.2, 1);
-
-  --font-display: var(--font-sans);
-  --accent-2: var(--accent);
-  --text-on-accent-2: var(--text-on-accent);
-
-  --bg-structure-dark: #0e1013;
-  --text-on-structure: var(--text-primary);
-  --text-on-dark-pop: var(--accent);
+  /* Panel geometry */
+  --panel-border-width: 1px;
 }
+
+/* Hooks: Identity */
 
 [data-theme="slack-dark"] [data-workspace-icon] {
   background-color: var(--text-secondary);
   color: var(--bg-base);
   border-radius: 0;
   font-size: 11px;
-}
-
-[data-theme="slack-dark"] [data-message-task-tag] {
-  border: none;
-}
-
-[data-theme="slack-dark"] [data-collection-card]:hover {
-  background-color: var(--bg-hover);
-  box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.45);
-  transform: translateY(-1px);
-}
-
-[data-theme="slack-dark"] [data-message-row] {
-  border-width: 1px;
-}
-[data-theme="slack-dark"] [data-message-row].border-accent {
-  border-color: rgba(255, 255, 255, 0.26);
-}
-
-[data-theme="slack-dark"] [data-composer-shell]:focus-within {
-  border-color: var(--border-subtle);
-  box-shadow: 0 0 0 2px
-    color-mix(
-      in oklab,
-      color-mix(in oklab, var(--accent) 60%, var(--brand-primary)) 45%,
-      transparent
-    );
 }
 
 [data-theme="slack-dark"] [data-channel-icon] {
@@ -325,11 +267,38 @@
   margin-right: 0.1em;
 }
 
+/* Hooks: Messages and composer */
+
+[data-theme="slack-dark"] [data-message-task-tag] {
+  border: none;
+}
+
+[data-theme="slack-dark"] [data-message-row] {
+  border-width: 1px;
+}
+
+[data-theme="slack-dark"] [data-message-row].border-accent {
+  border-color: rgba(255, 255, 255, 0.26);
+}
+
+[data-theme="slack-dark"] [data-composer-shell]:focus-within {
+  border-color: var(--border-subtle);
+  box-shadow: 0 0 0 2px
+    color-mix(
+      in oklab,
+      color-mix(in oklab, var(--accent) 60%, var(--brand-primary)) 45%,
+      transparent
+    );
+}
+
+/* Hooks: Tasks */
+
 [data-theme="slack-dark"] [data-tasks-board] [data-task-number] {
   background: var(--bg-floating);
   border-color: var(--border);
   box-shadow: var(--card-shadow);
 }
+
 [data-theme="slack-dark"] [data-tasks-board] [data-task-number]:hover {
   border-color: var(--accent);
   box-shadow: var(--shadow-popover);
@@ -340,7 +309,10 @@
   border-color: var(--border);
 }
 
-[data-theme="slack-dark"] {
-  --message-activity-color: var(--accent);
-  --message-activity-radius: 3px;
+/* Hooks: Panels and collections */
+
+[data-theme="slack-dark"] [data-collection-card]:hover {
+  background-color: var(--bg-hover);
+  box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.45);
+  transform: translateY(-1px);
 }
