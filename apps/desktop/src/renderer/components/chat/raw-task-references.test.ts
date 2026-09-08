@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "./Markdown";
 import { TaskRefContextProvider } from "@/features/tasks/TaskRefContext";
 import { useTaskByNumber } from "@/features/tasks/useTaskByNumber";
-import { highlightText } from "@/components/layout/SearchPanel";
+import { highlightText } from "@/features/chat-shell/search-panel";
 vi.mock("@/features/tasks/useTaskByNumber", async (orig) => ({
   ...(await orig<typeof import("@/features/tasks/useTaskByNumber")>()),
   useTaskByNumber: vi.fn(() => ({ data: null, isLoading: true, isError: false })),
@@ -40,7 +40,7 @@ describe("task numbers stay literal outside chat", () => {
   it.each([
     ["description dialog", "../tasks/TaskDetailDialog.tsx", "detail.content"],
     ["description side panel", "../tasks/TaskDetailPanel.tsx", "detail.content"],
-    ["saved message", "../layout/SavedListView.tsx", "item.message.content"],
+    ["saved message", "../../features/chat-shell/saved-list-view.tsx", "item.message.content"],
   ])("%s opts into raw task text even inside a chat task context", (_, path, expression) => {
     const source = readFileSync(new URL(path, import.meta.url), "utf8");
     expect(source).toContain(`<Markdown content={${expression}} taskReferences="raw" />`);
@@ -51,7 +51,10 @@ describe("task numbers stay literal outside chat", () => {
     expect(useTaskByNumber).not.toHaveBeenCalled();
   });
   it("search preserves literal text and query highlight without task resolution", () => {
-    const source = readFileSync(new URL("../layout/SearchPanel.tsx", import.meta.url), "utf8");
+    const source = readFileSync(
+      new URL("../../features/chat-shell/search-panel.tsx", import.meta.url),
+      "utf8",
+    );
     expect(source).toContain("{highlightText(excerpt, query)}");
     const html = renderToStaticMarkup(
       React.createElement(React.Fragment, null, highlightText(content, "#456")),

@@ -70,8 +70,11 @@ import {
   useViewerUser,
 } from "@/features/me/hooks";
 import { STATUS_DOT } from "@/components/status-dot";
-import { projectMemberRuntimeStatus } from "@/features/agents/member-runtime-status";
-import { PRESENCE_TONE_DOT, projectPresence } from "@/features/agents/presence-projection";
+import { projectMemberRuntimeStatus } from "@/features/agent-shell/model/member-runtime-status";
+import {
+  PRESENCE_TONE_DOT,
+  projectPresence,
+} from "@/features/agent-shell/model/presence-projection";
 
 /** Above this many members the roster stops being scannable at a glance, so the
  *  search field appears. It is the same cap that collapses the header strip into

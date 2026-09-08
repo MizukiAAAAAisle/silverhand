@@ -1,6 +1,6 @@
 import { buildConversationPanes } from "./build-conversation-panes";
 import { senderFilterToParam } from "@/components/ui/sender-filter-select";
-import { useAgents } from "@/features/agents/hooks";
+import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { useLayoutKeyboardShortcuts } from "@/features/app-shell/effects";
 import { useMessageUnreadCounts } from "@/features/channels/hooks";
 import { useChatRouteRecovery } from "@/features/chat-shell/use-chat-route-recovery";

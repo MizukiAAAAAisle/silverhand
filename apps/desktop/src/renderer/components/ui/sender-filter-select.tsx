@@ -7,7 +7,7 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { AuthorAvatarView } from "@/components/chat/author-avatar-view";
 import { UNRESOLVED_AGENT_LABEL } from "@/components/chat/author-presentation";
-import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import {
   FilterSelectItem,

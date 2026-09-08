@@ -582,7 +582,7 @@ describe("the live-discovery subscription is mounted once, by the session", () =
   const controllerSource = read("../conversation-shell/use-conversation-read-model.ts");
   const signalsSource = read("../app-shell/application-signals.ts");
   const shellSource = read("../app-shell/effects.ts");
-  const panelSource = read("../../components/layout/DirectMessagesPanel.tsx");
+  const panelSource = read("../chat-shell/sidebar/direct-messages-panel.tsx");
 
   /** The body of a top-level `function <name>(`, up to the next top-level
    *  declaration. Lets a count be attributed to ONE component instead of to a

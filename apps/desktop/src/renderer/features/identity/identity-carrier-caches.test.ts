@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import type { ServerFrame } from "@silverhand/shared";
 import { api } from "@/lib/api";
-import { decideAgentSyncAction } from "@/features/agents/agent-sync";
+import { decideAgentSyncAction } from "@/features/agent-shell/model/agent-sync";
 import {
   agentsKey,
   clusterFetchEpochKey,

@@ -1,4 +1,4 @@
-import { agentStreamCache } from "@/features/agents/agent-stream-cache";
+import { agentStreamCache } from "@/features/agent-shell/model/agent-stream-cache";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
@@ -19,41 +19,6 @@ import { CONVERSATION_MEMBERS_KEY_PREFIX } from "@/features/conversations/useCon
 import { clearSettingsSection } from "@/features/settings/settings-section";
 import { usersKey } from "@/features/users/hooks";
 
-/**
- * Multi-human audit 2026-06-03 #task:857 P0.7 (review-fold by Cindy
- * #task:861). Renderer-local state that is **identity-bound** — its
- * value reveals or depends on who the previous viewer was. Wiped by
- * {@link clearViewerLocalState} on every logout so the next signed-in
- * human starts without inheriting the previous viewer's navigation
- * history or pending gates.
- *
- * Kept INSIDE the file (rather than exported from current-user) so the
- * full ownership of "what survives a logout" stays in one place; if a
- * future preference key is added, this function is the diff target.
- *
- * Every layer is reset through the module that owns it, and each of those
- * resets clears memory AND disk. A list of localStorage keys wiped from
- * here would not be enough: a module holding its value in a singleton
- * (place memory, the settings section) keeps serving the previous viewer
- * from memory while the emptied key goes unread (#task:1846).
- *   1. {@link clearPlaceMemory} — last-channel-per-workspace and
- *      last-thread-per-channel.
- *   2. {@link clearAvatarBlobCache} — app-session avatar object URLs, so
- *      the next viewer inherits no avatar bytes and the blobs are
- *      released (#task:1321).
- *   3. {@link clearSettingsSection} — which Settings sub-section was open,
- *      identity-bound because it reveals what the previous viewer was
- *      looking at when they signed out. Defaulting back to the
- *      wizard-recommended landing tab is strictly safer than inheriting.
- *
- * What intentionally SURVIVES (device-scoped UI ergonomics — Cindy
- * #task:861 review): theme (`silverhand:appearance`), sidebar
- * visibility toggles, sidebar/split widths, message layout mode, tasks
- * drawer width, agent-section collapse state. None of these reveal who
- * the previous viewer was; they describe how the device's owner likes
- * the chrome to look. If the product contract ever tightens to "every
- * logout returns a factory-default shell", expand this function.
- */
 function clearViewerLocalState(): void {
   agentStreamCache.clear();
   clearPlaceMemory();
@@ -222,7 +187,7 @@ export function getHydratedViewer(qc: QueryClient): UserDto | null {
 }
 
 /**
- * D4.a Commit 6 (2) — pure mapping from the main-process IPC arm to
+ * pure mapping from the main-process IPC arm to
  * the renderer's `ViewerState` union. Extracted out of `useViewerUser`
  * so the three-way IPC → renderer mapping is testable without
  * React-DOM + React Query plumbing.
@@ -338,9 +303,8 @@ export function authResultToUser(
   result: Awaited<ReturnType<typeof window.silverhand.signup>>,
 ): UserDto {
   if (result.ok) return result.user;
-  // D4.a Commit 5d-fixup (Cindy P1-2): preserve the typed
-  // backend-unreachable signal end-to-end. `status: 0` is the
-  // sentinel main-process proxy uses to report that the
+  // preserve the typed backend-unreachable signal end-to-end.
+  // `status: 0` is the sentinel main-process proxy uses to report that the
   // signup/login fetch never reached the server; we tag the
   // ApiError so callers branching on `err.kind` get the typed
   // arm instead of a generic "0 Network Error" HTTP error.
@@ -421,15 +385,6 @@ export function useUploadAvatar() {
     },
   });
 }
-
-/*
- * `DELETE /api/me/avatar` has no renderer hook. The route and main's
- * `DELETE meAvatar → user-dto` session sync stay in place (shiki
- * 2026-08-06:「保留 backend api,前端先去掉消费」), but the only avatar
- * interaction the UI offers is picking a new image, so a clearing
- * mutation here would have no call site. Re-add it with the entry point
- * that needs it, not ahead of one.
- */
 
 /**
  * Resolve the viewer's avatar to a renderable object URL.

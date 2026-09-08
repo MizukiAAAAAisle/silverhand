@@ -1,6 +1,6 @@
-import { SectionShell } from "@/components/layout/SectionShell";
+import { Sidebar } from "@/components/layout/sidebar";
 import { SectionLayer } from "@/components/layout/SectionLayer";
-import { ActivityView } from "@/components/layout/ActivityView";
+import { ActivityView } from "@/features/activity-shell/activity-view";
 import { VerticalSplitter } from "@/components/layout/VerticalSplitter";
 import { useResizableWidth } from "@/hooks/useResizableWidth";
 import type { ActivityShellModel } from "@/features/conversation-shell/conversation-shell-models";
@@ -36,7 +36,7 @@ export function ActivityShell({
     <>
       {deferredSection === "activity" && (
         <SectionLayer visible={appSection !== "chat"}>
-          <SectionShell
+          <Sidebar
             name="activity"
             fill={selectedChannelId == null}
             width="var(--activity-list-width)"
@@ -64,7 +64,7 @@ export function ActivityShell({
                 storageKey="silverhand.layout.activity-split-ratio"
               />
             ) : null}
-          </SectionShell>
+          </Sidebar>
         </SectionLayer>
       )}
     </>

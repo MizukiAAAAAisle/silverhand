@@ -99,16 +99,6 @@ describe("resolveNotificationJumpTarget", () => {
     const r = await resolveNotificationJumpTarget(
       makeNotification({
         kind: "mention_external",
-        // The viewer of this row is the mention's author, so the backend fills
-        // BOTH coordinate groups with the source message (option A) — that is
-        // what every row written since `25e089d1` looks like. Pre-`25e089d1`
-        // rows name the then-destination copy in their own group instead, and
-        // are deliberately left alone: the resolver takes them to that historical
-        // destination, which the author can still read. That reachability is a
-        // GATED invariant, not an inference — migration v71 neither converts nor
-        // touches the legacy `Mentions` DMs (@Cindy 裁定 (b)), asserted as a
-        // full-row differential over every pre-existing conversation in
-        // `packages/backend/tests/agent-inbox-migration.test.ts` (#task:2089).
         workspace_id: "ws_remote",
         conversation_id: "conv_remote",
         message_id: "msg_remote",

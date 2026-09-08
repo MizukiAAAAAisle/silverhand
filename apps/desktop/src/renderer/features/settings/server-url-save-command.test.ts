@@ -1,17 +1,3 @@
-/**
- * `#task:1630` — the command side of the same unknown boundary.
- *
- * The pill regression was "we painted a status we had not observed".
- * This is its command twin: with no `BackendInfo` snapshot yet,
- * `ConnectionPane` defaulted `mode` to `'embedded'`, so a Save typed
- * inside that window (or during a persistent `backend:info` failure)
- * routed a REMOTE app's address change into `settings:saveServerUrl` —
- * a daemon-config rewrite plus daemon reload — while the app's own
- * server profile stayed on the old origin (Cindy's review).
- *
- * Guessing an owner is worse than guessing a status word: the pill
- * self-heals on the next snapshot, a wrong write does not.
- */
 import { describe, expect, it } from "vitest";
 import {
   planServerUrlSave,

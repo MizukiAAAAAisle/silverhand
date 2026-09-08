@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { routes, useNav, useRouteState } from "@/router";
-import { useAgents } from "@/features/agents/hooks";
+import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { DirectoryShell, type DirectoryLifecycle } from "@/components/layout/directory-shell";
 import { AgentSidebarShell } from "./agent-sidebar-shell";
 import { AgentDetailPage, type AgentNavigation } from "./agent-detail-page";

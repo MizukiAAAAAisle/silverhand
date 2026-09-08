@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useViewerWorkspacesSync } from "@/features/workspaces/hooks";
 import { useDirectPairsSync } from "@/features/direct-pairs/hooks";
 import { usePresenceSync } from "@/features/presence/hooks";
-import { useAgentSync } from "@/features/agents/agent-sync";
+import { useAgentSync } from "@/features/agent-shell/model/agent-sync";
 import { useUserSync } from "@/features/users/user-sync";
 import { useHostConnectionSync } from "@/features/hosts/host-connection-sync";
 import { useConversationIngestor } from "@/features/realtime/conversation-ingestor";

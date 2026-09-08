@@ -7,7 +7,7 @@ import { ApiError } from "@/lib/api";
 import { getCurrentUserId } from "@/lib/current-user";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
-import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { Button } from "@/components/ui/button";
 import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
 import { Checkbox } from "@/components/ui/checkbox";

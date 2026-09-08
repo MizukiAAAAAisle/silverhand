@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { AgentDto, UserDto } from "@silverhand/shared";
-import { useAgents } from "@/features/agents/hooks";
+import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { useUsers, makeUserNameResolver } from "@/features/users/hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import {

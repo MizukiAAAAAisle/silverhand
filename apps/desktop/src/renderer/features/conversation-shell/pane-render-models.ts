@@ -2,7 +2,7 @@ import type { HumanView } from "@/features/me/HumanView";
 import type { ComponentProps } from "react";
 import type { DirectPairDraftPane } from "@/features/direct-pairs/DirectPairDraftPane";
 import type { ChannelView } from "@/components/layout/ChannelView";
-import type { AgentView } from "@/features/agents/AgentView";
+import type { AgentView } from "@/features/agent-shell/components/agent-view";
 import type { ChannelAttachmentsPanel } from "@/components/layout/ChannelAttachmentsPanel";
 import type { TaskDetailPanel } from "@/components/tasks/TaskDetailPanel";
 import type { SideUnresolvedPlaceholder } from "@/components/layout/SideUnresolvedPlaceholder";

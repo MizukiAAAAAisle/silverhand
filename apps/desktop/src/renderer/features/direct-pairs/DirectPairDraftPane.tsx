@@ -6,7 +6,7 @@ import { EmptyConversation } from "@/components/layout/channel-view/empty-conver
 import { ConversationHeaderIdentity } from "@/components/layout/channel-view/conversation-header-identity";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import { ApiError } from "@/lib/api";
-import { useAgent } from "@/features/agents/hooks";
+import { useAgent } from "@/features/agent-shell/hooks/hooks";
 import { counterpartFromAgent } from "./counterpart-presentation";
 import {
   decideDraftHandoff,

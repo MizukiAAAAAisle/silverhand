@@ -11,9 +11,12 @@ import { AVATAR_PX } from "@/components/avatar-scale";
 import { STATUS_DOT } from "@/components/status-dot";
 import { AgentInfoPopover } from "@/components/AgentInfoPopover";
 import { HumanInfoPopover } from "@/components/HumanInfoPopover";
-import { useAgents } from "@/features/agents/hooks";
-import { projectMemberRuntimeStatus } from "@/features/agents/member-runtime-status";
-import { PRESENCE_TONE_DOT, projectPresence } from "@/features/agents/presence-projection";
+import { useAgents } from "@/features/agent-shell/hooks/hooks";
+import { projectMemberRuntimeStatus } from "@/features/agent-shell/model/member-runtime-status";
+import {
+  PRESENCE_TONE_DOT,
+  projectPresence,
+} from "@/features/agent-shell/model/presence-projection";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { useUsersById } from "@/features/users/hooks";
 import { usePresenceById, presenceDotStatus } from "@/features/presence/hooks";

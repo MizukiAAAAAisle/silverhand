@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { primaryAction, primaryCancel } from "@/features/common/PrimaryAction";
 import { describeApiError } from "@/lib/api-error-message";
 import { NameAvailabilityHint, useNameAvailability } from "@/features/naming/useNameAvailability";
-import { useAgents } from "@/features/agents/hooks";
+import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import {
   isBackendUnreachable,
   isRegistrationRequired,

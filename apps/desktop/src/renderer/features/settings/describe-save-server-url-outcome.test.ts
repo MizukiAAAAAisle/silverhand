@@ -1,10 +1,3 @@
-/**
- * D3.c Commit 4 — pins every `DesktopSaveServerUrlResult` arm to a
- * distinct user-visible banner. The test is the contractual gate
- * against Cindy `#task:634` review note 1: `reloaded` and
- * `connectivity_unverified` MUST NOT share copy, and
- * `connectivity_unverified` MUST NOT claim "Connected".
- */
 import { describe, expect, it } from "vitest";
 import type { DesktopSaveServerUrlResult } from "../../../preload/api";
 import { describeSaveServerUrlOutcome } from "./describe-save-server-url-outcome";

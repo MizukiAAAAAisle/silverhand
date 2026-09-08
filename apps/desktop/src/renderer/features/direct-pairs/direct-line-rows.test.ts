@@ -316,7 +316,7 @@ function read(relative: string): string {
 }
 
 describe("the sidebar and the shell defer to the seam (the wiring half)", () => {
-  const panelSource = read("../../components/layout/DirectMessagesPanel.tsx");
+  const panelSource = read("../chat-shell/sidebar/direct-messages-panel.tsx");
   const appSource = read("../chat-shell/chat-shell.tsx");
 
   it("the section merges through the seam and decides nothing itself", () => {

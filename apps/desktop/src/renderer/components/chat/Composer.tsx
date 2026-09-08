@@ -30,7 +30,7 @@ import { Button } from "@/components/ui/button";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { UserAvatar } from "@/components/UserAvatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
-import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import {
   useChannelsAcrossWorkspaces,
@@ -41,7 +41,7 @@ import {
   type WorkspaceHumanMember,
   type WorkspaceMemberLists,
 } from "@/features/workspaces/hooks";
-import { useAgents } from "@/features/agents/hooks";
+import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import type { ComposerDirectory, MentionAgent } from "@/features/conversations/pane-mode";
 
 import { useConversationMembers } from "@/features/conversations/useConversationMembers";

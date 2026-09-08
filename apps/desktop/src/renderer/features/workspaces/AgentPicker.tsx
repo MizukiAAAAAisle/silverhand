@@ -5,7 +5,7 @@ import type { AgentDto, UserDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { UserAvatar } from "@/components/UserAvatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
-import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 
 interface AgentPickerProps {
   candidates: AgentDto[];

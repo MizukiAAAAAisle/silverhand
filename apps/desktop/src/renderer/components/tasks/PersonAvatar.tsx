@@ -4,8 +4,8 @@ import type { AgentDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { UserAvatar } from "@/components/UserAvatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
-import { useAgents } from "@/features/agents/hooks";
-import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useAgents } from "@/features/agent-shell/hooks/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useUsersById } from "@/features/users/hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import type { PersonRef } from "@/features/tasks/taskFilters";
@@ -19,17 +19,6 @@ export interface PersonDirectory {
   userAvatarUrls: ReadonlyMap<string, string | null>;
 }
 
-/**
- * A task person's avatar — the same identity primitives as everywhere else
- * (agent → runtime-tinted `AgentAvatar`, human → neutral `UserAvatar`), sized to
- * the `xs` (16px) meta-row scale. Falls back to the generic person glyph if an
- * agent id isn't in the directory (e.g. a deleted agent still on old tasks), so
- * a row never renders a broken avatar (shiki #task:1441).
- *
- * Shared by the board's Assignee / From dropdowns and the detail modal's
- * metadata sidebar: one entity, one component. A second copy would be a second
- * answer to "what does this person look like".
- */
 export function PersonAvatar({
   person,
   name,
@@ -63,13 +52,6 @@ export function PersonAvatar({
   );
 }
 
-/**
- * Resolve the agent + user directories and their avatar object URLs for a
- * surface that renders people. Both `AgentDto` and `UserDto` expose
- * `{id, avatar_url}` and the batch hooks session-cache by url, so this is cheap
- * — but it must stay at the SURFACE, never inside `PersonAvatar`: a leaf that
- * fetched its own avatar would issue one request per row.
- */
 export function usePersonDirectory(): PersonDirectory {
   const { data: agents = [] } = useAgents();
   const agentsById = useMemo<ReadonlyMap<string, AgentDto>>(

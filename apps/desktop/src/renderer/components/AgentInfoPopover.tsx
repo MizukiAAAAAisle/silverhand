@@ -6,7 +6,7 @@ import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import {
   canControlDirectAgent,
   directAgentControlState,
-} from "@/features/agents/direct-agent-control";
+} from "@/features/agent-shell/model/direct-agent-control";
 import {
   useChannelAgents,
   useChannelAgentRuntime,
@@ -15,7 +15,10 @@ import {
   useStartAgent,
   useStopAgent,
 } from "@/features/channels/hooks";
-import { canEditAgentProfile, canRemoveAgentFromChannel } from "@/features/agents/permissions";
+import {
+  canEditAgentProfile,
+  canRemoveAgentFromChannel,
+} from "@/features/agent-shell/model/permissions";
 import { useConversationById } from "@/features/conversations/useConversationById";
 import { useConversationPaneCapabilities } from "@/features/conversations/pane-capabilities-context";
 import {
@@ -23,18 +26,18 @@ import {
   useAgentRuntimeState,
   projectRosterMembership,
   useAgentPresence,
-} from "@/features/agents/hooks";
+} from "@/features/agent-shell/hooks/hooks";
 import {
   presenceAuthorityFor,
   projectMemberRuntimeStatus,
-} from "@/features/agents/member-runtime-status";
+} from "@/features/agent-shell/model/member-runtime-status";
 import {
   PRESENCE_TONE_DOT,
   projectPresence,
   type PresenceDisplay,
-} from "@/features/agents/presence-projection";
+} from "@/features/agent-shell/model/presence-projection";
 import { useWorkspaceMemberLists } from "@/features/workspaces/hooks";
-import { useAgentAvatarObjectUrl } from "@/features/agents/avatar-hooks";
+import { useAgentAvatarObjectUrl } from "@/features/agent-shell/hooks/avatar-hooks";
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/me/hooks";
 import { Button } from "@/components/ui/button";
 import { destructiveAction, destructiveCancel } from "@/features/common/DestructiveAction";

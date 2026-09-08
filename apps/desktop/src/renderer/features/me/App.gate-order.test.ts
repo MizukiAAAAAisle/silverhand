@@ -1,45 +1,3 @@
-/**
- * D4.a Commit 6 (2) — App.tsx gate-order rendering pin.
- *
- * Cindy `MqA4uoNcRByKcf9E` boundary lock: "Renderer state-machine
- * tests, mocked silverhand — `useViewerUser` three arms, App.tsx gate
- * order".
- *
- * **What this file pins.** App.tsx renders a strict 4-way gate based
- * on the resolved `ViewerState`:
- *
- *   1. `!viewer.data`                    → Loading…
- *   2. `isBackendUnreachable(viewer)`    → <BackendUnreachableGate />
- *   3. `isRegistrationRequired(viewer)`  → <RegistrationGate />
- *   4. otherwise (authenticated UserDto) → <RegisteredAppShell />
- *
- * The load-bearing invariant Cindy P1-2 nailed in the 5d-fixup is
- * the **ordering** between branches 2 and 3 — backend-unreachable
- * MUST take precedence over registration-required so a stale signup
- * gate cannot appear over a profile pointing at a downed server.
- * `state-machine.test.ts` (companion file) pins guard correctness
- * and IPC mapping; THIS file pins gate-order RENDERING by exercising
- * the actual `App` component through `renderToStaticMarkup` with
- * priming of the React Query cache.
- *
- * **Discriminate gates by STRUCTURE, never by copy.** Earlier this
- * pin keyed each gate off its distinctive user-facing copy, which
- * made a pure wording edit (e.g. "Silverhand backend" → "server")
- * trip the assertions even though gate routing was unchanged. We now
- * identify each gate by stable, copy-free signals — a branch-owned
- * `data-gate` marker on the unreachable gate, the email/password form
- * fields and `autocomplete` mode unique to the registration gate, and
- * the server-url / message DATA the unreachable gate echoes from its
- * props. Copy AND iconography are free to change without touching this
- * file.
- *
- * **Authenticated arm is intentionally out of scope.** The
- * authenticated branch renders `RegisteredAppShell`, which is a
- * 1500-line tree of dozens of `useQuery` / `useEffect` hooks, WS
- * clients, and DOM-only APIs. SSR-rendering it would either crash
- * on missing globals or require so much mocking that the test
- * stops being a gate-order pin and becomes a shell smoke test.
- */
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -58,8 +16,6 @@ import type { BackendUnreachable, SetupRequired, ViewerState } from "./hooks";
 const SIG_UNREACHABLE_GATE = 'data-gate="backend-unreachable"';
 const SIG_REG_EMAIL_FIELD = 'type="email"';
 const SIG_REG_PASSWORD_FIELD = 'type="password"';
-// NB: react-dom/server emits the `autoComplete` prop in camelCase
-// (verified against rendered output), not the lowercased HTML form.
 const SIG_REG_SIGNUP_AUTOCOMPLETE = 'autoComplete="new-password"';
 const SIG_REG_LOGIN_AUTOCOMPLETE = 'autoComplete="current-password"';
 
@@ -215,10 +171,6 @@ describe("App.tsx gate ordering (D4.a Commit 6 part 2)", () => {
     expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
   });
 
-  // #task:1761 (Cindy P1-3) — the epoch hard gate must prevent the
-  // registered shell (and therefore every business query it mounts) from
-  // rendering. Structural signals only: the gate's data-gate marker and the
-  // absence of registration/shell markup.
   it("update_required branch: UpdateRequiredGate renders and the registered shell does not mount", async () => {
     const viewer = {
       update_required: true,

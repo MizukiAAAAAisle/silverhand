@@ -4,10 +4,10 @@ import type { AgentDto, AgentRunState } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useAgentRunStates } from "@/features/channels/hooks";
-import { useAgents } from "@/features/agents/hooks";
-import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useAgents } from "@/features/agent-shell/hooks/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useNav } from "@/router";
-import { focusAgentSideSection } from "@/features/agents/AgentView";
+import { focusAgentSideSection } from "@/features/agent-shell/components/agent-view";
 
 // ── Time helpers ─────────────────────────────────────────────────────────
 

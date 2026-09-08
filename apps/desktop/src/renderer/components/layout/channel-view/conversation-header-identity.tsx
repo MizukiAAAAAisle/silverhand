@@ -25,10 +25,13 @@ import { Hash } from "lucide-react";
 import type { DirectPairCounterpart } from "@silverhand/shared";
 import { AuthorAvatarView, DeletedActorMarker } from "@/components/chat/author-avatar-view";
 import { useNav } from "@/router";
-import { focusAgentSideSection } from "@/features/agents/AgentView";
-import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
-import { useAgent, useAgentPresence } from "@/features/agents/hooks";
-import { PRESENCE_TONE_DOT, projectPresence } from "@/features/agents/presence-projection";
+import { focusAgentSideSection } from "@/features/agent-shell/components/agent-view";
+import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
+import { useAgent, useAgentPresence } from "@/features/agent-shell/hooks/hooks";
+import {
+  PRESENCE_TONE_DOT,
+  projectPresence,
+} from "@/features/agent-shell/model/presence-projection";
 import { usePresenceById } from "@/features/presence/hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import {

@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { useRouteState } from "@/router";
-import { SAVED_FILTER_DEFAULT, type SavedFilterState } from "@/components/layout/SavedListView";
-import { SEARCH_FILTER_DEFAULT, type SearchFilterState } from "@/components/layout/SearchPanel";
+import { SAVED_FILTER_DEFAULT, type SavedFilterState } from "@/features/chat-shell/saved-list-view";
+import { SEARCH_FILTER_DEFAULT, type SearchFilterState } from "@/features/chat-shell/search-panel";
 import {
   ARCHIVED_FILTER_DEFAULT,
   type ArchivedFilterState,
-} from "@/components/layout/ArchivedChannelsPanel";
+} from "@/features/chat-shell/archived-channels-panel";
 import { senderFilterFromParam } from "@/components/ui/sender-filter-select";
 
 /** Session filters survive presentation changes; URL seeds remain one-way. */

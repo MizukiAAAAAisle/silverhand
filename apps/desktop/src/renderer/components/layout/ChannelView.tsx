@@ -12,10 +12,10 @@ import { ConversationViewSkeleton } from "@/components/layout/ConversationViewSk
 import { AddConversationMemberPopover } from "@/features/conversations/AddConversationMemberPopover";
 import { TaskRefContextProvider } from "@/features/tasks/TaskRefContext";
 import { ChannelSettingsDialog } from "./ChannelSettingsDialog";
-import { useAgents } from "@/features/agents/hooks";
-import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useAgents } from "@/features/agent-shell/hooks/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/me/hooks";
-import { canEditAgentProfile } from "@/features/agents/permissions";
+import { canEditAgentProfile } from "@/features/agent-shell/model/permissions";
 import {
   useChannelAgents,
   useChannelAgentRuntime,

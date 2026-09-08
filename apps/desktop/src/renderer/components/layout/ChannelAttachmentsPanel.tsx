@@ -34,8 +34,8 @@ import {
   reduceAttachmentsWindow,
 } from "@/components/layout/attachmentsWindow";
 import { useMessageRenderContext } from "@/components/chat/useMessageRenderContext";
-import { useAgents } from "@/features/agents/hooks";
-import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useAgents } from "@/features/agent-shell/hooks/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import {
   useChannelAttachments,
   useChannelAttachmentSenders,

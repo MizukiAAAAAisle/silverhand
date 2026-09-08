@@ -1,4 +1,4 @@
-import { AgentView } from "@/features/agents/AgentView";
+import { AgentView } from "@/features/agent-shell/components/agent-view";
 import { HumanView } from "@/features/me/HumanView";
 import { DirectoryPlaceholder } from "@/components/layout/directory-shell";
 

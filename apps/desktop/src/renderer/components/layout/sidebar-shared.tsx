@@ -9,13 +9,8 @@ import {
 import { BellOff, ChevronDown, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cn";
 
-/**
- * "Copy name" for a conversation row. Shared because a starred channel now has TWO
- * row surfaces (#task:1888 — global STARRED and, when unstarred, its parent's list)
- * and the same action must report itself identically on both; two copies of these
- * two strings is how toast copy drifts.
- */
 export async function copyConversationName(name: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(name);
@@ -25,21 +20,6 @@ export async function copyConversationName(name: string): Promise<void> {
   }
 }
 
-/**
- * Namespace for persisted section-collapse state (#task:1632). The prefix
- * lives HERE, not at the call sites: consumers pass a short `persistId`
- * (`'starred'`, `'dm'`, …) and can neither collide with another layout key
- * nor fork the naming convention. Same `silverhand:layout.*` family and the
- * same `'1'|'0'` encoding as `useSidebarPane`'s per-sidebar visibility, so
- * "how the device owner likes the chrome" stays one storage vocabulary.
- *
- * Device-scoped by design, and deliberately NOT identity-bound: a collapsed
- * section reveals nothing about who was signed in, so it survives logout with
- * the rest of the chrome ergonomics (see `clearViewerLocalState` in
- * features/me/hooks.ts). This is the localStorage-eligible family — unlike
- * list sort mode / rank, which is viewer-scoped server state
- * (docs/list-sort-v1.md) and must not fork per surface.
- */
 const SECTION_KEY_PREFIX = "silverhand:layout.sidebar-section.";
 
 function readExpanded(persistId: string, fallback: boolean): boolean {
@@ -61,25 +41,6 @@ function persistExpanded(persistId: string, value: boolean): void {
   }
 }
 
-/**
- * Collapse state for one sidebar section. With a `persistId` the toggle is
- * written through to localStorage and re-read on mount, so it survives an app
- * restart; without one the state is session-local (the previous behavior, kept
- * for sections whose collapse isn't worth remembering).
- *
- * `defaultExpanded` is the FIRST-RUN value only — once the user has toggled the
- * section, the stored choice wins. Read lazily in the initializer so the first
- * paint is already in the restored state (no expanded→collapsed flash).
- * `persistId` is treated as fixed for the section's lifetime; every caller
- * passes a literal or a value derived from one stable entity id.
- *
- * Exported (#task:1889) because the merged sidebar's WORKSPACE HEADER is a
- * collapse toggle too, persisted per workspace under the same vocabulary
- * (`persistId = 'ws.<workspaceId>'`) — a second collapse-storage convention for
- * the same chrome affordance is how the two would drift apart. The setter is a
- * plain toggle: every write to this storage comes from a user opening or closing
- * a section, so the stored bit always means intent (#task:1901).
- */
 export function useSidebarSectionExpanded(
   persistId: string | undefined,
   defaultExpanded: boolean,
@@ -98,71 +59,14 @@ export function useSidebarSectionExpanded(
 }
 
 /**
- * The sidebar's TWO glyph columns (#task:1889, shiki's Slack reference).
- *
- *   outer:   tool rows, the group headers, and everything a GROUP holds
- *            directly — container header rows and STARRED / DIRECT MESSAGES rows
- *   nested:  the channels under a container header
- *
- * One 16px step, and only one. The tree is four levels deep by structure, but
- * indenting each level would spend the whole narrow column on whitespace and
- * make the list read as a staircase (shiki: 「否则层级太多」, 2026-08-08). So the
- * question is which single distinction gets the step, and it goes to the one
- * where POSITION IS THE ONLY CUE LEFT: a group header is already a label by
- * typography (uppercase, tracked, muted, smaller, trailing count), but a
- * workspace row and a channel row are the same size, weight, colour and height,
- * and both are clickable — with them on one column a workspace and its nine
- * channels read as one flat run, and where one workspace's children end is
- * carried by the leading glyph alone. Indenting the channels turns each
- * workspace's children into a block whose edges ARE the boundary.
- *
- * The cost, accepted: tool rows, group headers, container header rows and STARRED
- * rows all share the outer column, and the same channel sits further out in
- * STARRED than under its parent. That is just "indent = depth" — in STARRED the
- * row's parent IS the group.
- *
- * There is still no permanent chevron GUTTER: since #task:1948 a collapsible row
- * keeps its identity glyph in the outer column and states its collapse in a small
- * caret TRAILING the label, inside the box it already occupies — so the affordance
- * is always visible without a column being spent on it (the candidate rejected in
- * #task:1889 was a LEADING triangle in its own column, which would have pushed
- * every channel another 12px in; docs/app-layout.md §3). The caret is drawn by
- * CAPABILITY, not by container species — every row that owns an `aria-expanded`
- * carries one (group headers AND the container header rows), and a leaf row — a
- * channel, STARRED, a direct line — never does, because its glyph is not a hinge.
- *
- * The section margin and the per-theme row border (`--sidebar-row-border-width`)
- * are already in the box, so only the indent step is these classes' job — a
- * hardcoded absolute x would be wrong in any theme that changes the border.
- *
- * The outer column is 8px (shiki 2026-08-10, up from 4px) — the two values move
- * TOGETHER, because the 16px step above is the invariant, not either absolute x.
+ * Regular top level offset
  */
 export const OUTER_GLYPH_INSET = "pl-2";
-export const NESTED_GLYPH_INSET = "pl-6";
-
 /**
- * The shared selected/hover recipe for a sidebar row — channel and container
- * rows, favorites, and the Search/Saved/Archived rail all share it, so it lives
- * in one place instead of drifting across five copies. Identity only: it paints
- * border + fill + text state; the consumer still owns layout (row border, sizing,
- * glyph inset). Selected = accent frame over the selected fill; unselected =
- * neutral, gaining an accent frame + row-hover ink on hover. The `--bg-row-hover`
- * fallback is `transparent` — every theme sets the token, so a theme that ever
- * forgot it would degrade to no hover fill, never a loud literal colour.
- *
- * Binary on purpose: exactly one strong highlight in the sidebar, no faint /
- * ambient second tier (#task:1254). `text-text-on-selected` is also the hook the
- * per-theme border contract keys on
- * (`aside[data-sidebar] .sidebar-row-border.text-text-on-selected` →
- * `--border-row-selected`), so it must stay on the selected row ALONE.
- *
- * STARRED used to paint from its own copy of this (`railRowTierClass`, #task:1957
- * folded it in): same two class strings, but its hover fallback was a literal
- * `rgba(255,255,255,0.7)` — the loud degradation this docblock argues against.
- * A conversation must look identical inside and outside STARRED, so there is one
- * function.
+ * Tree nested children offset
  */
+export const NESTED_GLYPH_INSET = "pl-3";
+
 export function sidebarRowStateClass(selected: boolean | undefined): string {
   return selected
     ? "border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected"
@@ -171,18 +75,6 @@ export function sidebarRowStateClass(selected: boolean | undefined): string {
 
 interface SectionProps {
   label: string;
-  /** Optional leading icon (lucide or any ReactNode). Renders before the
-   *  label as a small section anchor — used by Members panel to give
-   *  AGENTS / HUMANS a visual identity (#task:917 v6.8). Kept theme-
-   *  neutral; consumers pass plain lucide icons and themes decide
-   *  whether to paint them further. Skip when the section's content
-   *  already carries identity (channel `#` chips, computer Monitor
-   *  glyphs).
-   *
-   *  On a COLLAPSIBLE section the glyph stays put and the collapse state rides
-   *  in a caret trailing the label (#task:1948), so this slot is identity only
-   *  and the header sits on the section glyph column (#task:1889). Pass a 14px
-   *  glyph so it centres in the 16px slot. */
   icon?: ReactNode;
   count?: number;
   onAdd?: () => void;
@@ -221,7 +113,7 @@ export function SidebarSection({
   const body = showBody ? children : collapsedContent;
 
   return (
-    <section className="group/sectionscope px-1.5 pb-3">
+    <section className="group/sectionscope pb-3">
       <SidebarSectionHeader
         label={label}
         icon={icon}
@@ -232,7 +124,7 @@ export function SidebarSection({
         expanded={expanded}
         onToggle={() => toggleExpanded()}
       />
-      {body ? <ul className={collapsible ? "space-y-1 pl-3" : "space-y-1"}>{body}</ul> : null}
+      {body ? <ul className="space-y-1">{body}</ul> : null}
     </section>
   );
 }
@@ -261,27 +153,27 @@ export function SidebarSectionHeader({
   onToggle,
 }: SectionHeaderProps): JSX.Element {
   // Keep menu actions visible while keyboard-focused or portaled menus are open.
-  const actionReveal =
-    collapsible && icon !== undefined
-      ? "flex items-center transition-opacity opacity-0 " +
-        "group-hover/sectionscope:opacity-100 [&:has(:focus-visible)]:opacity-100 " +
-        "[&:has([data-state=open])]:opacity-100"
-      : "flex items-center";
+  const actionReveal = cn(
+    "flex items-center",
+    collapsible &&
+      icon !== undefined && [
+        "opacity-0 transition-opacity",
+        "group-hover/sectionheader:opacity-100 group-focus-visible/sectionheader:opacity-100",
+        "[&:has(:focus-visible)]:opacity-100 [&:has([data-state=open])]:opacity-100",
+      ],
+  );
 
   const headerInner = (
     <span className="flex min-w-0 items-center gap-2">
       {collapsible ? (
-        <span
+        <ChevronDown
           aria-hidden
           data-sidebar-section-caret
-          className="inline-flex size-4 shrink-0 items-center justify-center"
-        >
-          <ChevronDown
-            className={
-              "size-3 transition-transform duration-150 " + (expanded ? "rotate-0" : "-rotate-90")
-            }
-          />
-        </span>
+          className={cn(
+            "size-3 shrink-0 transition-transform duration-150",
+            expanded ? "rotate-0" : "-rotate-90",
+          )}
+        />
       ) : icon ? (
         <span
           data-sidebar-section-icon
@@ -299,77 +191,66 @@ export function SidebarSectionHeader({
     </span>
   );
 
+  const actions =
+    action ??
+    (onAdd ? (
+      <Button variant="ghost" size="icon" onClick={onAdd} aria-label={`add ${label}`}>
+        <Plus className="size-3.5" />
+      </Button>
+    ) : null);
+
+  const actionSlot = actions ? (
+    <span className={actionReveal} onClick={(event) => event.stopPropagation()}>
+      {actions}
+    </span>
+  ) : null;
+
   return (
     <header
       data-sidebar-group-heading={collapsible ? "" : undefined}
-      className={
-        collapsible
-          ? "mb-1 flex items-stretch justify-between text-xs font-bold tracking-wide text-text-primary"
-          : "mb-1 flex items-stretch justify-between text-xs font-bold tracking-wider text-text-muted"
-      }
+      className={cn(
+        "mb-1 text-xs leading-4 font-medium",
+        collapsible ? "tracking-wide text-text-primary" : "tracking-wider text-text-muted",
+      )}
     >
       {collapsible ? (
-        <button
-          type="button"
+        <div
+          role="button"
+          tabIndex={0}
           onClick={onToggle}
-          className={
-            "flex min-w-0 flex-1 items-center h-6 text-left sidebar-row-gutter " + OUTER_GLYPH_INSET
-          }
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget) {
+              return;
+            }
+
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onToggle?.();
+            }
+          }}
+          className={cn(
+            "group/sectionheader sidebar-row-gutter flex h-6 min-w-0 items-center justify-between",
+            "cursor-pointer text-left",
+            OUTER_GLYPH_INSET,
+          )}
           aria-expanded={expanded}
+          aria-label={label}
         >
           {headerInner}
-        </button>
+          {actionSlot}
+        </div>
       ) : (
-        <span className="flex flex-1 items-center px-2 h-6">{headerInner}</span>
+        <div className="flex items-center justify-between">
+          <span className="flex min-w-0 flex-1 items-center px-2 h-6">{headerInner}</span>
+          {actionSlot}
+        </div>
       )}
-      {action ? (
-        <span className={actionReveal}>{action}</span>
-      ) : onAdd ? (
-        <span className={actionReveal}>
-          <Button variant="ghost" size="icon" onClick={onAdd} aria-label={`add ${label}`}>
-            <Plus className="size-3.5" />
-          </Button>
-        </span>
-      ) : null}
     </header>
   );
 }
 
-/**
- * Loudness of an unread count badge (#task:1870). NOT three eligibilities —
- * one badge, three volumes, resolved from the viewer's effective attention mode
- * for that conversation/workspace:
- *   - `loud`  (All messages)   = filled `--accent` pill, the attention beacon.
- *   - `quiet` (Mentions only)  = hairline ring + neutral ink, NO fill. The fact
- *     is kept, the volume drops one step; reuses the Activity `+N new` count
- *     vocabulary rather than inventing a second recipe.
- *   - silent  (Mute)           = no badge at all — callers render nothing, which
- *     is why there is no `silent` member here (a badge that renders nothing is a
- *     branch, not a tier).
- *
- * Utility-vs-semantic budget: `quiet` deliberately spends NO saturated hue — the
- * accent fill is the one thing that separates "look here" from "for reference".
- */
 export type UnreadBadgeTier = "loud" | "quiet";
 
-/**
- * The ONE unread count pill for every sidebar surface (home rail workspace rows,
- * STARRED rows, channel rows). Extracted in #task:1870: the recipe had been
- * hand-copied at four call sites and had already drifted — the channel row was
- * `text-[length:var(--text-badge)]/leading-[16px]` with no `aria-label` while the other three were
- * `text-[length:var(--text-badge)]/h-4` — so a second (quiet) tier would have been copied four times
- * over a divergent base.
- *
- * `inverted` is the selected-row form: on a filled selection the accent pill
- * would fight the selection fill, so fill and ink swap. Layout (margins,
- * placement in the row's status slot) stays with the CONSUMER; this component
- * only owns the badge's own identity — per the shared-hook rule, a component that
- * also dictates spacing breaks the next consumer.
- *
- * `data-sidebar-unread` is the theme painting hook (forza6 repaints the pill as a
- * square poster sticker); `data-unread-tier` lets a theme scope its treatment to
- * one volume without re-deriving the tier from colours.
- */
 export function UnreadBadge({
   count,
   tier = "loud",
@@ -393,14 +274,13 @@ export function UnreadBadge({
     <span
       data-sidebar-unread
       data-unread-tier={tier}
-      className={
-        "inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-[var(--pill-radius)] px-1 text-[length:var(--text-badge)] tabular-nums " +
-        // Quiet drops the weight too: hairline + regular weight is one coherent
-        // step down, not a ring bolted onto a loud pill.
-        (tier === "quiet" ? "font-medium " : "font-semibold ") +
-        skin +
-        (className ? ` ${className}` : "")
-      }
+      className={cn(
+        "inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center",
+        "rounded-[var(--pill-radius)] px-1 text-[length:var(--text-badge)] tabular-nums",
+        tier === "quiet" ? "font-medium" : "font-semibold",
+        skin,
+        className,
+      )}
       aria-label={`${count} unread`}
     >
       {count > 99 ? "99+" : count}
@@ -408,33 +288,6 @@ export function UnreadBadge({
   );
 }
 
-/**
- * The persistent "this is muted" marker (shiki 2026-08-07, #task:1870). Shared by
- * the home rail's workspace row, its STARRED twin, and — since shiki 2026-08-09 —
- * the channel rows (`WorkspaceChannels` / `FavoritesPanel`), so a muted workspace
- * and a muted channel read identically and no consumer redraws the glyph.
- *
- * The marker is the SOLE mute signal on every row: an existence marker, not a
- * dimming. Dimming was tried on the channel rows and rejected — a muted row that
- * drops to the muted ink reads as de-emphasised or "not shown", not silenced, and
- * the rail never had a comparison group to make "dimmer" legible in the first
- * place (dogfood: shiki could not tell which workspace was muted; then, on the
- * channel rows, asked to keep the name at full colour). It sits BESIDE the count
- * slot rather than replacing it: a directed mention legitimately pierces mute, so
- * muted-and-loud is a real state, not a contradiction.
- *
- * Ink: no colour of its own — it inherits the row's `currentColor` and dims it.
- * That is what keeps it correct in all three themes AND on the selected row
- * (where the row's ink is `--text-on-selected`, so a fixed grey would sit wrong
- * on the fill), and it keeps the glyph on the row's own hover transition instead
- * of jumping colour families. `opacity-60` over the rail's resting
- * `--text-secondary` lands at ≈40% ink — the "very faint" end shiki asked for,
- * level with `--text-faint`, this renderer's third-tier text step.
- *
- * Identity only, per the shared-component rule: placement and spacing belong to
- * the consumer's status slot. The rail places it beside the count; the channel
- * rows place it beside the name (shiki 2026-08-09), like the workspace row.
- */
 export function MutedMarker(): JSX.Element {
   return <BellOff className="size-3 shrink-0 opacity-60" role="img" aria-label="Muted" />;
 }
@@ -487,40 +340,25 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         {...buttonProps}
         type="button"
         onClick={onClick}
-        className={
-          // `leading-[16px]` matches the icon container's literal-px
-          // height (16px avatar via AgentAvatar / HumanRowIcon). Without
-          // it `text-sm`'s ~20px line-height would inflate the icon
-          // wrapper's line-box past the avatar, leaving the avatar and
-          // the title text on subtly different vertical centers
-          // (#task:912 review round 5: shiki measured icon-wrapper 16×20
-          // vs avatar 16×16, name height 17.5 → ~2px misalignment).
-          // The rest of the nav tree pins the SAME 16px as `leading-4`
-          // (#task:1946, shiki `2uEqqwZpm372oo-D`) — grep both forms.
-          // `stacked` rows are two lines, so they need more vertical
-          // padding than the compact single-line default.
-          "sidebar-row-border flex w-full items-center gap-2 border px-2 text-left text-sm leading-[16px] transition-colors " +
-          (stacked ? "py-2 " : "py-1.5 ") +
-          sidebarRowStateClass(selected) +
-          (className ? ` ${className}` : "")
-        }
+        className={cn(
+          "sidebar-row-border flex w-full items-center gap-2 border px-2",
+          "text-left text-sm leading-[16px] transition-colors",
+          stacked ? "py-2" : "py-1.5",
+          sidebarRowStateClass(selected),
+          className,
+        )}
       >
         {icon ? (
-          // `leading-none` neutralizes any inherited line-height on the
-          // wrapper so its height collapses to its content (the 16×16
-          // avatar/glyph). Belt-and-braces with `leading-[16px]` on the
-          // button so the wrapper is pinned to 16px regardless of any
-          // future line-height change above.
           <span className="inline-flex shrink-0 items-center leading-none text-text-muted">
             {icon}
           </span>
         ) : null}
         <span
-          className={
-            "flex min-w-0 flex-1 " +
-            (stacked ? "flex-col gap-0.5 " : "gap-1.5 ") +
-            (badge && badge > 0 && !selected ? "font-semibold text-text-primary" : "")
-          }
+          className={cn(
+            "flex min-w-0 flex-1",
+            stacked ? "flex-col gap-0.5" : "gap-1.5",
+            badge && badge > 0 && !selected && "font-semibold text-text-primary",
+          )}
         >
           <span className="truncate">{title}</span>
           {stacked ? (
@@ -542,7 +380,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         ) : status ? (
           <span
             data-status-pip
-            className={"size-1.5 rounded-[var(--pill-radius)] " + STATUS_DOT[status]}
+            className={cn("size-1.5 rounded-[var(--pill-radius)]", STATUS_DOT[status])}
           />
         ) : null}
       </button>
@@ -578,35 +416,6 @@ interface ConversationRowLayoutProps extends Omit<
   children: ReactNode;
 }
 
-/**
- * One conversation row's layout — the skeleton behind the in-tree `ChannelRow`
- * and the STARRED `FavoriteRow`. It owns the row box (height, the per-theme
- * border, the glyph column, the selection/hover paint) and the full-width name
- * button; the consumer owns the content and its own wrappers (context menu,
- * sortable `<li>`).
- *
- * Scope is the CONVERSATION rung, which is why it is named for the entity and not
- * for the tree: both consumers render open- or fixed-roster conversations and nothing
- * else. **The container header row deliberately stays out** — it is a
- * different rung (`h-7`, `sidebar-row-gutter` instead of the state-painted
- * `sidebar-row-border`, its own ink) and it needs siblings BESIDE the name button
- * (caret, hover actions). Stretching this layout over it would turn it into a
- * switch on entity species, which is how a shared primitive starts hurting whoever
- * adopts it next; the row it would save is one `<div>`.
- *
- * `SidebarRow` is the OTHER row family and stays separate: a flat list's row is a
- * single `<button>` with auto height, so it has no container to place siblings in
- * and no glyph column to choose.
- *
- * MUST stay a `forwardRef` that spreads the rest of its props onto the row `<div>`:
- * both consumers hand this element to `AppContextMenu`, i.e. to a Radix
- * `Trigger asChild`, which opens the menu by cloning the element with its own
- * `ref` + `onContextMenu`/pointer handlers. A plain function component drops both
- * SILENTLY — right-click just stops working, with nothing failing at the type level
- * (#task:1957 regression, shiki 2026-08-10: 「抽离了 ConversationRow 之后 context
- * menu 丢了」). `title` / `children` / `className` are excluded from the spread
- * because this layout owns them.
- */
 export const ConversationRowLayout = forwardRef<HTMLDivElement, ConversationRowLayoutProps>(
   function ConversationRowLayout(
     { selected, column, draggable, title, onSelect, children, ...rest },
@@ -619,27 +428,13 @@ export const ConversationRowLayout = forwardRef<HTMLDivElement, ConversationRowL
         // (`data-row-selected`, `className`) can never be clobbered by a wrapper.
         {...rest}
         data-row-selected={selected || undefined}
-        className={
-          "sidebar-row-border flex h-8 w-full items-stretch border pr-2 " +
-          (column === "nested" ? NESTED_GLYPH_INSET : OUTER_GLYPH_INSET) +
-          " " +
-          // No `transition-colors`: selected/hover switch instantly (#task:1162).
-          // Selected is a discrete, already-committed state — fading it over 150ms
-          // is what read as the leaving-row "flicker" (and the entering row "slow to
-          // light up"). A discrete state must commit instantly; only hover (a
-          // pointer-driven continuous affordance) ever earned the fade, and the cost
-          // of keeping it (the whole drag-time colour-freeze apparatus) wasn't worth
-          // it. Hover now switches instantly too.
-          sidebarRowStateClass(selected) +
-          (draggable ? " cursor-grab select-none active:cursor-grabbing" : "")
-        }
+        className={cn(
+          "sidebar-row-border flex h-8 w-full items-stretch border pr-2",
+          column === "nested" ? NESTED_GLYPH_INSET : OUTER_GLYPH_INSET,
+          sidebarRowStateClass(selected),
+          draggable && "cursor-grab select-none active:cursor-grabbing",
+        )}
       >
-        {/* The name button grows to fill the row, so the whole width is clickable.
-            `font-medium` is the ROW rung of the sidebar's type ladder (`font-bold`
-            belongs to the section LABEL, never to a row — shiki 2026-08-10); the
-            matching ink, `text-text-secondary`, arrives on the container from
-            `sidebarRowStateClass`. `leading-4` pins the 16px line box so the 16px
-            identity glyph and the title share one vertical centre (#task:1946). */}
         <button
           type="button"
           onClick={onSelect}

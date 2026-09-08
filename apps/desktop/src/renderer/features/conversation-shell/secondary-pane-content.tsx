@@ -4,7 +4,7 @@ import { ThreadPanel } from "@/components/layout/ThreadPanel";
 import { ChannelThreadsPanel } from "@/components/layout/ChannelThreadsPanel";
 import { ChannelAttachmentsPanel } from "@/components/layout/ChannelAttachmentsPanel";
 import { TaskDetailPanel } from "@/components/tasks/TaskDetailPanel";
-import { AgentView } from "@/features/agents/AgentView";
+import { AgentView } from "@/features/agent-shell/components/agent-view";
 import { SideUnresolvedPlaceholder } from "@/components/layout/SideUnresolvedPlaceholder";
 import { ConversationPaneCapabilitiesProvider } from "@/features/conversations/pane-capabilities-context";
 import type { SecondaryPaneModel } from "./pane-render-models";

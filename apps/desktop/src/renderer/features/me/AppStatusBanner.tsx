@@ -1,25 +1,3 @@
-/**
- * `#task:1462` — the single app-status banner slot.
- *
- * Both the backend-unreachable signal (`useBackendUnreachableSnitch`) and
- * the outbound-protocol skew signal (`describeProtocolSkew`) want the same
- * top-center floating slot. They are different axes and can briefly
- * co-exist, so they must NOT be two components fighting over one `fixed`
- * coordinate (the earlier split did exactly that). This component owns the
- * slot; `selectAppStatusBanner` decides which message wins
- * (`backend_unreachable > protocol_skew`).
- *
- * Boundary (inherited from the former `BackendUnreachableBanner`, Cindy
- * `MqA4uoNcRByKcf9E`): mount in `RegisteredAppShell`, NOT App root —
- * boot-time unreachability is `BackendUnreachableGate`'s full-screen job;
- * this is the non-blocking mid-session arm. The user keeps full access to
- * history / navigation / settings; the banner only informs.
- *
- * Presentation-only: reachability state lives in the snitch; the skew copy
- * matrix lives in `describeProtocolSkew`; the compat field is polled by the
- * App-level `useBackendInfoSnapshot({ pollProtocolCompatibility: true })`
- * observer and read here from the shared cache.
- */
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useBackendInfoSnapshot } from "@/features/hosts/hooks";

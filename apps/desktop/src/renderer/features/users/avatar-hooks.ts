@@ -4,7 +4,7 @@ import { useUsersById } from "./hooks";
 
 /**
  * Avatar fetch hooks for human users. Mirror the agent hooks
- * (`apps/desktop/src/renderer/features/agents/avatar-hooks.ts`): turn a stored
+ * (`apps/desktop/src/renderer/features/agent-shell/hooks/avatar-hooks.ts`): turn a stored
  * `avatar_url` (or a user id resolved against the directory) into a browser
  * object URL by delegating to the app-session avatar cache
  * (`@/lib/avatar-blob-cache`), which owns the URL's lifetime and fetches each

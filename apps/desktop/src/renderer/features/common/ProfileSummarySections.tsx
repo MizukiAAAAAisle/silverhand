@@ -1,37 +1,6 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
-/**
- * Profile panel building blocks shared by the agent and human profile
- * cards. Replaces the previous form-row pattern (120px label grid
- * across every field) — that pattern read as a settings sheet rather
- * than a profile summary, and stacking everything in a single rhythm
- * made it hard to skim. The new shape:
- *
- *   <ProfileSection title="Identity"> [editor-ish or display content] </ProfileSection>
- *   <ProfileSection title="Capabilities">
- *     <ProfileFieldGrid>
- *       <ProfileField label="Runtime">…</ProfileField>
- *       <ProfileField label="Model">…</ProfileField>
- *       <ProfileField label="Description" full>…</ProfileField>
- *     </ProfileFieldGrid>
- *   </ProfileSection>
- *   <ProfileSection title="Metadata" muted>
- *     <MetadataList items={…} />
- *   </ProfileSection>
- *
- * Sections are bordered cards (one per concept), fields inside a
- * section are stacked label-on-top in a 2-column wrap grid, metadata
- * is a tighter `<dl>`-style list because IDs/timestamps don't need
- * field chrome.
- *
- * The primitives are deliberately presentation-only — they do NOT own
- * any state or commit logic; the agent/human cards keep their existing
- * `useUpdateAgent` / `useUpdateProfile` mutations and pass editors in
- * as `children`. That keeps codex-specific selects, runtime-blocked
- * disables, and avatar pickers untouched.
- */
-
 export interface ProfileSectionProps {
   title: string;
   /** Rendered inline immediately after the title — for a small edit
@@ -78,14 +47,7 @@ export function ProfileSection({
       <div
         data-panel-card="profile-section"
         className={cn(
-          "border border-border-subtle bg-bg-floating/50 p-4",
-          // Hover affordance: subtle → stronger border to give the
-          // section card a "alive" feel. Forza6 theme amplifies this
-          // into the poster-sticker hover (gray → ink near-black) via
-          // its component overrides; warm stays soft. Radius lives in
-          // global.css under the `[data-panel-card='profile-section']`
-          // hook (drives off `--profile-section-radius`) — do not add
-          // a `rounded-*` class or inline `border-radius` here. #task:814.
+          "border border-border-subtle bg-bg-floating/50 p-3",
           "transition-colors duration-150 hover:border-border",
         )}
       >
@@ -140,19 +102,6 @@ export interface MetadataItem {
   mono?: boolean;
 }
 
-/**
- * Compact `<dl>` list for IDs, timestamps, host ids — values that the
- * user reads but rarely interacts with. Kept tight on purpose so the
- * Metadata section doesn't take more visual weight than Capabilities.
- *
- * v6.8 (#task:917): `data-metadata-list` hook on the `<dl>` lets the
- * forza6 theme paint label-column alignment / HUD typography without
- * leaking theme code into the base structure. All values get
- * `tabular-nums` so dates and ID strings align across rows (zero
- * effect on mono values which are already tabular; helps the non-mono
- * date values most). Labels get a `data-metadata-label` hook for the
- * same reason.
- */
 export function MetadataList({ items }: { items: MetadataItem[] }): JSX.Element {
   return (
     <dl data-metadata-list className="divide-y divide-border-subtle/60">

@@ -287,7 +287,9 @@ describe("ChannelView — read-cursor cache-driven / gate-(b) (#task:1255 P1c)",
 
 describe("AgentActivityTimeline — pure reader / gate-(b) (#task:1255 P1c #2)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../features/agents/AgentActivityTimeline.tsx", import.meta.url)),
+    fileURLToPath(
+      new URL("../features/agent-shell/components/agent-activity-timeline.tsx", import.meta.url),
+    ),
     "utf8",
   );
 
@@ -303,7 +305,9 @@ describe("AgentActivityTimeline — pure reader / gate-(b) (#task:1255 P1c #2)",
 
 describe("useAgentActivityFeed — read-inert content cache (#task:1255 P1c #2)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../features/agents/useAgentActivityFeed.ts", import.meta.url)),
+    fileURLToPath(
+      new URL("../features/agent-shell/hooks/use-agent-activity-feed.ts", import.meta.url),
+    ),
     "utf8",
   );
 
@@ -359,7 +363,9 @@ describe("conversation-scope subscribe whitelist (#task:1255 P2 step-3)", () => 
 
   it("useAgentActivityFeed subscribes the SIDE scope", () => {
     const src = readFileSync(
-      fileURLToPath(new URL("../features/agents/useAgentActivityFeed.ts", import.meta.url)),
+      fileURLToPath(
+        new URL("../features/agent-shell/hooks/use-agent-activity-feed.ts", import.meta.url),
+      ),
       "utf8",
     );
     expect(src).toContain("wsConversationSideScope(");

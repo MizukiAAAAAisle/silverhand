@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { SectionLayer } from "./SectionLayer";
-import { SectionShell } from "./SectionShell";
+import { Sidebar } from "./sidebar";
 import { paneChrome } from "./pane-chrome";
 
 export interface DirectoryLifecycle {
@@ -28,9 +28,9 @@ export function DirectoryShell({
 
   return (
     <SectionLayer visible={visible}>
-      <SectionShell name={name} width="var(--sidebar-width)" sidebar={sidebar} splitter={splitter}>
+      <Sidebar name={name} width="var(--sidebar-width)" sidebar={sidebar} splitter={splitter}>
         {children}
-      </SectionShell>
+      </Sidebar>
     </SectionLayer>
   );
 }

@@ -2,10 +2,10 @@ import { DirectorySidebar } from "@/components/layout/directory-shell";
 import { Monitor, Plus, User, Users } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import type { AgentDto, HostDto } from "@silverhand/shared";
-import { useAgents, useAgentPresence } from "@/features/agents/hooks";
-import { projectPresence } from "@/features/agents/presence-projection";
-import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
-import { CreateAgentDialog } from "@/features/agents/CreateAgentDialog";
+import { useAgents, useAgentPresence } from "@/features/agent-shell/hooks/hooks";
+import { projectPresence } from "@/features/agent-shell/model/presence-projection";
+import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
+import { CreateAgentDialog } from "@/features/agent-shell/components/create-agent-dialog";
 import { useHostsQuery } from "@/features/hosts/hooks";
 import { hostDisplayName, UNKNOWN_COMPUTER_LABEL } from "@/features/hosts/host-display";
 import {

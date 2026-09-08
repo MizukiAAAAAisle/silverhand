@@ -12,7 +12,7 @@ import {
 // cache primitives, projection seam, agent-status buffer, unread badges, and
 // error formatting moved to sibling modules; re-exported below so the existing
 // import surface (`@/features/channels/hooks`) is unchanged.
-import { agentRuntimeStateKey } from "@/features/agents/hooks";
+import { agentRuntimeStateKey } from "@/features/agent-shell/hooks/hooks";
 import {
   useInfiniteQuery,
   useMutation,

@@ -38,18 +38,6 @@
   background-color: var(--forza6-ink);
 }
 
-[data-theme="forza6"] aside[data-sidebar] section > header {
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-[data-theme="forza6"] aside[data-sidebar] [data-sidebar-group-heading] {
-  font-family: var(--font-display);
-  font-size: 14px;
-  letter-spacing: 0.04em;
-  color: var(--text-primary);
-}
-
 [data-theme="forza6"] [data-member-chip="add"] {
   background-color: var(--bg-avatar-ground);
 }

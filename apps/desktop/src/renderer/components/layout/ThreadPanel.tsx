@@ -47,8 +47,8 @@ import {
 import { isCommittedMessage } from "@/features/channels/pending-message";
 import type { AttachmentSnapshot, MessageSeq } from "@silverhand/shared";
 import type { ComposerDirectory } from "@/features/conversations/pane-mode";
-import { useAgents } from "@/features/agents/hooks";
-import { useAgentAvatarObjectUrls } from "@/features/agents/avatar-hooks";
+import { useAgents } from "@/features/agent-shell/hooks/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useJoinChannel } from "@/features/workspaces/hooks";
 import type { ChannelGate } from "@/features/channels/membership";
 import { classifyTopShift } from "@/components/layout/messageListVirtualization";

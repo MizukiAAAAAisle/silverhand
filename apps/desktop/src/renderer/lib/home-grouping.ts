@@ -108,26 +108,6 @@ export interface SelectedConversation {
   starred: StarMembership;
 }
 
-/**
- * Does this workspace branch hold the open conversation's ROW — i.e. may a
- * COLLAPSED branch keep that one row on screen, and pay for the three queries that
- * takes (#task:1901, @Cindy MUST FIX)?
- *
- * The criterion is MEMBERSHIP AFTER exclusive-home, not `workspaceId` equality. A
- * starred conversation is no longer a member of its parent's list (#task:1888 —
- * `excludeStarredChannels` drops it) and its row lives in STARRED, so the parent
- * branch has nothing to keep: matching on the parent alone would mount channels /
- * sort / modes / unread only to find no row at the end of it. The row must be kept
- * by exactly the container that actually renders it, which is the same rule that
- * decides where the row IS.
- *
- * `'unknown'` does NOT mount either: membership is the whole precondition, so
- * guessing it is guessing the answer. The cost is that on a cold start a collapsed
- * branch's one row appears after the favorites list resolves rather than in
- * parallel with it; the alternative — guess "unstarred", mount, then unmount — is
- * the exact waste this predicate exists to remove, and it cannot be taken back once
- * the requests are out.
- */
 export function branchHoldsSelectedRow(
   workspaceId: string,
   selected: SelectedConversation,
@@ -137,33 +117,6 @@ export function branchHoldsSelectedRow(
   return selected.workspaceId === workspaceId;
 }
 
-/**
- * The rows a COLLAPSED workspace branch renders — the union of TWO independent
- * inputs, never one derived from the other (#task:1939, @Cindy MUST FIX).
- *
- * `isSelected` — the open row is ALWAYS kept, unread or not. That is the
- * pre-existing #task:1889 exception ("the selected row is always visible"), and it
- * has NOTHING to do with unread: a branch mounts to keep this row even when there
- * is no unread anywhere in it.
- *
- * `pokeUnread` — the SEPARATE poke gate: only when it is on are the branch's `loud`
- * unread rows revealed too. It MUST be the branch's WAKE GATE (the lit workspace
- * attention badge), NOT "is this branch collapsed": a branch can be collapsed-and-
- * mounted purely to keep the selected row (`branchHoldsSelectedRow`) while its wake
- * badge is dark, and the row-level `loud` verdict lives in a DIFFERENT cache from
- * the badge (they invalidate on different paths and neither refetches over time —
- * activity-lifecycle §10). Gating the poke on "collapsed" would then reveal a stale
- * `loud` sibling with no wake signal, breaking §8's "unread reveal is woken ONLY by
- * a non-zero badge". So the two inputs are kept orthogonal and the caller feeds the
- * wake gate here (by construction: poke ⟹ badge lit), not `!expanded`.
- *
- * `isLoud` MUST be the SAME `channelRowBadge`-`loud` verdict the row paints (Alice's
- * same-source constraint): the reveal set is then a subset of exactly what the wake
- * badge sums, so a `quiet` row never pokes out. `items` is the post-
- * `excludeStarredChannels` list, so a starred loud row is already gone — the
- * accepted empty-reveal case (#task:1888): its star counts toward the wake badge but
- * it renders in STARRED, not here.
- */
 export function collapsedRevealRows<T>(
   items: readonly T[],
   opts: {
@@ -175,25 +128,6 @@ export function collapsedRevealRows<T>(
   return items.filter((c) => opts.isSelected(c) || (opts.pokeUnread && opts.isLoud(c)));
 }
 
-/**
- * Which workspace branches a COLLAPSED group reveals (#task:1939, @Cindy MUST FIX).
- *
- * A collapsed GROUP must not hide a new message any more than a collapsed BRANCH
- * does: the WORKSPACES / DM header paints no unread number either, so a poke is the
- * only signal and it has to survive one level further up. The revealed set is exactly
- * the branches an EXPANDED group already keeps mounted while collapsed — the one
- * `holdsSelection` and any that `isAwake` (wake badge lit) — and NOTHING else. A
- * quiet, unselected branch is NOT here: gating on the whole membership would mount
- * every branch's queries just because the group closed (constraint ②), and the poke
- * is meant to cost only what a lit badge already costs.
- *
- * The `holdsSelection` branch comes FIRST so the current context stays on top and can
- * render headerless (the titlebar names the workspace you are in); the rest keep input
- * (sort) order, each needing its own label to stay attributable. `isAwake` is the
- * SAME `unread > 0` wake gate the branch level poke is gated on, so the two levels
- * reveal by one rule. A starred selection makes `holdsSelection` false everywhere
- * (its row is STARRED's, #task:1888), so it is never force-mounted here.
- */
 export function collapsedGroupRevealBranches<T>(
   workspaces: readonly T[],
   opts: { holdsSelection: (w: T) => boolean; isAwake: (w: T) => boolean },

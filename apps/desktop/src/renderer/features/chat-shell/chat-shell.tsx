@@ -1,10 +1,10 @@
 import { useChatBrowse } from "./use-chat-browse";
 import { useWorkspaceActions } from "./use-workspace-actions";
-import { Sidebar } from "@/components/layout/Sidebar";
+import { ChatSidebar } from "@/features/chat-shell/sidebar/chat-sidebar";
 import { SectionLayer } from "@/components/layout/SectionLayer";
-import { SavedListView } from "@/components/layout/SavedListView";
-import { SearchPanel } from "@/components/layout/SearchPanel";
-import { ArchivedChannelsPanel } from "@/components/layout/ArchivedChannelsPanel";
+import { SavedListView } from "@/features/chat-shell/saved-list-view";
+import { SearchPanel } from "@/features/chat-shell/search-panel";
+import { ArchivedChannelsPanel } from "@/features/chat-shell/archived-channels-panel";
 import { VerticalSplitter } from "@/components/layout/VerticalSplitter";
 import {
   SIDEBAR_ANIMATE_LAYOUT,
@@ -108,7 +108,7 @@ export function ChatShell({
                   data-state={workspaceSidebarPane.surfaceState}
                   style={{ width: "var(--sidebar-width)" }}
                 >
-                  <Sidebar
+                  <ChatSidebar
                     workspaces={workspaces.map((w) => ({
                       id: w.id,
                       name: w.name,

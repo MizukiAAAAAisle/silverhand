@@ -1,0 +1,367 @@
+import { useMemo, type ReactNode } from "react";
+import {
+  type ChannelAttentionMode,
+  type ChannelAttentionModeRowDto,
+  type ConversationVisibility,
+} from "@silverhand/shared";
+import { Plus } from "lucide-react";
+import { useSortable } from "@dnd-kit/sortable";
+import { ChannelRow } from "./channel-row";
+import { AppContextMenu } from "@/components/menus/AppContextMenu";
+import { ChannelRowMenuItems } from "./channel-row-menu-items";
+import { NESTED_GLYPH_INSET } from "@/components/layout/sidebar-shared";
+import { SortModeMenu } from "@/components/layout/SortModeMenu";
+import {
+  SortableGroup,
+  animateLayoutChanges,
+  sortableItemStyle,
+  useListDragSort,
+} from "@/components/layout/list-drag-sort";
+import {
+  useArchiveChannel,
+  useChannelSortState,
+  useChannelsForWorkspace,
+  useSetSortMode,
+  useStarChannel,
+} from "@/features/workspaces/hooks";
+import { useMessageUnreadCounts } from "@/features/channels/message-unread";
+import { useWorkspaceAttentionModes } from "@/features/attention/hooks";
+import { channelRowBadge, type RowBadge } from "@/lib/attention-mode";
+import { sortModeOf } from "@/lib/viewer-sort";
+import { collapsedRevealRows, excludeStarredChannels } from "@/lib/home-grouping";
+
+interface ChannelNode {
+  id: string;
+  title: string;
+  roster_policy: "open" | "fixed";
+  visibility: ConversationVisibility;
+  closed_at: number | null;
+  starred_at: number | null;
+  archived_at: number | null;
+  created_at: number;
+  is_member?: boolean;
+}
+
+export function ChannelSortMenu({ workspaceId }: { workspaceId: string }): JSX.Element {
+  const { data: viewerSort } = useChannelSortState(workspaceId, true);
+  const setSortMode = useSetSortMode();
+  const listKey = `channels:${workspaceId}`;
+  return (
+    <SortModeMenu
+      mode={sortModeOf(viewerSort)}
+      onChange={(m) => setSortMode.mutate({ list_key: listKey, mode: m })}
+    />
+  );
+}
+
+interface WorkspaceChannelsProps {
+  workspaceId: string;
+  /** The conversation the tree is currently FILLing, or null. One id for the
+   *  whole tree (the spec's single-highlight rule), so at most one row in one
+   *  workspace can match. */
+  selectedChannelId: string | null;
+  onSelectChannel: (channelId: string, workspaceId: string) => void;
+  /** Create a channel in THIS workspace — the empty-state action, and the
+   *  compensation for `/chat/w/:id` having no highlight of its own. */
+  onCreateChannel: (workspaceId: string) => void;
+  /** COLLAPSED partial render: show only a subset — no drag, no sort, no empty-state
+   *  action (see the file header). Always keeps the open channel's row; a starred
+   *  selection is excluded and shows in STARRED, so it may render nothing. Both a
+   *  collapsed SECTION and a collapsed BRANCH pass this. */
+  collapsed?: boolean;
+  /** Poke this branch's `loud` unread rows out on top of the kept selection
+   *  (#task:1939). Read ONLY while `collapsed`. MUST be the branch's WAKE GATE (the
+   *  lit workspace badge), never `!expanded`: a branch collapses-and-mounts to keep
+   *  the selection with a DARK badge, and gating the poke on "collapsed" would reveal
+   *  a stale `loud` sibling with no wake signal (`collapsedRevealRows` docblock). */
+  pokeUnread?: boolean;
+  /** A leading node (a workspace caption) shown ABOVE the revealed rows in the
+   *  collapsed render — but ONLY when the reveal set is non-empty (#task:1939, @Cindy
+   *  MUST FIX). It is co-fated with the rows on purpose: the collapsed GROUP mounts a
+   *  branch on its WAKE GATE (`workspace.unread > 0`, an aggregate), which can be lit
+   *  while this branch's row-level reveal is empty — its only loud row is STARRED
+   *  (moved out), or the row queries are loading / failed. Rendering the caption
+   *  beside the branch (before this component) would then leave a lone title with no
+   *  channels under it — a visible signal with nothing to point at, breaking
+   *  "starred-only only spins, shows no signal" and "loading/failure fabricates
+   *  nothing". Passing it HERE binds it to the same `revealed.length > 0` gate the
+   *  rows use, so no-rows ⟹ no-caption by construction. Only the collapsed GROUP
+   *  passes it (to attribute a non-current branch's rows); the branch level does not. */
+  revealCaption?: ReactNode;
+}
+
+export function WorkspaceChannels({
+  workspaceId,
+  selectedChannelId,
+  onSelectChannel,
+  onCreateChannel,
+  collapsed = false,
+  pokeUnread = false,
+  revealCaption,
+}: WorkspaceChannelsProps): JSX.Element {
+  const { data: items = [] } = useChannelsForWorkspace(workspaceId, true);
+  const { data: viewerSort } = useChannelSortState(workspaceId, true);
+
+  const { data: attentionModes } = useWorkspaceAttentionModes(workspaceId);
+  const { data: unreadData } = useMessageUnreadCounts(workspaceId, true);
+  const starChannel = useStarChannel(workspaceId);
+  const archiveChannel = useArchiveChannel(workspaceId);
+
+  const attentionByChannel = useMemo(
+    () => new Map((attentionModes?.channels ?? []).map((c) => [c.conversation_id, c])),
+    [attentionModes],
+  );
+
+  const workspaceMuted = attentionModes?.muted;
+  const unreadByChannel = unreadData?.by_conversation ?? {};
+
+  // `starred_at` is viewer-local sort state, never a channel field (#task:1209).
+  // The old second column got it joined at the composition root; here the join
+  // is local — this subtree already holds both halves of the same cache entry,
+  // and a per-workspace join is what lets many workspaces render at once without
+  // App.tsx keeping one map per workspace.
+  const nodes = useMemo<ChannelNode[]>(() => {
+    const starredAt = new Map<string, number>();
+    for (const e of viewerSort?.entries ?? []) {
+      if (e.starred_at !== null) starredAt.set(e.entity_id, e.starred_at);
+    }
+    return items.map((s) => ({
+      id: s.id,
+      title: s.title,
+      roster_policy: s.roster_policy,
+      visibility: s.visibility,
+      is_member: s.is_member,
+      closed_at: s.closed_at,
+      starred_at: starredAt.get(s.id) ?? null,
+      archived_at: s.archived_at,
+      created_at: s.created_at,
+    }));
+  }, [items, viewerSort]);
+
+  const homeTopLevel = excludeStarredChannels(nodes);
+  const { orderedGroups, onReorder } = useListDragSort<"channels", ChannelNode>({
+    listKey: `channels:${workspaceId}`,
+    groups: { channels: homeTopLevel },
+    viewerSort,
+    getId: (c) => c.id,
+    getCreatedAt: (c) => c.created_at,
+  });
+  const ordered = orderedGroups.channels;
+
+  if (collapsed) {
+    const revealed = collapsedRevealRows(ordered, {
+      pokeUnread,
+      isSelected: (c) => c.id === selectedChannelId,
+      isLoud: (c) =>
+        channelNodeBadge(c, attentionByChannel.get(c.id), unreadByChannel[c.id] ?? 0)?.tier ===
+        "loud",
+    });
+    if (revealed.length === 0) return <></>;
+    return (
+      <>
+        {revealCaption}
+        {revealed.map((c) => (
+          <li key={c.id}>
+            <WorkspaceChannelRow
+              channel={c}
+              selected={c.id === selectedChannelId}
+              onClick={() => onSelectChannel(c.id, workspaceId)}
+              onStar={(channelId, starred) => starChannel.mutate({ channelId, starred })}
+              onArchive={(channelId, archived) =>
+                archiveChannel.mutate({ channelId, archived, workspaceId })
+              }
+              archivePending={archiveChannel.isPending}
+              unreadCount={unreadByChannel[c.id] ?? 0}
+              attention={attentionByChannel.get(c.id)}
+              workspaceMuted={workspaceMuted}
+            />
+          </li>
+        ))}
+      </>
+    );
+  }
+
+  if (ordered.length === 0) {
+    // An expanded workspace with nothing to show offers the action instead of a
+    // dead "No channels yet" line — the same affordance `/chat/w/:id` needs.
+    return (
+      <li>
+        <button
+          type="button"
+          onClick={() => onCreateChannel(workspaceId)}
+          className={
+            "flex h-7 w-full items-center gap-1.5 text-left text-xs text-text-muted hover:text-text-primary " +
+            NESTED_GLYPH_INSET
+          }
+        >
+          <Plus className="size-3.5 shrink-0" />
+          <span className="truncate">New channel</span>
+        </button>
+      </li>
+    );
+  }
+
+  const rowProps = {
+    selectedChannelId,
+    onSelect: (channelId: string) => onSelectChannel(channelId, workspaceId),
+    onStar: (channelId: string, starred: boolean) => starChannel.mutate({ channelId, starred }),
+    onArchive: (channelId: string, archived: boolean) =>
+      archiveChannel.mutate({ channelId, archived, workspaceId }),
+    archivePending: archiveChannel.isPending,
+    unreadByChannel,
+    attentionByChannel,
+    workspaceMuted,
+  };
+
+  return (
+    <SortableGroup ids={ordered.map((c) => c.id)} onReorder={(next) => onReorder("channels", next)}>
+      {ordered.map((channel) => (
+        <SortableChannelItem key={channel.id} channel={channel} {...rowProps} />
+      ))}
+    </SortableGroup>
+  );
+}
+
+interface RowChildProps {
+  selectedChannelId: string | null;
+  onSelect: (id: string) => void;
+  onStar: (channelId: string, starred: boolean) => void;
+  onArchive: (channelId: string, archived: boolean) => void;
+  archivePending: boolean;
+  unreadByChannel: Record<string, number>;
+  /** This workspace's channel tiers, keyed by conversation id. Missing key ≡ the
+   *  row has no tier of its own (a `dm_channel`, or the batch hasn't landed). */
+  attentionByChannel: ReadonlyMap<string, ChannelAttentionModeRowDto>;
+  /** The workspace suppressor, `undefined` until the tier batch resolves. Rows keep
+   *  their own stored tier checked while it is on; only the resolved volume
+   *  changes. */
+  workspaceMuted: boolean | undefined;
+}
+
+function SortableChannelItem({
+  channel,
+  selectedChannelId,
+  onSelect,
+  onStar,
+  onArchive,
+  archivePending,
+  unreadByChannel,
+  attentionByChannel,
+  workspaceMuted,
+}: { channel: ChannelNode } & RowChildProps): JSX.Element {
+  const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({
+    id: channel.id,
+    animateLayoutChanges,
+  });
+  return (
+    <li
+      ref={setNodeRef}
+      style={sortableItemStyle({ transform, transition, isDragging })}
+      className="touch-none"
+      {...attributes}
+      {...listeners}
+    >
+      <WorkspaceChannelRow
+        channel={channel}
+        selected={channel.id === selectedChannelId}
+        onClick={() => onSelect(channel.id)}
+        onStar={onStar}
+        onArchive={onArchive}
+        archivePending={archivePending}
+        unreadCount={unreadByChannel[channel.id] ?? 0}
+        attention={attentionByChannel.get(channel.id)}
+        workspaceMuted={workspaceMuted}
+        draggable
+      />
+    </li>
+  );
+}
+
+/** The unread badge a channel row shows, or `null`. Extracted so the collapsed
+ *  poke-out reveal filter (`WorkspaceChannels`) paints from the EXACT same predicate
+ *  the row does: a row is revealed while collapsed iff the badge it would show is
+ *  `loud`, and `loud` is precisely what a row contributes to its workspace's wake
+ *  badge (`channelRowBadge`'s Σ invariant). Folds in the member gate — a browse-only
+ *  public row (non-member, or an unknown row on a stale payload) has no unread of its
+ *  own — and the `dm_channel`'s unconditional `'all'` tier. Missing/unresolved
+ *  attention leaves `effective_mode` undefined, which `channelRowBadge` renders as
+ *  nothing: a loading batch reveals no rows rather than fabricating unread. */
+function channelNodeBadge(
+  channel: ChannelNode,
+  attention: ChannelAttentionModeRowDto | undefined,
+  unreadCount: number,
+): RowBadge | null {
+  if (channel.is_member !== true) return null;
+  const effectiveMode: ChannelAttentionMode | undefined =
+    channel.roster_policy === "open" ? attention?.effective_mode : "all";
+  return channelRowBadge({
+    effectiveMode,
+    positionalUnread: unreadCount,
+    directedUnread: attention?.directed_unread_count ?? 0,
+  });
+}
+
+function WorkspaceChannelRow({
+  channel,
+  selected,
+  onClick,
+  onStar,
+  onArchive,
+  archivePending,
+  unreadCount,
+  attention,
+  workspaceMuted,
+  draggable,
+}: {
+  channel: ChannelNode;
+  selected: boolean;
+  onClick: () => void;
+  onStar: (channelId: string, starred: boolean) => void;
+  onArchive: (channelId: string, archived: boolean) => void;
+  archivePending: boolean;
+  unreadCount: number;
+  attention?: ChannelAttentionModeRowDto;
+  workspaceMuted: boolean | undefined;
+  draggable?: boolean;
+}): JSX.Element {
+  const isClosed = channel.closed_at !== null;
+  const isArchived = channel.archived_at !== null;
+
+  const badge = channelNodeBadge(channel, attention, unreadCount);
+
+  const isSilenced = attention?.mode === "mute";
+
+  const row = (
+    <ChannelRow
+      selected={selected}
+      column="nested"
+      draggable={draggable}
+      onSelect={onClick}
+      channelTitle={channel.title}
+      visibility={channel.roster_policy === "open" ? channel.visibility : undefined}
+      closed={isClosed}
+      muted={isSilenced}
+      badge={badge}
+    />
+  );
+
+  return (
+    <AppContextMenu trigger={row}>
+      <ChannelRowMenuItems
+        channelId={channel.id}
+        title={channel.title}
+        rosterPolicy={channel.roster_policy}
+        isMember={channel.is_member === true}
+        isArchived={isArchived}
+        starred={false}
+        attention={attention}
+        workspaceMuted={workspaceMuted}
+        onStar={() => onStar(channel.id, true)}
+        onArchive={() => onArchive(channel.id, !isArchived)}
+        archivePending={archivePending}
+      />
+    </AppContextMenu>
+  );
+}
+
+export type { ChannelNode };

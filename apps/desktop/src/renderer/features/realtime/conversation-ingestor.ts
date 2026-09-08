@@ -32,7 +32,7 @@ import {
   appendAgentActivityToCache,
   hasActiveAgentActivityReader,
   reconcileAgentActivityOnSnapshotRequired,
-} from "@/features/agents/useAgentActivityFeed";
+} from "@/features/agent-shell/hooks/use-agent-activity-feed";
 import {
   applyAgentRunStateToCache,
   hasActiveAgentRunStatesReader,
