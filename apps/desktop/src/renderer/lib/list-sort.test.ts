@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sortGroupByMode, type SortableEntry } from "./list-sort";
 
-/** #task:1146 within-group sort. Star/group membership is partitioned by
- *  the caller, so these tests only cover ordering within a single group by
- *  the viewer's chosen mode, plus the determinism guarantees. */
-
 function entry(over: Partial<SortableEntry> & { id: string }): SortableEntry {
   return {
     rank: null,

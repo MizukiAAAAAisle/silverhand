@@ -1,6 +1,5 @@
 /**
- * The document a `.html` attachment preview loads into its sandboxed iframe
- * (#task:2122; shiki + Cindy's B boundary, 2026-08-21).
+ * The document a `.html` attachment preview loads into its sandboxed iframe.
  *
  * The iframe itself is `sandbox="allow-scripts"` with NO `allow-same-origin`,
  * so the frame runs on an OPAQUE origin: author scripts execute (agent mockups
@@ -66,7 +65,7 @@ export const HTML_PREVIEW_CSP = [
 ].join("; ");
 
 /**
- * The trackpad-pinch bridge (#task:2161). The preview lives in an opaque-origin
+ * The trackpad-pinch bridge. The preview lives in an opaque-origin
  * iframe, so a `ctrl+wheel` pinch fires INSIDE the frame and never reaches the
  * host — the image Lightbox's host-side wheel listener cannot see it. This tiny
  * TRUSTED script (host-authored, never author bytes; governed by the CSP above)

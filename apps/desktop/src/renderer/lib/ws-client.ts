@@ -74,7 +74,7 @@ const SATISFIED_PENDING_CAP = 200;
  * singleton. Production code should always use `eventWsClient` (or the
  * top-level `subscribe*` helpers).
  *
- * ── Transport cursor model (Stage-2 #1255 P2 step-4) ────────────────────────
+ * ──────────────────────── Transport cursor model ────────────────────────
  * Per scope the client tracks TWO water marks, not one (docs/event-ws-transport-v1.md
  * §4.1). They exist only to serve different jobs the old single cursor conflated:
  *
@@ -94,8 +94,7 @@ const SATISFIED_PENDING_CAP = 200;
  * every frame; they diverge when a content-gated scope receives a frame that
  * writes no warm content (no reader / off-window no-op) — `received` advances so
  * the stream keeps flowing and gaps stay detectable, the resume floor stays pinned so a
- * resume re-delivers the un-applied frame (idempotent) rather than skipping it
- * (the #1251 class of bug). See docs/event-ws-transport-v1.md §1/§4.1/§5/§6.
+ * resume re-delivers the un-applied frame (idempotent) rather than skipping it.
  */
 export class EventWsClient {
   private ws: WebSocket | null = null;

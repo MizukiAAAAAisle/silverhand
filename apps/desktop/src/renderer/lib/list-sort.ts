@@ -1,31 +1,3 @@
-/**
- * Pure within-group sort for the user-selectable list ordering feature
- * (#task:1146). The renderer partitions a list into its live hard groups
- * (channel sidebar: `starred` / `unstarred`; workspace rail: `agent_space` /
- * `regular` —
- * star is the global Favorites overlay, NOT a rail group, see #task:1252) and
- * applies this helper to EACH
- * group independently, then concatenates the groups in their fixed order.
- * Star / group membership is therefore NOT this helper's concern — it only
- * orders the items handed to it, by the viewer's chosen sort mode.
- *
- * Two modes (server-persisted per viewer + list, see Alice's #task:1147):
- *  - `recent`  — most recently opened/selected by the viewer floats to the
- *                top (`lastAccessedAt` DESC). NOT "most recent activity" —
- *                another person/agent posting must not reorder my sidebar.
- *  - `manual`  — the viewer's drag order (`rank` ASC).
- *
- * Items with no signal for the active mode (a brand-new channel never
- * opened, or never dragged so `rank` is null) sort AFTER the items that do,
- * by `createdAt` ASC — i.e. they fall back to the app's existing default
- * order (oldest-first) instead of jumping to the top. In manual mode such
- * an item gets a real `rank` the first time it's dragged.
- *
- * Fully deterministic: every comparison ends in a `createdAt` then `id`
- * tiebreak, so the result never depends on the engine's sort stability or
- * on input order.
- */
-
 export type ListSortMode = "recent" | "manual";
 
 export interface SortableEntry {

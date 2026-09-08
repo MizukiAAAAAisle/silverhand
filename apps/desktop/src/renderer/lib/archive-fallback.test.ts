@@ -44,10 +44,6 @@ describe("pickDefaultChannel — excludes a recently-archived primary", () => {
   });
 
   it("does NOT re-select the just-archived channel even if the stale list still contains it", () => {
-    // The headline #task:1145 regression: archiving the ONLY active
-    // top-level channel clears to empty state, but the auto-select effect
-    // runs before invalidation drops the row — without exclusion it would
-    // re-open the archived channel. With exclusion → null → stay empty.
     expect(pickDefaultChannel(list("a"), "a")).toBeNull();
   });
 

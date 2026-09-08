@@ -1,29 +1,3 @@
-/**
- * Home-list projections under the Favorites model (#task:1254, re-scoped to
- * CONVERSATIONS by #task:1888, and to conversations ONLY by #task:1900).
- *
- * `starred_at` now means exactly one thing anywhere in the app: a channel / DM
- * channel star MOVES the row out of its parent's channel list into the GLOBAL
- * STARRED list (`FavoritesPanel`). Exclusive — the row renders THERE only, never in
- * both places. See `excludeStarredChannels`.
- *
- * Containers (workspace / agent space) have NO star (shiki, 2026-08-08): their
- * order is `f(mode, rank)` and nothing else, so no projection here ever reads a
- * container's `starred_at`. Why the container reading was retired:
- * docs/app-layout.md §4.5 (#task:1900).
- *
- * SINGLE SOURCE, NO DRIFT: every projection reads each item's `starred_at`, which
- * the composition root (App.tsx) joins onto every item from the SAME
- * `viewer_sort.entries[].starred_at` the backend's reorder validation uses
- * (`SortRepo.listStarredEntityIds`). Display membership and server validation
- * therefore agree by construction — the renderer never joins `GET /api/favorites`
- * back onto the channel list or keeps a second starred set.
- *
- * Why this matters to DRAG, not just to looks: `routes/sort.ts` accepts a
- * whole-group reorder only when `ordered_ids` is EXACTLY the group's live members,
- * so the channel exclusion must happen BEFORE `useListDragSort` sees the list.
- */
-
 import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
 
 /** Whether an item is starred — the one predicate the projections turn on. */

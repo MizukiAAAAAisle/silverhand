@@ -24,11 +24,6 @@ let cachedInfo: BackendInfo | null = null;
  *     show a "can't reach <server>" gate, not a generic "something
  *     went wrong" — the network DID fail, but the SOFTWARE is fine
  *     and a retry/profile-clear can recover.
- *
- * Pre-PR-2 callers used to read `(err as Error).message` (a string of
- * the form `"403 Forbidden: {body}"`); that still works because the
- * `message` field keeps the same shape. New code should switch to
- * `err instanceof ApiError && err.status === 404` instead.
  */
 export class ApiError extends Error {
   readonly kind: "http" | "backend_unreachable";
@@ -130,13 +125,7 @@ function headerValue(headers: Record<string, string>, name: string): string | nu
 
 function assertOk(res: BackendProxyResponse): void {
   if (res.status >= 200 && res.status < 300) return;
-  // D4.a Commit 5d-fixup (Cindy P1-2): `status: 0` is the typed
-  // sentinel main-process proxy uses to report backend
-  // unreachability — DO NOT let it fall through as a "normal"
-  // HTTP error (the message would say "0 Network Error: ..." which
-  // a renderer might wrongly route to a generic toast). Tag it
-  // `kind: 'backend_unreachable'` so callers branching on
-  // `err.kind` get a typed signal.
+
   if (res.status === 0) {
     throw new ApiError(
       0,

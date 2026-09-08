@@ -1,60 +1,6 @@
 import { useSyncExternalStore } from "react";
-
 import { fetchAttachmentBlob } from "./api";
 
-/**
- * Renderer-side LRU cache of attachment blob object URLs keyed by
- * attachment id.
- *
- * Why this exists:
- *   - Composer registers a URL the moment a file is picked / pasted /
- *     dropped, so the chip preview and the optimistic message both
- *     render the image bytes instantly without a network round-trip.
- *   - MessageItem looks the URL up before falling back to a backend
- *     fetch, so the swap from "optimistic temp message" → "real
- *     persisted message" doesn't trigger a reload (same id, same URL).
- *
- * Content updates (#task:1767 / #task:1769). An attachment's bytes are now
- * mutable in place (creator `file update`): the id is stable but the bytes it
- * serves can change, and `serve()` is `no-store`. A cached object URL is
- * therefore only valid for a GENERATION of the attachment, tracked here as a
- * per-id token `"<epoch>:<revision>"`:
- *   - `revision` mirrors the DTO `content_revision`; the side-channel
- *     `attachment_changed` event bumps the named id's revision precisely.
- *   - `epoch` is a coarse global counter bumped on a side-scope
- *     `snapshot_required` (a reconnect gap that may have dropped an
- *     `attachment_changed` we can't name — see the ingestor). Bumping it
- *     invalidates every cached blob so each visible attachment refetches the
- *     latest bytes; unchanged bytes just re-download cheaply from the local
- *     backend.
- * A cache entry carries the token it was fetched under. A read whose token no
- * longer matches the current token for that id is a MISS (stale), so the next
- * `loadAttachmentBlobUrl` refetches. A late fetch that resolves after its token
- * moved neither writes back nor is returned — it re-drives to the current
- * token. Components re-render on a token change via {@link useAttachmentBlobToken}.
- *
- * Lifecycle ownership rules (also documented in Composer / MessageItem):
- *   - Composer owns a preview URL it created with `URL.createObjectURL`
- *     UNTIL upload succeeds. On success it calls `setAttachmentBlobUrl`,
- *     which transfers ownership to the cache. On upload failure or
- *     pre-upload chip removal, Composer revokes the URL itself.
- *   - MessageItem only READS via `getAttachmentBlobUrl` /
- *     `loadAttachmentBlobUrl`. It must not call revoke directly — the
- *     same URL may be displayed in another row (e.g. message replayed
- *     in a thread pane) or in a Lightbox.
- *   - The cache revokes URLs when (a) explicit `releaseAttachmentPreview`
- *     is called (e.g. when a message is deleted), (b) a fresher URL replaces
- *     it for the same id (upload success / generation refetch), or (c) the LRU
- *     cap is exceeded and the oldest entry is evicted. MessageItem's <img>
- *     guards against use-after-revoke via `onError`, which falls back
- *     to `loadAttachmentBlobUrl` — that misses the cache (we just
- *     revoked) and re-fetches from the backend.
- *
- * Cap rationale: 10MB per-attachment server cap × 128 entries ≈ 1.3GB
- * worst-case memory ceiling. Realistic usage is far lower (most
- * attachments are screenshots <500KB) but the cap stops a long-running
- * session from leaking unbounded blob memory.
- */
 const MAX_ENTRIES = 128;
 
 interface CacheEntry {

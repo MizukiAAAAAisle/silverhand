@@ -24,7 +24,7 @@ describe("htmlPreviewSrcDoc", () => {
     expect(out).toBe(`${HTML_PREVIEW_TRUSTED_PREFIX}${author}</body></html>`);
   });
 
-  // Cindy B1 (2026-08-21): the prior impl scanned for the first `<head>` with a
+  // The prior impl scanned for the first `<head>` with a
   // regex, which is not an HTML parser. These are the three byte shapes that
   // slipped an author-active element in front of the policy. The trusted-prefix
   // construction must place the CSP meta before EVERY author byte regardless.

@@ -1,6 +1,5 @@
 /**
- * Read-cursor advancement decision for the channel mainline (#task:1255 P1c /
- * #task:1244 read-inert axis).
+ * Read-cursor advancement decision for the channel mainline.
  *
  * ChannelView marks a channel read off the mainline CACHE, not off frame
  * arrival — read advancement is visibility/intent-driven, never

@@ -1,6 +1,4 @@
 /**
- * Channel-open precedence (#task:1082).
- *
  * When the user switches into a channel, three signals compete for the
  * secondary pane. The precedence was locked with @Cindy:
  *

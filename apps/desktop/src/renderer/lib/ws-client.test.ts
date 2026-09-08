@@ -10,11 +10,6 @@ vi.mock("./api", () => ({
     local_host_id: "host-local",
     local_host_status: "claimed",
     local_host_ws_attachment: { observable: true, attached_at: null },
-    // D3.c Commit 4 — `BackendInfo` snapshot now carries the
-    // daemon-config `server_url` view. ws-client doesn't read this
-    // field, but the mock matches the typed surface so future typed
-    // mocks (and the structural twin between `preload/index.ts` and
-    // `api.d.ts`) stay in sync.
     local_host_server_url: "http://127.0.0.1:1234",
   }),
 }));
@@ -22,9 +17,6 @@ vi.mock("./api", () => ({
 import { EventWsClient, type WsScopeSubscription } from "./ws-client";
 import { decodeTransportSeq, decodeTransportEpoch } from "@silverhand/shared";
 
-// #task:1267 §6 — markSatisfied now takes (TransportSeq, TransportEpoch); decode
-// the raw fixture literals through the shared boundary decoders (the slice-A
-// sanctioned pattern), never a cast.
 const ts = (n: number) => decodeTransportSeq(n);
 const te = (s: string) => decodeTransportEpoch(s);
 
@@ -498,7 +490,7 @@ describe("EventWsClient — live forward-gap recovery", () => {
 });
 
 /**
- * #1251 — no-listener gap. When a scope's last subscriber goes away
+ * no-listener gap. When a scope's last subscriber goes away
  * (component unmount) and resubscribes (remount), events published in the
  * gap used to be lost: `unsubscribe()` dropped the per-scope cursor, so the
  * next `subscribe()` re-baselined to server head off the `subscribed` ack,
@@ -518,7 +510,7 @@ describe("EventWsClient — live forward-gap recovery", () => {
  * re-asserted at the transport layer): replay only touches the transport
  * frame cursor. It NEVER writes the read cursor or directed `read_at` — a
  * replayed frame is byte-identical to a live one and read-inert by
- * construction. "补帧『可得』≠『已读』".
+ * construction.
  */
 describe("EventWsClient — no-listener gap recovery (#1251)", () => {
   function eventSeqs(frames: Array<Record<string, unknown>>): number[] {
@@ -667,20 +659,6 @@ describe("EventWsClient — no-listener gap recovery (#1251)", () => {
     ]);
   });
 
-  // ── Orphan-scope gate (#1251 round-2 dogfood) ──────────────────────────
-  //
-  // The cursor must be the "applied-to-active-scope high-water", NOT the
-  // "socket-received high-water". When a view unmounts, the scope leaves
-  // `desiredScopes` (cursor retained) and the bridge listener detaches, but
-  // the socket stays OPEN and the server keeps fanning out until it processes
-  // the unsubscribe. A frame landing in that race window has no consumer; if
-  // it advanced the cursor (or a late ack re-baselined / late snapshot
-  // refetched), the cursor would move past a never-applied frame and the
-  // resubscribe would resume *after* it — losing it until a manual refetch.
-  // This was the dropped R2-C1 (a live message published ~2s before the
-  // client switched away). Orphan frames for non-desired scopes must be
-  // ignored entirely.
-
   it("ignores an orphan event after unsubscribe — cursor frozen at last applied seq", async () => {
     const { client, ws, sub, dispatched } = await connectedAt("conv:room", 5);
     fireEvent(ws, "conv:room", 6); // applied while desired → cursor 6
@@ -696,9 +674,6 @@ describe("EventWsClient — no-listener gap recovery (#1251)", () => {
     fireEvent(ws, "conv:room", 7);
     expect(eventSeqs(dispatched)).toEqual([6]); // 7 swallowed, not dispatched
 
-    // Resubscribe: resume from the frozen cursor (6, not 7) so the server
-    // replays seq 7. If the orphan had advanced the cursor to 7, this resume
-    // would read lastSeq:7 and 7 would be lost — exactly the R2-C1 bug.
     client.subscribe("conv:room");
     expect(ws.sent.filter((f) => f.type === "resume")).toEqual([
       { type: "resume", scopes: { "conv:room": { epoch: "epoch-1", lastSeq: 6 } } },
@@ -745,16 +720,6 @@ describe("EventWsClient — no-listener gap recovery (#1251)", () => {
   });
 });
 
-/**
- * #1255 P2 step-4 — the two-watermark cursor flip for CONTENT-GATED scopes
- * (`conversation:<id>`, the message stream). The single transport cursor splits
- * into `received` (wire continuity / gap detection) and `applied`
- * (the resume floor, advanced ONLY by `markSatisfied` / `commitSnapshotBaseline`).
- * Every scope above uses non-content-gated keys (`conv:room`, `viewer:…`) whose
- * floor still auto-advances with received — those tests pin the unchanged
- * pre-P2 behavior. These tests pin the NEW gated behavior. See
- * docs/event-ws-transport-v1.md §4.1/§5/§6.
- */
 describe("EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)", () => {
   const SCOPE = "conversation:room";
 
@@ -805,8 +770,6 @@ describe("EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)"
   it("advances received on events but pins the resume floor until markSatisfied", async () => {
     const { client, ws, sub } = await connectedGated(SCOPE, 5);
 
-    // received advances 6, 7 — but with no markSatisfied the floor stays at the
-    // ack baseline (5). A non-content-gated scope would have advanced to 7.
     fireEvent(ws, SCOPE, 6);
     fireEvent(ws, SCOPE, 7);
 
@@ -851,7 +814,7 @@ describe("EventWsClient — two-watermark content-gated scope (#1255 P2 step-4)"
     ]);
   });
 
-  // ── pending-satisfaction queue (#1261) ───────────────────────────────────────
+  // ────────────────────── pending-satisfaction queue ──────────────────────
   // The strict-contiguous pin above is preserved, but a satisfied-yet-non-
   // contiguous seq is now REMEMBERED and the floor drains through it the moment
   // the gap below fills — so a cursor-inert frame no longer pins the floor behind

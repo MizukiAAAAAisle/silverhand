@@ -3,13 +3,6 @@ import { nextTailReadMark, observeVisibleTail, type TailReadMark } from "./chann
 import { decodeMessageSeq } from "@silverhand/shared";
 import { ApiError } from "./api";
 
-// #task:1255 P1c / #task:1244 — ChannelView's read-cursor advancement moved off
-// frame arrival onto the mainline cache. These cases pin the read-inert
-// tightening Cindy/Alice signed off: read advances only when the visible window
-// is at tail and the newest mainline row actually advanced.
-
-// #task:1267 §3.5: tailSeq / TailReadMark.seq are a local MessageSeq gate; decode
-// fixture literals through the shared decoder (no cast).
 const s = (n: number) => decodeMessageSeq(n);
 
 describe("visible tail observation recovery", () => {

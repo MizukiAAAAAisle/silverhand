@@ -23,7 +23,7 @@ export type CachedPendingAttachment = {
   error?: string;
   /** Compose-time display identity (`Image #N` / `File #N`), assigned the
    *  moment the attachment enters this draft and STABLE for the draft's whole
-   *  lifetime (#task:1324). Never renumbers when other attachments are removed
+   *  lifetime. Never renumbers when other attachments are removed
    *  or reordered — so a body reference the user typed (`Image #1`) can never
    *  silently rebind to a different file. Carried into the send payload and
    *  echoed by the backend. */
@@ -42,7 +42,7 @@ export type ComposerLabelSeq = { image: number; file: number };
  * an `error` item would be dropped WITHOUT NOTICE — the send payload carries
  * only `state === 'done'` items, so a failed upload used to leave the composer
  * looking normal, disappear from the sent message, and take its typed
- * `Image #N` reference with it (#task:1834).
+ * `Image #N` reference with it.
  *
  * One predicate for both gates on purpose. The Send button's `disabled` and
  * `submit()`'s own guard each spelled out `uploading` separately, which is
@@ -121,8 +121,8 @@ export function writeComposerDraft(snapshot: ComposerDraftSnapshot): void {
 }
 
 /**
- * Assign the next stable label for an attachment entering this draft
- * (#task:1324). Called the instant a file is pasted/dropped/picked, so what
+ * Assign the next stable label for an attachment entering this draft.
+ * Called the instant a file is pasted/dropped/picked, so what
  * the user sees in the chip is exactly what will be sent to the agent.
  *
  * The ordinal is a per-kind monotonic counter: `max(persisted high-water,
@@ -142,7 +142,7 @@ export function assignAttachmentLabel(conversationId: string, contentType: strin
   entry.updatedAt = Date.now();
   drafts.set(conversationId, entry);
   // Build through the shared generator so the composer's label form can never
-  // drift from the backend schema / resolver (#task:1324).
+  // drift from the backend schema / resolver.
   return formatAttachmentLabel(kind, next);
 }
 
@@ -163,7 +163,7 @@ export function dropSentAttachmentsFromDraft(
   const sentKeys = new Set(sentAttachmentKeys);
   entry.pending = entry.pending.filter((item) => !sentKeys.has(item.key));
   // A send is a draft boundary: the label counter resets so the NEXT message
-  // starts at #1 (#task:1324). detach alone is not enough — without this the
+  // starts at #1. detach alone is not enough — without this the
   // counter (e.g. 2 after sending Image #1, Image #2) would carry into the new
   // message. Floor at the highest surviving live label so an attachment the
   // user added while the prior send was still in flight keeps a unique number.

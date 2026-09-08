@@ -1,7 +1,4 @@
 /**
- * Neighbor-aware fallback selection after archiving the primary channel
- * (#task:1145).
- *
  * When the user archives the channel they're currently viewing, the
  * primary pane would otherwise point at a now-archived conversation. The
  * rule (locked with shiki):
@@ -45,7 +42,7 @@ export function pickFallbackAfterArchive(
 
 /**
  * Default channel for the auto-select effect, EXCLUDING a recently-archived
- * primary id (#task:1145).
+ * primary id.
  *
  * After archiving the channel in the primary pane with no neighbor to fall
  * back to, App clears selection to the workspace empty state. But the

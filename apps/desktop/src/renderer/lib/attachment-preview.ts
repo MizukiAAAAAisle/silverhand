@@ -1,24 +1,3 @@
-/**
- * Which attachments open in an in-app previewer TAB (#task:2122) rather than
- * the OS open-with handler, WHERE the caller wires a tab controller: today the
- * two text formats an agent produces and a reader wants to read INLINE —
- * Markdown and HTML. This classifier only names the eligible kinds; whether the
- * previewer is actually the destination is the consumer's call. The member main
- * pane's message card routes here; the Attachments panel and thread pane still
- * OS-open these types, so this is not an app-wide single destination.
- *
- * PURE classifier. The kind decides the previewer BODY: `markdown` renders
- * through the shared `Markdown` component; `html` renders inside a sandboxed,
- * opaque-origin `<iframe>` (see `AttachmentHtmlPreview` — shiki + Cindy's B
- * boundary, 2026-08-21). Anything else returns `null` and keeps its existing
- * open-with-OS / download affordances untouched.
- *
- * Classification prefers the stored `content_type`, but falls back to the
- * FILENAME suffix when the stored type is generic — old attachment rows persist
- * `application/octet-stream` even for `.md` / `.html` (shared `mime.ts`), so a
- * content-type-only check would miss every legacy file (Cindy's mapping).
- */
-
 import { isGenericMimeHint, mimeFromFilename } from "@silverhand/shared";
 
 export type AttachmentPreviewKind = "markdown" | "html";

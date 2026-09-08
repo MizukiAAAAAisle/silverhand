@@ -4,7 +4,7 @@ import { routes } from "@/router";
 
 /**
  * How `handleJumpToMessage` should route a jump target whose only coordinates
- * are ids (#task:2052). A jump target carries NO placement — a workspace-less
+ * are ids. A jump target carries NO placement — a workspace-less
  * `channelId` could be a direct line OR a workspace channel that was passed
  * without its workspace id — so the one authority that can tell them apart is
  * the viewer's direct-pair list. This is the same fail-closed discipline the
@@ -39,7 +39,7 @@ export type JumpNavDecision = "to-direct" | "workspace-resolve" | "fail-closed";
 
 /**
  * Where an ACCEPTED jump lands: which primary pane, and the reply cluster to
- * open with it (#task:2102).
+ * open with it.
  *
  * This exists to make "does this arm carry the thread coordinate" ONE answer
  * instead of one per arm. The bug it retires: the direct arm navigated with

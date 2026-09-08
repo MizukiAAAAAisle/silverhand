@@ -1,12 +1,11 @@
 /**
- * What the bare `/chat` route should open (#task:2042).
+ * What the bare `/chat` route should open.
  *
  * Clicking the Chat rail drops every coordinate (`nav.toChat()` → `/chat`), so
  * something has to decide where the viewer lands. Before this, that decision had
  * exactly one arm — restore the last workspace, then its last channel — and a
  * viewer who had been reading a DIRECT line got a workspace channel instead:
- * their selection was not "lost" in storage, it had no arm to be restored INTO
- * (shiki, dogfood 2026-08-17).
+ * their selection was not "lost" in storage, it had no arm to be restored INTO.
  *
  * The rule this resolver owns is the ORDER of two authorities, and both halves
  * are load-bearing:
@@ -16,8 +15,7 @@
  *  - the viewer's own direct-pair list says whether that line is still theirs.
  *    A pair id that is not in it does not become a route, no matter what memory
  *    says — deleted lines, and lines the viewer is no longer an endpoint of, are
- *    the same case here (`#task:2042`: reachability follows the `direct-pairs`
- *    authority, never a cached row).
+ *    the same case here.
  *
  * Hence the third action. While the list has not answered we `wait` rather than
  * fall through to the workspace arm: falling through would navigate, and a
@@ -63,8 +61,7 @@ export type DirectPairAuthority =
  * Project a React Query read of the direct-pair list onto {@link DirectPairAuthority}.
  *
  * This mapping is here, pure, because it is where the ticket's contract is
- * actually decided and the earlier inline version got it wrong (@Cindy, review of
- * #task:2042): keying on "is there `data`" reads CACHED ROWS as the current
+ * actually decided and the earlier inline version got it wrong: keying on "is there `data`" reads CACHED ROWS as the current
  * answer, and React Query keeps the previous `data` through an invalidation — so
  * both "a refetch is in flight" and "the refetch failed" silently became `ready`
  * and re-opened a line whose reachability had not been re-answered.

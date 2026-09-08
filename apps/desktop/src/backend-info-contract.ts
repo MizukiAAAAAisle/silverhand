@@ -17,9 +17,6 @@
  */
 
 /**
- * `#task:1630` — the daemon's outbound-WS attachment as seen from the
- * process serving `backend:info`.
- *
  * The registry that owns this fact (`HostWsServerController`) lives in
  * the backend process. In an embedded deployment that IS the desktop
  * main process, so the attachment is observable here; in a remote
