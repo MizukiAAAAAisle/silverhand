@@ -158,7 +158,7 @@ export function InlineText({
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? errorId : undefined}
           className={cn(
-            "h-8 min-w-0 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 leading-tight text-text-primary outline-none focus:border-border-focus disabled:opacity-60",
+            "h-8 min-w-0 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2 leading-tight text-text-primary outline-none focus:border-border-focus disabled:opacity-60",
             className,
           )}
         />

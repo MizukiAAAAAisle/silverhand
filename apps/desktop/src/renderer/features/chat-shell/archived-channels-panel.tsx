@@ -115,7 +115,7 @@ export function ArchivedChannelsPanel({
       className="flex h-full min-w-0 flex-1 flex-col bg-bg-chat"
       style={{ ...paneChrome, overflow: "hidden" }}
     >
-      <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
+      <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <Archive className="size-3.5 text-accent" />
         <span className="font-serif text-sm font-semibold text-text-primary">Archived</span>
         <span className="text-xs tabular-nums text-text-muted">
@@ -215,7 +215,7 @@ export function ArchivedChannelsPanel({
 
 function SectionLabel({ text }: { text: string }): JSX.Element {
   return (
-    <h2 className="px-1 pb-2 text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-secondary">
+    <h2 className="px-1 pb-2 text-(length:--text-meta) font-medium uppercase tracking-wider text-text-secondary">
       {text}
     </h2>
   );
@@ -271,7 +271,7 @@ function ArchivedWorkspaceRow({
           <button
             type="button"
             onClick={onSettings}
-            className="m-3 ml-0 inline-flex size-7 shrink-0 items-center justify-center self-center rounded-[var(--control-radius)] text-text-secondary hover:bg-bg-hover focus-outline"
+            className="m-3 ml-0 inline-flex size-7 shrink-0 items-center justify-center self-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover focus-outline"
             aria-label={`Settings for ${workspace.name}`}
             title="Workspace settings"
           >
@@ -285,7 +285,7 @@ function ArchivedWorkspaceRow({
             onRestore();
           }}
           disabled={restorePending}
-          className="m-3 ml-0 inline-flex shrink-0 items-center gap-1.5 self-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          className="m-3 ml-0 inline-flex shrink-0 items-center gap-1.5 self-center rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
           aria-label={`Restore ${archivedWorkspaceRowLabel(workspace)}`}
           title="Restore workspace"
         >
@@ -353,7 +353,7 @@ function ArchivedChannelRow({
             onRestore();
           }}
           disabled={restorePending}
-          className="m-3 ml-0 inline-flex shrink-0 items-center gap-1.5 self-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          className="m-3 ml-0 inline-flex shrink-0 items-center gap-1.5 self-center rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
           aria-label={`Restore ${item.channel.title}`}
           title="Restore channel"
         >

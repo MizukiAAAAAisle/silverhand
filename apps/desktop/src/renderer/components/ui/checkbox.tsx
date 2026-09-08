@@ -19,11 +19,11 @@ export const Checkbox = forwardRef<HTMLButtonElement, CheckboxProps>(
       disabled={disabled}
       onClick={() => onCheckedChange?.(!checked)}
       className={cn(
-        "flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] transition-colors",
+        "flex size-4 shrink-0 items-center justify-center rounded-(--control-radius) border-(length:--control-border-width) transition-colors",
         checked
-          ? "border-transparent bg-[var(--bg-control-primary)] text-[var(--text-on-control-primary)]"
+          ? "border-transparent bg-(--bg-control-primary) text-(--text-on-control-primary)"
           : "border-border bg-bg-floating text-transparent",
-        disabled ? "opacity-50" : "cursor-pointer hover:border-[var(--bg-control-primary)]",
+        disabled ? "opacity-50" : "cursor-pointer hover:border-(--bg-control-primary)",
         className,
       )}
       {...props}

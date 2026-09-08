@@ -201,7 +201,7 @@ export function InlineRename({
             // (forza6 = 2px, warm = 1px) so the focus stroke matches the
             // theme's chrome weight.
             className={cn(
-              "h-8 min-w-0 flex-1 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 leading-tight text-text-primary outline-none focus:border-accent disabled:opacity-60",
+              "h-8 min-w-0 flex-1 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2 leading-tight text-text-primary outline-none focus:border-accent disabled:opacity-60",
             )}
           />
           <Button
@@ -246,7 +246,7 @@ export function InlineRename({
         // since that's a UX cue ("this is a placeholder, not your
         // chosen name"), not a layout decision.
         className={cn(
-          "min-w-0 truncate rounded-[var(--control-radius)] px-1 py-0.5 text-left transition-colors",
+          "min-w-0 truncate rounded-(--control-radius) px-1 py-0.5 text-left transition-colors",
           isFallback ? "text-text-muted italic" : "text-text-primary",
         )}
       >
@@ -257,7 +257,7 @@ export function InlineRename({
         onClick={enterEdit}
         aria-label={ariaLabel}
         title="Rename"
-        className="shrink-0 rounded-[var(--control-radius)] p-1 text-text-muted opacity-0 transition-opacity hover:bg-bg-hover hover:text-text-primary group-hover/inline-rename:opacity-100 focus-visible:opacity-100"
+        className="shrink-0 rounded-(--control-radius) p-1 text-text-muted opacity-0 transition-opacity hover:bg-bg-hover hover:text-text-primary group-hover/inline-rename:opacity-100 focus-visible:opacity-100"
       >
         <Pencil className="size-3.5" />
       </button>

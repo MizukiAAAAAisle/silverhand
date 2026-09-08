@@ -72,8 +72,8 @@ export function Combobox({
         <div
           data-input=""
           className={cn(
-            "flex items-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating transition-colors",
-            "hover:border-[color:var(--border-control-hover)]",
+            "flex items-center rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-floating transition-colors",
+            "hover:border-(--border-control-hover)",
             "focus-within:border-border-focus",
             className,
           )}
@@ -147,7 +147,7 @@ export function Combobox({
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => pick(s)}
               className={cn(
-                "flex w-full items-center rounded-[var(--select-item-radius)] px-2 py-1.5 text-left text-sm text-text-primary outline-none",
+                "flex w-full items-center rounded-(--select-item-radius) px-2 py-1.5 text-left text-sm text-text-primary outline-none",
                 "hover:bg-bg-hover",
                 s === value ? "bg-bg-hover" : "",
               )}

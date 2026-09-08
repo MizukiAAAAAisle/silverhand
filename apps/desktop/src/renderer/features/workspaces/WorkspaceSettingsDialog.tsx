@@ -224,10 +224,10 @@ export function WorkspaceSettingsDialog({
                   aria-current={active ? "page" : undefined}
                   onClick={() => setSection(item.id)}
                   className={cn(
-                    "flex items-center gap-2 rounded-[var(--control-radius)] px-2.5 py-1.5 text-left text-sm transition-colors",
+                    "flex items-center gap-2 rounded-(--control-radius) px-2.5 py-1.5 text-left text-sm transition-colors",
                     active
-                      ? "bg-[var(--bg-row-selected)] font-medium text-text-on-selected"
-                      : "text-text-secondary hover:bg-[var(--bg-option-hover)] hover:text-text-primary",
+                      ? "bg-(--bg-row-selected) font-medium text-text-on-selected"
+                      : "text-text-secondary hover:bg-(--bg-option-hover) hover:text-text-primary",
                   )}
                 >
                   <Icon className="size-3.5 shrink-0" />
@@ -274,7 +274,7 @@ export function WorkspaceSettingsDialog({
                 <div
                   role="tablist"
                   aria-label="Permission target"
-                  className="flex items-center gap-1 border-b-[length:var(--control-border-width)] border-border-subtle"
+                  className="flex items-center gap-1 border-b-(length:--control-border-width) border-border-subtle"
                 >
                   {PERMISSION_TABS.map((tab) => {
                     const active = permTab === tab.id;
@@ -404,7 +404,7 @@ function GeneralSection({
               onChange={(e) => onNameChange(e.target.value)}
               placeholder="my-frontend"
               autoFocus
-              className="transition-colors hover:border-[color:var(--border-control-hover)]"
+              className="transition-colors hover:border-(--border-control-hover)"
             />
             <Button type="submit" disabled={renameDisabled} {...primaryAction()}>
               {renamePending ? "Saving…" : "Save"}
@@ -439,7 +439,7 @@ function GeneralSection({
               frame on a whole panel promises a click the panel does not
               honour, and the Delete block's `border-error/30` is identity
               (danger tint) that hover must not recolour anyway. */}
-          <div className="flex items-center justify-between gap-3 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-elevated/40 p-3">
+          <div className="flex items-center justify-between gap-3 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-elevated/40 p-3">
             <div className="flex flex-col gap-0.5">
               <span className="text-sm font-medium text-text-primary">
                 {isArchived ? "Archived" : "Archive workspace"}
@@ -471,7 +471,7 @@ function GeneralSection({
             </Button>
           </div>
 
-          <div className="flex flex-col gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-error/30 bg-error/5 p-3">
+          <div className="flex flex-col gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-error/30 bg-error/5 p-3">
             <div className="flex flex-col gap-0.5">
               <span className="text-sm font-medium text-text-primary">Delete workspace</span>
               <span className="text-xs text-text-muted">
@@ -527,7 +527,7 @@ function GeneralSection({
           consistency within the section. Owner never reaches here (canLeave is
           false for owner). */}
       {hasLifecycle && canLeave ? (
-        <div className="flex flex-col gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-elevated/40 p-3">
+        <div className="flex flex-col gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-elevated/40 p-3">
           <div className="flex flex-col gap-0.5">
             <span className="text-sm font-medium text-text-primary">Leave workspace</span>
             <span className="text-xs text-text-muted">

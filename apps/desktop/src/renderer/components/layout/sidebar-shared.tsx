@@ -275,8 +275,8 @@ export function UnreadBadge({
       data-sidebar-unread
       data-unread-tier={tier}
       className={cn(
-        "inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center",
-        "rounded-[var(--pill-radius)] px-1 text-[length:var(--text-badge)] tabular-nums",
+        "inline-flex h-4 min-w-4 shrink-0 items-center justify-center",
+        "rounded-(--pill-radius) px-1 text-(length:--text-badge) tabular-nums",
         tier === "quiet" ? "font-medium" : "font-semibold",
         skin,
         className,
@@ -342,7 +342,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         onClick={onClick}
         className={cn(
           "sidebar-row-border flex w-full items-center gap-2 border px-2",
-          "text-left text-sm leading-[16px] transition-colors",
+          "text-left text-sm leading-4 transition-colors",
           stacked ? "py-2" : "py-1.5",
           sidebarRowStateClass(selected),
           className,
@@ -380,7 +380,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         ) : status ? (
           <span
             data-status-pip
-            className={cn("size-1.5 rounded-[var(--pill-radius)]", STATUS_DOT[status])}
+            className={cn("size-1.5 rounded-(--pill-radius)", STATUS_DOT[status])}
           />
         ) : null}
       </button>

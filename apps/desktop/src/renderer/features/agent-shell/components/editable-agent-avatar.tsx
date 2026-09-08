@@ -105,7 +105,7 @@ export function EditableAgentAvatar({
       {error ? (
         <p
           role="alert"
-          className="text-[length:var(--text-meta)] leading-snug text-error"
+          className="text-(length:--text-meta) leading-snug text-error"
           data-testid="agent-avatar-error"
         >
           {error}

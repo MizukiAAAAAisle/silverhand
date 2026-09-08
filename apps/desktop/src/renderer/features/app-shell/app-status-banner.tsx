@@ -19,17 +19,17 @@ function BannerShell({ title, detail, action }: BannerShellProps): JSX.Element {
     <div
       role="alert"
       aria-live="polite"
-      className="pointer-events-auto fixed left-1/2 top-3 z-[var(--z-in-dialog)] -translate-x-1/2 transform"
+      className="pointer-events-auto fixed left-1/2 top-3 z-(--z-in-dialog) -translate-x-1/2 transform"
       // The titlebar's drag region sits right above this; the banner owns
       // its own click target so it never gets swallowed by window drag.
       style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
     >
-      <div className="flex items-center gap-3 rounded-[var(--floating-radius)] [border:var(--floating-border)] bg-bg-floating px-3 py-2 shadow-modal">
+      <div className="flex items-center gap-3 rounded-(--floating-radius) [border:var(--floating-border)] bg-bg-floating px-3 py-2 shadow-modal">
         <AlertTriangle className="size-5 text-warning" />
         <div className="min-w-0">
           <p className="text-xs font-medium leading-snug text-text-primary">{title}</p>
           {detail ? (
-            <p className="text-[length:var(--text-meta)] leading-snug text-text-muted">{detail}</p>
+            <p className="text-(length:--text-meta) leading-snug text-text-muted">{detail}</p>
           ) : null}
         </div>
         {action ? (

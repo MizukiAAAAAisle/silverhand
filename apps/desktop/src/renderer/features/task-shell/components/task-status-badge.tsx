@@ -210,9 +210,9 @@ export function StatusPicker({
           // HoverPopover) so the picker isn't trapped behind its own
           // host; stays under the modal layer (z-[var(--z-lightbox)]+). Harmless in the
           // task-card context where nothing floats this high. #task:923
-          className="z-[var(--z-popover-nested)] min-w-[136px] bg-bg-floating p-1 shadow-popover outline-none"
+          className="z-(--z-popover-nested) min-w-34 bg-bg-floating p-1 shadow-popover outline-none"
         >
-          <div className="px-1.5 pb-1 pt-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
+          <div className="px-1.5 pb-1 pt-0.5 text-(length:--text-badge) font-medium uppercase tracking-wider text-text-muted">
             Move to
           </div>
           {ALL_STATUSES.filter((s) => s !== current).map((s) => (
@@ -223,7 +223,7 @@ export function StatusPicker({
                 onChange(s);
                 close();
               }}
-              className="flex w-full items-center rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left hover:bg-bg-hover"
+              className="flex w-full items-center rounded-(--floating-item-radius) px-2 py-1.5 text-left hover:bg-bg-hover"
             >
               <span data-task-status={s} className={CHIP}>
                 {LABELS[s]}

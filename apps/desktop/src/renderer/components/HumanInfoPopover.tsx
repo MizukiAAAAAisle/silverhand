@@ -129,7 +129,7 @@ export function HumanInfoPopover({
           onPointerEnter={scheduleOpen}
           onPointerLeave={scheduleClose}
           data-popover-frame="info"
-          className="z-[var(--z-dialog)] w-[260px] max-w-[calc(100vw-32px)] bg-bg-floating p-3 shadow-popover outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
+          className="z-(--z-dialog) w-65 max-w-[calc(100vw-32px)] bg-bg-floating p-3 shadow-popover outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           <div className="flex items-start gap-3">
             {avatarObjectUrl ? (
@@ -193,12 +193,12 @@ function HumanPresenceInline({ userId }: { userId: string }): JSX.Element {
   );
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted"
+      className="inline-flex shrink-0 items-center gap-1 text-(length:--text-badge) text-text-muted"
       title={label}
     >
       <span
         data-status-pip
-        className={`size-1.5 rounded-[var(--pill-radius)] ${PRESENCE_DOT[dot]}`}
+        className={`size-1.5 rounded-(--pill-radius) ${PRESENCE_DOT[dot]}`}
         aria-hidden
       />
       {label}

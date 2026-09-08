@@ -170,7 +170,7 @@ export function MemberCandidatePicker({
     ) : (
       matched.map((group) => (
         <div key={group.label}>
-          <div className="px-2 py-1 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
+          <div className="px-2 py-1 text-(length:--text-badge) font-medium uppercase tracking-wider text-text-muted">
             {group.label}
           </div>
           {group.items.map((candidate) => {
@@ -192,7 +192,7 @@ export function MemberCandidatePicker({
                 onMouseEnter={() => setActive(index)}
                 onClick={() => pick(candidate)}
                 className={cn(
-                  "flex w-full items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 text-left disabled:opacity-60",
+                  "flex w-full items-center gap-2 rounded-(--select-item-radius) px-2 py-1.5 text-left disabled:opacity-60",
                   index === active ? "bg-bg-hover" : "",
                 )}
               >
@@ -220,7 +220,7 @@ export function MemberCandidatePicker({
                   >
                     {displayName}
                   </span>
-                  <span className="max-w-[45%] shrink-0 truncate font-mono text-[length:var(--text-meta)] text-text-muted">
+                  <span className="max-w-[45%] shrink-0 truncate font-mono text-(length:--text-meta) text-text-muted">
                     @{handle}
                   </span>
                 </span>

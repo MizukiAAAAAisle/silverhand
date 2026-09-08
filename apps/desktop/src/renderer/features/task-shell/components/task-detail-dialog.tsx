@@ -162,8 +162,8 @@ export function TaskDetailDialog({
         // the wide band would frame a sentence in a mostly-empty 900×300 box.
         className={
           resolved
-            ? "flex max-h-[70vh] min-h-[300px] max-w-[900px] flex-col gap-0 p-0"
-            : "flex max-w-[420px] flex-col gap-0 p-0"
+            ? "flex max-h-[70vh] min-h-75 max-w-225 flex-col gap-0 p-0"
+            : "flex max-w-105 flex-col gap-0 p-0"
         }
         // This dialog owns its padding (`p-0` + a bordered header at `px-5
         // py-4`), so the cluster keeps hugging the corner: its band is the
@@ -374,7 +374,7 @@ function TaskDetailBody({
             </>
           ) : (
             <div className="flex items-start gap-2">
-              <DialogTitle className="flex-1 text-base leading-snug [overflow-wrap:anywhere]">
+              <DialogTitle className="flex-1 text-base leading-snug wrap-anywhere">
                 {detail.title}
               </DialogTitle>
               {!busy ? (

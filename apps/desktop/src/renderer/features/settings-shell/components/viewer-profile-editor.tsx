@@ -99,7 +99,7 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
         {avatarError ? (
           <p
             role="alert"
-            className="text-[length:var(--text-meta)] leading-snug text-error"
+            className="text-(length:--text-meta) leading-snug text-error"
             data-testid="human-avatar-error"
           >
             {avatarError}

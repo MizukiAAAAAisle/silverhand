@@ -987,7 +987,7 @@ export function Composer({
       onDragLeave={onDragLeave}
       className={
         "shrink-0 border-t border-border-subtle bg-bg-chat px-3 py-3 " +
-        (dragOver ? "[outline:2px_solid_var(--border-focus)] [outline-offset:-2px]" : "")
+        (dragOver ? "[outline:2px_solid_var(--border-focus)] -outline-offset-2" : "")
       }
     >
       {pending.length > 0 ? (
@@ -1026,7 +1026,7 @@ export function Composer({
         ) : null}
         <div
           data-composer-shell
-          className="flex flex-col overflow-hidden rounded-[var(--control-radius)] border border-border-subtle bg-bg-floating focus-within:border-border-focus"
+          className="flex flex-col overflow-hidden rounded-(--control-radius) border border-border-subtle bg-bg-floating focus-within:border-border-focus"
         >
           <ComposerActivityHeader
             conversationId={conversationId}
@@ -1067,10 +1067,8 @@ export function Composer({
             // No bottom/right padding to dodge buttons anymore — they
             // live in the toolbar below. `min-h-[60px]` keeps the
             // textarea at 3 rows; the toolbar adds its own ~32px
-            // below, so total composer height ≈ 92px (up from 76px),
-            // which shiki accepted as the trade for guaranteed
-            // no-overlap.
-            className="block max-h-48 min-h-[60px] w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            // below, so total composer height ≈ 92px (up from 76px)
+            className="block max-h-48 min-h-15 w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           />
           <input
             ref={fileInputRef}
@@ -1197,7 +1195,7 @@ function AttachmentChip({
   // text button, not a heavy accent badge.
   return (
     <div
-      className={`flex max-w-[280px] items-center gap-1.5 rounded-md border bg-bg-floating px-2 py-1 text-xs ${stateClass}`}
+      className={`flex max-w-70 items-center gap-1.5 rounded-md border bg-bg-floating px-2 py-1 text-xs ${stateClass}`}
       title={item.error ?? `${item.filename} (${sizeLabel})`}
     >
       {isImage && item.previewUrl ? (
@@ -1215,7 +1213,7 @@ function AttachmentChip({
       )}
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="truncate">{item.filename}</span>
-        <div className="flex items-center gap-1 text-[length:var(--text-badge)] text-text-muted">
+        <div className="flex items-center gap-1 text-(length:--text-badge) text-text-muted">
           {item.label ? (
             onInsertLabel ? (
               <button
@@ -1279,7 +1277,6 @@ interface ActiveTrigger {
 // typing". Unicode-aware (`\p{L}` letters, `\p{N}` numbers, `\p{M}`
 // combining marks, plus `_` and `-`) so a CJK query (`#设计`, `@张三`)
 // keeps the menu open instead of bailing on the first non-ASCII char
-// (#task:1720).
 const HANDLE_CHAR = /[\p{L}\p{N}\p{M}_-]/u;
 
 // `TOKEN_TAIL_CHAR` — "does the char BEFORE the sigil extend some other
@@ -1752,7 +1749,7 @@ function PickerMenu({
     : -1;
   return (
     <div
-      className="absolute bottom-full left-0 mb-1.5 w-64 overflow-hidden rounded-[var(--select-content-radius)] bg-bg-floating shadow-popover"
+      className="absolute bottom-full left-0 mb-1.5 w-64 overflow-hidden rounded-(--select-content-radius) bg-bg-floating shadow-popover"
       data-composer-picker=""
       data-dropdown-frame
       onMouseDown={(e) => e.preventDefault()}
@@ -1795,7 +1792,7 @@ function PickerMenu({
       {hiddenCount > 0 ? (
         <div
           aria-hidden
-          className="border-t border-border-subtle px-3 py-1.5 text-[length:var(--text-meta)] text-text-muted"
+          className="border-t border-border-subtle px-3 py-1.5 text-(length:--text-meta) text-text-muted"
         >
           +{hiddenCount} more
         </div>
@@ -1803,14 +1800,14 @@ function PickerMenu({
       {channelStatus === "loading" ? (
         <div
           role="status"
-          className="border-t border-border-subtle px-3 py-1.5 text-[length:var(--text-meta)] text-text-muted"
+          className="border-t border-border-subtle px-3 py-1.5 text-(length:--text-meta) text-text-muted"
         >
           Loading channels…
         </div>
       ) : channelStatus === "partial_error" ? (
         <div
           role="status"
-          className="border-t border-border-subtle px-3 py-1.5 text-[length:var(--text-meta)] text-text-muted"
+          className="border-t border-border-subtle px-3 py-1.5 text-(length:--text-meta) text-text-muted"
         >
           Some channels unavailable
         </div>
@@ -1823,7 +1820,7 @@ function SectionHeader({ label }: { label: string }): JSX.Element {
   return (
     <div
       role="presentation"
-      className="px-2 pb-1 pt-1.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted"
+      className="px-2 pb-1 pt-1.5 text-(length:--text-badge) font-medium uppercase tracking-wider text-text-muted"
     >
       {label}
     </div>
@@ -1880,7 +1877,7 @@ function Row({
             <span className="truncate text-sm font-medium text-text-primary">
               {item.agent.display_name?.trim() || item.agent.name}
             </span>
-            <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
+            <div className="flex items-center gap-1.5 text-(length:--text-meta) text-text-muted">
               <span className="truncate font-mono">@{item.agent.name}</span>
               <span aria-hidden>·</span>
               <span data-agent-runtime className="shrink-0">
@@ -1900,7 +1897,7 @@ function Row({
             <span className="truncate text-sm font-medium text-text-primary">
               {item.human.display_name?.trim() || item.human.name}
             </span>
-            <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
+            <div className="flex items-center gap-1.5 text-(length:--text-meta) text-text-muted">
               <span className="truncate font-mono">@{item.human.name}</span>
               <span aria-hidden>·</span>
               <span data-participant-kind className="shrink-0">
@@ -1917,7 +1914,7 @@ function Row({
               <span className="truncate text-sm font-medium text-text-primary">
                 {item.channel.title}
               </span>
-              <span className="truncate text-[length:var(--text-meta)] text-text-muted">
+              <span className="truncate text-(length:--text-meta) text-text-muted">
                 {item.workspaceName}
               </span>
             </div>

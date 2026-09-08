@@ -69,7 +69,7 @@ export function FilterSelectItem({
         <span className="truncate">{children}</span>
       </Select.ItemText>
       {suffix ? (
-        <span className="ml-auto text-[length:var(--text-badge)] text-text-muted">{suffix}</span>
+        <span className="ml-auto text-(length:--text-badge) text-text-muted">{suffix}</span>
       ) : null}
       <Select.ItemIndicator className="absolute right-2 inline-flex items-center">
         <Check className="size-3.5 text-accent" />

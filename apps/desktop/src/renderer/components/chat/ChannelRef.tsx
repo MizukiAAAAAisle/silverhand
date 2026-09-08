@@ -76,7 +76,7 @@ export function ChannelRef({ name, channel, onOpen }: ChannelRefProps): JSX.Elem
   if (!onOpen) {
     return (
       <span
-        className="inline-flex items-baseline gap-0.5 rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent"
+        className="inline-flex items-baseline gap-0.5 rounded-(--chip-radius) px-1 -mx-0.5 font-medium text-accent"
         title={tooltip}
         data-channel-ref-state="resolved-no-handler"
         data-channel-ref-id={channel.id}
@@ -91,7 +91,7 @@ export function ChannelRef({ name, channel, onOpen }: ChannelRefProps): JSX.Elem
       role="button"
       tabIndex={0}
       className={
-        "inline-flex cursor-pointer items-baseline gap-0.5 rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent focus-outline " +
+        "inline-flex cursor-pointer items-baseline gap-0.5 rounded-(--chip-radius) px-1 -mx-0.5 font-medium text-accent focus-outline " +
         INLINE_REF_HOVER_CLASS +
         (dim ? " opacity-60" : "")
       }

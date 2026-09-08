@@ -30,10 +30,10 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
           alt={user.display_name || user.name}
         />
         <div className="agent-profile-hero-fields min-w-0 flex-1">
-          <div className="agent-profile-hero-name break-words font-serif font-semibold text-text-primary">
+          <div className="agent-profile-hero-name wrap-break-word font-serif font-semibold text-text-primary">
             {user.display_name || user.name}
           </div>
-          <div className="break-words font-mono text-xs text-text-muted">@{user.name}</div>
+          <div className="wrap-break-word font-mono text-xs text-text-muted">@{user.name}</div>
         </div>
       </section>
 

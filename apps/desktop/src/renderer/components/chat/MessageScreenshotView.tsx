@@ -103,7 +103,7 @@ export function MessageScreenshotView({
   return (
     <div
       data-screenshot-root
-      className="flex w-[760px] flex-col gap-3 bg-bg-floating p-6 text-text-primary"
+      className="flex w-190 flex-col gap-3 bg-bg-floating p-6 text-text-primary"
     >
       {safeChannelTitle ? (
         <div className="border-b border-border-subtle pb-2 text-sm font-semibold">
@@ -232,7 +232,7 @@ function ScreenshotRow({
           avatar={presentation?.avatar ?? { variant: "neutral-user" }}
           size={AVATAR_PX.lg}
           label={avatarLabel}
-          className="border-[length:var(--border-avatar-width)] border-border-avatar"
+          className="border-(length:--border-avatar-width) border-border-avatar"
           agentAvatarUrls={authorAgentAvatarUrls}
           humanAvatarUrls={authorUserAvatarUrls}
           objectUrlOverride={viewerAvatarOverride}
@@ -260,7 +260,7 @@ function ScreenshotRow({
         }
         timestamp={
           continuesPrevious ? null : (
-            <span className="text-[length:var(--text-meta)] text-text-muted">{time}</span>
+            <span className="text-(length:--text-meta) text-text-muted">{time}</span>
           )
         }
         taskTag={null}
@@ -344,7 +344,7 @@ function ScreenshotAttachmentTile({
   const isImage = attachment.content_type.startsWith("image/");
   const filename = sanitizeScreenshotText(attachment.filename);
   const labelBadge = label ? (
-    <span className="block w-full text-center font-mono text-[length:var(--text-badge)] text-text-muted">
+    <span className="block w-full text-center font-mono text-(length:--text-badge) text-text-muted">
       {label}
     </span>
   ) : null;
@@ -365,10 +365,10 @@ function ScreenshotAttachmentTile({
   }
   return (
     <div className="flex flex-col items-start gap-1">
-      <div className="flex max-w-[280px] items-center gap-2 rounded-md border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary">
+      <div className="flex max-w-70 items-center gap-2 rounded-md border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary">
         <FileText className="size-4 shrink-0 text-text-muted" />
         <span className="min-w-0 truncate">{filename}</span>
-        <span className="shrink-0 text-[length:var(--text-badge)] text-text-muted">
+        <span className="shrink-0 text-(length:--text-badge) text-text-muted">
           {formatBytes(attachment.size)}
         </span>
       </div>

@@ -137,7 +137,7 @@ export function BackendUnreachableGate({
         // also drops the 1px frame by its own `[data-modal-shell]` rule.
         data-modal-shell
         data-popover-frame="info"
-        className="w-full max-w-[480px] rounded-md border border-border bg-bg-floating p-6 shadow-modal"
+        className="w-full max-w-120 rounded-md border border-border bg-bg-floating p-6 shadow-modal"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
         <header className="mb-4 flex items-center gap-2">
@@ -212,12 +212,12 @@ export function BackendUnreachableGate({
               </Button>
             </div>
             {classification.kind === "reject" && (
-              <p className="text-[length:var(--text-meta)] text-error">{classification.message}</p>
+              <p className="text-(length:--text-meta) text-error">{classification.message}</p>
             )}
           </form>
         ) : (
           <div className="mb-4 flex items-center gap-2">
-            <p className="min-w-0 flex-1 break-all rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border-subtle bg-bg-inset px-2 py-1.5 font-mono text-xs">
+            <p className="min-w-0 flex-1 break-all rounded-(--control-radius) border-(length:--control-border-width) border-border-subtle bg-bg-inset px-2 py-1.5 font-mono text-xs">
               {serverUrl}
             </p>
             <Button
@@ -240,7 +240,7 @@ export function BackendUnreachableGate({
               // Tailwind's 1px `border` — forza6 states are 2px (shiki
               // #task:1833 「下方的状态用 2px」). Warm themes declare 1px, so
               // they are unchanged.
-              "mb-4 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-2 text-xs",
+              "mb-4 rounded-(--control-radius) border-(length:--control-border-width) px-3 py-2 text-xs",
               banner.tone === "error"
                 ? "border-error bg-bg-inset text-error"
                 : banner.tone === "success"
@@ -260,7 +260,7 @@ export function BackendUnreachableGate({
           the network may be unreachable.
         </p>
         {message ? (
-          <pre className="mb-4 overflow-x-auto rounded-[var(--control-radius)] border border-border-subtle bg-bg-inset px-2 py-1.5 font-mono text-[length:var(--text-meta)] leading-snug text-text-muted">
+          <pre className="mb-4 overflow-x-auto rounded-(--control-radius) border border-border-subtle bg-bg-inset px-2 py-1.5 font-mono text-(length:--text-meta) leading-snug text-text-muted">
             {message}
           </pre>
         ) : null}

@@ -295,7 +295,7 @@ function MemberOverflowChip({
       data-member-chip="overflow"
       data-member-total={totalVisible}
       data-avatar-ground
-      className="inline-flex size-6 shrink-0 items-center justify-center rounded-none border border-border-subtle p-0 text-[length:var(--text-badge)] font-semibold text-text-muted transition-transform hover:scale-105 focus-outline"
+      className="inline-flex size-6 shrink-0 items-center justify-center rounded-none border border-border-subtle p-0 text-(length:--text-badge) font-semibold text-text-muted transition-transform hover:scale-105 focus-outline"
     >
       +{overflow.length}
     </button>

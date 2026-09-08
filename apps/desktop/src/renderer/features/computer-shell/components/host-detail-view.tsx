@@ -787,8 +787,8 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
  */
 function CascadeImpact({ agents }: { agents: HostAgentResource[] }): JSX.Element {
   return (
-    <div className="rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5">
-      <p className="text-[length:var(--text-meta)] font-semibold uppercase tracking-wider text-warning">
+    <div className="rounded-(--control-radius) bg-(--warning-surface) px-3 py-2.5">
+      <p className="text-(length:--text-meta) font-semibold uppercase tracking-wider text-warning">
         {computerCopy.deleteCascadeImpactTitle}
       </p>
       <ul className="mt-2 flex flex-col gap-1.5" aria-label="Agents to be removed">
@@ -994,11 +994,11 @@ function ProxySection({
                     data-runtime-tile
                     data-checked={checked || undefined}
                     className={cn(
-                      "flex min-w-0 items-center gap-3 rounded-[var(--control-radius)] border px-3 py-2 transition-colors",
+                      "flex min-w-0 items-center gap-3 rounded-(--control-radius) border px-3 py-2 transition-colors",
                       proxyEnabled ? "cursor-pointer" : "cursor-not-allowed",
                       checked
-                        ? "border-accent bg-[var(--bg-row-selected,var(--bg-selected))]"
-                        : "border-border-subtle bg-bg-floating hover:bg-[var(--bg-option-hover)]",
+                        ? "border-accent bg-(--bg-row-selected,var(--bg-selected))"
+                        : "border-border-subtle bg-bg-floating hover:bg-(--bg-option-hover)",
                     )}
                   >
                     <input
@@ -1012,7 +1012,7 @@ function ProxySection({
                       data-runtime-tile-check
                       data-checked={checked || undefined}
                       className={cn(
-                        "flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border",
+                        "flex size-4 shrink-0 items-center justify-center rounded-(--control-radius) border",
                         checked
                           ? "border-accent bg-accent text-text-on-accent"
                           : "border-border-subtle bg-bg-floating text-transparent",
@@ -1025,7 +1025,7 @@ function ProxySection({
                     <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
                       {runtimeLabel(kind)}
                     </span>
-                    <span className="shrink-0 font-mono text-[length:var(--text-meta)] text-text-muted">
+                    <span className="shrink-0 font-mono text-(length:--text-meta) text-text-muted">
                       {kind}
                     </span>
                   </label>
@@ -1112,8 +1112,8 @@ function HostHero({
           {statusLabel && statusTone ? (
             <StatusChip label={statusLabel} tone={statusTone} />
           ) : statusLoading ? (
-            <span className="inline-flex items-center gap-1.5 border border-transparent px-1 py-0.5 text-[length:var(--text-badge)] text-text-muted">
-              <Loader2 className="size-[15px] animate-spin" aria-hidden />
+            <span className="inline-flex items-center gap-1.5 border border-transparent px-1 py-0.5 text-(length:--text-badge) text-text-muted">
+              <Loader2 className="size-3.75 animate-spin" aria-hidden />
               <span>Loading…</span>
             </span>
           ) : null}
@@ -1133,7 +1133,7 @@ function HostHero({
             aria-label="Refresh host status"
             title="Refresh"
           >
-            <RefreshCw className={cn("size-[15px]", refreshing && "animate-spin")} />
+            <RefreshCw className={cn("size-3.75", refreshing && "animate-spin")} />
           </Button>
         </div>
         {/* Meta line: stable `host.name` (mono) ONLY when the user has
@@ -1188,11 +1188,11 @@ function StatusChip({ label, tone }: { label: string; tone: HostStatusTone }): J
     <span
       role="status"
       data-panel-pill="host-status"
-      className="inline-flex items-center gap-1.5 border border-border-subtle bg-transparent px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-secondary"
+      className="inline-flex items-center gap-1.5 border border-border-subtle bg-transparent px-2 py-0.5 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-secondary"
     >
       <span
         data-status-pip
-        className={cn("size-1.5 rounded-[var(--pill-radius)]", TONE_DOT_CLASS[tone])}
+        className={cn("size-1.5 rounded-(--pill-radius)", TONE_DOT_CLASS[tone])}
         aria-hidden
       />
       {label}
@@ -1211,7 +1211,7 @@ function ProvenanceChip(): JSX.Element {
   return (
     <span
       data-panel-pill="host-provenance"
-      className="inline-flex items-center border border-border-subtle bg-transparent px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted"
+      className="inline-flex items-center border border-border-subtle bg-transparent px-2 py-0.5 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted"
     >
       {computerCopy.appManaged}
     </span>
@@ -1262,7 +1262,7 @@ function SystemSection({
 function SystemField({ label, children }: { label: string; children: ReactNode }): JSX.Element {
   return (
     <div className="flex items-baseline gap-4">
-      <dt className="w-36 shrink-0 text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-muted">
+      <dt className="w-36 shrink-0 text-(length:--text-meta) font-medium uppercase tracking-wider text-text-muted">
         {label}
       </dt>
       <dd data-host-system-value className="min-w-0 flex-1 text-sm tabular-nums">
@@ -1304,7 +1304,7 @@ function AdmissionFailureNotice({
   return (
     <div
       role="status"
-      className="mt-5 flex items-start gap-2.5 rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5"
+      className="mt-5 flex items-start gap-2.5 rounded-(--control-radius) bg-(--warning-surface) px-3 py-2.5"
     >
       <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
       <p className="min-w-0 flex-1 text-sm text-text-primary">
@@ -1432,7 +1432,7 @@ function HostSection({
   return (
     <section className="flex flex-col border-t border-border-subtle py-6 first:border-t-0">
       <header className="mb-3.5">
-        <h3 className="text-[length:var(--text-meta)] font-semibold uppercase tracking-[0.14em] text-text-muted">
+        <h3 className="text-(length:--text-meta) font-semibold uppercase tracking-[0.14em] text-text-muted">
           {title}
         </h3>
       </header>
@@ -1485,7 +1485,7 @@ function AgentCard({
         type="button"
         onClick={onOpen}
         aria-label={`Open ${agent.display_name} profile`}
-        className="flex w-full items-center gap-3 rounded-[var(--row-radius)] border-[length:var(--control-border-width)] border-border-subtle bg-bg-floating px-3 py-2.5 text-left transition-colors hover:border-text-primary focus-visible:border-text-primary focus-visible:outline-none"
+        className="flex w-full items-center gap-3 rounded-(--row-radius) border-(length:--control-border-width) border-border-subtle bg-bg-floating px-3 py-2.5 text-left transition-colors hover:border-text-primary focus-visible:border-text-primary focus-visible:outline-none"
       >
         {knownRuntime.success ? (
           <AgentAvatar
@@ -1534,12 +1534,12 @@ function AgentStatusPip({ online }: { online: "online" | "offline" }): JSX.Eleme
     <span
       role="status"
       aria-label={online === "online" ? "Online" : "Offline"}
-      className="inline-flex items-center gap-1.5 text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-muted"
+      className="inline-flex items-center gap-1.5 text-(length:--text-meta) font-medium uppercase tracking-wider text-text-muted"
     >
       <span
         data-status-pip
         className={cn(
-          "size-1.5 rounded-[var(--pill-radius)]",
+          "size-1.5 rounded-(--pill-radius)",
           online === "online" ? "bg-success" : "bg-text-muted/40",
         )}
         aria-hidden

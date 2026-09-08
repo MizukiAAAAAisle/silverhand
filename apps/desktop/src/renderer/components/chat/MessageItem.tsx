@@ -534,7 +534,7 @@ function ActorMessageItem({
     <time
       dateTime={new Date(message.created_at).toISOString()}
       title={timeTooltip}
-      className="text-[length:var(--text-meta)] text-text-muted"
+      className="text-(length:--text-meta) text-text-muted"
     >
       {timeLabel}
     </time>
@@ -611,7 +611,7 @@ function ActorMessageItem({
   // jumps to first unread.
   const threadUnreadNode =
     threadUnreadCount > 0 ? (
-      <span className="shrink-0 whitespace-nowrap font-medium text-[var(--unread)]">
+      <span className="shrink-0 whitespace-nowrap font-medium text-(--unread)">
         {threadUnreadCount > 99 ? "99+" : threadUnreadCount} new
       </span>
     ) : null;
@@ -691,7 +691,7 @@ function ActorMessageItem({
           // above lines that are themselves content-height.
           (badgeHeadsPreview
             ? ""
-            : "h-[18px] rounded-[var(--chip-radius)] bg-[var(--chip-bg)] px-2 hover:bg-[var(--chip-bg-hover)]")
+            : "h-4.5 rounded-(--chip-radius) bg-(--chip-bg) px-2 hover:bg-(--chip-bg-hover)")
         }
       >
         <ThreadIcon className="size-3 shrink-0" />
@@ -768,7 +768,7 @@ function ActorMessageItem({
         // rows; the horizontal padding and the leading-column width are
         // untouched, so every body in the group stays on the same text
         // baseline as its head.
-        "relative flex items-start gap-3 rounded-[var(--row-radius)] border-2 px-2 transition-colors " +
+        "relative flex items-start gap-3 rounded-(--row-radius) border-2 px-2 transition-colors " +
         (continuesPrevious ? "py-0.5 " : "py-1.5 ") +
         (jumpFlash ? "msg-jump-flash " : "") +
         (selectionMode && committed ? "cursor-pointer " : "") +
@@ -802,7 +802,7 @@ function ActorMessageItem({
           dateTime={new Date(message.created_at).toISOString()}
           title={timeTooltip}
           className={
-            "w-8 shrink-0 select-none text-[length:var(--text-badge)] text-text-muted transition-opacity " +
+            "w-8 shrink-0 select-none text-(length:--text-badge) text-text-muted transition-opacity " +
             (alignRight ? "text-left " : "text-right ") +
             (hover ? "opacity-100" : "opacity-0")
           }
@@ -890,7 +890,7 @@ function ActorMessageItem({
           onFocus={() => setFocusWithin(true)}
           onBlur={handleActionsBlur}
           className={
-            "absolute top-1 z-[var(--z-raised)] flex items-center gap-3 text-xs transition-opacity " +
+            "absolute top-1 z-(--z-raised) flex items-center gap-3 text-xs transition-opacity " +
             (alignRight ? "left-2" : "right-2") +
             " " +
             (hover || focusWithin || reactionPickerOpen
@@ -1042,7 +1042,7 @@ function MessageTaskTag({
         // fill / border / radius stay in lockstep with the board chips.
         data-task-status={status}
         title={title}
-        className="inline-flex h-[18px] max-w-[220px] cursor-default items-center gap-1.5 whitespace-nowrap rounded-[var(--task-status-radius)] px-2 text-[length:var(--text-meta)] font-medium leading-none"
+        className="inline-flex h-4.5 max-w-55 cursor-default items-center gap-1.5 whitespace-nowrap rounded-(--task-status-radius) px-2 text-(length:--text-meta) font-medium leading-none"
       >
         {/* The status glyph is aria-hidden and the fill colour is visual-only,
             and a generic span's aria-label is not reliably exposed — so carry
@@ -1071,7 +1071,7 @@ function MessageTaskTag({
         aria-label={`Task #${linkedTask.task_number} (${label}) — click to change status`}
         // Stop the click from reaching the row's selection/jump capture.
         onClick={(e) => e.stopPropagation()}
-        className="inline-flex h-[18px] max-w-[220px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[var(--task-status-radius)] px-2 text-[length:var(--text-meta)] font-medium leading-none transition-opacity hover:opacity-80 focus-outline"
+        className="inline-flex h-4.5 max-w-55 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-(--task-status-radius) px-2 text-(length:--text-meta) font-medium leading-none transition-opacity hover:opacity-80 focus-outline"
       >
         {body}
       </button>
@@ -1136,7 +1136,7 @@ function Avatar({
       avatar={presentation.avatar}
       size={AVATAR_PX.lg}
       label={presentation.label}
-      className="border-[length:var(--border-avatar-width)] border-border-avatar"
+      className="border-(length:--border-avatar-width) border-border-avatar"
       objectUrlOverride={avatarObjectUrl}
     />
   );
@@ -1310,7 +1310,7 @@ function ActionButton({
       title={label}
       aria-label={label}
       className={
-        "flex items-center rounded-sm transition-colors transition-opacity focus-outline " +
+        "flex items-center rounded-sm transition-[color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,opacity] focus-outline " +
         (visible ? "opacity-100" : "pointer-events-none opacity-0") +
         " " +
         (active ? "text-accent" : "text-text-muted hover:text-text-primary")
@@ -1482,7 +1482,7 @@ function AttachmentTile({
           type="button"
           onClick={() => imageUrl && setLightboxOpen(true)}
           disabled={!imageUrl}
-          className="block overflow-hidden rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating focus-outline"
+          className="block overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating focus-outline"
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}
         >
           {imageUrl ? (
@@ -1522,12 +1522,12 @@ function AttachmentTile({
     return (
       <div className="flex flex-col items-start gap-1">
         <div
-          className="flex max-w-[320px] items-center gap-2 overflow-hidden rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary"
+          className="flex max-w-[320px] items-center gap-2 overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary"
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}
         >
           <FileText className="size-4 shrink-0 text-text-muted" />
           <span className="min-w-0 truncate">{attachment.filename}</span>
-          <span className="shrink-0 text-[length:var(--text-badge)] text-text-muted">
+          <span className="shrink-0 text-(length:--text-badge) text-text-muted">
             {formatBytes(attachment.size)}
           </span>
         </div>
@@ -1538,7 +1538,7 @@ function AttachmentTile({
 
   return (
     <div className="flex flex-col items-start gap-1">
-      <div className="flex max-w-[320px] items-stretch overflow-hidden rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating focus-outline-within">
+      <div className="flex max-w-[320px] items-stretch overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating focus-outline-within">
         <button
           type="button"
           onClick={previewable ? () => onOpenAttachment?.(attachment) : downloadAndOpen}
@@ -1547,7 +1547,7 @@ function AttachmentTile({
         >
           <FileText className="size-4 shrink-0 text-text-muted group-hover:text-text-primary" />
           <span className="min-w-0 truncate">{attachment.filename}</span>
-          <span className="shrink-0 text-[length:var(--text-badge)] text-text-muted group-hover:text-text-primary">
+          <span className="shrink-0 text-(length:--text-badge) text-text-muted group-hover:text-text-primary">
             {formatBytes(attachment.size)}
           </span>
         </button>
@@ -1585,7 +1585,7 @@ function AttachmentTile({
  *  button): on a sent message the label is already fixed. */
 function AttachmentLabelBadge({ label }: { label: string }): JSX.Element {
   return (
-    <span className="block w-full text-center font-mono text-[length:var(--text-badge)] text-text-muted">
+    <span className="block w-full text-center font-mono text-(length:--text-badge) text-text-muted">
       {label}
     </span>
   );
@@ -1620,7 +1620,7 @@ function SelectionCheckbox({
       aria-label={checked ? "Deselect message" : "Select message"}
       onClick={onChange}
       className={
-        "mt-1.5 inline-flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border transition-colors focus-outline " +
+        "mt-1.5 inline-flex size-4 shrink-0 items-center justify-center rounded-(--control-radius) border transition-colors focus-outline " +
         (checked
           ? "border-accent bg-accent text-bg-floating"
           : "border-border bg-bg-floating text-transparent hover:border-accent")

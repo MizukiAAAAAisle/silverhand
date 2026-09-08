@@ -128,7 +128,7 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
                           sideOffset={8}
                           collisionPadding={8}
                           data-popover-frame="info"
-                          className="z-[var(--z-popover)] bg-bg-floating px-3 py-2 text-xs text-text-primary shadow-popover"
+                          className="z-(--z-popover) bg-bg-floating px-3 py-2 text-xs text-text-primary shadow-popover"
                         >
                           <div className="font-semibold">
                             {dateFormat.format(new Date(`${cell.date}T00:00:00Z`))}

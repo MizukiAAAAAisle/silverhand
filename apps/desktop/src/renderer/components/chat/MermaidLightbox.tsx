@@ -164,17 +164,17 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-[var(--z-lightbox)] bg-overlay-backdrop data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-(--z-lightbox) bg-overlay-backdrop data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content
           data-modal-shell
           onKeyDown={onKeyDown}
           aria-label="Diagram preview"
-          className="fixed inset-0 z-[var(--z-lightbox-chrome)] m-auto flex flex-col overflow-hidden rounded-[var(--floating-radius,var(--radius-md))] bg-bg-floating shadow-xl focus:outline-none"
+          className="fixed inset-0 z-(--z-lightbox-chrome) m-auto flex flex-col overflow-hidden rounded-(--floating-radius,var(--radius-md)) bg-bg-floating shadow-xl focus:outline-none"
           style={{ width: "min(1100px, 92vw)", height: "86vh" }}
         >
           <div
             data-modal-divider
-            className="flex shrink-0 items-center gap-2 border-b-[length:var(--control-border-width)] border-border-subtle px-3 py-2"
+            className="flex shrink-0 items-center gap-2 border-b-(length:--control-border-width) border-border-subtle px-3 py-2"
           >
             <DialogPrimitive.Title className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
               Diagram
@@ -185,7 +185,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
               data-sticker
               data-sticker-size="md"
               data-sticker-tone="neutral"
-              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary focus-outline"
+              className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-muted hover:bg-bg-hover hover:text-text-primary focus-outline"
             >
               <X className="size-4" />
             </DialogPrimitive.Close>
@@ -226,7 +226,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
           </div>
           <div
             data-modal-divider
-            className="flex shrink-0 items-center gap-2 border-t-[length:var(--control-border-width)] border-border-subtle px-3 py-2 text-xs"
+            className="flex shrink-0 items-center gap-2 border-t-(length:--control-border-width) border-border-subtle px-3 py-2 text-xs"
           >
             <div className="flex items-center gap-2">
               <Button
@@ -268,7 +268,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
                   button or sticker chrome. Reset is the `0` key (and stepping
                   with −). A visually-hidden "Zoom " prefix gives screen readers
                   "Zoom 150%", not a bare percentage. */}
-              <span className="flex h-7 min-w-[3.25rem] items-center justify-center px-1.5 tabular-nums text-text-secondary">
+              <span className="flex h-7 min-w-13 items-center justify-center px-1.5 tabular-nums text-text-secondary">
                 <span className="sr-only">Zoom </span>
                 {Math.round(scale * 100)}%
               </span>

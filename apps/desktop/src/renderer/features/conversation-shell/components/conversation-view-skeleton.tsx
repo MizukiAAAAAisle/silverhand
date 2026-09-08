@@ -92,7 +92,7 @@ export function ConversationViewSkeleton(): JSX.Element {
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <div className="size-4 shrink-0 rounded-none bg-bg-hover" />
         <div className="h-3.5 w-36 rounded bg-bg-hover" />
-        <div className="ml-auto flex items-center gap-[3px]">
+        <div className="ml-auto flex items-center gap-0.75">
           {[0, 1, 2].map((i) => (
             <div key={i} className="size-6 shrink-0 rounded-none bg-bg-hover" />
           ))}
@@ -109,7 +109,7 @@ export function ConversationViewSkeleton(): JSX.Element {
        * `min-h-[60px]` input body and a footer button row (`size-7`). */}
       <div className="shrink-0 border-t border-border-subtle bg-bg-primary px-3 py-3">
         <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-floating">
-          <div className="min-h-[60px] px-3 py-2">
+          <div className="min-h-15 px-3 py-2">
             <div className="h-3.5 w-32 rounded bg-bg-hover" />
           </div>
           <div className="flex items-center justify-between px-2 py-1.5">

@@ -137,7 +137,7 @@ export function AgentSidebarShell({
             <Fragment key={group.key}>
               <li
                 data-agent-group-header
-                className="flex items-center gap-1.5 px-2 pb-0.5 pt-2 text-[length:var(--text-meta)] font-medium text-text-muted"
+                className="flex items-center gap-1.5 px-2 pb-0.5 pt-2 text-(length:--text-meta) font-medium text-text-muted"
               >
                 <Monitor className="size-3 shrink-0" />
                 <span className="truncate">{group.name}</span>
@@ -154,7 +154,7 @@ export function AgentSidebarShell({
         {viewer ? (
           <SidebarRow
             key={viewer.id}
-            className="h-[32px]"
+            className="h-8"
             icon={
               <HumanRowIcon
                 avatarObjectUrl={viewerAvatarObjectUrl}
@@ -173,7 +173,7 @@ export function AgentSidebarShell({
           return (
             <SidebarRow
               key={u.id}
-              className="h-[32px]"
+              className="h-8"
               icon={
                 <HumanRowIcon avatarObjectUrl={avatarObjectUrl} alt={u.display_name || u.name} />
               }
@@ -211,7 +211,7 @@ function AgentRow({
   const display = presence === null ? null : projectPresence({ scope: "global", presence });
   return (
     <SidebarRow
-      className="h-[32px]"
+      className="h-8"
       icon={
         <AgentAvatar
           runtime={agent.runtime}

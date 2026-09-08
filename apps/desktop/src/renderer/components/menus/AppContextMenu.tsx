@@ -13,9 +13,9 @@ const MENU_ITEM_CLASS = cn(
   // Disabled items downgrade to `not-allowed` via the data-disabled
   // selector below so the affordance still tracks the actual state.
   "flex select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none transition-colors",
-  "cursor-pointer data-[disabled]:cursor-not-allowed",
-  "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
-  "data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary",
+  "cursor-pointer data-disabled:cursor-not-allowed",
+  "data-disabled:pointer-events-none data-disabled:opacity-50",
+  "data-highlighted:bg-bg-hover data-highlighted:text-text-primary",
 );
 
 function AppMenuItemContent({
@@ -34,7 +34,7 @@ function AppMenuItemContent({
       </span>
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {trailing ? (
-        <span className="shrink-0 text-[length:var(--text-badge)] text-text-muted">{trailing}</span>
+        <span className="shrink-0 text-(length:--text-badge) text-text-muted">{trailing}</span>
       ) : null}
     </>
   );

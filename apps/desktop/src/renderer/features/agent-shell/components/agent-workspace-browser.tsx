@@ -161,9 +161,9 @@ function FullBrowser({
     <div
       // Routed through `--card-radius` so warm/forza6 stay 0 (poster
       // hard-cut) and slack-dark gets 8px. #task:912 review round 6.
-      className="flex h-full min-h-0 overflow-hidden rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating"
+      className="flex h-full min-h-0 overflow-hidden rounded-(--card-radius) border border-border-subtle bg-bg-floating"
     >
-      <aside className="flex w-[280px] shrink-0 flex-col overflow-hidden border-r border-border-subtle bg-bg-base">
+      <aside className="flex w-70 shrink-0 flex-col overflow-hidden border-r border-border-subtle bg-bg-base">
         {/* The tree column owns the refresh (shiki 2026-08-07「刷新按钮应该融合
             进 file tree nav 中」). It used to float alone in a bar above the
             card, which read as orphaned chrome — the same verdict that keeps a
@@ -173,7 +173,7 @@ function FullBrowser({
             across both panes. Header is outside the scroll box below so it
             stays put while the tree scrolls. */}
         <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
-          <span className="text-[length:var(--text-meta)] uppercase tracking-[0.08em] text-text-muted">
+          <span className="text-(length:--text-meta) uppercase tracking-[0.08em] text-text-muted">
             Files
           </span>
           <RefreshButton onRefresh={onRefresh} isFetching={treeQuery.isFetching} />
@@ -218,14 +218,14 @@ function CompactBrowser({
             <button
               type="button"
               onClick={() => onSelect(null)}
-              className="flex items-center rounded-[var(--row-radius)] p-1 text-text-muted transition-colors hover:text-text-primary"
+              className="flex items-center rounded-(--row-radius) p-1 text-text-muted transition-colors hover:text-text-primary"
               aria-label="Back to file list"
               title="Back to file list"
             >
               <ChevronRight className="size-4 rotate-180" />
             </button>
             <span
-              className="min-w-0 flex-1 truncate font-mono text-[length:var(--text-meta)] text-text-primary"
+              className="min-w-0 flex-1 truncate font-mono text-(length:--text-meta) text-text-primary"
               title={selectedPath}
             >
               {leafName(selectedPath)}
@@ -397,7 +397,7 @@ function TreeRow({
           // Row vocabulary — picks up theme `--row-radius` (warm/forza6 = 0 for
           // scan-line, slack-dark = 6px for Slack-style soft list rows).
           // #task:912 review round 4.
-          "flex w-full items-center gap-1.5 rounded-[var(--row-radius)] py-1 pr-2 text-left text-text-secondary hover:bg-bg-hover",
+          "flex w-full items-center gap-1.5 rounded-(--row-radius) py-1 pr-2 text-left text-text-secondary hover:bg-bg-hover",
         )}
         style={{ paddingLeft: indent }}
         title={node.path}
@@ -425,7 +425,7 @@ function TreeRow({
         // Row vocabulary — see DirNode comment above; same `--row-radius` token
         // covers folder + file rows so the tree reads as a single surface.
         // #task:912 review round 4.
-        "flex w-full items-center gap-1.5 rounded-[var(--row-radius)] py-1 pr-2 text-left",
+        "flex w-full items-center gap-1.5 rounded-(--row-radius) py-1 pr-2 text-left",
         selected ? "bg-accent-2 text-text-on-accent-2" : "text-text-primary hover:bg-bg-hover",
       )}
       style={{ paddingLeft: indent + 14 /* align with dir name col */ }}
@@ -506,7 +506,7 @@ function WorkspaceFilePreview({
           >
             {path}
           </span>
-          <span className="shrink-0 text-[length:var(--text-meta)] text-text-muted">
+          <span className="shrink-0 text-(length:--text-meta) text-text-muted">
             {formatBytes(file.size)} · {dayjs(file.mtime).format("YYYY-MM-DD HH:mm")}
           </span>
           <button
@@ -524,7 +524,7 @@ function WorkspaceFilePreview({
       {file.truncated ? (
         <div
           data-panel-card="placeholder"
-          className="shrink-0 border-b border-warning/40 bg-warning/10 px-4 py-2 text-[length:var(--text-meta)] text-text-on-warning"
+          className="shrink-0 border-b border-warning/40 bg-warning/10 px-4 py-2 text-(length:--text-meta) text-text-on-warning"
         >
           Preview truncated at 512 KB. The full file lives on the agent's host — not all of it is
           shown here.
@@ -537,7 +537,9 @@ function WorkspaceFilePreview({
           // daemon's read cap (the banner above says so when it bit).
           <Markdown content={file.content} renderBudget="unbounded" />
         ) : (
-          <pre className="whitespace-pre-wrap break-words font-mono text-xs">{file.content}</pre>
+          <pre className="whitespace-pre-wrap wrap-break-word font-mono text-xs">
+            {file.content}
+          </pre>
         )}
       </div>
     </div>

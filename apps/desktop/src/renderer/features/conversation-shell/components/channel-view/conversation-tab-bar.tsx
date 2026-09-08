@@ -130,7 +130,7 @@ export function ConversationTabBar({
   return (
     <div
       data-conversation-tabs
-      className="flex h-[var(--conversation-tab-strip-height)] shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border-subtle px-2 scrollbar-hide"
+      className="flex h-(--conversation-tab-strip-height) shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border-subtle px-2 scrollbar-hide"
     >
       <DndContext
         sensors={sensors}
@@ -274,7 +274,7 @@ function SortableTab({
         <Icon className="size-3.5 shrink-0" aria-hidden />
         {label}
         {unread ? (
-          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--unread)]" />
+          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-(--unread)" />
         ) : null}
       </button>
       {showInlineClose ? (

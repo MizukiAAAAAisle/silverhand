@@ -131,7 +131,7 @@ export function InlineTextarea({
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? errorId : undefined}
           className={cn(
-            "w-full resize-none rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 py-1.5 text-sm leading-relaxed text-text-primary outline-none focus:border-border-focus disabled:opacity-60",
+            "w-full resize-none rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2 py-1.5 text-sm leading-relaxed text-text-primary outline-none focus:border-border-focus disabled:opacity-60",
           )}
         />
         <div className="flex items-center justify-end gap-1.5">

@@ -162,7 +162,7 @@ export function MessageRowContent({
           <div
             className={
               alignRight
-                ? "ml-auto w-fit max-w-full rounded-[var(--message-bubble-radius)] bg-[var(--bg-message-bubble)] px-3 py-2"
+                ? "ml-auto w-fit max-w-full rounded-(--message-bubble-radius) bg-(--bg-message-bubble) px-3 py-2"
                 : undefined
             }
           >

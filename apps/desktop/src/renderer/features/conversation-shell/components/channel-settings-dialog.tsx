@@ -331,7 +331,7 @@ export function ChannelSettingsDialog({
           </Button>
           {leaveConfirm ? (
             <div className="flex flex-col gap-2.5">
-              <div className="rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5">
+              <div className="rounded-(--control-radius) bg-(--warning-surface) px-3 py-2.5">
                 <p className="text-sm leading-relaxed text-text-primary">
                   {isPrivate
                     ? "You won't be able to rejoin unless you're added back."

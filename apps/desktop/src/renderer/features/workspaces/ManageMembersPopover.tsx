@@ -169,7 +169,7 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
               return (
                 <li
                   key={`${m.kind}:${id}`}
-                  className="flex h-8 items-center gap-2 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base px-2"
+                  className="flex h-8 items-center gap-2 rounded-(--chip-radius) border border-border-subtle bg-bg-base px-2"
                 >
                   {m.kind === "agent" ? (
                     <AgentAvatar
@@ -189,7 +189,7 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
                     <span className="truncate text-sm font-medium text-text-primary">
                       {displayName}
                     </span>
-                    <span className="truncate font-mono text-[length:var(--text-meta)] text-text-muted">
+                    <span className="truncate font-mono text-(length:--text-meta) text-text-muted">
                       @{handle}
                     </span>
                   </span>
@@ -203,7 +203,7 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
                       disabled={removeMember.isPending}
                       aria-label="Remove"
                       title="Remove member"
-                      className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-60"
+                      className="ml-auto flex size-6 items-center justify-center rounded-(--chip-radius) text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-60"
                     >
                       <Trash2 className="size-3.5" />
                     </button>
@@ -219,7 +219,7 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
                       disabled={removeHumanMember.isPending}
                       aria-label="Remove"
                       title="Remove member"
-                      className="ml-auto flex size-6 items-center justify-center rounded-[var(--chip-radius)] text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-60"
+                      className="ml-auto flex size-6 items-center justify-center rounded-(--chip-radius) text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-60"
                     >
                       <Trash2 className="size-3.5" />
                     </button>
@@ -309,7 +309,7 @@ function formatRemoveHumanError(err: unknown): string {
 function Section({ title, children }: { title: string; children: ReactNode }): JSX.Element {
   return (
     <section className="flex flex-col gap-1.5">
-      <div className="text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
+      <div className="text-(length:--text-badge) font-medium uppercase tracking-wider text-text-muted">
         {title}
       </div>
       {children}

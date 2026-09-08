@@ -70,10 +70,10 @@ export function Titlebar({
     <header
       data-titlebar="app"
       className={
-        "drag-region flex h-[var(--titlebar-height)] shrink-0 items-center " +
+        "drag-region flex h-(--titlebar-height) shrink-0 items-center " +
         "gap-2 border-b text-xs " +
-        "bg-[var(--bg-app,var(--bg-primary))] " +
-        "border-[var(--titlebar-border,var(--border-subtle))]"
+        "bg-(--bg-app,var(--bg-primary)) " +
+        "border-(--titlebar-border,var(--border-subtle))"
       }
     >
       {/* Spacer matches the visible left chrome so the workspace info
@@ -85,7 +85,7 @@ export function Titlebar({
           width: `max(var(--titlebar-controls-safe-width), ${chromeWidth})`,
         }}
       >
-        <div className="absolute left-[var(--titlebar-sidebar-toggle-left)] top-1/2 flex -translate-y-1/2 items-center gap-1">
+        <div className="absolute left-(--titlebar-sidebar-toggle-left) top-1/2 flex -translate-y-1/2 items-center gap-1">
           {/* The browse-sidebar toggle is chat-only: Activity has no browse
            * sidebar (its list is a fixed column), so it's hidden there —
            * the empty region still reserves the traffic-lights inset via
@@ -133,7 +133,7 @@ export function Titlebar({
       ) : null}
 
       {isArchived ? (
-        <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-[length:var(--text-badge)] uppercase tracking-wider text-text-muted">
+        <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-text-muted">
           archived
         </span>
       ) : null}

@@ -155,7 +155,7 @@ export function ThreadReplyPreview({
       }}
       title={title}
       className={
-        "group mt-1.5 flex w-full cursor-pointer flex-col gap-1 rounded-[var(--chip-radius)] px-2 py-1.5 transition-colors " +
+        "group mt-1.5 flex w-full cursor-pointer flex-col gap-1 rounded-(--chip-radius) px-2 py-1.5 transition-colors " +
         // A recessed WASH separates the replies from the message body above
         // (shiki 2026-07-31) — one layer only: the fill REPLACED the hairline
         // rule that used to do this job rather than stacking on top of it, and
@@ -167,7 +167,7 @@ export function ThreadReplyPreview({
         // one shape there). All three themes declare the pair — `forza6.css`
         // owns `:root`, so an omitted token inherits forza6's value instead of
         // reaching the fallback below.
-        "bg-[var(--thread-preview-bg,var(--chip-bg))] hover:bg-[var(--thread-preview-bg-hover,var(--chip-bg-hover))] " +
+        "bg-(--thread-preview-bg,var(--chip-bg)) hover:bg-(--thread-preview-bg-hover,var(--chip-bg-hover)) " +
         (alignRight ? "items-end" : "items-start")
       }
     >
@@ -194,7 +194,7 @@ export function ThreadReplyPreview({
           // fallback here only covers a theme that does not exist yet. The ink
           // lifts on a hover ANYWHERE in the block (`group-hover`), not only
           // over the lines: one target, one response.
-          "flex w-full flex-col gap-1 text-xs leading-tight text-[var(--thread-preview-text,var(--text-muted))] transition-colors group-hover:text-text-secondary " +
+          "flex w-full flex-col gap-1 text-xs leading-tight text-(--thread-preview-text,var(--text-muted)) transition-colors group-hover:text-text-secondary " +
           (alignRight ? "items-end text-right" : "items-start text-left")
         }
       >

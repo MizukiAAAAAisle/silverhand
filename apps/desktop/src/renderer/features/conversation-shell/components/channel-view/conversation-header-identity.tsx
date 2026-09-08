@@ -179,7 +179,7 @@ function CounterpartIdentity({
         </span>
         {description ? (
           <span
-            className="min-w-0 truncate text-[length:var(--text-meta)] leading-tight text-text-muted"
+            className="min-w-0 truncate text-(length:--text-meta) leading-tight text-text-muted"
             title={description}
           >
             {description}

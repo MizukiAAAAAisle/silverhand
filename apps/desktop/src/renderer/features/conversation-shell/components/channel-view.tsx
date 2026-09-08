@@ -915,12 +915,12 @@ function ActiveChannelView({
               </>
             )}
             {closed ? (
-              <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-[length:var(--text-badge)] uppercase tracking-wider text-text-muted">
+              <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-text-muted">
                 closed
               </span>
             ) : null}
             {isArchived ? (
-              <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[length:var(--text-badge)] uppercase tracking-wider text-accent">
+              <span className="rounded-full bg-accent-soft px-2 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-accent">
                 archived
               </span>
             ) : null}
@@ -937,7 +937,7 @@ function ActiveChannelView({
                   aria-pressed={find.open}
                   title="Search this channel"
                   className={
-                    "flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] " +
+                    "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                     (find.open
                       ? "bg-bg-hover text-text-primary"
                       : "text-text-muted hover:bg-bg-hover hover:text-text-primary")
@@ -957,7 +957,7 @@ function ActiveChannelView({
                   aria-pressed={threadsListActive}
                   title="Threads"
                   className={
-                    "relative flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] " +
+                    "relative flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                     (threadsListActive
                       ? "bg-bg-hover text-text-primary"
                       : "text-text-muted hover:bg-bg-hover hover:text-text-primary")
@@ -970,7 +970,7 @@ function ActiveChannelView({
                     // aria-label — so pointer-events-none and aria-hidden.
                     <span
                       aria-hidden
-                      className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-[var(--unread)]"
+                      className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-(--unread)"
                     />
                   ) : null}
                 </button>
@@ -986,7 +986,7 @@ function ActiveChannelView({
                   aria-pressed={filesListActive}
                   title="Attachments"
                   className={
-                    "flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] " +
+                    "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                     (filesListActive
                       ? "bg-bg-hover text-text-primary"
                       : "text-text-muted hover:bg-bg-hover hover:text-text-primary")
@@ -1012,7 +1012,7 @@ function ActiveChannelView({
                   onClick={() => setSettingsOpen(true)}
                   aria-label="Channel settings"
                   title="Channel settings"
-                  className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                  className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-muted hover:bg-bg-hover hover:text-text-primary"
                 >
                   <Settings className="size-3.5" />
                 </button>
@@ -1080,8 +1080,8 @@ function ActiveChannelView({
           match (ensure-visible below). */}
           {findAvailable && find.open && chatSurfaceActive ? (
             <div
-              className={`absolute inset-x-0 z-[var(--z-sticky)] ${
-                viewTabsShown ? "top-[calc(3rem_+_var(--conversation-tab-strip-height))]" : "top-12"
+              className={`absolute inset-x-0 z-(--z-sticky) ${
+                viewTabsShown ? "top-[calc(3rem+var(--conversation-tab-strip-height))]" : "top-12"
               }`}
             >
               <InlineFindBar
@@ -1266,7 +1266,7 @@ function ActiveChannelView({
             pane via the same `onOpenTask` an inline `#task` chip uses. `inset-0`
             covers the whole column. */}
             {tasksTabActive && taskBoardContainer && onOpenTask ? (
-              <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
+              <div className="absolute inset-0 z-(--z-raised) bg-bg-base">
                 <ChannelTasksTab container={taskBoardContainer} onOpenTask={onOpenTask} />
               </div>
             ) : null}
@@ -1277,7 +1277,7 @@ function ActiveChannelView({
             attachment tabs remounts the fetch/decode rather than reusing stale
             body state. */}
             {activeAttachmentTab ? (
-              <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
+              <div className="absolute inset-0 z-(--z-raised) bg-bg-base">
                 <ChannelAttachmentTab
                   key={activeAttachmentTab.attachmentId}
                   attachmentId={activeAttachmentTab.attachmentId}
@@ -1292,7 +1292,7 @@ function ActiveChannelView({
             switching between two panel tabs remounts the surface's own
             filter/scroll rather than carrying one list's state into another. */}
             {activePanelTab ? (
-              <div className="absolute inset-0 z-[var(--z-raised)] bg-bg-base">
+              <div className="absolute inset-0 z-(--z-raised) bg-bg-base">
                 {activePanelHostable ? (
                   <ConversationPanelTab
                     key={activePanelTab}

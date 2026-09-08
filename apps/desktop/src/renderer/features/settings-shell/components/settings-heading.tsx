@@ -5,7 +5,7 @@ export function SettingsHeading({ icon, title }: { icon: ReactNode; title: strin
     <div className="flex items-center gap-3">
       <span
         data-settings-icon-chip
-        className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] bg-bg-elevated text-text-secondary"
+        className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) bg-bg-elevated text-text-secondary"
       >
         {icon}
       </span>

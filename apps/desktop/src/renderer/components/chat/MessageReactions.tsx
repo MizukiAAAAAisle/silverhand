@@ -75,7 +75,7 @@ export function MessageReactions({
               data-reaction-add
               aria-label="Add reaction"
               title="Add reaction"
-              className="flex h-[18px] items-center rounded-[var(--chip-radius)] bg-[var(--chip-bg)] px-2 text-text-muted transition-colors hover:bg-[var(--chip-bg-hover)] hover:text-text-primary focus-outline"
+              className="flex h-4.5 items-center rounded-(--chip-radius) bg-(--chip-bg) px-2 text-text-muted transition-colors hover:bg-(--chip-bg-hover) hover:text-text-primary focus-outline"
             >
               <SmilePlus className="size-3.5" />
             </button>
@@ -149,7 +149,7 @@ function ReactionChip({
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
-          className="z-[var(--z-popover)] max-w-[240px] rounded-[var(--floating-radius)] border border-border bg-bg-floating px-2.5 py-1.5 text-xs text-text-primary shadow-popover outline-none"
+          className="z-(--z-popover) max-w-60 rounded-(--floating-radius) border border-border bg-bg-floating px-2.5 py-1.5 text-xs text-text-primary shadow-popover outline-none"
         >
           <span className="mr-1">{agg.emoji}</span>
           {reactors.isLoading && names.length === 0 ? (

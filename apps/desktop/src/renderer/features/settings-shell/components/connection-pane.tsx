@@ -70,7 +70,7 @@ function ServerStatusPill({
       role="status"
       aria-label={`Desktop to server: ${STATUS_LABEL[status]}`}
       className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded-[var(--control-radius)] border bg-bg-floating px-2 py-0.5 text-[length:var(--text-badge)] font-medium",
+        "inline-flex shrink-0 items-center gap-1 rounded-(--control-radius) border bg-bg-floating px-2 py-0.5 text-(length:--text-badge) font-medium",
         STATUS_TONE_CLASS[status],
       )}
     >
@@ -309,7 +309,7 @@ export function ConnectionPane(): JSX.Element {
               // Width from the theme's control cluster (forza6 = 2px), so this
               // banner stays identical to its twin in BackendUnreachableGate
               // (#task:1833).
-              "rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-2 text-xs",
+              "rounded-(--control-radius) border-(length:--control-border-width) px-3 py-2 text-xs",
               banner.tone === "error"
                 ? "border-error bg-bg-inset text-error"
                 : banner.tone === "success"
@@ -360,7 +360,7 @@ export function ConnectionPane(): JSX.Element {
             </Button>
           </div>
           {classification.kind === "reject" && (
-            <p className="text-[length:var(--text-meta)] text-error">{classification.message}</p>
+            <p className="text-(length:--text-meta) text-error">{classification.message}</p>
           )}
         </form>
       </div>

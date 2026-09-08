@@ -185,7 +185,7 @@ export function SearchPanel({
       className="flex h-full min-w-0 flex-1 flex-col bg-bg-chat"
       style={{ ...paneChrome, overflow: "hidden" }}
     >
-      <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
+      <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <SearchIcon className="size-3.5 text-accent" />
         <span className="font-serif text-sm font-semibold text-text-primary">Search</span>
         {data ? (
@@ -215,7 +215,7 @@ export function SearchPanel({
             disabled={!hasIntent}
             aria-label="Clear search"
             title="Clear search"
-            className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline disabled:pointer-events-none disabled:opacity-0"
+            className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-(--control-radius) text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline disabled:pointer-events-none disabled:opacity-0"
           >
             <X className="size-4" />
           </button>
@@ -258,7 +258,7 @@ export function SearchPanel({
           <div className="space-y-5">
             {resultGroups.map((group) => (
               <section key={group.key}>
-                <header className="mb-2 flex items-center gap-2 px-1 text-[length:var(--text-meta)] font-medium uppercase leading-none tracking-wider text-text-muted">
+                <header className="mb-2 flex items-center gap-2 px-1 text-(length:--text-meta) font-medium uppercase leading-none tracking-wider text-text-muted">
                   {group.icon}
                   <span className="leading-none">{group.label}</span>
                   <span className="leading-none text-text-muted/70">{group.results.length}</span>
@@ -377,7 +377,7 @@ function WorkspaceFilterSelect({
             </SelectItem>
             {agentSpaces.length > 0 ? (
               <Select.Group>
-                <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
+                <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
                   Agent Spaces
                 </Select.Label>
                 {agentSpaces.map((workspace) => (
@@ -399,7 +399,7 @@ function WorkspaceFilterSelect({
             ) : null}
             {peopleOwned.length > 0 ? (
               <Select.Group>
-                <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
+                <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
                   Workspaces
                 </Select.Label>
                 {peopleOwned.map((workspace) => (
@@ -635,7 +635,7 @@ function MessageResultHeader({
 
 function EmptyState({ icon, text }: { icon: ReactNode; text: string }): JSX.Element {
   return (
-    <div className="flex h-full min-h-[220px] items-center justify-center rounded-md border border-dashed border-border text-sm text-text-muted">
+    <div className="flex h-full min-h-55 items-center justify-center rounded-md border border-dashed border-border text-sm text-text-muted">
       <div className="flex items-center gap-2">
         {icon}
         <span>{text}</span>

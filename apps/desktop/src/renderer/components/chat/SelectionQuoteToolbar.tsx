@@ -203,7 +203,7 @@ export function SelectionQuoteToolbar({
       // same one menus and info cards read, so each theme paints it once (forza6 →
       // 2px ink, the hairline themes → 1px subtle) and nothing is hardcoded here.
       data-popover-frame="toolbar"
-      className="z-[var(--z-popover)] flex items-center gap-0.5 rounded-[var(--floating-radius,var(--radius-md))] bg-bg-floating p-0.5 text-xs text-text-primary shadow-popover"
+      className="z-(--z-popover) flex items-center gap-0.5 rounded-(--floating-radius,var(--radius-md)) bg-bg-floating p-0.5 text-xs text-text-primary shadow-popover"
     >
       <SelectionQuoteButton
         icon={<TextQuote className="size-3.5" />}
@@ -241,7 +241,7 @@ function SelectionQuoteButton({
       // to 0 either way. Clamped at 0 so forza6's hard corners
       // (`--floating-radius: 0`) never go negative. Keep the `2px` in sync with
       // the container's `p-0.5` if that padding changes.
-      className="inline-flex items-center gap-1 rounded-[max(0px,calc(var(--floating-radius,var(--radius-md))_-_2px))] px-2 py-0.5 font-medium text-text-primary transition-colors hover:bg-[var(--bg-option-hover)] focus-outline"
+      className="inline-flex items-center gap-1 rounded-[max(0px,calc(var(--floating-radius,var(--radius-md))-2px))] px-2 py-0.5 font-medium text-text-primary transition-colors hover:bg-(--bg-option-hover) focus-outline"
     >
       {icon}
       <span>{label}</span>

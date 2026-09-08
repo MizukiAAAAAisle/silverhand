@@ -582,7 +582,7 @@ function StaticMentionRef({
   }
   return (
     <span
-      className="rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent"
+      className="rounded-(--chip-radius) px-1 -mx-0.5 font-medium text-accent"
       aria-label={`@${name}`}
       data-mention-kind={humanId ? "human" : "agent"}
       data-mention-id={humanId}
@@ -612,7 +612,7 @@ function StaticChannelRef({
   return (
     <span
       className={
-        "inline-flex items-baseline gap-0.5 rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent" +
+        "inline-flex items-baseline gap-0.5 rounded-(--chip-radius) px-1 -mx-0.5 font-medium text-accent" +
         (channel.closed_at != null ? " opacity-60" : "")
       }
       title={`#${channel.title}`}
@@ -642,7 +642,7 @@ function StaticConversationRef({
   const icon = conversationIcon(conversation ? "channel" : undefined);
   return (
     <span
-      className="inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent"
+      className="inline-flex max-w-55 items-center gap-0.5 rounded-(--chip-radius) bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent"
       aria-label={conversation ? `${faceLabel("channel")} · ${label}` : `Conversation #conv:${id}`}
       data-conversation-ref={id}
     >
@@ -957,7 +957,7 @@ function OversizedContent({ content, bytes }: { content: string; bytes: number }
           {copied ? "Copied" : "Copy full text"}
         </button>
       </div>
-      <pre className="whitespace-pre-wrap break-words">
+      <pre className="whitespace-pre-wrap wrap-break-word">
         {content.slice(0, OVERSIZED_PREVIEW_CHARS)}
         {"\n…"}
       </pre>

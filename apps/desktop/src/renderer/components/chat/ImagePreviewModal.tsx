@@ -402,10 +402,10 @@ export function ImagePreviewModal({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[var(--z-lightbox)] bg-black/40" />
+        <Dialog.Overlay className="fixed inset-0 z-(--z-lightbox) bg-black/40" />
         <Dialog.Content
           data-modal-shell
-          className="fixed left-1/2 top-1/2 z-[var(--z-lightbox-chrome)] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--floating-radius,var(--radius-md))] bg-bg-floating p-4 shadow-xl"
+          className="fixed left-1/2 top-1/2 z-(--z-lightbox-chrome) flex max-h-[80vh] w-205 -translate-x-1/2 -translate-y-1/2 flex-col rounded-(--floating-radius,var(--radius-md)) bg-bg-floating p-4 shadow-xl"
         >
           <div className="flex items-center gap-2">
             <Dialog.Title className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
@@ -417,7 +417,7 @@ export function ImagePreviewModal({
               data-sticker
               data-sticker-size="md"
               data-sticker-tone="neutral"
-              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary focus-outline"
+              className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-muted hover:bg-bg-hover hover:text-text-primary focus-outline"
             >
               <X className="size-4" />
             </Dialog.Close>
@@ -426,7 +426,7 @@ export function ImagePreviewModal({
             {messages.length === 0 ? "Select at least one message" : ""}
           </Dialog.Description>
 
-          <div className="mt-3 min-h-[200px] flex-1 overflow-auto rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated p-2">
+          <div className="mt-3 min-h-50 flex-1 overflow-auto rounded-(--control-radius) border border-border-subtle bg-bg-elevated p-2">
             {phase === "rendering" || phase === "idle" ? (
               <div className="flex h-full items-center justify-center text-xs text-text-muted">
                 Rendering…

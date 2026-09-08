@@ -49,7 +49,7 @@ export function reactionChipClass(agg: ReactionAggregateDto, interactive: boolea
 export function ReactionChipBody({ agg }: { agg: ReactionAggregateDto }): JSX.Element {
   return (
     <>
-      <span className="text-[length:var(--text-strong)] leading-none">{agg.emoji}</span>
+      <span className="text-(length:--text-strong) leading-none">{agg.emoji}</span>
       <span
         className={
           "font-semibold " + (agg.viewer_reacted ? "text-text-primary" : "text-text-muted")

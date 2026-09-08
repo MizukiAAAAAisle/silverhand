@@ -174,7 +174,7 @@ function WorkspaceSegment({ name }: { name: string }): JSX.Element {
       sigil={
         <span
           aria-hidden
-          className="shrink-0 self-center font-serif text-[length:var(--text-strong)] font-semibold leading-none"
+          className="shrink-0 self-center font-serif text-(length:--text-strong) font-semibold leading-none"
         >
           W
         </span>

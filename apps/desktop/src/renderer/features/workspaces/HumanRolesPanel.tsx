@@ -100,7 +100,7 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
   return (
     <div className="flex flex-col gap-4">
       {!canEdit ? (
-        <div className="flex items-start gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border-subtle bg-bg-elevated/40 p-2.5 text-xs text-text-muted">
+        <div className="flex items-start gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border-subtle bg-bg-elevated/40 p-2.5 text-xs text-text-muted">
           <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
           <span>
             You are {viewerRoleLabel(viewerRole)} in this workspace — you can view member roles, but
@@ -118,7 +118,7 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
           return (
             <li
               key={member.user_id}
-              className="flex items-center gap-2.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-3 py-2"
+              className="flex items-center gap-2.5 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-floating px-3 py-2"
             >
               <UserAvatar
                 size={AVATAR_PX.sm}
@@ -129,7 +129,7 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
                 <span className="truncate text-sm font-medium text-text-primary">
                   {member.display_name || member.name}
                 </span>
-                <span className="truncate font-mono text-[length:var(--text-meta)] text-text-muted">
+                <span className="truncate font-mono text-(length:--text-meta) text-text-muted">
                   @{member.name}
                 </span>
               </span>
@@ -156,7 +156,7 @@ function RoleBadge({ role }: { role: WorkspaceRole }): JSX.Element {
   return (
     <span
       className={cn(
-        "shrink-0 rounded-[var(--chip-radius)] border-[length:var(--control-border-width)] px-2 py-0.5 text-[length:var(--text-meta)] font-medium",
+        "shrink-0 rounded-(--chip-radius) border-(length:--control-border-width) px-2 py-0.5 text-(length:--text-meta) font-medium",
         role === "owner"
           ? "border-border text-text-secondary"
           : "border-border-subtle text-text-muted",
@@ -185,9 +185,9 @@ function RoleSelect({
       <Select.Trigger
         aria-label="Member role"
         className={cn(
-          "flex h-7 shrink-0 items-center justify-between gap-1.5 rounded-[var(--control-radius)] bg-bg-base px-2.5 text-xs",
-          "border-[length:var(--control-border-width)] border-border transition-colors",
-          "hover:border-[color:var(--border-control-hover)]",
+          "flex h-7 shrink-0 items-center justify-between gap-1.5 rounded-(--control-radius) bg-bg-base px-2.5 text-xs",
+          "border-(length:--control-border-width) border-border transition-colors",
+          "hover:border-(--border-control-hover)",
           "data-[state=open]:border-border-focus focus-visible:outline-none focus-visible:border-border-focus",
           "disabled:cursor-not-allowed disabled:opacity-60",
         )}
@@ -202,14 +202,14 @@ function RoleSelect({
           position="popper"
           align="end"
           sideOffset={4}
-          className="z-[var(--z-in-dialog)] min-w-[10rem] rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating p-1 text-sm shadow-popover"
+          className="z-(--z-in-dialog) min-w-40 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-floating p-1 text-sm shadow-popover"
         >
           <Select.Viewport>
             {ASSIGNABLE_ROLES.map((role) => (
               <Select.Item
                 key={role}
                 value={role}
-                className="flex cursor-default items-center gap-2 rounded-[var(--control-radius)] px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover"
+                className="flex cursor-default items-center gap-2 rounded-(--control-radius) px-2 py-1.5 text-text-primary outline-none data-highlighted:bg-bg-hover"
               >
                 <span className="flex w-3.5 shrink-0 justify-center">
                   <Select.ItemIndicator>
@@ -234,7 +234,7 @@ function PanelSkeleton(): JSX.Element {
       {[0, 1, 2].map((i) => (
         <div
           key={i}
-          className="h-11 animate-pulse rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated/40"
+          className="h-11 animate-pulse rounded-(--control-radius) border border-border-subtle bg-bg-elevated/40"
         />
       ))}
     </div>
@@ -251,7 +251,7 @@ function PanelMessage({
   return (
     <div
       className={cn(
-        "flex items-center gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated/40 p-4 text-sm",
+        "flex items-center gap-2 rounded-(--control-radius) border border-border-subtle bg-bg-elevated/40 p-4 text-sm",
         tone === "error" ? "text-error" : "text-text-muted",
       )}
     >

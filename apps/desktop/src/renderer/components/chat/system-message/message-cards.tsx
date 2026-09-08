@@ -254,7 +254,7 @@ function SessionClearedRow({ meta }: { meta: SessionClearedMetadata }): JSX.Elem
           </span>
           <span>
             prev{" "}
-            <code className="rounded bg-bg-elevated px-1 font-mono text-[length:var(--text-meta)] text-text-secondary">
+            <code className="rounded bg-bg-elevated px-1 font-mono text-(length:--text-meta) text-text-secondary">
               {meta.previous_cli_session_id_prefix}
             </code>
           </span>
@@ -292,12 +292,12 @@ export function OnboardingRow({
     >
       <ChevronRight
         className={
-          "mt-[3px] size-3 shrink-0 text-text-muted/60 transition-transform " +
+          "mt-0.75 size-3 shrink-0 text-text-muted/60 transition-transform " +
           (expanded ? "rotate-90" : "")
         }
       />
       <span
-        className="mt-0.5 inline-flex shrink-0 items-center rounded px-1.5 py-px text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-accent bg-accent-soft"
+        className="mt-0.5 inline-flex shrink-0 items-center rounded px-1.5 py-px text-(length:--text-badge) font-semibold uppercase tracking-wider text-accent bg-accent-soft"
         data-onboarding-badge="1"
       >
         Onboarding

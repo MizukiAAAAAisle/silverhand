@@ -47,7 +47,7 @@ export function ScheduleFireBanner({
           {headerTitle}
         </span>
         {meta ? (
-          <span className="ml-auto font-mono text-[length:var(--text-meta)] font-normal text-text-muted">
+          <span className="ml-auto font-mono text-(length:--text-meta) font-normal text-text-muted">
             {meta.spec_summary ?? meta.spec_kind}
           </span>
         ) : null}

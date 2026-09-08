@@ -304,9 +304,9 @@ function VisibilitySelect({
               aria-checked={selected}
               onClick={() => onChange(opt.value)}
               className={cn(
-                "flex items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs font-medium transition-colors",
+                "flex items-center justify-center gap-1.5 rounded-(--control-radius) border-(length:--control-border-width) px-3 py-1.5 text-xs font-medium transition-colors",
                 selected
-                  ? "border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-text-on-selected"
+                  ? "border-(--border-row-selected) bg-(--bg-row-selected) text-text-on-selected"
                   : // Resting matches the member chips below (bg-base + subtle
                     // border). Hover is the canonical control-hover recipe: an
                     // ink border (`--border-control-hover` — dark ink in warm,
@@ -314,7 +314,7 @@ function VisibilitySelect({
                     // selectable-option fill (`--bg-option-hover` — forza6 pale
                     // lime, warm/slack neutral). NOT `--bg-row-hover`, which is a
                     // magenta brand tint in forza6.
-                    "border-border-subtle bg-bg-base text-text-secondary hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)] hover:text-text-primary",
+                    "border-border-subtle bg-bg-base text-text-secondary hover:border-(--border-control-hover) hover:bg-(--bg-option-hover) hover:text-text-primary",
               )}
             >
               <Icon className="size-3.5" />
@@ -365,7 +365,7 @@ function RegularMemberPicker({
             type="button"
             onClick={() => onChange([])}
             aria-label="Clear selected members"
-            className="shrink-0 rounded-[var(--control-radius)] text-text-muted transition-colors hover:text-text-primary focus-outline"
+            className="shrink-0 rounded-(--control-radius) text-text-muted transition-colors hover:text-text-primary focus-outline"
           >
             <X className="size-3.5" aria-hidden />
           </button>

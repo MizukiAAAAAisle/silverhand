@@ -117,7 +117,7 @@ export function AgentPermissionsPanel({
               it explains why THIS agent's editor is read-only, so it sits with
               the editor below the picker, not above it. */}
           {!canEdit ? (
-            <div className="flex items-start gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border-subtle bg-bg-elevated/40 p-2.5 text-xs text-text-muted">
+            <div className="flex items-start gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border-subtle bg-bg-elevated/40 p-2.5 text-xs text-text-muted">
               <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
               <span>
                 You can view this agent's permissions; editing requires owner / admin, or being the
@@ -154,9 +154,9 @@ function AgentSelect({
     <Select.Root value={value ?? undefined} onValueChange={onChange}>
       <Select.Trigger
         className={cn(
-          "flex h-9 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] bg-bg-floating px-3 text-sm",
-          "border-[length:var(--control-border-width)] border-border transition-colors",
-          "hover:border-[color:var(--border-control-hover)]",
+          "flex h-9 w-full items-center justify-between gap-2 rounded-(--control-radius) bg-bg-floating px-3 text-sm",
+          "border-(length:--control-border-width) border-border transition-colors",
+          "hover:border-(--border-control-hover)",
           "data-[state=open]:border-border-focus focus-visible:outline-none focus-visible:border-border-focus",
         )}
       >
@@ -183,14 +183,14 @@ function AgentSelect({
         <Select.Content
           position="popper"
           sideOffset={4}
-          className="z-[var(--z-dialog)] min-w-[var(--radix-select-trigger-width)] rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating p-1 text-sm shadow-popover"
+          className="z-(--z-dialog) min-w-(--radix-select-trigger-width) rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-floating p-1 text-sm shadow-popover"
         >
           <Select.Viewport>
             {agents.map((agent) => (
               <Select.Item
                 key={agent.id}
                 value={agent.id}
-                className="flex cursor-default items-center gap-2 rounded-[var(--control-radius)] px-2 py-1.5 text-text-primary outline-none data-[highlighted]:bg-bg-hover"
+                className="flex cursor-default items-center gap-2 rounded-(--control-radius) px-2 py-1.5 text-text-primary outline-none data-highlighted:bg-bg-hover"
               >
                 <AgentAvatar
                   runtime={agent.runtime}
@@ -276,7 +276,7 @@ function AgentCapabilityEditor({
   }
 
   return (
-    <div className="flex flex-col gap-4 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating p-3.5">
+    <div className="flex flex-col gap-4 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-floating p-3.5">
       <div className="flex items-center justify-end">
         <span className="text-xs tabular-nums text-text-muted">
           Granted {grantedCount}/{CAPABILITY_COUNT}
@@ -290,7 +290,7 @@ function AgentCapabilityEditor({
       <div className="columns-2 gap-x-6">
         {GROUPS.map((group) => (
           <div key={group.id} className="mb-4 flex break-inside-avoid flex-col gap-1.5 last:mb-0">
-            <div className="text-[length:var(--text-meta)] font-semibold uppercase tracking-wide text-text-muted">
+            <div className="text-(length:--text-meta) font-semibold uppercase tracking-wide text-text-muted">
               {group.label}
             </div>
             {group.items.map((item) => {
@@ -300,10 +300,8 @@ function AgentCapabilityEditor({
                 <div
                   key={item.key}
                   className={cn(
-                    "flex items-start gap-2 rounded-[var(--control-radius)] px-1.5 py-1",
-                    highlight
-                      ? "[outline:2px_solid_var(--border-focus)] [outline-offset:-2px]"
-                      : null,
+                    "flex items-start gap-2 rounded-(--control-radius) px-1.5 py-1",
+                    highlight ? "[outline:2px_solid_var(--border-focus)] -outline-offset-2" : null,
                   )}
                 >
                   <Checkbox
@@ -315,7 +313,7 @@ function AgentCapabilityEditor({
                   />
                   <span className="flex flex-col">
                     <span className="text-xs font-medium text-text-primary">{item.label}</span>
-                    <span className="text-[length:var(--text-meta)] leading-tight text-text-muted">
+                    <span className="text-(length:--text-meta) leading-tight text-text-muted">
                       {item.hint}
                     </span>
                   </span>
@@ -332,7 +330,7 @@ function AgentCapabilityEditor({
         // scrolling to the end of a long capability list. Negative margins
         // cancel the card padding so it spans full width and sits flush at
         // the card's bottom edge; the card bg covers rows scrolling behind.
-        <div className="sticky bottom-0 -mx-3.5 -mb-3.5 mt-1 flex items-center gap-2 border-t-[length:var(--control-border-width)] border-border bg-bg-floating px-3.5 py-3">
+        <div className="sticky bottom-0 -mx-3.5 -mb-3.5 mt-1 flex items-center gap-2 border-t-(length:--control-border-width) border-border bg-bg-floating px-3.5 py-3">
           <Button
             size="sm"
             onClick={() => void onSave()}
@@ -359,8 +357,8 @@ function AgentCapabilityEditor({
 function PanelSkeleton(): JSX.Element {
   return (
     <div className="flex flex-col gap-3">
-      <div className="h-9 animate-pulse rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated/40" />
-      <div className="h-64 animate-pulse rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated/40" />
+      <div className="h-9 animate-pulse rounded-(--control-radius) border border-border-subtle bg-bg-elevated/40" />
+      <div className="h-64 animate-pulse rounded-(--control-radius) border border-border-subtle bg-bg-elevated/40" />
     </div>
   );
 }
@@ -375,7 +373,7 @@ function PanelMessage({
   return (
     <div
       className={cn(
-        "flex items-center gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated/40 p-4 text-sm",
+        "flex items-center gap-2 rounded-(--control-radius) border border-border-subtle bg-bg-elevated/40 p-4 text-sm",
         tone === "error" ? "text-error" : "text-text-muted",
       )}
     >

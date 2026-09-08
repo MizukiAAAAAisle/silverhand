@@ -76,7 +76,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
   return (
     <nav
       aria-label="App sections"
-      className="nav-rail flex h-full w-[var(--nav-rail-width)] shrink-0 flex-col items-center gap-1 bg-[var(--bg-nav-rail)] py-2"
+      className="nav-rail flex h-full w-(--nav-rail-width) shrink-0 flex-col items-center gap-1 bg-(--bg-nav-rail) py-2"
       style={{
         ...paneChrome,
         overflow: "hidden",
@@ -116,7 +116,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
               <span
                 data-nav-unread-dot
                 aria-hidden
-                className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-[var(--unread)]"
+                className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-(--unread)"
               />
             )}
           </button>

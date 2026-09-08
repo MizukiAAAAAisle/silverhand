@@ -35,7 +35,7 @@ export function EditPencilButton({
       tabIndex={hidden ? -1 : undefined}
       aria-hidden={hidden || undefined}
       className={cn(
-        "rounded-[var(--control-radius)] p-1 text-text-muted transition-colors hover:text-text-primary disabled:opacity-50",
+        "rounded-(--control-radius) p-1 text-text-muted transition-colors hover:text-text-primary disabled:opacity-50",
         hidden && "invisible",
       )}
       title={hidden ? undefined : ariaLabel}

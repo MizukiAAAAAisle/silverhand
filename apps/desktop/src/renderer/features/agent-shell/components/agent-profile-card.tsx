@@ -84,7 +84,7 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
                     }}
                   />
                 ) : (
-                  <div className="break-words agent-profile-hero-name font-serif font-semibold text-text-primary">
+                  <div className="wrap-break-word agent-profile-hero-name font-serif font-semibold text-text-primary">
                     {agent.display_name || agent.name}
                   </div>
                 )}
@@ -107,7 +107,7 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
           <div className={cn("flex gap-1", descriptionEditing ? "items-start" : "items-center")}>
             <div
               className={cn(
-                "agent-profile-hero-description min-w-0 break-words",
+                "agent-profile-hero-description min-w-0 wrap-break-word",
                 descriptionEditing && "flex-1",
               )}
             >

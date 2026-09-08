@@ -95,7 +95,7 @@ export function WorkspaceFilterSelect({
                 workspace-filter dropdown reads the same. */}
             {agentSpaces.length > 0 ? (
               <Select.Group>
-                <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
+                <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
                   Agent Spaces
                 </Select.Label>
                 {agentSpaces.map((workspace) => (
@@ -122,7 +122,7 @@ export function WorkspaceFilterSelect({
             ) : null}
             {peopleOwned.length > 0 ? (
               <Select.Group>
-                <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
+                <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
                   Workspaces
                 </Select.Label>
                 {peopleOwned.map((workspace) => (

@@ -426,7 +426,7 @@ export function ActivityView({
       className="flex h-full flex-1 flex-col bg-bg-chat"
       style={{ ...paneChrome, overflow: "hidden" }}
     >
-      <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
+      <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <ActivityIcon className="size-3.5 text-accent" />
         <span className="font-serif text-sm font-semibold text-text-primary">Activity</span>
         <span className="text-xs text-text-muted">{counts.all}</span>
@@ -445,10 +445,10 @@ export function ActivityView({
               type="button"
               onClick={() => setFilter(f.key)}
               className={
-                "inline-flex items-center gap-1.5 border-[length:var(--control-border-width)] rounded-[var(--chip-radius)] px-2.5 py-1 text-xs font-medium transition-colors " +
+                "inline-flex items-center gap-1.5 border-(length:--control-border-width) rounded-(--chip-radius) px-2.5 py-1 text-xs font-medium transition-colors " +
                 (on
-                  ? "border-[color:var(--border-control-hover)] bg-[var(--bg-row-selected)] text-text-primary"
-                  : "border-border bg-bg-floating text-text-muted hover:border-[color:var(--border-control-hover)] hover:text-text-primary")
+                  ? "border-(--border-control-hover) bg-(--bg-row-selected) text-text-primary"
+                  : "border-border bg-bg-floating text-text-muted hover:border-(--border-control-hover) hover:text-text-primary")
               }
             >
               {f.label}
@@ -537,7 +537,7 @@ function ActivitySection({
 }): JSX.Element {
   return (
     <section>
-      <div className="px-1 pb-1.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
+      <div className="px-1 pb-1.5 text-(length:--text-badge) font-medium uppercase tracking-wider text-text-muted">
         {label}
       </div>
       <ul className="space-y-2">
@@ -638,7 +638,7 @@ function ActivityRow({
   // item 2).
   const countEl =
     item.unread_count != null && item.unread_count > 0 ? (
-      <span className="shrink-0 rounded-[var(--control-radius)] bg-accent-soft px-1.5 py-px text-xs font-medium leading-tight tabular-nums text-accent">
+      <span className="shrink-0 rounded-(--control-radius) bg-accent-soft px-1.5 py-px text-xs font-medium leading-tight tabular-nums text-accent">
         {item.unread_count > 99 ? "99+" : item.unread_count} new
       </span>
     ) : null;
@@ -747,7 +747,7 @@ function ActivityRow({
 
         {/* Timestamp pairs with the where-line, so it stays TOP-right (the row is
             items-start). */}
-        <span className="shrink-0 text-[length:var(--text-meta)] text-text-muted">
+        <span className="shrink-0 text-(length:--text-meta) text-text-muted">
           {relTime(item.timestamp)}
         </span>
         {clearSource ? (
@@ -766,7 +766,7 @@ function ActivityRow({
               e.stopPropagation();
               clearItem.mutate(clearSource);
             }}
-            className="grid size-7 shrink-0 self-center place-items-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary"
+            className="grid size-7 shrink-0 self-center place-items-center rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-floating text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary"
           >
             <Check className="size-4" />
           </button>

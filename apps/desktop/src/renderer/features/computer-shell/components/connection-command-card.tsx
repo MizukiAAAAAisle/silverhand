@@ -107,11 +107,11 @@ export function ConnectionCommandCard({
     <div className="flex flex-col gap-3">
       <div
         data-terminal-surface
-        className="overflow-hidden rounded-[var(--floating-radius)] border border-[var(--border-terminal)] bg-[var(--bg-terminal)]"
+        className="overflow-hidden rounded-(--floating-radius) border border-(--border-terminal) bg-(--bg-terminal)"
       >
         {/* Terminal title bar: label left, Reveal + Copy right. */}
-        <div className="flex items-center justify-between gap-2 border-b border-[var(--border-terminal)] bg-[var(--bg-terminal-chrome)] px-3 py-1.5">
-          <span className="inline-flex items-center gap-1.5 font-mono text-[length:var(--text-meta)] uppercase tracking-wider text-[var(--text-terminal-chrome)]">
+        <div className="flex items-center justify-between gap-2 border-b border-(--border-terminal) bg-(--bg-terminal-chrome) px-3 py-1.5">
+          <span className="inline-flex items-center gap-1.5 font-mono text-(length:--text-meta) uppercase tracking-wider text-(--text-terminal-chrome)">
             <Terminal className="size-3.5" aria-hidden />
             {label}
           </span>
@@ -120,7 +120,7 @@ export function ConnectionCommandCard({
               type="button"
               onClick={() => setRevealed((v) => !v)}
               disabled={!daemonCommand}
-              className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-[length:var(--text-meta)] text-[var(--text-terminal-chrome)] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+              className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-(length:--text-meta) text-(--text-terminal-chrome) transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={revealed ? computerCopy.hide : computerCopy.reveal}
             >
               {revealed ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
@@ -130,7 +130,7 @@ export function ConnectionCommandCard({
               type="button"
               onClick={() => void handleCopy()}
               disabled={!daemonCommand}
-              className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-[length:var(--text-meta)] text-[var(--text-terminal-chrome)] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+              className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-(length:--text-meta) text-(--text-terminal-chrome) transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={computerCopy.copy}
             >
               {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
@@ -141,7 +141,7 @@ export function ConnectionCommandCard({
         {/* Body: `$` prompt + the command. The prompt is decorative
          * (select-none, its own span) so it's never part of the copy. */}
         <div className="max-h-32 overflow-y-auto px-3 py-2.5">
-          <code className="block whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-[var(--text-terminal)]">
+          <code className="block whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-(--text-terminal)">
             <span className="select-none opacity-50" aria-hidden>
               ${" "}
             </span>

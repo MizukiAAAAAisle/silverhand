@@ -173,7 +173,7 @@ export function SavedListView({
       className="flex h-full flex-1 flex-col bg-bg-chat"
       style={{ ...paneChrome, overflow: "hidden" }}
     >
-      <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
+      <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <Bookmark className="size-3.5 fill-current text-accent" />
         <span className="font-serif text-sm font-semibold text-text-primary">Saved</span>
         {data ? <span className="text-xs tabular-nums text-text-muted">{items.length}</span> : null}

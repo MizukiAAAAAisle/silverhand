@@ -25,7 +25,7 @@ export const ChannelRow = forwardRef<HTMLDivElement, ChannelRowProps>(function C
 ): JSX.Element {
   return (
     <ConversationRowLayout ref={ref} {...layout}>
-      <div className="flex size-[22px] shrink-0 items-center justify-center">
+      <div className="flex size-5.5 shrink-0 items-center justify-center">
         <ChannelIcon
           variant="sticker"
           visibility={visibility}

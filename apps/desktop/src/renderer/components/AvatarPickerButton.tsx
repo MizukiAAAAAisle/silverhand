@@ -114,7 +114,7 @@ export function AvatarPickerButton({
           // sits inside the square `overflow-hidden` clip, so anything
           // wider than the available width gets cut. Callers pass single
           // verbs; `ariaLabel` carries the verbose text.
-          "text-[length:var(--text-badge)] font-semibold uppercase tracking-normal",
+          "text-(length:--text-badge) font-semibold uppercase tracking-normal",
           "opacity-0 transition-opacity duration-100 ease-out",
           "group-hover:opacity-100 group-focus-within:opacity-100",
         )}

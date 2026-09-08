@@ -99,7 +99,7 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
       className="flex h-full flex-1 flex-col bg-bg-base"
       style={{ ...paneChrome, overflow: "hidden" }}
     >
-      <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle pl-[6px] pr-4">
+      <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle pl-1.5 pr-4">
         <TaskIcon
           data-tasks-hero
           data-sticker
@@ -111,7 +111,7 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
           {selectedChannelName ? `Tasks in #${selectedChannelName}` : "All Tasks"}
         </span>
         <span className="text-xs text-text-muted">· {boardCountLabel(totalTaskCount(counts))}</span>
-        <span className="ml-auto text-[length:var(--text-badge)] text-text-muted">
+        <span className="ml-auto text-(length:--text-badge) text-text-muted">
           {boardCountLabel(activeTaskCount(counts))} active
         </span>
       </header>

@@ -144,7 +144,7 @@ export function SenderFilterSelect({
               All senders
             </FilterSelectItem>
             <Select.Group>
-              <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
+              <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
                 Humans
               </Select.Label>
               {sortedUsers.length === 0 ? (
@@ -188,7 +188,7 @@ export function SenderFilterSelect({
               )}
             </Select.Group>
             <Select.Group>
-              <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
+              <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
                 Agents
               </Select.Label>
               {agents.length === 0 ? (

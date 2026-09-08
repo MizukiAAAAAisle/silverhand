@@ -129,7 +129,7 @@ export function QuotedMessagePreview({
           : undefined
       }
     >
-      <div className="mb-1 flex items-center gap-1 text-[length:var(--text-badge)] uppercase tracking-wider text-text-muted">
+      <div className="mb-1 flex items-center gap-1 text-(length:--text-badge) uppercase tracking-wider text-text-muted">
         <ThreadIcon className="size-3" />
         <span>thread from</span>
       </div>

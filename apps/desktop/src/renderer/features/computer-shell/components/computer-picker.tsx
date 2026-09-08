@@ -56,7 +56,7 @@ export function ComputerPicker({
         aria-label={ariaLabel}
         className={cn(
           FILTER_SELECT_TRIGGER_CLASS,
-          "data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60",
+          "data-disabled:cursor-not-allowed data-disabled:opacity-60",
         )}
       >
         <span className="flex min-w-0 items-center gap-1.5">

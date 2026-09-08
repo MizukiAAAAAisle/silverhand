@@ -104,11 +104,11 @@ function ConversationActivityPane({
           sidebar, while sparse content lists keep the sticker (#task:1441). */}
       <aside
         data-agent-activity
-        className="flex w-[224px] shrink-0 flex-col border-r border-border-subtle bg-bg-base"
+        className="flex w-56 shrink-0 flex-col border-r border-border-subtle bg-bg-base"
       >
         <div className="flex-1 overflow-y-auto px-1.5 py-2">
           {groups.active.length === 0 && groups.recent.length === 0 ? (
-            <p className="px-2 py-6 text-center text-[length:var(--text-meta)] text-text-muted">
+            <p className="px-2 py-6 text-center text-(length:--text-meta) text-text-muted">
               Not in any channel yet.
             </p>
           ) : (
@@ -164,7 +164,7 @@ function RosterGroup({
   if (rows.length === 0) return null;
   return (
     <div className="mb-0.5">
-      <p className="px-2 pb-0.5 pt-1 font-mono text-[length:var(--text-badge)] uppercase tracking-wider text-text-muted">
+      <p className="px-2 pb-0.5 pt-1 font-mono text-(length:--text-badge) uppercase tracking-wider text-text-muted">
         {label}
       </p>
       <ul className="flex flex-col">
@@ -256,8 +256,8 @@ function RosterItem({
           // `aside[data-sidebar]`-scoped, so on this content-area row the class
           // is purely the colour utility — border/bg stay the inline tokens.
           selected
-            ? "border-[var(--border-row-selected,var(--accent))] bg-[var(--bg-row-selected,var(--bg-selected))] font-semibold text-text-on-selected"
-            : "border-transparent text-text-secondary hover:border-[var(--border-row-hover,var(--accent))] hover:text-text-primary",
+            ? "border-(--border-row-selected,var(--accent)) bg-(--bg-row-selected,var(--bg-selected)) font-semibold text-text-on-selected"
+            : "border-transparent text-text-secondary hover:border-(--border-row-hover,var(--accent)) hover:text-text-primary",
         )}
       >
         {/* Conversation roster row identity. The `data-channel-icon` sticker
@@ -275,7 +275,7 @@ function RosterItem({
           <span
             data-status-pip
             aria-label="active"
-            className="size-1.5 shrink-0 rounded-[var(--pill-radius)] bg-success"
+            className="size-1.5 shrink-0 rounded-(--pill-radius) bg-success"
           />
         ) : null}
       </button>

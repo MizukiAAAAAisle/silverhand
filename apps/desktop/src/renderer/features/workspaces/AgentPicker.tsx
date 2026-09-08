@@ -194,7 +194,7 @@ export function MemberPicker({
         <Select.Trigger
           id={selectId}
           aria-label="Add member"
-          className="flex w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-[placeholder]:text-text-muted"
+          className="flex w-full items-center justify-between gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-(--border-control-hover) focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-placeholder:text-text-muted"
         >
           <span className="flex min-w-0 items-center gap-1.5">
             <UserPlus className="size-3.5 shrink-0 text-text-muted" />
@@ -208,7 +208,7 @@ export function MemberPicker({
           <Select.Content
             position="popper"
             sideOffset={4}
-            className="z-[var(--z-in-dialog)] max-h-[40vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-popover"
+            className="z-(--z-in-dialog) max-h-[40vh] min-w-(--radix-select-trigger-width) overflow-hidden rounded-md border border-border bg-bg-floating shadow-popover"
           >
             <Select.Viewport className="p-1">
               {candidates.length === 0 ? (
@@ -224,7 +224,7 @@ export function MemberPicker({
                     <Select.Item
                       key={key}
                       value={key}
-                      className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-primary outline-none data-[highlighted]:bg-bg-hover"
+                      className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text-primary outline-none data-highlighted:bg-bg-hover"
                     >
                       {candidate.kind === "agent" ? (
                         <AgentAvatar
@@ -243,7 +243,7 @@ export function MemberPicker({
                       <Select.ItemText>
                         <span className="flex min-w-0 items-baseline gap-1.5">
                           <span className="truncate font-medium">{displayName}</span>
-                          <span className="truncate font-mono text-[length:var(--text-meta)] text-text-muted">
+                          <span className="truncate font-mono text-(length:--text-meta) text-text-muted">
                             @{handle}
                           </span>
                         </span>
@@ -300,7 +300,7 @@ function SelectedTag({
   return (
     <span
       className={
-        "inline-flex h-full max-w-full items-center gap-1.5 rounded-[var(--chip-radius)] border border-border-subtle bg-bg-base pl-1.5 pr-1 text-xs leading-none " +
+        "inline-flex h-full max-w-full items-center gap-1.5 rounded-(--chip-radius) border border-border-subtle bg-bg-base pl-1.5 pr-1 text-xs leading-none " +
         (muted ? "text-text-muted" : "text-text-primary")
       }
     >
@@ -308,7 +308,7 @@ function SelectedTag({
       <span className="flex min-w-0 items-baseline gap-1">
         <span className="truncate font-medium">{displayName}</span>
         {handle ? (
-          <span className="truncate font-mono text-[length:var(--text-meta)] text-text-muted">
+          <span className="truncate font-mono text-(length:--text-meta) text-text-muted">
             @{handle}
           </span>
         ) : null}
@@ -318,7 +318,7 @@ function SelectedTag({
         onClick={onRemove}
         aria-label={ariaRemoveLabel}
         title="Remove member"
-        className="flex size-4 shrink-0 items-center justify-center rounded-[var(--chip-radius)] text-text-muted transition-colors hover:text-text-primary focus-outline"
+        className="flex size-4 shrink-0 items-center justify-center rounded-(--chip-radius) text-text-muted transition-colors hover:text-text-primary focus-outline"
       >
         <X className="size-3" aria-hidden />
       </button>

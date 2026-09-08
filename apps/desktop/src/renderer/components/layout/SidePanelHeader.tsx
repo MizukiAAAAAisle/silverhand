@@ -71,7 +71,7 @@ function SidePanelCloseButton({
       data-sticker-size="md"
       data-sticker-tone="neutral"
       className={
-        "flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline " +
+        "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline " +
         className
       }
     >

@@ -821,7 +821,7 @@ export function ThreadPanel({
       <aside
         ref={findRootRef}
         data-pane="thread"
-        className="relative flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
+        className="relative flex h-full min-h-0 w-full flex-col bg-(--bg-chat,transparent)"
       >
         <SidePanelHeader
           onClose={onClose}
@@ -838,7 +838,7 @@ export function ThreadPanel({
                   aria-pressed={find.open}
                   title="Search this thread"
                   className={
-                    "flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] " +
+                    "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                     (find.open
                       ? "bg-bg-hover text-text-primary"
                       : "text-text-muted hover:bg-bg-hover hover:text-text-primary")
@@ -859,7 +859,7 @@ export function ThreadPanel({
                   onClick={toggleFollow}
                   disabled={followPending}
                   className={
-                    "flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] hover:bg-bg-hover disabled:opacity-50 " +
+                    "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) hover:bg-bg-hover disabled:opacity-50 " +
                     (viewerFollowing
                       ? "text-text-primary hover:text-text-primary"
                       : "text-text-muted hover:text-text-primary")
@@ -881,7 +881,7 @@ export function ThreadPanel({
                   aria-label="View in channel"
                   title="View in channel"
                   onClick={onViewInChannel}
-                  className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                  className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-muted hover:bg-bg-hover hover:text-text-primary"
                 >
                   <ArrowUpRight className="size-3.5" />
                 </button>
@@ -907,7 +907,7 @@ export function ThreadPanel({
           It drives only the search controller + overlay; the cluster window is
           untouched until the user navigates to a match (ensure-visible above). */}
         {findAvailable && find.open ? (
-          <div className="absolute inset-x-0 top-12 z-[var(--z-sticky)]">
+          <div className="absolute inset-x-0 top-12 z-(--z-sticky)">
             <InlineFindBar
               controller={find}
               onOpenAdvanced={() =>
@@ -1041,7 +1041,7 @@ export function ThreadPanel({
                 aria-label={shouldResetToLatest ? "Jump to latest reply" : "Scroll to bottom"}
                 title={shouldResetToLatest ? "Jump to latest reply" : "Scroll to bottom"}
                 onClick={handleScrollBottomClick}
-                className="absolute bottom-4 left-1/2 z-[var(--z-sticky)] flex size-9 -translate-x-1/2 items-center justify-center rounded-[var(--pill-radius)] bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
+                className="absolute bottom-4 left-1/2 z-(--z-sticky) flex size-9 -translate-x-1/2 items-center justify-center rounded-(--pill-radius) bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
               >
                 <ArrowDown className="size-4" />
               </button>

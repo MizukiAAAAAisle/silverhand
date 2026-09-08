@@ -220,7 +220,7 @@ export function ChannelMembersDialog({
         // A roster is one column of short rows, so a wider shell would only buy
         // empty space right of every name; a long name is budgeted in the row.
         // The Add-member trigger matches this width exactly.
-        className="max-w-[360px]"
+        className="max-w-90"
         cornerActions={
           showBulk ? (
             <>
@@ -449,7 +449,7 @@ export function ChannelMembersContent({
     return (
       <li key={key} className="flex flex-col">
         <div
-          className="flex min-h-[34px] items-center gap-2.5 rounded-[var(--chip-radius)] px-1.5 py-1 transition-colors hover:bg-[var(--bg-option-hover)]"
+          className="flex min-h-8.5 items-center gap-2.5 rounded-(--chip-radius) px-1.5 py-1 transition-colors hover:bg-(--bg-option-hover)"
           data-member-row={member.kind}
         >
           <span className="relative flex shrink-0 items-center">
@@ -489,14 +489,14 @@ export function ChannelMembersContent({
             <span className="truncate text-sm font-medium text-text-primary" title={label}>
               {label}
             </span>
-            <span className="max-w-[45%] shrink-0 truncate font-mono text-[length:var(--text-meta)] text-text-muted">
+            <span className="max-w-[45%] shrink-0 truncate font-mono text-(length:--text-meta) text-text-muted">
               @{member.name}
             </span>
             {isSelf ? (
               // Radius comes from the chip token, not a literal — `--chip-radius`
               // is 0 in forza6 (hard-cut poster geometry) and 4px in the warm
               // themes, the same token the row above already consumes.
-              <span className="shrink-0 rounded-[var(--chip-radius)] border border-border-subtle px-1 text-[length:var(--text-badge)] text-text-muted">
+              <span className="shrink-0 rounded-(--chip-radius) border border-border-subtle px-1 text-(length:--text-badge) text-text-muted">
                 you
               </span>
             ) : null}
@@ -553,14 +553,14 @@ export function ChannelMembersContent({
                 agent gets no band — nothing about it departs from this
                 product's normal behaviour. */}
             {confirmCopy ? (
-              <div className="rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5">
+              <div className="rounded-(--control-radius) bg-(--warning-surface) px-3 py-2.5">
                 {/* `break-words`: this sentence quotes the `@handle`, and a
                     handle is one unbreakable run of up to
                     `ENTITY_NAME_MAX_LENGTH` characters — wider than this
                     column, with no space or hyphen for the line breaker to
                     use. Everywhere else a handle appears it truncates; here it
                     must stay whole, so the wrap opportunity has to be forced. */}
-                <p className="break-words text-sm leading-relaxed text-text-primary">
+                <p className="wrap-break-word text-sm leading-relaxed text-text-primary">
                   {confirmCopy}
                 </p>
               </div>
@@ -643,7 +643,7 @@ export function ChannelMembersContent({
 
 function GroupLabel({ children }: { children: string }): JSX.Element {
   return (
-    <div className="px-1.5 pb-1 pt-2.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-[0.1em] text-text-muted">
+    <div className="px-1.5 pb-1 pt-2.5 text-(length:--text-badge) font-semibold uppercase tracking-widest text-text-muted">
       {children}
     </div>
   );

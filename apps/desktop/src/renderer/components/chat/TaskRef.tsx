@@ -65,7 +65,7 @@ export function TaskRefStaticChip({
   if (!task) {
     return (
       <span
-        className="inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+        className="inline-flex max-w-55 items-center gap-1 rounded-(--chip-radius) bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
         title={`Task ${inertLabel}`}
         data-task-ref={String(taskNumber)}
         data-task-ref-state="static"
@@ -79,7 +79,7 @@ export function TaskRefStaticChip({
   // shared `state='resolved'` hook — no export-specific styling exists.
   return (
     <span
-      className="inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] font-medium text-accent"
+      className="inline-flex max-w-55 items-center gap-1 rounded-(--chip-radius) font-medium text-accent"
       title={`Task #${task.task_number} · ${task.title}`}
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved"
@@ -161,7 +161,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   if (!conversationId) {
     return (
       <span
-        className="inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+        className="inline-flex max-w-55 items-center gap-1 rounded-(--chip-radius) bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
         title={`Task ${inertLabel}`}
         data-task-ref={String(taskNumber)}
         data-task-ref-state="no-context"
@@ -178,7 +178,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   if (result.isLoading) {
     const loadingChip = (
       <span
-        className="inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+        className="inline-flex max-w-55 items-center gap-1 rounded-(--chip-radius) bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
         // Wrapped in HoverPopover below — use aria-label, not the
         // native `title` attribute. macOS browsers schedule the native
         // tooltip on a 2-3s cycle that competes with Radix HoverCard
@@ -228,7 +228,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
 
   const inertChip = (
     <span
-      className="inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+      className="inline-flex max-w-55 items-center gap-0.5 rounded-(--chip-radius) bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
       // Wrapped in HoverPopover below — `aria-label` instead of the
       // native `title` attribute (see loading branch comment above
       // for the flicker rationale).
@@ -267,7 +267,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
     <span
       role="button"
       tabIndex={0}
-      className="inline-flex max-w-[220px] cursor-pointer items-center gap-1 rounded-[var(--chip-radius)] font-medium text-accent focus-outline"
+      className="inline-flex max-w-55 cursor-pointer items-center gap-1 rounded-(--chip-radius) font-medium text-accent focus-outline"
       aria-label={tooltip}
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved"
@@ -330,7 +330,7 @@ function TaskPopoverBody({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <span data-tasks-num className="font-mono text-[length:var(--text-badge)] text-text-muted">
+        <span data-tasks-num className="font-mono text-(length:--text-badge) text-text-muted">
           #{task.task_number}
         </span>
         {/* Same interactive chip as the task-pane card: click → "Move to"
@@ -342,8 +342,8 @@ function TaskPopoverBody({
           onOpenChange={onPickerOpenChange}
         />
       </div>
-      <p className="break-words text-xs font-medium text-text-primary">{task.title}</p>
-      <p className="flex items-baseline gap-1.5 text-[length:var(--text-meta)] text-text-muted">
+      <p className="wrap-break-word text-xs font-medium text-text-primary">{task.title}</p>
+      <p className="flex items-baseline gap-1.5 text-(length:--text-meta) text-text-muted">
         <span className="shrink-0 text-text-secondary">
           {task.assignee ? task.assignee.name : <em>unassigned</em>}
         </span>

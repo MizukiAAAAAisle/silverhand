@@ -133,8 +133,8 @@ function MessageActivitySection({ subject }: { subject: ProfileMessageSubject })
           role="status"
           aria-label="Loading message activity"
         >
-          <div className="h-3 w-40 animate-pulse rounded-[var(--control-radius)] bg-bg-elevated" />
-          <div className="h-28 animate-pulse rounded-[var(--control-radius)] bg-bg-elevated" />
+          <div className="h-3 w-40 animate-pulse rounded-(--control-radius) bg-bg-elevated" />
+          <div className="h-28 animate-pulse rounded-(--control-radius) bg-bg-elevated" />
         </div>
       )}
     </ProfileSection>

@@ -134,11 +134,11 @@ export function CreateTaskChannelPicker({
         // dialog's own scroll-allowed subtree. The trade-off is that the search
         // box now sits inside the host <form>, so its Enter is guarded below so
         // it can never submit the form.
-        className="z-[var(--z-popover)] flex max-h-[42vh] w-[var(--radix-popover-trigger-width)] min-w-[240px] flex-col rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
+        className="z-(--z-popover) flex max-h-[42vh] w-(--radix-popover-trigger-width) min-w-60 flex-col rounded-(--select-content-radius) bg-bg-floating p-1 shadow-popover outline-none"
       >
         <div
           data-input=""
-          className="flex items-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 py-1.5 transition-colors focus-within:border-border-focus"
+          className="flex items-center gap-1.5 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2 py-1.5 transition-colors focus-within:border-border-focus"
         >
           <Search className="size-3.5 shrink-0 text-text-muted" />
           <input
@@ -173,7 +173,7 @@ export function CreateTaskChannelPicker({
           {groups.map((g, gi) => (
             <div key={g.items[0]?.workspaceId ?? gi}>
               {g.title ? (
-                <div className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
+                <div className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
                   {g.title}
                 </div>
               ) : null}
@@ -204,7 +204,7 @@ export function CreateTaskChannelPicker({
             </div>
           ))}
           {flatOptions.length === 0 ? (
-            <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
+            <p className="px-2 py-3 text-center text-(length:--text-meta) italic text-text-muted">
               No matches
             </p>
           ) : null}

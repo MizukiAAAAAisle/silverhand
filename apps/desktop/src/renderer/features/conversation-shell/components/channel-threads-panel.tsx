@@ -58,7 +58,7 @@ export function ChannelThreadsPanel({
   return (
     <aside
       data-pane="threads-list"
-      className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
+      className="flex h-full min-h-0 w-full flex-col bg-(--bg-chat,transparent)"
     >
       <SidePanelHeader onClose={onClose}>
         <SidePanelHeaderTitle
@@ -217,10 +217,10 @@ export function ChannelThreadsContent({
               onClick={() => setTab(t.key)}
               aria-pressed={on}
               className={
-                "inline-flex items-center gap-1.5 border-[length:var(--control-border-width)] rounded-[var(--chip-radius)] px-2.5 py-1 text-xs font-medium transition-colors " +
+                "inline-flex items-center gap-1.5 border-(length:--control-border-width) rounded-(--chip-radius) px-2.5 py-1 text-xs font-medium transition-colors " +
                 (on
-                  ? "border-[color:var(--border-control-hover)] bg-[var(--bg-row-selected)] text-text-primary"
-                  : "border-border bg-bg-floating text-text-muted hover:border-[color:var(--border-control-hover)] hover:text-text-primary")
+                  ? "border-(--border-control-hover) bg-(--bg-row-selected) text-text-primary"
+                  : "border-border bg-bg-floating text-text-muted hover:border-(--border-control-hover) hover:text-text-primary")
               }
             >
               {t.label}
@@ -326,7 +326,7 @@ function ThreadRow({
             standalone byline row read as disjoint from it. */}
         <span className="flex items-start gap-2 px-2.5 py-2">
           <span className="mt-px flex shrink-0">{renderAvatar(summary.root_author, 20)}</span>
-          <span className="line-clamp-2 break-words text-sm text-text-primary">
+          <span className="line-clamp-2 wrap-break-word text-sm text-text-primary">
             {renderAuthorName(summary.root_author)}
             <span className="font-semibold">{": "}</span>
             {summary.root_preview}
@@ -340,7 +340,7 @@ function ThreadRow({
         {summary.reply_count > 0 ? (
           <span className="flex w-full items-center gap-2 border-t border-border px-2.5 py-1.5">
             {summary.repliers.length > 0 ? (
-              <span className="flex items-center gap-[3px]">
+              <span className="flex items-center gap-0.75">
                 {summary.repliers.map((r, i) => (
                   // `unresolved` repliers have no id (never aggregate), so fall
                   // back to a positional key — never collapse two lost actors
@@ -352,7 +352,7 @@ function ThreadRow({
                 {overflow > 0 ? (
                   <span
                     data-avatar-ground
-                    className="flex size-[18px] shrink-0 items-center justify-center rounded-none text-[length:var(--text-badge)] font-medium text-text-muted"
+                    className="flex size-4.5 shrink-0 items-center justify-center rounded-none text-(length:--text-badge) font-medium text-text-muted"
                   >
                     +{overflow}
                   </span>
@@ -367,7 +367,7 @@ function ThreadRow({
               summary.viewer_following ? (
                 <span
                   data-thread-unread="sticker"
-                  className="shrink-0 min-w-[16px] rounded-[var(--pill-radius)] bg-[var(--unread)] px-1 text-center text-[length:var(--text-badge)] font-semibold leading-[16px] text-text-on-accent"
+                  className="shrink-0 min-w-4 rounded-(--pill-radius) bg-(--unread) px-1 text-center text-(length:--text-badge) font-semibold leading-4 text-text-on-accent"
                   title={`${unreadCount} new`}
                   aria-label={`${unreadCount} new`}
                 >
@@ -376,7 +376,7 @@ function ThreadRow({
               ) : (
                 <span
                   data-thread-unread="dot"
-                  className="size-1.5 shrink-0 rounded-[var(--pill-radius)] bg-[var(--unread)]"
+                  className="size-1.5 shrink-0 rounded-(--pill-radius) bg-(--unread)"
                   title={`${unreadCount} unread`}
                   aria-label={`${unreadCount} unread`}
                 />

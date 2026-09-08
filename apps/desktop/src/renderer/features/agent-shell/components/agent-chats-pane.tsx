@@ -170,7 +170,7 @@ export function AgentChatsPane({ agentId, onOpenChat }: AgentChatsPaneProps): JS
                 for a container they are not in. A neutral glyph would draw
                 "unowned workspace" — a claim, not a gap (#task:2084's lesson).
                 Each ROW still wears its own entity's identity primitive. */}
-            <header className="mb-2 flex items-center gap-2 px-1 text-[length:var(--text-meta)] font-semibold uppercase leading-none tracking-wider text-text-muted">
+            <header className="mb-2 flex items-center gap-2 px-1 text-(length:--text-meta) font-semibold uppercase leading-none tracking-wider text-text-muted">
               <span className="min-w-0 truncate leading-none">{group.label}</span>
               <span className="leading-none text-text-muted/70">{group.chats.length}</span>
             </header>

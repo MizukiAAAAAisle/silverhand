@@ -114,7 +114,7 @@ export function AddConversationMemberPopover({
             aria-label="Add member to this conversation"
             title="Add member"
             data-member-chip="add"
-            className="inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--control-radius)] border-0 bg-transparent p-0 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline"
+            className="inline-flex size-6 shrink-0 items-center justify-center rounded-(--control-radius) border-0 bg-transparent p-0 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline"
           >
             <Plus className="size-3.5" />
           </button>
@@ -130,7 +130,7 @@ export function AddConversationMemberPopover({
           // passes `w-[360px]` to stay flush with its own edges — see the prop
           // doc). The two header entries are allowed to differ: the member-strip
           // `+` is a low-key affordance, the modal's row aligns to the modal.
-          className={`${widthClass} z-[var(--z-dialog)] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none`}
+          className={`${widthClass} z-(--z-dialog) rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none`}
         >
           <PopoverBody workspaceId={workspaceId} conversationId={conversationId} />
         </Popover.Content>

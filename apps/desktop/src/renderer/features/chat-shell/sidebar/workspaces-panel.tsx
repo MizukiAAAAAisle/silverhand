@@ -178,7 +178,7 @@ function WorkspaceRow(
 ): JSX.Element {
   const identity = (
     <>
-      <span className="flex size-[22px] shrink-0 items-center justify-center">{props.icon}</span>
+      <span className="flex size-5.5 shrink-0 items-center justify-center">{props.icon}</span>
       <span className="ml-2 min-w-0 truncate">{props.title}</span>
     </>
   );
@@ -623,11 +623,11 @@ function WorkspaceActions({
             if (!keyboardOpen.current) event.preventDefault();
           }}
           data-popover-frame="menu"
-          className="z-[var(--z-dialog)] min-w-40 bg-bg-floating p-1 shadow-popover"
+          className="z-(--z-dialog) min-w-40 bg-bg-floating p-1 shadow-popover"
         >
           <button
             type="button"
-            className="flex w-full items-center gap-2 rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover"
+            className="flex w-full items-center gap-2 rounded-(--floating-item-radius) px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover"
             onClick={() => {
               setOpen(false);
               onCreate();
@@ -639,7 +639,7 @@ function WorkspaceActions({
           {onSettings ? (
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover"
+              className="flex w-full items-center gap-2 rounded-(--floating-item-radius) px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover"
               onClick={() => {
                 setOpen(false);
                 onSettings();

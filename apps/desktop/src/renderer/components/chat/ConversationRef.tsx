@@ -132,7 +132,7 @@ export function ConversationRef({ id, conversation, onOpen }: ConversationRefPro
 
   const inertChip = (
     <span
-      className="inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+      className="inline-flex max-w-55 items-center gap-0.5 rounded-(--chip-radius) bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
       // Wrapped in HoverPopover below — `aria-label` instead of the
       // native `title` attribute. macOS browsers schedule the native
       // tooltip on a 2-3s cycle that competes with Radix HoverCard
@@ -152,7 +152,7 @@ export function ConversationRef({ id, conversation, onOpen }: ConversationRefPro
       role="button"
       tabIndex={0}
       className={
-        "inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent focus-outline " +
+        "inline-flex max-w-55 cursor-pointer items-center gap-0.5 rounded-(--chip-radius) bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent focus-outline " +
         // The resting soft fill stays — it is this chip's identity as a BOX
         // (an opaque id, not running text). Only the hover fill is gone: a
         // soft→solid flip plus an ink inversion is a whole new surface for a
@@ -210,15 +210,12 @@ function ConversationPopoverBody({
   return (
     <div className="space-y-2">
       <div className="flex items-baseline gap-2">
-        <span className="rounded-[var(--chip-radius)] bg-bg-elevated px-1 py-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wide text-text-muted">
+        <span className="rounded-(--chip-radius) bg-bg-elevated px-1 py-0.5 text-(length:--text-badge) font-medium uppercase tracking-wide text-text-muted">
           {faceLabel(face)}
         </span>
       </div>
-      <p className="line-clamp-2 break-words text-xs font-medium text-text-primary">{title}</p>
-      <p
-        className="truncate font-mono text-[length:var(--text-badge)] text-text-muted"
-        aria-label={id}
-      >
+      <p className="line-clamp-2 wrap-break-word text-xs font-medium text-text-primary">{title}</p>
+      <p className="truncate font-mono text-(length:--text-badge) text-text-muted" aria-label={id}>
         {id}
       </p>
     </div>
@@ -258,10 +255,7 @@ function UnresolvedConversationPopoverBody({
   return (
     <div className="space-y-2">
       <p className="text-xs text-text-muted">{message}</p>
-      <p
-        className="truncate font-mono text-[length:var(--text-badge)] text-text-muted"
-        aria-label={id}
-      >
+      <p className="truncate font-mono text-(length:--text-badge) text-text-muted" aria-label={id}>
         {id}
       </p>
     </div>

@@ -310,7 +310,7 @@ export function TaskFilterBar({
             // `--control-radius` (forza6 squares it to 0, warm rounds) and
             // the fill is the theme hover token, so it adapts per theme
             // (shiki #task:795).
-            "inline-flex items-center justify-center rounded-[var(--control-radius)] p-1.5",
+            "inline-flex items-center justify-center rounded-(--control-radius) p-1.5",
             "text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary",
           )}
         >
@@ -363,8 +363,8 @@ const FilterTrigger = forwardRef<
       type="button"
       data-active={active || undefined}
       className={cn(
-        "flex max-w-[200px] items-center gap-1.5 rounded-[var(--control-radius)]",
-        "border-[length:var(--control-border-width)] px-2 py-1 text-[length:var(--text-meta)] transition-colors",
+        "flex max-w-50 items-center gap-1.5 rounded-(--control-radius)",
+        "border-(length:--control-border-width) px-2 py-1 text-(length:--text-meta) transition-colors",
         // Hover always paints the theme's control hover border
         // (`--border-control-hover`: forza6 near-black ink / warm
         // accent / slack-dark `--border` 10% white). Note this is a
@@ -373,14 +373,14 @@ const FilterTrigger = forwardRef<
         // transparent` (sidebar bg veil expresses hover there), and
         // we don't want that to bleed into control triggers where the
         // border is the only hover signal (#task:912 review round 3).
-        "hover:border-[color:var(--border-control-hover)]",
+        "hover:border-(--border-control-hover)",
         active
           ? // Non-default value → theme selected-row fill (forza6 festive
             // lime) + on-selected ink + the selected-row border colour
             // (`--border-row-selected`, same near-black as hover) so the
             // chip reads as a framed poster sticker, not a borderless fill
             // (shiki #task:790).
-            "border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-text-on-selected"
+            "border-(--border-row-selected) bg-(--bg-row-selected) text-text-on-selected"
           : "border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary",
         className,
       )}
@@ -419,7 +419,7 @@ function FilterPanel({
         onKeyDown={onKeyDown}
         data-task-filter-panel
         data-dropdown-frame
-        className="scrollbar-hide z-[var(--z-toolbar)] max-h-[50vh] min-w-[180px] overflow-y-auto rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
+        className="scrollbar-hide z-(--z-toolbar) max-h-[50vh] min-w-45 overflow-y-auto rounded-(--select-content-radius) bg-bg-floating p-1 shadow-popover outline-none"
       >
         {children}
       </Popover.Content>
@@ -473,8 +473,8 @@ export function OptionRow({
         // surfaces stay in lock-step. The transparent border is kept only
         // to reserve layout space (no hover colour) so rows don't shift
         // (shiki #task:790).
-        "flex w-full items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 text-left text-xs transition-colors",
-        "border border-transparent hover:bg-[var(--bg-option-hover)] hover:text-text-primary",
+        "flex w-full items-center gap-2 rounded-(--select-item-radius) px-2 py-1.5 text-left text-xs transition-colors",
+        "border border-transparent hover:bg-(--bg-option-hover) hover:text-text-primary",
         // A real (non-default) current value = the app-wide selected-row
         // vocabulary (festive lime fill + on-selected ink), NOT the magenta
         // `accent-soft` tint. The ALL/All-channels default row stays plain
@@ -482,9 +482,9 @@ export function OptionRow({
         // Keyboard-highlighted (but not the current value) → neutral hover
         // fill, so mouse and keyboard share one visual language.
         activeSelected
-          ? "bg-[var(--bg-row-selected)] text-text-on-selected"
+          ? "bg-(--bg-row-selected) text-text-on-selected"
           : active
-            ? "bg-[var(--bg-option-hover)] text-text-primary"
+            ? "bg-(--bg-option-hover) text-text-primary"
             : "text-text-secondary",
       )}
     >
@@ -592,7 +592,7 @@ function ChannelFilter({
           <span className="flex min-w-0 flex-col">
             <span className="truncate">{o.label}</span>
             {o.sublabel ? (
-              <span className="truncate text-[length:var(--text-badge)] text-text-muted">
+              <span className="truncate text-(length:--text-badge) text-text-muted">
                 {o.sublabel}
               </span>
             ) : null}
@@ -634,11 +634,11 @@ function ChannelFilter({
           sideOffset={4}
           data-task-filter-panel
           data-dropdown-frame
-          className="z-[var(--z-toolbar)] flex max-h-[50vh] w-[240px] flex-col rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
+          className="z-(--z-toolbar) flex max-h-[50vh] w-60 flex-col rounded-(--select-content-radius) bg-bg-floating p-1 shadow-popover outline-none"
         >
           <div
             data-input=""
-            className="flex items-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 py-1.5 transition-colors focus-within:border-border-focus"
+            className="flex items-center gap-1.5 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2 py-1.5 transition-colors focus-within:border-border-focus"
           >
             <Search className="size-3.5 shrink-0 text-text-muted" />
             <input
@@ -675,7 +675,7 @@ function ChannelFilter({
             </OptionRow>
             {flatOptions.map(renderOption)}
             {filtered.length === 0 ? (
-              <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
+              <p className="px-2 py-3 text-center text-(length:--text-meta) italic text-text-muted">
                 No matches
               </p>
             ) : null}
@@ -822,7 +822,7 @@ function BoardScopeFilter({
         </OptionRow>
         {groups.map((group) => (
           <div key={group.key}>
-            <div className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
+            <div className="px-2 pb-1 pt-2 text-(length:--text-badge) font-medium uppercase tracking-wider text-text-muted">
               {group.label}
             </div>
             {group.rows.map((row) => {
@@ -998,7 +998,7 @@ function PersonFilterControl({
           );
         })}
         {state === "ready" ? null : (
-          <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
+          <p className="px-2 py-3 text-center text-(length:--text-meta) italic text-text-muted">
             {state === "loading"
               ? "Loading…"
               : state === "failed"

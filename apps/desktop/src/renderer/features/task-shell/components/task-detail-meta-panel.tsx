@@ -59,7 +59,7 @@ export function TaskDetailMetaPanel(props: TaskDetailMetaPanelProps): JSX.Elemen
       // No ground of its own: the column sits on the dialog's own
       // `bg-bg-floating` (shiki 2026-07-29), so the divider is the only
       // separator. A second fill here read as a panel bolted onto the modal.
-      className="flex w-[240px] shrink-0 flex-col gap-y-3.5 overflow-y-auto border-l border-border-subtle px-4 py-4"
+      className="flex w-60 shrink-0 flex-col gap-y-3.5 overflow-y-auto border-l border-border-subtle px-4 py-4"
     >
       {rows.map((row) => (
         <MetaRow key={row.key} label={row.label} error={row.error}>
@@ -87,12 +87,12 @@ function MetaRow({
 }): JSX.Element {
   return (
     <div className="grid grid-cols-[68px_1fr] items-start gap-x-2">
-      <span className="chrome-label text-[length:var(--text-badge)] font-medium leading-4 text-text-muted">
+      <span className="chrome-label text-(length:--text-badge) font-medium leading-4 text-text-muted">
         {label}
       </span>
       <div className="min-w-0 text-xs leading-4 text-text-primary">
         {children}
-        {error ? <p className="mt-0.5 text-[length:var(--text-meta)] text-error">{error}</p> : null}
+        {error ? <p className="mt-0.5 text-(length:--text-meta) text-error">{error}</p> : null}
       </div>
     </div>
   );

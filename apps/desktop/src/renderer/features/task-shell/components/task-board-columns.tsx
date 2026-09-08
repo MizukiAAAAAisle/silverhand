@@ -253,7 +253,7 @@ function KanbanColumn({
         // column, so the live columns don't jitter when Closed folds/unfolds.
         // `min-w-[12rem]` is the readable floor — below it the board scrolls
         // (parent `overflow-x-auto`) rather than letting a card squeeze.
-        "flex min-h-0 max-h-full min-w-[12rem] flex-1 flex-col overflow-hidden rounded-[var(--card-radius)] border border-border-subtle transition-colors",
+        "flex min-h-0 max-h-full min-w-48 flex-1 flex-col overflow-hidden rounded-(--card-radius) border border-border-subtle transition-colors",
         columnClassName,
         // Done + Closed are terminal — dim slightly so the live columns read as
         // the focus.
@@ -270,25 +270,25 @@ function KanbanColumn({
       >
         <Chevron className="size-3.5 shrink-0 text-text-muted" aria-hidden />
         <Icon data-tasks-column-icon className={cn("size-3.5 shrink-0", iconClass)} aria-hidden />
-        <span className="text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-secondary">
+        <span className="text-(length:--text-meta) font-medium uppercase tracking-wider text-text-secondary">
           {title}
         </span>
-        <span className="text-[length:var(--text-badge)] tabular-nums text-text-muted">
+        <span className="text-(length:--text-badge) tabular-nums text-text-muted">
           {boardCountLabel(total)}
         </span>
       </button>
       {collapsed ? null : (
         <div ref={bodyRef} data-tasks-column-body className="min-h-0 flex-auto overflow-y-auto p-2">
           {isLoading ? (
-            <p className="px-2 py-3 text-center text-[length:var(--text-meta)] text-text-muted">
+            <p className="px-2 py-3 text-center text-(length:--text-meta) text-text-muted">
               Loading…
             </p>
           ) : isError ? (
-            <p className="px-2 py-3 text-center text-[length:var(--text-meta)] text-text-muted">
+            <p className="px-2 py-3 text-center text-(length:--text-meta) text-text-muted">
               Couldn’t load tasks
             </p>
           ) : items.length === 0 && !dragOver ? (
-            <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
+            <p className="px-2 py-3 text-center text-(length:--text-meta) italic text-text-muted">
               No {title.toLowerCase()} tasks
             </p>
           ) : (
@@ -346,7 +346,7 @@ function TaskCard({
         }}
         onDragEnd={() => setDragging(false)}
         className={cn(
-          "group relative min-w-0 cursor-grab rounded-[var(--card-radius)] border border-border-subtle transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing",
+          "group relative min-w-0 cursor-grab rounded-(--card-radius) border border-border-subtle transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing",
           cardClassName,
           dragging && "opacity-50",
         )}
@@ -361,13 +361,13 @@ function TaskCard({
           draggable={false}
           onClick={onClick}
           aria-label="Open task detail"
-          className="absolute inset-0 z-0 rounded-[var(--card-radius)] focus-outline-accent"
+          className="absolute inset-0 z-0 rounded-(--card-radius) focus-outline-accent"
         />
         {/* Content layer. `pointer-events-none` so text clicks fall through to
             the jump overlay; only the status badge re-enables pointer events.
             `min-w-0` propagates the row's narrow-width shrink to the rows below
             (#task:918). */}
-        <div className="pointer-events-none relative z-[var(--z-raised)] min-w-0 p-2">
+        <div className="pointer-events-none relative z-(--z-raised) min-w-0 p-2">
           {/* Row 1: #number + interactive status badge (reads "Closed" for a
               closed task — no separate chip). 2-row layout (#task:917): #nnn +
               status own a line, content below, so a long title isn't compressed.
@@ -376,7 +376,7 @@ function TaskCard({
           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pb-0.5 leading-none">
             <span
               data-tasks-num
-              className="shrink-0 font-mono text-[length:var(--text-badge)] text-text-muted"
+              className="shrink-0 font-mono text-(length:--text-badge) text-text-muted"
             >
               #{task.task_number}
             </span>
@@ -388,7 +388,7 @@ function TaskCard({
           </div>
           {/* Row 2: title — `[overflow-wrap:anywhere]` so a long URL / hash with
               no spaces still breaks inside a narrow card (#task:918). */}
-          <span className="block min-w-0 text-xs text-text-primary [overflow-wrap:anywhere]">
+          <span className="block min-w-0 text-xs text-text-primary wrap-anywhere">
             {task.title}
           </span>
           {/* Row 3: assignee · channel · created — inline meta, single line.
@@ -398,7 +398,7 @@ function TaskCard({
               (`min-w-0 truncate`) so a long channel title ellipsizes while
               assignee + time stay pinned, and the card height never grows
               (shiki 2026-07-23). 稳定 > 自适应. */}
-          <div className="mt-1 flex items-center gap-x-2 text-[length:var(--text-badge)] text-text-muted">
+          <div className="mt-1 flex items-center gap-x-2 text-(length:--text-badge) text-text-muted">
             <span className="shrink-0 text-text-secondary">
               {task.assignee ? task.assignee.name : <span className="italic">unassigned</span>}
             </span>

@@ -153,7 +153,7 @@ export function useTaskMetaRows({
       key: "task",
       label: "Task",
       value: (
-        <span className="font-mono text-[length:var(--text-meta)] text-text-secondary">
+        <span className="font-mono text-(length:--text-meta) text-text-secondary">
           #{view.task_number}
         </span>
       ),
@@ -289,7 +289,7 @@ function Timestamp({ at, muted }: { at: number; muted?: boolean }): JSX.Element 
   return (
     <time
       dateTime={new Date(at).toISOString()}
-      className={cn("font-mono text-[length:var(--text-meta)]", muted && "text-text-muted")}
+      className={cn("font-mono text-(length:--text-meta)", muted && "text-text-muted")}
     >
       {dayjs(at).format(TIMESTAMP_FORMAT)}
     </time>
@@ -375,7 +375,7 @@ function AssigneePicker({
           // Hover = a slight fade, the same affordance the status chip uses — no
           // ground, no border; two editable rows in one column answer "I'm
           // clickable" the same way.
-          className="flex min-w-0 items-center rounded-[var(--control-radius)] text-left transition-opacity hover:opacity-80 focus-outline"
+          className="flex min-w-0 items-center rounded-(--control-radius) text-left transition-opacity hover:opacity-80 focus-outline"
         >
           {children}
         </button>
@@ -389,7 +389,7 @@ function AssigneePicker({
           // Above the host dialog's layer (`z-[var(--z-dialog)]`) — a picker under its host is
           // unclickable. The pane host has no such layer, so this is safe there
           // too.
-          className="z-[var(--z-popover-nested)] min-w-[180px] max-w-[240px] bg-bg-floating p-1 shadow-popover outline-none"
+          className="z-(--z-popover-nested) min-w-45 max-w-60 bg-bg-floating p-1 shadow-popover outline-none"
           onCloseAutoFocus={(e) => e.preventDefault()}
         >
           {placement === "direct_pair" ? (
@@ -444,11 +444,11 @@ function CandidateList({
 }): JSX.Element {
   return (
     <div className="flex flex-col gap-1">
-      <p className="chrome-label px-2 pt-1 text-[length:var(--text-badge)] font-medium text-text-muted">
+      <p className="chrome-label px-2 pt-1 text-(length:--text-badge) font-medium text-text-muted">
         Assign to
       </p>
       {candidates.length === 0 ? (
-        <p className="px-2 py-1.5 text-[length:var(--text-meta)] italic text-text-muted">
+        <p className="px-2 py-1.5 text-(length:--text-meta) italic text-text-muted">
           {placeholder}
         </p>
       ) : (
@@ -458,7 +458,7 @@ function CandidateList({
             type="button"
             aria-current={c.isCurrent ? "true" : undefined}
             onClick={() => onChoose(c)}
-            className="flex w-full min-w-0 items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1 text-left text-xs transition-colors hover:bg-bg-hover"
+            className="flex w-full min-w-0 items-center gap-2 rounded-(--select-item-radius) px-2 py-1 text-left text-xs transition-colors hover:bg-bg-hover"
           >
             <PersonAvatar
               person={{ type: "agent", id: c.id }}
@@ -719,7 +719,7 @@ export function InlineFieldEditor({
           "resize-none overflow-hidden",
           isTitle
             ? "min-h-0 py-1 text-base font-medium leading-snug"
-            : "min-h-[120px] text-sm leading-relaxed",
+            : "min-h-30 text-sm leading-relaxed",
           errorMsg && "border-error focus-visible:border-error",
         )}
       />

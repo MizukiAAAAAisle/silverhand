@@ -154,7 +154,7 @@ function DirectMessageRow({
         onSelectDirectPair(row.conversationId);
       }}
     >
-      <div className="flex size-[22px] shrink-0 items-center justify-center">
+      <div className="flex size-5.5 shrink-0 items-center justify-center">
         <AuthorAvatarView
           avatar={counterpart.avatar}
           size={16}

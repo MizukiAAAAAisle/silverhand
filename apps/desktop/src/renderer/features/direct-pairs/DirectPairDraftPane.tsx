@@ -158,7 +158,7 @@ export function DirectPairDraftPane({
         ) : null}
         <div
           data-composer-shell
-          className="flex flex-col overflow-hidden rounded-[var(--control-radius)] border border-border-subtle bg-bg-floating focus-within:border-border-focus"
+          className="flex flex-col overflow-hidden rounded-(--control-radius) border border-border-subtle bg-bg-floating focus-within:border-border-focus"
         >
           <textarea
             ref={textareaRef}
@@ -175,7 +175,7 @@ export function DirectPairDraftPane({
             onCompositionEnd={() => setComposing(false)}
             aria-label={`Message ${title}`}
             placeholder="Enter to send · Shift + Enter for a new line"
-            className="block max-h-48 min-h-[60px] w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            className="block max-h-48 min-h-15 w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           />
           <div className="flex items-center justify-end px-2 py-1.5">
             <Button

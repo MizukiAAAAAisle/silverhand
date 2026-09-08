@@ -60,7 +60,7 @@ export function SwitchRuntimeConfirmDialog({
         <DialogHeader>
           <DialogTitle>{`Switch to ${label}?`}</DialogTitle>
         </DialogHeader>
-        <div className="rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5">
+        <div className="rounded-(--control-radius) bg-(--warning-surface) px-3 py-2.5">
           <DialogDescription asChild className="text-sm leading-relaxed text-text-primary">
             <ul className="list-disc list-inside space-y-1">
               <li>Runtime sessions for all conversations are reset.</li>

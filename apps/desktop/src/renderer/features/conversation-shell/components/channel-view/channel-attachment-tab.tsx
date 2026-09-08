@@ -158,7 +158,7 @@ export function ChannelAttachmentTab({
               data-sticker
               data-sticker-size="md"
               data-sticker-tone="neutral"
-              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--chip-radius)] text-text-secondary hover:text-text-primary focus-outline disabled:opacity-40"
+              className="flex size-7 shrink-0 items-center justify-center rounded-(--chip-radius) text-text-secondary hover:text-text-primary focus-outline disabled:opacity-40"
               onClick={() => zoomTo(htmlZoom / HTML_ZOOM_STEP)}
               disabled={atMinZoom}
               aria-label="Zoom out"
@@ -180,7 +180,7 @@ export function ChannelAttachmentTab({
               data-sticker
               data-sticker-size="md"
               data-sticker-tone="neutral"
-              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--chip-radius)] text-text-secondary hover:text-text-primary focus-outline disabled:opacity-40"
+              className="flex size-7 shrink-0 items-center justify-center rounded-(--chip-radius) text-text-secondary hover:text-text-primary focus-outline disabled:opacity-40"
               onClick={() => zoomTo(htmlZoom * HTML_ZOOM_STEP)}
               disabled={atMaxZoom}
               aria-label="Zoom in"
@@ -188,7 +188,7 @@ export function ChannelAttachmentTab({
             >
               <ZoomIn className="size-3.5" />
             </button>
-            <span className="min-w-[2.75rem] text-center text-xs tabular-nums text-text-secondary">
+            <span className="min-w-11 text-center text-xs tabular-nums text-text-secondary">
               <span className="sr-only">Zoom </span>
               {Math.round(htmlZoom * 100)}%
             </span>
@@ -200,7 +200,7 @@ export function ChannelAttachmentTab({
           data-sticker
           data-sticker-size="md"
           data-sticker-tone="neutral"
-          className="flex shrink-0 items-center gap-1.5 rounded-[var(--chip-radius)] px-2 py-1 text-xs text-text-secondary hover:text-text-primary focus-outline"
+          className="flex shrink-0 items-center gap-1.5 rounded-(--chip-radius) px-2 py-1 text-xs text-text-secondary hover:text-text-primary focus-outline"
           title="Open in default app"
         >
           <ExternalLink className="size-3.5" />
@@ -212,7 +212,7 @@ export function ChannelAttachmentTab({
           data-sticker
           data-sticker-size="md"
           data-sticker-tone="neutral"
-          className="flex shrink-0 items-center gap-1.5 rounded-[var(--chip-radius)] px-2 py-1 text-xs text-text-secondary hover:text-text-primary focus-outline"
+          className="flex shrink-0 items-center gap-1.5 rounded-(--chip-radius) px-2 py-1 text-xs text-text-secondary hover:text-text-primary focus-outline"
           title="Download"
         >
           <Download className="size-3.5" />

@@ -123,12 +123,12 @@ export function RegistrationGate({ signupEnabled }: RegistrationGateProps): JSX.
         // also drops the 1px frame by its own `[data-modal-shell]` rule.
         data-modal-shell
         data-popover-frame="info"
-        className="w-full max-w-[420px] rounded-md border border-border bg-bg-floating p-6 shadow-modal"
+        className="w-full max-w-105 rounded-md border border-border bg-bg-floating p-6 shadow-modal"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
         <header className="mb-5 flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
-            <span className="grid size-7 place-items-center rounded-[var(--chip-radius)] border border-border-subtle bg-bg-inset text-text-secondary">
+            <span className="grid size-7 place-items-center rounded-(--chip-radius) border border-border-subtle bg-bg-inset text-text-secondary">
               <KeyRound className="size-4" />
             </span>
             <h1 className="text-base font-semibold leading-tight">

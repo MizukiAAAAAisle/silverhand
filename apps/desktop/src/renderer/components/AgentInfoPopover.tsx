@@ -181,7 +181,7 @@ export function AgentInfoPopover({
           onPointerEnter={scheduleOpen}
           onPointerLeave={scheduleClose}
           data-popover-frame="info"
-          className="z-[var(--z-dialog)] w-[260px] max-w-[calc(100vw-32px)] bg-bg-floating p-3 shadow-popover outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
+          className="z-(--z-dialog) w-65 max-w-[calc(100vw-32px)] bg-bg-floating p-3 shadow-popover outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           {/* v3 layout (#task:912 review round 7 → round 9 final):
                 avatar | name + ● presence    [↻ ⏻ ⌫]   ← actions top-right
@@ -294,7 +294,7 @@ export function AgentInfoPopover({
 function PresenceLine({ display }: { display: PresenceDisplay }): JSX.Element {
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted"
+      className="inline-flex shrink-0 items-center gap-1 text-(length:--text-badge) text-text-muted"
       title={display.tone === "failed" ? undefined : display.detail}
       role="img"
       aria-label={display.a11yLabel}
@@ -302,7 +302,7 @@ function PresenceLine({ display }: { display: PresenceDisplay }): JSX.Element {
       <span
         data-status-pip
         className={
-          "size-1.5 rounded-[var(--pill-radius)] " +
+          "size-1.5 rounded-(--pill-radius) " +
           PRESENCE_TONE_DOT[display.tone] +
           (display.pulse ? " motion-safe:animate-pulse" : "")
         }
@@ -518,7 +518,7 @@ function AgentManagementActions({
               type="button"
               onClick={restart}
               disabled={pending}
-              className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
+              className="inline-flex size-7 items-center justify-center rounded-(--control-radius) text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
               title={`Restart ${agentLabel}`}
               aria-label={`Restart ${agentLabel}`}
             >
@@ -528,7 +528,7 @@ function AgentManagementActions({
               type="button"
               onClick={stopAgent}
               disabled={pending || !stoppable}
-              className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
+              className="inline-flex size-7 items-center justify-center rounded-(--control-radius) text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
               title={`Stop ${agentLabel}`}
               aria-label={`Stop ${agentLabel}`}
             >
@@ -538,7 +538,7 @@ function AgentManagementActions({
               type="button"
               onClick={() => setClearDialogOpen(true)}
               disabled={pending}
-              className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
+              className="inline-flex size-7 items-center justify-center rounded-(--control-radius) text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
               title={`Clear ${agentLabel} session`}
               aria-label={`Clear ${agentLabel} session`}
             >
@@ -551,7 +551,7 @@ function AgentManagementActions({
             type="button"
             onClick={() => setRemoveDialogOpen(true)}
             disabled={removeFromChannel.isPending}
-            className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
+            className="inline-flex size-7 items-center justify-center rounded-(--control-radius) text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
             title={`Remove ${agentLabel} from this ${convNoun}`}
             aria-label={`Remove ${agentLabel} from this ${convNoun}`}
           >
@@ -689,7 +689,7 @@ function DirectAgentRuntimeActions({
             else stop.mutate({ agentId: agent.id });
           }}
           disabled={disabled}
-          className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
+          className="inline-flex size-7 items-center justify-center rounded-(--control-radius) text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
           title={`${action} @${agent.name}`}
           aria-label={`${action} @${agent.name}`}
         >
@@ -699,7 +699,7 @@ function DirectAgentRuntimeActions({
           type="button"
           onClick={() => setClearDialogOpen(true)}
           disabled={disabled}
-          className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
+          className="inline-flex size-7 items-center justify-center rounded-(--control-radius) text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
           title={`Clear @${agent.name} session`}
           aria-label={`Clear @${agent.name} session`}
         >

@@ -198,7 +198,7 @@ function ActivityTimeline({
                 type="button"
                 onClick={() => void onLoadEarlier()}
                 disabled={isLoadingMore}
-                className="mx-auto mb-1 flex items-center gap-1 px-2 py-1.5 text-[length:var(--text-meta)] text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
+                className="mx-auto mb-1 flex items-center gap-1 px-2 py-1.5 text-(length:--text-meta) text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
               >
                 <ChevronUp className="size-3" />
                 {isLoadingMore ? "Loading…" : "Load earlier"}
@@ -325,7 +325,7 @@ function RowShell({
       <div className="flex items-start gap-2.5">
         <span
           className={cn(
-            "mt-0.5 shrink-0 font-mono text-[length:var(--text-badge)] tabular-nums",
+            "mt-0.5 shrink-0 font-mono text-(length:--text-badge) tabular-nums",
             ACTIVITY_META,
           )}
         >
@@ -333,7 +333,7 @@ function RowShell({
         </span>
         <Icon className={cn("mt-0.5 size-3.5 shrink-0", TONE_TEXT[tone])} strokeWidth={2} />
         <div className="min-w-0 flex-1 text-xs leading-snug">
-          <div className="break-words">{title}</div>
+          <div className="wrap-break-word">{title}</div>
           {preview ? <div className="mt-1 min-w-0">{preview}</div> : null}
         </div>
       </div>
@@ -366,7 +366,7 @@ function GroupRow({
       title={<span className="text-text-secondary">Thinking</span>}
       preview={
         text.trim().length > 0 ? (
-          <span className="block whitespace-pre-wrap break-words text-xs italic leading-snug text-text-secondary">
+          <span className="block whitespace-pre-wrap wrap-break-word text-xs italic leading-snug text-text-secondary">
             {text}
           </span>
         ) : null
@@ -502,11 +502,17 @@ function EventRow({
       </span>
     );
   } else if (kind === "error" || kind === "stderr") {
-    title = <span className="break-words text-error">{str(payload, "message") ?? "Error"}</span>;
+    title = (
+      <span className="wrap-break-word text-error">{str(payload, "message") ?? "Error"}</span>
+    );
   } else if (kind === "api_response") {
     const isNotice = str(payload, "status") === "notice";
     title = (
-      <span className={isNotice ? "break-words text-text-secondary" : "break-words text-warning"}>
+      <span
+        className={
+          isNotice ? "wrap-break-word text-text-secondary" : "wrap-break-word text-warning"
+        }
+      >
         {str(payload, "message") ?? "Provider response"}
       </span>
     );
@@ -556,7 +562,7 @@ function ToolDetailView({ detail }: { detail: ToolDetail }): JSX.Element {
   return (
     <pre
       className={cn(
-        "whitespace-pre-wrap break-all bg-[var(--activity-params-bg)] px-2 py-1 font-mono text-[length:var(--text-meta)] leading-relaxed",
+        "whitespace-pre-wrap break-all bg-(--activity-params-bg) px-2 py-1 font-mono text-(length:--text-meta) leading-relaxed",
         ACTIVITY_META,
       )}
     >
@@ -570,7 +576,7 @@ function ToolDetailView({ detail }: { detail: ToolDetail }): JSX.Element {
  *  never shown (marker-only). */
 function DiffView({ removed, added }: { removed: string; added: string }): JSX.Element {
   return (
-    <div className="flex flex-col gap-px border border-border-subtle font-mono text-[length:var(--text-meta)] leading-relaxed">
+    <div className="flex flex-col gap-px border border-border-subtle font-mono text-(length:--text-meta) leading-relaxed">
       <DiffSide
         text={removed}
         sign="-"

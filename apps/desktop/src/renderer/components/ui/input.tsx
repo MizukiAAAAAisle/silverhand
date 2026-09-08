@@ -8,7 +8,7 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
         ref={ref}
         data-input=""
         className={cn(
-          "flex h-9 w-full rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-3 py-1 text-sm text-text-primary placeholder:text-text-muted focus-visible:border-border-focus focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-9 w-full rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-floating px-3 py-1 text-sm text-text-primary placeholder:text-text-muted focus-visible:border-border-focus focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
           className,
         )}
         {...props}
@@ -26,7 +26,7 @@ export const Textarea = forwardRef<
     ref={ref}
     data-input=""
     className={cn(
-      "flex min-h-[80px] w-full rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus-visible:border-border-focus focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
+      "flex min-h-20 w-full rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-floating px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus-visible:border-border-focus focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
       className,
     )}
     {...props}

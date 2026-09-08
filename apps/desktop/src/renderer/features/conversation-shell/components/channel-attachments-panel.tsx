@@ -110,7 +110,7 @@ export function ChannelAttachmentsPanel({
   return (
     <aside
       data-pane="attachments-list"
-      className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
+      className="flex h-full min-h-0 w-full flex-col bg-(--bg-chat,transparent)"
     >
       <SidePanelHeader onClose={onClose}>
         <SidePanelHeaderTitle
@@ -296,7 +296,7 @@ export function ChannelAttachmentsContent({
               <button
                 type="button"
                 onClick={() => setFilter(ALL_ATTACHMENTS_FILTER)}
-                className="mt-1 rounded-[var(--control-radius)] px-2 py-1 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+                className="mt-1 rounded-(--control-radius) px-2 py-1 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary"
               >
                 Clear filters
               </button>
@@ -317,8 +317,8 @@ export function ChannelAttachmentsContent({
             firstItemIndex={attachWindow.firstItemIndex}
             groupCounts={groupCounts}
             groupContent={(index) => (
-              <div className="bg-[var(--bg-chat,var(--bg-app))]">
-                <div className="pb-1 pt-2 text-[length:var(--text-badge)] font-medium uppercase tracking-wide text-text-muted">
+              <div className="bg-(--bg-chat,var(--bg-app))">
+                <div className="pb-1 pt-2 text-(length:--text-badge) font-medium uppercase tracking-wide text-text-muted">
                   {groups[index]?.label ?? ""}
                 </div>
               </div>
@@ -341,7 +341,7 @@ export function ChannelAttachmentsContent({
               // with no per-row author — so it keeps its own resolver.)
               const presentation = item.source.author ? presentAuthor(item.source.author) : null;
               return (
-                <div className="py-[3px]">
+                <div className="py-0.75">
                   <AttachmentRow
                     key={item.attachment.id}
                     item={item}
@@ -518,7 +518,7 @@ function SenderFilterSelect({
     >
       <Select.Trigger
         aria-label="Filter attachments by sender"
-        className={cn(FILTER_SELECT_TRIGGER_CLASS, "w-auto max-w-[12rem]")}
+        className={cn(FILTER_SELECT_TRIGGER_CLASS, "w-auto max-w-48")}
       >
         <span className="flex min-w-0 items-center gap-1.5">
           {value == null || selectedIdentity == null ? (
@@ -837,7 +837,7 @@ function AttachmentThumb({
 
   if (isImage && imageUrl && !failed) {
     return (
-      <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-[var(--chip-radius)] bg-bg-inset">
+      <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-(--chip-radius) bg-bg-inset">
         <img
           src={imageUrl}
           alt={attachment.filename}
@@ -849,7 +849,7 @@ function AttachmentThumb({
   }
   const Icon = isImage ? ImageIcon : FileText;
   return (
-    <span className="flex size-8 shrink-0 items-center justify-center rounded-[var(--chip-radius)] bg-bg-inset text-text-muted">
+    <span className="flex size-8 shrink-0 items-center justify-center rounded-(--chip-radius) bg-bg-inset text-text-muted">
       <Icon className="size-4" />
     </span>
   );

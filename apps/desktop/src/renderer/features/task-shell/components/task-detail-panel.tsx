@@ -172,7 +172,7 @@ function PaneContent({
               its own (`retry: 1`, no focus refetch), so the Retry has to be
               reachable here — but it stays a single muted line: the body below is
               still readable, this is a footnote about its freshness. */}
-          <div className="flex flex-none items-center gap-3 border-b border-border-subtle px-[18px] py-2 text-xs text-text-muted">
+          <div className="flex flex-none items-center gap-3 border-b border-border-subtle px-4.5 py-2 text-xs text-text-muted">
             <span>Showing the last loaded version — the refresh failed.</span>
             <button
               type="button"
@@ -210,23 +210,23 @@ function PaneStatePanel({
       <div
         role="status"
         aria-label="Loading task"
-        className="min-h-0 flex-1 overflow-hidden px-[18px] py-4"
+        className="min-h-0 flex-1 overflow-hidden px-4.5 py-4"
       >
         <div aria-hidden className="flex flex-col gap-4 motion-safe:animate-pulse">
-          <div className="h-5 w-3/4 rounded-[var(--control-radius)] bg-bg-hover" />
+          <div className="h-5 w-3/4 rounded-(--control-radius) bg-bg-hover" />
           <div className="task-pane-meta items-center">
             {Array.from({ length: 6 }, (_, index) => (
               <Fragment key={index}>
-                <div className="h-2.5 w-14 rounded-[var(--control-radius)] bg-bg-hover" />
-                <div className="h-3 w-24 max-w-full rounded-[var(--control-radius)] bg-bg-hover" />
+                <div className="h-2.5 w-14 rounded-(--control-radius) bg-bg-hover" />
+                <div className="h-3 w-24 max-w-full rounded-(--control-radius) bg-bg-hover" />
               </Fragment>
             ))}
           </div>
           <div className="flex flex-col gap-2">
-            <div className="mb-1 h-2.5 w-20 rounded-[var(--control-radius)] bg-bg-hover" />
-            <div className="h-3 w-full rounded-[var(--control-radius)] bg-bg-hover" />
-            <div className="h-3 w-full rounded-[var(--control-radius)] bg-bg-hover" />
-            <div className="h-3 w-2/3 rounded-[var(--control-radius)] bg-bg-hover" />
+            <div className="mb-1 h-2.5 w-20 rounded-(--control-radius) bg-bg-hover" />
+            <div className="h-3 w-full rounded-(--control-radius) bg-bg-hover" />
+            <div className="h-3 w-full rounded-(--control-radius) bg-bg-hover" />
+            <div className="h-3 w-2/3 rounded-(--control-radius) bg-bg-hover" />
           </div>
         </div>
       </div>
@@ -234,7 +234,7 @@ function PaneStatePanel({
   }
   const copy = FAILURE_COPY[failure];
   return (
-    <div className="flex flex-col gap-1.5 px-[18px] py-6">
+    <div className="flex flex-col gap-1.5 px-4.5 py-6">
       <p className="text-sm font-semibold leading-snug text-text-primary">{copy.header}</p>
       <p className="text-sm text-text-muted">{copy.body}</p>
       {/* Retry ONLY for the transient tier: the query client is `retry: 1` with
@@ -277,7 +277,7 @@ function PaneBody({
   const rows = useTaskMetaRows({ view: detail, ...slot }).filter((row) => row.key !== "task");
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-[18px] py-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4.5 py-4">
       {editingField === "title" ? (
         <InlineFieldEditor
           taskId={detail.id}
@@ -288,7 +288,7 @@ function PaneBody({
         />
       ) : (
         <div className="flex items-start gap-2">
-          <h1 className="flex-1 text-base font-semibold leading-snug text-text-primary [overflow-wrap:anywhere]">
+          <h1 className="flex-1 text-base font-semibold leading-snug text-text-primary wrap-anywhere">
             {detail.title}
           </h1>
           {!busy ? (
@@ -309,13 +309,13 @@ function PaneBody({
       <div className="task-pane-meta items-start">
         {rows.map((row) => (
           <Fragment key={row.key}>
-            <span className="chrome-label text-[length:var(--text-badge)] font-medium leading-4 text-text-muted">
+            <span className="chrome-label text-(length:--text-badge) font-medium leading-4 text-text-muted">
               {row.label}
             </span>
             <div className="min-w-0 text-xs leading-4 text-text-primary">
               {row.value}
               {row.error ? (
-                <p className="mt-0.5 text-[length:var(--text-meta)] text-error">{row.error}</p>
+                <p className="mt-0.5 text-(length:--text-meta) text-error">{row.error}</p>
               ) : null}
             </div>
           </Fragment>
@@ -324,7 +324,7 @@ function PaneBody({
 
       <section className="flex min-w-0 flex-col gap-2">
         <div className="flex items-center gap-2">
-          <h2 className="chrome-label text-[length:var(--text-badge)] font-medium text-text-muted">
+          <h2 className="chrome-label text-(length:--text-badge) font-medium text-text-muted">
             Description
           </h2>
           {!busy && editingField !== "content" ? (

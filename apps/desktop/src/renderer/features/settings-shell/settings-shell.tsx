@@ -130,7 +130,7 @@ export function SettingsShell(): JSX.Element {
         className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-base"
         style={paneChrome}
       >
-        <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-5">
+        <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle px-5">
           <span className="flex shrink-0 items-center text-accent">
             {SECTION_CHROME[section].icon}
           </span>
@@ -140,7 +140,7 @@ export function SettingsShell(): JSX.Element {
         </header>
 
         <div className="flex min-h-0 min-w-0 flex-1 justify-center">
-          <div className="flex min-h-0 w-full min-w-0 max-w-[49rem] flex-col">
+          <div className="flex min-h-0 w-full min-w-0 max-w-196 flex-col">
             {section === "appearance" ? (
               <AppearancePane
                 appearance={appearance}
@@ -235,7 +235,7 @@ function AppearancePane({
                       type="button"
                       onClick={() => setTheme(id)}
                       className={cn(
-                        "group relative flex min-h-[92px] flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left focus-outline",
+                        "group relative flex min-h-23 flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left focus-outline",
                         CONTROL_HOVER_LIFT,
                         active ? "border-accent" : "border-border-subtle",
                       )}
@@ -329,7 +329,7 @@ const MESSAGE_LAYOUT_META: Record<MessageLayoutMode, { label: string; icon: type
 function MessageAlignmentControl(): JSX.Element {
   const mode = useMessageLayoutMode();
   return (
-    <div className="grid gap-2 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3">
+    <div className="grid gap-2 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-text-primary">Message alignment</h3>
@@ -348,10 +348,10 @@ function MessageAlignmentControl(): JSX.Element {
                 aria-checked={selected}
                 onClick={() => setMessageLayoutMode(id)}
                 className={cn(
-                  "flex items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs font-medium transition-colors focus-outline",
+                  "flex items-center justify-center gap-1.5 rounded-(--control-radius) border-(length:--control-border-width) px-3 py-1.5 text-xs font-medium transition-colors focus-outline",
                   selected
-                    ? "border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-text-on-selected"
-                    : "border-border-subtle bg-bg-base text-text-secondary hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)] hover:text-text-primary",
+                    ? "border-(--border-row-selected) bg-(--bg-row-selected) text-text-on-selected"
+                    : "border-border-subtle bg-bg-base text-text-secondary hover:border-(--border-control-hover) hover:bg-(--bg-option-hover) hover:text-text-primary",
                 )}
               >
                 <Icon className="size-3.5" />
@@ -413,7 +413,7 @@ function AccountPane(): JSX.Element {
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="text-xs font-medium text-text-secondary">Log out</p>
-              <p className="text-[length:var(--text-meta)] text-text-muted">
+              <p className="text-(length:--text-meta) text-text-muted">
                 Ends the current sign-in on this computer.
               </p>
             </div>
@@ -469,7 +469,7 @@ function SharedFontSizeControl({
   };
 
   return (
-    <div className="grid gap-2 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3">
+    <div className="grid gap-2 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-text-primary">Font size</h3>
@@ -493,7 +493,7 @@ function SharedFontSizeControl({
             type="button"
             onClick={onReset}
             disabled={!isOverride}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-(--control-radius) border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
           >
             <RotateCcw className="size-3.5" />
             Reset
@@ -502,7 +502,7 @@ function SharedFontSizeControl({
       </div>
 
       <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 pt-1">
-        <span className="font-mono text-[length:var(--text-meta)] text-text-muted">
+        <span className="font-mono text-(length:--text-meta) text-text-muted">
           {FONT_SIZE_MIN}px
         </span>
         <RangeInput
@@ -558,7 +558,7 @@ function SharedFontSizeControl({
           }}
           className="w-full"
         />
-        <span className="font-mono text-[length:var(--text-meta)] text-text-muted">
+        <span className="font-mono text-(length:--text-meta) text-text-muted">
           {FONT_SIZE_MAX}px
         </span>
       </div>
@@ -602,12 +602,12 @@ function MarkdownFontControl({
   };
 
   return (
-    <div className="grid gap-3 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3">
+    <div className="grid gap-3 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span
             data-settings-icon-chip
-            className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] bg-bg-elevated text-text-secondary"
+            className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) bg-bg-elevated text-text-secondary"
           >
             {icon}
           </span>
@@ -620,7 +620,7 @@ function MarkdownFontControl({
           type="button"
           onClick={onReset}
           disabled={!fontValue}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-(--control-radius) border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
         >
           <RotateCcw className="size-3.5" />
           Reset
@@ -647,10 +647,10 @@ function MarkdownFontControl({
                 data-selected={isSelected || undefined}
                 onClick={() => onFontChange(preset.value)}
                 className={cn(
-                  "rounded-[var(--pill-radius)] border px-2 py-1 text-[length:var(--text-meta)] font-medium transition-colors focus-outline",
+                  "rounded-(--pill-radius) border px-2 py-1 text-(length:--text-meta) font-medium transition-colors focus-outline",
                   isSelected
                     ? "border-accent bg-accent text-text-on-accent"
-                    : "border-border-subtle bg-bg-primary text-text-secondary hover:border-[color:var(--border-control-hover)] hover:text-text-primary",
+                    : "border-border-subtle bg-bg-primary text-text-secondary hover:border-(--border-control-hover) hover:text-text-primary",
                 )}
               >
                 {preset.label}
@@ -662,7 +662,7 @@ function MarkdownFontControl({
 
       <div
         className={cn(
-          "rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-3 py-2 text-text-primary",
+          "rounded-(--control-radius) border border-border-subtle bg-bg-primary px-3 py-2 text-text-primary",
           code ? "font-mono" : "",
         )}
         style={sampleStyle}

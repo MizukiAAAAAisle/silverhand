@@ -259,7 +259,7 @@ function ServerRow({
         )}
         <span className="truncate">{target}</span>
       </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[length:var(--text-meta)] text-text-muted">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-(length:--text-meta) text-text-muted">
         <span title="Private, domain-scoped name handed to the runtime so profile and workspace layers never collide.">
           runtime: <code className="font-mono">{runtimeName}</code>
         </span>
@@ -296,7 +296,7 @@ function ProbeButton({
       type="button"
       variant="outline"
       size="sm"
-      className="h-6 gap-1.5 px-2 text-[length:var(--text-meta)]"
+      className="h-6 gap-1.5 px-2 text-(length:--text-meta)"
       disabled={disabled}
       onClick={onClick}
     >
@@ -316,7 +316,7 @@ function ProbeButton({
 function ProbeResult({ probe }: { probe: ReturnType<typeof useMcpProbe> }): JSX.Element | null {
   if (probe.isPending) {
     return (
-      <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
+      <div className="flex items-center gap-1.5 text-(length:--text-meta) text-text-muted">
         <Loader2 className="size-3 shrink-0 animate-spin" />
         Probing…
       </div>
@@ -386,7 +386,7 @@ function ProbeTools({ tools }: { tools: NonNullable<McpProbeResult["tools"]> }):
               <span className="font-mono text-xs text-text-primary">{tool.name}</span>
               {tool.description ? (
                 <span
-                  className="truncate text-[length:var(--text-meta)] text-text-muted"
+                  className="truncate text-(length:--text-meta) text-text-muted"
                   title={tool.description}
                 >
                   {tool.description}
@@ -432,7 +432,7 @@ function probePhaseLabel(phase: McpProbePhase): string {
 
 function TypeBadge({ type }: { type: string }): JSX.Element {
   return (
-    <span className="shrink-0 border border-border-subtle px-1.5 py-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wide text-text-muted">
+    <span className="shrink-0 border border-border-subtle px-1.5 py-0.5 text-(length:--text-badge) font-medium uppercase tracking-wide text-text-muted">
       {type}
     </span>
   );
@@ -611,7 +611,7 @@ function EmptyCard({
 
 function NoticeLine({ icon, children }: { icon: JSX.Element; children: ReactNode }): JSX.Element {
   return (
-    <div className="flex items-start gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed text-text-muted">
+    <div className="flex items-start gap-2 rounded-(--control-radius) border border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed text-text-muted">
       <span className="mt-0.5 text-text-muted">{icon}</span>
       <span>{children}</span>
     </div>
@@ -644,8 +644,8 @@ function CopyButton({
         });
       }}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle px-2 py-1 text-text-secondary transition-colors hover:border-border hover:text-text-primary",
-        mono ? "font-mono text-xs" : "text-[length:var(--text-meta)]",
+        "inline-flex items-center gap-1.5 rounded-(--control-radius) border border-border-subtle px-2 py-1 text-text-secondary transition-colors hover:border-border hover:text-text-primary",
+        mono ? "font-mono text-xs" : "text-(length:--text-meta)",
       )}
       title="Copy to clipboard"
     >

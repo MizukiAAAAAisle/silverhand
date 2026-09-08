@@ -157,7 +157,7 @@ function HeaderAction({
         data-sticker
         data-sticker-size="md"
         data-sticker-tone="neutral"
-        className={`flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] transition-colors hover:bg-bg-hover focus-outline disabled:pointer-events-none disabled:opacity-50 ${destructive ? "text-error" : "text-text-muted hover:text-text-primary"}`}
+        className={`flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) transition-colors hover:bg-bg-hover focus-outline disabled:pointer-events-none disabled:opacity-50 ${destructive ? "text-error" : "text-text-muted hover:text-text-primary"}`}
       >
         {children}
       </button>

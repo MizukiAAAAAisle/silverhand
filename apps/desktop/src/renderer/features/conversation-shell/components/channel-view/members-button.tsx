@@ -47,11 +47,11 @@ export function MembersButton({
       aria-label={count === null ? "Members" : `Members (${count})`}
       title="Members"
       data-member-count={count ?? undefined}
-      className="flex h-7 min-w-7 shrink-0 items-center justify-center gap-1 rounded-[var(--control-radius)] px-1.5 text-text-muted hover:bg-bg-hover hover:text-text-primary"
+      className="flex h-7 min-w-7 shrink-0 items-center justify-center gap-1 rounded-(--control-radius) px-1.5 text-text-muted hover:bg-bg-hover hover:text-text-primary"
     >
       <Users className="size-3.5" />
       {count === null ? null : (
-        <span className="text-[length:var(--text-meta)] font-medium leading-none tabular-nums">
+        <span className="text-(length:--text-meta) font-medium leading-none tabular-nums">
           {count}
         </span>
       )}
