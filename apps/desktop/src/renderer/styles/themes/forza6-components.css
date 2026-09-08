@@ -24,11 +24,11 @@
   --text-primary: var(--forza6-ink);
   --text-secondary: var(--forza6-ink);
   --text-muted: rgba(0, 0, 0, 0.62);
-  box-shadow: var(--forza6-poster-shadow-xl);
+  box-shadow: none;
 }
 
 [data-theme="forza6"] aside[data-sidebar] .sidebar-row-border:not(.text-text-on-selected):hover {
-  box-shadow: var(--forza6-poster-shadow);
+  box-shadow: none;
 }
 
 [data-theme="forza6"]
