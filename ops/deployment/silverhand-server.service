@@ -1,0 +1,26 @@
+[Unit]
+Description=Silverhand Rust server
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=%h/silverhand-data
+EnvironmentFile=%h/.config/silverhand-server/server.env
+ExecStart=%h/.local/lib/silverhand/current/silverhand-backend
+
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=90s
+SendSIGKILL=no
+
+UMask=0077
+LimitCORE=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=silverhand-server
+
+[Install]
+WantedBy=default.target
