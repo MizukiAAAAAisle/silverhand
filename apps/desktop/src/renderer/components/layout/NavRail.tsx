@@ -123,7 +123,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
                   )}
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="right">⌘ + {item.shortcut}</TooltipContent>
+              <TooltipContent side="right">⌘{item.shortcut}</TooltipContent>
             </Tooltip>
           );
         })}
