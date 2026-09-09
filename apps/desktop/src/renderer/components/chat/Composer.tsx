@@ -1137,6 +1137,8 @@ export function Composer({
               disabled={sendDisabled}
               title="Send (Enter)"
               data-composer-action="send"
+              data-sticker
+              data-sticker-size="md"
               className="h-7"
             >
               Send
