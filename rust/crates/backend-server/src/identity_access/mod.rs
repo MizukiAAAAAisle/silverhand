@@ -26,6 +26,7 @@ pub mod human_auth;
 pub mod password_hasher;
 pub mod peer_profile;
 pub mod public_profile_mcp;
+pub mod related_users;
 pub mod scope_event_publishers;
 pub mod self_profile;
 pub mod self_profile_mcp;

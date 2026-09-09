@@ -18,7 +18,7 @@ import {
   useViewerAvatarObjectUrl,
   useViewerUser,
 } from "@/features/session/hooks";
-import { useUsers } from "@/features/users/hooks";
+import { useRelatedUsers } from "@/features/users/related-users";
 import { usePresenceById, presenceDotStatus } from "@/features/presence/hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { AgentAvatar } from "@/components/AgentAvatar";
@@ -104,9 +104,9 @@ export function AgentSidebarShell({
       ? viewerQuery.data
       : null;
 
-  const { data: allUsers = [] } = useUsers();
+  const { data: relatedUsers = [] } = useRelatedUsers(viewer?.id ?? null);
 
-  const otherHumans = viewer ? allUsers.filter((u) => u.id !== viewer.id) : allUsers;
+  const otherHumans = viewer ? relatedUsers.filter((u) => u.id !== viewer.id) : [];
   const otherAvatarUrls = useUserAvatarObjectUrls(otherHumans);
   const humansCount = (viewer ? 1 : 0) + otherHumans.length;
 

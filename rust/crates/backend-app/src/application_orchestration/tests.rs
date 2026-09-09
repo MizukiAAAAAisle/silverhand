@@ -12058,3 +12058,162 @@ async fn profile_message_counts_mounts_behind_the_real_human_perimeter() {
     assert_eq!(value["days"].as_array().unwrap().len(), 366);
     assert_eq!(value["subject"]["id"], "user-1");
 }
+
+/// Real authenticated HTTP + WS: empty-workspace roster changes invalidate the
+/// creator's related-human read, independently of conversation/channel events.
+#[tokio::test]
+async fn related_users_follow_owned_workspace_memberships_over_http_and_ws() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("related.sqlite");
+    seed_enrollment_scenario(&path).await;
+    let pool = SqlitePoolOptions::new()
+        .connect(path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO workspaces(id,name,name_key,owner_user_id,created_at,updated_at) VALUES
+      ('owned-empty','Owned Empty','owned empty','admin-1',1,1),
+      ('owned-second','Owned Second','owned second','admin-1',1,1);
+      INSERT INTO workspace_users(workspace_id,user_id,joined_at,role) VALUES
+      ('owned-empty','admin-1',1,'owner'),('owned-second','admin-1',1,'owner');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = prepare(&config(path.clone())).await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let running = tokio::spawn(serve(listener, app, async move {
+        let _ = shutdown_rx.await;
+        Ok::<(), std::io::Error>(())
+    }));
+    let admin = format!("Bearer {ADMIN_TOKEN}");
+    let get_ids = |value: serde_json::Value| {
+        value["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let read = http_over_tcp(address, "GET", "/api/users/related", None, "").await;
+    assert!(read.starts_with("HTTP/1.1 401"), "{read}");
+    let read = http_over_tcp(address, "GET", "/api/users/related", Some(&admin), "").await;
+    assert!(read.starts_with("HTTP/1.1 200"), "{read}");
+    assert_eq!(get_ids(http_json_body(&read)), vec!["admin-1"]);
+    // The viewer query parameter cannot impersonate the owner. Directory remains independent.
+    let read = http_over_tcp(
+        address,
+        "GET",
+        "/api/users/related?viewer=admin-1",
+        Some(&format!("Bearer {TOKEN}")),
+        "",
+    )
+    .await;
+    assert!(!get_ids(http_json_body(&read)).contains(&"admin-1".to_owned()));
+    let read = http_over_tcp(address, "GET", "/api/users", Some(&admin), "").await;
+    assert!(get_ids(http_json_body(&read)).len() > 1);
+    let mut req = format!("ws://{address}{EVENT_WEBSOCKET_PATH}")
+        .into_client_request()
+        .unwrap();
+    req.headers_mut()
+        .insert(ORIGIN, "http://localhost:5173".parse().unwrap());
+    req.headers_mut().insert(
+        COOKIE,
+        format!("{EVENT_WS_SESSION_COOKIE}={ADMIN_TOKEN}")
+            .parse()
+            .unwrap(),
+    );
+    req.headers_mut()
+        .insert(DESKTOP_API_EPOCH_HEADER, MINIMUM_CLIENT_API_EPOCH.into());
+    let (mut socket, _) = connect_async(req).await.unwrap();
+    assert_eq!(next_socket_json(&mut socket).await["type"], "authenticated");
+    socket
+        .send(ClientMessage::Text(
+            serde_json::json!({"type":"subscribe","scope":"workspace:owned-empty"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_socket_json(&mut socket).await["type"], "subscribed");
+    let add = http_over_tcp(
+        address,
+        "POST",
+        "/api/workspaces/owned-empty/members",
+        Some(&admin),
+        r#"{"kind":"human","user_id":"user-1"}"#,
+    )
+    .await;
+    assert!(add.starts_with("HTTP/1.1 201"), "{add}");
+    let event = next_socket_json(&mut socket).await;
+    assert_eq!(event["kind"], "workspace_members_changed");
+    assert_eq!(event["scope"], "workspace:owned-empty");
+    assert_eq!(
+        event["payload"],
+        serde_json::json!({"workspace_id":"owned-empty"})
+    );
+    let read = http_over_tcp(address, "GET", "/api/users/related", Some(&admin), "").await;
+    assert_eq!(get_ids(http_json_body(&read)), vec!["admin-1", "user-1"]);
+    // A second relationship does not duplicate a human; removing only one preserves them.
+    sqlx::query("INSERT INTO workspace_users(workspace_id,user_id,joined_at,role) VALUES('owned-second','user-1',1,'member')").execute(&pool).await.unwrap();
+    let read = http_over_tcp(address, "GET", "/api/users/related", Some(&admin), "").await;
+    assert_eq!(get_ids(http_json_body(&read)), vec!["admin-1", "user-1"]);
+    let remove = http_over_tcp(
+        address,
+        "DELETE",
+        "/api/workspaces/owned-empty/members/users/user-1",
+        Some(&admin),
+        "",
+    )
+    .await;
+    assert!(
+        remove.starts_with("HTTP/1.1 200") || remove.starts_with("HTTP/1.1 204"),
+        "{remove}"
+    );
+    assert_eq!(
+        next_socket_json(&mut socket).await["kind"],
+        "workspace_members_changed"
+    );
+    let read = http_over_tcp(address, "GET", "/api/users/related", Some(&admin), "").await;
+    assert_eq!(get_ids(http_json_body(&read)), vec!["admin-1", "user-1"]);
+    socket
+        .send(ClientMessage::Text(
+            serde_json::json!({
+                "type":"subscribe", "scope":"viewer:self"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_socket_json(&mut socket).await["type"], "subscribed");
+
+    for workspace in ["owned-second", "owned-empty"] {
+        let delete = http_over_tcp(
+            address,
+            "DELETE",
+            &format!("/api/workspaces/{workspace}"),
+            Some(&admin),
+            "",
+        )
+        .await;
+        assert!(delete.starts_with("HTTP/1.1 204"), "{delete}");
+        let event = next_socket_json(&mut socket).await;
+        assert_eq!(event["kind"], "viewer_workspaces_changed");
+        assert_eq!(event["payload"]["change"], "removed");
+        assert_eq!(event["payload"]["workspace_id"], workspace);
+        let read = http_over_tcp(address, "GET", "/api/users/related", Some(&admin), "").await;
+        let expected = if workspace == "owned-second" {
+            vec!["admin-1"]
+        } else {
+            vec![]
+        };
+        assert_eq!(get_ids(http_json_body(&read)), expected);
+    }
+    socket.close(None).await.unwrap();
+    pool.close().await;
+    shutdown_tx.send(()).unwrap();
+    running.await.unwrap().unwrap();
+}

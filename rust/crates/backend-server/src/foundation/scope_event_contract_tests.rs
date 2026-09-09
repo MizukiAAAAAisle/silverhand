@@ -4467,6 +4467,7 @@ const SUPPORTED_EVENT_KINDS: &[&str] = &[
     "user_changed",
     "message",
     "workspace_channels_changed",
+    "workspace_members_changed",
     "conversation_members_changed",
     "attention_pref_changed",
     "task_changed",
@@ -4499,6 +4500,7 @@ fn wire_kind(event: &ProductEvent) -> &'static str {
         ProductEvent::UserPresence { .. } => "user_presence",
         ProductEvent::UserChanged { .. } => "user_changed",
         ProductEvent::Message(_) => "message",
+        ProductEvent::WorkspaceMembersChanged { .. } => "workspace_members_changed",
         ProductEvent::WorkspaceChannelsChanged { .. } => "workspace_channels_changed",
         ProductEvent::ConversationMembersChanged { .. } => "conversation_members_changed",
         ProductEvent::AttentionPrefChanged { .. } => "attention_pref_changed",
@@ -4556,6 +4558,9 @@ fn the_supported_wire_kinds_are_a_closed_named_set() {
             user_id: "user-1".to_owned(),
         },
         ProductEvent::Message(json!({ "message": { "id": "m-1" } })),
+        ProductEvent::WorkspaceMembersChanged {
+            workspace_id: "w-1".to_owned(),
+        },
         ProductEvent::WorkspaceChannelsChanged {
             workspace_id: "w-1".to_owned(),
             channel_id: "c-1".to_owned(),

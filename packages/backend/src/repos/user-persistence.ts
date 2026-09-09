@@ -58,6 +58,7 @@ export function createSqliteUserPersistence(db: Db): UserPersistence {
   const read: UserReadPort = {
     get: id => toSnapshotOrNull(users.get(id)),
     list: () => users.list().map(toSnapshot),
+    listRelated: viewerUserId => users.listRelated(viewerUserId).map(toSnapshot),
   };
 
   const profile: UserDirectWritePort = {

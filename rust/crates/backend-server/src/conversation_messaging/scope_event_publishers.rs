@@ -302,14 +302,16 @@ impl ScopeEventHub {
             "removed" => ViewerWorkspaceChange::Removed,
             _ => return Err(ScopeEventHubError::RegistryPoisoned),
         };
-        self.publish(
+        let viewer_event = self.publish(
             EventScope::Viewer(viewer.clone()),
             ProductEvent::ViewerWorkspacesChanged {
                 change,
                 workspace_id: workspace.as_str().to_owned(),
                 role: role.map(str::to_owned),
             },
-        )
+        );
+        let members = self.publish_workspace_members_changed(workspace);
+        viewer_event.and(members)
     }
 
     pub fn publish_direct_pairs_changed(

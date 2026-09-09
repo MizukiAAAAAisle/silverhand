@@ -62,6 +62,16 @@ export class UserRepo {
    * List every user. V1 has at most one row (created at registration);
    * exposed for tests + future V2 admin views.
    */
+  listRelated(viewerUserId: string): UserRow[] {
+    return this.db.prepare<[string], UserRow>(`
+      SELECT * FROM users WHERE id IN (
+        SELECT wu.user_id FROM workspaces w
+        JOIN workspace_users wu ON wu.workspace_id = w.id
+        WHERE w.owner_user_id = ? AND w.owner_agent_id IS NULL
+      ) ORDER BY created_at ASC, id ASC
+    `).all(viewerUserId);
+  }
+
   list(): UserRow[] {
     return this.db
       .prepare<[], UserRow>('SELECT * FROM users ORDER BY created_at ASC')

@@ -25,8 +25,8 @@ use silverhand_backend_core::{
         AvatarStorageRef, AvatarStorageRefRead,
     },
     identity_access::user_identity::{
-        DisplayName, UserDirectoryRead, UserEmailLookup, UserProfileRead, UserProfileWrite,
-        UserProfileWriteUnitOfWork, UserRecord,
+        DisplayName, RelatedUserDirectoryRead, UserDirectoryRead, UserEmailLookup, UserProfileRead,
+        UserProfileWrite, UserProfileWriteUnitOfWork, UserRecord,
     },
 };
 use sqlx::{
@@ -336,6 +336,27 @@ impl UserProfileWriteUnitOfWork for SqliteUserStore {
     }
 }
 
+// IN deduplicates memberships before projecting users; unrelated profiles never leave SQLite.
+const LIST_RELATED_PROFILES: &str =
+    "SELECT id, name, display_name, email, avatar_storage_key, created_at, updated_at
+ FROM users WHERE id IN (
+ SELECT wu.user_id FROM workspaces w JOIN workspace_users wu ON wu.workspace_id = w.id
+ WHERE w.owner_user_id = ? AND w.owner_agent_id IS NULL)
+ ORDER BY created_at ASC, id ASC";
+
+impl RelatedUserDirectoryRead for SqliteUserStore {
+    async fn list_related(&self, viewer: &UserId) -> Result<Vec<UserRecord>, PersistenceFailure> {
+        let rows = sqlx::query(LIST_RELATED_PROFILES)
+            .bind(viewer.as_str())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        rows.iter()
+            .map(|row| decode_user(row).map_err(PersistenceFailure::from_source))
+            .collect()
+    }
+}
+
 impl UserDirectoryRead for SqliteUserStore {
     async fn list(&self) -> Result<Vec<UserRecord>, PersistenceFailure> {
         let rows = sqlx::query(LIST_PROFILES)
@@ -443,6 +464,64 @@ INSERT INTO users (id, name, display_name, email, avatar_storage_key, avatar_con
 
     fn uid(raw: &str) -> UserId {
         UserId::parse(raw).unwrap()
+    }
+
+    #[tokio::test]
+    async fn related_directory_uses_owner_and_union_including_archived_but_not_agent_homes() {
+        let (_dir, store) = open_seeded().await;
+        sqlx::raw_sql("INSERT INTO workspaces(id,name,name_key,owner_user_id,archived_at,created_at,updated_at) VALUES
+          ('a','A','a','user-1',NULL,1,1), ('b','B','b','user-1',10,1,1),
+          ('other','Other','other','user-2',NULL,1,1);
+          INSERT INTO workspace_users(workspace_id,user_id,joined_at) VALUES
+          ('a','user-1',1),('a','user-2',1),('b','user-2',1),('b','user-3',1),
+          ('other','user-1',1);")
+          .execute(&store.pool).await.unwrap();
+        let ids = |rows: Vec<UserRecord>| {
+            rows.into_iter()
+                .map(|u| u.id.as_str().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(store.list_related(&uid("user-1")).await.unwrap()),
+            ["user-1", "user-2", "user-3"]
+        );
+        assert_eq!(
+            ids(store.list_related(&uid("user-2")).await.unwrap()),
+            ["user-1"]
+        );
+        assert!(store.list_related(&uid("user-3")).await.unwrap().is_empty());
+
+        sqlx::query("DELETE FROM workspace_users WHERE workspace_id='a' AND user_id='user-2'")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(store.list_related(&uid("user-1")).await.unwrap().len(), 3);
+        sqlx::query("DELETE FROM workspaces WHERE id='b'")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            ids(store.list_related(&uid("user-1")).await.unwrap()),
+            ["user-1"]
+        );
+
+        sqlx::raw_sql("INSERT INTO hosts(id,name,kind,created_at) VALUES('h','H','local',1);
+          INSERT INTO agents(id,name,display_name,runtime,host_id,created_by_user_id,created_at,updated_at)
+          VALUES('agent','agent','Agent','claude','h','user-1',1,1);
+          INSERT INTO workspaces(id,name,name_key,owner_user_id,owner_agent_id,created_at,updated_at)
+          VALUES('home','Home',NULL,'user-1','agent',1,1);
+          INSERT INTO workspace_users(workspace_id,user_id,joined_at) VALUES('home','user-3',1);")
+          .execute(&store.pool).await.unwrap();
+        assert_eq!(
+            ids(store.list_related(&uid("user-1")).await.unwrap()),
+            ["user-1"]
+        );
+        // Read the persisted owner pointer on every request; no renderer or process cache.
+        sqlx::query("UPDATE workspaces SET owner_user_id='user-2' WHERE id='a'")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        assert!(store.list_related(&uid("user-1")).await.unwrap().is_empty());
     }
 
     #[tokio::test]

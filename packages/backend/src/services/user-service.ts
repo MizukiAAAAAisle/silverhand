@@ -92,6 +92,10 @@ export class UserService {
     return snapshotToDto(row);
   }
 
+  listRelatedDtos(viewerUserId: string): UserDto[] {
+    return this.users.listRelated(viewerUserId).map(snapshotToDto);
+  }
+
   listDtos(): UserDto[] {
     return this.users.list().map(snapshotToDto);
   }

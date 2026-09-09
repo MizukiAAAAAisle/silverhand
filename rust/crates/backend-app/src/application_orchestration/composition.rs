@@ -645,6 +645,8 @@ pub(super) async fn compose_after_audit(
     // the raw `blob_store` handle survives for the #2254 agent-chat audit attachment
     // serve below, which reads blobs directly, NOT through the avatar single-kind wrapper.
     let agent_avatar_blobs = SingleKindAvatarBlobs::new(blob_store.clone(), StorageKind::Local);
+    let related_users =
+        silverhand_backend_server::identity_access::related_users::router(user_store.clone());
     let users_router = users::router(
         UsersDeps {
             directory: user_store.clone(),
@@ -877,6 +879,7 @@ pub(super) async fn compose_after_audit(
     }));
     let human_products = require_human_session(
         host.merge(profile_message_counts)
+            .merge(related_users)
             .merge(human_writes)
             .merge(lane_human_products)
             // Wave 3A checkpoint A6 (#2203): `POST /api/agents/{id}/direct-messages`, the

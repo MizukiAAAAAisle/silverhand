@@ -39,6 +39,7 @@ export interface UserProfileSnapshot {
 export interface UserReadPort {
   get(id: string): UserProfileSnapshot | null;
   list(): UserProfileSnapshot[];
+  listRelated(viewerUserId: string): UserProfileSnapshot[];
 }
 
 /**

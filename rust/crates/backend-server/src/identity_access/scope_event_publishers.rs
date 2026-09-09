@@ -82,6 +82,19 @@ impl ScopeEventHub {
         HubAgentChangedSink::new(self.clone())
     }
 
+    /// Workspace roster invalidation, including workspaces without channels.
+    pub fn publish_workspace_members_changed(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Workspace(workspace.clone()),
+            ProductEvent::WorkspaceMembersChanged {
+                workspace_id: workspace.as_str().to_owned(),
+            },
+        )
+    }
+
     pub(crate) fn publish_viewer_added_to_workspace(
         &self,
         viewer: &UserId,
@@ -160,8 +173,12 @@ impl ViewerWorkspacesChangedSink for HubWorkspaceMembershipPublisher {
         workspace_id: &WorkspaceId,
         role: WorkspaceRole,
     ) -> Result<(), ViewerAnnounceFailure> {
-        self.0
-            .publish_viewer_added_to_workspace(user_id, workspace_id, role)
+        let viewer = self
+            .0
+            .publish_viewer_added_to_workspace(user_id, workspace_id, role);
+        let members = self.0.publish_workspace_members_changed(workspace_id);
+        viewer
+            .and(members)
             .map_err(ViewerAnnounceFailure::from_source)
     }
 }

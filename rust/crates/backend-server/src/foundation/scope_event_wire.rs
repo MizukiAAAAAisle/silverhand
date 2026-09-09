@@ -41,6 +41,9 @@ pub(crate) enum ProductEvent {
         last_seen_at: Option<i64>,
     },
     Message(Value),
+    WorkspaceMembersChanged {
+        workspace_id: String,
+    },
     WorkspaceChannelsChanged {
         workspace_id: String,
         channel_id: String,

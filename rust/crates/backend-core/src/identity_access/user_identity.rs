@@ -372,6 +372,15 @@ pub trait UserDirectoryRead: Clone + Send + Sync + 'static {
     fn list(&self) -> impl Future<Output = Result<Vec<UserRecord>, PersistenceFailure>> + Send;
 }
 
+/// Member-rail humans: union of human memberships in workspaces created by the viewer.
+/// The authenticated viewer is supplied by the transport, never a query parameter.
+pub trait RelatedUserDirectoryRead: Clone + Send + Sync + 'static {
+    fn list_related(
+        &self,
+        viewer: &UserId,
+    ) -> impl Future<Output = Result<Vec<UserRecord>, PersistenceFailure>> + Send;
+}
+
 // ===========================================================================
 // Write: PATCH /api/me (display_name), with the user_changed announce.
 // ===========================================================================

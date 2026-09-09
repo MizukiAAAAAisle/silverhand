@@ -40,5 +40,13 @@ export function publishViewerWorkspacesChanged(
     role?: WorkspaceRoleDto;
   },
 ): void {
-  ctx.events.publishToScope(`viewer:${userId}`, 'viewer_workspaces_changed', payload);
+  try {
+    ctx.events.publishToScope(`viewer:${userId}`, 'viewer_workspaces_changed', payload);
+  } finally {
+    if (payload.change !== 'metadata_changed') {
+      ctx.events.publishToScope(`workspace:${payload.workspace_id}`, 'workspace_members_changed', {
+        workspace_id: payload.workspace_id,
+      });
+    }
+  }
 }

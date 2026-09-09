@@ -470,6 +470,7 @@ export const apiPaths = {
   // endpoint returns the discriminated `RegistrationRequired` shape so
   // the renderer can mount the auth gate.
   users: '/api/users',
+  relatedUsers: '/api/users/related',
   me: '/api/me',
   meAvatar: '/api/me/avatar',
   /** Public avatar fetch for any user. Returns the blob bytes (auth

@@ -61,6 +61,10 @@ export function createUsersApp(deps: UsersRouteDeps): Hono<AppEnv> {
     return c.json({ users: ctx.userService.listDtos() });
   });
 
+  app.get(apiPaths.relatedUsers, c => {
+    return c.json({ users: ctx.userService.listRelatedDtos(requireViewerUserId(c)) });
+  });
+
   app.get(apiPaths.me, c => {
     // Kept defensive for tests or future setup allowlists. Normal C.6+
     // public API traffic reaches this route with a session principal.

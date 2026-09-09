@@ -448,3 +448,30 @@ describe('SqliteUserPersistence single-viewer gate: existence, not rows', () => 
     db.close();
   });
 });
+
+describe('related human directory', () => {
+  it('reads only the creator membership union, deduplicates and reflects removal', () => {
+    const db = openVirginDb();
+    try {
+      db.exec(`
+        INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES
+          ('owner','owner','Owner',1,1),('peer','peer','Peer',2,2),('foreign','foreign','Foreign',3,3);
+        INSERT INTO workspaces(id,name,name_key,owner_user_id,archived_at,created_at,updated_at) VALUES
+          ('a','A','a','owner',NULL,1,1),('b','B','b','owner',10,1,1),
+          ('other','Other','other','foreign',NULL,1,1);
+        INSERT INTO workspace_users(workspace_id,user_id,joined_at) VALUES
+          ('a','owner',1),('a','peer',1),('b','peer',1),('other','owner',1),('other','foreign',1);
+      `);
+      const { read } = createSqliteUserPersistence(db);
+      expect(read.listRelated('owner').map(u => u.id)).toEqual(['owner','peer']);
+      expect(read.listRelated('peer')).toEqual([]);
+      db.prepare("DELETE FROM workspace_users WHERE workspace_id='a' AND user_id='peer'").run();
+      expect(read.listRelated('owner').map(u => u.id)).toEqual(['owner','peer']);
+      db.prepare("DELETE FROM workspaces WHERE id='b'").run();
+      expect(read.listRelated('owner').map(u => u.id)).toEqual(['owner']);
+      expect(read.list()).toHaveLength(3);
+    } finally {
+      db.close();
+    }
+  });
+});

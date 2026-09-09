@@ -232,3 +232,7 @@ export const WorkspaceMembersResponseSchema = z.object({
 export type WorkspaceMembersResponse = z.infer<
   typeof WorkspaceMembersResponseSchema
 >;
+
+/** Roster invalidation on workspace:<workspace_id>, including empty workspaces.
+ * Consumers refetch relatedUsers; this hint grants no directory access. */
+export const WorkspaceMembersChangedEventSchema = z.object({ workspace_id: z.string() });
