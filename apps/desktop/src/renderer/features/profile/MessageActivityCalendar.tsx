@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import * as Tooltip from "@radix-ui/react-tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   messageActivityCalendar,
   messageActivityLevel,
@@ -75,7 +75,7 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
               <span>Fri</span>
               <span />
             </div>
-            <Tooltip.Provider delayDuration={120} skipDelayDuration={0}>
+            <TooltipProvider>
               <div
                 className="message-activity-grid"
                 role="group"
@@ -83,8 +83,8 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
               >
                 {cells.map((cell, index) =>
                   cell.visible ? (
-                    <Tooltip.Root key={cell.date}>
-                      <Tooltip.Trigger asChild>
+                    <Tooltip key={cell.date}>
+                      <TooltipTrigger asChild>
                         <button
                           type="button"
                           className="message-activity-cell"
@@ -122,30 +122,22 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
                             }
                           }}
                         />
-                      </Tooltip.Trigger>
-                      <Tooltip.Portal>
-                        <Tooltip.Content
-                          sideOffset={8}
-                          collisionPadding={8}
-                          data-popover-frame="info"
-                          className="z-(--z-popover) bg-bg-floating px-3 py-2 text-xs text-text-primary shadow-popover"
-                        >
-                          <div className="font-semibold">
-                            {dateFormat.format(new Date(`${cell.date}T00:00:00Z`))}
-                          </div>
-                          <div className="mt-1 text-text-secondary">
-                            {cell.count.toLocaleString()}{" "}
-                            {cell.count === 1 ? "message" : "messages"}
-                          </div>
-                        </Tooltip.Content>
-                      </Tooltip.Portal>
-                    </Tooltip.Root>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <div className="font-semibold">
+                          {dateFormat.format(new Date(`${cell.date}T00:00:00Z`))}
+                        </div>
+                        <div className="mt-1 text-white/75">
+                          {cell.count.toLocaleString()} {cell.count === 1 ? "message" : "messages"}
+                        </div>
+                      </TooltipContent>
+                    </Tooltip>
                   ) : (
                     <span key={cell.date} />
                   ),
                 )}
               </div>
-            </Tooltip.Provider>
+            </TooltipProvider>
           </div>
         </div>
       </div>
