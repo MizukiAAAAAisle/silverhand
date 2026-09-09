@@ -177,18 +177,10 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
       sidebar={
         <nav className="scrollbar-hide flex-1 overflow-y-auto">
           <div className="mb-3 space-y-1">
-            <button
-              type="button"
-              onClick={props.onSelectSearch}
-              aria-current={props.searchActive ? "page" : undefined}
-              className={cn(
-                "mb-2 flex h-8 w-full items-center gap-2 rounded-(--control-radius) border-0 bg-bg-elevated/60 px-2.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-elevated focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-border-focus",
-                props.searchActive && "bg-bg-elevated text-text-primary",
-              )}
-            >
-              <Search aria-hidden className="size-4 shrink-0" />
+            <SidebarNavigationButton onClick={props.onSelectSearch} active={props.searchActive}>
+              <Search className="size-4" />
               <span>Search</span>
-            </button>
+            </SidebarNavigationButton>
 
             <SidebarNavigationButton onClick={props.onSelectSaved} active={props.savedActive}>
               <Bookmark className={cn("size-4", props.savedActive ? "fill-current" : "")} />
