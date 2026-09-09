@@ -3,7 +3,6 @@ import { Archive, Bookmark, Plus, Search } from "lucide-react";
 import type { AgentDto } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
-import { SEARCH_FIELD_FRAME } from "@/components/common/control-ink-border";
 import {
   useAgentAvatarObjectUrls,
   type AgentAvatarSource,
@@ -183,9 +182,8 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
               onClick={props.onSelectSearch}
               aria-current={props.searchActive ? "page" : undefined}
               className={cn(
-                SEARCH_FIELD_FRAME,
-                "mb-2 h-8 w-full text-left text-sm text-text-muted focus-visible:outline-none",
-                props.searchActive && "border-border-focus text-text-primary",
+                "mb-2 flex h-8 w-full items-center gap-2 rounded-(--control-radius) border-0 bg-bg-elevated/60 px-2.5 text-left text-sm text-text-muted transition-colors hover:bg-bg-elevated focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-border-focus",
+                props.searchActive && "bg-bg-elevated text-text-primary",
               )}
             >
               <Search aria-hidden className="size-4 shrink-0" />
