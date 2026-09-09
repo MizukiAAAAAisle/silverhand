@@ -1419,6 +1419,13 @@ pub(super) async fn compose_after_audit(
             source: Box::new(source),
         })?;
 
+    // Console is opt-in on the product listener, with its own bearer perimeter.
+    // The HTTPS edge forwards these routes to the same upstream as the product API;
+    // the private metrics listener never serves Console routes.
+    let console_router = crate::foundation::operator_console::router(config)
+        .await?
+        .unwrap_or_default();
+
     // #2255/#2257: the embedded-bootstrap one-shot token authority is the LAST fallible
     // startup step. The listener has already bound, and `bound_listener_addr` is the
     // `local_addr()` witness from that exact listener; only now may the composition decide
@@ -1491,6 +1498,7 @@ pub(super) async fn compose_after_audit(
             // indistinguishable 404.
             .merge(embedded_bootstrap_router)
             .merge(readyz_router)
+            .merge(console_router)
             .route(
                 "/metrics",
                 axum::routing::any(|| async { axum::http::StatusCode::FORBIDDEN }),

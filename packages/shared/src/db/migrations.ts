@@ -1940,7 +1940,7 @@ export const migrations: Migration[] = [
       // throwing here rolls the transaction back and leaves no `_migrations`
       // row, so the upgrade retries on the next boot once the data is clean.
       const audit = auditConversationTitleAddresses(
-        rows.map(row => ({
+        rows.map((row) => ({
           id: row.id,
           workspaceId: row.workspace_id,
           title: row.title,
@@ -1950,9 +1950,9 @@ export const migrations: Migration[] = [
       );
       if (audit.defects.length > 0) {
         throw new Error(
-          `migration v72 (#task:2016): a workspace holds conversations whose `
-            + `titles fold to one address. Rename one of each pair, then restart. `
-            + `\n${describeConversationTitleAudit(audit)}`,
+          `migration v72 (#task:2016): a workspace holds conversations whose ` +
+            `titles fold to one address. Rename one of each pair, then restart. ` +
+            `\n${describeConversationTitleAudit(audit)}`,
         );
       }
 
@@ -2889,7 +2889,7 @@ export const migrations: Migration[] = [
           .get().n;
         throw new Error(
           `v76 task_board_key: ${count} task row(s) cannot derive a board from their ` +
-            `owner conversation (samples: ${invalid.map(row => `${row.id}:${row.issue}`).join(', ')}). ` +
+            `owner conversation (samples: ${invalid.map((row) => `${row.id}:${row.issue}`).join(', ')}). ` +
             'Resolve missing owners or workspace divergence before upgrading; refusing ' +
             'to drop an orphan or freeze a wrong board.',
         );
@@ -3129,7 +3129,7 @@ export const migrations: Migration[] = [
         )
         .all();
       const audit = auditWorkspaceNameAddresses(
-        rows.map(row => ({
+        rows.map((row) => ({
           id: row.id,
           ownerAgentId: row.owner_agent_id,
           name: row.name,
@@ -3139,9 +3139,9 @@ export const migrations: Migration[] = [
       );
       if (audit.defects.length > 0) {
         throw new Error(
-          `migration v78 (#task:2027): regular workspace display names fold to `
-            + `one current address. Rename one of each pair, then restart.\n`
-            + describeWorkspaceNameAudit(audit),
+          `migration v78 (#task:2027): regular workspace display names fold to ` +
+            `one current address. Rename one of each pair, then restart.\n` +
+            describeWorkspaceNameAudit(audit),
         );
       }
 
@@ -3246,8 +3246,9 @@ export const migrations: Migration[] = [
           }>;
         };
       };
-      const collisions = handle.prepare(
-        `SELECT user_id, canonical_key,
+      const collisions = handle
+        .prepare(
+          `SELECT user_id, canonical_key,
                 GROUP_CONCAT(entity_id, ',') AS source_keys
            FROM (
              SELECT user_id, entity_id,
@@ -3265,14 +3266,15 @@ export const migrations: Migration[] = [
           GROUP BY user_id, canonical_key
          HAVING COUNT(*) > 1
           ORDER BY user_id, canonical_key`,
-      ).all();
+        )
+        .all();
       if (collisions.length > 0) {
         const sample = collisions
-          .map(row => `${row.user_id}:${row.canonical_key}<-[${row.source_keys}]`)
+          .map((row) => `${row.user_id}:${row.canonical_key}<-[${row.source_keys}]`)
           .join('; ');
         throw new Error(
-          `migration v79 (#task:2032): favorite keys would collapse during `
-            + `conversation-kind retirement (${collisions.length} collision(s)): ${sample}`,
+          `migration v79 (#task:2032): favorite keys would collapse during ` +
+            `conversation-kind retirement (${collisions.length} collision(s)): ${sample}`,
         );
       }
     },
@@ -3394,7 +3396,7 @@ export const migrations: Migration[] = [
     // could not exist under the old constraint). Fail LOUDLY inside the migration
     // transaction if that invariant is violated, rather than silently discard a
     // column that had diverged.
-    precondition: db => {
+    precondition: (db) => {
       const handle = db as {
         prepare: (sql: string) => { get: () => { n: number } };
       };
@@ -3997,7 +3999,7 @@ export const migrations: Migration[] = [
     //   - the v60 backfill SQL above, which reads these columns as HISTORY.
     //     Applied migrations are never rewritten; that statement only ever runs
     //     against a v59 file, where the columns still exist.
-    precondition: db => {
+    precondition: (db) => {
       const handle = db as {
         prepare: (sql: string) => { all: () => { id: string }[] };
       };
@@ -4025,12 +4027,12 @@ export const migrations: Migration[] = [
         .all();
       if (orphans.length > 0) {
         throw new Error(
-          `migration v87: ${orphans.length} message row(s) still carry retired task_* `
-            + 'data with no canonical tasks row of the same id, so dropping the columns '
-            + 'would destroy the only copy. Ids (up to 20): '
-            + `${orphans.map(row => row.id).join(', ')}. `
-            + 'Re-run the v60 backfill for these rows (tasks.id = the anchor message id) '
-            + 'before upgrading.',
+          `migration v87: ${orphans.length} message row(s) still carry retired task_* ` +
+            'data with no canonical tasks row of the same id, so dropping the columns ' +
+            'would destroy the only copy. Ids (up to 20): ' +
+            `${orphans.map((row) => row.id).join(', ')}. ` +
+            'Re-run the v60 backfill for these rows (tasks.id = the anchor message id) ' +
+            'before upgrading.',
         );
       }
     },
@@ -4196,6 +4198,17 @@ export const migrations: Migration[] = [
         WHERE from_kind='agent' AND cc_source_message_id IS NULL;
     `,
   },
+  {
+    version: 95,
+    name: 'operator_console_aggregate_indexes',
+    up: `
+      CREATE INDEX idx_auth_sessions_last_used_at
+        ON auth_sessions(last_used_at, user_id);
+      CREATE INDEX idx_messages_product_activity_created_at
+        ON messages(created_at)
+        WHERE from_kind IN ('user','agent') AND cc_source_message_id IS NULL;
+    `,
+  },
 ];
 
 /**
@@ -4204,8 +4217,7 @@ export const migrations: Migration[] = [
  * it needs and moves the outward `CURRENT_SCHEMA_EPOCH` (see `schema-epochs.ts`)
  * at most once (#task:2103).
  */
-export const CURRENT_MIGRATION_STEP =
-  migrations[migrations.length - 1]?.version ?? 0;
+export const CURRENT_MIGRATION_STEP = migrations[migrations.length - 1]?.version ?? 0;
 
 // Baseline compaction floor (#task:1213): historical migrations v1..v44 were
 // folded into the single `baseline` snapshot at version 44, so 44 is now the

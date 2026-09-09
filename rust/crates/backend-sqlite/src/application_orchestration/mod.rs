@@ -7,3 +7,6 @@
 mod agent_graph_read;
 mod agent_materialization;
 mod agent_teardown;
+mod console_analytics;
+
+pub use console_analytics::{SqliteConsoleAnalyticsError, SqliteConsoleAnalyticsRead};

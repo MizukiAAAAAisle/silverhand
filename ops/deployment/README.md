@@ -53,3 +53,62 @@ The semantics are defined in systemd 239's upstream
 and [unit manual](https://github.com/systemd/systemd/blob/v239/man/systemd.unit.xml),
 matching the production systemd major version. Production rollback still needs a
 paired binary/environment/data snapshot; this unit alone cannot supply one.
+
+## Console HTTPS ingress
+
+This Console candidate uses the existing product listener, independently of the
+private metrics listener. Enable it with `SILVERHAND_CONSOLE_TOKEN` in the
+protected server environment file and the `remote-only` profile. See
+[Console access and token lifecycle](../../docs/ecs-console.md#enable-and-access).
+The operator entry is `/console` on the deployment's configured HTTPS origin.
+Resolve the domain from the current deployment configuration; these files do not
+change the live deployment.
+
+For an Nginx ingress, include `silverhand-console-http.conf` inside `http {}` and
+`silverhand-console-routes.conf` inside the existing HTTPS `server {}` for that
+domain. Set the upstream to the actual product address (the reference uses
+`127.0.0.1:8080` for a colocated edge), and use a writable, rotated access-log
+path. Keep the domain's existing certificate, HTTP-to-HTTPS redirect, product API
+and WebSocket locations. Reconcile any existing matching locations rather than
+adding duplicates. Check the full effective configuration with `nginx -t` before
+an authorized reload. This is a reference adapter, not evidence that production
+uses Nginx or authorization to install it.
+
+The route snippet forwards the path/query unchanged and explicitly preserves
+Authorization. It disables inherited caching, response buffering and error
+interception. Its access log records only timestamp, fixed route family, method,
+status and elapsed time. Do not add URL tokens or header/request debug logging.
+`/metrics` and `/metrics/*` are rejected at the edge; the backend also rejects
+public `/metrics`. No route targets the private metrics listener.
+
+The upstream Nginx documentation describes
+[proxy URI and header handling](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass)
+and [HTTPS server configuration](https://nginx.org/en/docs/http/configuring_https_servers.html).
+For another ingress, preserve the same routing, authentication-header, cache and
+logging contract rather than installing another proxy layer.
+
+Verify the exact snippets against a built candidate with Python 3, Nginx and
+OpenSSL available:
+
+```bash
+python3 scripts/test-console-https.py --binary /absolute/path/to/silverhand-backend
+```
+
+The script creates an empty isolated store, an ephemeral token, a temporary TLS
+certificate and three loopback listeners. It verifies the certificate against
+its own test CA, runs `nginx -t`, exercises all Console API gates through HTTPS,
+checks query forwarding, no-store and metrics isolation, and checks credential-
+free rejection logs at the ERROR floor. It cleans up only its child processes and
+prints the retained artifact directory. It does not install certificates, read
+production secrets or modify existing services. Production ingress validation
+and deployment remain a separate release step.
+
+The browser credential lifecycle has a dependency-free regression check:
+
+```bash
+node scripts/test-console-token-memory.mjs
+```
+
+It executes the shipped inline script with fresh page contexts sharing origin
+storage, checks legacy-key removal without token reads/writes, reload/disconnect/
+pagehide clearing, and late responses that must not restore a previous session.

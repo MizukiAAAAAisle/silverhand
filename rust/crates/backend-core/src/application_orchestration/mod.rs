@@ -15,4 +15,5 @@
 
 pub mod agent_creation;
 pub mod agent_materialization;
+pub mod console_analytics;
 pub mod teardown;

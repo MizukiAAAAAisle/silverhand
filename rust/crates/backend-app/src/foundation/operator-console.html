@@ -1,0 +1,1652 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Silverhand Console</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font:
+          13px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
+        color: #222b38;
+        background: #f7f8fa;
+        --line: #e5e8ed;
+        --muted: #707988;
+        --accent: #5369db;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      button,
+      input {
+        font: inherit;
+      }
+      button,
+      a,
+      input {
+        outline-offset: 4px;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:disabled {
+        cursor: wait;
+        opacity: 0.55;
+      }
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+      .skip {
+        position: absolute;
+        left: -9999px;
+        z-index: 10;
+        background: #fff;
+        padding: 8px;
+      }
+      .skip:focus {
+        left: 12px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      .sidebar {
+        width: 208px;
+        position: fixed;
+        inset: 0 auto 0 0;
+        background: #fff;
+        border-right: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        padding: 24px 14px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 10px 28px;
+        font-size: 17px;
+        font-weight: 650;
+        letter-spacing: -0.5px;
+      }
+      .mark {
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        background: #242d3b;
+        color: #fff;
+        border-radius: 7px;
+        font: 600 17px monospace;
+      }
+      .eyebrow {
+        font-size: 10px;
+        letter-spacing: 1.2px;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .sidebar .eyebrow {
+        padding: 12px;
+      }
+      .nav-link {
+        display: flex;
+        gap: 11px;
+        align-items: center;
+        padding: 10px 12px;
+        margin: 3px 0;
+        border-radius: 6px;
+        color: #606b7b;
+        font-weight: 500;
+      }
+      .nav-link:hover {
+        background: #f5f6f9;
+      }
+      .nav-link[aria-current] {
+        background: #edf0ff;
+        color: #475dcc;
+      }
+      .nav-icon {
+        width: 16px;
+        text-align: center;
+        font-size: 16px;
+      }
+      .sidebar-footer {
+        margin-top: auto;
+        border-top: 1px solid var(--line);
+        padding: 18px 10px 0;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .sidebar-footer strong {
+        display: block;
+        color: #414d5d;
+        font-size: 12px;
+        margin-bottom: 5px;
+      }
+      .dot {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #9099a7;
+        margin-right: 7px;
+      }
+      .connected .dot {
+        background: #299478;
+      }
+      .shell {
+        margin-left: 208px;
+      }
+      .topbar {
+        min-height: 60px;
+        background: #fff;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 32px;
+        gap: 12px;
+      }
+      .breadcrumb {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .breadcrumb span {
+        margin: 0 12px;
+        color: #b8bec7;
+      }
+      .breadcrumb strong {
+        color: #394352;
+        font-weight: 500;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 3px 8px;
+        font-size: 11px;
+        color: #677181;
+        background: #fff;
+      }
+      .top-actions,
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .button {
+        border: 1px solid #dce0e6;
+        background: #fff;
+        border-radius: 6px;
+        padding: 7px 12px;
+        color: #3e4958;
+        font-weight: 500;
+        white-space: nowrap;
+      }
+      .button:hover {
+        background: #f4f6fa;
+      }
+      .primary {
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }
+      .primary:hover {
+        background: #455bc8;
+      }
+      .quiet {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        padding: 6px;
+      }
+      main {
+        max-width: 1480px;
+        margin: auto;
+        padding: 30px 32px 40px;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      h1 {
+        font-size: 25px;
+        letter-spacing: -0.7px;
+        line-height: 1.3;
+        margin: 0 0 6px;
+        font-weight: 650;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+      }
+      h2 {
+        font-size: 14px;
+        margin: 0;
+        font-weight: 600;
+      }
+      #page-title:focus,
+      #main:focus {
+        outline: none;
+      }
+      [data-view='activity'] > .section-heading {
+        margin-top: 0;
+      }
+      .section-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 24px 0 12px;
+        gap: 12px;
+      }
+      .small {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .panel {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        min-width: 0;
+      }
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .metric {
+        padding: 18px 20px;
+      }
+      .metric-label {
+        color: #687383;
+        font-size: 12px;
+      }
+      .value {
+        font-size: 28px;
+        letter-spacing: -0.8px;
+        font-weight: 600;
+        line-height: 1.3;
+        margin: 9px 0 7px;
+        font-variant-numeric: tabular-nums;
+      }
+      .metric-note {
+        font-size: 11px;
+        color: #8a929e;
+      }
+      .resources {
+        display: flex;
+        gap: 25px;
+        padding: 13px 20px;
+        border-top: 1px solid var(--line);
+        margin-top: 14px;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        flex-wrap: wrap;
+      }
+      .resources span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .resources strong {
+        color: #394352;
+        font-weight: 600;
+        margin-left: 8px;
+        font-variant-numeric: tabular-nums;
+      }
+      .activity {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        padding: 18px 0;
+      }
+      .activity > div {
+        padding: 0 20px;
+        border-right: 1px solid var(--line);
+      }
+      .activity > div:last-child {
+        border: 0;
+      }
+      .activity strong {
+        display: block;
+        font-size: 22px;
+        font-weight: 600;
+        margin-top: 7px;
+        font-variant-numeric: tabular-nums;
+      }
+      .segmented {
+        display: flex;
+        border: 1px solid var(--line);
+        padding: 3px;
+        border-radius: 6px;
+        background: #eef0f4;
+        gap: 3px;
+      }
+      .segmented button {
+        border: 0;
+        border-radius: 4px;
+        padding: 4px 11px;
+        color: var(--muted);
+        background: transparent;
+        font-size: 11px;
+      }
+      .segmented button[aria-pressed='true'] {
+        background: #fff;
+        color: #303a49;
+        box-shadow: 0 1px 3px #1a25301a;
+      }
+      .panel-head {
+        padding: 18px 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 15px;
+        border-bottom: 1px solid var(--line);
+      }
+      .panel-head p {
+        font-size: 11px;
+        margin-top: 3px;
+      }
+      .legend {
+        display: flex;
+        gap: 16px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .swatch {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        margin-right: 6px;
+        background: #6378df;
+      }
+      .swatch.agent {
+        background: #c9d1f7;
+      }
+      .chart-wrap {
+        padding: 20px;
+      }
+      .chart-stat {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+      .chart-stat strong {
+        font-size: 24px;
+        font-weight: 600;
+        letter-spacing: -0.5px;
+      }
+      .plot {
+        display: flex;
+        height: 160px;
+        gap: 12px;
+      }
+      .axis {
+        width: 40px;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        font-size: 10px;
+        color: #929aa5;
+        text-align: right;
+      }
+      .chart {
+        flex: 1;
+        display: flex;
+        align-items: end;
+        gap: 5px;
+        border-bottom: 1px solid var(--line);
+        background: repeating-linear-gradient(
+          to top,
+          transparent 0,
+          transparent calc(50% - 1px),
+          #f0f2f6 calc(50% - 1px),
+          #f0f2f6 50%
+        );
+      }
+      .bar {
+        height: 100%;
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: end;
+        border-radius: 3px 3px 0 0;
+        position: relative;
+        outline-offset: 1px;
+      }
+      .bar:focus-visible,
+      .bar:hover {
+        background: #f0f2fb;
+      }
+      .bar i {
+        display: block;
+        background: #6378df;
+      }
+      .bar i.agent {
+        background: #c9d1f7;
+      }
+      .bar span {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 50%;
+        transform: translateX(-50%);
+        background: #263243;
+        color: #fff;
+        padding: 7px 10px;
+        border-radius: 5px;
+        font-size: 11px;
+        white-space: nowrap;
+        z-index: 2;
+        display: none;
+        pointer-events: none;
+      }
+      .bar:nth-child(-n + 5) span {
+        left: 0;
+        transform: none;
+      }
+      .bar:nth-last-child(-n + 5) span {
+        left: auto;
+        right: 0;
+        transform: none;
+      }
+      .bar:hover span,
+      .bar:focus-visible span {
+        display: block;
+      }
+      .dates {
+        display: flex;
+        justify-content: space-between;
+        margin: 9px 0 0 52px;
+        font-size: 10px;
+        color: #929aa5;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      th {
+        text-align: left;
+        font-weight: 500;
+        color: var(--muted);
+        background: #fafbfc;
+        font-size: 11px;
+      }
+      th,
+      td {
+        padding: 11px 20px;
+        border-bottom: 1px solid #edf0f3;
+      }
+      tbody tr:last-child td {
+        border-bottom: 0;
+      }
+      .number {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .runtime-name {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+      }
+      .share {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        justify-content: end;
+      }
+      .track {
+        width: 70px;
+        height: 4px;
+        border-radius: 4px;
+        background: #eef0f7;
+        overflow: hidden;
+      }
+      .track i {
+        display: block;
+        height: 100%;
+        background: #7d8ee0;
+      }
+      .contract-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 13px 20px;
+        border-bottom: 1px solid #edf0f3;
+        color: #687383;
+        font-size: 12px;
+      }
+      .contract-row:last-child {
+        border: 0;
+      }
+      .contract-row strong {
+        font:
+          500 12px ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        color: #394352;
+        background: #f2f4f7;
+        border-radius: 4px;
+        padding: 2px 7px;
+      }
+      .footnote {
+        padding: 13px 20px;
+        border-top: 1px solid var(--line);
+        font-size: 11px;
+        color: var(--muted);
+      }
+      footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 22px;
+        font-size: 10px;
+        color: #8a929e;
+      }
+      .notice {
+        border: 1px solid #ebccae;
+        background: #fff8ef;
+        color: #8c592b;
+        border-radius: 6px;
+        padding: 11px 14px;
+        margin-bottom: 20px;
+        font-size: 12px;
+      }
+      .empty {
+        padding: 70px 24px;
+        text-align: center;
+      }
+      .empty h2 {
+        font-size: 19px;
+        margin: 12px 0 8px;
+      }
+      .empty p {
+        max-width: 370px;
+        margin: 0 auto 20px;
+      }
+      .empty-icon {
+        display: inline-grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #f6f7fb;
+        font-size: 20px;
+        color: #6477d2;
+      }
+      dialog {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 24px;
+        width: min(420px, calc(100% - 32px));
+        box-shadow: 0 20px 90px #17243c26;
+        color: inherit;
+      }
+      dialog::backdrop {
+        background: #1b26364d;
+      }
+      dialog h2 {
+        font-size: 18px;
+      }
+      dialog p {
+        font-size: 12px;
+        margin: 8px 0 20px;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        margin-bottom: 7px;
+      }
+      input {
+        width: 100%;
+        border: 1px solid #cfd5df;
+        border-radius: 6px;
+        padding: 9px 11px;
+      }
+      dialog .actions {
+        justify-content: flex-end;
+        margin-top: 20px;
+      }
+      #auth-error {
+        color: #b44141;
+        font-size: 12px;
+        margin-top: 8px;
+      }
+      dialog .dialog-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      @media (min-width: 1500px) {
+        main {
+          padding-top: 36px;
+        }
+        .plot {
+          height: 190px;
+        }
+      }
+      @media (max-width: 1050px) {
+        .sidebar {
+          width: 174px;
+        }
+        .shell {
+          margin-left: 174px;
+        }
+        main {
+          padding: 24px;
+        }
+        .topbar {
+          padding: 12px 24px;
+        }
+        .metric {
+          padding: 16px;
+        }
+        .resources {
+          gap: 16px;
+        }
+        .track {
+          width: 45px;
+        }
+      }
+      @media (max-width: 760px) {
+        .sidebar {
+          position: static;
+          width: auto;
+          padding: 12px 16px;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+        .brand {
+          padding: 0 0 12px;
+        }
+        .sidebar .eyebrow,
+        .sidebar-footer {
+          display: none;
+        }
+        nav {
+          display: flex;
+          gap: 5px;
+          overflow: auto;
+        }
+        .nav-link {
+          padding: 6px 9px;
+          font-size: 12px;
+          white-space: nowrap;
+        }
+        .nav-icon {
+          display: none;
+        }
+        .shell {
+          margin: 0;
+        }
+        .topbar {
+          padding: 10px 16px;
+          min-height: 52px;
+        }
+        .topbar .badge {
+          display: none;
+        }
+        main {
+          padding: 20px 16px;
+        }
+        header {
+          align-items: start;
+        }
+        header p {
+          font-size: 12px;
+        }
+        .metrics {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+        .activity {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 18px;
+        }
+        .activity > div:nth-child(2) {
+          border: 0;
+        }
+        .resources {
+          gap: 12px 20px;
+        }
+        .chart {
+          gap: 3px;
+        }
+        .panel-head {
+          align-items: start;
+          flex-wrap: wrap;
+        }
+        .chart-wrap {
+          padding: 16px;
+        }
+        .plot {
+          height: 140px;
+        }
+        .top-actions {
+          gap: 4px;
+        }
+        footer {
+          flex-wrap: wrap;
+        }
+        .section-heading {
+          flex-wrap: wrap;
+        }
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        button,
+        a {
+          transition: background 0.15s;
+        }
+      }
+
+      .user-section {
+        margin-top: 20px;
+      }
+      .user-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      .user-search {
+        display: flex;
+        gap: 8px;
+        flex: 1;
+        max-width: 420px;
+      }
+      .user-search input {
+        min-width: 0;
+      }
+      .user-search label {
+        position: absolute;
+        left: -9999px;
+      }
+      .top-users {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0 28px;
+        padding: 6px 20px;
+      }
+      .top-user {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line);
+        min-width: 0;
+      }
+      .rank {
+        width: 22px;
+        color: var(--muted);
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+      }
+      .user-name {
+        border: 0;
+        padding: 0;
+        background: transparent;
+        color: var(--accent);
+        text-align: left;
+        font-weight: 500;
+        overflow-wrap: anywhere;
+      }
+      .user-identity {
+        flex: 1;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .user-handle {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 400;
+      }
+      .user-count {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+      }
+      .table-scroll {
+        overflow-x: auto;
+      }
+      .users-table {
+        min-width: 670px;
+      }
+      .users-table td {
+        vertical-align: top;
+      }
+      .pagination {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 20px;
+        border-top: 1px solid var(--line);
+      }
+      #users-state {
+        padding: 16px 0;
+      }
+      .detail-meta {
+        display: flex;
+        gap: 14px 30px;
+        flex-wrap: wrap;
+        padding: 16px 20px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .detail-meta strong {
+        color: #394352;
+        font-weight: 500;
+      }
+      .detail-metrics {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .detail-metrics > div:last-child {
+        border: 0;
+      }
+      #user-detail {
+        margin-bottom: 20px;
+      }
+      #user-detail-title:focus {
+        outline: none;
+      }
+      @media (max-width: 760px) {
+        .top-users {
+          grid-template-columns: 1fr;
+        }
+        .user-search {
+          max-width: none;
+          width: 100%;
+        }
+        .detail-metrics {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 0;
+        }
+        .detail-metrics > div {
+          padding: 0 12px;
+        }
+        .detail-metrics > div:nth-child(2) {
+          border-right: 1px solid var(--line);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a href="#main" class="skip">Skip to content</a>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">s</span>silverhand<span class="small">/</span>
+      </div>
+      <div class="eyebrow">Console</div>
+      <nav aria-label="Console sections">
+        <a class="nav-link" href="#/overview" aria-current="page"
+          ><span class="nav-icon" aria-hidden="true">▦</span>Overview</a
+        >
+        <a class="nav-link" href="#/activity"
+          ><span class="nav-icon" aria-hidden="true">↗</span>Activity</a
+        >
+        <a class="nav-link" href="#/runtimes"
+          ><span class="nav-icon" aria-hidden="true">▤</span>Agent runtimes</a
+        >
+        <a class="nav-link" href="#/contract"
+          ><span class="nav-icon" aria-hidden="true">≡</span>Server contract</a
+        >
+      </nav>
+      <div class="sidebar-footer">
+        <strong><span class="dot"></span>Read-only console</strong>Product analytics<br />Silverhand
+        infrastructure
+      </div>
+    </aside>
+    <div class="shell">
+      <div class="topbar">
+        <div class="breadcrumb">
+          Console<span>/</span><strong id="breadcrumb-page">Overview</strong>
+        </div>
+        <div class="top-actions">
+          <span class="badge">Read only</span
+          ><button id="connection" class="button">
+            <span class="dot"></span><span id="connection-label">Connect</span>
+          </button>
+        </div>
+      </div>
+      <main id="main" tabindex="-1">
+        <header>
+          <div>
+            <h1 id="page-title" tabindex="-1">Overview</h1>
+            <p id="page-description">Resources across Silverhand.</p>
+          </div>
+          <button class="button" id="refresh" disabled>↻ &nbsp; Refresh</button>
+        </header>
+        <div id="error" class="notice" role="alert" hidden></div>
+        <section id="welcome" class="panel empty">
+          <div class="empty-icon" aria-hidden="true">▦</div>
+          <h2>Your console, at a glance</h2>
+          <p>Connect to view product activity, resource counts and the current server contract.</p>
+          <button class="button primary" id="welcome-connect">Connect to console</button>
+          <div class="small">A console access token is required.</div>
+        </section>
+        <div id="content" hidden>
+          <section data-view="overview" aria-label="Resource overview">
+            <div class="metrics" id="totals"></div>
+            <div class="resources" id="resources"></div>
+          </section>
+          <section id="activity" class="section" data-view="activity" hidden>
+            <div class="section-heading">
+              <h2>Activity overview</h2>
+              <div class="segmented" aria-label="Activity window">
+                <button type="button" data-days="7" aria-pressed="true">Last 7 days</button
+                ><button type="button" data-days="30" aria-pressed="false">Last 30 days</button>
+              </div>
+            </div>
+            <div class="panel activity" id="windows"></div>
+            <section class="user-section" aria-labelledby="users-title">
+              <div class="section-heading user-toolbar">
+                <div>
+                  <h2 id="users-title">User activity</h2>
+                  <p class="small">
+                    Ranked by original human messages · selected 7 / 30 day window
+                  </p>
+                </div>
+                <form class="user-search" id="user-search">
+                  <label for="user-query">Find a user</label
+                  ><input
+                    id="user-query"
+                    placeholder="Search name, handle or exact user ID"
+                    maxlength="128"
+                  /><button class="button" type="submit">Search</button>
+                </form>
+              </div>
+              <div id="users-state" class="small" role="status"></div>
+              <button class="button" id="users-retry" hidden>Retry user activity</button>
+              <div id="users-results" hidden>
+                <section
+                  class="panel user-section"
+                  id="user-detail"
+                  hidden
+                  aria-labelledby="user-detail-title"
+                >
+                  <div class="panel-head">
+                    <div>
+                      <h2 id="user-detail-title" tabindex="-1"></h2>
+                      <p id="user-detail-identity"></p>
+                    </div>
+                    <button class="button" id="user-clear">Close user</button>
+                  </div>
+                  <div class="activity detail-metrics" id="user-detail-metrics"></div>
+                  <div class="detail-meta" id="user-detail-meta"></div>
+                  <div class="chart-wrap">
+                    <h2 id="user-trend-title">Daily messages</h2>
+                    <div class="plot" style="margin-top: 20px">
+                      <div class="axis" id="user-axis"></div>
+                      <div
+                        class="chart"
+                        id="user-chart"
+                        aria-label="Selected user daily messages"
+                      ></div>
+                    </div>
+                    <div class="dates" id="user-dates"></div>
+                    <p class="small" id="user-chart-empty" hidden>No messages in this period.</p>
+                  </div>
+                </section>
+                <div class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>Top 10 users</h2>
+                      <p id="top-users-period">Most messages across all users</p>
+                    </div>
+                    <span class="badge">Human messages</span>
+                  </div>
+                  <div id="top-users" class="top-users"></div>
+                </div>
+                <div class="panel user-section">
+                  <div class="panel-head">
+                    <h2>Users</h2>
+                    <span class="small" id="users-total"></span>
+                  </div>
+                  <div class="table-scroll">
+                    <table class="users-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">User</th>
+                          <th scope="col" class="number">Messages</th>
+                          <th scope="col" class="number">Active days</th>
+                          <th scope="col" class="number">Conversations</th>
+                          <th scope="col">Last message</th>
+                        </tr>
+                      </thead>
+                      <tbody id="user-rows"></tbody>
+                    </table>
+                  </div>
+                  <div class="pagination">
+                    <span class="small" id="users-page"></span>
+                    <div class="actions">
+                      <button class="button" id="users-prev">Previous</button
+                      ><button class="button" id="users-next">Next</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <div class="panel" style="margin-top: 20px">
+              <div class="panel-head">
+                <div>
+                  <h2>Message volume</h2>
+                  <p>Original human and agent messages · last 30 days</p>
+                </div>
+                <div class="legend">
+                  <span><i class="swatch"></i>Human</span
+                  ><span><i class="swatch agent"></i>Agent</span>
+                </div>
+              </div>
+              <div class="chart-wrap">
+                <div class="chart-stat">
+                  <strong id="message-total">—</strong
+                  ><span class="small">messages in 30 days</span>
+                </div>
+                <div class="plot">
+                  <div class="axis" id="axis"></div>
+                  <div class="chart" id="chart" aria-label="Daily message volume"></div>
+                </div>
+                <div class="dates" id="dates"></div>
+                <p class="small" id="chart-empty" hidden>No messages in this period.</p>
+              </div>
+            </div>
+          </section>
+          <section class="panel section" id="runtimes-section" data-view="runtimes" hidden>
+            <div class="panel-head">
+              <div>
+                <h2>Agent runtimes</h2>
+                <p>Distribution across registered agents</p>
+              </div>
+              <span class="badge" id="runtime-count"></span>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Runtime</th>
+                  <th scope="col" class="number">Agents</th>
+                  <th scope="col" class="number">Share</th>
+                </tr>
+              </thead>
+              <tbody id="runtimes"></tbody>
+            </table>
+          </section>
+          <section class="panel section" id="contract-section" data-view="contract" hidden>
+            <div class="panel-head">
+              <div>
+                <h2>Server contract</h2>
+                <p>Protocol versions of the running server</p>
+              </div>
+              <span class="badge">Current</span>
+            </div>
+            <div id="contract"></div>
+            <div class="footnote">
+              Client release distribution is available in structured logs / SLS.
+            </div>
+          </section>
+          <footer>
+            <span id="stamp" role="status"></span
+            ><span>Product statistics · snapshot may be cached for 30s</span>
+          </footer>
+        </div>
+      </main>
+    </div>
+    <dialog id="connect-dialog" aria-labelledby="dialog-title">
+      <div class="dialog-head">
+        <h2 id="dialog-title">Connect to console</h2>
+        <button class="quiet" id="close-dialog" aria-label="Close connection dialog">✕</button>
+      </div>
+      <p>
+        Enter the access token for this console. It is kept only in page memory. Reloading or
+        reopening this page requires entering it again.
+      </p>
+      <form id="auth">
+        <label for="token">Console access token</label
+        ><input
+          id="token"
+          type="password"
+          autocomplete="off"
+          placeholder="Enter your console token"
+          required
+        />
+        <div id="auth-error" role="alert"></div>
+        <div class="actions">
+          <button type="button" class="button" id="disconnect" hidden>Disconnect</button
+          ><button class="button primary" id="submit">Connect</button>
+        </div>
+      </form>
+    </dialog>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const fmt = new Intl.NumberFormat('en-US');
+      let snapshot = null;
+      let activeDays = 7;
+      let currentToken = '';
+      let request = null;
+      let usersRequest = null;
+      let usersGeneration = 0;
+      let usersPage = 1;
+      let usersSearch = '';
+      let selectedUserId = '';
+      let usersLoadedKey = '';
+      let usersTimeZone = 'Asia/Shanghai';
+      const escapeHtml = (value) =>
+        String(value).replace(
+          /[&<>"']/g,
+          (character) =>
+            ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character],
+        );
+
+      // Remove credentials left by older Console versions; never read or save them.
+      try {
+        sessionStorage.removeItem('silverhand-console-token');
+      } catch {
+        /* Storage may be disabled; this page uses memory only. */
+      }
+
+      function renderWindow() {
+        const window = snapshot.activity_windows.find((item) => item.days === activeDays);
+        $('windows').innerHTML = window
+          ? [
+              ['Authenticated users', window.authenticated_users],
+              ['Speaking users', window.speaking_users],
+              ['Human messages', window.human_messages],
+              ['Agent messages', window.agent_messages],
+            ]
+              .map(
+                ([label, value]) =>
+                  `<div><span class="metric-label">${label}</span><strong>${fmt.format(value)}</strong></div>`,
+              )
+              .join('')
+          : '<div>No activity window available.</div>';
+        document
+          .querySelectorAll('[data-days]')
+          .forEach((button) =>
+            button.setAttribute('aria-pressed', String(Number(button.dataset.days) === activeDays)),
+          );
+      }
+
+      function render(data) {
+        snapshot = data;
+        const totals = [
+          ['users', 'Users', 'Registered users'],
+          ['agents', 'Agents', 'Registered agents'],
+          ['regular_workspaces', 'Workspaces', 'Regular workspaces'],
+          ['messages', 'Messages', 'Original authored messages'],
+        ];
+        $('totals').innerHTML = totals
+          .map(
+            ([key, label, note]) =>
+              `<div class="panel metric"><div class="metric-label">${label}</div><div class="value">${fmt.format(data.totals[key])}</div><div class="metric-note">${note}</div></div>`,
+          )
+          .join('');
+        $('resources').innerHTML = [
+          ['active_channels', 'Active channels'],
+          ['archived_channels', 'Archived channels'],
+          ['active_computers', 'Active computers'],
+        ]
+          .map(
+            ([key, label]) =>
+              `<span>${label}<strong>${fmt.format(data.totals[key])}</strong></span>`,
+          )
+          .join('');
+        renderWindow();
+
+        const days = data.daily_activity;
+        const maximum = Math.max(1, ...days.map((day) => day.human_messages + day.agent_messages));
+        const step = Math.max(2, 10 ** Math.floor(Math.log10(maximum)));
+        const ceiling = Math.ceil(maximum / step) * step;
+        const total = days.reduce((sum, day) => sum + day.human_messages + day.agent_messages, 0);
+        $('message-total').textContent = fmt.format(total);
+        $('axis').innerHTML = [ceiling, ceiling / 2, 0]
+          .map((value) => `<span>${fmt.format(value)}</span>`)
+          .join('');
+        $('chart').innerHTML = days
+          .map((day) => {
+            const label = `${day.date} · Human ${fmt.format(day.human_messages)} · Agent ${fmt.format(day.agent_messages)}`;
+            return `<div class="bar" tabindex="0" role="img" aria-label="${escapeHtml(label)}"><i class="agent" style="height:${(day.agent_messages / ceiling) * 100}%"></i><i style="height:${(day.human_messages / ceiling) * 100}%"></i><span>${escapeHtml(label)}</span></div>`;
+          })
+          .join('');
+        $('dates').innerHTML = days.length
+          ? [days[0], days[Math.floor((days.length - 1) / 2)], days[days.length - 1]]
+              .map((day) => `<span>${escapeHtml(day.date)}</span>`)
+              .join('')
+          : '';
+        $('chart-empty').hidden = total !== 0;
+
+        const runtimeTotal = data.agent_runtimes.reduce((sum, row) => sum + row.count, 0);
+        $('runtime-count').textContent = `${fmt.format(runtimeTotal)} agents`;
+        $('runtimes').innerHTML = data.agent_runtimes.length
+          ? data.agent_runtimes
+              .map((row) => {
+                const share = runtimeTotal ? (row.count / runtimeTotal) * 100 : 0;
+                return `<tr><td class="runtime-name">${escapeHtml(row.runtime)}</td><td class="number">${fmt.format(row.count)}</td><td class="number"><div class="share"><span class="track" aria-hidden="true"><i style="width:${share}%"></i></span>${share.toFixed(1)}%</div></td></tr>`;
+              })
+              .join('')
+          : '<tr><td colspan="3" class="small">No registered agents yet.</td></tr>';
+
+        const contractLabels = {
+          current_desktop_api_epoch: 'Desktop API epoch',
+          minimum_client_api_epoch: 'Minimum client API epoch',
+          outbound_protocol_version: 'Outbound protocol version',
+        };
+        $('contract').innerHTML = Object.entries(data.server_contract)
+          .map(
+            ([key, value]) =>
+              `<div class="contract-row"><span>${escapeHtml(contractLabels[key] || key.replaceAll('_', ' '))}</span><strong>${escapeHtml(value)}</strong></div>`,
+          )
+          .join('');
+
+        $('stamp').textContent =
+          `Snapshot ${new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'medium', timeZone: data.time_zone }).format(new Date(data.generated_at))} · ${data.time_zone}`;
+        $('content').hidden = false;
+        $('welcome').hidden = true;
+      }
+
+      function setConnection(connected) {
+        $('connection').classList.toggle('connected', connected);
+        $('connection-label').textContent = connected ? 'Connected' : 'Connect';
+        $('disconnect').hidden = !currentToken;
+        $('refresh').disabled = !currentToken;
+      }
+
+      async function load(token) {
+        if (request) return;
+
+        const controller = new AbortController();
+        request = controller;
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        $('submit').disabled = true;
+        $('disconnect').disabled = true;
+        $('refresh').disabled = true;
+        $('refresh').textContent = 'Refreshing…';
+        $('auth-error').textContent = '';
+        $('error').hidden = true;
+        $('content').setAttribute('aria-busy', 'true');
+
+        try {
+          const response = await fetch('/console/api/overview', {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: controller.signal,
+            cache: 'no-store',
+          });
+          if (controller.signal.aborted || request !== controller) return;
+          if (!response.ok) {
+            if (response.status === 401) {
+              currentToken = '';
+              resetUsers();
+              snapshot = null;
+              $('content').hidden = true;
+              $('welcome').hidden = false;
+            }
+            throw new Error(
+              response.status === 401
+                ? 'Invalid console token. Check the token and try again.'
+                : `Unable to refresh (${response.status}). Please try again.`,
+            );
+          }
+
+          const nextSnapshot = await response.json();
+          if (controller.signal.aborted || request !== controller) return;
+          render(nextSnapshot);
+          currentToken = token;
+          setConnection(true);
+          $('connect-dialog').close();
+          $('token').value = '';
+          usersLoadedKey = '';
+          if (location.hash === '#/activity') loadUsers();
+        } catch (error) {
+          if (request !== controller) return;
+          const message =
+            error.name === 'AbortError'
+              ? 'The request timed out. Please try again.'
+              : error.message;
+          $('auth-error').textContent = message;
+          $('error').textContent = `${snapshot ? 'Showing the last snapshot. ' : ''}${message}`;
+          $('error').hidden = false;
+          setConnection(false);
+        } finally {
+          clearTimeout(timeout);
+          if (request === controller) {
+            request = null;
+            $('submit').disabled = false;
+            $('disconnect').disabled = false;
+            $('refresh').disabled = !currentToken;
+            $('refresh').textContent = '↻  Refresh';
+            $('content').setAttribute('aria-busy', 'false');
+          }
+        }
+      }
+
+      function openConnection() {
+        $('auth-error').textContent = '';
+        $('connect-dialog').showModal();
+        $('token').focus();
+      }
+
+      $('connection').addEventListener('click', openConnection);
+      $('welcome-connect').addEventListener('click', openConnection);
+      $('close-dialog').addEventListener('click', () => {
+        $('token').value = '';
+        $('connect-dialog').close();
+      });
+      $('connect-dialog').addEventListener('cancel', () => {
+        $('token').value = '';
+      });
+      $('auth').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const token = $('token').value;
+        $('token').value = '';
+        load(token);
+      });
+      $('refresh').addEventListener('click', () => load(currentToken));
+
+      function disconnect() {
+        request?.abort();
+        request = null;
+        currentToken = '';
+        snapshot = null;
+        resetUsers();
+        $('token').value = '';
+        $('content').hidden = true;
+        $('welcome').hidden = false;
+        $('error').hidden = true;
+        setConnection(false);
+        $('submit').disabled = false;
+        $('disconnect').disabled = false;
+        $('refresh').textContent = '↻  Refresh';
+        $('content').setAttribute('aria-busy', 'false');
+        $('connect-dialog').close();
+      }
+
+      $('disconnect').addEventListener('click', disconnect);
+      // Clear credentials and cancel requests before a page can enter back/forward cache.
+      window.addEventListener('pagehide', disconnect);
+      window.addEventListener('pageshow', () => {
+        $('token').value = '';
+      });
+
+      document.querySelectorAll('[data-days]').forEach((button) =>
+        button.addEventListener('click', () => {
+          activeDays = Number(button.dataset.days);
+          if (snapshot) {
+            renderWindow();
+            usersPage = 1;
+            loadUsers();
+          }
+        }),
+      );
+
+      function resetUsers() {
+        usersGeneration += 1;
+        usersRequest?.abort();
+        usersRequest = null;
+        usersLoadedKey = '';
+        selectedUserId = '';
+        $('users-results').hidden = true;
+        $('users-state').textContent = '';
+        $('user-query').value = '';
+        usersSearch = '';
+        usersPage = 1;
+      }
+
+      function userDate(value) {
+        return value == null
+          ? '—'
+          : new Intl.DateTimeFormat('en-GB', {
+              dateStyle: 'medium',
+              timeStyle: 'short',
+              timeZone: usersTimeZone,
+            }).format(new Date(value));
+      }
+
+      function userButton(user) {
+        return `<button class="user-name" data-user="${escapeHtml(user.user_id)}">${escapeHtml(user.display_name || user.name)}</button><div class="user-handle">@${escapeHtml(user.name)}</div>`;
+      }
+
+      function renderUsers(data) {
+        usersTimeZone = data.time_zone;
+        $('top-users-period').textContent =
+          `Most messages across all users · last ${data.days} days`;
+        $('top-users').innerHTML = data.top_users.length
+          ? data.top_users
+              .map(
+                (user, index) =>
+                  `<div class="top-user"><span class="rank">${index + 1}</span><div class="user-identity">${userButton(user)}</div><span class="user-count">${fmt.format(user.message_count)}</span></div>`,
+              )
+              .join('')
+          : '<p class="small" style="padding:14px 0">No users have sent messages in this period.</p>';
+        $('users-total').textContent = `${fmt.format(data.total_matching)} matching users`;
+        $('user-rows').innerHTML = data.users.length
+          ? data.users
+              .map(
+                (user) =>
+                  `<tr><td>${userButton(user)}</td><td class="number">${fmt.format(user.message_count)}</td><td class="number">${fmt.format(user.active_days)}</td><td class="number">${fmt.format(user.conversation_count)}</td><td>${escapeHtml(userDate(user.last_message_at))}</td></tr>`,
+              )
+              .join('')
+          : '<tr><td colspan="5" class="small">No matching users. Try another name or clear the search.</td></tr>';
+        const pages = Math.max(1, Math.ceil(data.total_matching / data.page_size));
+        $('users-page').textContent =
+          `Page ${data.page} of ${fmt.format(pages)} · ${data.page_size} per page`;
+        $('users-prev').disabled = data.page <= 1;
+        $('users-next').disabled = data.page >= pages || data.page >= 10000;
+      }
+
+      function renderUserDetail(data) {
+        const user = data.user;
+        $('user-detail-title').textContent = user.display_name || user.name;
+        $('user-detail-identity').textContent =
+          `@${user.name} · ${user.user_id} · last ${data.days} days`;
+        $('user-detail-metrics').innerHTML = [
+          ['Messages', user.message_count],
+          ['Active days', user.active_days],
+          ['Conversations', user.conversation_count],
+        ]
+          .map(
+            ([label, value]) =>
+              `<div><span class="metric-label">${label}</span><strong>${fmt.format(value)}</strong></div>`,
+          )
+          .join('');
+        $('user-detail-meta').innerHTML =
+          `<span>Last message <strong>${escapeHtml(userDate(user.last_message_at))}</strong></span><span>Last authenticated <strong>${escapeHtml(userDate(user.last_authenticated_at))}</strong></span><span>${escapeHtml(data.time_zone)} · within selected window</span>`;
+        const days = data.daily_activity;
+        const maximum = Math.max(1, ...days.map((day) => day.message_count));
+        const step = Math.max(2, 10 ** Math.floor(Math.log10(maximum)));
+        const ceiling = Math.ceil(maximum / step) * step;
+        $('user-axis').innerHTML = [ceiling, ceiling / 2, 0]
+          .map((count) => `<span>${fmt.format(count)}</span>`)
+          .join('');
+        $('user-trend-title').textContent = `Daily human messages · last ${data.days} days`;
+        $('user-chart').innerHTML = days
+          .map((day) => {
+            const label = `${day.date}: ${fmt.format(day.message_count)} messages`;
+            return `<div class="bar" tabindex="0" role="img" aria-label="${escapeHtml(label)}"><i style="height:${(day.message_count / ceiling) * 100}%"></i><span>${escapeHtml(label)}</span></div>`;
+          })
+          .join('');
+        $('user-dates').innerHTML = days.length
+          ? [days[0], days[Math.floor((days.length - 1) / 2)], days[days.length - 1]]
+              .map((day) => `<span>${escapeHtml(day.date)}</span>`)
+              .join('')
+          : '';
+        $('user-chart-empty').hidden = user.message_count !== 0;
+        $('user-detail').hidden = false;
+      }
+
+      async function loadUsers(focusUser = false) {
+        if (!currentToken) return;
+        usersRequest?.abort();
+        const controller = new AbortController();
+        usersRequest = controller;
+        const generation = ++usersGeneration;
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        const key = `${activeDays}:${usersPage}:${usersSearch}:${selectedUserId}`;
+        usersLoadedKey = '';
+        $('users-state').textContent = 'Loading user activity…';
+        $('users-results').hidden = true;
+        $('users-retry').hidden = true;
+        $('user-detail').hidden = true;
+
+        async function read(path) {
+          const response = await fetch(path, {
+            headers: { Authorization: `Bearer ${currentToken}` },
+            signal: controller.signal,
+            cache: 'no-store',
+          });
+          if (!response.ok) {
+            const error = new Error(
+              response.status === 401
+                ? 'Your console token is no longer valid.'
+                : response.status === 404
+                  ? 'This user no longer exists. Select another user.'
+                  : `User activity could not be loaded (${response.status}). Please retry.`,
+            );
+            error.status = response.status;
+            throw error;
+          }
+          return response.json();
+        }
+
+        try {
+          const query = new URLSearchParams({
+            days: String(activeDays),
+            page: String(usersPage),
+            q: usersSearch,
+          });
+          const list = await read(`/console/api/users?${query}`);
+          if (generation !== usersGeneration) return;
+          renderUsers(list);
+          $('users-results').hidden = false;
+          if (selectedUserId) {
+            const detail = await read(
+              `/console/api/users/${encodeURIComponent(selectedUserId)}?days=${activeDays}`,
+            );
+            if (generation !== usersGeneration) return;
+            renderUserDetail(detail);
+            if (focusUser) $('user-detail-title').focus();
+          }
+          usersLoadedKey = key;
+          $('users-state').textContent =
+            `User activity snapshot ${userDate(list.generated_at)} · ${list.time_zone}. Agent messages are not attributed to users.`;
+        } catch (error) {
+          if (generation !== usersGeneration) return;
+          $('users-state').textContent =
+            error.name === 'AbortError'
+              ? 'User activity request timed out. Please retry.'
+              : error.message;
+          $('users-retry').hidden = false;
+          if (error.status === 404) selectedUserId = '';
+          if (error.status === 401) {
+            currentToken = '';
+            snapshot = null;
+            $('content').hidden = true;
+            $('welcome').hidden = false;
+            $('error').hidden = false;
+            $('error').textContent = error.message;
+            resetUsers();
+            setConnection(false);
+          }
+        } finally {
+          clearTimeout(timeout);
+          if (generation === usersGeneration) usersRequest = null;
+        }
+      }
+
+      $('user-search').addEventListener('submit', (event) => {
+        event.preventDefault();
+        usersSearch = $('user-query').value.trim();
+        selectedUserId = '';
+        usersPage = 1;
+        loadUsers();
+      });
+      $('users-prev').addEventListener('click', () => {
+        usersPage -= 1;
+        loadUsers();
+      });
+      $('users-next').addEventListener('click', () => {
+        usersPage += 1;
+        loadUsers();
+      });
+      $('users-retry').addEventListener('click', () => loadUsers());
+      $('user-clear').addEventListener('click', () => {
+        selectedUserId = '';
+        loadUsers();
+      });
+      $('users-results').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-user]');
+        if (button) {
+          selectedUserId = button.dataset.user;
+          loadUsers(true);
+        }
+      });
+
+      const pages = {
+        overview: { title: 'Overview', description: 'Resources across Silverhand.' },
+        activity: {
+          title: 'Activity',
+          description: 'Active users and message trends across Silverhand.',
+        },
+        runtimes: {
+          title: 'Agent runtimes',
+          description: 'Runtime distribution across registered agents.',
+        },
+        contract: {
+          title: 'Server contract',
+          description: 'Protocol compatibility of the running server.',
+        },
+      };
+      const navigation = [...document.querySelectorAll('.nav-link')];
+      const views = [...document.querySelectorAll('[data-view]')];
+
+      function showPage(moveFocus = false) {
+        const requested = location.hash.slice(2);
+        const page =
+          location.hash.startsWith('#/') && Object.hasOwn(pages, requested)
+            ? requested
+            : 'overview';
+        const route = `#/${page}`;
+        if (location.hash !== route) history.replaceState(null, '', route);
+
+        views.forEach((view) => {
+          view.hidden = view.dataset.view !== page;
+        });
+        navigation.forEach((link) => {
+          if (link.getAttribute('href') === route) link.setAttribute('aria-current', 'page');
+          else link.removeAttribute('aria-current');
+        });
+        $('page-title').textContent = pages[page].title;
+        $('page-description').textContent = pages[page].description;
+        $('breadcrumb-page').textContent = pages[page].title;
+        document.title = `${pages[page].title} · Silverhand Console`;
+        if (page === 'activity' && currentToken && !usersLoadedKey) loadUsers();
+
+        if (moveFocus) {
+          $('page-title').focus({ preventScroll: true });
+          window.scrollTo(0, 0);
+        }
+      }
+
+      document.querySelector('.skip').addEventListener('click', (event) => {
+        event.preventDefault();
+        $('main').focus();
+      });
+      window.addEventListener('hashchange', () => showPage(true));
+      showPage();
+    </script>
+  </body>
+</html>

@@ -9,3 +9,4 @@
 pub(crate) mod request_perimeter;
 
 pub(crate) mod observability;
+pub(crate) mod operator_console;

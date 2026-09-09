@@ -5,6 +5,7 @@ index idx_agent_runtime_slots_conversation: CREATE INDEX idx_agent_runtime_slots
 index idx_agents_idempotency_key_per_user: CREATE UNIQUE INDEX idx_agents_idempotency_key_per_user ON agents (created_by_user_id, idempotency_key) WHERE idempotency_key IS NOT NULL
 index idx_attachments_channel: CREATE INDEX idx_attachments_channel ON attachments(channel_id, created_at DESC)
 index idx_attachments_source_conversation: CREATE INDEX idx_attachments_source_conversation ON attachments(source_conversation_id, created_at DESC)
+index idx_auth_sessions_last_used_at: CREATE INDEX idx_auth_sessions_last_used_at ON auth_sessions(last_used_at, user_id)
 index idx_auth_sessions_user: CREATE INDEX idx_auth_sessions_user ON auth_sessions(user_id, revoked_at, last_used_at DESC)
 index idx_channel_attention_prefs_conversation: CREATE INDEX idx_channel_attention_prefs_conversation ON channel_attention_preferences(conversation_id)
 index idx_conversation_agents_agent: CREATE INDEX idx_conversation_agents_agent ON conversation_agents(agent_id)
@@ -36,6 +37,7 @@ index idx_messages_cc_dedupe: CREATE UNIQUE INDEX idx_messages_cc_dedupe ON mess
 index idx_messages_client_identity: CREATE UNIQUE INDEX idx_messages_client_identity ON messages(from_user_id, client_message_id) WHERE client_message_id IS NOT NULL
 index idx_messages_conversation: CREATE INDEX idx_messages_conversation ON messages(conversation_id, seq)
 index idx_messages_conversation_from_kind: CREATE INDEX idx_messages_conversation_from_kind ON messages(conversation_id, from_kind, seq)
+index idx_messages_product_activity_created_at: CREATE INDEX idx_messages_product_activity_created_at ON messages(created_at) WHERE from_kind IN ('user','agent') AND cc_source_message_id IS NULL
 index idx_messages_profile_agent: CREATE INDEX idx_messages_profile_agent ON messages(from_agent_id, created_at) WHERE from_kind='agent' AND cc_source_message_id IS NULL
 index idx_messages_profile_user: CREATE INDEX idx_messages_profile_user ON messages(from_user_id, created_at) WHERE from_kind='user' AND cc_source_message_id IS NULL
 index idx_messages_thread_root: CREATE INDEX idx_messages_thread_root ON messages(conversation_id, thread_root_id, seq)

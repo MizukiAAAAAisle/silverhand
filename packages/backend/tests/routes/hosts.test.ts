@@ -333,7 +333,7 @@ describe('host routes', () => {
         // verify the payload assembles to a token-bearing command with no host id.
         const command = assembleConnectCommand({
           daemonNpmSpec: body.daemon_npm_spec,
-          serverUrl: 'https://silverhand.taobao.net',
+          serverUrl: 'https://silverhand.ai',
           connectToken: body.connect_token,
         });
         expect(command).toContain('--connect-token');
@@ -392,7 +392,7 @@ describe('host routes', () => {
         // The recipe flows through the payload into the edge-assembled command.
         const command = assembleConnectCommand({
           daemonNpmSpec: body.daemon_npm_spec,
-          serverUrl: 'https://silverhand.taobao.net',
+          serverUrl: 'https://silverhand.ai',
           connectToken: body.connect_token,
         });
         expect(command).toContain(
@@ -431,7 +431,7 @@ describe('host routes', () => {
       // side from it), so an edge-assembled command never contains the host id.
       const command = assembleConnectCommand({
         daemonNpmSpec: created.daemon_npm_spec,
-        serverUrl: 'https://silverhand.taobao.net',
+        serverUrl: 'https://silverhand.ai',
         connectToken: created.connect_token,
       });
       expect(command).not.toContain(created.host_id);
@@ -1957,7 +1957,7 @@ describe('host routes', () => {
       expect(body.connect_token).not.toBe(oldToken);
       const rotatedCommand = assembleConnectCommand({
         daemonNpmSpec: body.daemon_npm_spec,
-        serverUrl: 'https://silverhand.taobao.net',
+        serverUrl: 'https://silverhand.ai',
         connectToken: body.connect_token,
       });
       expect(rotatedCommand).toContain(body.connect_token);

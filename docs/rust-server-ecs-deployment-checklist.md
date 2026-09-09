@@ -108,3 +108,11 @@ Rust 的 metrics 实现、ops 配置和隔离验证先独立 review，再进行�
   数据。Node 专属序列为空不是 Rust 的故障，也不能用 Node 名伪报 Tokio 指标。
 - ECS_OPERATIONS.md 的当前部署记录在实际切换时更新；候选 commit、checksum、
   unit/env、备份和回滚版本成套冻结，不把本清单当作上线证明。
+
+## Console 域名入口验收
+
+若本次发布启用 Console，按 [HTTPS ingress 候选配置](../ops/deployment/README.md#console-https-ingress)
+将域名下 `/console` 与 `/console/api/*` 接入 product upstream，保留预置
+`SILVERHAND_CONSOLE_TOKEN` 鉴权；不转发私有 metrics 端口。上线前验证 TLS、
+Authorization 透传、全部数据 API 的缺失/错误 token 401、有效 token 读取、
+禁缓存与日志不含凭据。token 未设置时 Console 路由应为 404。

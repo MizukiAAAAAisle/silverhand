@@ -43,7 +43,7 @@ function baseInput(): HostDiagnosticsInput {
       ],
     },
     app: {
-      server_url: 'https://silverhand.taobao.net',
+      server_url: 'https://silverhand.ai',
       mode: 'remote',
     },
     fetch: {
@@ -63,7 +63,7 @@ describe('buildHostDiagnosticsText', () => {
     expect(text).toContain('- Availability: available\n');
     expect(text).toContain('- OS: macOS 15.5\n');
     expect(text).toContain('Agents\n- Count: 1\n- @Cindy · codex · online\n');
-    expect(text).toContain('- Server URL: https://silverhand.taobao.net\n');
+    expect(text).toContain('- Server URL: https://silverhand.ai\n');
     expect(text).toContain('- Mode: remote\n');
   });
 

@@ -1860,6 +1860,7 @@ dependencies = [
  "metrics-process",
  "proc-macro2",
  "serde_json",
+ "sha2 0.11.0",
  "silverhand-backend-core",
  "silverhand-backend-filesystem",
  "silverhand-backend-server",

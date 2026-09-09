@@ -20,6 +20,7 @@ futures-util.workspace = true
 http-body-util.workspace = true
 http-body = "=1.0.1"
 serde_json.workspace = true
+sha2.workspace = true
 silverhand-backend-core.workspace = true
 silverhand-backend-filesystem.workspace = true
 silverhand-backend-server.workspace = true

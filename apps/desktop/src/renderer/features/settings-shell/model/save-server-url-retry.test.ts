@@ -32,10 +32,10 @@ const okSaved = (): DesktopProfileSaveWithTestResult => ({
     ok: true,
     kind: "system_ca_verified",
     info: { signup_enabled: true },
-    originUrl: "https://silverhand.taobao.net",
+    originUrl: "https://silverhand.ai",
   },
   profile: {
-    server_url: "https://silverhand.taobao.net",
+    server_url: "https://silverhand.ai",
     updated_at: 1_720_000_000_000,
   },
   phase2: {
@@ -55,7 +55,7 @@ describe("saveServerConnectionProfileWithSettingsRetry", () => {
     const delays: number[] = [];
 
     const result = await saveServerConnectionProfileWithSettingsRetry({
-      serverUrl: "https://silverhand.taobao.net",
+      serverUrl: "https://silverhand.ai",
       save,
       sleep: async (ms) => {
         delays.push(ms);
@@ -71,7 +71,7 @@ describe("saveServerConnectionProfileWithSettingsRetry", () => {
     const save = vi.fn(async () => networkFailed());
 
     const result = await saveServerConnectionProfileWithSettingsRetry({
-      serverUrl: "https://silverhand.taobao.net",
+      serverUrl: "https://silverhand.ai",
       save,
       sleep: async () => {},
     });
@@ -127,7 +127,7 @@ describe("saveServerConnectionProfileWithSettingsRetry", () => {
           ok: true,
           kind: "system_ca_verified",
           info: { signup_enabled: true },
-          originUrl: "https://silverhand.taobao.net",
+          originUrl: "https://silverhand.ai",
         },
       },
     ];
@@ -135,7 +135,7 @@ describe("saveServerConnectionProfileWithSettingsRetry", () => {
     for (const response of nonRetryable) {
       const save = vi.fn(async () => response);
       const result = await saveServerConnectionProfileWithSettingsRetry({
-        serverUrl: "https://silverhand.taobao.net",
+        serverUrl: "https://silverhand.ai",
         save,
         sleep: async () => {
           throw new Error("sleep should not be called");

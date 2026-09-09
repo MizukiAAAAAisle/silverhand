@@ -26,8 +26,13 @@ fn address() -> SocketAddr {
 }
 
 fn command(root: &std::path::Path, api: SocketAddr, metrics: &str) -> Command {
+    std::fs::create_dir_all(root.join("silverhand")).unwrap();
+    std::fs::create_dir_all(root.join("tmp")).unwrap();
+
     let mut c = Command::new(env!("CARGO_BIN_EXE_silverhand-backend"));
     c.env_clear()
+        .env("SILVERHAND_DIR", root.join("silverhand"))
+        .env("TMPDIR", root.join("tmp"))
         .env("SILVERHAND_DATABASE_PATH", root.join("data/silverhand.db"))
         .env("SILVERHAND_BLOBS_ROOT", root.join("data/blobs"))
         .env("SILVERHAND_LOG_DIR", root.join("logs"))
@@ -38,6 +43,15 @@ fn command(root: &std::path::Path, api: SocketAddr, metrics: &str) -> Command {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     c
+}
+
+fn console_command(root: &std::path::Path, api: SocketAddr, metrics: SocketAddr) -> Command {
+    let mut process = command(root, api, &metrics.to_string());
+    process.env(
+        "SILVERHAND_CONSOLE_TOKEN",
+        "01234567890123456789012345678901",
+    );
+    process
 }
 
 fn request(
@@ -452,4 +466,127 @@ fn disabled_metrics_still_refuses_public_metrics() {
     let mut process = Process(command(root.path(), api, "").spawn().unwrap());
     wait_ready(&mut process, api);
     assert_eq!(request(api, "GET", "/metrics", None, "").0, 403);
+}
+
+#[test]
+fn executable_console_uses_product_listener_with_its_own_token_gate() {
+    let root = tempfile::tempdir().unwrap();
+    let api = address();
+    let metrics = address();
+    let token = "01234567890123456789012345678901";
+    let mut process = Process(console_command(root.path(), api, metrics).spawn().unwrap());
+    wait_ready(&mut process, api);
+
+    assert_eq!(request(api, "GET", "/console", None, "").0, 200);
+    assert_eq!(request(metrics, "GET", "/console", None, "").0, 404);
+    assert_eq!(
+        request(api, "GET", "/console/api/overview", None, "").0,
+        401
+    );
+    assert_eq!(
+        request(api, "GET", "/console/api/overview", Some("wrong-token"), "").0,
+        401
+    );
+
+    let email = "console-source@example.com";
+    let signup_body = json!({
+        "email": email,
+        "name": "consoleuser",
+        "password": "test-console-password",
+    });
+    assert_eq!(
+        request(api, "POST", "/auth/signup", None, &signup_body.to_string()).0,
+        200
+    );
+
+    let (status, body) = request(api, "GET", "/console/api/overview", Some(token), "");
+    assert_eq!(status, 200, "{body}");
+    let overview: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(overview["totals"]["users"], 1);
+    assert_eq!(overview["time_zone"], "Asia/Shanghai");
+    assert_eq!(overview["daily_activity"].as_array().unwrap().len(), 30);
+    assert!(overview.get("release_telemetry").is_none());
+
+    for source in [email, "consoleuser", "test-console-password", token] {
+        assert!(!body.contains(source), "console response leaked {source}");
+    }
+    assert_eq!(request(metrics, "GET", "/metrics", None, "").0, 200);
+    assert_eq!(request(api, "GET", "/metrics", Some(token), "").0, 403);
+    for path in ["/console/api/users", "/console/api/users/unknown"] {
+        assert_eq!(request(api, "GET", path, None, "").0, 401);
+        assert_eq!(request(metrics, "GET", path, Some(token), "").0, 404);
+    }
+    assert_eq!(
+        request(api, "GET", "/console/api/users", Some(token), "").0,
+        200
+    );
+    assert_eq!(
+        request(api, "GET", "/console/api/users/unknown", Some(token), "").0,
+        404
+    );
+}
+
+#[test]
+fn invalid_console_configuration_refuses_before_database_creation() {
+    for (metrics, token) in [
+        (String::new(), "too-short"),
+        (address().to_string(), "too-short"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let status = command(root.path(), address(), &metrics)
+            .env("SILVERHAND_CONSOLE_TOKEN", token)
+            .status()
+            .unwrap();
+
+        assert!(!status.success());
+        assert!(!root.path().join("data/silverhand.db").exists());
+    }
+}
+
+#[test]
+fn console_is_opt_in_and_independent_of_metrics() {
+    let root = tempfile::tempdir().unwrap();
+    let api = address();
+    let token = "01234567890123456789012345678901";
+    let mut process = Process(
+        command(root.path(), api, "")
+            .env("SILVERHAND_CONSOLE_TOKEN", token)
+            .spawn()
+            .unwrap(),
+    );
+    wait_ready(&mut process, api);
+    assert_eq!(request(api, "GET", "/console", None, "").0, 200);
+    assert_eq!(
+        request(api, "GET", "/console/api/overview", Some(token), "").0,
+        200
+    );
+    assert_eq!(request(api, "GET", "/metrics", None, "").0, 403);
+
+    let disabled = tempfile::tempdir().unwrap();
+    let disabled_api = address();
+    let mut disabled_process = Process(command(disabled.path(), disabled_api, "").spawn().unwrap());
+    wait_ready(&mut disabled_process, disabled_api);
+    for path in [
+        "/console",
+        "/console/api/overview",
+        "/console/api/users",
+        "/console/api/users/any",
+    ] {
+        assert_eq!(request(disabled_api, "GET", path, Some(token), "").0, 404);
+    }
+}
+
+#[test]
+fn console_refuses_embedded_profile_even_with_a_valid_token() {
+    let root = tempfile::tempdir().unwrap();
+    let status = command(root.path(), address(), "")
+        .env("SILVERHAND_DEPLOYMENT_PROFILE", "embedded")
+        .env(
+            "SILVERHAND_CONSOLE_TOKEN",
+            "01234567890123456789012345678901",
+        )
+        .status()
+        .unwrap();
+    assert!(!status.success());
+    assert!(!root.path().join("data/silverhand.db").exists());
 }

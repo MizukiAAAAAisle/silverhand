@@ -5,7 +5,7 @@
     {
       "epoch": 69,
       "firstStep": 69,
-      "lastStep": 94,
+      "lastStep": 95,
       "released": false
     }
   ],
@@ -14,8 +14,8 @@
     "packages/shared/src/conversation-title-audit.ts": "36d75a99f6b29e7f0302739a368fe6ecb26be4fb5c067a00b7cec93eac2bbce0",
     "packages/shared/src/conversation-title.ts": "74e08fa0290476e633508b05958d9be88a412c0ae468e29a9b60bebb9b43a3db",
     "packages/shared/src/db/baseline-schema.ts": "7e5b7e9a0aca9b79fa433dca341d68ef4f761c5a545069c6005a4519851130e6",
-    "packages/shared/src/db/migrations.ts": "48673b64d51201b4c7c263c6efabf22001a7542d021d3396c7388c5390605c3d",
-    "packages/shared/src/db/schema-epochs.ts": "59101a4c4985779bae58a0acd57d3f6723ef3109689f5d4fe66243f48135aca2",
+    "packages/shared/src/db/migrations.ts": "73fbe47c8fac70e05ca7897c2a390929aa49a58cb4a2a887ddbecb476eb2193c",
+    "packages/shared/src/db/schema-epochs.ts": "f6c5c6056ff8045ea4065d1fa17116a80904999bc170b862cc675e36c315acf8",
     "packages/shared/src/display-name-charset.ts": "13ad82b9e92e562014322c569df15476a8ef5d7863f541f79207a5403d542410",
     "packages/shared/src/unicode-case-fold.ts": "b5cb75d46582dc93b640434ad78fe8f0a741e5e1aa183adbb27368ce2aceb120",
     "packages/shared/src/unicode-name-charset.ts": "bbcda81d89d738fdfe6a9ff0dd4dad633a79a84cd8f82e203753910196967879",
@@ -377,6 +377,13 @@
       "version": 94,
       "name": "profile_message_count_indexes",
       "up": "\n      CREATE INDEX idx_messages_profile_user ON messages(from_user_id, created_at)\n        WHERE from_kind='user' AND cc_source_message_id IS NULL;\n      CREATE INDEX idx_messages_profile_agent ON messages(from_agent_id, created_at)\n        WHERE from_kind='agent' AND cc_source_message_id IS NULL;\n    ",
+      "foreignKeyEscape": false,
+      "precondition": false
+    },
+    {
+      "version": 95,
+      "name": "operator_console_aggregate_indexes",
+      "up": "\n      CREATE INDEX idx_auth_sessions_last_used_at\n        ON auth_sessions(last_used_at, user_id);\n      CREATE INDEX idx_messages_product_activity_created_at\n        ON messages(created_at)\n        WHERE from_kind IN ('user','agent') AND cc_source_message_id IS NULL;\n    ",
       "foreignKeyEscape": false,
       "precondition": false
     }

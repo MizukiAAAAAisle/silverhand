@@ -123,7 +123,7 @@ describe('silverhand-daemon connect command', () => {
   // the arg-name contract to shared instead of duplicating literals.
   it('round-trips buildConnectArgv → parseConnectArgv (assemble⇄parse single source)', () => {
     const cases = [
-      { serverUrl: 'https://silverhand.taobao.net', connectToken: 'ct_abc123' },
+      { serverUrl: 'https://silverhand.ai', connectToken: 'ct_abc123' },
       { serverUrl: 'http://127.0.0.1:18080', connectToken: 'ct_x/y+z=' },
     ];
     for (const input of cases) {
@@ -145,11 +145,11 @@ describe('silverhand-daemon connect command', () => {
   it('assembleConnectCommand emits an npx connect invocation with the recipe', () => {
     const command = assembleConnectCommand({
       daemonNpmSpec: '@silverhand-ai/daemon@latest',
-      serverUrl: 'https://silverhand.taobao.net',
+      serverUrl: 'https://silverhand.ai',
       connectToken: 'ct_abc123',
     });
     expect(command).toBe(
-      'npx @silverhand-ai/daemon@latest connect --server-url https://silverhand.taobao.net --connect-token ct_abc123',
+      'npx @silverhand-ai/daemon@latest connect --server-url https://silverhand.ai --connect-token ct_abc123',
     );
   });
 

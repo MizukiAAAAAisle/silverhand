@@ -8,21 +8,22 @@ not Rust configuration aliases.
 
 ## Variables
 
-| Variable | Contract |
-| --- | --- |
-| `SILVERHAND_DEPLOYMENT_PROFILE` | Required: `embedded` or `remote-only`. The latter advertises deployment mode `standalone`. |
-| `SILVERHAND_DATABASE_PATH` | Required, nonempty path to the SQLite database file. |
-| `SILVERHAND_BLOBS_ROOT` | Required, nonempty blob directory path. |
-| `SILVERHAND_LOG_DIR` | Required, writable diagnostic and categorized audit log directory. |
-| `SILVERHAND_LISTEN_ADDR` | Required numeric IP socket address, e.g. `0.0.0.0:8080` or `[::1]:8080`. |
-| `SILVERHAND_ALLOWED_ORIGINS` | Required, nonempty comma-separated event WebSocket origin allowlist. Use the actual client-facing HTTPS origin. |
-| `SILVERHAND_METRICS_LISTEN` | Optional; unset or empty disables metrics. Numeric loopback IP socket only, e.g. `127.0.0.1:9464` or `[::1]:9464`. Wildcards, LAN addresses and DNS names are rejected. Port 0 is allowed for isolated callers. |
-| `SILVERHAND_DISABLE_SIGNUP` | Remote-only: unset/empty or `0` enables signup; `1` disables it; other values fail. Embedded preserves the launcher contract: only exact `1` disables signup. |
-| `SILVERHAND_MIGRATE` | `0` or `1`; defaults to `0` for remote-only, `1` for embedded. Fresh databases initialize without an upgrade opt-in. |
-| `SILVERHAND_DAEMON_NPM_SPEC` | Optional explicit daemon package specification. |
-| `SILVERHAND_BOOTSTRAP_TOKEN_PATH` | Optional launcher-owned token file; armed only for embedded on actual loopback bind. |
-| `SILVERHAND_STARTUP_GENERATION` | Optional launcher correlation token. Emits one stdout `bound` frame containing the actual API address; not a readiness claim. |
-| `RUST_LOG` | Tracing filter; defaults to the ERROR floor, with the existing activity-retention summary directive. |
+| Variable                          | Contract                                                                                                                                                                                                        |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SILVERHAND_DEPLOYMENT_PROFILE`   | Required: `embedded` or `remote-only`. The latter advertises deployment mode `standalone`.                                                                                                                      |
+| `SILVERHAND_DATABASE_PATH`        | Required, nonempty path to the SQLite database file.                                                                                                                                                            |
+| `SILVERHAND_BLOBS_ROOT`           | Required, nonempty blob directory path.                                                                                                                                                                         |
+| `SILVERHAND_LOG_DIR`              | Required, writable diagnostic and categorized audit log directory.                                                                                                                                              |
+| `SILVERHAND_LISTEN_ADDR`          | Required numeric IP socket address, e.g. `0.0.0.0:8080` or `[::1]:8080`.                                                                                                                                        |
+| `SILVERHAND_ALLOWED_ORIGINS`      | Required, nonempty comma-separated event WebSocket origin allowlist. Use the actual client-facing HTTPS origin.                                                                                                 |
+| `SILVERHAND_METRICS_LISTEN`       | Optional; unset or empty disables metrics. Numeric loopback IP socket only, e.g. `127.0.0.1:9464` or `[::1]:9464`. Wildcards, LAN addresses and DNS names are rejected. Port 0 is allowed for isolated callers. |
+| `SILVERHAND_CONSOLE_TOKEN`        | Optional; enables the token-gated ECS Console on the product listener. Requires `remote-only` and 32–256 visible ASCII characters. Independent of metrics; expose through the existing HTTPS ingress.           |
+| `SILVERHAND_DISABLE_SIGNUP`       | Remote-only: unset/empty or `0` enables signup; `1` disables it; other values fail. Embedded preserves the launcher contract: only exact `1` disables signup.                                                   |
+| `SILVERHAND_MIGRATE`              | `0` or `1`; defaults to `0` for remote-only, `1` for embedded. Fresh databases initialize without an upgrade opt-in.                                                                                            |
+| `SILVERHAND_DAEMON_NPM_SPEC`      | Optional explicit daemon package specification.                                                                                                                                                                 |
+| `SILVERHAND_BOOTSTRAP_TOKEN_PATH` | Optional launcher-owned token file; armed only for embedded on actual loopback bind.                                                                                                                            |
+| `SILVERHAND_STARTUP_GENERATION`   | Optional launcher correlation token. Emits one stdout `bound` frame containing the actual API address; not a readiness claim.                                                                                   |
+| `RUST_LOG`                        | Tracing filter; defaults to the ERROR floor, with activity-retention INFO summaries and credential-free Console authorization rejection WARN events.                                                            |
 
 Use absolute paths in service configuration. `SILVERHAND_ALLOWED_ORIGINS` is a
 security allowlist, not the backend bind address or a topology advertisement.
@@ -43,6 +44,7 @@ The executable owns the exporter and its upkeep; unexpected exporter termination
 requests application shutdown and produces a failing process exit. SIGTERM and
 SIGINT drain the existing application shutdown path and close both listeners.
 See [Server Observability](server-observability.md).
+See [ECS Console Dashboard](ecs-console.md) for the separate product-count read model.
 
 ## Data and upgrades
 

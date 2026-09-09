@@ -271,6 +271,7 @@ const fn const_parse_i64(value: &str) -> i64 {
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     metrics_listen: Option<SocketAddr>,
+    console_token_hash: Option<[u8; 32]>,
     database_path: PathBuf,
     allow_schema_upgrade: bool,
     blobs_root: PathBuf,
@@ -352,6 +353,7 @@ impl AppConfig {
             .filter(|value| !value.is_empty());
         Ok(Self {
             metrics_listen: None,
+            console_token_hash: None,
             database_path,
             allow_schema_upgrade: deployment_profile == DeploymentProfile::Embedded,
             blobs_root,
@@ -414,6 +416,10 @@ impl AppConfig {
         )?;
         let metrics_listen =
             observability::parse_listen(env::var("SILVERHAND_METRICS_LISTEN").ok().as_deref())?;
+        let console_token_hash = foundation::operator_console::parse_token(
+            env::var("SILVERHAND_CONSOLE_TOKEN").ok().as_deref(),
+            deployment_profile == DeploymentProfile::RemoteOnly,
+        )?;
         Self::new(
             database_path,
             blobs_root,
@@ -428,6 +434,7 @@ impl AppConfig {
         )
         .map(|mut config| {
             config.metrics_listen = metrics_listen;
+            config.console_token_hash = console_token_hash;
             config.with_schema_upgrade(allow_schema_upgrade)
         })
     }
@@ -515,6 +522,10 @@ fn parse_signup_enabled(
 pub enum ConfigError {
     #[error("SILVERHAND_METRICS_LISTEN must be a loopback IP socket address")]
     InvalidMetricsListen,
+    #[error("SILVERHAND_CONSOLE_TOKEN requires the remote-only deployment profile")]
+    ConsoleRequiresRemoteOnly,
+    #[error("SILVERHAND_CONSOLE_TOKEN must contain 32 to 256 visible ASCII characters")]
+    InvalidConsoleToken,
     #[error("required environment variable {0} is missing or empty")]
     MissingEnvironment(&'static str),
     #[error("database path must not be empty")]

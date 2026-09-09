@@ -1344,3 +1344,10 @@ CREATE INDEX idx_messages_profile_user ON messages(from_user_id, created_at)
 
 CREATE INDEX idx_messages_profile_agent ON messages(from_agent_id, created_at)
         WHERE from_kind='agent' AND cc_source_message_id IS NULL;
+
+CREATE INDEX idx_auth_sessions_last_used_at
+        ON auth_sessions(last_used_at, user_id);
+
+CREATE INDEX idx_messages_product_activity_created_at
+        ON messages(created_at)
+        WHERE from_kind IN ('user','agent') AND cc_source_message_id IS NULL;

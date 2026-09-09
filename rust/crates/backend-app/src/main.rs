@@ -24,13 +24,19 @@ async fn main() -> ExitCode {
     };
     tracing_subscriber::registry()
         .with(production_json_layer(
-            // Keep the requested daily retention summary visible without
-            // enabling unrelated INFO logs at the default ERROR floor.
-            EnvFilter::from_default_env().add_directive(
-                "activity_retention=info"
-                    .parse()
-                    .expect("static log directive"),
-            ),
+            // Keep retention summaries and credential-free authorization rejections
+            // visible without enabling unrelated logs at the default ERROR floor.
+            EnvFilter::from_default_env()
+                .add_directive(
+                    "activity_retention=info"
+                        .parse()
+                        .expect("static log directive"),
+                )
+                .add_directive(
+                    "operator_console_access=warn"
+                        .parse()
+                        .expect("static log directive"),
+                ),
             ProductionConversationLogDebugControl::process(),
             SystemProcessClock,
             file_writer.and(std::io::stderr),

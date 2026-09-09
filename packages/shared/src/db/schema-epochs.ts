@@ -102,15 +102,14 @@ export const SCHEMA_EPOCH_MANIFEST: readonly SchemaEpochEntry[] = [
   {
     epoch: 69,
     firstStep: 69,
-    lastStep: 94,
+    lastStep: 95,
     released: false,
   },
 ];
 
 /** The epoch this build ships: the last manifest entry. */
 export const CURRENT_SCHEMA_EPOCH: number =
-  SCHEMA_EPOCH_MANIFEST[SCHEMA_EPOCH_MANIFEST.length - 1]?.epoch ??
-  ONE_TO_ONE_EPOCH_CEILING_STEP;
+  SCHEMA_EPOCH_MANIFEST[SCHEMA_EPOCH_MANIFEST.length - 1]?.epoch ?? ONE_TO_ONE_EPOCH_CEILING_STEP;
 
 /** Epoch that owns a given migration step, or `null` if no epoch claims it. */
 export function epochForMigrationStep(step: number): number | null {
@@ -126,7 +125,7 @@ export function epochForMigrationStep(step: number): number | null {
 export function firstStepOfEpoch(epoch: number): number | null {
   if (epoch <= 0) return null;
   if (epoch <= ONE_TO_ONE_EPOCH_CEILING_STEP) return epoch;
-  return SCHEMA_EPOCH_MANIFEST.find(e => e.epoch === epoch)?.firstStep ?? null;
+  return SCHEMA_EPOCH_MANIFEST.find((e) => e.epoch === epoch)?.firstStep ?? null;
 }
 
 /**
@@ -233,7 +232,7 @@ export function classifyMigrationLedger(
   appliedSteps: readonly number[],
   plan: readonly Pick<Migration, 'version'>[],
 ): MigrationLedgerVerdict {
-  const planSteps = [...new Set(plan.map(m => m.version))].sort((a, b) => a - b);
+  const planSteps = [...new Set(plan.map((m) => m.version))].sort((a, b) => a - b);
   const highestApplied = appliedSteps.reduce((max, step) => Math.max(max, step), 0);
   if (planSteps.length === 0) {
     return {
@@ -245,15 +244,15 @@ export function classifyMigrationLedger(
   const ceiling = planSteps[planSteps.length - 1]!;
   const planSet = new Set(planSteps);
   const applied = new Set(appliedSteps);
-  const inRange = [...applied].filter(s => s >= floor && s <= ceiling).sort((a, b) => a - b);
-  const unexpectedSteps = inRange.filter(s => !planSet.has(s));
+  const inRange = [...applied].filter((s) => s >= floor && s <= ceiling).sort((a, b) => a - b);
+  const unexpectedSteps = inRange.filter((s) => !planSet.has(s));
   const appliedThroughStep = inRange.length > 0 ? inRange[inRange.length - 1]! : 0;
-  const missingSteps = planSteps.filter(s => s <= appliedThroughStep && !applied.has(s));
+  const missingSteps = planSteps.filter((s) => s <= appliedThroughStep && !applied.has(s));
   if (missingSteps.length > 0 || unexpectedSteps.length > 0) {
     return { kind: 'inconsistent', appliedThroughStep, missingSteps, unexpectedSteps };
   }
 
-  const pending = planSteps.filter(s => !applied.has(s));
+  const pending = planSteps.filter((s) => !applied.has(s));
   if (pending.length === 0) {
     // The epoch a fully-applied PLAN reaches is not necessarily this build's
     // epoch: a plan slice (tests, staged fixtures) can end mid-epoch, and saying
@@ -331,8 +330,8 @@ export function assertSchemaEpochManifest(
     if (!entry.released) unreleased += 1;
     if (unreleased > 1) {
       throw new Error(
-        `schema epoch manifest: epoch ${entry.epoch} is a second unreleased epoch. `
-          + 'One unshipped build may bump the outward epoch at most once, so new steps extend the open epoch instead of opening another.',
+        `schema epoch manifest: epoch ${entry.epoch} is a second unreleased epoch. ` +
+          'One unshipped build may bump the outward epoch at most once, so new steps extend the open epoch instead of opening another.',
       );
     }
     for (let step = entry.firstStep; step <= entry.lastStep; step += 1) {
@@ -342,21 +341,21 @@ export function assertSchemaEpochManifest(
     previousLastStep = entry.lastStep;
   }
 
-  const planSteps = [...new Set(plan.map(m => m.version))].sort((a, b) => a - b);
-  const divergent = planSteps.filter(s => s > ONE_TO_ONE_EPOCH_CEILING_STEP);
-  const unclaimed = divergent.filter(s => !claimed.has(s));
+  const planSteps = [...new Set(plan.map((m) => m.version))].sort((a, b) => a - b);
+  const divergent = planSteps.filter((s) => s > ONE_TO_ONE_EPOCH_CEILING_STEP);
+  const unclaimed = divergent.filter((s) => !claimed.has(s));
   if (unclaimed.length > 0) {
     throw new Error(
-      `schema epoch manifest: migration step(s) ${unclaimed.join(', ')} belong to no epoch. `
-        + 'Extend the unreleased epoch\'s lastStep in the same commit as the new step, or — if that epoch has shipped — append a new epoch for it.',
+      `schema epoch manifest: migration step(s) ${unclaimed.join(', ')} belong to no epoch. ` +
+        "Extend the unreleased epoch's lastStep in the same commit as the new step, or — if that epoch has shipped — append a new epoch for it.",
     );
   }
   const planSet = new Set(divergent);
-  const phantom = [...claimed].filter(s => !planSet.has(s)).sort((a, b) => a - b);
+  const phantom = [...claimed].filter((s) => !planSet.has(s)).sort((a, b) => a - b);
   if (phantom.length > 0) {
     throw new Error(
-      `schema epoch manifest: epoch range(s) claim step(s) ${phantom.join(', ')} that this build does not define. `
-        + 'An epoch may only claim steps that exist, or `epochForMigrationStep` answers for a step no ledger can ever contain.',
+      `schema epoch manifest: epoch range(s) claim step(s) ${phantom.join(', ')} that this build does not define. ` +
+        'An epoch may only claim steps that exist, or `epochForMigrationStep` answers for a step no ledger can ever contain.',
     );
   }
 }
@@ -374,8 +373,8 @@ export function assertSupportPolicyFloors(): void {
   }
   if (MIN_SUPPORTED_MIGRATION_STEP < BASELINE_MIGRATION_STEP) {
     throw new Error(
-      `schema epoch support policy: epoch ${MIN_SUPPORTED_SCHEMA_EPOCH} derives step floor ${MIN_SUPPORTED_MIGRATION_STEP}, `
-        + `below the baseline step ${BASELINE_MIGRATION_STEP}. The baseline migration is a full CREATE, so no support policy may promise to upgrade from under it.`,
+      `schema epoch support policy: epoch ${MIN_SUPPORTED_SCHEMA_EPOCH} derives step floor ${MIN_SUPPORTED_MIGRATION_STEP}, ` +
+        `below the baseline step ${BASELINE_MIGRATION_STEP}. The baseline migration is a full CREATE, so no support policy may promise to upgrade from under it.`,
     );
   }
 }
