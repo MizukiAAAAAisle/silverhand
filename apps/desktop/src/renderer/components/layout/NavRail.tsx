@@ -1,5 +1,6 @@
 import { type JSX, type ReactNode } from "react";
 import { Activity, MessagesSquare, Monitor, Settings, Users } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { TaskIcon } from "@/features/task-shell/components/task-icon";
 import { PANE_RADIUS, paneChrome } from "./pane-chrome";
 
@@ -94,34 +95,39 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
         borderBottomLeftRadius: `var(--app-corner-radius, ${PANE_RADIUS})`,
       }}
     >
-      {ITEMS.map((item) => {
-        const selected = item.id === current;
-        const hasDot = dots?.[item.id] === true;
-        return (
-          <button
-            key={item.id}
-            type="button"
-            title={`${item.label}  ⌘${item.shortcut}`}
-            aria-label={item.label}
-            aria-current={selected ? "page" : undefined}
-            onClick={() => onChange(item.id)}
-            className="nav-rail__item flex size-9 items-center justify-center transition-colors"
-          >
-            {item.icon}
-            {hasDot && (
-              // Attention dot: no count, top-right corner (icon is centred, so
-              // the corner is empty). `--accent` = the app's unread/brand hue.
-              // `data-nav-unread-dot` lets a theme reshape it (e.g. forza6's
-              // square-sticker language) without touching this layout.
-              <span
-                data-nav-unread-dot
-                aria-hidden
-                className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-(--unread)"
-              />
-            )}
-          </button>
-        );
-      })}
+      <TooltipProvider>
+        {ITEMS.map((item) => {
+          const selected = item.id === current;
+          const hasDot = dots?.[item.id] === true;
+          return (
+            <Tooltip key={item.id}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={item.label}
+                  aria-current={selected ? "page" : undefined}
+                  onClick={() => onChange(item.id)}
+                  className="nav-rail__item flex size-9 items-center justify-center transition-colors"
+                >
+                  {item.icon}
+                  {hasDot && (
+                    // Attention dot: no count, top-right corner (icon is centred, so
+                    // the corner is empty). `--accent` = the app's unread/brand hue.
+                    // `data-nav-unread-dot` lets a theme reshape it (e.g. forza6's
+                    // square-sticker language) without touching this layout.
+                    <span
+                      data-nav-unread-dot
+                      aria-hidden
+                      className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-(--unread)"
+                    />
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right">⌘ + {item.shortcut}</TooltipContent>
+            </Tooltip>
+          );
+        })}
+      </TooltipProvider>
 
       <button
         type="button"
