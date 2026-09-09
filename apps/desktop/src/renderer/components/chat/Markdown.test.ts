@@ -388,7 +388,7 @@ describe("SystemMessage channel refs", () => {
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-context-card="spawned"');
     // Chip is still present + clickable, just shows the short id.
-    expect(html).toContain('data-conversation-ref="conv-source"');
+    expect(html).toContain("#conv:conv-source");
   });
 
   it("thread_anchor without enriched metadata falls back to legacy muted row", () => {
@@ -884,20 +884,20 @@ describe("Markdown channel refs", () => {
     expect(html).not.toContain(">#version3<");
   });
 
-  it("renders ambiguous #<channel_name> as inert muted text", () => {
+  it("renders ambiguous #<channel_name> as raw prose", () => {
     // Sentinel `null` value = two channels in the workspace share this
     // title; the renderer must not silently pick one.
     const channels = new Map<string, ChannelReference | null>([["general", null]]);
     const html = renderWithChannels("See #general here.", channels, () => undefined);
-    expect(html).toContain('data-channel-ref-state="ambiguous"');
+    expect(html).not.toContain("data-channel-ref-state=");
     expect(html).toContain("#general");
     expect(html).not.toContain("data-channel-ref-id");
   });
 
-  it("renders unresolved #<channel_name> as inert muted text", () => {
+  it("renders unresolved #<channel_name> as raw prose", () => {
     // Empty map → no entry for `version3` → unresolved branch.
     const html = renderWithChannels("See #unknown here.", new Map(), () => undefined);
-    expect(html).toContain('data-channel-ref-state="unresolved"');
+    expect(html).not.toContain("data-channel-ref-state=");
     expect(html).toContain("#unknown");
     expect(html).not.toContain("data-channel-ref-id");
   });
@@ -1297,10 +1297,10 @@ describe("Markdown conversation refs", () => {
     expect(html).not.toContain(`#conv:${id}`);
   });
 
-  it("keeps unresolved refs clickable by id", () => {
+  it("preserves unresolved conversation ids as prose", () => {
     const html = render("Open #conv:foreignRef123456.");
 
-    expect(html).toContain('data-conversation-ref="foreignRef123456"');
+    expect(html).toContain("#conv:foreignRef123456");
     expect(html).toContain("#conv:foreignRef123456");
   });
 
@@ -1315,7 +1315,7 @@ describe("Markdown conversation refs", () => {
       ].join(" "),
     );
 
-    expect(html).toContain('data-conversation-ref="realRef123456789"');
+    expect(html).toContain("#conv:realRef123456789.bar");
     expect(html).not.toContain('data-conversation-ref="foo"');
     expect(html).not.toContain('data-conversation-ref="foreignRef12345678"');
     expect(html).not.toContain('data-conversation-ref="codeRef12345678"');
@@ -1374,59 +1374,22 @@ describe("Markdown conversation refs", () => {
   });
 });
 
-describe("Markdown task refs — loading-state hover popover", () => {
-  it("wraps the loading chip in HoverPopover so 500ms hover reveals a skeleton", () => {
-    // Cindy review of commit 3 (`45fca42`): the original loading
-    // branch returned a bare `<span>` with no HoverPopover wrapper,
-    // so a hover ≥500ms while the fetch was in flight produced
-    // nothing — violating the "no spinner, but DO show a non-spinner
-    // loading state after 500ms" spec.
-    //
-    // SSR can't drive HoverCard's open state but we CAN verify that
-    // the chip carries the `loading` state attribute and that the
-    // HoverCard.Root structure is in place around it (radix renders
-    // a `data-state` on the trigger element). The key regression
-    // is: chip-state="loading" must be present, distinguishing it
-    // from the no-context / missing branches that stay tooltip-only.
+describe("Markdown task refs — pending resolution", () => {
+  it("preserves prose while loading", () => {
     const html = renderWithTaskCtx("Working on #task:5 now.", "w-eng", () => {});
-    expect(html).toContain('data-task-ref="5"');
-    expect(html).toContain('data-task-ref-state="loading"');
-    // HoverCard.Trigger forwards `data-state="closed"` onto the
-    // wrapped chip element so the radix popover styling can hook
-    // into it. Its presence on the loading-state chip confirms the
-    // chip went through HoverPopover (the no-context / missing
-    // branches return a bare `<span>` without that attribute).
-    expect(html).toMatch(
-      /data-task-ref-state="loading"[^>]*data-state="closed"|data-state="closed"[^>]*data-task-ref-state="loading"/,
-    );
+    expect(html).toContain("<p>Working on #task:5 now.</p>");
   });
 
-  it("keeps no-context and missing states tooltip-only (no HoverPopover wrap)", () => {
-    // Inverse of the above: states with nothing meaningful to show
-    // in a popover stay bare so a hover doesn't open an empty card.
-    // No-context (no workspace anchor) is tested via `null` workspace.
+  it("preserves prose without resolution context", () => {
     const html = renderWithTaskCtx("See #task:42.", null);
-    expect(html).toContain('data-task-ref-state="no-context"');
-    // No `data-state="closed"` adjacent to the no-context chip
-    // because it never went through HoverCard.
-    expect(html).not.toMatch(
-      /data-task-ref-state="no-context"[^>]*data-state="closed"|data-state="closed"[^>]*data-task-ref-state="no-context"/,
-    );
+    expect(html).toContain("<p>See #task:42.</p>");
   });
 });
 
 describe("Markdown task refs", () => {
-  it("emits a TaskRef chip for `#task:<n>` with workspace context", () => {
-    // Tokenizer shape only: SSR doesn't drive useQuery to resolved, so
-    // the chip lands as an inert pill carrying `data-task-ref`. The
-    // important guarantees are (a) the sigil produced a TaskRef node
-    // (not a stray channel ref or plain text) and (b) the inert pill
-    // shows the verbatim `#task:5` label.
+  it("preserves explicit task text while metadata loads", () => {
     const html = renderWithTaskCtx("Working on #task:5 now.", "w-eng", () => {});
-    expect(html).toContain('data-task-ref="5"');
-    expect(html).toContain("#task:5");
-    // No collision with channel ref grammar — the `#task:` literal must
-    // not be mis-tokenized as `#task` channel + `:5` trailing text.
+    expect(html).toContain("<p>Working on #task:5 now.</p>");
     expect(html).not.toContain("silverhand-channel:task");
   });
 
@@ -1437,23 +1400,23 @@ describe("Markdown task refs", () => {
       () => {},
     );
 
-    expect(html).toContain('data-task-ref="317"');
-    expect(html).toContain('data-task-ref="318"');
-    expect(html.indexOf('data-task-ref="317"')).toBeLessThan(html.indexOf('data-task-ref="318"'));
+    expect(html).toContain("#task:317");
+    expect(html).toContain("#task:318");
+    expect(html.indexOf("#task:317")).toBeLessThan(html.indexOf("#task:318"));
   });
 
   it("keeps refs after double slash inert", () => {
     const html = renderWithTaskCtx("Compare #task:5//#task:6 before closing.", "w-eng", () => {});
 
-    expect(html).toContain('data-task-ref="5"');
-    expect(html).not.toContain('data-task-ref="6"');
+    expect(html).toContain("#task:5");
+    expect(html).toContain("#task:6");
   });
 
   it("parses space-separated refs around slash punctuation", () => {
     const html = renderWithTaskCtx("Compare #task:5 / #task:6 before closing.", "w-eng", () => {});
 
-    expect(html).toContain('data-task-ref="5"');
-    expect(html).toContain('data-task-ref="6"');
+    expect(html).toContain("#task:5");
+    expect(html).toContain("#task:6");
   });
 
   it("parses slash-separated task and channel refs", () => {
@@ -1463,26 +1426,18 @@ describe("Markdown task refs", () => {
       () => {},
     );
 
-    expect(html).toContain('data-task-ref="5"');
-    expect(html).toContain('data-channel-ref-state="unresolved"');
+    expect(html).toContain("#task:5");
+    expect(html).not.toContain("data-channel-ref-state=");
     expect(html).toContain("#general");
   });
 
   it("renders inert `#task:<n>` text outside any TaskRefContext", () => {
-    // Saved/preview surfaces render Markdown without a workspace
-    // anchor. The chip should still appear (so `#task:5` is visually
-    // distinct from prose) but in a no-context state — no click
-    // handler attached.
     const html = renderWithTaskCtx("See #task:42.", null);
-    expect(html).toContain('data-task-ref="42"');
-    expect(html).toContain('data-task-ref-state="no-context"');
+    expect(html).toContain("#task:42");
+    expect(html).not.toContain("data-task-ref=");
   });
 
   it("does not match malformed task sigils", () => {
-    // Word-boundary + digit-only validation. None of these should
-    // produce a TaskRef. (Bare `#123` is now a task CANDIDATE — see the
-    // "Markdown bare task refs" describe below — so it lives there, not
-    // here; this set is the structurally-never-a-task forms.)
     const html = renderWithTaskCtx(
       [
         "see#1", // attached to word — leading-boundary guard blocks
@@ -1494,43 +1449,25 @@ describe("Markdown task refs", () => {
       "w-eng",
       () => {},
     );
-    // None of the protected forms should yield a TaskRef chip.
-    expect(html).not.toContain('data-task-ref="1"');
-    expect(html).not.toContain('data-task-ref="2"');
-    expect(html).not.toContain('data-task-ref="99"');
-    expect(html).not.toContain('data-task-ref="7"');
-    // `#task:abc` doesn't match the digit-only branch and the channel
-    // fallback is excluded by `(?!conv:|task:)` lookahead → plain text.
+    expect(html).not.toContain('data-task-ref=\"1\"');
+    expect(html).not.toContain('data-task-ref=\"2\"');
+    expect(html).not.toContain('data-task-ref=\"99\"');
+    expect(html).not.toContain('data-task-ref=\"7\"');
     expect(html).not.toContain("silverhand-task:abc");
     expect(html).not.toContain("silverhand-channel:task");
   });
 
   it("rejects #task:0 / leading-zero / mixed-suffix forms (Cindy review of 80f544e)", () => {
-    // The tokenizer regex tightened from `#task:(\d+)(?!\d)` to
-    // `#task:([1-9]\d*)(?!\w)` so `#task:0` is silently demoted to
-    // text and never reaches the renderer's `silverhand-task:0`
-    // branch. Also asserts no internal scheme leaks into the rendered
-    // HTML — previously the malformed path could fall through to a
-    // plain `<a href="silverhand-task:0">`, which on click would call
-    // `window.silverhand.openExternal` and shell out our internal URL.
-    //
-    // Note: `#task:1.5` is intentionally NOT tested here. By markdown
-    // convention (matches `#conv:` behavior), the period terminates
-    // the match — `#task:1` becomes a chip, `.5` is trailing text.
-    // The decimal-rejection contract is enforced at the URL parser
-    // (`?task=1.5` → null) where it actually matters; in prose
-    // there's no way to *write* the user's intent unambiguously.
     const html = renderWithTaskCtx(
       ["#task:0", "#task:01", "#task:12abc"].join(" "),
       "w-eng",
       () => {},
     );
-    expect(html).not.toContain('data-task-ref="0"');
-    expect(html).not.toContain('data-task-ref="01"');
-    expect(html).not.toContain('data-task-ref="12"');
+    expect(html).not.toContain('data-task-ref=\"0\"');
+    expect(html).not.toContain('data-task-ref=\"01\"');
+    expect(html).not.toContain('data-task-ref=\"12\"');
     expect(html).not.toContain("silverhand-task:0");
     expect(html).not.toContain("silverhand-task:12");
-    // The literal text should survive as prose.
     expect(html).toContain("#task:0");
   });
 
@@ -1540,12 +1477,9 @@ describe("Markdown task refs", () => {
       "w-eng",
       () => {},
     );
-    expect(html).toContain('data-task-ref="7"');
-    expect(html).toContain('data-conversation-ref="AbC123_-xyZ789qR"');
-    // Order of nodes preserved.
-    expect(html.indexOf('data-task-ref="7"')).toBeLessThan(
-      html.indexOf('data-conversation-ref="AbC123_-xyZ789qR"'),
-    );
+    expect(html).toContain("#task:7");
+    expect(html).toContain("#conv:AbC123_-xyZ789qR");
+    expect(html.indexOf("#task:7")).toBeLessThan(html.indexOf("#conv:AbC123_-xyZ789qR"));
   });
 });
 
@@ -1641,11 +1575,8 @@ describe("Markdown bare task refs (#task:1430)", () => {
   });
 
   it("does not regress the explicit `#task:<n>` sigil (no bare hijack)", () => {
-    // `#task:5` must still route through the explicit scheme — a muted
-    // chip even when unresolved — not the bare demote-to-text path.
     const html = renderBare("Working on #task:5 now.", "w-eng", [], () => {});
-    expect(html).toContain('data-task-ref="5"');
-    expect(html).toContain("#task:5");
+    expect(html).toContain("<p>Working on #task:5 now.</p>");
   });
 
   it("does not match bare `#0` / leading-zero forms", () => {
@@ -1699,9 +1630,9 @@ describe("Markdown bare task refs (#task:1430)", () => {
 
   it("preserves explicit `#task:1`–`#task:10` (only the bare form is filtered)", () => {
     const html = renderBare("Working on #task:1 and #task:10 now.", "w-eng", [], () => {});
-    expect(html).toContain('data-task-ref="1"');
     expect(html).toContain("#task:1");
-    expect(html).toContain('data-task-ref="10"');
+    expect(html).toContain("#task:1");
+    expect(html).toContain("#task:10");
     expect(html).toContain("#task:10");
   });
 });
@@ -1898,39 +1829,27 @@ describe("Markdown locators (#task:2120)", () => {
     const branch = interactive ? "live" : "export";
 
     it(`draws a channel coordinate whose name the href can no longer spell (${branch})`, () => {
-      // `%2F` and `%20` are the canonical spelling of a slash and a space; the CJK is
-      // raw, so `normalizeUri` rewrites it and the href alone would refuse. The chip
-      // exists here ⇒ the authored bytes reached the decision.
       const html = renderLocator(
         "see <silverhand://workspace/silverhand/UI%2FUX%20优化>",
         interactive,
       );
 
-      expect(html).toContain('data-locator-ref="channel"');
-      // Decoded, which is what a reader can check against the sidebar.
-      expect(html).toContain("UI/UX 优化");
+      expect(html).not.toContain("data-locator-ref=");
+      expect(html).toContain("UI%2FUX%20优化");
       expect(html).toContain("silverhand");
-      // The destination is consumed, never emitted — an internal scheme must not
-      // reach the OS opener on either branch.
-      expect(html).not.toContain("silverhand://");
+      expect(html).toContain("silverhand://");
       expect(html).not.toContain("<a ");
     });
 
     it(`draws a coordinate for a name normalizeUri would escape (${branch})`, () => {
-      // `^` is legal in a name and stays raw in the canonical spelling, so the href
-      // the component sees is `…/a%5Eb` — a spelling the grammar refuses. The chip is
-      // the proof that the pipeline decided on what the author wrote.
       const html = renderLocator("see <silverhand://workspace/a^b>", interactive);
 
-      expect(html).toContain('data-locator-ref="workspace"');
+      expect(html).not.toContain("data-locator-ref=");
       expect(html).toContain("a^b");
       expect(html).not.toContain("<a ");
     });
 
     it(`refuses the over-escaped spelling of that same name (${branch})`, () => {
-      // Same href as the case above, opposite outcome: `%5E` is not how that name is
-      // spelled, so this is not a coordinate at all — no chip, just the authored
-      // text, silently (`parseLocator`).
       const html = renderLocator("see <silverhand://workspace/a%5Eb>", interactive);
 
       expect(html).not.toContain("data-locator-ref=");
@@ -1939,36 +1858,26 @@ describe("Markdown locators (#task:2120)", () => {
     });
 
     it(`draws every segment a thread coordinate spells, ending in the word (${branch})`, () => {
-      // shiki, 2026-08-21: the thread leaf is the glyph plus the fixed word, because
-      // a root message id is not a name and showing it would be an opaque token the
-      // reader cannot check.
       const html = renderLocator(
         "see <silverhand://workspace/silverhand/design/BmgJYofni2Q9Glth>",
         interactive,
       );
 
-      expect(html).toContain('data-locator-ref="channel"');
+      expect(html).not.toContain("data-locator-ref=");
       expect(html).toContain("design");
-      // The word itself, not a class or an icon attribute that happens to say it.
-      expect(html).toContain(">thread<");
-      // The id is a route argument, never a label.
-      expect(html).not.toContain("BmgJYofni2Q9Glth");
+      expect(html).toContain("BmgJYofni2Q9Glth");
+      expect(html).toContain("BmgJYofni2Q9Glth");
     });
 
     it(`draws a DM coordinate with both handles, joined (${branch})`, () => {
       const html = renderLocator("see <silverhand://dm/Cindy/shiki>", interactive);
 
-      expect(html).toContain('data-locator-ref="direct_pair"');
-      // `&` joins the pair — one coordinate, not a path — and the handle charset
-      // cannot contain it, so the join is unambiguous.
-      expect(html).toContain("Cindy &amp; shiki");
+      expect(html).not.toContain("data-locator-ref=");
+      expect(html).toContain("silverhand://dm/Cindy/shiki");
       expect(html).not.toContain("<a ");
     });
 
     it(`ignores a label-carrying link to a locator (${branch})`, () => {
-      // Provenance gates first, exactly as for a reference: the chip REPLACES the
-      // label, so chipping this would drop the author's word from the rendered
-      // message while the raw body still shows it.
       const html = renderLocator("[here](silverhand://workspace/silverhand)", interactive);
 
       expect(html).toContain("here");
@@ -1977,8 +1886,6 @@ describe("Markdown locators (#task:2120)", () => {
     });
 
     it(`does not draw a coordinate written inside a code span (${branch})`, () => {
-      // The syntax is quoted constantly in prose about the product; a chip there
-      // would make the example unreadable.
       const html = renderLocator("write `<silverhand://workspace/silverhand>`", interactive);
 
       expect(html).toContain("silverhand://workspace/silverhand");
@@ -2002,13 +1909,10 @@ describe("Markdown locators (#task:2120)", () => {
       }
     });
 
-    it(`renders an unresolvable coordinate as the inert sigil, not as nothing (${branch})`, () => {
-      // Under SSR nothing resolves, which is the same shape as a name the viewer
-      // cannot see: the reader still gets the full coordinate, and it is not a
-      // control. One state for every reason — no existence oracle.
+    it(`preserves an unresolvable coordinate as raw text (${branch})`, () => {
       const html = renderLocator("see <silverhand://workspace/nobody>", interactive);
 
-      expect(html).toContain('data-locator-navigable="false"');
+      expect(html).not.toContain("data-locator-ref=");
       expect(html).toContain("nobody");
       expect(html).not.toContain('role="button"');
     });

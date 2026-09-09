@@ -79,7 +79,7 @@ describe("task numbers stay literal outside chat", () => {
   it("raw task mode preserves other reference kinds", () => {
     const text = "#task:123/#general @Alice";
     const html = render("raw", text);
-    expect(html).toContain("data-channel-ref");
+    expect(html.replace(/<[^>]*>/g, "")).toBe(text);
     expect(html).not.toContain("data-task-ref");
     expect(useTaskByNumber).not.toHaveBeenCalled();
   });

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { AtSign, Hash } from "lucide-react";
 import type { Locator } from "@silverhand/shared";
 import { ThreadIcon } from "@/components/icons/conversation-icons";
@@ -23,7 +24,13 @@ import { buildLocatorTargetUrl, useNav } from "@/router";
 import { faceLabel } from "./ConversationRef";
 import { INLINE_REF_HOVER_CLASS } from "./inline-ref-chip";
 
-export function LocatorRef({ locator }: { locator: Locator }): JSX.Element {
+export function LocatorRef({
+  locator,
+  children,
+}: {
+  locator: Locator;
+  children: ReactNode;
+}): JSX.Element {
   const nav = useNav();
   const workspaces = useWorkspaces().data ?? [];
   const workspaceId = resolveLocatorWorkspaceId(locator, workspaces);
@@ -60,30 +67,25 @@ export function LocatorRef({ locator }: { locator: Locator }): JSX.Element {
   return (
     <LocatorChip
       locator={locator}
+      raw={children}
       target={target}
       onOpen={(t) => nav.go(buildLocatorTargetUrl(t))}
     />
   );
 }
 
-/**
- * Export / static-render locator chip: always the inert sigil.
- *
- * The static path renders outside the query layer, so there is nothing to resolve
- * against — and an export is read where the app is not, where no coordinate is
- * navigable. Drawing the inert form is therefore honest rather than degraded: the
- * reader still gets the full coordinate, which is the whole point of a locator.
- */
-export function LocatorRefStaticChip({ locator }: { locator: Locator }): JSX.Element {
-  return <LocatorChip locator={locator} target={null} onOpen={undefined} />;
+export function LocatorRefStaticChip({ children }: { children: ReactNode }): JSX.Element {
+  return <>{children}</>;
 }
 
 function LocatorChip({
   locator,
+  raw,
   target,
   onOpen,
 }: {
   locator: Locator;
+  raw: ReactNode;
   target: LocatorTarget | null;
   onOpen: ((target: LocatorTarget) => void) | undefined;
 }): JSX.Element {
@@ -94,16 +96,7 @@ function LocatorChip({
     "inline-flex max-w-[280px] items-center gap-1 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 align-baseline font-medium";
 
   if (!target || !onOpen) {
-    return (
-      <span
-        className={`${shared} bg-bg-elevated text-text-muted`}
-        title={tooltip}
-        data-locator-ref={locator.kind}
-        data-locator-navigable="false"
-      >
-        {body}
-      </span>
-    );
+    return <>{raw}</>;
   }
   const dim = target.kind === "channel" && target.closed;
   return (

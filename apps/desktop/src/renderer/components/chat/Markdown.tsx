@@ -306,7 +306,7 @@ function MarkdownInner({
                 if (staticRef.arm === "locator") {
                   // A locator in an export is a coordinate, never a control —
                   // see `LocatorRefStaticChip`.
-                  return <LocatorRefStaticChip locator={staticRef.locator} />;
+                  return <LocatorRefStaticChip>{children}</LocatorRefStaticChip>;
                 }
                 if (staticRef.arm !== "other") {
                   // Either malformed, or written in a spelling display refuses.
@@ -413,7 +413,7 @@ function MarkdownInner({
               // A container coordinate (#task:2120). It resolves itself — no map
               // is threaded in, because a locator can name ANY workspace and the
               // render context's maps are scoped to this message's one.
-              return <LocatorRef locator={liveRef.locator} />;
+              return <LocatorRef locator={liveRef.locator}>{children}</LocatorRef>;
             }
             if (liveRef.arm !== "other") {
               // Our scheme, but either a malformed destination or a spelling
@@ -600,14 +600,7 @@ function StaticChannelRef({
   channel: ChannelReference | null | undefined;
 }): JSX.Element {
   if (!channel) {
-    return (
-      <span
-        className="font-mono text-text-muted"
-        data-channel-ref-state={channel === null ? "ambiguous" : "unresolved"}
-      >
-        #{name}
-      </span>
-    );
+    return <>{`#${name}`}</>;
   }
   return (
     <span
@@ -632,6 +625,10 @@ function StaticConversationRef({
   id: string;
   conversation: WorkspaceChannelReference | undefined;
 }): JSX.Element {
+  if (!conversation) {
+    return <>{`#conv:${id}`}</>;
+  }
+
   const label = conversation
     ? conversationDisplayName(conversation)
     : `#conv:${shortConversationId(id)}`;

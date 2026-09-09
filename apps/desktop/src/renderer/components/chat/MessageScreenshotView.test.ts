@@ -236,7 +236,7 @@ describe("MessageScreenshotView — non-interactive contract", () => {
   it("#conv: refs render as static chips (no ConversationRef hook)", () => {
     const html = render([msg("m1", 1, "see #conv:abcdefghijklmnop for details")]);
     expect(html).toContain("#conv:abcdefghijklmnop");
-    expect(html).toContain('data-conversation-ref="abcdefghijklmnop"');
+    expect(html).not.toContain('data-conversation-ref="abcdefghijklmnop"');
     expect(html).not.toMatch(/<button/);
   });
 
@@ -261,8 +261,8 @@ describe("MessageScreenshotView — non-interactive contract", () => {
 
   it("#task: refs render as static task chips (no live TaskRef hook)", () => {
     const html = render([msg("m1", 1, "fixed in #task:42")]);
-    expect(html).toContain('data-task-ref="42"');
-    expect(html).toContain('data-task-ref-state="static"');
+    expect(html).not.toContain('data-task-ref="42"');
+    expect(html).not.toContain('data-task-ref-state="static"');
     expect(html).toContain("#task:42");
     expect(html).not.toMatch(/<button/);
     expect(html).not.toMatch(/role="button"/);

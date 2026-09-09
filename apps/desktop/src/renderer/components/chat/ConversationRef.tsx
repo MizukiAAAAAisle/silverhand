@@ -4,7 +4,6 @@ import { INLINE_REF_HOVER_CLASS } from "./inline-ref-chip";
 import {
   useConversationIdentity,
   type ConversationIdentity,
-  type ConversationIdentityStatus,
 } from "@/features/conversations/conversation-identity";
 import { presentCounterpart } from "@/features/direct-pairs/counterpart-presentation";
 
@@ -63,32 +62,7 @@ interface ConversationRefProps {
  *  id (#task:2073). Both chips consume these two functions. */
 export type ConversationRefFace = "channel" | "direct_line";
 
-/**
- * Inline rendering of a `#conv:<conversation_id>` reference.
- *
- * Unlike `#name`, this is id-addressed and intentionally clickable even
- * when metadata is unavailable: the side pane can surface the unresolved
- * placeholder instead of silently dropping a reference.
- *
- * Resolution: `useConversationIdentity(id)` is the authoritative source. It
- * composes the two identity faces — `GET /api/conversations/:id/ref` for a
- * workspace conversation in ANY workspace, and the viewer's own complete
- * direct-pair list for a private line, whose 404 from the ref face is the
- * correct answer rather than a gap (#task:2038). The optional `conversation`
- * prop is a synchronous fast path that avoids a loading flash when the id is
- * already in the current-workspace channels map (PR-2 review by @Cindy on
- * commit 3 — the prop alone fails for any cross-workspace `#conv:<id>` since
- * the map is workspace-scoped).
- *
- * Cost of putting this on every chip: the pair list is ONE viewer-global entry
- * whose observers never trigger a re-read (`DIRECT_PAIRS_QUERY_POLICY`), so a
- * stream of chips adds no requests to it; the ref face is keyed per id, retried
- * at most twice, and not requested at all for an id the pair list already names.
- *
- * Hover ≥500ms surfaces a popover with the conversation's full
- * metadata. Loading shows a skeleton; a decided non-resolution renders an
- * explicit "unavailable" body so we never sit on a forever-skeleton popover.
- */
+/** Unresolved references inherit the surrounding prose without navigation. */
 export function ConversationRef({ id, conversation, onOpen }: ConversationRefProps): JSX.Element {
   const resolution = useConversationIdentity(id);
   // Prefer the prop (current-workspace fast path) over the resolution; both
@@ -100,33 +74,17 @@ export function ConversationRef({ id, conversation, onOpen }: ConversationRefPro
     : resolution.status === "resolved"
       ? presentIdentity(resolution.identity)
       : null;
-  // Three-state for popover purposes:
-  //   - 'resolved'    → render real metadata
-  //   - 'unavailable' → a decided non-resolution (403 / 404 / a failed private-
-  //                     line read), render explicit body (NOT skeleton — a
-  //                     forever-skeleton popover is what Cindy review of
-  //                     `45fca42` flagged on cross-workspace ids)
-  //   - 'loading'     → skeleton via HoverPopover.isContentReady=false
-  const popoverStatus: "resolved" | "unavailable" | "loading" = resolved
-    ? "resolved"
-    : resolution.status === "loading"
-      ? "loading"
-      : "unavailable";
+  if (!resolved) {
+    return <>{`#conv:${id}`}</>;
+  }
 
-  const label = resolved ? resolved.title : `#conv:${shortConversationId(id)}`;
-  const tooltip = resolved
-    ? `${faceLabel(resolved.face)} · ${resolved.title}`
-    : `Open conversation #conv:${id}`;
-  const icon = conversationIcon(resolved?.face);
-  // Unresolved fallback (`#conv:<short>`) is pure ASCII → mono so the id
-  // segment reads as the structured atom it is. Resolved labels surface
-  // the human-readable title which may contain CJK, so they stay sans —
-  // mono CJK fallback (PingFang etc.) looks uneven next to ASCII chars.
-  // See forza6 font split spec (msg vWYNLYq_Wtw6P4rj).
+  const label = resolved.title;
+  const tooltip = `${faceLabel(resolved.face)} · ${resolved.title}`;
+  const icon = conversationIcon(resolved.face);
   const chipBody = (
     <>
       {icon}
-      <span className={resolved ? "truncate" : "truncate font-mono"}>{label}</span>
+      <span className="truncate">{label}</span>
     </>
   );
 
@@ -177,18 +135,11 @@ export function ConversationRef({ id, conversation, onOpen }: ConversationRefPro
     </span>
   );
 
-  const popoverContent =
-    popoverStatus === "resolved" && resolved ? (
-      <ConversationPopoverBody id={id} face={resolved.face} title={resolved.title} />
-    ) : popoverStatus === "unavailable" ? (
-      <UnresolvedConversationPopoverBody id={id} reason={resolution.status} />
-    ) : null;
-
   return (
     <HoverPopover
       trigger={onOpen ? interactiveChip : inertChip}
-      content={popoverContent}
-      isContentReady={popoverStatus !== "loading"}
+      content={<ConversationPopoverBody id={id} face={resolved.face} title={resolved.title} />}
+      isContentReady
     />
   );
 }
@@ -215,46 +166,6 @@ function ConversationPopoverBody({
         </span>
       </div>
       <p className="line-clamp-2 wrap-break-word text-xs font-medium text-text-primary">{title}</p>
-      <p className="truncate font-mono text-(length:--text-badge) text-text-muted" aria-label={id}>
-        {id}
-      </p>
-    </div>
-  );
-}
-
-/**
- * Popover for refs no face could resolve — clicking the chip still opens the
- * side pane (which renders its own placeholder), so the popover only documents
- * the id and the reason we couldn't resolve. Visible state is "decided" —
- * `isContentReady=true` — so the user gets a clear "unavailable" message instead
- * of a forever-skeleton. Cindy review of commit 3.
- *
- * The `unauthorized` line names no LEVEL. A 403 from `/ref` is not evidence of
- * a missing workspace, and once the gate is public-aware (#task:1692) most of
- * what remains is same-workspace: a private channel, an archived public one, a
- * DM the viewer isn't in. Telling a workspace member they lack workspace access
- * is a false statement about the one thing they can check.
- *
- * `not_found` may claim deletion because it rests on the direct-pair list's
- * completeness contract; `unresolved` (that read failed) may not — see
- * `resolveConversationIdentity`.
- */
-function UnresolvedConversationPopoverBody({
-  id,
-  reason,
-}: {
-  id: string;
-  reason: ConversationIdentityStatus;
-}): JSX.Element {
-  const message =
-    reason === "unauthorized"
-      ? "You don't have access to this conversation."
-      : reason === "not_found"
-        ? "Conversation not found — it may have been deleted."
-        : "Couldn’t resolve this conversation.";
-  return (
-    <div className="space-y-2">
-      <p className="text-xs text-text-muted">{message}</p>
       <p className="truncate font-mono text-(length:--text-badge) text-text-muted" aria-label={id}>
         {id}
       </p>

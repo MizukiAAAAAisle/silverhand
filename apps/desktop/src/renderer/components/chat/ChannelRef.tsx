@@ -44,8 +44,8 @@ interface ChannelRefProps {
  * Visible states:
  *   - resolved + handler → clickable accent pill, click navigates
  *   - resolved, no handler → tooltip-only accent pill
- *   - ambiguous (null sentinel) → muted `#name` text, no navigation
- *   - unresolved (undefined) → muted `#name` text, no navigation
+ *   - ambiguous (null sentinel) → raw `#name` text, no navigation
+ *   - unresolved (undefined) → raw `#name` text, no navigation
  *
  * Ambiguity is intentional: when two channels share a title we can't
  * pick the right destination silently, so we degrade to inert text
@@ -53,22 +53,8 @@ interface ChannelRefProps {
  * responsibility (rename one, or use `#conv:<id>` to point exactly).
  */
 export function ChannelRef({ name, channel, onOpen }: ChannelRefProps): JSX.Element {
-  // Unresolved / ambiguous → muted text. `data-channel-ref-state` is
-  // exposed for tests so they can assert which branch fired. The text
-  // here is the raw `name` captured by the markdown tokenizer, which is
-  // restricted to ASCII (`[a-zA-Z0-9_-]+`) → font-mono is safe and
-  // matches the forza6 sigil-mono spec (msg vWYNLYq_Wtw6P4rj). The
-  // resolved branches below render `channel.title` which is user-input
-  // and may contain CJK, so they stay sans.
   if (!channel) {
-    return (
-      <span
-        className="font-mono text-text-muted"
-        data-channel-ref-state={channel === null ? "ambiguous" : "unresolved"}
-      >
-        #{name}
-      </span>
-    );
+    return <>{`#${name}`}</>;
   }
   const tooltip = `#${channel.title}`;
   const dim = channel.closed_at != null;
