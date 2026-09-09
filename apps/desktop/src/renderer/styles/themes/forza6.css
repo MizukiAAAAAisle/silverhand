@@ -49,7 +49,7 @@
   /* Surface, text and border foundations */
   --bg-active: #c9d1c9;
   --bg-base: #ffffff;
-  --bg-elevated: #e5e8e4;
+  --bg-elevated: #f2f2f2;
   --bg-hover: #dae0da;
   --bg-primary: #eceeeb;
   --bg-selected: var(--brand-primary);
