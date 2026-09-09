@@ -5,7 +5,7 @@ import {
   CursorIcon,
   GeminiIcon,
   OPENCODE_LOGO_DATA_URI,
-  PI_LOGO_DATA_URI,
+  PiIcon,
   QODER_LOGO_DATA_URI,
 } from "@/icons/agents";
 import { cn } from "@/lib/cn";
@@ -46,6 +46,7 @@ const ICONS: Partial<Record<RuntimeKind, (p: { style?: React.CSSProperties }) =>
   codex: CodexIcon,
   cursor: CursorIcon,
   gemini: GeminiIcon,
+  pi: PiIcon,
 };
 
 // Full-color brand logos that carry their own background + corner
@@ -53,7 +54,6 @@ const ICONS: Partial<Record<RuntimeKind, (p: { style?: React.CSSProperties }) =>
 const BRAND_LOGOS: Partial<Record<RuntimeKind, string>> = {
   opencode: OPENCODE_LOGO_DATA_URI,
   qoder: QODER_LOGO_DATA_URI,
-  pi: PI_LOGO_DATA_URI,
 };
 
 // Tints picked to match each brand's primary color when one exists.
@@ -61,6 +61,7 @@ const BRAND_LOGOS: Partial<Record<RuntimeKind, string>> = {
 // path carries its own `#d97757` fill so `fg` is a no-op there.
 // Only runtimes rendered as tinted vector marks need an entry.
 const TINTS: Partial<Record<RuntimeKind, { bg: string; fg: string }>> = {
+  pi: { bg: "bg-[#09090b]", fg: "text-white" },
   claude: { bg: "bg-[#fdf3ec]", fg: "text-[#d97757]" },
   codex: { bg: "bg-[#1f1f1f]", fg: "text-white" },
   cursor: { bg: "bg-[#0f0f0f]", fg: "text-white" },
@@ -120,7 +121,8 @@ export function AgentAvatar({
 
   const Icon = ICONS[runtime];
   const tint = TINTS[runtime];
-  const inner = Math.round(size * 0.6);
+  // Pi’s official viewBox already includes the mark’s surrounding space.
+  const inner = runtime === "pi" ? size : Math.round(size * 0.6);
   return (
     <span
       className={cn(
