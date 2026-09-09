@@ -3,6 +3,7 @@ import { Archive, Bookmark, Plus, Search } from "lucide-react";
 import type { AgentDto } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
+import { SEARCH_FIELD_FRAME } from "@/components/common/control-ink-border";
 import {
   useAgentAvatarObjectUrls,
   type AgentAvatarSource,
@@ -177,10 +178,19 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
       sidebar={
         <nav className="scrollbar-hide flex-1 overflow-y-auto">
           <div className="mb-3 space-y-1">
-            <SidebarNavigationButton onClick={props.onSelectSearch} active={props.searchActive}>
-              <Search className="size-4" />
+            <button
+              type="button"
+              onClick={props.onSelectSearch}
+              aria-current={props.searchActive ? "page" : undefined}
+              className={cn(
+                SEARCH_FIELD_FRAME,
+                "mb-2 h-8 w-full text-left text-sm text-text-muted focus-visible:outline-none",
+                props.searchActive && "border-border-focus text-text-primary",
+              )}
+            >
+              <Search aria-hidden className="size-4 shrink-0" />
               <span>Search</span>
-            </SidebarNavigationButton>
+            </button>
 
             <SidebarNavigationButton onClick={props.onSelectSaved} active={props.savedActive}>
               <Bookmark className={cn("size-4", props.savedActive ? "fill-current" : "")} />
