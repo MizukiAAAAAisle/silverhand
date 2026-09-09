@@ -44,7 +44,9 @@ describe("related humans invalidation", () => {
       queryKey: relatedUsersKey("me"),
       queryFn: () => {
         if (++calls === 1) {
-          return new Promise<{ users: string[] }>((resolve) => { finishOld = resolve; });
+          return new Promise<{ users: string[] }>((resolve) => {
+            finishOld = resolve;
+          });
         }
         return Promise.resolve({ users: [] });
       },

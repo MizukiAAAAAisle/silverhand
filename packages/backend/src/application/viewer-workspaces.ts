@@ -21,11 +21,7 @@ import type { BackendContext } from '../context.js';
 // the consumer guard whitelists each value here: `isViewerWorkspacesChangedPayload`
 // (`features/workspaces/hooks.ts`) drops any `change` it does not recognize, so a
 // value added here without a matching guard entry is a dead-letter edge.
-export type ViewerWorkspaceChange =
-  | 'added'
-  | 'role_changed'
-  | 'removed'
-  | 'metadata_changed';
+export type ViewerWorkspaceChange = 'added' | 'role_changed' | 'removed' | 'metadata_changed';
 
 export function publishViewerWorkspacesChanged(
   ctx: BackendContext,

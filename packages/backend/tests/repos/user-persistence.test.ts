@@ -33,10 +33,7 @@ function openVirginDb(path = ':memory:', opts: { busyTimeoutMs?: number } = {}):
 }
 
 function countRows(db: Db, table: string): number {
-  return (
-    db.prepare<[], { c: number }>(`SELECT COUNT(*) AS c FROM ${table}`).get()?.c
-    ?? 0
-  );
+  return db.prepare<[], { c: number }>(`SELECT COUNT(*) AS c FROM ${table}`).get()?.c ?? 0;
 }
 
 describe('SqliteUserPersistence registration UnitOfWork isolation', () => {
@@ -73,7 +70,7 @@ describe('SqliteUserPersistence registration UnitOfWork isolation', () => {
     );
 
     let rivalError: unknown;
-    const observed = persistence.registration.atomically(tx => {
+    const observed = persistence.registration.atomically((tx) => {
       const before = tx.users.anyExists();
       try {
         rivalRegister.run();
@@ -90,9 +87,9 @@ describe('SqliteUserPersistence registration UnitOfWork isolation', () => {
     // which passed the gate.
     expect(rivalError).toMatchObject({ code: 'SQLITE_BUSY' });
     expect(observed).toEqual({ before: false, after: true });
-    expect(
-      writer.prepare<[], { id: string }>(`SELECT id FROM users`).all(),
-    ).toEqual([{ id: 'first' }]);
+    expect(writer.prepare<[], { id: string }>(`SELECT id FROM users`).all()).toEqual([
+      { id: 'first' },
+    ]);
   });
 
   it('the write lock is taken at BEGIN — contention surfaces before the callback runs a step', () => {
@@ -126,9 +123,7 @@ describe('SqliteUserPersistence registration UnitOfWork isolation', () => {
     // Nested `.immediate()` silently degrades to a SAVEPOINT and takes no write
     // lock at all, which would leave the gate resting on nothing.
     db.transaction(() => {
-      expect(() => persistence.registration.atomically(() => undefined)).toThrow(
-        /root-only/,
-      );
+      expect(() => persistence.registration.atomically(() => undefined)).toThrow(/root-only/);
     })();
   });
 });
@@ -149,12 +144,14 @@ describe('SqliteUserPersistence registration scope', () => {
     const workspaces = new WorkspaceRepo(db);
     const conversations = new ConversationRepo(db);
     const workspaceIds = ['alpha', 'beta'].map(
-      name => workspaces.insert({ name: fixedWorkspaceName(name), description: null }).id,
+      (name) => workspaces.insert({ name: fixedWorkspaceName(name), description: null }).id,
     );
     const conversationIds = workspaceIds.map(
-      workspaceId =>
-        conversations.insertChannel({ workspaceId, title: fixedConversationTitle(`${workspaceId}-room`) })
-          .id,
+      (workspaceId) =>
+        conversations.insertChannel({
+          workspaceId,
+          title: fixedConversationTitle(`${workspaceId}-room`),
+        }).id,
     );
     return { db, workspaceIds, conversationIds };
   }
@@ -163,7 +160,7 @@ describe('SqliteUserPersistence registration scope', () => {
     const { db, workspaceIds, conversationIds } = seededVirginDb();
     const persistence = createSqliteUserPersistence(db);
 
-    const created = persistence.registration.atomically(tx => {
+    const created = persistence.registration.atomically((tx) => {
       const row = tx.users.create({
         id: 'human',
         name: 'human',
@@ -193,7 +190,7 @@ describe('SqliteUserPersistence registration scope', () => {
             WHERE user_id = 'human' ORDER BY conversation_id`,
         )
         .all()
-        .map(r => r.conversation_id),
+        .map((r) => r.conversation_id),
     ).toEqual([...conversationIds].sort());
   });
 
@@ -205,14 +202,10 @@ describe('SqliteUserPersistence registration scope', () => {
     // one the first human is locked out of FOREVER (un-archiving does not add
     // membership). This is the falsifier for reaching for a read model —
     // EVERY conversation projection filters `archived_at IS NULL`.
-    db.prepare(`UPDATE workspaces SET archived_at = 1 WHERE id = ?`).run(
-      workspaceIds[0],
-    );
-    db.prepare(`UPDATE conversations SET archived_at = 1 WHERE id = ?`).run(
-      conversationIds[0],
-    );
+    db.prepare(`UPDATE workspaces SET archived_at = 1 WHERE id = ?`).run(workspaceIds[0]);
+    db.prepare(`UPDATE conversations SET archived_at = 1 WHERE id = ?`).run(conversationIds[0]);
 
-    const seen = persistence.registration.atomically(tx => ({
+    const seen = persistence.registration.atomically((tx) => ({
       workspaces: tx.workspaces.listIds().sort(),
       conversations: tx.conversations.listIds().sort(),
     }));
@@ -228,15 +221,12 @@ describe('SqliteUserPersistence registration scope', () => {
     const persistence = createSqliteUserPersistence(db);
     const [owned, unowned] = workspaceIds;
 
-    persistence.registration.atomically(tx => {
+    persistence.registration.atomically((tx) => {
       tx.users.create({ id: 'first', name: 'first', displayName: 'First' });
       tx.workspaces.addOwnerMember(owned!, 'first');
-      db.prepare(`UPDATE workspaces SET owner_user_id = ? WHERE id = ?`).run(
-        'first',
-        owned,
-      );
+      db.prepare(`UPDATE workspaces SET owner_user_id = ? WHERE id = ?`).run('first', owned);
     });
-    persistence.registration.atomically(tx => {
+    persistence.registration.atomically((tx) => {
       tx.users.create({ id: 'second', name: 'second', displayName: 'Second' });
       tx.workspaces.claimUnowned('second');
     });
@@ -251,7 +241,7 @@ describe('SqliteUserPersistence registration scope', () => {
     const persistence = createSqliteUserPersistence(db);
 
     expect(() =>
-      persistence.registration.atomically(tx => {
+      persistence.registration.atomically((tx) => {
         tx.users.create({ id: 'human', name: 'human', displayName: 'Human' });
         tx.workspaces.addOwnerMember(workspaceIds[0]!, 'human');
         tx.workspaces.claimUnowned('human');
@@ -279,15 +269,11 @@ describe('SqliteUserPersistence registration scope', () => {
     cleanups.push(() => db.close());
     const persistence = createSqliteUserPersistence(db);
 
-    expect(persistence.registration.atomically(tx => tx.users.anyExists())).toBe(
-      false,
-    );
-    persistence.registration.atomically(tx =>
+    expect(persistence.registration.atomically((tx) => tx.users.anyExists())).toBe(false);
+    persistence.registration.atomically((tx) =>
       tx.users.create({ id: 'human', name: 'human', displayName: 'Human' }),
     );
-    expect(persistence.registration.atomically(tx => tx.users.anyExists())).toBe(
-      true,
-    );
+    expect(persistence.registration.atomically((tx) => tx.users.anyExists())).toBe(true);
   });
 });
 
@@ -295,16 +281,15 @@ describe('SqliteUserPersistence read + profile ports', () => {
   it('profile writes return the updated row and null for a user that does not exist', () => {
     const db = openVirginDb();
     const persistence = createSqliteUserPersistence(db);
-    persistence.registration.atomically(tx =>
+    persistence.registration.atomically((tx) =>
       tx.users.create({ id: 'human', name: 'human', displayName: 'Human' }),
     );
 
     expect(persistence.read.get('human')?.display_name).toBe('Human');
-    expect(persistence.read.list().map(r => r.id)).toEqual(['human']);
+    expect(persistence.read.list().map((r) => r.id)).toEqual(['human']);
 
     expect(
-      persistence.profile.updateProfile('human', { display_name: 'Renamed' })
-        ?.display_name,
+      persistence.profile.updateProfile('human', { display_name: 'Renamed' })?.display_name,
     ).toBe('Renamed');
     const withAvatar = persistence.profile.setAvatar('human', {
       storageKey: 'users/human/avatars/abc',
@@ -322,8 +307,7 @@ describe('SqliteUserPersistence read + profile ports', () => {
     // A missing user is `null`, never a thrown driver error and never an
     // invented row — the service maps this to 404.
     expect(persistence.read.get('ghost')).toBeNull();
-    expect(persistence.profile.updateProfile('ghost', { display_name: 'x' }))
-      .toBeNull();
+    expect(persistence.profile.updateProfile('ghost', { display_name: 'x' })).toBeNull();
     expect(
       persistence.profile.setAvatar('ghost', {
         storageKey: 'k',
@@ -373,24 +357,26 @@ describe('SqliteUserPersistence read + profile ports', () => {
     expect(keysOf(persistence.read.get('human')!)).toEqual(PROJECTION_KEYS);
     expect(persistence.read.list().map(keysOf)).toEqual([PROJECTION_KEYS]);
     expect(
-      keysOf(persistence.profile.updateProfile('human', {
-        display_name: 'Renamed',
-      })!),
+      keysOf(
+        persistence.profile.updateProfile('human', {
+          display_name: 'Renamed',
+        })!,
+      ),
     ).toEqual(PROJECTION_KEYS);
     expect(
-      keysOf(persistence.profile.setAvatar('human', {
-        storageKey: 'users/human/avatars/abc',
-        contentType: 'image/png',
-      })!),
+      keysOf(
+        persistence.profile.setAvatar('human', {
+          storageKey: 'users/human/avatars/abc',
+          contentType: 'image/png',
+        })!,
+      ),
     ).toEqual(PROJECTION_KEYS);
-    expect(keysOf(persistence.profile.clearAvatar('human')!)).toEqual(
-      PROJECTION_KEYS,
-    );
+    expect(keysOf(persistence.profile.clearAvatar('human')!)).toEqual(PROJECTION_KEYS);
 
     // The in-transaction create is the sixth surface that hands a row out.
     const txDb = openVirginDb();
-    const created = createSqliteUserPersistence(txDb).registration.atomically(
-      tx => tx.users.create({ id: 'other', name: 'other', displayName: 'Other' }),
+    const created = createSqliteUserPersistence(txDb).registration.atomically((tx) =>
+      tx.users.create({ id: 'other', name: 'other', displayName: 'Other' }),
     );
     expect(keysOf(created)).toEqual(PROJECTION_KEYS);
     txDb.close();
@@ -411,13 +397,13 @@ describe('SqliteUserPersistence single-viewer gate: existence, not rows', () => 
     const db = openVirginDb();
     const { registration } = createSqliteUserPersistence(db);
 
-    expect(registration.atomically(tx => tx.users.anyExists())).toBe(false);
+    expect(registration.atomically((tx) => tx.users.anyExists())).toBe(false);
     new UserRepo(db).create({
       id: 'first001',
       name: 'first',
       displayName: 'First Human',
     });
-    expect(registration.atomically(tx => tx.users.anyExists())).toBe(true);
+    expect(registration.atomically((tx) => tx.users.anyExists())).toBe(true);
 
     db.close();
   });
@@ -431,12 +417,12 @@ describe('SqliteUserPersistence single-viewer gate: existence, not rows', () => 
     const { registration } = createSqliteUserPersistence(db);
 
     const spy = vi.spyOn(db, 'prepare');
-    const exists = registration.atomically(tx => tx.users.anyExists());
-    const statements = spy.mock.calls.map(call => String(call[0]));
+    const exists = registration.atomically((tx) => tx.users.anyExists());
+    const statements = spy.mock.calls.map((call) => String(call[0]));
     spy.mockRestore();
 
     expect(exists).toBe(true);
-    const overUsers = statements.filter(sql => /\busers\b/i.test(sql));
+    const overUsers = statements.filter((sql) => /\busers\b/i.test(sql));
     expect(overUsers).toHaveLength(1);
     const [gate] = overUsers as [string];
     // `LIMIT 1` is the "stops at the first row" half; the absence of a column
@@ -463,12 +449,12 @@ describe('related human directory', () => {
           ('a','owner',1),('a','peer',1),('b','peer',1),('other','owner',1),('other','foreign',1);
       `);
       const { read } = createSqliteUserPersistence(db);
-      expect(read.listRelated('owner').map(u => u.id)).toEqual(['owner','peer']);
+      expect(read.listRelated('owner').map((u) => u.id)).toEqual(['owner', 'peer']);
       expect(read.listRelated('peer')).toEqual([]);
       db.prepare("DELETE FROM workspace_users WHERE workspace_id='a' AND user_id='peer'").run();
-      expect(read.listRelated('owner').map(u => u.id)).toEqual(['owner','peer']);
+      expect(read.listRelated('owner').map((u) => u.id)).toEqual(['owner', 'peer']);
       db.prepare("DELETE FROM workspaces WHERE id='b'").run();
-      expect(read.listRelated('owner').map(u => u.id)).toEqual(['owner']);
+      expect(read.listRelated('owner').map((u) => u.id)).toEqual(['owner']);
       expect(read.list()).toHaveLength(3);
     } finally {
       db.close();

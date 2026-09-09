@@ -58,10 +58,7 @@ export interface UserReadPort {
  * this contract.
  */
 export interface UserDirectWritePort {
-  updateProfile(
-    id: string,
-    input: { display_name?: string },
-  ): UserProfileSnapshot | null;
+  updateProfile(id: string, input: { display_name?: string }): UserProfileSnapshot | null;
   setAvatar(
     id: string,
     avatar: { storageKey: string; contentType: string },
@@ -79,11 +76,7 @@ export interface RegistrationTxScope {
   users: {
     /** The V1 single-viewer gate: is ANY human already registered? */
     anyExists(): boolean;
-    create(input: {
-      id: string;
-      name: string;
-      displayName: string;
-    }): UserProfileSnapshot;
+    create(input: { id: string; name: string; displayName: string }): UserProfileSnapshot;
   };
   workspaces: {
     /** EVERY workspace row, with no kind enumeration: humans have no implicit

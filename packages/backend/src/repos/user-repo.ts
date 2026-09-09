@@ -36,24 +36,18 @@ export class UserRepo {
   constructor(private readonly db: Db) {}
 
   get(id: string): UserRow | null {
-    const row = this.db
-      .prepare<[string], UserRow>('SELECT * FROM users WHERE id = ?')
-      .get(id);
+    const row = this.db.prepare<[string], UserRow>('SELECT * FROM users WHERE id = ?').get(id);
     return row ?? null;
   }
 
   getByName(name: string): UserRow | null {
-    const row = this.db
-      .prepare<[string], UserRow>('SELECT * FROM users WHERE name = ?')
-      .get(name);
+    const row = this.db.prepare<[string], UserRow>('SELECT * FROM users WHERE name = ?').get(name);
     return row ?? null;
   }
 
   getByEmail(email: string): UserRow | null {
     const row = this.db
-      .prepare<[string], UserRow>(
-        'SELECT * FROM users WHERE email = ? COLLATE NOCASE',
-      )
+      .prepare<[string], UserRow>('SELECT * FROM users WHERE email = ? COLLATE NOCASE')
       .get(email);
     return row ?? null;
   }
@@ -63,19 +57,19 @@ export class UserRepo {
    * exposed for tests + future V2 admin views.
    */
   listRelated(viewerUserId: string): UserRow[] {
-    return this.db.prepare<[string], UserRow>(`
+    return this.db
+      .prepare<[string], UserRow>(`
       SELECT * FROM users WHERE id IN (
         SELECT wu.user_id FROM workspaces w
         JOIN workspace_users wu ON wu.workspace_id = w.id
         WHERE w.owner_user_id = ? AND w.owner_agent_id IS NULL
       ) ORDER BY created_at ASC, id ASC
-    `).all(viewerUserId);
+    `)
+      .all(viewerUserId);
   }
 
   list(): UserRow[] {
-    return this.db
-      .prepare<[], UserRow>('SELECT * FROM users ORDER BY created_at ASC')
-      .all();
+    return this.db.prepare<[], UserRow>('SELECT * FROM users ORDER BY created_at ASC').all();
   }
 
   /**
@@ -86,9 +80,7 @@ export class UserRepo {
    * pre-#task:1982 form and its full-row read was never part of the contract).
    */
   anyExists(): boolean {
-    const row = this.db
-      .prepare<[], { one: number }>('SELECT 1 AS one FROM users LIMIT 1')
-      .get();
+    const row = this.db.prepare<[], { one: number }>('SELECT 1 AS one FROM users LIMIT 1').get();
     return row !== undefined;
   }
 
@@ -136,12 +128,7 @@ export class UserRepo {
    * paths deliberately do not re-validate (`UserRow.name` stays `z.string()`),
    * so no stored row can be made unreadable by tightening this.
    */
-  create(input: {
-    id: string;
-    name: string;
-    displayName: string;
-    email?: string | null;
-  }): UserRow {
+  create(input: { id: string; name: string; displayName: string; email?: string | null }): UserRow {
     if (!ParticipantNameSchema.safeParse(input.name).success) {
       throw new Error(
         `UserRepo.create: name must satisfy ParticipantNameSchema (got ${JSON.stringify(input.name)})`,
@@ -156,14 +143,7 @@ export class UserRepo {
               email, created_at, updated_at)
            VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)`,
         )
-        .run(
-          input.id,
-          input.name,
-          input.displayName,
-          input.email ?? null,
-          now,
-          now,
-        );
+        .run(input.id, input.name, input.displayName, input.email ?? null, now, now);
     } catch (err) {
       throwAsUserWriteConflict(err);
     }
@@ -179,10 +159,7 @@ export class UserRepo {
    * post-registration — `name` is intentionally not accepted here. The
    * registration boundary is the only writer of `name`.
    */
-  updateProfile(
-    id: string,
-    input: { display_name?: string },
-  ): UserRow | null {
+  updateProfile(id: string, input: { display_name?: string }): UserRow | null {
     if (!this.get(id)) return null;
     if (input.display_name === undefined) return this.get(id);
     this.db
@@ -200,10 +177,7 @@ export class UserRepo {
    * Set avatar storage_key + content_type as a unit. Caller must have
    * already persisted the blob via `BlobFileStorage.put`.
    */
-  setAvatar(
-    id: string,
-    avatar: { storageKey: string; contentType: string },
-  ): UserRow | null {
+  setAvatar(id: string, avatar: { storageKey: string; contentType: string }): UserRow | null {
     if (!this.get(id)) return null;
     this.db
       .prepare(

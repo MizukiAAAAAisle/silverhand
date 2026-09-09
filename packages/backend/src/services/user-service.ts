@@ -143,16 +143,13 @@ export class UserService {
 
     let row: UserProfileSnapshot;
     try {
-      row = this.registration.atomically(tx => {
+      row = this.registration.atomically((tx) => {
         // V1 single-user gate; multi-user invite path will replace this
         // embedded-only profile creator in D-stage. The UnitOfWork holds the
         // write lock from BEGIN, which is what makes this read-then-write gate
         // more than a hope (see `RegistrationUnitOfWork`).
         if (tx.users.anyExists()) {
-          throw new UserServiceError(
-            'already_registered',
-            'a viewer is already registered',
-          );
+          throw new UserServiceError('already_registered', 'a viewer is already registered');
         }
         const id = randomHex(8); // 16 hex chars
         const created = tx.users.create({ id, name: input.name, displayName });
@@ -191,10 +188,7 @@ export class UserService {
       // be a genuine bug here, so it propagates untranslated rather than
       // becoming a 409 about the name).
       if (err instanceof UserWriteConflictError && err.kind === 'name') {
-        throw new UserServiceError(
-          'name_taken',
-          `name "${input.name}" is already taken`,
-        );
+        throw new UserServiceError('name_taken', `name "${input.name}" is already taken`);
       }
       throw err;
     }
@@ -218,20 +212,14 @@ export class UserService {
    * Throws `invalid_input` on whitespace-only `display_name`, and
    * `user_not_found` (404) when the row no longer exists.
    */
-  updateProfile(
-    id: string,
-    input: { display_name?: string },
-  ): UserDto {
+  updateProfile(id: string, input: { display_name?: string }): UserDto {
     const existing = this.users.get(id);
     if (!existing) {
       throw new UserServiceError('user_not_found', `user ${id} does not exist`);
     }
 
     const patch: { display_name?: string } = {};
-    if (
-      input.display_name !== undefined
-      && input.display_name !== existing.display_name
-    ) {
+    if (input.display_name !== undefined && input.display_name !== existing.display_name) {
       patch.display_name = input.display_name;
     }
 
@@ -241,10 +229,7 @@ export class UserService {
 
     const updated = this.profileWrites.updateProfile(id, patch);
     if (!updated) {
-      throw new UserServiceError(
-        'user_not_found',
-        `user ${id} does not exist`,
-      );
+      throw new UserServiceError('user_not_found', `user ${id} does not exist`);
     }
     this.publishChanged(id);
     return snapshotToDto(updated);
@@ -267,10 +252,7 @@ export class UserService {
       type: contentType,
     });
     if (validation) {
-      throw new UserServiceError(
-        validation.code,
-        validation.message,
-      );
+      throw new UserServiceError(validation.code, validation.message);
     }
 
     let stored;
@@ -399,5 +381,5 @@ function randomHex(byteCount: number): string {
   for (let i = 0; i < bytes.length; i++) {
     bytes[i] = Math.floor(Math.random() * 256);
   }
-  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }

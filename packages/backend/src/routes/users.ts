@@ -57,15 +57,15 @@ export function createUsersApp(deps: UsersRouteDeps): Hono<AppEnv> {
   const { ctx } = deps;
 
   // ── Current viewer (user profile) ────────────────────────────────
-  app.get(apiPaths.users, c => {
+  app.get(apiPaths.users, (c) => {
     return c.json({ users: ctx.userService.listDtos() });
   });
 
-  app.get(apiPaths.relatedUsers, c => {
+  app.get(apiPaths.relatedUsers, (c) => {
     return c.json({ users: ctx.userService.listRelatedDtos(requireViewerUserId(c)) });
   });
 
-  app.get(apiPaths.me, c => {
+  app.get(apiPaths.me, (c) => {
     // Kept defensive for tests or future setup allowlists. Normal C.6+
     // public API traffic reaches this route with a session principal.
     const principal = c.get('principal');
@@ -83,15 +83,12 @@ export function createUsersApp(deps: UsersRouteDeps): Hono<AppEnv> {
     return c.json(dto);
   });
 
-  app.patch(apiPaths.me, async c => {
+  app.patch(apiPaths.me, async (c) => {
     const viewerUserId = requireViewerUserId(c);
     const body = await c.req.json().catch(() => null);
     const parsed = UpdateUserProfileInputSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { error: parsed.error.errors[0]?.message ?? 'invalid input' },
-        400,
-      );
+      return c.json({ error: parsed.error.errors[0]?.message ?? 'invalid input' }, 400);
     }
     try {
       const dto = ctx.userService.updateProfile(viewerUserId, parsed.data);
@@ -103,7 +100,7 @@ export function createUsersApp(deps: UsersRouteDeps): Hono<AppEnv> {
     }
   });
 
-  app.post(apiPaths.meAvatar, async c => {
+  app.post(apiPaths.meAvatar, async (c) => {
     const viewerUserId = requireViewerUserId(c);
     let form: FormData;
     try {
@@ -130,7 +127,7 @@ export function createUsersApp(deps: UsersRouteDeps): Hono<AppEnv> {
     }
   });
 
-  app.delete(apiPaths.meAvatar, async c => {
+  app.delete(apiPaths.meAvatar, async (c) => {
     const viewerUserId = requireViewerUserId(c);
     try {
       const dto = await ctx.userService.clearAvatar(viewerUserId);
@@ -147,7 +144,7 @@ export function createUsersApp(deps: UsersRouteDeps): Hono<AppEnv> {
   // turns the bytes into an object URL (mirrors the attachment
   // download pattern). Any logged-in viewer can fetch any user's
   // avatar — there is no hidden-profile concept in V1.
-  app.get(apiPaths.userAvatar(':id'), async c => {
+  app.get(apiPaths.userAvatar(':id'), async (c) => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'user id required' }, 400);
     const ref = ctx.userService.getAvatarStorageRef(id);

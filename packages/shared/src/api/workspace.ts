@@ -1,9 +1,7 @@
 // AUTO-SPLIT from the former monolithic api/dto.ts (#task:963).
 // Bounded context: workspace. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
-import {
-  AGENT_CAPABILITIES,
-} from '../db/schema.js';
+import { AGENT_CAPABILITIES } from '../db/schema.js';
 import { AgentDtoSchema } from './agent.js';
 import { UserDtoSchema } from './user.js';
 import { WorkspaceNameSchema } from './name.js';
@@ -100,9 +98,7 @@ export const WorkspaceColdReadResponseSchema = z.object({
   workspaces: z.array(ViewerWorkspaceDtoSchema),
   viewer_sort: ViewerSortStateDtoSchema,
 });
-export type WorkspaceColdReadResponse = z.infer<
-  typeof WorkspaceColdReadResponseSchema
->;
+export type WorkspaceColdReadResponse = z.infer<typeof WorkspaceColdReadResponseSchema>;
 
 export const WorkspaceMemberDtoSchema = z.object({
   workspace_id: z.string(),
@@ -174,10 +170,12 @@ export const CreateWorkspaceInputSchema = z.object({
 });
 export type CreateWorkspaceInput = z.input<typeof CreateWorkspaceInputSchema>;
 
-export const UpdateWorkspaceInputSchema = z.object({
-  name: WorkspaceNameSchema.optional(),
-  description: z.string().nullable().optional(),
-}).refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
+export const UpdateWorkspaceInputSchema = z
+  .object({
+    name: WorkspaceNameSchema.optional(),
+    description: z.string().nullable().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'no fields to update' });
 export type UpdateWorkspaceInput = z.input<typeof UpdateWorkspaceInputSchema>;
 
 /** Body for `PATCH /api/workspaces/:id/archive`. Toggle-shaped instead of
@@ -229,9 +227,7 @@ export const WorkspaceMembersResponseSchema = z.object({
    *  `human_members[].role`; not a second source of truth. */
   viewer_role: WorkspaceRoleSchema.nullable(),
 });
-export type WorkspaceMembersResponse = z.infer<
-  typeof WorkspaceMembersResponseSchema
->;
+export type WorkspaceMembersResponse = z.infer<typeof WorkspaceMembersResponseSchema>;
 
 /** Roster invalidation on workspace:<workspace_id>, including empty workspaces.
  * Consumers refetch relatedUsers; this hint grants no directory access. */

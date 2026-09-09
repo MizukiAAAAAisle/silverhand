@@ -56,15 +56,15 @@ export function createSqliteUserPersistence(db: Db): UserPersistence {
   const conversations = new ConversationRepo(db);
 
   const read: UserReadPort = {
-    get: id => toSnapshotOrNull(users.get(id)),
+    get: (id) => toSnapshotOrNull(users.get(id)),
     list: () => users.list().map(toSnapshot),
-    listRelated: viewerUserId => users.listRelated(viewerUserId).map(toSnapshot),
+    listRelated: (viewerUserId) => users.listRelated(viewerUserId).map(toSnapshot),
   };
 
   const profile: UserDirectWritePort = {
     updateProfile: (id, input) => toSnapshotOrNull(users.updateProfile(id, input)),
     setAvatar: (id, avatar) => toSnapshotOrNull(users.setAvatar(id, avatar)),
-    clearAvatar: id => toSnapshotOrNull(users.clearAvatar(id)),
+    clearAvatar: (id) => toSnapshotOrNull(users.clearAvatar(id)),
   };
 
   const scope: RegistrationTxScope = {
@@ -75,7 +75,7 @@ export function createSqliteUserPersistence(db: Db): UserPersistence {
       // pre-#1982 form; `tests/repos/user-persistence.test.ts` pins the
       // statement shape so a future edit cannot quietly return to it.
       anyExists: () => users.anyExists(),
-      create: input => toSnapshot(users.create(input)),
+      create: (input) => toSnapshot(users.create(input)),
     },
     workspaces: {
       // Deliberately `SELECT id FROM workspaces` and not `WorkspaceRepo.list()`,
@@ -89,7 +89,7 @@ export function createSqliteUserPersistence(db: Db): UserPersistence {
         db
           .prepare<[], { id: string }>(`SELECT id FROM workspaces`)
           .all()
-          .map(r => r.id),
+          .map((r) => r.id),
       addOwnerMember: (workspaceId, userId) => {
         // `WorkspaceRepo.addUserMember` is the same INSERT OR IGNORE with an
         // explicit role; it additionally re-reads the row (a read this scope
@@ -102,10 +102,10 @@ export function createSqliteUserPersistence(db: Db): UserPersistence {
       // no owner and provably cannot demote an owned workspace. NOT
       // `setOwnerUserId` per id — that one overwrites unconditionally and
       // opens its own transaction.
-      claimUnowned: userId => {
-        db.prepare(
-          `UPDATE workspaces SET owner_user_id = ? WHERE owner_user_id IS NULL`,
-        ).run(userId);
+      claimUnowned: (userId) => {
+        db.prepare(`UPDATE workspaces SET owner_user_id = ? WHERE owner_user_id IS NULL`).run(
+          userId,
+        );
       },
     },
     conversations: {
@@ -113,7 +113,7 @@ export function createSqliteUserPersistence(db: Db): UserPersistence {
         db
           .prepare<[], { id: string }>(`SELECT id FROM conversations`)
           .all()
-          .map(r => r.id),
+          .map((r) => r.id),
       addMember: (conversationId, userId) => {
         // Same INSERT OR IGNORE as the pre-#1982 statement, plus a discarded
         // re-read; see `addOwnerMember` on `joined_at`.

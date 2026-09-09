@@ -3,7 +3,8 @@ import { DAEMON_ADMISSION } from '../daemon-admission.generated.js';
 
 export const apiPaths = {
   health: '/api/health',
-  profileMessageCounts: (kind: 'user' | 'agent', id: string) => `/api/profiles/${kind}/${encodeURIComponent(id)}/message-counts`,
+  profileMessageCounts: (kind: 'user' | 'agent', id: string) =>
+    `/api/profiles/${kind}/${encodeURIComponent(id)}/message-counts`,
   serverInfo: '/api/server/info',
   runtimes: '/api/runtimes',
   eventWebSocket: BACKEND_ADMISSION.eventWebSocketPath,
@@ -196,11 +197,8 @@ export const apiPaths = {
    *  the same 404, so the face reaches no blob outside the conversation it audits.
    *  Serves the raw bytes (same body shape as `GET /api/attachments/:id`). Each
    *  read leaves operator audit evidence. */
-  agentChatAttachment: (
-    id: string,
-    conversationId: string,
-    attachmentId: string,
-  ) => `/api/agents/${id}/chats/${conversationId}/attachments/${attachmentId}`,
+  agentChatAttachment: (id: string, conversationId: string, attachmentId: string) =>
+    `/api/agents/${id}/chats/${conversationId}/attachments/${attachmentId}`,
   /** Public avatar fetch for any agent. Returns the blob bytes with a
    *  long immutable Cache-Control header (cache-busted via the
    *  `?v=updated_at` query param baked into `AgentDto.avatar_url`).
@@ -238,11 +236,9 @@ export const apiPaths = {
    *  PUT sets it. It suppresses — never rewrites — each channel's own tier, so
    *  turning it off restores every channel's stored choice unchanged. Regular
    *  workspace only (agent-home workspaces 404). Human viewer-scoped. */
-  workspaceAttentionPreference: (id: string) =>
-    `/api/workspaces/${id}/attention-preference`,
+  workspaceAttentionPreference: (id: string) => `/api/workspaces/${id}/attention-preference`,
   workspaceMembers: (id: string) => `/api/workspaces/${id}/members`,
-  workspaceMember: (id: string, agentId: string) =>
-    `/api/workspaces/${id}/members/${agentId}`,
+  workspaceMember: (id: string, agentId: string) => `/api/workspaces/${id}/members/${agentId}`,
   workspaceHumanMember: (id: string, userId: string) =>
     `/api/workspaces/${id}/members/users/${userId}`,
   workspaceHumanMemberRole: (id: string, userId: string) =>
@@ -263,8 +259,7 @@ export const apiPaths = {
   workspaceAgentCapabilities: (id: string, agentId: string) =>
     `/api/workspaces/${id}/agents/${agentId}/capabilities`,
   workspaceChannels: (id: string) => `/api/workspaces/${id}/channels`,
-  workspaceArchivedChannels: (id: string) =>
-    `/api/workspaces/${id}/channels/archived`,
+  workspaceArchivedChannels: (id: string) => `/api/workspaces/${id}/channels/archived`,
   /** Global flat archived-channel list across every workspace the
    *  caller can view. Backs the "Archived" chat-tool page (filters:
    *  workspace, archived date). Per-workspace endpoint above is still
@@ -291,16 +286,13 @@ export const apiPaths = {
     `/api/channels/${id}/threads/${rootMessageId}/follow`,
   channelAgents: (id: string) => `/api/channels/${id}/agents`,
   channelAgentRuntime: (id: string) => `/api/channels/${id}/agent-runtime`,
-  channelAgentStart: (id: string, agentId: string) =>
-    `/api/channels/${id}/agents/${agentId}/start`,
-  channelAgentStop: (id: string, agentId: string) =>
-    `/api/channels/${id}/agents/${agentId}/stop`,
+  channelAgentStart: (id: string, agentId: string) => `/api/channels/${id}/agents/${agentId}/start`,
+  channelAgentStop: (id: string, agentId: string) => `/api/channels/${id}/agents/${agentId}/stop`,
   channelAgentClearSession: (id: string, agentId: string) =>
     `/api/channels/${id}/agents/${agentId}/clear-session`,
   /** AgentSlot session control. Unlike the channel route, this address has no
    * presentation target because the runtime is owned by the Agent aggregate. */
-  agentClearSession: (agentId: string) =>
-    `/api/agents/${agentId}/clear-session`,
+  agentClearSession: (agentId: string) => `/api/agents/${agentId}/clear-session`,
   channelAgentRunStates: (id: string) => `/api/channels/${id}/agent-run-states`,
   channelClose: (id: string) => `/api/channels/${id}/close`,
   channelStop: (id: string) => `/api/channels/${id}/stop`,
@@ -352,8 +344,7 @@ export const apiPaths = {
    *  ever touches delivery/follow. Regular channel only (dm_channel + thread 404 —
    *  a DM's unread is directed-grade, a thread's ambient is follow-driven). Human
    *  viewer-scoped. */
-  conversationAttentionPreference: (id: string) =>
-    `/api/conversations/${id}/attention-preference`,
+  conversationAttentionPreference: (id: string) => `/api/conversations/${id}/attention-preference`,
   /** The viewer's Activity list (#task:1227, docs/activity-lifecycle-v1.md §9.3)
    *  — the `listActivity` projection (directed mentions/tasks ∪ positional
    *  unread ∩ `enter()`), already deduped + salience-sorted. Read-only,
@@ -551,11 +542,9 @@ export const authPaths = {
  *  the request body/query/object id; the URL carries only the executing agent. */
 export const internalPaths = {
   /** Agent posts a chat message; backend writes + distributes. */
-  agentSendConversationMessage: (aid: string) =>
-    `/internal/agents/${aid}/send-message`,
+  agentSendConversationMessage: (aid: string) => `/internal/agents/${aid}/send-message`,
   /** Agent reports that a stale send was intentionally abandoned. */
-  agentResolveStaleMessage: (aid: string) =>
-    `/internal/agents/${aid}/stale-message-resolution`,
+  agentResolveStaleMessage: (aid: string) => `/internal/agents/${aid}/stale-message-resolution`,
   /** Agent creates a new top-level channel in the same workspace. */
   agentCreateChannel: (aid: string) => `/internal/agents/${aid}/create-channel`,
   /** Agent reads message history at an explicit absolute target. */
@@ -587,8 +576,7 @@ export const internalPaths = {
   agentCreateConversationTasks: (aid: string) => `/internal/agents/${aid}/tasks/create`,
   agentClaimConversationTasks: (aid: string) => `/internal/agents/${aid}/tasks/claim`,
   agentUnclaimConversationTask: (aid: string) => `/internal/agents/${aid}/tasks/unclaim`,
-  agentUpdateConversationTaskStatus: (aid: string) =>
-    `/internal/agents/${aid}/tasks/update-status`,
+  agentUpdateConversationTaskStatus: (aid: string) => `/internal/agents/${aid}/tasks/update-status`,
   /** Agent edits a task's title/content (optimistic-concurrency CAS). */
   agentEditConversationTask: (aid: string) => `/internal/agents/${aid}/tasks/edit`,
   /** Agent reads one task's full detail (content + provenance + source_ref). */
@@ -684,5 +672,4 @@ export const internalPaths = {
    *  answer an identical 404 — this endpoint must not become an existence
    *  oracle. Backs `silverhand profile get --handle <name>`. */
   agentGetPeerProfile: (aid: string) => `/internal/agents/${aid}/peer-profile`,
-
 } as const;
