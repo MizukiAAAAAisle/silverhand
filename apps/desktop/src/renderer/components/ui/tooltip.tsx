@@ -19,7 +19,7 @@ export const TooltipContent = forwardRef<
       sideOffset={sideOffset}
       collisionPadding={collisionPadding}
       className={cn(
-        "z-(--z-popover-nested) max-w-[min(20rem,var(--radix-tooltip-content-available-width))] rounded-(--control-radius) border-0 bg-black/85 px-2.5 py-1.5 text-xs leading-4 text-white wrap-break-word",
+        "z-(--z-popover-nested) max-w-[min(20rem,var(--radix-tooltip-content-available-width))] rounded-(--control-radius) border-0 bg-black/85 px-2.5 py-1.5 text-[11px] leading-4 text-white wrap-break-word",
         className,
       )}
       {...props}
