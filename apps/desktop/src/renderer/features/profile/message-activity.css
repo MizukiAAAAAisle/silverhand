@@ -25,12 +25,6 @@
   min-width: var(--profile-content-width);
 }
 
-[data-profile-host="human"]:has([data-profile-layout]),
-[data-profile-host="agent"]:has([data-profile-layout]),
-[data-profile-host="side"]:has([data-profile-layout]) {
-  min-width: 0;
-}
-
 [data-profile-host="human"] [data-profile-layout],
 [data-profile-host="agent"] [data-profile-layout],
 [data-profile-host="side"] [data-profile-layout] {
@@ -142,8 +136,6 @@
 
 .message-activity-legend i {
   display: block;
-  width: 12px;
-  height: 12px;
 }
 
 .message-activity-legend span:first-child {
