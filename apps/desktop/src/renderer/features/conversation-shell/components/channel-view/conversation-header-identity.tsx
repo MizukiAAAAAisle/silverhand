@@ -1,25 +1,3 @@
-/**
- * The chat header's identity — the glyph and the name a conversation wears
- * (#task:2039).
- *
- * ONE identity primitive per entity, chosen by the pane's mode rather than by
- * each header: a workspace channel wears the canonical `#`
- * (`[data-conversation-hash-icon]`, painted per theme), a `direct_pair` wears its
- * COUNTERPART'S FACE — the same avatar that endpoint has in the sidebar row and
- * in its bylines. shiki, #task:2039: «DM channel 的 header 应该显示 DM 对象的
- * avatar，而不是一个 # icon». The earlier ruling that every channel header carries
- * the `#` with no branch (#task:1373) is untouched: it was about channels, and a
- * pair is not one.
- *
- * The `title` stays the caller's — for a pair it is already the counterpart's
- * resolved label (`presentCounterpart`) — so the face and the name can never
- * disagree, and the pre-mint draft pane converges onto the real pair without the
- * title moving.
- *
- * `title_only` is the third arm's honest answer (a placement with no pane mode,
- * or a pair whose carrier resolved no counterpart): no borrowed chrome, no
- * invented face.
- */
 import { useMemo } from "react";
 import { Hash } from "lucide-react";
 import type { DirectPairCounterpart } from "@silverhand/shared";
@@ -40,7 +18,7 @@ import {
 } from "@/features/direct-pairs/counterpart-presentation";
 import type { ConversationPaneCapabilities } from "@/features/conversations/pane-mode";
 
-const TITLE_CLASS = "min-w-0 truncate font-serif text-base font-semibold text-text-primary";
+const TITLE_CLASS = "min-w-0 truncate font-serif text-base leading-4.5 font-semibold text-text-primary";
 
 /** Both header arms — the channel `#` and the DM avatar — share this one box edge
  *  so switching conversation kind never resizes the identity. */
@@ -69,8 +47,6 @@ export function ConversationHeaderIdentity({
 }: {
   identity: ConversationPaneCapabilities["headerIdentity"];
   title: string;
-  /** Only consulted for `counterpart` identity; `null` falls back to the title
-   *  alone. */
   counterpart?: DirectPairCounterpart | null;
 }): JSX.Element {
   if (identity === "counterpart" && counterpart) {
@@ -179,7 +155,7 @@ function CounterpartIdentity({
         </span>
         {description ? (
           <span
-            className="min-w-0 truncate text-(length:--text-meta) leading-tight text-text-muted"
+            className="min-w-0 truncate text-(length:--text-meta) text-text-muted leading-3"
             title={description}
           >
             {description}
@@ -190,23 +166,6 @@ function CounterpartIdentity({
   );
 }
 
-/**
- * The counterpart's online dot, right after the name (shiki #task:2114:「DM channel
- * header 中，在 agent 名字后面加上 online status dot」).
- *
- * A dot, not the Online/Away/Offline word: the header is identity at a glance and
- * the word already lives in the counterpart's info card. `title` carries it for
- * anyone who asks.
- *
- * Which authority — a pair has NO roster (that is what makes it a pair), so this
- * is the agent's GLOBAL presence, the same composition the agent page's hero and
- * the info popover use (`useAgentPresence`: availability × presence deadline).
- * Deliberately NOT the roster seat status the member strip's dot shows: there is
- * no seat here. `null` (no definite answer yet) draws NOTHING rather than assert a
- * speculative state, and a deleted endpoint never reaches this component — it
- * wears the deleted marker instead, which is a fact about the principal, not a
- * state it could be in.
- */
 function CounterpartPresenceDot({
   counterpart,
 }: {
@@ -220,19 +179,6 @@ function CounterpartPresenceDot({
   );
 }
 
-/** Dot ground: green is earned by a live, available agent; Away and Offline share
- *  the muted pip (the distinction is a word, not a colour — an idle agent that
- *  will answer the next message must not read as an alarm). The colour comes from
- *  the SHARED `PRESENCE_TONE_DOT` map, the same one `AgentInfoPopover`'s global
- *  line reads, so this dot cannot drift a shade off it (#task:2128).
- *
- *  Carries `data-status-pip` and reads `--pill-radius` — the SAME status-pip
- *  contract the sidebar rail dot uses (shiki #task:2127). The attribute is what
- *  keeps the dot informational across themes: forza6 re-inks plain status colours
- *  but exempts `[data-status-pip]`, and the radius token makes the pip square in
- *  forza6 (`--pill-radius: 0`) and round elsewhere, so this dot matches every
- *  other presence pip instead of staying a hardcoded circle. Size stays the
- *  header's own (one tier above the rail) — that is layout, the consumer's call. */
 const PRESENCE_DOT_CLASS = "size-2 shrink-0 rounded-[var(--pill-radius)]";
 
 function AgentPresenceDot({ agentId }: { agentId: string }): JSX.Element | null {
@@ -249,9 +195,6 @@ function AgentPresenceDot({ agentId }: { agentId: string }): JSX.Element | null 
   );
 }
 
-/** The human arm of the same dot. A pair's counterpart can be a human, and the
- *  chip strip already gives humans this pip from the presence map — a DM header
- *  that dotted only agents would answer the same question twice differently. */
 function HumanPresenceDot({ userId }: { userId: string }): JSX.Element {
   const presence = usePresenceById().get(userId)?.presence;
   const online = presence === "online";
