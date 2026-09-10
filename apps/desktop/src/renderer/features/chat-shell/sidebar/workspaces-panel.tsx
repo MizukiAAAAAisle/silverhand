@@ -12,8 +12,7 @@ import {
   sortableItemStyle,
 } from "@/components/layout/list-drag-sort";
 import {
-  OUTER_GLYPH_INSET,
-  SidebarChevron,
+  SidebarSectionHeader,
   MutedMarker,
   useSidebarSectionExpanded,
 } from "../../../components/layout/sidebar-shared";
@@ -118,28 +117,19 @@ function WorkspaceRow({
   children: ReactNode;
 }): JSX.Element {
   return (
-    <div
-      className={cn(
-        "sidebar-row-gutter group/ws flex h-6 w-full items-center text-text-primary",
-        OUTER_GLYPH_INSET,
-        SidebarChevron,
-      )}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs font-medium leading-4"
-      >
-        <SidebarChevron expanded={expanded} />
-        {icon ? (
+    <SidebarSectionHeader
+      label={title}
+      collapsible
+      expanded={expanded}
+      onToggle={onToggle}
+      leading={
+        icon ? (
           <span className="flex size-5.5 shrink-0 items-center justify-center">{icon}</span>
-        ) : null}
-        <span className="min-w-0 truncate">{title}</span>
-        {muted ? <MutedMarker /> : null}
-      </button>
-      {children}
-    </div>
+        ) : undefined
+      }
+      trailing={muted ? <MutedMarker /> : undefined}
+      action={children}
+    />
   );
 }
 

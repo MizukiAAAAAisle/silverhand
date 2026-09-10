@@ -144,6 +144,8 @@ export function SidebarSection({
 
 interface SectionHeaderProps {
   label: string;
+  leading?: ReactNode;
+  trailing?: ReactNode;
   icon?: ReactNode;
   count?: number;
   onAdd?: () => void;
@@ -157,6 +159,8 @@ interface SectionHeaderProps {
 /** Collapse state belongs to the caller; this header only presents it. */
 export function SidebarSectionHeader({
   label,
+  leading,
+  trailing,
   icon,
   count,
   onAdd,
@@ -188,7 +192,9 @@ export function SidebarSectionHeader({
           {icon}
         </span>
       ) : null}
+      {leading}
       <span className="truncate">{label}</span>
+      {trailing}
       {typeof count === "number" ? (
         <span data-sidebar-count className="shrink-0 font-medium text-text-muted/70">
           {count}
