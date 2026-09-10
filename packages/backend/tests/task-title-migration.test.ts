@@ -10,6 +10,12 @@ const cases = JSON.parse(
 const step = migrations.find((m) => m.version === 96)!;
 
 describe('task title forward migration', () => {
+  it('shares a corpus without duplicate normalization pairs', () => {
+    const identities = cases.map(({ raw, canonical }) => JSON.stringify([raw, canonical]));
+    expect(new Set(identities).size).toBe(cases.length);
+    expect(cases.filter(({ name }) => name.startsWith('member_'))).toHaveLength(25);
+  });
+
   it('keeps generated migration inputs independent of current API validators', () => {
     const plan = JSON.parse(
       readFileSync(

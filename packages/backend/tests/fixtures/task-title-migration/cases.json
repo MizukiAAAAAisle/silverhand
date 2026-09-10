@@ -252,131 +252,6 @@
     "refusal": null
   },
   {
-    "name": "whitespace_9",
-    "raw": "\ta\t\tb\t",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_10",
-    "raw": "\na\n\nb\n",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_11",
-    "raw": "\u000ba\u000b\u000bb\u000b",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_12",
-    "raw": "\fa\f\fb\f",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_13",
-    "raw": "\ra\r\rb\r",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_32",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_160",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_5760",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8192",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8193",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8194",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8195",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8196",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8197",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8198",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8199",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8200",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8201",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8202",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8232",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8233",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8239",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_8287",
-    "raw": " a  b ",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_12288",
-    "raw": "　a　　b　",
-    "canonical": "a b"
-  },
-  {
-    "name": "whitespace_65279",
-    "raw": "﻿a﻿﻿b﻿",
-    "canonical": "a b"
-  },
-  {
     "name": "historical_shape_474",
     "raw": "把  system",
     "canonical": "把 system"

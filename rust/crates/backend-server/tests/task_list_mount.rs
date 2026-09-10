@@ -315,51 +315,58 @@ async fn the_mounted_path_answers_get_only() {
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 }
 
-/// A step95 database and its isolated upgrade copy exercise the same HTTP reads.
-/// No production database or conversation content is used.
-#[tokio::test]
-async fn historical_titles_fail_strict_reads_then_upgrade_restores_list_and_detail() {
-    use tracing::instrument::WithSubscriber;
-    let logs = log_capture::LogBuffer::default();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .with_max_level(tracing::Level::ERROR)
-        .with_writer(logs.clone())
-        .finish();
-    async {
+#[derive(serde::Deserialize)]
+struct MigrationTitleCase {
+    name: String,
+    raw: String,
+    canonical: String,
+}
 
-    use axum::Extension;
-    use silverhand_backend_core::host_runtime::runtime_credential::{
-        RuntimeCustody, RuntimeGeneration, RuntimePrincipal,
-    };
-    use silverhand_backend_server::conversation_messaging::messaging::task::{
-        TaskDetailState, task_detail_router,
-    };
-    use silverhand_backend_sqlite::foundation::database_startup::prepare_database;
+fn valid_migration_titles() -> Vec<MigrationTitleCase> {
+    let cases: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../../packages/backend/tests/fixtures/task-title-migration/cases.json"
+    ))
+    .unwrap();
+    cases
+        .into_iter()
+        .filter(|case| case["canonical"].is_string())
+        .map(|case| serde_json::from_value(case).unwrap())
+        .collect()
+}
+
+async fn seed_step95_titles(path: &std::path::Path, cases: &[MigrationTitleCase]) {
     use sqlx::Executor;
 
-    let directory = tempfile::tempdir().unwrap();
-    let old = directory.path().join("old.sqlite");
-    let upgraded = directory.path().join("upgrade.sqlite");
-    let mut db = current_schema::create_current_schema(&old).await;
+    let mut db = current_schema::create_current_schema(path).await;
     for statement in SEED {
         db.execute(*statement).await.unwrap();
     }
     db.execute("DELETE FROM tasks").await.unwrap();
 
-    let cases: Vec<Value> = serde_json::from_str(include_str!(
-        "../../../../packages/backend/tests/fixtures/task-title-migration/cases.json"
-    ))
-    .unwrap();
-    let valid: Vec<_> = cases
-        .iter()
-        .filter(|c| c["canonical"].is_string())
-        .collect();
-    for (i, c) in valid.iter().enumerate() {
-        sqlx::query("INSERT INTO tasks(id,workspace_id,task_number,conversation_id,title,status,creator_kind,created_at,closed_at,board_key,content) VALUES (?, 'workspace-1', ?, 'conv000000000001', ?, ?, 'system', 100, ?, 'ws:workspace-1','untouched body')")
-            .bind(format!("task-{i}")).bind(i as i64 + 1).bind(c["raw"].as_str().unwrap()).bind(if i % 2 == 0 { "closed" } else { "done" }).bind(if i % 2 == 0 { Some(200_i64) } else { None }).execute(&mut db).await.unwrap();
+    for (index, case) in cases.iter().enumerate() {
+        let closed = index % 2 == 0;
+        sqlx::query(
+            "INSERT INTO tasks (id, workspace_id, task_number, conversation_id, title, \
+             status, creator_kind, created_at, closed_at, board_key, content) \
+             VALUES (?, 'workspace-1', ?, 'conv000000000001', ?, ?, 'system', \
+             100, ?, 'ws:workspace-1', 'untouched body')",
+        )
+        .bind(format!("task-{index}"))
+        .bind(index as i64 + 1)
+        .bind(&case.raw)
+        .bind(if closed { "closed" } else { "done" })
+        .bind(closed.then_some(200_i64))
+        .execute(&mut db)
+        .await
+        .unwrap();
     }
-    db.execute("CREATE TABLE _migrations(version INTEGER PRIMARY KEY,name TEXT NOT NULL,applied_at INTEGER NOT NULL)").await.unwrap();
+
+    db.execute(
+        "CREATE TABLE _migrations (version INTEGER PRIMARY KEY, \
+         name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
+    )
+    .await
+    .unwrap();
     let plan: Value = serde_json::from_str(include_str!(
         "../../../../packages/shared/src/db/rust-migrations.generated.json"
     ))
@@ -368,7 +375,7 @@ async fn historical_titles_fail_strict_reads_then_upgrade_restores_list_and_deta
         .as_array()
         .unwrap()
         .iter()
-        .filter(|s| s["version"].as_i64().unwrap() <= 95)
+        .filter(|step| step["version"].as_i64().unwrap() <= 95)
     {
         sqlx::query("INSERT INTO _migrations VALUES (?, ?, 1)")
             .bind(step["version"].as_i64().unwrap())
@@ -378,117 +385,138 @@ async fn historical_titles_fail_strict_reads_then_upgrade_restores_list_and_deta
             .unwrap();
     }
     db.close().await.unwrap();
-    std::fs::copy(&old, &upgraded).unwrap();
-    let result = prepare_database(&upgraded, true).await.unwrap();
-    assert_eq!(result.applied_steps, vec![96]);
-    assert!(
-        prepare_database(&upgraded, true)
-            .await
-            .unwrap()
-            .applied_steps
-            .is_empty()
+}
+
+async fn upgrade_title_copy(old: &std::path::Path, upgraded: &std::path::Path) {
+    use silverhand_backend_sqlite::foundation::database_startup::prepare_database;
+
+    std::fs::copy(old, upgraded).unwrap();
+    let first = prepare_database(upgraded, true).await.unwrap();
+    assert_eq!(first.applied_steps, vec![96]);
+
+    let second = prepare_database(upgraded, true).await.unwrap();
+    assert!(second.applied_steps.is_empty());
+}
+
+#[derive(Clone)]
+struct NoopMigrationAudit;
+
+impl silverhand_backend_core::foundation::cli_invoke_audit::CliInvokeAuditSink
+    for NoopMigrationAudit
+{
+    fn record(&self, _: silverhand_backend_core::foundation::cli_invoke_audit::CliInvoke) {}
+}
+
+async fn title_read_router(path: &std::path::Path) -> Router {
+    use axum::Extension;
+    use silverhand_backend_core::host_runtime::runtime_credential::{
+        RuntimeCustody, RuntimeGeneration, RuntimePrincipal,
+    };
+    use silverhand_backend_server::{
+        conversation_messaging::messaging::task::{TaskDetailState, task_detail_router},
+        foundation::cli_invoke_observer::audit_cli_invocations,
+    };
+
+    let boards = MessagingStore::open(path).await.unwrap();
+    let tasks = SqliteTaskStore::open(path).await.unwrap();
+    let routes = task_list_router(TaskListState {
+        boards: boards.clone(),
+        fetch: tasks.clone(),
+    })
+    .merge(task_detail_router(TaskDetailState {
+        boards,
+        read: tasks,
+    }));
+
+    let principal = RuntimePrincipal::for_scope(
+        RuntimeScope::AgentSlot {
+            agent: AgentId::parse(AGENT).unwrap(),
+        },
+        RuntimeCustody::new(
+            RuntimeGeneration::new(1).unwrap(),
+            DaemonInstanceId::parse("daemon-1").unwrap(),
+        ),
+    );
+    audit_cli_invocations(routes, NoopMigrationAudit).layer(Extension(principal))
+}
+
+async fn title_get(app: &Router, suffix: &str) -> axum::response::Response {
+    let request = Request::builder()
+        .uri(format!("/internal/agents/{AGENT}/{suffix}"))
+        .body(Body::empty())
+        .unwrap();
+    app.clone().oneshot(request).await.unwrap()
+}
+
+async fn title_json(response: axum::response::Response) -> Value {
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn assert_title_list(app: &Router, repaired: bool, count: usize) {
+    let response = title_get(app, "tasks?limit=100&workspace_id=workspace-1").await;
+    let expected = if repaired {
+        StatusCode::OK
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    assert_eq!(
+        response.status(),
+        expected,
+        "title list: repaired={repaired}"
     );
 
-    for (path, repaired) in [(&old, false), (&upgraded, true)] {
-        let boards = MessagingStore::open(path).await.unwrap();
-        let tasks = SqliteTaskStore::open(path).await.unwrap();
-        #[derive(Clone)]
-        struct NoopAudit;
-        impl silverhand_backend_core::foundation::cli_invoke_audit::CliInvokeAuditSink for NoopAudit {
-            fn record(&self, _: silverhand_backend_core::foundation::cli_invoke_audit::CliInvoke) {}
-        }
-        let app = silverhand_backend_server::foundation::cli_invoke_observer::audit_cli_invocations(task_list_router(TaskListState {
-            boards: boards.clone(),
-            fetch: tasks.clone(),
-        })
-        .merge(task_detail_router(TaskDetailState {
-            boards,
-            read: tasks,
-        }))
-        , NoopAudit)
-        .layer(Extension(RuntimePrincipal::for_scope(
-            RuntimeScope::AgentSlot {
-                agent: AgentId::parse(AGENT).unwrap(),
-            },
-            RuntimeCustody::new(
-                RuntimeGeneration::new(1).unwrap(),
-                DaemonInstanceId::parse("daemon-1").unwrap(),
-            ),
-        )));
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!(
-                        "/internal/agents/{AGENT}/tasks?limit=100&workspace_id=workspace-1"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+    if repaired {
+        let body = title_json(response).await;
+        assert_eq!(body["tasks"].as_array().unwrap().len(), count);
+    }
+}
+
+async fn assert_title_details(app: &Router, repaired: bool, cases: &[MigrationTitleCase]) {
+    for (index, case) in cases.iter().enumerate() {
+        let response = title_get(app, &format!("tasks/detail?task_id=task-{index}")).await;
+        let expected = if repaired || case.raw == case.canonical {
+            StatusCode::OK
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
         assert_eq!(
             response.status(),
-            if repaired {
-                StatusCode::OK
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            expected,
+            "{}: repaired={repaired}",
+            case.name
         );
+
         if repaired {
-            let body: Value =
-                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                    .unwrap();
-            assert_eq!(body["tasks"].as_array().unwrap().len(), valid.len());
-        }
-        for (i, c) in valid.iter().enumerate() {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(format!(
-                            "/internal/agents/{AGENT}/tasks/detail?task_id=task-{i}"
-                        ))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            let canonical_before = c["raw"] == c["canonical"];
-            assert_eq!(
-                response.status(),
-                if repaired || canonical_before {
-                    StatusCode::OK
-                } else {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                },
-                "{}",
-                c["name"]
-            );
-            if repaired {
-                let body: Value = serde_json::from_slice(
-                    &to_bytes(response.into_body(), usize::MAX).await.unwrap(),
-                )
-                .unwrap();
-                assert_eq!(body["task"]["title"], c["canonical"]);
-                assert_eq!(body["task"]["content"], "untouched body");
-            }
+            let body = title_json(response).await;
+            assert_eq!(body["task"]["title"], case.canonical, "{}", case.name);
+            assert_eq!(body["task"]["content"], "untouched body");
         }
     }
-    }.with_subscriber(subscriber).await;
+}
+
+fn assert_title_diagnostics(logs: &log_capture::LogBuffer) {
     let events = logs.events();
     assert!(
         events
             .iter()
-            .any(|e| e["fields"]["field"] == "tasks.title:non_canonical")
+            .any(|event| event["fields"]["field"] == "tasks.title:non_canonical")
     );
     assert!(
         events
             .iter()
-            .any(|e| e["fields"]["stage"] == "fetch_candidates")
+            .any(|event| event["fields"]["stage"] == "fetch_candidates")
     );
-    assert!(events.iter().any(|e| e["fields"]["stage"] == "read_point"));
-    for event in events.iter().filter(|e| e["fields"]["stage"].is_string()) {
+    assert!(
+        events
+            .iter()
+            .any(|event| event["fields"]["stage"] == "read_point")
+    );
+
+    for event in events
+        .iter()
+        .filter(|event| event["fields"]["stage"].is_string())
+    {
         assert!(
             event["span"]["request_id"]
                 .as_str()
@@ -500,6 +528,41 @@ async fn historical_titles_fail_strict_reads_then_upgrade_restores_list_and_deta
         assert!(!serialized.contains("把  system"));
         assert!(!serialized.contains("task-0"));
     }
+}
+
+/// Compare a synthetic step95 database with its upgraded copy through real HTTP
+/// handlers. The untouched database proves strict reads remain strict.
+#[tokio::test]
+async fn historical_titles_fail_strict_reads_then_upgrade_restores_list_and_detail() {
+    use tracing::instrument::WithSubscriber;
+
+    // Setup and migration use only isolated synthetic data.
+    let cases = valid_migration_titles();
+    let directory = tempfile::tempdir().unwrap();
+    let old = directory.path().join("old.sqlite");
+    let upgraded = directory.path().join("upgrade.sqlite");
+    seed_step95_titles(&old, &cases).await;
+    upgrade_title_copy(&old, &upgraded).await;
+
+    // Capture HTTP failures at the production default level.
+    let logs = log_capture::LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_max_level(tracing::Level::ERROR)
+        .with_writer(logs.clone())
+        .finish();
+    async {
+        for (path, repaired) in [(&old, false), (&upgraded, true)] {
+            let app = title_read_router(path).await;
+            assert_title_list(&app, repaired, cases.len()).await;
+            assert_title_details(&app, repaired, &cases).await;
+        }
+    }
+    .with_subscriber(subscriber)
+    .await;
+
+    // Diagnostics expose stage/field and correlation, never persisted content.
+    assert_title_diagnostics(&logs);
 }
 
 #[path = "support/log_capture.rs"]
