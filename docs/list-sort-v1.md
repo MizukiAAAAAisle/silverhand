@@ -81,7 +81,7 @@ final order with a pure helper.
 
 Two concerns, two scopes:
 
-- **mode** — per *scope* (#task:1146). A scope is one independently toggleable
+- **mode** — per _scope_ (#task:1146). A scope is one independently toggleable
   `[recent | manual]` axis. Default `recent` (recently-**opened** by this
   viewer). A manual reorder (drag) also switches that scope to `manual`
   atomically (`order ⟹ manual`, see API), so drag works from any mode. How many
@@ -148,12 +148,13 @@ placement in THAT list. Since #task:1888 no list hard-partitions by star, so a
 star never moves an entity ACROSS groups within one list and **the home rank is
 always preserved** (`SortRepo` + `routes/sort.ts` — the route applies the policy,
 `SortRepo` is the mechanism). The one asymmetry left is home vs favorites:
+
 - **home rank PRESERVED on star** (`setStarred`; the route does NOT clear). A
   conversation star MOVES it out of its workspace list, so its home rank is a
   harmless orphan while starred and is RESTORED to its arranged position when it
   returns home on unstar.
 - **FAVORITES rank CLEARED on unstar** (`clearFavoriteRank`). Leaving Favorites is
-  a *voluntary* removal, so its arranged position is discarded — a later re-star
+  a _voluntary_ removal, so its arranged position is discarded — a later re-star
   re-enters fresh (recent/tail), never silently jumping to a stale favorites slot.
 
 Star is personal, so any write is **scoped to the acting viewer** (the old global
@@ -195,7 +196,7 @@ color — it holds regardless of whether rows animate their colors.
 
 > **Historical note — color-freeze apparatus removed (#task:1162).** Sidebar
 > rows once carried a 150ms `transition-colors` hover-fade. That fade forced a
-> second, color-level apparatus *only during drag* (`deriveRowFreeze` →
+> second, color-level apparatus _only during drag_ (`deriveRowFreeze` →
 > `freezeColorTransition` all-rows + `freezeColorValue` siblings-only) to stop a
 > row sliding under the cursor from flickering its hover bg at the drop frame,
 > and the same fade caused a flicker on selection change. shiki cut the hover-fade
@@ -209,7 +210,7 @@ color — it holds regardless of whether rows animate their colors.
 
 #### Recent visible order is a frozen read model (#task:1161)
 
-`recent` is an **MRU axis** (the ⌘Tab / editor-switcher family, *not* Slack/Discord
+`recent` is an **MRU axis** (the ⌘Tab / editor-switcher family, _not_ Slack/Discord
 activity-order). The naive form — sort live by each row's `last_accessed_at` — has a
 dogfood-fatal flaw: opening a row stamps its key (touch), the next `viewer_sort`
 refetch lands the fresh key, and the row you just clicked reflows to the top **under
@@ -223,20 +224,20 @@ So the visible recent order is composed as a **read model**, single-sourced in
   and nothing else — it never reorders the visible list. This is the same
   persistence-vs-presentation split as the `pendingDrop` drop override above.
 - **Freeze the key, admit additions/removals.** Each id's recent sort key is frozen
-  to its value at *entry*. An id that appears after entry (new / restored row) is
+  to its value at _entry_. An id that appears after entry (new / restored row) is
   **admitted and frozen on first sight**: it orders by its live key that frame
-  (landing at its natural recent slot) *and* that key is written into the snapshot,
+  (landing at its natural recent slot) _and_ that key is written into the snapshot,
   so a later open of that row can't reflow it either. This is "admit and freeze",
   **not** "unknown id ⇒ forever live" — the latter just relocates the click-jump
   from entry-list rows to post-mount rows. Admission is **per-new-id**: never
-  recapture the *whole* snapshot on a membership change — that re-freezes
+  recapture the _whole_ snapshot on a membership change — that re-freezes
   already-clicked rows at their bumped keys and reintroduces the original jump.
   Removed ids drop out. Manual scopes never consult the snapshot (rank-ordered).
 - **Re-snapshot trigger is decoupled from selection/touch — load-bearing.** The
-  snapshot recaptures *only* on `recentSnapshotToken` change: the list changes
+  snapshot recaptures _only_ on `recentSnapshotToken` change: the list changes
   (`listKey`), or a scope toggles into/out of recent (the recent-scope set,
   order-independent), plus the first real load. The token **must not** encode
-  `last_accessed_at` / entry values. Re-snapshotting *at the selection moment* would
+  `last_accessed_at` / entry values. Re-snapshotting _at the selection moment_ would
   re-eat the just-written key and the jump returns — the decoupling **is** the fix.
 - Captured synchronously in render via a ref compare (not an effect), so the first
   painted frame is already frozen — no live-then-freeze flash.
@@ -391,7 +392,7 @@ Mutations return the authoritative `{ viewer_sort }` for optimistic reconcile
   upsert of `last_accessed_at`. Called **only on selection**. Renderer sends it
   fire-and-forget (non-blocking) and dedups/throttles per `(viewer, target)`;
   the upsert is idempotent as a backstop. **Persistence only** — it never reorders
-  the visible recent list (see *Recent visible order is a frozen read model*).
+  the visible recent list (see _Recent visible order is a frozen read model_).
 
 Personal ⭐ star (#task:1209) — entity-scoped, can-view gated, viewer-scoped
 write. Star is sort-context state, so these routes live in the sort app (not the
@@ -399,7 +400,7 @@ entity files), reusing `resolveListGroups` as the can-view + non-archived +
 sortable gate. The old admin-gated `/pin` routes were **deleted** (no alias), and
 since #task:1899 there is exactly ONE starrable entity kind, so exactly one pair:
 
-- `POST  /api/channels/:id/star`   / `DELETE /api/channels/:id/star`
+- `POST  /api/channels/:id/star` / `DELETE /api/channels/:id/star`
   → both return the FULL `{ viewer_sort }` for the affected `channels:<ws_id>`
   list (same shape as the mode/order return, never a single entry) so the renderer
   reconciles star alongside rank/mode in one state.
@@ -432,19 +433,20 @@ scope ⇒ default `recent`; channel lists use the single sentinel scope `''`).
 > mixing granularities would put parents in a short list whose row count then grows
 > with their children. There is no `workspace` / `dm` kind, field, or branch in the
 > Favorites read-model. (This supersedes the 2026-07-01 workspace/DM-only scope,
-> which the single-column sidebar inverted.) Note "Mentions" is not a kind: a
-> Mentions inbox is a fixed-roster conversation in the agent's own home workspace.
+> which the single-column sidebar inverted.) A legacy conversation titled "Mentions" is not a separate kind.
+> The dedicated inbox behavior is retired; current mention CC uses the human
+> author ↔ agent DirectPair mainline.
 
 The sidebar's `STARRED` section is the viewer's **global Favorites**: a flat
 list of the conversations the viewer has starred. It is **exclusive** — a
 starred conversation lives HERE and is REMOVED from its parent workspace's
-children, Slack-style, with no duplication (#task:1252; see *Exclusive — moved out
-of home* below). **Membership** is a read-side projection — the single
+children, Slack-style, with no duplication (#task:1252; see _Exclusive — moved out
+of home_ below). **Membership** is a read-side projection — the single
 `user_sort_entry.starred_at` fact (in the conversation's HOME `channels:<ws_id>`
 list_key) is the one source
 of star truth; there is no "favorites membership" storage. **Ordering**, by
 contrast, Favorites owns: a first-class viewer-scoped sort state under
-`list_key='favorites'` (#task:1252 C — see *Sortable* below).
+`list_key='favorites'` (#task:1252 C — see _Sortable_ below).
 
 - `GET /api/favorites` → `ListFavoritesDto { items: FavoriteRowDto[], viewer_sort }`.
   Read-only, human viewer-scoped, **global** (no workspace filter, mirroring
@@ -466,8 +468,8 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
     ("recently starred" would silently diverge from every other list's `recent`).
   - **`manual` = the favorites `rank`**, written by the reorder under `list_key='favorites'`.
   - This **reverses** the v1 "Favorites owns no storage" stance: storing per-viewer
-    *ordering* (rank + the list-wide mode) is the explicit cost of C. It still stores
-    no *membership* — `starred_at` in the home list remains the sole star truth.
+    _ordering_ (rank + the list-wide mode) is the explicit cost of C. It still stores
+    no _membership_ — `starred_at` in the home list remains the sole star truth.
 - **`favorite_key = conversation:<entity_id>`** is the
   list's stable sort identity: the renderer row/drag key, the reorder `ordered_ids`
   element, AND the `entity_id` under `user_sort_entry.list_key='favorites'` and the
@@ -489,7 +491,7 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
   (a collapsed, never-opened workspace) still renders a title and a parent name.
   Fields:
   `{ kind, favorite_key, entity_id, workspace_id, title, parent_title,
-  starred_at, created_at, unread_count|null }`. `title` is the conversation's own
+starred_at, created_at, unread_count|null }`. `title` is the conversation's own
   bare title (no `#` sigil, no parent prefix — the renderer composes those);
   `workspace_id` is the
   **PARENT** (since #1888 it is NOT `entity_id`); `parent_title` is the workspace
@@ -512,7 +514,7 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
   which derives the storage `list_key` server-side, so the renderer never builds one:
   - `channel` — a starred regular channel; its parent is a regular workspace.
   - fixed roster — a starred conversation in an agent's home workspace (the DM
-    stream, its Onboarding thread, its Mentions inbox); `parent_title` resolves
+    stream or a retained legacy channel); `parent_title` resolves
     from the parent's bound `owner_agent_id`.
   - A container has no star at all
     (#task:1899), so it can never produce a global-Favorites row.
@@ -532,7 +534,7 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
   inaccessible/archived favorite is **hidden, not deleted**: the
   `starred_at` row persists, so the favorite reappears on restore/re-share (same
   orphan-hide philosophy as `getState(visibleEntityIds)`). On **unstar** the
-  `favorites` *ordering* row is actively DELETED (`clearFavoriteRank`), so a
+  `favorites` _ordering_ row is actively DELETED (`clearFavoriteRank`), so a
   re-star re-enters fresh — there is no stale favorites rank to revive. (The HOME
   rank is the opposite: preserved as an orphan, restored on return.) **Why hide
   archived rather than keep+flag:** the star
@@ -557,7 +559,7 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
 - **Rank asymmetry on the move (deliberate).** Star → home rank PRESERVED
   (involuntary hide; restored on unstar-return). Unstar → favorites rank CLEARED
   (`clearFavoriteRank`; voluntary removal, re-star re-enters fresh). See the
-  *Single-value rank* section for the full rationale.
+  _Single-value rank_ section for the full rationale.
 - **STARRED owns presence, not behavior (invariant).** Favorites is an INDEX to
   entities, not a second navigation/selection/unread model. Opening a favorite,
   restoring its saved layout, computing its selection highlight, its unread, and
@@ -581,7 +583,7 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
   the single group `channels`. The **workspace rail has no star axis**: containers
   cannot be starred, so the rail is ordered by `mode` over `rank` alone and nothing
   ever enters Favorites from it.
-  Sort mode only orders *within* a group. "Pin/Pinned 📌" is reserved for a future
+  Sort mode only orders _within_ a group. "Pin/Pinned 📌" is reserved for a future
   SHARED axis and must not reuse the star storage/routes.
 - Favorites ordering is its OWN axis (`list_key='favorites'`, #task:1252 C), not the
   home-list rank and not a revival of any home `starred` hard group. Storing

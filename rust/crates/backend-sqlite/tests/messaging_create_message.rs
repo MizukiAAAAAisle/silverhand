@@ -2495,6 +2495,81 @@ fn skip_reasons(
         .collect()
 }
 
+/// Exercise the production authority, rather than the permissive Grants fixture.
+/// Scope is chosen at birth; both targets are visible through the same creator.
+#[tokio::test]
+async fn production_mention_authority_only_copies_agent_scoped_targets() {
+    for scope in ["conversation", "agent"] {
+        let mut fixture = Fixture::new().await;
+        sqlx::query(
+            "INSERT INTO agents (id,name,runtime,host_id,created_at,updated_at,display_name, \
+             created_by_user_id,session_scope) VALUES \
+             ('scope-target','scope-target','claude',?,0,0,'Scope target',?,?)",
+        )
+        .bind(HOST_ID)
+        .bind(USER_ID)
+        .bind(scope)
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+        let store = fixture.store().await;
+
+        for _ in 0..2 {
+            let command = SendMessage::prepare(
+                draft(
+                    user_actor(),
+                    CHANNEL_ID,
+                    "<silverhand://agent/scope-target> hello",
+                ),
+                &EveryBracketedRun,
+                &store,
+            )
+            .await
+            .unwrap();
+            let result = store.send_message(command).await.unwrap();
+            assert_eq!(
+                skip_reasons(result.committed()),
+                vec![if scope == "agent" {
+                    "copied:scope-target".to_owned()
+                } else {
+                    "NoDirectLine:scope-target".to_owned()
+                }],
+            );
+        }
+
+        let expected = if scope == "agent" { 2 } else { 0 };
+        assert_eq!(
+            fixture.direct_pairs().await.len(),
+            usize::from(expected > 0)
+        );
+        assert_eq!(fixture.queued_for("scope-target").await.len(), expected);
+        assert_eq!(fixture.notification_rows().await.len(), expected);
+        assert_eq!(
+            fixture
+                .count("SELECT count(*) FROM messages WHERE cc_source_message_id IS NOT NULL")
+                .await,
+            expected as i64,
+        );
+        assert_eq!(
+            fixture.count("SELECT count(*) FROM messages WHERE cc_source_message_id IS NOT NULL AND thread_root_id IS NOT NULL").await,
+            0,
+        );
+
+        // Source removal does not retract a separately delivered DM snapshot.
+        sqlx::query("DELETE FROM messages WHERE conversation_id = ?")
+            .bind(CHANNEL_ID)
+            .execute(&mut fixture.db)
+            .await
+            .unwrap();
+        assert_eq!(
+            fixture
+                .count("SELECT count(*) FROM messages WHERE cc_source_message_id IS NOT NULL")
+                .await,
+            expected as i64,
+        );
+    }
+}
+
 /// A mention of someone who cannot read the conversation lands as a copy on the
 /// direct line between them and the author — minted with the copy — and the four
 /// facts commit together.

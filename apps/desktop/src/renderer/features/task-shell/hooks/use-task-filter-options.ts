@@ -32,7 +32,7 @@ import { isAgentSpace, type WorkspaceOwnership } from "@/features/workspaces/wor
  * (`place.conversation_id === channelId`), so every row's primary label is the
  * channel TITLE and the SUBTITLE carries the source — the workspace name for a
  * regular channel, the agent's name for an agent-space channel. That's why an
- * agent with multiple channels in its space (e.g. `Mentions` + `Onboarding`)
+ * agent with multiple retained channels in its space
  * shows as distinct rows that no longer collide on a single label. Rows are
  * still GROUPED by data source (`group: 'workspace' | 'agent_space'`) for the
  * section split, which READS "Agent Spaces" (#task:2044).

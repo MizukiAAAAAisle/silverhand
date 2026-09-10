@@ -1,16 +1,14 @@
 // AUTO-SPLIT from the former monolithic api/dto.ts (#task:963).
 // Bounded context: notification. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
-import {
-  NotificationKindSchema,
-} from '../db/schema.js';
+import { NotificationKindSchema } from '../db/schema.js';
 
 //
 // Emitted kinds (v1):
 //   - mention_external: a user @-mentioned an agent who wasn't a member of the
-//     originating conversation. The mention was CC'd into that agent's DM
-//     channel (a dedicated `Mentions` conversation); a notification points the
-//     user at it.
+//     originating conversation. An eligible agent-scoped target receives a CC
+//     in the human author ↔ agent DirectPair mainline. The author's notification
+//     points back to the source message.
 //   - mention_self: a registered human viewer was @-mentioned in a conversation
 //     they belong to — channel mainline OR a reply-cluster (thread). Emitted by
 //     `notifyViewerMentionBestEffort` on every send (read-state = `read_at`).
@@ -63,9 +61,7 @@ export const MarkNotificationsReadInputSchema = z
     /** Mark every unread notification (for the current user). */
     all: z.boolean().optional(),
   })
-  .refine(v => !!(v.id || v.workspace_id || v.conversation_id || v.all), {
+  .refine((v) => !!(v.id || v.workspace_id || v.conversation_id || v.all), {
     message: 'must specify id, workspace_id, conversation_id, or all',
   });
-export type MarkNotificationsReadInput = z.infer<
-  typeof MarkNotificationsReadInputSchema
->;
+export type MarkNotificationsReadInput = z.infer<typeof MarkNotificationsReadInputSchema>;

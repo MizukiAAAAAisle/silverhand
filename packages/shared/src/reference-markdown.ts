@@ -36,7 +36,8 @@ import {
  *   2. thread reply — a referenced channel member becomes a follower BEFORE the
  *      reply's follower-gated recipient plan is computed, so here a reference can
  *      widen who receives it.
- *   3. mention CC — a referenced agent gets a wrapped copy in its Mentions DM.
+ *   3. mention CC — an eligible non-member agent-scoped agent gets a wrapped
+ *      copy in the human author ↔ agent DirectPair mainline.
  *   4. after arrival — human notification/unread, and the wake batch's framing.
  *
  * What an empty set costs depends on the layer, and the answer is NOT uniform:
@@ -117,11 +118,7 @@ function parserCoordinates(value: string): { prefix: string; body: string } {
  * `link` node, and a reference link (`[x][id]` + a `definition`) is by
  * construction not an autolink, so no definition table is collected at all.
  */
-const NON_PROSE_TYPES: ReadonlySet<string> = new Set([
-  'code',
-  'inlineCode',
-  'blockquote',
-]);
+const NON_PROSE_TYPES: ReadonlySet<string> = new Set(['code', 'inlineCode', 'blockquote']);
 
 /**
  * The references a message body addresses, deduplicated, in first-occurrence
@@ -458,10 +455,7 @@ export function findShorthandCandidates(source: string): string[] {
  * resolver built from an authoritative roster, never from a still-loading one
  * (see {@link findShorthandCandidates}).
  */
-export function rewriteShorthandReferences(
-  source: string,
-  resolve: ShorthandResolver,
-): string {
+export function rewriteShorthandReferences(source: string, resolve: ShorthandResolver): string {
   const { prefix, body } = parserCoordinates(source);
   const edits: Array<{ start: number; end: number; text: string }> = [];
   for (const { start, end, handle } of collectShorthandMatches(source)) {

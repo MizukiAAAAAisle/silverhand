@@ -1751,7 +1751,8 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     ///
     /// A reference is REACHED if the principal still participates in the TARGET conversation, or if
     /// this very send copied the mention to that agent. Both halves matter: an agent outside the
-    /// target can still be reached through its Mentions DM, and a participant needs no copy.
+    /// target can still be reached through the human author ↔ agent DirectPair when eligible
+    /// for CC, and a participant needs no copy.
     ///
     /// The copy outcomes are read for `Copied` ONLY — never for a skip reason. `AlreadyMember` asks
     /// about the SOURCE conversation, so on a cross-post it answers about the wrong roster

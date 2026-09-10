@@ -18,16 +18,16 @@
 
 设计任何"既可能由用户触发、也可能由 agent 触发"的功能时，按下表自检：
 
-| # | 检查项 | 通过条件 |
-|---|--------|---------|
-| 1 | Service 方法签名是否对 user/agent 同一份？ | 入口接收统一的 `Principal`，不要 `sendUserMessage` + `sendAgentMessage` 两个方法 |
-| 2 | 行为差异是否走 `POLICIES` 表？ | 新增 policy 字段而不是 `if (actor.kind === 'agent')` |
-| 3 | Actor / Principal 是否在**路由 boundary** 构造？ | route handler 解析 token/header/url → 构造 actor → 调 service。Service 内不再解析身份 |
-| 4 | 是否新增 actor union？ | **不要**。身份已统一到 `Principal`（`user` / `agent` / `system`，见 `packages/backend/src/auth/principal.ts`）；service 直接接 `Principal`，不要再引入 `*Actor` union（身份构造契约见 `auth-and-host-model.md` §3.5） |
-| 5 | DB 字段是否区分 `*_kind + *_id` 两列？ | 参照 AttachmentService 的 `createdByKind:'user'\|'agent', createdById:string`。**不要**建 `user_id` + `agent_id` 两列各占一边 |
-| 6 | Workspace member 关系是否只覆盖 regular workspace？ | `workspace_members` regular-only。**不要**为 `agent_home` 加 member 行；agent_home 的 agent 关系**只**走 `workspaces.owner_agent_id`（DB BEFORE INSERT trigger 兜底） |
-| 7 | 是否新增"隐式信任 header"？ | **禁止**。新身份信息必须走 session token / URL 明示，不能让 caller 自填身份。内部路由已硬性 400 拒绝 principal header（见 `auth-and-host-model.md` §3.5） |
-| 8 | 是否裸奔 attachment / 私有资源 GET？ | 必须在 **route 层**（不是 service 注释里）显式做 viewer + ACL 校验 |
+| #   | 检查项                                              | 通过条件                                                                                                                                                                                                              |
+| --- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Service 方法签名是否对 user/agent 同一份？          | 入口接收统一的 `Principal`，不要 `sendUserMessage` + `sendAgentMessage` 两个方法                                                                                                                                      |
+| 2   | 行为差异是否走 `POLICIES` 表？                      | 新增 policy 字段而不是 `if (actor.kind === 'agent')`                                                                                                                                                                  |
+| 3   | Actor / Principal 是否在**路由 boundary** 构造？    | route handler 解析 token/header/url → 构造 actor → 调 service。Service 内不再解析身份                                                                                                                                 |
+| 4   | 是否新增 actor union？                              | **不要**。身份已统一到 `Principal`（`user` / `agent` / `system`，见 `packages/backend/src/auth/principal.ts`）；service 直接接 `Principal`，不要再引入 `*Actor` union（身份构造契约见 `auth-and-host-model.md` §3.5） |
+| 5   | DB 字段是否区分 `*_kind + *_id` 两列？              | 参照 AttachmentService 的 `createdByKind:'user'\|'agent', createdById:string`。**不要**建 `user_id` + `agent_id` 两列各占一边                                                                                         |
+| 6   | Workspace member 关系是否只覆盖 regular workspace？ | `workspace_members` regular-only。**不要**为 `agent_home` 加 member 行；agent_home 的 agent 关系**只**走 `workspaces.owner_agent_id`（DB BEFORE INSERT trigger 兜底）                                                 |
+| 7   | 是否新增"隐式信任 header"？                         | **禁止**。新身份信息必须走 session token / URL 明示，不能让 caller 自填身份。内部路由已硬性 400 拒绝 principal header（见 `auth-and-host-model.md` §3.5）                                                             |
+| 8   | 是否裸奔 attachment / 私有资源 GET？                | 必须在 **route 层**（不是 service 注释里）显式做 viewer + ACL 校验                                                                                                                                                    |
 
 ---
 
@@ -37,12 +37,25 @@
 
 ```ts
 const POLICIES = {
-  user:  { requireSenderMembership:false, allowTarget:false, autoStartIdleRecipients:true,  ccMentions:true,  resolveRun:false },
-  agent: { requireSenderMembership:true,  allowTarget:true,  autoStartIdleRecipients:false, ccMentions:false, resolveRun:true  },
+  user: {
+    requireSenderMembership: false,
+    allowTarget: false,
+    autoStartIdleRecipients: true,
+    ccMentions: true,
+    resolveRun: false,
+  },
+  agent: {
+    requireSenderMembership: true,
+    allowTarget: true,
+    autoStartIdleRecipients: false,
+    ccMentions: false,
+    resolveRun: true,
+  },
 };
 ```
 
 **新增行为差异的步骤**：
+
 1. 先尝试加一个新 policy 字段（如 `allowAttachmentDelete:boolean`），让 user 和 agent 各填一个值
 2. service 内改成读 `POLICIES[principal.kind].allowAttachmentDelete`
 3. 不要写 `if (actor.kind === 'agent')` 业务分支
@@ -69,15 +82,15 @@ type Principal =
 
 ## 4. Workspace / Channel / DM 模型不变量
 
-| 不变量 | 含义 |
-|--------|------|
-| `workspaces.kind ∈ {regular, agent_home}` | 没有第三种 |
-| 每个 agent 有且只有一个 `agent_home` workspace | UNIQUE on `owner_agent_id` |
-| `agent_home` 可以包含**多个** `dm_channel` | `Onboarding`（默认）+ `Mentions` + 未来更多。**不要**假设 "exactly one" |
-| `WorkspaceDto.dm_channel_id` = default landing channel | **不**意味着唯一约束。措辞别再叫 "primary" |
-| `WorkspaceDto.dm_channel_ids` = 全量 DM channel id 数组 | 给旧 caller 拿 secondary id 当 workspace id 时做 fallback |
-| `workspace_members` 不接受 `agent_home` 行 | DB 层 BEFORE INSERT trigger 兜底 |
-| 新建 agent 默认 dm_channel 标题 = `Onboarding` | 不再叫 `dm-<name>`；迁移过来的旧名保留不动 |
+| 不变量                                                  | 含义                                                                                                                     |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `workspaces.kind ∈ {regular, agent_home}`               | 没有第三种                                                                                                               |
+| 每个 agent 有且只有一个 `agent_home` workspace          | UNIQUE on `owner_agent_id`                                                                                               |
+| `agent_home` 可以包含**多个** `dm_channel`              | 可保留多个历史频道，**不要**假设 "exactly one"。旧固定 `Mentions` 接收逻辑已退休；当前 CC 落在作者↔agent DirectPair 主线 |
+| `WorkspaceDto.dm_channel_id` = default landing channel  | **不**意味着唯一约束。措辞别再叫 "primary"                                                                               |
+| `WorkspaceDto.dm_channel_ids` = 全量 DM channel id 数组 | 给旧 caller 拿 secondary id 当 workspace id 时做 fallback                                                                |
+| `workspace_members` 不接受 `agent_home` 行              | DB 层 BEFORE INSERT trigger 兜底                                                                                         |
+| 新建 agent 默认 dm_channel 标题 = `Onboarding`          | 不再叫 `dm-<name>`；迁移过来的旧名保留不动                                                                               |
 
 ---
 
@@ -97,6 +110,7 @@ PRAGMA restore (foreign_keys=ON, legacy_alter_table 恢复原值)
 ```
 
 **新写 migration 必须**：
+
 1. 用 v16 runner 同款外 txn / 内 pragma 嵌套
 2. commit 前跑 `foreign_key_check`，零破洞才允许提交
 3. 失败路径恢复 pragma（不能让 process 残留 OFF）
@@ -135,6 +149,7 @@ PRAGMA restore (foreign_keys=ON, legacy_alter_table 恢复原值)
 ## 8. Review 锚点
 
 PR / 设计稿 review 时按以下顺序检查：
+
 1. §1 checklist —— 8 项逐一过，违反需要解释
 2. §6 反模式 —— 不能命中
 3. §7 鉴权硬约束 —— 涉及到的必须显式回应，不得回退
@@ -152,15 +167,16 @@ PR / 设计稿 review 时按以下顺序检查：
 
 ### 9.1 两个 plane 的分工
 
-| plane | 角色 | 例子 |
-| --- | --- | --- |
-| **control plane** | IM server：HTTP route、DB、ACL、消息分发、scheduler | `packages/backend` |
+| plane               | 角色                                                                       | 例子                                                            |
+| ------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| **control plane**   | IM server：HTTP route、DB、ACL、消息分发、scheduler                        | `packages/backend`                                              |
 | **execution plane** | AgentHost：spawn agent CLI、stdin/stdout、文件系统访问、API key、本地 PATH | `packages/host`（daemon，承接 spawn / inbox-drain / run-state） |
 
 **核心 invariant**：spawn agent CLI 是 execution plane 的事，**不是** control plane 的事。
 agent spawn / inbox-drain / run-state 归 `packages/host`（daemon），backend 只记 runtime intent / state、不持有 OS process handle。
 
 未来 remote / sandbox 形态：
+
 - 云端 backend 不可能 spawn `claude` —— 没装、没用户 fs、没 API key；
 - 沙箱内 daemon 持有真正的 user-side 运行时，向 IM 上报；
 - Electron 客户端订阅 IM 广播，**自己也不 spawn** —— 它跟其它客户端等价。
@@ -181,11 +197,11 @@ agent spawn / inbox-drain / run-state 归 `packages/host`（daemon），backend 
 
 ### 9.4 spawn / inbox / run-state 的归属（当前实现）
 
-| 关注点 | 归属 |
-| --- | --- |
-| spawn agent CLI | `packages/host` daemon（独立子进程） |
-| inbox drain | daemon |
-| run state record | daemon → backend 通过 event 上报 |
+| 关注点                | 归属                                                                                           |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| spawn agent CLI       | `packages/host` daemon（独立子进程）                                                           |
+| inbox drain           | daemon                                                                                         |
+| run state record      | daemon → backend 通过 event 上报                                                               |
 | backend ↔ daemon 通信 | `HostClient`（embedded 走 Unix socket，standalone 走 outbound WS）——已落地且**必需**，不是可选 |
 
 backend 已不再自己 host ConversationManager；spawn / stdin-stdout / inbox-drain / run-state 全部归 `packages/host` daemon。backend 只记 `(conversation, agent)` 的 runtime intent / state，不持有 OS process handle。**host 是真正的安全边界**：控制面（backend 记 intent / 颁 token / 走 ACL）与执行面（daemon 持 pid / 跑进程 / 触碰 fs 与 API key）分离；spawn 的归属轴是 `agent.host_id`（事件周界同样只查 agent 归属 + conversation membership，不查 workspace host——cross-computer slice 2 起 workspace host 只表示 workspace 的 home computer，不再约束成员分布）。
@@ -216,11 +232,11 @@ cursor 模型的命根是一条等式：
 
 系统里存在多条语义不同、**绝不可互相播种**的序号轴：
 
-| 轴 | 语义 | 谁推进 |
-|----|------|--------|
-| **transport seq** | 某 WS scope 的 publish-log 位置（wire 连续性 / gap / resume floor） | transport（received/satisfied 两水位） |
-| **message seq** | 某 conversation stream 里消息的持久顺序（history / freshness CAS / positional unread） | message repo（`messages.seq` / `conversation_stream_heads`） |
-| **read seq** | 某 viewer 的 read/observe cursor 位置 | read model（observe / `notifications.read_at`） |
+| 轴                | 语义                                                                                   | 谁推进                                                       |
+| ----------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| **transport seq** | 某 WS scope 的 publish-log 位置（wire 连续性 / gap / resume floor）                    | transport（received/satisfied 两水位）                       |
+| **message seq**   | 某 conversation stream 里消息的持久顺序（history / freshness CAS / positional unread） | message repo（`messages.seq` / `conversation_stream_heads`） |
+| **read seq**      | 某 viewer 的 read/observe cursor 位置                                                  | read model（observe / `notifications.read_at`）              |
 
 **约束：** 这三根轴**不允许**用一个裸 `number` 表达、不允许互相赋值播种。我们已经踩过 `stream_head_seq`（message 轴）被用去播种 transport cursor 的坑——那类 bug 的终态修法是**类型让它编译不过**，不是靠 review 眼力。S2（brand-typed `TransportSeq` / `MessageSeq` / `ReadSeq`）是这条规则的落地机制；在 S2 落地前，新代码至少要在命名 + 注释上显式标轴，禁止跨轴直传。
 
@@ -242,11 +258,11 @@ agent 授权是 capability-based（见 `graded-permissions-v1.md`）。新增 ca
 
 **约束：新增任何 compat / legacy / fallback / 迁移过渡 shim，必须在代码注释（或设计稿）里内联「退出条件三件套」，缺任一项不许合入：**
 
-| # | 项 | 说明 |
-|---|-----|------|
-| 1 | **守哪个具名的真实契约** | 这层 shim 在保护哪个**具体的、真实存在**的契约？公开 API / 已落库的旧数据行 / 文档化的对外集成 / 对用户的承诺。答不出具名契约 = 它守的是「空」，现在就不该加（存量的立即删）。 |
-| 2 | **删除的明确触发条件** | 什么**可观测事实**为真时这层就该删？e.g. `DB count(fossil)=0` / 旧 client 全部下线 / 全 workspace registry-bound / 某 migration version 之后。必须是可验证的谓词，不是「以后再说」。 |
-| 3 | **owner** | 谁负责在触发条件满足时删它。无主的 shim 永远不会被删。 |
+| #   | 项                       | 说明                                                                                                                                                                                 |
+| --- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | **守哪个具名的真实契约** | 这层 shim 在保护哪个**具体的、真实存在**的契约？公开 API / 已落库的旧数据行 / 文档化的对外集成 / 对用户的承诺。答不出具名契约 = 它守的是「空」，现在就不该加（存量的立即删）。       |
+| 2   | **删除的明确触发条件**   | 什么**可观测事实**为真时这层就该删？e.g. `DB count(fossil)=0` / 旧 client 全部下线 / 全 workspace registry-bound / 某 migration version 之后。必须是可验证的谓词，不是「以后再说」。 |
+| 3   | **owner**                | 谁负责在触发条件满足时删它。无主的 shim 永远不会被删。                                                                                                                               |
 
 **退役时按 A/B/C 三桶处置（判据来源）：**
 
@@ -266,18 +282,18 @@ agent 授权是 capability-based（见 `graded-permissions-v1.md`）。新增 ca
 
 ### 12.1 设计期 checklist(该域强制,每条附 falsifier)
 
-| # | 检查项 | 通过条件 = falsifier(如何证明未误判通过) |
-|---|--------|---------|
-| 1 | **bounded context 归位** | 缺陷必须修在其归属层:lifecycle、projection-membership(favorites/roster)、read-attention(unread/Activity)、UI-cache、navigation-restore 各自独立。falsifier:若为修复一个 navigation 缺陷而改动 unread 清扫逻辑,即为归错层(见 #1413:archive 且存在 unread 只是触发条件,非缺陷归属层)。**CQRS 强约束:workspace-scoped 查询对 regular 与 DM 两 collection 不得 union**(唯一例外为全局 archived 恢复索引)。 |
-| 2 | **改动任一投影前,须先枚举全部 consumer** | 对已知投影清单逐个裁定「排除或保留」:badge/rollup(含 `by_conversation`)、Activity 列表(含其 bool 投影,如 rail dot)、favorites 行(含 `viewer_sort.entries` 等嵌套)、roster、search、nav auto-restore 候选。falsifier:一条删除 / 归档事实后,以一个 whole-cache 断言证明该 id 在每张投影中均不残留;matcher 必须使用 delimited-segment(见 §12.1#10),不得使用 exact-only——exact-only 无法检测复合 id `workspace:<wsId>`(见 #1404 遗漏 favorites、#1409 遗漏 Activity 的 mention 路径)。 |
-| 3 | **清除方式须按 query scope 分档**(独立于「枚举」的另一半) | 枚举完成后,清除方式分两档:**scoped query**(删除后将 404,如 per-ws `by_conversation`)必须 `removeQueries`,不得 refetch;**global query**(删除后不 404,如 favorites/Activity)必须使用本地 membership filter,不得 invalidate 整表(重量级 server-scored / ordered list 的整表 refetch 会 re-score 并 reflow 幸存项)。falsifier:删除后幸存项的顺序与身份保持不变(不止「被删项消失」)(见 #1404/#1409)。 |
-| 4 | **consumer-split,不得就地收窄** | 同一 source list 的多个消费面各自读取独立投影,不得塌缩为单一开关:**auto(default/remembered/fallback)↔ explicit(jump/search/deeplink)**、**display ↔ control-plane**、**active ↔ union**。falsifier:控制面与显式面均不受 display scope 门控(见 #1398:Stop 按钮 enablement 曾被 display filter 门控,构成 fail-closed 缺陷)。 |
-| 5 | **语义不同的轴不得混用**(同族三类,各有 incident) | 语义不同的两个概念不得塌进同一个门:**① `archive ≠ delete`**——archived 必须同时满足「显式可达」与「自动不可达」,两方向均须测试(见 #1413);**② `freshness(isFetching)≠ fact`**——背景 refetch 期间 `isFetching` 为真,不得据此驱动「最后 settled 事实」的展示门,falsifier:mock 一次背景 refetch,断言已 settled 值不被瞬时抹为 loading/undefined(见 #1376);**③ `advisory ≠ correctness`**——best-effort / 可自愈信号(如 mark-read epoch)不得升格为渲染门或 correctness 门,falsifier:该信号判定错误时,渲染与定位仍有界退出、不死锁(见 #1317)。 |
-| 6 | **读路径校验为权威,写路径清理仅作 belt-and-suspenders** | 指向已隐藏对象的 stale pointer(`lastChannelByWorkspace` / cursor / cache)由读路径校验治理(读取时校验 active),不得依赖 archive 时的顺带 clear。falsifier:模拟一个未被清除或跨设备的 stale pointer,证明读路径将其拦截;若仅有 clear-on-write 而无读路径校验,则不通过(见 #1413)。 |
-| 7 | **每个改动派生聚合的状态迁移必须 emit** | 任何改动 `ROLLUP_UNREAD`(或任一缓存聚合)的迁移都必须发出递减 / 更新事件。falsifier:逐条状态迁移断言其 emit;遗漏一条,则 in-place badge cache 只能在下次 refetch 时自愈(见 #1284/#1404;逐点补漏 anti-pattern)。 |
-| 8 | **完整性网须选对档**(见 §12.3) | 按「载体形态 × blast-radius」选择,既不得一律采用 registry,也不得一律依赖命名约定。 |
-| 9 | **不得夸大 chokepoint 的层级** | 必须准确声明其实际守护范围:cleanup-declaration chokepoint(强制「进入 registry 者必带 cleanup」)≠ query-definition chokepoint(key 由 registry 拥有、无法绕过)。falsifier:裸写 `useQuery` 而从不进入 registry 是否可绕过?若可,则它不是 definition chokepoint,注释与 residual 必须如实写明(见 #1412)。 |
-| 10 | **测试保真度** | whole-cache / route conformance 测试必须 seed 真实嵌套字段与 composite id(如 favorites `viewer_sort.entries[].entity_id`、`workspace:<wsId>`);matcher 必须使用 delimited-segment(`split(/[:/]/).includes(id)`),不得使用 exact-only(遗漏复合 id)或 substring(误吃 preview)。falsifier:禁用被测的 cleanup,测试必须转红(以证其非误判通过,见 #1412/#1413)。 |
+| #   | 检查项                                                    | 通过条件 = falsifier(如何证明未误判通过)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| --- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **bounded context 归位**                                  | 缺陷必须修在其归属层:lifecycle、projection-membership(favorites/roster)、read-attention(unread/Activity)、UI-cache、navigation-restore 各自独立。falsifier:若为修复一个 navigation 缺陷而改动 unread 清扫逻辑,即为归错层(见 #1413:archive 且存在 unread 只是触发条件,非缺陷归属层)。**CQRS 强约束:workspace-scoped 查询对 regular 与 DM 两 collection 不得 union**(唯一例外为全局 archived 恢复索引)。                                                                                                                                 |
+| 2   | **改动任一投影前,须先枚举全部 consumer**                  | 对已知投影清单逐个裁定「排除或保留」:badge/rollup(含 `by_conversation`)、Activity 列表(含其 bool 投影,如 rail dot)、favorites 行(含 `viewer_sort.entries` 等嵌套)、roster、search、nav auto-restore 候选。falsifier:一条删除 / 归档事实后,以一个 whole-cache 断言证明该 id 在每张投影中均不残留;matcher 必须使用 delimited-segment(见 §12.1#10),不得使用 exact-only——exact-only 无法检测复合 id `workspace:<wsId>`(见 #1404 遗漏 favorites、#1409 遗漏 Activity 的 mention 路径)。                                                     |
+| 3   | **清除方式须按 query scope 分档**(独立于「枚举」的另一半) | 枚举完成后,清除方式分两档:**scoped query**(删除后将 404,如 per-ws `by_conversation`)必须 `removeQueries`,不得 refetch;**global query**(删除后不 404,如 favorites/Activity)必须使用本地 membership filter,不得 invalidate 整表(重量级 server-scored / ordered list 的整表 refetch 会 re-score 并 reflow 幸存项)。falsifier:删除后幸存项的顺序与身份保持不变(不止「被删项消失」)(见 #1404/#1409)。                                                                                                                                       |
+| 4   | **consumer-split,不得就地收窄**                           | 同一 source list 的多个消费面各自读取独立投影,不得塌缩为单一开关:**auto(default/remembered/fallback)↔ explicit(jump/search/deeplink)**、**display ↔ control-plane**、**active ↔ union**。falsifier:控制面与显式面均不受 display scope 门控(见 #1398:Stop 按钮 enablement 曾被 display filter 门控,构成 fail-closed 缺陷)。                                                                                                                                                                                                             |
+| 5   | **语义不同的轴不得混用**(同族三类,各有 incident)          | 语义不同的两个概念不得塌进同一个门:**① `archive ≠ delete`**——archived 必须同时满足「显式可达」与「自动不可达」,两方向均须测试(见 #1413);**② `freshness(isFetching)≠ fact`**——背景 refetch 期间 `isFetching` 为真,不得据此驱动「最后 settled 事实」的展示门,falsifier:mock 一次背景 refetch,断言已 settled 值不被瞬时抹为 loading/undefined(见 #1376);**③ `advisory ≠ correctness`**——best-effort / 可自愈信号(如 mark-read epoch)不得升格为渲染门或 correctness 门,falsifier:该信号判定错误时,渲染与定位仍有界退出、不死锁(见 #1317)。 |
+| 6   | **读路径校验为权威,写路径清理仅作 belt-and-suspenders**   | 指向已隐藏对象的 stale pointer(`lastChannelByWorkspace` / cursor / cache)由读路径校验治理(读取时校验 active),不得依赖 archive 时的顺带 clear。falsifier:模拟一个未被清除或跨设备的 stale pointer,证明读路径将其拦截;若仅有 clear-on-write 而无读路径校验,则不通过(见 #1413)。                                                                                                                                                                                                                                                          |
+| 7   | **每个改动派生聚合的状态迁移必须 emit**                   | 任何改动 `ROLLUP_UNREAD`(或任一缓存聚合)的迁移都必须发出递减 / 更新事件。falsifier:逐条状态迁移断言其 emit;遗漏一条,则 in-place badge cache 只能在下次 refetch 时自愈(见 #1284/#1404;逐点补漏 anti-pattern)。                                                                                                                                                                                                                                                                                                                          |
+| 8   | **完整性网须选对档**(见 §12.3)                            | 按「载体形态 × blast-radius」选择,既不得一律采用 registry,也不得一律依赖命名约定。                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 9   | **不得夸大 chokepoint 的层级**                            | 必须准确声明其实际守护范围:cleanup-declaration chokepoint(强制「进入 registry 者必带 cleanup」)≠ query-definition chokepoint(key 由 registry 拥有、无法绕过)。falsifier:裸写 `useQuery` 而从不进入 registry 是否可绕过?若可,则它不是 definition chokepoint,注释与 residual 必须如实写明(见 #1412)。                                                                                                                                                                                                                                    |
+| 10  | **测试保真度**                                            | whole-cache / route conformance 测试必须 seed 真实嵌套字段与 composite id(如 favorites `viewer_sort.entries[].entity_id`、`workspace:<wsId>`);matcher 必须使用 delimited-segment(`split(/[:/]/).includes(id)`),不得使用 exact-only(遗漏复合 id)或 substring(误吃 preview)。falsifier:禁用被测的 cleanup,测试必须转红(以证其非误判通过,见 #1412/#1413)。                                                                                                                                                                                |
 
 ### 12.2 边界条款(不得违反)
 
@@ -292,9 +308,9 @@ agent 授权是 capability-based（见 `graded-permissions-v1.md`）。新增 ca
 
 **完整性网的强度取决于「归属」信息的载体形态:类型(编译期 `satisfies` / registry)> 源码 scan > 命名约定。** 选档判据如下:
 
-| 缺口形态 | 正解档 | 例 |
-|---|---|---|
-| 一条事实 fan-out 至 N 个分散 carrier(多 cache,或单一读模型的多条组装路) | chokepoint / registry + 类型闭环 + whole-cache 不变量(新增一条未登记即编译或测试转红) | 见 #1410(Activity source registry)、#1412(viewer-local projection registry) |
+| 缺口形态                                                                                 | 正解档                                                                                          | 例                                                                            |
+| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| 一条事实 fan-out 至 N 个分散 carrier(多 cache,或单一读模型的多条组装路)                  | chokepoint / registry + 类型闭环 + whole-cache 不变量(新增一条未登记即编译或测试转红)           | 见 #1410(Activity source registry)、#1412(viewer-local projection registry)   |
 | 单一漏斗 + 小型 pure fn + 少量分支,或 by-construction 版本将扰动一个既有 hardened 不变量 | 共享谓词 + falsification 测试 + 显式 residual(以命名将模型刻入变量,如 `channels`→`allChannels`) | 见 #1413(navigation restore resolver,其 precedence 被 #1082/#1145/#1300 锁定) |
 
 **blast-radius 判据:** 当 by-construction 为零风险的 additive 层(新建 registry / 类型,不改动既有代码)时,即使成本相当或更低也应采用;当 by-construction 需重构一个既有 hardened 不变量(如 precedence-lock)时,将引入回归风险,应维持在 convention-floor 层级。不得为了防范尚未出现的分支而重构既有硬不变量。无论选择哪一档,residual 必须显式写在注释与测试中——不得使 by-convention 的代码呈现为 by-construction,以免后续读者误以为第二半已消除。

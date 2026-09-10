@@ -14,9 +14,9 @@
 // (`list_key='channels:<ws_id>'`). A WORKSPACE / DM container is NOT a
 // global-Favorites member, and since #task:1899 is not starrable at all. Mixing
 // granularities would put parents in a short list whose row count then grows with
-// their children; the single-column sidebar therefore stars leaves only. Note
-// there is no separate "Mentions" classifier: a Mentions inbox in the agent's
-// home workspace is covered by the fixed-roster arm.
+// their children; the single-column sidebar therefore stars leaves only.
+// Membership is based on conversation identity and stars, not a reserved title.
+// Mention CC uses the author ↔ agent DirectPair, not a dedicated inbox channel.
 //
 // Each row is id-keyed (`entity_id`); its display identity is server-resolved
 // (Activity `preview_sender` precedent) so the renderer does ZERO local

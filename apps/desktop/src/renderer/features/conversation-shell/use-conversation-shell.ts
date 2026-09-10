@@ -146,8 +146,8 @@ export function useConversationShell({
 
   const handleSelectWorkspace = (id: string): void => {
     // If the workspace has unread mentions, jump straight to the latest
-    // one (typically the Mentions channel in a DM) — that's what the
-    // user clicked the badge to see. Falls back to the
+    // source message — that is what the user clicked the badge to see.
+    // Falls back to the
     // remembered/default channel pick when there's no pointer.
     const pointer = unreadCounts?.latest_by_workspace?.[id];
     if (pointer) {

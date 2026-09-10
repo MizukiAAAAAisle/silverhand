@@ -9,8 +9,8 @@
 // SCOPE: the global Favorites/STARRED list holds CONVERSATION rows only — it
 // projects the viewer's stars from the per-workspace conversation lists
 // (`list_key='channels:<ws_id>'`), across open- and fixed-roster conversations
-// (the latter covers an agent home's DM stream, its Onboarding stream and its
-// Mentions inbox). A
+// without assigning special meaning to their titles. Mention CC is delivered
+// to the author ↔ agent DirectPair, not a reserved workspace channel. A
 // WORKSPACE / DM container is NOT a global-Favorites member, and since #task:1899
 // cannot be starred at all: containers are simply outside this bounded context.
 //
@@ -111,10 +111,7 @@ export function favoriteKey(entityId: string): string {
  * per-favorite_key sort triple the renderer composes order from. The backend does
  * not pre-sort.
  */
-export function listFavorites(
-  db: Db,
-  params: ListFavoritesParams,
-): ListFavoritesDto {
+export function listFavorites(db: Db, params: ListFavoritesParams): ListFavoritesDto {
   const { viewerUserId } = params;
 
   // ── conversation favorites (list_key='channels:<ws_id>') ──────────────────
@@ -214,11 +211,7 @@ export function listFavorites(
   // `badge_count` column here would be a second carrier of the same number that
   // nothing refreshes. `unread_count` above is a different question and stays.
 
-  const pushEntry = (
-    key: string,
-    starredAt: number,
-    lastAccessedAt: number | null,
-  ) => {
+  const pushEntry = (key: string, starredAt: number, lastAccessedAt: number | null) => {
     entries.push({
       entity_id: key,
       rank: rankByKey.get(key) ?? null,
@@ -239,7 +232,7 @@ export function listFavorites(
     const parentTitle = r.owner_agent_id
       ? r.agent_display_name?.trim()
         ? r.agent_display_name
-        : r.agent_name ?? r.workspace_name
+        : (r.agent_name ?? r.workspace_name)
       : r.workspace_name;
     items.push({
       roster_policy: r.roster_policy,
@@ -264,11 +257,7 @@ export function listFavorites(
   items.sort(
     (a, b) =>
       b.starred_at - a.starred_at ||
-      (a.favorite_key < b.favorite_key
-        ? -1
-        : a.favorite_key > b.favorite_key
-          ? 1
-          : 0),
+      (a.favorite_key < b.favorite_key ? -1 : a.favorite_key > b.favorite_key ? 1 : 0),
   );
 
   return { items, viewer_sort: { list_key: 'favorites', modes, entries } };
@@ -284,5 +273,5 @@ export interface FavoritesReadModel {
 }
 
 export function createFavoritesReadModel(db: Db): FavoritesReadModel {
-  return { list: params => listFavorites(db, params) };
+  return { list: (params) => listFavorites(db, params) };
 }
