@@ -19,7 +19,7 @@ const SIG_REG_PASSWORD_FIELD = 'type="password"';
 const SIG_REG_SIGNUP_AUTOCOMPLETE = 'autoComplete="new-password"';
 const SIG_REG_LOGIN_AUTOCOMPLETE = 'autoComplete="current-password"';
 
-// Minimal silverhand stub. App.tsx pulls in many components that
+// Minimal silverhand stub. app.tsx pulls in many components that
 // reference `window.silverhand.*` at module-evaluation time
 // (preload-typed methods exposed by the preload bridge). We stub
 // the whole `window` object so any unsolicited access surfaces as
@@ -50,12 +50,12 @@ const silverhand = {
 };
 
 async function renderApp(viewer: ViewerState | undefined): Promise<string> {
-  // Late-import so the silverhand stub is installed before App.tsx is
-  // evaluated. App.tsx pulls in `useAppearance` and a handful of
+  // Late-import so the silverhand stub is installed before app.tsx is
+  // evaluated. app.tsx pulls in `useAppearance` and a handful of
   // module-scope `useQuery` consumers; they call into
   // `window.silverhand.*` lazily, but a bare top-of-file `import` would
   // still evaluate them before `vi.stubGlobal` ran.
-  const { App } = await import("@/App");
+  const { App } = await import("@/app");
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -72,7 +72,7 @@ beforeEach(() => {
   // bypass queryFn entirely.
   silverhand.getAuthState.mockReturnValue(new Promise(() => {}));
   vi.stubGlobal("window", { silverhand });
-  // localStorage is touched by App.tsx (last-channel maps). Stub a
+  // localStorage is touched by app.tsx (last-channel maps). Stub a
   // tiny in-memory shim so module-level hydration doesn't throw.
   const store = new Map<string, string>();
   vi.stubGlobal("localStorage", {
@@ -93,7 +93,7 @@ afterEach(() => {
   silverhand.getAuthState.mockReset();
 });
 
-describe("App.tsx gate ordering (D4.a Commit 6 part 2)", () => {
+describe("app.tsx gate ordering (D4.a Commit 6 part 2)", () => {
   it("loading branch: viewer.data is undefined → no gate renders", async () => {
     const html = await renderApp(undefined);
     // Neither gate's structural signal should be present while loading.
@@ -154,7 +154,7 @@ describe("App.tsx gate ordering (D4.a Commit 6 part 2)", () => {
     // emits one arm at a time. The synthetic case here is the
     // load-bearing regression bait: if a future edit flipped the
     // `isBackendUnreachable` and `isRegistrationRequired` checks in
-    // App.tsx, this test would fail by rendering the registration
+    // app.tsx, this test would fail by rendering the registration
     // form instead of the unreachable gate.
     const synthetic = {
       backend_unreachable: true,

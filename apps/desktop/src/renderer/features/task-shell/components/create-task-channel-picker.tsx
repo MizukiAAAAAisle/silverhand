@@ -2,7 +2,7 @@ import { useId, useMemo, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { ChevronDown, Search } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { ChannelIcon } from "@/components/ChannelIcon";
+import { ChannelIcon } from "@/components/channel-icon";
 import { FILTER_SELECT_TRIGGER_CLASS } from "@/components/ui/filter-select";
 import { useRovingList, isImeComposing } from "@/features/task-shell/model/task-filter-keyboard";
 import { OptionRow, type ChannelOption } from "@/features/task-shell/components/task-filter-bar";

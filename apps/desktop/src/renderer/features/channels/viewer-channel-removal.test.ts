@@ -804,7 +804,7 @@ describe("viewer-local channel removal contract (#task:1689)", () => {
   // survived the first round of this contract.
   describe("the conversation-ref read point is the only producer (independent enumeration)", () => {
     // Scan the WHOLE renderer tree, not just `features/**`: nothing stops a
-    // producer from living in `components/`, `lib/`, or `App.tsx`, and a fence
+    // producer from living in `components/`, `lib/`, or `app.tsx`, and a fence
     // narrower than the surface it protects is not a fence.
     const RENDERER_SRC = fileURLToPath(new URL("../..", import.meta.url));
     const READ_POINT = "features/conversations/conversation-ref-query.ts";

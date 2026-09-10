@@ -3,8 +3,8 @@ import dayjs from "dayjs";
 import { Archive, ArchiveRestore, Settings } from "lucide-react";
 import type { ArchivedChannelListItemDto } from "@silverhand/shared";
 import type { AgentDto } from "@silverhand/shared";
-import { ChannelIcon } from "@/components/ChannelIcon";
-import { WorkspaceIcon } from "@/components/WorkspaceIcon";
+import { ChannelIcon } from "@/components/channel-icon";
+import { WorkspaceIcon } from "@/components/workspace-icon";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
@@ -25,7 +25,7 @@ import {
   dateFilterSince,
   type DateFilterValue,
 } from "@/components/ui/date-filter-select";
-import { ListRowsSkeleton } from "../../components/layout/ListRowsSkeleton";
+import { ListRowsSkeleton } from "../../components/layout/list-rows-skeleton";
 import { paneChrome } from "../../components/layout/pane-chrome";
 
 /** Archived-view filter selection. Lifted to App so it survives pane
@@ -408,7 +408,7 @@ export function archivedRowOpenTarget(item: ArchivedChannelListItemDto): {
  *
  * Archived-ness is read from `archived_at`, NOT through
  * `partitionRailWorkspaces`: that projection keys off a joined boolean
- * `archived` which only the sidebar's `WorkspaceItem` carries (App.tsx maps
+ * `archived` which only the sidebar's `WorkspaceItem` carries (app.tsx maps
  * `archived_at !== null` into it). Handing it a `WorkspaceListItem` type-checks
  * and returns an EMPTY archived group — a silent miss — so this face owns its
  * own predicate.

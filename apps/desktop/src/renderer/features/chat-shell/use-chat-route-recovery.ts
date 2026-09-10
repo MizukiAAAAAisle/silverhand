@@ -5,7 +5,7 @@ import { type ChannelListItem } from "@/features/workspaces/hooks";
 
 import { useMessageUnreadCounts } from "@/features/channels/hooks";
 
-import { type MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import { type MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 
 import {
   buildChannelLayoutUrl,

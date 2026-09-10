@@ -2,7 +2,7 @@
  * D4.a Commit 6 (2) — renderer state-machine tests.
  *
  * Cindy `MqA4uoNcRByKcf9E` boundary lock: "Renderer state-machine
- * tests, mocked silverhand — `useViewerUser` three arms, App.tsx gate
+ * tests, mocked silverhand — `useViewerUser` three arms, app.tsx gate
  * order".
  *
  * Two layers tested here:
@@ -14,7 +14,7 @@
  *      spinning up React Query / DOM.
  *
  *   2. **`isBackendUnreachable` / `isRegistrationRequired` type
- *      guards** — these guards are what `App.tsx`'s gate-order
+ *      guards** — these guards are what `app.tsx`'s gate-order
  *      branch checks call (in that order). The order itself is
  *      pinned by `App.gate-order.test.ts` rendering; this file
  *      pins the discrimination correctness (no false positives /
@@ -235,8 +235,8 @@ describe("isBackendUnreachable / isRegistrationRequired type guards", () => {
     expect(isRegistrationRequired(userDto())).toBe(false);
   });
 
-  it('synthetic "both flags set" payload still discriminates uniquely — backend_unreachable wins because App.tsx checks it FIRST', () => {
-    // Cindy P1-2 gate-order constraint: in `App.tsx` the
+  it('synthetic "both flags set" payload still discriminates uniquely — backend_unreachable wins because app.tsx checks it FIRST', () => {
+    // Cindy P1-2 gate-order constraint: in `app.tsx` the
     // `isBackendUnreachable` check fires BEFORE
     // `isRegistrationRequired`. If a regression flipped the
     // order, this synthetic ViewerState (which shouldn't exist on
@@ -267,7 +267,7 @@ describe("isBackendUnreachable / isRegistrationRequired type guards", () => {
 
   it("null / non-object inputs do not crash the guards", () => {
     // Defense-in-depth: the guards run on `viewer.data` which is
-    // `undefined | ViewerState`. App.tsx checks `!viewer.data` first
+    // `undefined | ViewerState`. app.tsx checks `!viewer.data` first
     // so the guards only see real shapes, but pin the safety here
     // so a regression that re-ordered the loading-branch check
     // doesn't crash.

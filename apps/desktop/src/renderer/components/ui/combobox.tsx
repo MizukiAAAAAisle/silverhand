@@ -2,7 +2,7 @@ import { useId, useRef, useState, type KeyboardEvent } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { dropdownPanelProps } from "./dropdownPanel";
+import { dropdownPanelProps } from "./dropdown-panel";
 
 /**
  * Editable combobox — a free-text input paired with a suggestions dropdown.

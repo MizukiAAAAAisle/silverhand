@@ -66,7 +66,7 @@ export function userSyncTouchesViewer(action: UserSyncAction, viewerId: string |
  * this client's mutation caches, so before #task:1702 / #task:1707 the
  * directory / roster / Activity / reaction / task copies of that human sat
  * stale until each surface happened to remount (global
- * `refetchOnWindowFocus` is off — `lib/queryClient.ts`).
+ * `refetchOnWindowFocus` is off — `lib/query-client.ts`).
  *
  * The event is an invalidation signal only; its payload carries no profile
  * fields, so nothing here patches a cache from the frame. Re-reading the

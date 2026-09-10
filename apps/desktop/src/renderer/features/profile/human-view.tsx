@@ -1,4 +1,4 @@
-import { SidePanelHeader } from "@/components/layout/SidePanelHeader";
+import { SidePanelHeader } from "@/components/layout/side-panel-header";
 import { useEffect } from "react";
 import { useUsers } from "@/features/users/hooks";
 import {

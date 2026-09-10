@@ -2,10 +2,10 @@ import { useMemo } from "react";
 import { Bookmark, Clock, Layers } from "lucide-react";
 import dayjs from "dayjs";
 import type { AgentDto, SavedMessageDto } from "@silverhand/shared";
-import { Markdown } from "@/components/chat/Markdown";
+import { Markdown } from "@/components/chat/markdown";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
-import { ChannelIcon } from "@/components/ChannelIcon";
-import { WorkspaceIcon } from "@/components/WorkspaceIcon";
+import { ChannelIcon } from "@/components/channel-icon";
+import { WorkspaceIcon } from "@/components/workspace-icon";
 import { AuthorAvatarView, AuthorName } from "@/components/chat/author-avatar-view";
 import { presentAuthor } from "@/components/chat/author-presentation";
 import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
@@ -16,7 +16,7 @@ import { useUsers, useUsersById, makeUserNameResolver } from "@/features/users/h
 import { useSavedMessages, useUnsaveMessage } from "@/features/saved/hooks";
 import type { WorkspaceListItem } from "@/features/workspaces/hooks";
 import { FilterBlock } from "@/components/ui/filter-select";
-import { ListRowsSkeleton } from "../../components/layout/ListRowsSkeleton";
+import { ListRowsSkeleton } from "../../components/layout/list-rows-skeleton";
 import {
   WorkspaceFilterSelect,
   workspaceFilterId,

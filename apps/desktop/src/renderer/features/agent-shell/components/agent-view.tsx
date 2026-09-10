@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { Lock } from "lucide-react";
 import type { AgentDto, AgentRuntimeStateDto } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
-import { SidePanelHeader } from "@/components/layout/SidePanelHeader";
+import { SidePanelHeader } from "@/components/layout/side-panel-header";
 import { AgentHeader } from "./agent-header";
 import { AgentProfileCard } from "./agent-profile-card";
 import { AgentSchedulesCard } from "./agent-schedules-card";

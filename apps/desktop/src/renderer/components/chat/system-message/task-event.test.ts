@@ -2,11 +2,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { MessageDtoSchema } from "@silverhand/shared";
-import { CLUSTERABLE_SUBTYPES } from "@/components/chat/groupMessages";
+import { CLUSTERABLE_SUBTYPES } from "@/components/chat/group-messages";
 import { TaskEventRow } from "./task-event";
 
 vi.mock("./shared", () => ({ useUserResolver: () => () => "User" }));
-vi.mock("@/components/chat/TaskRef", () => ({
+vi.mock("@/components/chat/task-ref", () => ({
   TaskRef: ({ taskNumber }: { taskNumber: number }) => `#${taskNumber}`,
 }));
 

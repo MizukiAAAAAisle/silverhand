@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 
 const RENDERER_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const HOOK = "data-channel-icon";
-const ALLOWED = ["components/ChannelIcon.tsx", "components/ConversationGlyph.tsx"];
+const ALLOWED = ["components/channel-icon.tsx", "components/conversation-glyph.tsx"];
 
 function walk(dir: string): string[] {
   const out: string[] = [];

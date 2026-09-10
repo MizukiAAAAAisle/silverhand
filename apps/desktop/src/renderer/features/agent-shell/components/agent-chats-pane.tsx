@@ -40,7 +40,7 @@
 import { useMemo, type JSX, type ReactNode } from "react";
 import type { AgentAuditChatSummary } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
-import { ChannelIcon } from "@/components/ChannelIcon";
+import { ChannelIcon } from "@/components/channel-icon";
 import {
   CollectionItemCard,
   COLLECTION_CARD_CLASS,

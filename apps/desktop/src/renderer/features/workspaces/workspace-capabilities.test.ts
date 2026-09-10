@@ -29,7 +29,7 @@ describe("workspaceCapabilities", () => {
   it("no container answers the regular shape (not the agent-space one)", () => {
     // Deliberate: answering the agent-space shape would print "takes its name
     // from its agent" for a container that does not exist. Safe only because
-    // every caller takes the workspace id from the same row (`App.tsx`), so an
+    // every caller takes the workspace id from the same row (`app.tsx`), so an
     // unresolved row means no id and nothing actionable — not "regular
     // capabilities against a live target".
     expect(workspaceCapabilities(null)).toEqual(workspaceCapabilities({ owner_agent_id: null }));

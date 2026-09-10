@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 import { cn } from "@/lib/cn";
 import { describeApiError } from "@/lib/api-error-message";
-import { NameAvailabilityHint, useNameAvailability } from "@/features/naming/useNameAvailability";
+import { NameAvailabilityHint, useNameAvailability } from "@/features/naming/use-name-availability";
 import {
   useHostAvailabilityMap,
   useHostRuntimeCatalog,
@@ -123,7 +123,7 @@ export function CreateAgentDialog({
   const [error, setError] = useState<string | null>(null);
   const createAgent = useCreateAgent();
   // onBlur name validation — format (shared ParticipantNameSchema) + uniqueness
-  // (agents ∪ users, server probe). See features/naming/useNameAvailability.
+  // (agents ∪ users, server probe). See features/naming/use-name-availability.
   const nameCheck = useNameAvailability("agent", name);
 
   const modelSuggestions = runtimeCatalogEntry(runtime).modelSuggestions;

@@ -1,5 +1,5 @@
 import type { DirectPairAuthority } from "@/features/chat-shell/model/chat-place-restore";
-import type { AppSection } from "@/components/layout/NavRail";
+import type { AppSection } from "@/components/layout/nav-rail";
 import { routes } from "@/router";
 
 /**

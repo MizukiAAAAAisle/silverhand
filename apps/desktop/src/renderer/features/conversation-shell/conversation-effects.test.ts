@@ -44,7 +44,7 @@ vi.mock("@/features/workspaces/hooks", () => ({
   useRenameChannel: () => ({ mutateAsync: h.rename }),
   useSetChannelVisibility: () => ({ mutateAsync: h.visibility }),
 }));
-vi.mock("@/features/channels/useViewerChannelRemovalSync", () => ({
+vi.mock("@/features/channels/use-viewer-channel-removal-sync", () => ({
   useViewerChannelRemovalSync: (p: { onVisibilityLoss: (id: string) => void }) => {
     h.removal = p.onVisibilityLoss;
   },

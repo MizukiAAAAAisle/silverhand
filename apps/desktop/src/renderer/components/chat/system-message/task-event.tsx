@@ -7,7 +7,7 @@ import {
   readTaskSystemMetadataPartial,
 } from "@silverhand/shared";
 import { formatUserDisplayName } from "@/features/session/current-user";
-import { TaskRef } from "@/components/chat/TaskRef";
+import { TaskRef } from "@/components/chat/task-ref";
 import { type RendererProps, useUserResolver } from "./shared";
 
 // ─── task event row ───────────────────────────────────────────────────

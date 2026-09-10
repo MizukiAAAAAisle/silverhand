@@ -1,4 +1,4 @@
-import { deriveNavRailDots } from "@/components/layout/NavRail";
+import { deriveNavRailDots } from "@/components/layout/nav-rail";
 import { useBackendInfoSnapshot } from "@/features/computer-shell/hooks/hooks";
 import { useTaskBoardRealtime } from "@/features/task-shell/hooks/use-board";
 import {

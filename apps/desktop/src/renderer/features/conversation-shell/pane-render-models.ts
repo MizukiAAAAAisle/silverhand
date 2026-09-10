@@ -1,6 +1,6 @@
 import type { HumanView } from "@/features/profile/human-view";
 import type { ComponentProps } from "react";
-import type { DirectPairDraftPane } from "@/features/direct-pairs/DirectPairDraftPane";
+import type { DirectPairDraftPane } from "@/features/direct-pairs/direct-pair-draft-pane";
 import type { ChannelView } from "@/features/conversation-shell/components/channel-view";
 import type { AgentView } from "@/features/agent-shell/components/agent-view";
 import type { ChannelAttachmentsPanel } from "@/features/conversation-shell/components/channel-attachments-panel";

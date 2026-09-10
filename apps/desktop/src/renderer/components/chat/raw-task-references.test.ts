@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Markdown } from "./Markdown";
+import { Markdown } from "./markdown";
 import { TaskRefContextProvider } from "@/features/task-shell/components/task-ref-context";
 import { useTaskByNumber } from "@/features/task-shell/hooks/use-task-by-number";
 import { highlightText } from "@/features/chat-shell/search-panel";

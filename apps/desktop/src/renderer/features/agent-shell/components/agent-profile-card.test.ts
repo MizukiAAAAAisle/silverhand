@@ -7,7 +7,7 @@ import type { AgentDto, UserDto } from "@silverhand/shared";
 import { AgentProfileCard } from "./agent-profile-card";
 import { setCurrentUserId } from "@/features/session/current-user";
 
-vi.mock("@/features/profile/ProfileMessageActivity", () => ({
+vi.mock("@/features/profile/profile-message-activity", () => ({
   ProfileMessageActivity: () => null,
 }));
 

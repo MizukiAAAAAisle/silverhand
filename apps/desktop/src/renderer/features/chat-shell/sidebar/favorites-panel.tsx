@@ -7,7 +7,7 @@ import type {
 } from "@silverhand/shared";
 import { useSortable } from "@dnd-kit/sortable";
 import { ChannelRow } from "./channel-row";
-import { AppContextMenu } from "@/components/menus/AppContextMenu";
+import { AppContextMenu } from "@/components/menus/app-context-menu";
 import { ChannelRowMenuItems } from "./channel-row-menu-items";
 import { useFavorites, useUnstarFavorite } from "@/features/favorites/hooks";
 import { useAttentionModesAcrossWorkspaces } from "@/features/attention/hooks";
@@ -16,7 +16,7 @@ import { useArchiveChannel, useChannelDetail, useSetSortMode } from "@/features/
 import { channelRowBadge } from "@/features/attention/attention-mode";
 import { conversationSelectionTier } from "@/features/chat-shell/model/rail-selection";
 import { sortModeOf } from "@/lib/viewer-sort";
-import { SortModeMenu } from "@/components/layout/SortModeMenu";
+import { SortModeMenu } from "@/components/layout/sort-mode-menu";
 import {
   SortableGroup,
   animateLayoutChanges,

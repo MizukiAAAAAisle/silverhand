@@ -10,7 +10,7 @@
  * **identity-bound** — when a remote-backend viewer logs out, the next
  * session's human must NOT inherit the previous viewer's last-visited
  * channel. {@link clearPlaceMemory} wipes both the disk value AND the
- * in-process Map so App.tsx's restore effect sees an empty slate.
+ * in-process Map so app.tsx's restore effect sees an empty slate.
  *
  * Besides the last workspace and last channel per workspace, we also remember
  * which ARM the Chat rail was last on ({@link getLastChatPlace}) so leaving the
@@ -24,7 +24,7 @@
  * without immediately re-surfacing a batch the user just closed. All
  * place-memory state is wiped together on logout.
  *
- * Lives in `lib/` (not `App.tsx`) so `useLogout` in
+ * Lives in `lib/` (not `app.tsx`) so `useLogout` in
  * `features/session/hooks.ts` can import it without taking a circular
  * dependency on the App module.
  */

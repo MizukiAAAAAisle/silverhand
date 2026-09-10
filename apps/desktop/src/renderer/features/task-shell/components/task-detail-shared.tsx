@@ -4,7 +4,7 @@ import dayjs from "dayjs";
 import { Check, Loader2, X } from "lucide-react";
 import { TASK_CONTENT_MAX_LEN, type TaskDetailDto, type TaskStatus } from "@silverhand/shared";
 import { Textarea } from "@/components/ui/input";
-import { ChannelIcon } from "@/components/ChannelIcon";
+import { ChannelIcon } from "@/components/channel-icon";
 import { MiniIconButton } from "@/features/task-shell/components/mini-icon-button";
 import {
   PersonAvatar,
@@ -14,7 +14,7 @@ import {
 import { TaskStatusBadge } from "@/features/task-shell/components/task-status-badge";
 import { useAssignTask, useEditTask, useUpdateTaskStatus } from "@/features/task-shell/hooks/hooks";
 import type { TaskDetailFailure } from "@/features/task-shell/model/task-detail";
-import { useConversationMembers } from "@/features/conversations/useConversationMembers";
+import { useConversationMembers } from "@/features/conversations/use-conversation-members";
 import { useDirectPairPane, projectDirectPairAssignee } from "@/features/direct-pairs/hooks";
 import { cn } from "@/lib/cn";
 

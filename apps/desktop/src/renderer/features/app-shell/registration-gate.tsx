@@ -4,7 +4,7 @@ import { AUTH_HANDLE_TAKEN_CODE, suggestParticipantNameFromEmail } from "@silver
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { primaryAction } from "@/components/common/primary-action";
-import { nameFormatMessage } from "@/features/naming/useNameAvailability";
+import { nameFormatMessage } from "@/features/naming/use-name-availability";
 import { cn } from "@/lib/cn";
 import { useLoginUser, useSignupUser } from "../session/hooks";
 

@@ -3,7 +3,7 @@ import { QueryClient } from "@tanstack/react-query";
 import type { UserDto } from "@silverhand/shared";
 import { cacheViewer } from "./hooks";
 import { usersKey } from "../users/hooks";
-import { CONVERSATION_MEMBERS_KEY_PREFIX } from "../conversations/useConversationMembers";
+import { CONVERSATION_MEMBERS_KEY_PREFIX } from "../conversations/use-conversation-members";
 
 const viewer: UserDto = {
   id: "u1",

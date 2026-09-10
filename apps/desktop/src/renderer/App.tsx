@@ -8,10 +8,10 @@ import { useApplicationSignals } from "@/features/app-shell/application-signals"
 import { AgentShell } from "@/features/agent-shell/agent-shell";
 import { ComputerShell } from "@/features/computer-shell/computer-shell";
 import { Toaster } from "sonner";
-import { NavRail } from "@/components/layout/NavRail";
-import { SectionLayer } from "@/components/layout/SectionLayer";
-import { Titlebar } from "@/components/layout/Titlebar";
-import { useAppearance } from "@/hooks/useAppearance";
+import { NavRail } from "@/components/layout/nav-rail";
+import { SectionLayer } from "@/components/layout/section-layer";
+import { Titlebar } from "@/components/layout/titlebar";
+import { useAppearance } from "@/hooks/use-appearance";
 import {
   isBackendUnreachable,
   isRegistrationRequired,

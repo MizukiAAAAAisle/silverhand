@@ -551,8 +551,8 @@ describe("decideDraftHandoff — when the draft pane may leave for the real pair
 });
 
 describe("the draft pane is per-agent, and defers to the pure handoff rule", () => {
-  const paneSource = read("./DirectPairDraftPane.tsx");
-  const appSource = read("../../App.tsx");
+  const paneSource = read("./direct-pair-draft-pane.tsx");
+  const appSource = read("../../app.tsx");
   const contentSource =
     read("../conversation-shell/primary-pane-content.tsx") +
     read("../conversation-shell/build-conversation-panes.ts");
@@ -575,7 +575,7 @@ describe("the draft pane is per-agent, and defers to the pure handoff rule", () 
 
 describe("the live-discovery subscription is mounted once, by the session", () => {
   const hooksSource = read("./hooks.ts");
-  const appSource = read("../../App.tsx");
+  const appSource = read("../../app.tsx");
   const contentSource =
     read("../conversation-shell/primary-pane-content.tsx") +
     read("../conversation-shell/build-conversation-panes.ts");
@@ -586,7 +586,7 @@ describe("the live-discovery subscription is mounted once, by the session", () =
 
   /** The body of a top-level `function <name>(`, up to the next top-level
    *  declaration. Lets a count be attributed to ONE component instead of to a
-   *  2000-line module — `App.tsx` holds both the pre-auth gates and the shell. */
+   *  2000-line module — `app.tsx` holds both the pre-auth gates and the shell. */
   function topLevelFunction(source: string, name: string): string {
     const start = source.indexOf(`function ${name}(`);
     expect(start).toBeGreaterThan(-1);

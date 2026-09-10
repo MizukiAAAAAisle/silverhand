@@ -24,7 +24,7 @@ import {
  * The flag is asserted here as tree metadata rather than as a string in the href
  * because a message body is attacker input (@Cindy) — the end-to-end half, which
  * SPELLINGS get stamped and that the flag never reaches the DOM, is asserted in
- * `Markdown.test.ts`, where a real body is parsed.
+ * `markdown.test.ts`, where a real body is parsed.
  */
 
 /** A link node as `remarkRefs` leaves it. */

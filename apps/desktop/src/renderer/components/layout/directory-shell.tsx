@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { SectionLayer } from "./SectionLayer";
+import { SectionLayer } from "./section-layer";
 import { Sidebar } from "./sidebar";
 import { paneChrome } from "./pane-chrome";
 

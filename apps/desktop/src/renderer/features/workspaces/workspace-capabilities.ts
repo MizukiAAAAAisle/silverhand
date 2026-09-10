@@ -70,7 +70,7 @@ const AGENT_SPACE: WorkspaceCapabilities = {
  * regular-workspace shape ON PURPOSE, which is what the old
  * `workspaceKind === 'dm'` comparison produced for `null` too. It is not a fail-open ONLY
  * because both callers derive the workspace id from the same row they derive
- * capabilities from (`App.tsx`), so an unresolved row means no id, and Save /
+ * capabilities from (`app.tsx`), so an unresolved row means no id, and Save /
  * Archive / Delete / Leave / Create all gate on the id while the viewer-role
  * axis stays fail-closed. Answering `AGENT_SPACE` instead would be worse than
  * useless — it would print "takes its name from its agent" for a container that

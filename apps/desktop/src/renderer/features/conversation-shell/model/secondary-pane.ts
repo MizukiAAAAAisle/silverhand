@@ -9,7 +9,7 @@
  * line>` resolves instead of rendering "deleted or never existed".
  *
  * These functions are deliberately pure so that:
- *   1. App.tsx stays thin — just plumbing route state + the identity
+ *   1. app.tsx stays thin — just plumbing route state + the identity
  *      resolution into these helpers.
  *   2. Unit tests can exercise the URL → state matrix without
  *      mounting React or React Query.

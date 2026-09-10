@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Clock, Loader2 } from "lucide-react";
 import { ThreadIcon } from "@/components/icons/conversation-icons";
-import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/SidePanelHeader";
+import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
 import type { StreamUnreadDto } from "@silverhand/shared";
 import { AuthorAvatarView, AuthorName } from "@/components/chat/author-avatar-view";
@@ -11,13 +11,13 @@ import {
   presentAuthor,
 } from "@/components/chat/author-presentation";
 import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
-import { useRelativeTime } from "@/components/chat/useRelativeTime";
+import { useRelativeTime } from "@/components/chat/use-relative-time";
 import { useConversationUnread } from "@/features/channels/hooks";
 import {
   useChannelThreads,
   type ChannelThreadsFilter,
   type ThreadSummary,
-} from "@/features/channels/useChannelThreads";
+} from "@/features/channels/use-channel-threads";
 
 interface ChannelThreadsPanelProps {
   channelId: string;

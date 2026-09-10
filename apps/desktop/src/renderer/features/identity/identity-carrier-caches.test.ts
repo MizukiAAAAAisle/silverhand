@@ -12,8 +12,11 @@ import {
   threadFollowersKey,
   threadRootKey,
 } from "@/features/channels/message-cache-core";
-import { channelThreadsKey, channelThreadsUnreadKey } from "@/features/channels/useChannelThreads";
-import { channelAttachmentsKey } from "@/features/channels/useChannelAttachments";
+import {
+  channelThreadsKey,
+  channelThreadsUnreadKey,
+} from "@/features/channels/use-channel-threads";
+import { channelAttachmentsKey } from "@/features/channels/use-channel-attachments";
 import { directPairsKey, directPairsQueryOptions } from "@/features/direct-pairs/hooks";
 import { savedKey } from "@/features/saved/hooks";
 import { searchKey } from "@/features/search/hooks";

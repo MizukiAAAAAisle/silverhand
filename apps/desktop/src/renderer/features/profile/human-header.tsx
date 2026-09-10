@@ -1,7 +1,7 @@
 import type { UserDto } from "@silverhand/shared";
-import { UserAvatar } from "@/components/UserAvatar";
+import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
-import { SidePanelHeader } from "@/components/layout/SidePanelHeader";
+import { SidePanelHeader } from "@/components/layout/side-panel-header";
 import { ProfileHeaderContent } from "@/features/profile/profile-header-content";
 import { usePresenceById, presenceDotStatus, humanPresenceText } from "@/features/presence/hooks";
 import { useHumanAvatar } from "./use-human-avatar";

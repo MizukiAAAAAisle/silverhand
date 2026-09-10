@@ -151,7 +151,7 @@ export const THREAD_ADDRESS_SEPARATOR = '/thread:';
  * Every id in this product is `randomBytes(12).toString('base64url')`, which is
  * always exactly 16 characters of `[A-Za-z0-9_-]`, and the prose reader already
  * pins that shape — `#conv:` in a message body is recognised by
- * `Markdown.tsx`'s reference scanner only at `{16}`. So the length is not a
+ * `markdown.tsx`'s reference scanner only at `{16}`. So the length is not a
  * generosity knob: a token this codec accepted but prose did not would be a
  * live address in a header and inert text in a message, which is the same
  * surface disagreeing with itself (@Cindy B3). One domain, spelled once here,

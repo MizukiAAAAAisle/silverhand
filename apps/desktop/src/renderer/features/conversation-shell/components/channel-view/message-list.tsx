@@ -17,19 +17,19 @@ import type {
   StreamUnreadDto,
   ThreadReplyPreviewRow,
 } from "@silverhand/shared";
-import { ChannelMessageItem } from "@/components/chat/ChannelMessageItem";
-import { useMessageRenderContext } from "@/components/chat/useMessageRenderContext";
+import { ChannelMessageItem } from "@/components/chat/channel-message-item";
+import { useMessageRenderContext } from "@/components/chat/use-message-render-context";
 import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
-import { SystemMessage } from "@/components/chat/SystemMessage";
-import { SystemActivityCluster } from "@/components/chat/SystemActivityCluster";
-import { authorGroupContinuations } from "@/components/chat/authorGrouping";
-import { groupMessages } from "@/components/chat/groupMessages";
-import { useMessageActionSurface } from "@/components/chat/useMessageActionSurface";
-import { MessageActionChrome } from "@/components/chat/MessageActionChrome";
+import { SystemMessage } from "@/components/chat/system-message";
+import { SystemActivityCluster } from "@/components/chat/system-activity-cluster";
+import { authorGroupContinuations } from "@/components/chat/author-grouping";
+import { groupMessages } from "@/components/chat/group-messages";
+import { useMessageActionSurface } from "@/components/chat/use-message-action-surface";
+import { MessageActionChrome } from "@/components/chat/message-action-chrome";
 import { MessageRowsSkeleton } from "@/features/conversation-shell/components/conversation-view-skeleton";
 import { EmptyConversation } from "./empty-conversation";
 import { type CachedMessage, isCommittedMessage } from "@/features/channels/pending-message";
-import type { WorkspaceChannelReference } from "@/components/chat/ConversationRef";
+import type { WorkspaceChannelReference } from "@/components/chat/conversation-ref";
 import {
   classifyTopShift,
   FIRST_ITEM_INDEX_START,

@@ -18,7 +18,7 @@ import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from "@/lib/ws-
 // the All threads list. A viewer `unread_updated` (or a viewer-scope
 // `snapshot_required`) is the only remote signal for its membership changing, so
 // this module invalidates it alongside the unread badge caches.
-import { channelThreadsUnreadKey } from "@/features/channels/useChannelThreads";
+import { channelThreadsUnreadKey } from "@/features/channels/use-channel-threads";
 import { workspaceScopedQueryEnabled } from "@/features/workspaces/workspace-scoped-query";
 
 /** Debounced invalidate of every message-unread badge query (per-workspace

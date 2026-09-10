@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
 import { Activity as ActivityIcon, AlertTriangle, Check } from "lucide-react";
 import type { ActivityItemDto, MessageAuthorDto, AgentDto } from "@silverhand/shared";
-import { WorkspaceIcon } from "@/components/WorkspaceIcon";
+import { WorkspaceIcon } from "@/components/workspace-icon";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
-import { ChannelIcon } from "@/components/ChannelIcon";
+import { ChannelIcon } from "@/components/channel-icon";
 import { ThreadIcon } from "@/components/icons/conversation-icons";
 import {
   AuthorAvatarView,
@@ -22,8 +22,8 @@ import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-ho
 import type { AgentAvatarSource } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useActivity, useClearActivityItem } from "@/features/attention/hooks";
 import { activityItemSource } from "@/features/attention/observe";
-import { ListRowsSkeleton } from "../../components/layout/ListRowsSkeleton";
-import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import { ListRowsSkeleton } from "../../components/layout/list-rows-skeleton";
+import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import { paneChrome } from "../../components/layout/pane-chrome";
 
 /**
@@ -50,7 +50,7 @@ import { paneChrome } from "../../components/layout/pane-chrome";
  *     the canonical identity primitives (`WorkspaceIcon`; `Hash` with the
  *     `data-channel-icon` theme hook; `AuthorAvatarView` for a counterpart), NOT
  *     raw glyphs — so forza6 paints them as its `W`/`#` posters instead of
- *     generic lucide shapes. The old "Channel/Mention/Thread" text label is
+ *     generic lucide shapes. The old "Channel/mention/Thread" text label is
  *     dropped: real icons + the thread glyph (row 2) + the sender (row 3) carry
  *     that signal now.
  *   - row 2 = SUBJECT: thread → a thread glyph + `thread_root_preview` (the root

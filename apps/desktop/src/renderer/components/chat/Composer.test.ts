@@ -32,7 +32,7 @@ import {
   type ChannelSlice,
   type ChannelSourceStatus,
   type HumanMentionCandidate,
-} from "./Composer";
+} from "./composer";
 
 /**
  * Locks the branches `formatPickInsertion` can produce so the mention
@@ -551,7 +551,7 @@ describe("buildShorthandResolver", () => {
   });
 
   it("resolves a colliding handle to the agent, matching the renderer", () => {
-    // `Markdown.tsx` consults `agentsByName` before `humansByName`. If this
+    // `markdown.tsx` consults `agentsByName` before `humansByName`. If this
     // disagreed, the chip would show an agent while the body delivered to a
     // human.
     const resolve = buildShorthandResolver(

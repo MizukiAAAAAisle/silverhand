@@ -1,10 +1,10 @@
 import { useProfileHeroSize } from "@/features/profile/use-profile-hero-size";
-import { ProfileMessageActivity } from "@/features/profile/ProfileMessageActivity";
+import { ProfileMessageActivity } from "@/features/profile/profile-message-activity";
 import { useState, type JSX } from "react";
 import "./agent-profile-hero.css";
 import dayjs from "dayjs";
 import type { AgentDto } from "@silverhand/shared";
-import { AgentAvatar } from "@/components/AgentAvatar";
+import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { cn } from "@/lib/cn";
 import { MetadataList, ProfileSection } from "@/features/profile/profile-summary-sections";

@@ -22,18 +22,18 @@ import type {
   AttachmentSenderFacet,
   UserDto,
 } from "@silverhand/shared";
-import { AgentAvatar } from "@/components/AgentAvatar";
-import { UserAvatar } from "@/components/UserAvatar";
+import { AgentAvatar } from "@/components/agent-avatar";
+import { UserAvatar } from "@/components/user-avatar";
 import { AuthorAvatarView, AuthorName } from "@/components/chat/author-avatar-view";
 import { presentAuthor, type AuthorPresentation } from "@/components/chat/author-presentation";
 import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
-import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/SidePanelHeader";
+import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
 import {
   INITIAL_ATTACHMENTS_WINDOW,
   reduceAttachmentsWindow,
 } from "@/features/conversation-shell/model/attachments-window";
-import { useMessageRenderContext } from "@/components/chat/useMessageRenderContext";
+import { useMessageRenderContext } from "@/components/chat/use-message-render-context";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import {
@@ -43,7 +43,7 @@ import {
   isAttachmentFilterActive,
   type AttachmentListFilter,
   type AttachmentSenderFilter,
-} from "@/features/channels/useChannelAttachments";
+} from "@/features/channels/use-channel-attachments";
 import {
   groupAttachmentsByDay,
   resolveSenderIdentity,
@@ -60,13 +60,13 @@ import { cn } from "@/lib/cn";
 import { attachmentPreviewKind } from "@/features/attachments/attachment-preview";
 import { saveAttachmentToDisk } from "@/components/chat/save-attachment";
 import { formatOpenException, openAttachmentExternally } from "@/components/chat/open-attachment";
-import { Lightbox } from "@/components/chat/Lightbox";
+import { Lightbox } from "@/components/chat/lightbox";
 import {
   getAttachmentBlobUrl,
   loadAttachmentBlobUrl,
   useAttachmentBlobToken,
 } from "@/features/attachments/attachment-blob-cache";
-import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 
 interface ChannelAttachmentsPanelProps {
   channelId: string;

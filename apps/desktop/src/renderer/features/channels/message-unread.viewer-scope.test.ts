@@ -9,7 +9,7 @@ import {
 } from "@silverhand/shared";
 import { api } from "@/lib/api";
 import { conversationUnreadKey, useConversationUnread } from "./message-unread";
-import { channelThreadsKey, channelThreadsUnreadKey } from "./useChannelThreads";
+import { channelThreadsKey, channelThreadsUnreadKey } from "./use-channel-threads";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 

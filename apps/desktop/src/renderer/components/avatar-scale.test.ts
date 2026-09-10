@@ -3,8 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { AVATAR_PX, AVATAR_PX_DEFAULT } from "./avatar-scale";
-import { AgentAvatar } from "./AgentAvatar";
-import { UserAvatar } from "./UserAvatar";
+import { AgentAvatar } from "./agent-avatar";
+import { UserAvatar } from "./user-avatar";
 
 // Locks the identity-avatar square scale (#task:1440) as CONTRACT, not pixels:
 // (1) the default tier is `md` (the historical default must never drift to a

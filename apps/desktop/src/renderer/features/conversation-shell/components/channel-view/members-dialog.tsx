@@ -43,8 +43,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { AgentAvatar } from "@/components/AgentAvatar";
-import { UserAvatar } from "@/components/UserAvatar";
+import { AgentAvatar } from "@/components/agent-avatar";
+import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { SEARCH_FIELD_FRAME } from "@/components/common/control-ink-border";
 import {
@@ -58,8 +58,8 @@ import {
   canRemoveMember,
   memberDtoKey,
   useConversationMembers,
-} from "@/features/conversations/useConversationMembers";
-import { AddConversationMemberPopover } from "@/features/conversations/AddConversationMemberPopover";
+} from "@/features/conversations/use-conversation-members";
+import { AddConversationMemberPopover } from "@/features/conversations/add-conversation-member-popover";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { useUsersById } from "@/features/users/hooks";
 import { presenceDotStatus, usePresenceById } from "@/features/presence/hooks";

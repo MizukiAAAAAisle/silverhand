@@ -10,7 +10,7 @@
  * click critical path. This skeleton fills the slot during that gap so the
  * shell never shows an empty hole — and, crucially, never the previous
  * section's stale content (the skeleton is gated by destination, not
- * predecessor; see App.tsx). It is purely perceptual: the real mount work
+ * predecessor; see app.tsx). It is purely perceptual: the real mount work
  * still runs a beat later behind the already-painted shell.
  *
  * Deliberately data-free and cheap (no queries, no real rows, no avatar fetch,

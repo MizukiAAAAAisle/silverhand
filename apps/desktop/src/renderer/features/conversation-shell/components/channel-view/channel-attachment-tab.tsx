@@ -8,8 +8,8 @@ import { useAttachmentBlobToken } from "@/features/attachments/attachment-blob-c
 import { attachmentPreviewKind } from "@/features/attachments/attachment-preview";
 import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
 import { toastIcon } from "@/lib/toast-icons";
-import { Markdown } from "@/components/chat/Markdown";
-import { AttachmentHtmlPreview } from "@/components/chat/AttachmentHtmlPreview";
+import { Markdown } from "@/components/chat/markdown";
+import { AttachmentHtmlPreview } from "@/components/chat/attachment-html-preview";
 import { openAttachmentExternally } from "@/components/chat/open-attachment";
 import { saveAttachmentToDisk } from "@/components/chat/save-attachment";
 

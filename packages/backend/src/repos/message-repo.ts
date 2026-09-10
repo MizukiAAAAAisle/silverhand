@@ -881,7 +881,7 @@ export class MessageRepo {
                ${filterClause}
          ORDER BY lr.created_at DESC, root.seq DESC
          -- SOURCE-FENCE (#task:1279): this total order is the AUTHORITY. The client
-         -- mirror is compareThreadSummary (apps/desktop .../useChannelThreads.ts) --
+         -- mirror is compareThreadSummary (apps/desktop .../use-channel-threads.ts) --
          -- keep the two byte-identical: (last_reply_at DESC, root_seq DESC).
          LIMIT @limit`,
       )

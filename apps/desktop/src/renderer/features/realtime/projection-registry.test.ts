@@ -3,7 +3,7 @@ import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { decodeMessageSeq } from "@silverhand/shared";
 import type { MessageDto, ThreadSummaryInvariant } from "@silverhand/shared";
 import { messagesKey, threadRootKey } from "@/features/channels/hooks";
-import { channelThreadsKey } from "@/features/channels/useChannelThreads";
+import { channelThreadsKey } from "@/features/channels/use-channel-threads";
 import {
   dispositionSettle,
   ingestMessageProjections,

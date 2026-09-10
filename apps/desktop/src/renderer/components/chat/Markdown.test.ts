@@ -5,11 +5,11 @@ import { describe, expect, it } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentDto, TaskSummaryDto, UserDto } from "@silverhand/shared";
 import { decodeMessageSeq } from "@silverhand/shared";
-import { Markdown } from "./Markdown";
+import { Markdown } from "./markdown";
 import { MESSAGE_RENDER_BUDGET_BYTES } from "./markdown-render-budget";
-import { SystemMessage } from "./SystemMessage";
-import type { ChannelReference } from "./ChannelRef";
-import type { WorkspaceChannelReference } from "./ConversationRef";
+import { SystemMessage } from "./system-message";
+import type { ChannelReference } from "./channel-ref";
+import type { WorkspaceChannelReference } from "./conversation-ref";
 import { AUTHORED_HREF_PROP, PLUGIN_LINK_PROP } from "./reference-href";
 import { TaskRefContextProvider } from "@/features/task-shell/components/task-ref-context";
 import {
@@ -515,7 +515,7 @@ describe("SystemMessage channel refs", () => {
 
   it('PR-10 follow-up #7: info-block subtypes get `data-system-layout="info"`; cluster narration does not', () => {
     // Drift guard for the avatar-column / content-column split in
-    // `SystemMessage.tsx`'s `INFO_BLOCK_SUBTYPES` set, paired with
+    // `system-message.tsx`'s `INFO_BLOCK_SUBTYPES` set, paired with
     // `.system-message-row[data-system-layout="info"]` in
     // global.css. Banners + cards (schedule_fire, context cards,
     // mention_cc, onboarding) must carry the

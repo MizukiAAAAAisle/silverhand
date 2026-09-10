@@ -21,7 +21,7 @@ describe("SettingsShell — Account owns the profile editor, not Computer lifecy
     expect(CODE).not.toMatch(/\buseUpdateProfile\b/);
     expect(CODE).not.toMatch(/\buseUploadAvatar\b/);
     expect(CODE).not.toMatch(/\buseViewerAvatarObjectUrl\b/);
-    expect(CODE).not.toMatch(/AvatarPickerButton/);
+    expect(CODE).not.toMatch(/avatar-picker-button/);
     expect(CODE).not.toMatch(/validateAvatarFile/);
   });
 

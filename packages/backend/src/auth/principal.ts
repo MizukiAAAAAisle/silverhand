@@ -109,7 +109,7 @@ export function installPublicPrincipalMiddleware(app: Hono<AppEnv>): void {
  *     (`viewer user pointer is dangling`). Indicates DB corruption.
  *   - Otherwise → next.
  *
- * Renderer-side `App.tsx` mirrors this contract by mounting
+ * Renderer-side `app.tsx` mirrors this contract by mounting
  * `<RegistrationGate>` instead of the AppShell pre-registration. This
  * middleware is the security half (V2 multi-user, CLI tools, any
  * non-renderer caller).

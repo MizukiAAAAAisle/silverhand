@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { AppSection } from "@/components/layout/NavRail";
+import type { AppSection } from "@/components/layout/nav-rail";
 import type { RouteState } from "@/router";
 
 /**

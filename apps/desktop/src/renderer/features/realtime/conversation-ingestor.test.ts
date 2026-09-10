@@ -39,11 +39,14 @@ import {
   taskByNumberKey,
 } from "@/features/task-shell/hooks/use-task-by-number";
 import { taskDetailKey } from "@/features/task-shell/model/task-detail";
-import { channelThreadsKey, channelThreadsUnreadKey } from "@/features/channels/useChannelThreads";
+import {
+  channelThreadsKey,
+  channelThreadsUnreadKey,
+} from "@/features/channels/use-channel-threads";
 import {
   channelAttachmentsKey,
   channelAttachmentSendersKey,
-} from "@/features/channels/useChannelAttachments";
+} from "@/features/channels/use-channel-attachments";
 import { agentRunStatesKey } from "@/features/agent-shell/model/agent-run-state-cache";
 import { eventWsClient } from "@/lib/ws-client";
 import {

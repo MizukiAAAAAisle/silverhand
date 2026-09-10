@@ -1,18 +1,18 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Maximize2, Minimize2, Paperclip, Search, Settings, X } from "lucide-react";
 import { ThreadIcon } from "@/components/icons/conversation-icons";
-import { Composer } from "@/components/chat/Composer";
-import { SelectionQuoteToolbar } from "@/components/chat/SelectionQuoteToolbar";
-import { ChannelJoinBar } from "@/components/chat/ChannelJoinBar";
-import { QuotedMessagePreview } from "@/components/chat/QuotedMessagePreview";
-import { findThreadAnchor, readAnchorMessageId } from "@/components/chat/threadAnchor";
+import { Composer } from "@/components/chat/composer";
+import { SelectionQuoteToolbar } from "@/components/chat/selection-quote-toolbar";
+import { ChannelJoinBar } from "@/components/chat/channel-join-bar";
+import { QuotedMessagePreview } from "@/components/chat/quoted-message-preview";
+import { findThreadAnchor, readAnchorMessageId } from "@/components/chat/thread-anchor";
 import { openAttachmentExternally } from "@/components/chat/open-attachment";
 import {
   attachmentPreviewKind,
   resolveAttachmentOpenRoute,
 } from "@/features/attachments/attachment-preview";
 import { ConversationViewSkeleton } from "@/features/conversation-shell/components/conversation-view-skeleton";
-import { AddConversationMemberPopover } from "@/features/conversations/AddConversationMemberPopover";
+import { AddConversationMemberPopover } from "@/features/conversations/add-conversation-member-popover";
 import { TaskRefContextProvider } from "@/features/task-shell/components/task-ref-context";
 import { ChannelSettingsDialog } from "./channel-settings-dialog";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
@@ -36,18 +36,18 @@ import {
   observeVisibleTail,
   type TailReadMark,
 } from "@/features/conversation-shell/model/channel-read";
-import type { WorkspaceChannelReference } from "@/components/chat/ConversationRef";
+import type { WorkspaceChannelReference } from "@/components/chat/conversation-ref";
 import { MemberStrip } from "./channel-view/member-strip";
 import { MembersButton } from "./channel-view/members-button";
 import { ChannelMembersDialog } from "./channel-view/members-dialog";
 import { MessageList } from "./channel-view/message-list";
 import { InlineFindBar } from "./inline-find-bar";
-import { useInlineFindController, useInlineFindHotkey } from "@/features/search/useInlineFind";
+import { useInlineFindController, useInlineFindHotkey } from "@/features/search/use-inline-find";
 import {
   directPairSenderSeed,
   type AdvancedSearchSeed,
 } from "@/features/search/advanced-search-seed";
-import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import type { AttachmentSnapshot, ConversationVisibility } from "@silverhand/shared";
 import type { ConversationPaneDescriptor } from "@/features/conversations/pane-descriptor";
 import {
@@ -63,7 +63,7 @@ import { ConversationTabBar } from "./channel-view/conversation-tab-bar";
 import { ChannelTasksTab } from "./channel-view/channel-tasks-tab";
 import { ChannelAttachmentTab } from "./channel-view/channel-attachment-tab";
 import { ConversationPanelTab } from "./channel-view/conversation-panel-tab";
-import { useConversationTabs } from "@/features/conversations/useConversationTabs";
+import { useConversationTabs } from "@/features/conversations/use-conversation-tabs";
 import { tabKey, type PanelTabKind } from "@/features/conversation-shell/model/conversation-tabs";
 import {
   taskBoardContainerForPane,

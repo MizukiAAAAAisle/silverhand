@@ -12,7 +12,7 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { Check, ChevronDown, ChevronUp, Copy, Hash } from "lucide-react";
-import { rehypeHighlightTerm } from "./rehypeHighlightTerm";
+import { rehypeHighlightTerm } from "./rehype-highlight-term";
 import type { AgentDto, UserDto } from "@silverhand/shared";
 import { ADDRESSABLE_ID_PATTERN } from "@silverhand/shared";
 import { isAutolink } from "@silverhand/shared/reference-markdown";
@@ -21,18 +21,18 @@ import {
   markdownByteLength,
   MESSAGE_RENDER_BUDGET_BYTES,
 } from "./markdown-render-budget";
-import { Mention } from "./Mention";
-import { MermaidDiagram } from "./MermaidDiagram";
-import { ChannelRef, type ChannelReference } from "./ChannelRef";
-import { LocatorRef, LocatorRefStaticChip } from "./LocatorRef";
+import { Mention } from "./mention";
+import { MermaidDiagram } from "./mermaid-diagram";
+import { ChannelRef, type ChannelReference } from "./channel-ref";
+import { LocatorRef, LocatorRefStaticChip } from "./locator-ref";
 import {
   ConversationRef,
   conversationIcon,
   faceLabel,
   shortConversationId,
   type WorkspaceChannelReference,
-} from "./ConversationRef";
-import { TaskRef, TaskRefStaticChip, type StaticTaskRefSummary } from "./TaskRef";
+} from "./conversation-ref";
+import { TaskRef, TaskRefStaticChip, type StaticTaskRefSummary } from "./task-ref";
 import {
   AUTHORED_HREF_PROP,
   classifyReferenceHref,

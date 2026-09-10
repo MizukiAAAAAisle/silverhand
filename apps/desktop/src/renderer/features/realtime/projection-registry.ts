@@ -15,7 +15,7 @@ import {
   hasActiveChannelThreadsReader,
   invalidateChannelThreadsList,
   mergeThreadsListEntry,
-} from "@/features/channels/useChannelThreads";
+} from "@/features/channels/use-channel-threads";
 
 /**
  *  - `merged`              — a DISPLAYED projection was written synchronously with

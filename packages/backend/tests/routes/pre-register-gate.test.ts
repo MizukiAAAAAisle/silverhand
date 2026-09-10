@@ -19,7 +19,7 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
  *     no registration state and should keep working even before the
  *     human registers.
  *
- * The renderer-side gate in `App.tsx` is the user-friendly half;
+ * The renderer-side gate in `app.tsx` is the user-friendly half;
  * this middleware is the security half (V2 multi-user, CLI tools,
  * any non-renderer caller).
  */

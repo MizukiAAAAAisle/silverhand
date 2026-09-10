@@ -57,7 +57,7 @@ import {
   optimisticSelfAuthor,
 } from "@/features/channels/pending-message";
 import { api, ApiError, apiUpload } from "@/lib/api";
-import { channelThreadsKey } from "@/features/channels/useChannelThreads";
+import { channelThreadsKey } from "@/features/channels/use-channel-threads";
 import { conversationUnreadKey } from "@/features/channels/message-unread";
 import { getCurrentUserId } from "@/features/session/current-user";
 import { getHydratedViewer } from "@/features/session/hooks";
@@ -68,7 +68,7 @@ import {
   agentRunStatesKey,
   reconcileAgentRunStateSnapshot,
 } from "@/features/agent-shell/model/agent-run-state-cache";
-import { wsConversationScope, wsConversationSideScope } from "@/hooks/useConversationStream";
+import { wsConversationScope, wsConversationSideScope } from "@/hooks/use-conversation-stream";
 import { clusterInitialFetchEnabled } from "@/features/conversation-shell/model/thread-mark-read";
 import {
   mainlineStreamSourceHead,

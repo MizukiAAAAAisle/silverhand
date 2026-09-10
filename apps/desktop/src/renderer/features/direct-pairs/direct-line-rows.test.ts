@@ -142,7 +142,7 @@ describe("mergeDirectLineRows — one line per agent, and who owns it", () => {
 
   it("highlights EXACTLY one row in each reachable configuration", () => {
     // The two selection carriers are mutually exclusive by route:
-    // `/chat/d/new/:agentId` puts nothing in `selectedChannelId` (App.tsx: «Nothing
+    // `/chat/d/new/:agentId` puts nothing in `selectedChannelId` (app.tsx: «Nothing
     // is selected while it is set»), so "a draft is open" and "a conversation is
     // open" never arrive together. Both cells must land on one highlight — a
     // sidebar with none is the reported bug, and one with two would be the same

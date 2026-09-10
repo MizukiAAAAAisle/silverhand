@@ -22,7 +22,7 @@ import {
   AppContextMenuItem,
   AppDropdownMenu,
   AppDropdownMenuItem,
-} from "@/components/menus/AppContextMenu";
+} from "@/components/menus/app-context-menu";
 import {
   isRemovable,
   tabKey,

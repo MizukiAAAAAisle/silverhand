@@ -45,12 +45,12 @@ import {
   hasActiveChannelThreadsReader,
   invalidateChannelThreadsList,
   invalidateChannelThreadsUnread,
-} from "@/features/channels/useChannelThreads";
+} from "@/features/channels/use-channel-threads";
 import {
   hasActiveChannelAttachmentsReader,
   invalidateChannelAttachmentsList,
   invalidateChannelAttachmentSenders,
-} from "@/features/channels/useChannelAttachments";
+} from "@/features/channels/use-channel-attachments";
 import {
   applyAgentStatusToCache,
   applyClusterMessageToCaches,

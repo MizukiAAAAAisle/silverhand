@@ -1,9 +1,9 @@
-import { ProfileMessageActivity } from "@/features/profile/ProfileMessageActivity";
+import { ProfileMessageActivity } from "@/features/profile/profile-message-activity";
 import dayjs from "dayjs";
 import type { UserDto } from "@silverhand/shared";
 import { MetadataList, ProfileSection } from "@/features/profile/profile-summary-sections";
 import { useHumanAvatar } from "./use-human-avatar";
-import { UserAvatar } from "@/components/UserAvatar";
+import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useProfileHeroSize } from "@/features/profile/use-profile-hero-size";
 import "@/features/agent-shell/components/agent-profile-hero.css";

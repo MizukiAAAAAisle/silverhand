@@ -1,6 +1,6 @@
 import { Bell, BellOff, Check } from "lucide-react";
 import type { ChannelAttentionMode } from "@silverhand/shared";
-import { AppContextMenuItem, AppContextMenuSeparator } from "@/components/menus/AppContextMenu";
+import { AppContextMenuItem, AppContextMenuSeparator } from "@/components/menus/app-context-menu";
 import {
   useSetChannelAttentionPreference,
   useSetWorkspaceAttentionPreference,

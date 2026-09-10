@@ -256,7 +256,7 @@ useConversationStream(conversationId, onEvent, scope)
 
 ## 7. UI：Composer 内置 Activity Header（方案 A）
 
-`ComposerActivityHeader.tsx`（旧 `AgentActivityBubble.tsx` / `AgentActivityStrip` /
+`composer-activity-header.tsx`（旧 `AgentActivityBubble.tsx` / `AgentActivityStrip` /
 `AgentActivityDock` 已废弃删除）渲染为 **Composer 输入框 shell 盒子的第一个子元素**，
 与 textarea 共用同一圈圆角边框（无浮层、无阴影、无缝隙）。读感是"输入区在忙"，不是
 调试 HUD。

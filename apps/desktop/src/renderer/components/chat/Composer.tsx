@@ -27,8 +27,8 @@ import {
 } from "@silverhand/shared/reference-markdown";
 import { MAX_ATTACHMENTS, shouldInterceptOversizedPaste } from "./oversize-paste";
 import { Button } from "@/components/ui/button";
-import { AgentAvatar } from "@/components/AgentAvatar";
-import { UserAvatar } from "@/components/UserAvatar";
+import { AgentAvatar } from "@/components/agent-avatar";
+import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
@@ -44,7 +44,7 @@ import {
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import type { ComposerDirectory, MentionAgent } from "@/features/conversations/pane-mode";
 
-import { useConversationMembers } from "@/features/conversations/useConversationMembers";
+import { useConversationMembers } from "@/features/conversations/use-conversation-members";
 import { useSendMessage } from "@/features/channels/hooks";
 import {
   isBackendUnreachable,
@@ -70,8 +70,8 @@ import {
   type ComposerDraftSnapshot,
 } from "@/features/messages/composer-draft-cache";
 import { onQuoteToComposer, spliceQuoteIntoDraft } from "@/features/messages/quote-to-composer";
-import { Lightbox } from "./Lightbox";
-import { ComposerActivityHeader } from "./ComposerActivityHeader";
+import { Lightbox } from "./lightbox";
+import { ComposerActivityHeader } from "./composer-activity-header";
 
 interface ComposerProps {
   conversationId: string;
@@ -1288,7 +1288,7 @@ const HANDLE_CHAR = /[\p{L}\p{N}\p{M}_-]/u;
 // BECOMES: `PLAIN_MENTION_PATTERN` in `packages/shared/src/api/message.ts`
 // (`(?<![\w/])@…`, which the send-time rewrite uses to pick the runs it
 // turns into canonical references — #task:2001) and `canStartRef` in
-// `Markdown.tsx` (`!/[\w]/.test(prev)`, the render authority). Both treat a
+// `markdown.tsx` (`!/[\w]/.test(prev)`, the render authority). Both treat a
 // preceding CJK char as a boundary and DO produce a mention there — so a
 // Unicode class here made the picker strictly stricter than the product: in
 // prose without spaces (`谢谢@alice`) the menu refused to open even though
@@ -1309,7 +1309,7 @@ const TOKEN_TAIL_CHAR = /\w/;
  * trigger must not be the tail of another token — ASCII word char or
  * `/` — so `me@example.com` and `path/@thing` stay quiet while CJK
  * prose (`谢谢@alice`) opens the menu with no space needed. Mirrors
- * `canStartRef` in `Markdown.tsx` and `PLAIN_MENTION_PATTERN` in
+ * `canStartRef` in `markdown.tsx` and `PLAIN_MENTION_PATTERN` in
  * `packages/shared/src/api/message.ts`; see `TOKEN_TAIL_CHAR`.
  *
  * Exported for unit tests (pure function; no DOM).

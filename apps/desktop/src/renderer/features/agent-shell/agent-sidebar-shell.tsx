@@ -21,8 +21,8 @@ import {
 import { useRelatedUsers } from "@/features/users/related-users";
 import { usePresenceById, presenceDotStatus } from "@/features/presence/hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
-import { AgentAvatar } from "@/components/AgentAvatar";
-import { UserAvatar } from "@/components/UserAvatar";
+import { AgentAvatar } from "@/components/agent-avatar";
+import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { Button } from "@/components/ui/button";
 import { CURRENT_USER_SUBTITLE } from "@/features/session/current-user";

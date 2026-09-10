@@ -4,7 +4,7 @@ import {
   AppContextMenuItem,
   AppContextMenuSeparator,
   AppContextMenuSub,
-} from "@/components/menus/AppContextMenu";
+} from "@/components/menus/app-context-menu";
 import { ChannelAttentionMenuItems } from "../../conversation-shell/components/channel-attention-surfaces";
 import { copyConversationName } from "../../../components/layout/sidebar-shared";
 

@@ -15,7 +15,7 @@ import type {
   AgentWorkspaceTree,
   AgentWorkspaceTreeNode,
 } from "@silverhand/shared";
-import { Markdown } from "@/components/chat/Markdown";
+import { Markdown } from "@/components/chat/markdown";
 import { cn } from "@/lib/cn";
 
 /**

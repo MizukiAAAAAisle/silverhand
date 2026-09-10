@@ -683,7 +683,7 @@ export function useChannelSortState(workspaceId: string | null, workspaceResolve
  *  Backed by `GET /api/workspaces/:id/channels/archived`. Runs for EVERY
  *  container kind — the endpoint is channel-like and returns archived
  *  `dm_channel`s for an agent space just as it returns archived `channel`s for a
- *  regular workspace (#task:1144). This union feeds `channels` in App.tsx, so an
+ *  regular workspace (#task:1144). This union feeds `channels` in app.tsx, so an
  *  archived DM opened from the global Archived panel resolves to a real
  *  `selectedChannel` instead of a blank pane (#task:1145). The gate that
  *  remains is `workspaceResolved` — the one cell of the old kind predicate with

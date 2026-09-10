@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { matchPath, useLocation, useNavigate } from "react-router-dom";
-import type { AppSection } from "@/components/layout/NavRail";
+import type { AppSection } from "@/components/layout/nav-rail";
 import type { LocatorTarget } from "@/features/conversations/locator-target";
 
 /**

@@ -4,8 +4,8 @@ import type { TaskDetailDto } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
 import { TaskIcon } from "@/features/task-shell/components/task-icon";
 import { MiniIconButton } from "@/features/task-shell/components/mini-icon-button";
-import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/SidePanelHeader";
-import { Markdown } from "@/components/chat/Markdown";
+import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
+import { Markdown } from "@/components/chat/markdown";
 import {
   FAILURE_COPY,
   InlineFieldEditor,

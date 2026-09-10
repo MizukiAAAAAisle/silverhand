@@ -81,7 +81,7 @@ import type {
   RuntimeKind,
 } from "@silverhand/shared";
 import { RuntimeKindSchema, RUNTIME_ORDER_LIST, runtimeLabel } from "@silverhand/shared";
-import { AgentAvatar } from "@/components/AgentAvatar";
+import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import {

@@ -1,9 +1,9 @@
 import { useMemo, type ComponentType } from "react";
 import type { MessageDto, UserDto } from "@silverhand/shared";
 import { useUsersById, makeUserNameResolver } from "@/features/users/hooks";
-import { Markdown } from "@/components/chat/Markdown";
-import type { WorkspaceChannelReference } from "@/components/chat/ConversationRef";
-import type { ChannelReference } from "@/components/chat/ChannelRef";
+import { Markdown } from "@/components/chat/markdown";
+import type { WorkspaceChannelReference } from "@/components/chat/conversation-ref";
+import type { ChannelReference } from "@/components/chat/channel-ref";
 
 /**
  * Shared hook: build a resolver that maps `user_id` → display name.

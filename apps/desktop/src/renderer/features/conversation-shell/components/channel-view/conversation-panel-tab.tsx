@@ -4,7 +4,7 @@ import type {
   ConversationAgentRuntimeDto,
   ConversationVisibility,
 } from "@silverhand/shared";
-import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import type { PanelTabKind } from "@/features/conversation-shell/model/conversation-tabs";
 import { ChannelAttachmentsContent } from "@/features/conversation-shell/components/channel-attachments-panel";
 import { ChannelThreadsContent } from "@/features/conversation-shell/components/channel-threads-panel";

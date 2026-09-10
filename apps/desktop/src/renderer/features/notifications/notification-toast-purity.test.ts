@@ -30,14 +30,14 @@ describe("notification toast surface — surfaced ≠ eliminated", () => {
 });
 
 describe("conversation focus surface — must not drain notification read_at", () => {
-  const appSource = readFileSync(fileURLToPath(new URL("../../App.tsx", import.meta.url)), "utf8");
+  const appSource = readFileSync(fileURLToPath(new URL("../../app.tsx", import.meta.url)), "utf8");
   const focusSelectorSource = readFileSync(
     fileURLToPath(new URL("../conversation-shell/model/secondary-pane.ts", import.meta.url)),
     "utf8",
   );
   const DRAIN_CALL = "markConversationNotificationsRead.mutate";
 
-  it("App.tsx never invokes the notification drain directly (no focus-drain)", () => {
+  it("app.tsx never invokes the notification drain directly (no focus-drain)", () => {
     // The Activity rail's channel/thread panes are the SAME route-driven
     // ChannelView/ThreadPanel as chat; notification clearing is an explicit
     // Activity-row action, not a shell effect. A re-introduced focus-drain

@@ -32,7 +32,7 @@ pass would not have prevented the bug that motivated S2.
   to another. The genuine hazard is **MessageSeq ↔ TransportSeq** (a persisted
   message ordinal vs. an ephemeral per-WS-scope event counter): the same
   `number` carrying two unrelated meanings. The renderer seam at
-  `useConversationStream.ts:75` (copies a TransportSeq into a payload a business
+  `use-conversation-stream.ts:75` (copies a TransportSeq into a payload a business
   hook could read as a MessageSeq) is exactly this — "one number, two meanings",
   the same shape as the false-stale bug class.
 - **Axis B — optionality collapse.** `map.get(k) ?? 0` conflates *"absent /
@@ -155,7 +155,7 @@ contract decisions (this doc), not renderer-local choices. Four kinds:
    instances:
    - **close-watermark**: `MessageUnreadPointerDto.seq` → `recordCloseWatermark()`
      → localStorage → `resolveChannelOpen(pointer.seq > watermark)`
-     (`App.tsx` / `place-memory.ts` / `channel-open.ts:34`). localStorage hydrate
+     (`app.tsx` / `place-memory.ts` / `channel-open.ts:34`). localStorage hydrate
      is a **decode boundary** (§4.1).
    - **mainline tail-read gate**: `tailSeq = messages.at(-1).seq`
      → `nextTailReadMark()` → `TailReadMark.seq` (`ChannelView.tsx:289-304`,

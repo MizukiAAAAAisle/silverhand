@@ -1,9 +1,9 @@
 import { useState, type ReactElement, type JSX } from "react";
 import { LogOut } from "lucide-react";
-import { AppContextMenu, AppContextMenuItem } from "@/components/menus/AppContextMenu";
+import { AppContextMenu, AppContextMenuItem } from "@/components/menus/app-context-menu";
 import { useWorkspaceMemberLists } from "@/features/workspaces/hooks";
 import { canLeaveWorkspace } from "@/features/workspaces/workspace-permissions";
-import { LeaveWorkspaceConfirmDialog } from "@/features/workspaces/LeaveWorkspaceConfirmDialog";
+import { LeaveWorkspaceConfirmDialog } from "@/features/workspaces/leave-workspace-confirm-dialog";
 import { WorkspaceMuteMenuItem } from "../../conversation-shell/components/channel-attention-surfaces";
 
 /**

@@ -7,10 +7,10 @@ import {
 import { Plus } from "lucide-react";
 import { useSortable } from "@dnd-kit/sortable";
 import { ChannelRow } from "./channel-row";
-import { AppContextMenu } from "@/components/menus/AppContextMenu";
+import { AppContextMenu } from "@/components/menus/app-context-menu";
 import { ChannelRowMenuItems } from "./channel-row-menu-items";
 import { NESTED_GLYPH_INSET } from "@/components/layout/sidebar-shared";
-import { SortModeMenu } from "@/components/layout/SortModeMenu";
+import { SortModeMenu } from "@/components/layout/sort-mode-menu";
 import {
   SortableGroup,
   animateLayoutChanges,
@@ -121,7 +121,7 @@ export function WorkspaceChannels({
   // The old second column got it joined at the composition root; here the join
   // is local — this subtree already holds both halves of the same cache entry,
   // and a per-workspace join is what lets many workspaces render at once without
-  // App.tsx keeping one map per workspace.
+  // app.tsx keeping one map per workspace.
   const nodes = useMemo<ChannelNode[]>(() => {
     const starredAt = new Map<string, number>();
     for (const e of viewerSort?.entries ?? []) {

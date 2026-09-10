@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import * as Select from "@radix-ui/react-select";
 import { ChevronDown } from "lucide-react";
 import type { AgentDto } from "@silverhand/shared";
-import { WorkspaceIcon } from "@/components/WorkspaceIcon";
+import { WorkspaceIcon } from "@/components/workspace-icon";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import type { WorkspaceListItem } from "@/features/workspaces/hooks";

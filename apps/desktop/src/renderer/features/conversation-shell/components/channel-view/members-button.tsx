@@ -1,5 +1,5 @@
 import { Users } from "lucide-react";
-import { useConversationMembers } from "@/features/conversations/useConversationMembers";
+import { useConversationMembers } from "@/features/conversations/use-conversation-members";
 
 /**
  * The channel header's Members action, carrying the current member count

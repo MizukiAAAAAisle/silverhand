@@ -5,12 +5,12 @@ import type {
   HumanMemberDto,
   MemberDto,
 } from "@silverhand/shared";
-import { AgentAvatar } from "@/components/AgentAvatar";
-import { UserAvatar } from "@/components/UserAvatar";
+import { AgentAvatar } from "@/components/agent-avatar";
+import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { STATUS_DOT } from "@/components/status-dot";
-import { AgentInfoPopover } from "@/components/AgentInfoPopover";
-import { HumanInfoPopover } from "@/components/HumanInfoPopover";
+import { AgentInfoPopover } from "@/components/agent-info-popover";
+import { HumanInfoPopover } from "@/components/human-info-popover";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { projectMemberRuntimeStatus } from "@/features/agent-shell/model/member-runtime-status";
 import {
@@ -26,7 +26,7 @@ import {
   isUpdateRequired,
   useViewerUser,
 } from "@/features/session/hooks";
-import { useConversationMembers } from "@/features/conversations/useConversationMembers";
+import { useConversationMembers } from "@/features/conversations/use-conversation-members";
 import { useNav } from "@/router";
 
 // ── Member strip ────────────────────────────────────────────────────────

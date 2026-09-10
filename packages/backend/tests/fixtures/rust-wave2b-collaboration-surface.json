@@ -80,7 +80,7 @@
       "kind": "workspace_channels_changed",
       "scope": "workspace",
       "publisher_sources": ["services/channel-service.ts", "application/conversation-member.ts"],
-      "consumer_sources": ["apps/desktop/src/renderer/features/channels/useViewerChannelRemovalSync.ts", "apps/desktop/src/renderer/features/attention/hooks.ts", "apps/desktop/src/renderer/features/saved/hooks.ts"],
+      "consumer_sources": ["apps/desktop/src/renderer/features/channels/use-viewer-channel-removal-sync.ts", "apps/desktop/src/renderer/features/attention/hooks.ts", "apps/desktop/src/renderer/features/saved/hooks.ts"],
       "cold_authorities": ["GET /api/workspaces/:id/channels", "GET /api/workspaces/:id/channels/archived", "GET /api/attention/badges", "GET /api/attention/modes", "GET /api/saved"],
       "integration_owner": "#2194 owns channel mutations and the typed projector; #2193 cross-domain membership UoWs consume the effect port"
     },

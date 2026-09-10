@@ -18,13 +18,13 @@ import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
 import { CONTROL_HOVER_LIFT } from "@/components/common/control-ink-border";
 import { destructiveAction, DESTRUCTIVE_TRIGGER } from "@/components/common/destructive-action";
 import { cn } from "@/lib/cn";
-import { useAppearance } from "@/hooks/useAppearance";
+import { useAppearance } from "@/hooks/use-appearance";
 import {
   MESSAGE_LAYOUT_MODES,
   setMessageLayoutMode,
   useMessageLayoutMode,
   type MessageLayoutMode,
-} from "@/components/chat/useMessageLayoutMode";
+} from "@/components/chat/use-message-layout-mode";
 import {
   isBackendUnreachable,
   isRegistrationRequired,

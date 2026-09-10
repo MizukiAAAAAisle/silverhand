@@ -1,7 +1,7 @@
 import { Bot } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { AgentAvatar } from "@/components/AgentAvatar";
-import { UserAvatar } from "@/components/UserAvatar";
+import { AgentAvatar } from "@/components/agent-avatar";
+import { UserAvatar } from "@/components/user-avatar";
 import type { AuthorAvatar, AuthorPresentation } from "./author-presentation";
 
 /**

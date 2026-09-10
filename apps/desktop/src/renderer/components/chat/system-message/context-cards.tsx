@@ -12,11 +12,11 @@ import {
 } from "@silverhand/shared";
 import { makeUserNameResolver } from "@/features/users/hooks";
 import { formatUserDisplayName } from "@/features/session/current-user";
-import { Markdown } from "@/components/chat/Markdown";
-import { ConversationRef } from "@/components/chat/ConversationRef";
-import type { WorkspaceChannelReference } from "@/components/chat/ConversationRef";
-import type { ChannelReference } from "@/components/chat/ChannelRef";
-import { useRelativeTime } from "@/components/chat/useRelativeTime";
+import { Markdown } from "@/components/chat/markdown";
+import { ConversationRef } from "@/components/chat/conversation-ref";
+import type { WorkspaceChannelReference } from "@/components/chat/conversation-ref";
+import type { ChannelReference } from "@/components/chat/channel-ref";
+import { useRelativeTime } from "@/components/chat/use-relative-time";
 import { type RendererProps, useUserResolver, firstLine } from "./shared";
 
 type ContextCardKind = "quoted" | "inherited" | "spawned";

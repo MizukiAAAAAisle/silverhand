@@ -1,6 +1,6 @@
 import { AlarmClock } from "lucide-react";
 import { readScheduleFireMetadata } from "@silverhand/shared";
-import { useRelativeTime } from "@/components/chat/useRelativeTime";
+import { useRelativeTime } from "@/components/chat/use-relative-time";
 import type { RendererProps } from "./shared";
 
 export function ScheduleFireRow({ message }: RendererProps): JSX.Element {

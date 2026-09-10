@@ -49,7 +49,7 @@ import type { ConversationRef, DirectPairListItem } from "@silverhand/shared";
 import {
   useConversationById,
   type ConversationByIdResult,
-} from "@/features/conversations/useConversationById";
+} from "@/features/conversations/use-conversation-by-id";
 import { useDirectPairsList, type DirectPairListQueryFacts } from "@/features/direct-pairs/hooks";
 import { presentCounterpart } from "@/features/direct-pairs/counterpart-presentation";
 import {

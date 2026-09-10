@@ -3,7 +3,7 @@ import { useNav, useRouteState } from "@/router";
 import {
   useMessageJumpController,
   type MessageJumpTarget,
-} from "@/features/channels/useMessageJumpController";
+} from "@/features/channels/use-message-jump-controller";
 import type { DirectPairAuthority } from "@/features/chat-shell/model/chat-place-restore";
 import { executeMessageJump, type MessageJumpEnvironment } from "./message-jump";
 

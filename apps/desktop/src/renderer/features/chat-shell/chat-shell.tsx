@@ -1,19 +1,19 @@
 import { useChatBrowse } from "./use-chat-browse";
 import { useWorkspaceActions } from "./use-workspace-actions";
 import { ChatSidebar } from "@/features/chat-shell/sidebar/chat-sidebar";
-import { SectionLayer } from "@/components/layout/SectionLayer";
+import { SectionLayer } from "@/components/layout/section-layer";
 import { SavedListView } from "@/features/chat-shell/saved-list-view";
 import { SearchPanel } from "@/features/chat-shell/search-panel";
 import { ArchivedChannelsPanel } from "@/features/chat-shell/archived-channels-panel";
-import { VerticalSplitter } from "@/components/layout/VerticalSplitter";
+import { VerticalSplitter } from "@/components/layout/vertical-splitter";
 import {
   SIDEBAR_ANIMATE_LAYOUT,
   SIDEBAR_PERFORMANCE_VARIANT,
 } from "@/sidebar-performance-experiment";
-import { useResizableWidth } from "@/hooks/useResizableWidth";
-import { CreateWorkspaceDialog } from "@/features/workspaces/CreateWorkspaceDialog";
-import { CreateChannelDialog } from "@/features/workspaces/CreateChannelDialog";
-import { WorkspaceSettingsDialog } from "@/features/workspaces/WorkspaceSettingsDialog";
+import { useResizableWidth } from "@/hooks/use-resizable-width";
+import { CreateWorkspaceDialog } from "@/features/workspaces/create-workspace-dialog";
+import { CreateChannelDialog } from "@/features/workspaces/create-channel-dialog";
+import { WorkspaceSettingsDialog } from "@/features/workspaces/workspace-settings-dialog";
 import { workspaceCapabilities } from "@/features/workspaces/workspace-capabilities";
 import type { ChatShellModel } from "@/features/conversation-shell/conversation-shell-models";
 import type { ConversationContent } from "@/features/conversation-shell/conversation-content";

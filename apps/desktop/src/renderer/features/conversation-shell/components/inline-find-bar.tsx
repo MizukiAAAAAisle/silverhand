@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useCallback } from "react";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
-import { type InlineFindController, inlineFindKeyAction } from "@/features/search/useInlineFind";
+import { type InlineFindController, inlineFindKeyAction } from "@/features/search/use-inline-find";
 
 /**
  * The fixed search bar for the in-conversation header find (#task:1335).

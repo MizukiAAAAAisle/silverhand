@@ -1,8 +1,8 @@
 import { Sidebar } from "@/components/layout/sidebar";
-import { SectionLayer } from "@/components/layout/SectionLayer";
+import { SectionLayer } from "@/components/layout/section-layer";
 import { ActivityView } from "@/features/activity-shell/activity-view";
-import { VerticalSplitter } from "@/components/layout/VerticalSplitter";
-import { useResizableWidth } from "@/hooks/useResizableWidth";
+import { VerticalSplitter } from "@/components/layout/vertical-splitter";
+import { useResizableWidth } from "@/hooks/use-resizable-width";
 import type { ActivityShellModel } from "@/features/conversation-shell/conversation-shell-models";
 import type { ConversationContent } from "@/features/conversation-shell/conversation-content";
 import { ConversationStage } from "@/features/conversation-shell/conversation-stage";

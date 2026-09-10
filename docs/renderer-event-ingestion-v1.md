@@ -49,10 +49,10 @@ Corollary: scope subscribe/unsubscribe is a **bandwidth optimization**, never a 
   **All share the one `positions[conversation:id]` cursor.**
 - Timing (the core flaw): `message` frame → `handleFrame` → `acceptEventFrame` (**advance cursor first**,
   `recordPosition`) → `frameListeners` dispatch → `useConversationStream`
-  (`hooks/useConversationStream.ts:110`) → per-view `onEvent` → `appendMessageToCache` (**write cache
+  (`hooks/use-conversation-stream.ts:110`) → per-view `onEvent` → `appendMessageToCache` (**write cache
   after**). Cursor advance is decoupled from cache write, and cache write only happens when a view
   registered a listener.
-- `ingestConversationEvent` (`useConversationStream.ts:27`) currently handles **only `agent_activity`**;
+- `ingestConversationEvent` (`use-conversation-stream.ts:27`) currently handles **only `agent_activity`**;
   message-cache writes live in per-view `onEvent` handlers.
 - Message cache: `messagesKey(id)=['channels',id,'messages']` is `InfiniteData` with bidirectional
   paging (`MessagesPageParam = undefined | {before,seq} | {after,seq}`). `appendMessageToCache`

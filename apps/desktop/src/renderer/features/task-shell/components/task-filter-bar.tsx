@@ -10,8 +10,8 @@ import {
 import * as Popover from "@radix-ui/react-popover";
 import { Check, ChevronDown, Layers, PenLine, RotateCcw, Search, User } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { WorkspaceIcon } from "@/components/WorkspaceIcon";
-import { ChannelIcon } from "@/components/ChannelIcon";
+import { WorkspaceIcon } from "@/components/workspace-icon";
+import { ChannelIcon } from "@/components/channel-icon";
 import {
   PersonAvatar,
   usePersonDirectory,

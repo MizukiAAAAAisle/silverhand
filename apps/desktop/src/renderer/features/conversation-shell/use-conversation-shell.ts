@@ -9,7 +9,7 @@ import { useNotificationToasts } from "@/features/notifications/hooks";
 import { useSavedMessages } from "@/features/saved/hooks";
 import type { AdvancedSearchSeed } from "@/features/search/advanced-search-seed";
 import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
-import { useLayoutSettings } from "@/hooks/useLayoutSettings";
+import { useLayoutSettings } from "@/hooks/use-layout-settings";
 import { resolveChannelOpen } from "@/features/conversation-shell/model/channel-open";
 import { getChannelLayout, getCloseWatermark } from "@/features/app-shell/place-memory";
 import { agentSpaceRecognitionName } from "@/features/workspaces/workspace-name";

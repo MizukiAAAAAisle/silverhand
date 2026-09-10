@@ -220,7 +220,7 @@ describe("useAgentRunStates — pure reader / gate-(b) fence (#task:1255 P1c)", 
 
 describe("useChannelThreads — pure reader / gate-(b) fence (#task:1255 P1c)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../features/channels/useChannelThreads.ts", import.meta.url)),
+    fileURLToPath(new URL("../features/channels/use-channel-threads.ts", import.meta.url)),
     "utf8",
   );
   const body = sliceFunctionBody(source, "export function useChannelThreads(");
@@ -377,7 +377,7 @@ describe("conversation-scope subscribe whitelist (#task:1255 P2 step-3)", () => 
   it("useConversationMembers declares SIDE-scope interest via the registry + keeps its own onWsFrame", () => {
     const src = readFileSync(
       fileURLToPath(
-        new URL("../features/conversations/useConversationMembers.ts", import.meta.url),
+        new URL("../features/conversations/use-conversation-members.ts", import.meta.url),
       ),
       "utf8",
     );
@@ -390,7 +390,7 @@ describe("conversation-scope subscribe whitelist (#task:1255 P2 step-3)", () => 
 
   it("useChannelThreads stays on the MESSAGE-STREAM scope", () => {
     const src = readFileSync(
-      fileURLToPath(new URL("../features/channels/useChannelThreads.ts", import.meta.url)),
+      fileURLToPath(new URL("../features/channels/use-channel-threads.ts", import.meta.url)),
       "utf8",
     );
     expect(src).toContain("wsConversationScope(");

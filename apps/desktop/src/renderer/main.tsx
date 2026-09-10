@@ -2,8 +2,8 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
-import { App } from "./App";
-import { queryClient } from "./lib/queryClient";
+import { App } from "./app";
+import { queryClient } from "./lib/query-client";
 // Rajdhani is forza6's tech/racing display face — bundled (not a CDN
 // link) so chrome label / task pill / sidebar count metrics don't
 // flash through a system fallback during a cold start with no network.

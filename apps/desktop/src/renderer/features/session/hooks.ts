@@ -19,7 +19,7 @@ import {
   getAvatarBlobUrl,
   loadAvatarBlobUrl,
 } from "@/features/identity/avatar-blob-cache";
-import { CONVERSATION_MEMBERS_KEY_PREFIX } from "@/features/conversations/useConversationMembers";
+import { CONVERSATION_MEMBERS_KEY_PREFIX } from "@/features/conversations/use-conversation-members";
 import { clearSettingsSection } from "@/features/settings-shell/model/settings-section";
 import { usersKey } from "@/features/users/hooks";
 
@@ -146,7 +146,7 @@ export function isRegistrationRequired(
 
 /**
  * D4.a Commit 5d-fixup (Cindy P1-2): type guard for the
- * backend-unreachable arm. Renderer gates (App.tsx) check this
+ * backend-unreachable arm. Renderer gates (app.tsx) check this
  * BEFORE `isRegistrationRequired` so the connect-banner takes
  * precedence over the setup wizard.
  */

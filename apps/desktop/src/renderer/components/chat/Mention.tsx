@@ -1,6 +1,6 @@
 import type { AgentDto, UserDto } from "@silverhand/shared";
-import { AgentInfoPopover } from "@/components/AgentInfoPopover";
-import { HumanInfoPopover } from "@/components/HumanInfoPopover";
+import { AgentInfoPopover } from "@/components/agent-info-popover";
+import { HumanInfoPopover } from "@/components/human-info-popover";
 import { useUserAvatarObjectUrl } from "@/features/users/avatar-hooks";
 import { useNav } from "@/router";
 import { INLINE_REF_HOVER_CLASS } from "./inline-ref-chip";

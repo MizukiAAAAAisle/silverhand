@@ -4,7 +4,7 @@ import type { AgentDto } from "@silverhand/shared";
 import { MoreVertical, Plus, Settings } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
-import { WorkspaceIcon } from "@/components/WorkspaceIcon";
+import { WorkspaceIcon } from "@/components/workspace-icon";
 
 import {
   SidebarSectionHeader,

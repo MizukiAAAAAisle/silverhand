@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { neutralAction } from "@/components/common/control-ink-border";
 import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
-import { SelectionActionButton } from "./SelectionToolbar";
+import { SelectionActionButton } from "./selection-toolbar";
 
 interface LightboxProps {
   open: boolean;

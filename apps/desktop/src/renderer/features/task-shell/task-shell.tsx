@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { useNav, useRouteState } from "@/router";
 import { TaskDetailDialog } from "@/features/task-shell/components/task-detail-dialog";
-import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import { resolveTaskDetailSurface } from "@/features/task-shell/model/task-detail-surface";
 import { TaskBoard } from "./task-board";
 

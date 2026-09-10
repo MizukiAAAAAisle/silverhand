@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { decodeTransportEpoch, decodeTransportSeq, type ServerFrame } from "@silverhand/shared";
-import { useForeignWorkspaceChannelRemovalSync } from "../channels/useViewerChannelRemovalSync";
+import { useForeignWorkspaceChannelRemovalSync } from "../channels/use-viewer-channel-removal-sync";
 import { applyAttentionFrame, attentionBadgesKey } from "./hooks";
 
 const harness = vi.hoisted(() => ({

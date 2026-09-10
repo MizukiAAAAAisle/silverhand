@@ -1,7 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { activityKey } from "@/features/attention/hooks";
 import { messageReactorsKeyPrefix } from "@/features/channels/reaction-hooks";
-import { CONVERSATION_MEMBERS_KEY_PREFIX } from "@/features/conversations/useConversationMembers";
+import { CONVERSATION_MEMBERS_KEY_PREFIX } from "@/features/conversations/use-conversation-members";
 import { directPairsKey } from "@/features/direct-pairs/hooks";
 import { favoritesKey } from "@/features/favorites/hooks";
 import { hostResourcesKeyPrefix, hostStatusKeyPrefix } from "@/features/computer-shell/hooks/hooks";

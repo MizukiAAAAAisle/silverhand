@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from "@/lib/ws-client";
 import { conversationRefQueryOptions } from "@/features/conversations/conversation-ref-query";
 import { recordChannelWorkspace } from "@/features/channels/channel-workspace-index";
-import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 
 const unreadKey = ["notifications", "unread"] as const;
 const listKey = ["notifications", "list"] as const;

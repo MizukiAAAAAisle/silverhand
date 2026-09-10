@@ -1,6 +1,6 @@
 import type { AgentRunState } from "@silverhand/shared";
 import type { QueryClient } from "@tanstack/react-query";
-import { queryClient } from "@/lib/queryClient";
+import { queryClient } from "@/lib/query-client";
 
 export const AGENT_RUN_STATES_GC_MS = 30 * 60_000;
 const TERMINAL_RUN_TOMBSTONE_TTL_MS = 5 * 60_000;

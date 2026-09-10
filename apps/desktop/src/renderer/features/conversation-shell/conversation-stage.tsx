@@ -1,4 +1,4 @@
-import { SplitPane } from "@/components/layout/SplitPane";
+import { SplitPane } from "@/components/layout/split-pane";
 import { ConversationViewSkeleton } from "@/features/conversation-shell/components/conversation-view-skeleton";
 import type { ConversationContent } from "./conversation-content";
 

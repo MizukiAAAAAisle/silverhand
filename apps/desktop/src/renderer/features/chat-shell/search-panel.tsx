@@ -19,8 +19,8 @@ import {
   FILTER_SELECT_TRIGGER_CLASS as SELECT_TRIGGER_CLASS,
   FILTER_SELECT_CONTENT_CLASS as SELECT_CONTENT_CLASS,
 } from "@/components/ui/filter-select";
-import { WorkspaceIcon } from "@/components/WorkspaceIcon";
-import { ChannelIcon } from "@/components/ChannelIcon";
+import { WorkspaceIcon } from "@/components/workspace-icon";
+import { ChannelIcon } from "@/components/channel-icon";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { AuthorAvatarView, AuthorName } from "@/components/chat/author-avatar-view";
 import { presentAuthor } from "@/components/chat/author-presentation";
@@ -36,7 +36,7 @@ import {
   parseSenderFilter,
   type SenderFilterValue,
 } from "@/components/ui/sender-filter-select";
-import { ListRowsSkeleton } from "../../components/layout/ListRowsSkeleton";
+import { ListRowsSkeleton } from "../../components/layout/list-rows-skeleton";
 import { paneChrome } from "../../components/layout/pane-chrome";
 
 interface SearchPanelProps {

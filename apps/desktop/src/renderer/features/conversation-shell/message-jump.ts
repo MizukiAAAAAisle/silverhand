@@ -1,5 +1,5 @@
-import type { AppSection } from "@/components/layout/NavRail";
-import type { MessageJumpTarget } from "@/features/channels/useMessageJumpController";
+import type { AppSection } from "@/components/layout/nav-rail";
+import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import type { DirectPairAuthority } from "@/features/chat-shell/model/chat-place-restore";
 import {
   resolveJumpNav,

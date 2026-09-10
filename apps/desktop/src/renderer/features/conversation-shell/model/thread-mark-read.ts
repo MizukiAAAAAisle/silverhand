@@ -1,5 +1,5 @@
 import type { MessageSeq } from "@silverhand/shared";
-import type { JumpPhase } from "@/features/channels/messageJumpPhase";
+import type { JumpPhase } from "@/features/channels/message-jump-phase";
 import { lastCommittedSeq, type CachedMessage } from "@/features/channels/pending-message";
 
 /**

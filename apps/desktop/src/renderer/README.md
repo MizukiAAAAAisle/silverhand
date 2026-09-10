@@ -1,6 +1,6 @@
 # Renderer structure
 
-Start at `App.tsx` for application composition, then choose the owning page:
+Start at `app.tsx` for application composition, then choose the owning page:
 
 | Page     | Entry directory           |
 | -------- | ------------------------- |

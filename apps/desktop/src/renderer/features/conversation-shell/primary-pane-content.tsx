@@ -1,5 +1,5 @@
 import { ChannelView } from "@/features/conversation-shell/components/channel-view";
-import { DirectPairDraftPane } from "@/features/direct-pairs/DirectPairDraftPane";
+import { DirectPairDraftPane } from "@/features/direct-pairs/direct-pair-draft-pane";
 import type { PrimaryPaneModel } from "./pane-render-models";
 
 export function PrimaryPaneContent({ model }: { model: PrimaryPaneModel }) {

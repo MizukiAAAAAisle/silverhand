@@ -8,7 +8,7 @@ import type {
 } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { sidebarRowStateClass } from "@/components/layout/sidebar-shared";
-import { ConversationGlyph } from "@/components/ConversationGlyph";
+import { ConversationGlyph } from "@/components/conversation-glyph";
 import { AgentActivityTimeline, AgentStreamActivityTimeline } from "./agent-activity-timeline";
 
 interface AgentActivityPaneProps {
@@ -70,10 +70,7 @@ export function AgentActivityPane(props: AgentActivityPaneProps): JSX.Element {
   );
 }
 
-function ConversationActivityPane({
-  agentId,
-  state,
-}: AgentActivityPaneProps): JSX.Element {
+function ConversationActivityPane({ agentId, state }: AgentActivityPaneProps): JSX.Element {
   const rows = state?.visible_participations ?? [];
   const seats = state?.seats ?? [];
   const groups = useMemo(() => partitionRoster(rows, seats), [rows, seats]);

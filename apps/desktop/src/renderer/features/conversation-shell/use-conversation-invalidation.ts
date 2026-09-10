@@ -13,7 +13,7 @@ import {
 import {
   useForeignWorkspaceChannelRemovalSync,
   useViewerChannelRemovalSync,
-} from "@/features/channels/useViewerChannelRemovalSync";
+} from "@/features/channels/use-viewer-channel-removal-sync";
 
 import { useNav, useRouteState } from "@/router";
 import { lastChannelByWorkspace, persistLastChannel } from "@/features/app-shell/place-memory";

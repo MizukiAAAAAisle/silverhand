@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { Camera } from "lucide-react";
 import { validateAvatarFile, type RuntimeKind } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
-import { AgentAvatar } from "@/components/AgentAvatar";
-import { AvatarPickerButton } from "@/components/AvatarPickerButton";
+import { AgentAvatar } from "@/components/agent-avatar";
+import { AvatarPickerButton } from "@/components/avatar-picker-button";
 import { useUploadAgentAvatar } from "../hooks/hooks";
 
 interface EditableAgentAvatarProps {

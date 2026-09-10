@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import type { TaskStatus } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
-import { AppContextMenu, AppContextMenuItem } from "@/components/menus/AppContextMenu";
+import { AppContextMenu, AppContextMenuItem } from "@/components/menus/app-context-menu";
 
 /**
  * Small inline status chip for task cards (global section + per-conversation Tasks tab).

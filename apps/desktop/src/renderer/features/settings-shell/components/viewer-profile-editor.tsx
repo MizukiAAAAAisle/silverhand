@@ -2,7 +2,7 @@ import { useId, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Loader2, User as UserIcon } from "lucide-react";
 import { validateAvatarFile, type UserDto } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
-import { AvatarPickerButton } from "@/components/AvatarPickerButton";
+import { AvatarPickerButton } from "@/components/avatar-picker-button";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";

@@ -126,7 +126,7 @@ export function Titlebar({
            * no `@`, no `· DM` marker (shiki 2026-08-01, #task:1768). Reads like
            * the person you're talking to; the icon + rail already convey whose
            * space it is. The name itself is resolved upstream via
-           * `agentSpaceRecognitionName` (App.tsx), shared with the rail so the two
+           * `agentSpaceRecognitionName` (app.tsx), shared with the rail so the two
            * can't drift. */}
           {workspaceName}
         </span>

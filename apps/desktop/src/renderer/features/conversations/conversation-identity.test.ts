@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationRef, DirectPairListItem } from "@silverhand/shared";
-import type { ConversationByIdResult } from "@/features/conversations/useConversationById";
+import type { ConversationByIdResult } from "@/features/conversations/use-conversation-by-id";
 import type { DirectPairListQueryFacts } from "@/features/direct-pairs/hooks";
 import {
   conversationPaneDescriptorFromIdentity,
