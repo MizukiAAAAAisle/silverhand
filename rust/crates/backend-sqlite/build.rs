@@ -30,7 +30,7 @@ fn main() {
         .collect();
     assert_eq!(
         hooks,
-        [53, 54, 71, 72, 76, 78, 79, 81, 87],
+        [53, 54, 71, 72, 76, 78, 79, 81, 87, 96],
         "update native migration preconditions for changed shared plan"
     );
 }

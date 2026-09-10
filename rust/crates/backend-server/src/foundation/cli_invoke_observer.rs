@@ -26,6 +26,7 @@ use silverhand_backend_core::{
     foundation::cli_preflight_audit::NonNegativeFiniteF64,
     host_runtime::runtime_credential::RuntimePrincipal,
 };
+use tracing::Instrument;
 
 const CLI_TRACE_PATH: &str = "/internal/agents/{aid}/cli-trace";
 const AVATAR_PATH: &str = "/internal/agents/{aid}/avatar";
@@ -461,7 +462,13 @@ where
     request.extensions_mut().insert(context.clone());
     let started = Instant::now();
 
-    match AssertUnwindSafe(next.run(request)).catch_unwind().await {
+    // A span emits no event by itself. ERROR keeps its generated identity
+    // available to failure logs under the production ERROR-only default filter.
+    let span = tracing::error_span!("cli_request", request_id = request_id.as_str());
+    match AssertUnwindSafe(next.run(request).instrument(span))
+        .catch_unwind()
+        .await
+    {
         Ok(response) => {
             let status = response.status();
             let terminal = response

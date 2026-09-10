@@ -95,12 +95,22 @@ pub enum TaskStoreError {
 /// Erase a driver read error into the port's safe-500. Private to the module, so
 /// each read leaf routes its `sqlx` failures through the same source.
 fn driver(error: sqlx::Error) -> PersistenceFailure {
+    tracing::error!(
+        stage = "task_store",
+        failure_kind = "database",
+        "task persistence failed"
+    );
     PersistenceFailure::from_source(TaskStoreError::Sql(error))
 }
 
 /// Erase a named corruption reason into the port's safe-500, preserving the
 /// offending column so an operator can find it.
 fn corrupt(field: &'static str) -> PersistenceFailure {
+    tracing::error!(
+        stage = "task_decode",
+        field,
+        "stored task violates domain contract"
+    );
     PersistenceFailure::from_source(TaskStoreError::Corrupt { field })
 }
 

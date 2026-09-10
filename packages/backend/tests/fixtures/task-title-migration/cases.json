@@ -1,0 +1,409 @@
+[
+  {
+    "name": "plain",
+    "raw": "hello world",
+    "canonical": "hello world",
+    "refusal": null
+  },
+  {
+    "name": "trim_and_collapse",
+    "raw": "  hello   world  ",
+    "canonical": "hello world",
+    "refusal": null
+  },
+  {
+    "name": "crlf_run_is_one_space",
+    "raw": "a\r\nb",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "empty",
+    "raw": "",
+    "canonical": null,
+    "refusal": "empty"
+  },
+  {
+    "name": "all_whitespace_mixed",
+    "raw": " \t\r\n　﻿",
+    "canonical": null,
+    "refusal": "empty"
+  },
+  {
+    "name": "nel_is_preserved_at_both_ends",
+    "raw": "ab",
+    "canonical": "ab",
+    "refusal": null
+  },
+  {
+    "name": "nel_only_is_a_valid_title",
+    "raw": "",
+    "canonical": "",
+    "refusal": null
+  },
+  {
+    "name": "mvs_is_preserved_at_both_ends",
+    "raw": "᠎a᠎᠎b᠎",
+    "canonical": "᠎a᠎᠎b᠎",
+    "refusal": null
+  },
+  {
+    "name": "non_member_adjacent_to_member",
+    "raw": "a b",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "cap_exactly_at_limit",
+    "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "canonical": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "refusal": null
+  },
+  {
+    "name": "cap_one_over_limit",
+    "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "canonical": null,
+    "refusal": "too_long"
+  },
+  {
+    "name": "raw_huge_but_canonical_tiny",
+    "raw": "a                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        b",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "raw_over_limit_but_canonical_exactly_at_limit",
+    "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa   b",
+    "canonical": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa b",
+    "refusal": null
+  },
+  {
+    "name": "astral_exactly_at_limit",
+    "raw": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+    "canonical": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+    "refusal": null
+  },
+  {
+    "name": "astral_one_scalar_over_limit",
+    "raw": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+    "canonical": null,
+    "refusal": "too_long"
+  },
+  {
+    "name": "astral_tips_a_mixed_title_over",
+    "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+    "canonical": null,
+    "refusal": "too_long"
+  },
+  {
+    "name": "astral_lands_a_mixed_title_exactly_at_limit",
+    "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+    "canonical": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+    "refusal": null
+  },
+  {
+    "name": "member_u0009_trims_and_collapses",
+    "raw": "\ta\t\tb\t",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u000a_trims_and_collapses",
+    "raw": "\na\n\nb\n",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u000b_trims_and_collapses",
+    "raw": "\u000ba\u000b\u000bb\u000b",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u000c_trims_and_collapses",
+    "raw": "\fa\f\fb\f",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u000d_trims_and_collapses",
+    "raw": "\ra\r\rb\r",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u0020_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u00a0_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u1680_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u2000_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u2001_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u2002_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u2003_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u2004_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u2005_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u2006_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u2007_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u2008_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u2009_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u200a_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u2028_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u2029_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u202f_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u205f_trims_and_collapses",
+    "raw": " a  b ",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_u3000_trims_and_collapses",
+    "raw": "　a　　b　",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "member_ufeff_trims_and_collapses",
+    "raw": "﻿a﻿﻿b﻿",
+    "canonical": "a b",
+    "refusal": null
+  },
+  {
+    "name": "whitespace_9",
+    "raw": "\ta\t\tb\t",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_10",
+    "raw": "\na\n\nb\n",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_11",
+    "raw": "\u000ba\u000b\u000bb\u000b",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_12",
+    "raw": "\fa\f\fb\f",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_13",
+    "raw": "\ra\r\rb\r",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_32",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_160",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_5760",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8192",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8193",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8194",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8195",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8196",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8197",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8198",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8199",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8200",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8201",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8202",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8232",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8233",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8239",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_8287",
+    "raw": " a  b ",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_12288",
+    "raw": "　a　　b　",
+    "canonical": "a b"
+  },
+  {
+    "name": "whitespace_65279",
+    "raw": "﻿a﻿﻿b﻿",
+    "canonical": "a b"
+  },
+  {
+    "name": "historical_shape_474",
+    "raw": "把  system",
+    "canonical": "把 system"
+  },
+  {
+    "name": "historical_shape_836",
+    "raw": "codex  restart",
+    "canonical": "codex restart"
+  },
+  {
+    "name": "historical_shape_924",
+    "raw": "human  + remote",
+    "canonical": "human + remote"
+  },
+  {
+    "name": "historical_shape_857",
+    "raw": "启动  claude",
+    "canonical": "启动 claude"
+  },
+  {
+    "name": "historical_shape_988",
+    "raw": "一下  docs",
+    "canonical": "一下 docs"
+  },
+  {
+    "name": "historical_shape_1135",
+    "raw": "加载  mcp",
+    "canonical": "加载 mcp"
+  }
+]

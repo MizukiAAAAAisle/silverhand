@@ -116,7 +116,7 @@ where
         Ok(TaskListAccess::Authorized(scope)) => scope,
         Ok(TaskListAccess::UnknownWorkspace(workspace)) => return unknown_workspace(&workspace),
         Ok(TaskListAccess::Forbidden(reason)) => return forbidden(reason),
-        Err(_) => return safe_500(),
+        Err(_) => return safe_500("resolve_boards"),
     };
 
     // The fetch narrows by the coordinate the witness projects; the per-row re-bind inside
@@ -131,12 +131,12 @@ where
 
     let candidates = match state.fetch.fetch_list_candidates(&candidate_query).await {
         Ok(candidates) => candidates,
-        Err(_) => return safe_500(),
+        Err(_) => return safe_500("fetch_candidates"),
     };
 
     let rows = match list_visible_tasks(&scope, candidates, &mut boards, limit).await {
         Ok(rows) => rows,
-        Err(_) => return safe_500(),
+        Err(_) => return safe_500("filter_visible"),
     };
 
     let mut tasks = Vec::with_capacity(rows.len());
@@ -223,7 +223,8 @@ fn corrupt_row(corruption: ProjectionCorruption) -> Response {
 
 /// An authority (resolver, fetch, or participation) failed. The `PersistenceFailure` is
 /// already erased of any spelling; the wire says nothing beyond the status.
-fn safe_500() -> Response {
+fn safe_500(stage: &'static str) -> Response {
+    tracing::error!(operation = "task.list", stage, "task read failed");
     internal()
 }
 

@@ -92,7 +92,7 @@ where
             AgentRead::GlobalById(global)
         } else {
             let Some(source) = principal.source() else {
-                return safe_500();
+                return safe_500("principal_source");
             };
             let mut boards = state.boards.clone();
             let authorization = authorize_agent_board(
@@ -106,7 +106,7 @@ where
             match authorization {
                 Ok(BoardAuthorization::Authorized(board)) => AgentRead::BoardScoped(board),
                 Ok(_) => return not_found(),
-                Err(_) => return safe_500(),
+                Err(_) => return safe_500("authorize_frame"),
             }
         };
         (address, actor)
@@ -131,7 +131,7 @@ where
         {
             Ok(Ok(value)) => value,
             Ok(Err(refusal)) => return board_refusal(refusal),
-            Err(_) => return safe_500(),
+            Err(_) => return safe_500("resolve_board"),
         };
         if let ResolvedBoard::Workspace { workspace, .. } = &resolved {
             match raw_boards
@@ -140,7 +140,7 @@ where
             {
                 Ok(true) => {}
                 Ok(false) => return capability_denied(),
-                Err(_) => return safe_500(),
+                Err(_) => return safe_500("read_capability"),
             }
         }
         let source = match &resolved {
@@ -175,7 +175,7 @@ where
                     reason: "workspace membership required".to_owned(),
                 });
             }
-            Err(_) => return safe_500(),
+            Err(_) => return safe_500("authorize_board"),
         };
         let address = TaskReadAddress::ByNumber {
             board: board.coordinate().clone(),
@@ -191,15 +191,23 @@ where
     let point = match state.read.read_authorized_point(request).await {
         Ok(Some(value)) => value,
         Ok(None) => return not_found(),
-        Err(_) => return safe_500(),
+        Err(_) => return safe_500("read_point"),
     };
     let viewer = ReadViewer::Agent(principal.agent().clone());
     let Some(source) = point.for_viewer(&viewer) else {
-        return safe_500();
+        return safe_500("bind_viewer");
     };
     match project_detail(source) {
         Ok(task) => (StatusCode::OK, Json(serde_json::json!({"task":task}))).into_response(),
-        Err(_) => safe_500(),
+        Err(corruption) => {
+            tracing::error!(
+                operation = "task.detail",
+                stage = "project_detail",
+                field = corruption.field(),
+                "task projection failed"
+            );
+            safe_500("project_detail")
+        }
     }
 }
 
@@ -263,7 +271,8 @@ fn not_found() -> Response {
     )
         .into_response()
 }
-fn safe_500() -> Response {
+fn safe_500(stage: &'static str) -> Response {
+    tracing::error!(operation = "task.detail", stage, "task read failed");
     (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
 }
 

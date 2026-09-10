@@ -16,7 +16,7 @@ use tracing_subscriber::{
     EnvFilter, Layer,
     field::RecordFields,
     fmt::{
-        FmtContext, MakeWriter,
+        FmtContext, FormattedFields, MakeWriter,
         format::{FormatEvent, FormatFields, Writer},
         time::{FormatTime, SystemTime},
         writer::BoxMakeWriter,
@@ -177,7 +177,7 @@ where
 {
     fn format_event(
         &self,
-        _context: &FmtContext<'_, S, N>,
+        context: &FmtContext<'_, S, N>,
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
@@ -185,10 +185,29 @@ where
         event.record(&mut visitor);
         let mut timestamp = String::new();
         SystemTime.format_time(&mut Writer::new(&mut timestamp))?;
+
+        let mut fields = visitor.finish();
+        // Carry only the generated CLI request identity, never arbitrary span
+        // contents. This joins store/route diagnostics to the invocation audit.
+        if let Some(scope) = context.event_scope() {
+            for span in scope.from_root() {
+                if span.name() != "cli_request" {
+                    continue;
+                }
+                let extensions = span.extensions();
+                if let Some(formatted) = extensions.get::<FormattedFields<N>>() {
+                    if let Ok(values) = serde_json::from_str::<Value>(formatted.fields.as_str()) {
+                        if let Some(id) = values["request_id"].as_str() {
+                            fields.insert("request_id".to_owned(), Value::String(id.to_owned()));
+                        }
+                    }
+                }
+            }
+        }
         let output = serde_json::json!({
             "timestamp": timestamp,
             "level": event.metadata().level().as_str(),
-            "fields": visitor.finish(),
+            "fields": fields,
             "target": event.metadata().target(),
         });
         writeln!(writer, "{output}")
@@ -358,6 +377,36 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn error_floor_preserves_only_cli_request_identity_from_spans() {
+        let output = Buffer::default();
+        let subscriber = registry().with(production_json_layer(
+            EnvFilter::new("error"),
+            ProductionConversationLogDebugControl::new(),
+            Clock(Arc::new(AtomicI64::new(100))),
+            output.clone(),
+        ));
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::error_span!(
+                "cli_request",
+                request_id = "rust-1-46",
+                title = "private title",
+                query = "private query"
+            );
+            let _guard = span.enter();
+            tracing::error!(
+                stage = "task_decode",
+                field = "tasks.title:non_canonical",
+                "stored task violates domain contract"
+            );
+        });
+        let events = lines(&output);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["fields"]["request_id"], "rust-1-46");
+        assert_eq!(events[0]["fields"]["field"], "tasks.title:non_canonical");
+        assert!(!events[0].to_string().contains("private"));
     }
 
     #[test]

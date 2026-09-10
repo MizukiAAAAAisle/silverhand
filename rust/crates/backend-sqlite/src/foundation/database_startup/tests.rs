@@ -104,9 +104,9 @@ async fn empty_store_runs_shared_history_without_ts_then_current_is_noop() {
     let path = root.path().join("data/database.sqlite");
     let first = prepare_database(&path, false).await.unwrap();
     assert_eq!(first.before_step, 0);
-    assert_eq!(first.after_step, 95);
+    assert_eq!(first.after_step, 96);
     assert_eq!(first.after_epoch, 69);
-    assert_eq!(first.applied_steps, (44..=95).collect::<Vec<_>>());
+    assert_eq!(first.applied_steps, (44..=96).collect::<Vec<_>>());
     assert!(first.backup_path.is_none());
     let second = prepare_database(&path, false).await.unwrap();
     assert!(second.applied_steps.is_empty());
@@ -182,10 +182,13 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
     .unwrap();
     assert!(matches!(
         prepare_database(&path, false).await,
-        Err(DatabaseStartupError::UpgradeDisabled { from: 87, to: 95 })
+        Err(DatabaseStartupError::UpgradeDisabled { from: 87, to: 96 })
     ));
     let upgraded = prepare_database(&path, true).await.unwrap();
-    assert_eq!(upgraded.applied_steps, vec![88, 89, 90, 91, 92, 93, 94, 95]);
+    assert_eq!(
+        upgraded.applied_steps,
+        vec![88, 89, 90, 91, 92, 93, 94, 95, 96]
+    );
     let backup = upgraded.backup_path.unwrap();
     let mut live = connect(&path).await;
     assert_eq!(
@@ -229,7 +232,7 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
             .await
             .unwrap()
             .after_step,
-        95
+        96
     );
     // Optional export for the real-process smoke; fixture generation remains a
     // test-only activity, never a production startup fallback.
@@ -275,7 +278,7 @@ async fn failed_step_rolls_back_sql_and_ledger_before_restart() {
     assert_eq!(version, 44);
     db.close().await.unwrap();
     let restarted = prepare_database(&path, true).await.unwrap();
-    assert_eq!(restarted.applied_steps, (45..=95).collect::<Vec<_>>());
+    assert_eq!(restarted.applied_steps, (45..=96).collect::<Vec<_>>());
     assert!(restarted.backup_path.is_some());
 }
 
@@ -303,11 +306,11 @@ async fn retired_workspace_starred_mode_upgrades_from_87_and_88_without_losing_o
         assert_ne!(before, expected);
         db.close().await.unwrap();
         assert!(matches!(prepare_database(&path, false).await,
-            Err(DatabaseStartupError::UpgradeDisabled { from, to: 95 }) if from == previous));
+            Err(DatabaseStartupError::UpgradeDisabled { from, to: 96 }) if from == previous));
         let outcome = prepare_database(&path, true).await.unwrap();
         assert_eq!(
             outcome.applied_steps,
-            ((previous + 1)..=95).collect::<Vec<_>>()
+            ((previous + 1)..=96).collect::<Vec<_>>()
         );
         let mut db = connect(&path).await;
         assert_eq!(snapshot(&mut db, false).await, expected);
@@ -542,7 +545,7 @@ async fn agent_stream_upgrade_preserves_history_without_guessing_generation() {
     db.close().await.unwrap();
     assert_eq!(
         prepare_database(&path, true).await.unwrap().applied_steps,
-        vec![90, 91, 92, 93, 94, 95]
+        vec![90, 91, 92, 93, 94, 95, 96]
     );
     let mut db = connect(&path).await;
     let row:(String,String,i64,Option<i64>)=sqlx::query_as("SELECT conversation_id,payload,created_at,runtime_generation FROM conversation_events WHERE id=101").fetch_one(&mut db).await.unwrap();
@@ -580,4 +583,44 @@ async fn agent_stream_upgrade_preserves_history_without_guessing_generation() {
         "migration must preserve the previous identity high-water mark"
     );
     db.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn task_title_migration_rejects_unrepairable_values_transactionally() {
+    let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/backend/tests/fixtures/task-title-migration/cases.json"
+    )))
+    .unwrap();
+    for case in cases.iter().filter(|c| c["canonical"].is_null()) {
+        let mut db = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        db.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL)")
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO tasks VALUES ('repairable','a  b'),('invalid',?)")
+            .bind(case["raw"].as_str().unwrap())
+            .execute(&mut db)
+            .await
+            .unwrap();
+        db.execute("BEGIN").await.unwrap();
+        let error = preconditions::run(&mut db, 96).await.unwrap_err();
+        assert!(
+            error.to_string().contains("tasks.title"),
+            "{}",
+            case["name"]
+        );
+        db.execute("ROLLBACK").await.unwrap();
+        let title: String = sqlx::query_scalar("SELECT title FROM tasks WHERE id='repairable'")
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+        assert_eq!(title, "a  b");
+        let temp: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_temp_master WHERE name='task_title_backfill'",
+        )
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+        assert_eq!(temp, 0);
+    }
 }

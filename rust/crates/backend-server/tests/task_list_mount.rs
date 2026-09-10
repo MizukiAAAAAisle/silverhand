@@ -314,3 +314,193 @@ async fn the_mounted_path_answers_get_only() {
     let (status, _) = call(&mounted.app, "POST", Some(&mounted.bearer)).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 }
+
+/// A step95 database and its isolated upgrade copy exercise the same HTTP reads.
+/// No production database or conversation content is used.
+#[tokio::test]
+async fn historical_titles_fail_strict_reads_then_upgrade_restores_list_and_detail() {
+    use tracing::instrument::WithSubscriber;
+    let logs = log_capture::LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_max_level(tracing::Level::ERROR)
+        .with_writer(logs.clone())
+        .finish();
+    async {
+
+    use axum::Extension;
+    use silverhand_backend_core::host_runtime::runtime_credential::{
+        RuntimeCustody, RuntimeGeneration, RuntimePrincipal,
+    };
+    use silverhand_backend_server::conversation_messaging::messaging::task::{
+        TaskDetailState, task_detail_router,
+    };
+    use silverhand_backend_sqlite::foundation::database_startup::prepare_database;
+    use sqlx::Executor;
+
+    let directory = tempfile::tempdir().unwrap();
+    let old = directory.path().join("old.sqlite");
+    let upgraded = directory.path().join("upgrade.sqlite");
+    let mut db = current_schema::create_current_schema(&old).await;
+    for statement in SEED {
+        db.execute(*statement).await.unwrap();
+    }
+    db.execute("DELETE FROM tasks").await.unwrap();
+
+    let cases: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../../packages/backend/tests/fixtures/task-title-migration/cases.json"
+    ))
+    .unwrap();
+    let valid: Vec<_> = cases
+        .iter()
+        .filter(|c| c["canonical"].is_string())
+        .collect();
+    for (i, c) in valid.iter().enumerate() {
+        sqlx::query("INSERT INTO tasks(id,workspace_id,task_number,conversation_id,title,status,creator_kind,created_at,closed_at,board_key,content) VALUES (?, 'workspace-1', ?, 'conv000000000001', ?, ?, 'system', 100, ?, 'ws:workspace-1','untouched body')")
+            .bind(format!("task-{i}")).bind(i as i64 + 1).bind(c["raw"].as_str().unwrap()).bind(if i % 2 == 0 { "closed" } else { "done" }).bind(if i % 2 == 0 { Some(200_i64) } else { None }).execute(&mut db).await.unwrap();
+    }
+    db.execute("CREATE TABLE _migrations(version INTEGER PRIMARY KEY,name TEXT NOT NULL,applied_at INTEGER NOT NULL)").await.unwrap();
+    let plan: Value = serde_json::from_str(include_str!(
+        "../../../../packages/shared/src/db/rust-migrations.generated.json"
+    ))
+    .unwrap();
+    for step in plan["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["version"].as_i64().unwrap() <= 95)
+    {
+        sqlx::query("INSERT INTO _migrations VALUES (?, ?, 1)")
+            .bind(step["version"].as_i64().unwrap())
+            .bind(step["name"].as_str().unwrap())
+            .execute(&mut db)
+            .await
+            .unwrap();
+    }
+    db.close().await.unwrap();
+    std::fs::copy(&old, &upgraded).unwrap();
+    let result = prepare_database(&upgraded, true).await.unwrap();
+    assert_eq!(result.applied_steps, vec![96]);
+    assert!(
+        prepare_database(&upgraded, true)
+            .await
+            .unwrap()
+            .applied_steps
+            .is_empty()
+    );
+
+    for (path, repaired) in [(&old, false), (&upgraded, true)] {
+        let boards = MessagingStore::open(path).await.unwrap();
+        let tasks = SqliteTaskStore::open(path).await.unwrap();
+        #[derive(Clone)]
+        struct NoopAudit;
+        impl silverhand_backend_core::foundation::cli_invoke_audit::CliInvokeAuditSink for NoopAudit {
+            fn record(&self, _: silverhand_backend_core::foundation::cli_invoke_audit::CliInvoke) {}
+        }
+        let app = silverhand_backend_server::foundation::cli_invoke_observer::audit_cli_invocations(task_list_router(TaskListState {
+            boards: boards.clone(),
+            fetch: tasks.clone(),
+        })
+        .merge(task_detail_router(TaskDetailState {
+            boards,
+            read: tasks,
+        }))
+        , NoopAudit)
+        .layer(Extension(RuntimePrincipal::for_scope(
+            RuntimeScope::AgentSlot {
+                agent: AgentId::parse(AGENT).unwrap(),
+            },
+            RuntimeCustody::new(
+                RuntimeGeneration::new(1).unwrap(),
+                DaemonInstanceId::parse("daemon-1").unwrap(),
+            ),
+        )));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/internal/agents/{AGENT}/tasks?limit=100&workspace_id=workspace-1"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if repaired {
+                StatusCode::OK
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        );
+        if repaired {
+            let body: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(body["tasks"].as_array().unwrap().len(), valid.len());
+        }
+        for (i, c) in valid.iter().enumerate() {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "/internal/agents/{AGENT}/tasks/detail?task_id=task-{i}"
+                        ))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let canonical_before = c["raw"] == c["canonical"];
+            assert_eq!(
+                response.status(),
+                if repaired || canonical_before {
+                    StatusCode::OK
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                },
+                "{}",
+                c["name"]
+            );
+            if repaired {
+                let body: Value = serde_json::from_slice(
+                    &to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+                )
+                .unwrap();
+                assert_eq!(body["task"]["title"], c["canonical"]);
+                assert_eq!(body["task"]["content"], "untouched body");
+            }
+        }
+    }
+    }.with_subscriber(subscriber).await;
+    let events = logs.events();
+    assert!(
+        events
+            .iter()
+            .any(|e| e["fields"]["field"] == "tasks.title:non_canonical")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e["fields"]["stage"] == "fetch_candidates")
+    );
+    assert!(events.iter().any(|e| e["fields"]["stage"] == "read_point"));
+    for event in events.iter().filter(|e| e["fields"]["stage"].is_string()) {
+        assert!(
+            event["span"]["request_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("rust-")
+        );
+        let serialized = event.to_string();
+        assert!(!serialized.contains("untouched body"));
+        assert!(!serialized.contains("把  system"));
+        assert!(!serialized.contains("task-0"));
+    }
+}
+
+#[path = "support/log_capture.rs"]
+mod log_capture;

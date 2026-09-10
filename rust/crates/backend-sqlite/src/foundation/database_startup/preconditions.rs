@@ -46,6 +46,23 @@ pub(super) async fn run(db: &mut SqliteConnection, step: i64) -> Result<(), Data
         79 => reject_count(db, "SELECT COUNT(*) FROM (SELECT user_id, CASE WHEN SUBSTR(entity_id,1,8)='channel:' THEN 'conversation:'||SUBSTR(entity_id,9) WHEN SUBSTR(entity_id,1,11)='dm_channel:' THEN 'conversation:'||SUBSTR(entity_id,12) ELSE entity_id END AS canonical_key FROM user_sort_entry WHERE list_key='favorites' GROUP BY user_id,canonical_key HAVING COUNT(*)>1)", "step79 favorite keys collide after conversation-kind retirement").await?,
         81 => reject_count(db, "SELECT COUNT(*) FROM saved_messages sm JOIN conversations c ON c.id=sm.conversation_id WHERE sm.workspace_id IS NOT c.workspace_id", "step81 saved-message workspace mismatch").await?,
         87 => reject_count(db, "SELECT COUNT(*) FROM messages m WHERE m.task_number IS NOT NULL AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.id=m.id)", "step87 retired task carrier has no canonical task; restore backfill before upgrading").await?,
+        96 => {
+            use silverhand_backend_core::conversation_messaging::messaging::task::TaskTitle;
+
+            db.execute("CREATE TEMP TABLE task_title_backfill (id TEXT PRIMARY KEY, title TEXT NOT NULL)").await?;
+            let rows = sqlx::query("SELECT id, title FROM tasks").fetch_all(&mut *db).await?;
+            for row in rows {
+                let id: String = row.try_get("id")?;
+                let raw: String = row.try_get("title")?;
+                let title = TaskTitle::parse(&raw).map_err(|_| DatabaseStartupError::Integrity(
+                    "step96: tasks.title cannot satisfy the canonical title contract".to_owned()
+                ))?;
+                if title.as_str() != raw {
+                    sqlx::query("INSERT INTO task_title_backfill VALUES (?, ?)")
+                        .bind(id).bind(title.as_str()).execute(&mut *db).await?;
+                }
+            }
+        }
         _ => return Err(DatabaseStartupError::Integrity(format!("unimplemented migration precondition {step}"))),
     }
     Ok(())
