@@ -18,6 +18,7 @@
  *    (which a runtime would read as a brand-new server, resetting OAuth/cache).
  */
 import { z } from 'zod';
+import type { RuntimeKind } from './db/schema.js';
 
 /**
  * MCP config scope domain. `profile` = the executing subject's global/L1
@@ -66,10 +67,7 @@ const HttpServerSchema = z
  * `url` [+ `headers`]). `.strict()` on both arms rejects unknown keys so a
  * typo or unsupported field fails loud at write/validate time.
  */
-export const McpServerConfigSchema = z.union([
-  StdioServerSchema,
-  HttpServerSchema,
-]);
+export const McpServerConfigSchema = z.union([StdioServerSchema, HttpServerSchema]);
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
 
 /**
@@ -100,9 +98,7 @@ export type McpConfig = z.infer<typeof McpConfigSchema>;
 
 export const EMPTY_MCP_CONFIG: McpConfig = { mcpServers: {} };
 
-export type ParseMcpResult =
-  | { ok: true; config: McpConfig }
-  | { ok: false; error: string };
+export type ParseMcpResult = { ok: true; config: McpConfig } | { ok: false; error: string };
 
 /**
  * Parse + validate raw JSON text into a {@link McpConfig}. Fail-loud: returns
@@ -129,7 +125,10 @@ export function parseMcpConfig(raw: string): ParseMcpResult {
   if (!parsed.success) {
     const first = parsed.error.issues[0];
     const where = first?.path.length ? ` at ${first.path.join('.')}` : '';
-    return { ok: false, error: `invalid MCP config${where}: ${first?.message ?? 'schema mismatch'}` };
+    return {
+      ok: false,
+      error: `invalid MCP config${where}: ${first?.message ?? 'schema mismatch'}`,
+    };
   }
   return { ok: true, config: parsed.data };
 }
@@ -179,10 +178,7 @@ export function toClaudeMcpConfig(
  * server Codex cannot represent throws, which the spawn loader catches into a
  * loud, all-or-nothing layer drop.
  */
-export function toCodexMcpOverrides(
-  config: McpConfig,
-  scope: McpScope = 'profile',
-): string[] {
+export function toCodexMcpOverrides(config: McpConfig, scope: McpScope = 'profile'): string[] {
   const overrides: string[] = [];
   for (const [name, server] of Object.entries(config.mcpServers)) {
     const key = `mcp_servers.${runtimeMcpServerName(scope, name)}`;
@@ -212,9 +208,7 @@ export function toCodexMcpOverrides(
  * exactly this shape, and `codex app-server` accepts the same `-c
  * mcp_servers.<name>=<toml>` overrides the daemon appends to its argv.
  */
-export function toCodexServerConfig(
-  server: McpServerConfig,
-): Record<string, unknown> {
+export function toCodexServerConfig(server: McpServerConfig): Record<string, unknown> {
   // The union isn't a TS-discriminated one (stdio's `type` is optional), so
   // narrow on the structural marker: a remote server is the one with `url`.
   if ('url' in server) {
@@ -250,9 +244,7 @@ export type OpencodeMcpServer =
  *    variants map to the url-based `remote` form; the transport is opencode's
  *    concern, and we never pre-check connectivity — same rule as codex).
  */
-export function toOpencodeServerConfig(
-  server: McpServerConfig,
-): OpencodeMcpServer {
+export function toOpencodeServerConfig(server: McpServerConfig): OpencodeMcpServer {
   // The union isn't TS-discriminated (stdio's `type` is optional); narrow on
   // the structural `url` marker like {@link toCodexServerConfig}.
   if ('url' in server) {
@@ -286,9 +278,7 @@ export function toOpencodeMcpConfig(
   if (names.length === 0) return null;
   const mcp: Record<string, OpencodeMcpServer> = {};
   for (const name of names) {
-    mcp[runtimeMcpServerName(scope, name)] = toOpencodeServerConfig(
-      config.mcpServers[name]!,
-    );
+    mcp[runtimeMcpServerName(scope, name)] = toOpencodeServerConfig(config.mcpServers[name]!);
   }
   return { mcp };
 }
@@ -344,13 +334,7 @@ export function serializeTomlValue(value: unknown): string {
  * it is the last completed stage (`initialize` for a connection test, `tools`
  * when tools were listed); on failure it is the stage that failed.
  */
-export const MCP_PROBE_PHASES = [
-  'parse',
-  'not_found',
-  'connect',
-  'initialize',
-  'tools',
-] as const;
+export const MCP_PROBE_PHASES = ['parse', 'not_found', 'connect', 'initialize', 'tools'] as const;
 export const McpProbePhaseSchema = z.enum(MCP_PROBE_PHASES);
 export type McpProbePhase = z.infer<typeof McpProbePhaseSchema>;
 
@@ -410,4 +394,55 @@ function serializeTomlString(value: string): string {
     .replace(/\r/g, '\\r')
     .replace(/\t/g, '\\t');
   return `"${escaped}"`;
+}
+
+/** Standard ACP session MCP wire projection; shares the profile namespace. */
+export type AcpMcpServer =
+  | { name: string; command: string; args: string[]; env: { name: string; value: string }[] }
+  | { name: string; type: 'http' | 'sse'; url: string; headers: { name: string; value: string }[] };
+
+export function toAcpMcpServers(config: McpConfig, scope: McpScope): AcpMcpServer[] {
+  return Object.entries(config.mcpServers).map(([name, server]) => {
+    const identity = { name: runtimeMcpServerName(scope, name) };
+    if ('command' in server) {
+      return {
+        ...identity,
+        command: server.command,
+        args: server.args ?? [],
+        env: Object.entries(server.env ?? {}).map(([name, value]) => ({ name, value })),
+      };
+    }
+    return {
+      ...identity,
+      type: server.type,
+      url: server.url,
+      headers: Object.entries(server.headers ?? {}).map(([name, value]) => ({ name, value })),
+    };
+  });
+}
+
+export type ProfileMcpProjection =
+  | { kind: 'claude'; config: ReturnType<typeof toClaudeMcpConfig> }
+  | { kind: 'codex'; overrides: ReturnType<typeof toCodexMcpOverrides> }
+  | { kind: 'opencode'; config: ReturnType<typeof toOpencodeMcpConfig> }
+  | { kind: 'acp'; servers: AcpMcpServer[] };
+
+/** Static projection only. Does not connect, authenticate, or prove server health. */
+export function projectProfileMcpForRuntime(
+  config: McpConfig,
+  runtime: RuntimeKind,
+): ProfileMcpProjection {
+  switch (runtime) {
+    case 'claude':
+    case 'qoder':
+      return { kind: 'claude', config: toClaudeMcpConfig(config, 'profile') };
+    case 'codex':
+      return { kind: 'codex', overrides: toCodexMcpOverrides(config, 'profile') };
+    case 'opencode':
+      return { kind: 'opencode', config: toOpencodeMcpConfig(config, 'profile') };
+    case 'grok':
+      return { kind: 'acp', servers: toAcpMcpServers(config, 'profile') };
+    default:
+      throw new Error(`Profile MCP is not loaded for ${runtime}.`);
+  }
 }
