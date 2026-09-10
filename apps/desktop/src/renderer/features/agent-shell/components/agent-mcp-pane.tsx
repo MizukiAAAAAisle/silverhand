@@ -15,12 +15,10 @@ import {
 import {
   MCP_CONFIG_FILENAME,
   parseMcpConfig,
+  projectProfileMcpForRuntime,
   runtimeCatalogEntry,
   runtimeLabel,
   runtimeMcpServerName,
-  toClaudeMcpConfig,
-  toCodexMcpOverrides,
-  type McpConfig,
   type McpProbePhase,
   type McpProbeResult,
   type McpServerConfig,
@@ -452,33 +450,16 @@ type ConfigCheckResult = { ok: true; count: number } | { ok: false; error: strin
  */
 function runConfigCheck(raw: string | null, runtime: RuntimeKind): ConfigCheckResult {
   const parsed = parseMcpConfig(raw ?? "");
-  if (!parsed.ok) return { ok: false, error: parsed.error };
+  if (!parsed.ok) {
+    return { ok: false, error: parsed.error };
+  }
+
   try {
-    projectForRuntime(parsed.config, runtime);
+    projectProfileMcpForRuntime(parsed.config, runtime);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
   return { ok: true, count: Object.keys(parsed.config.mcpServers).length };
-}
-
-function projectForRuntime(config: McpConfig, runtime: RuntimeKind): void {
-  // Mirror the spawn loader EXACTLY (host `mcp-spawn.ts` switch). Unsupported
-  // runtimes skip the whole layer at spawn, so projecting them through a
-  // supported adapter would falsely report "Config OK" for servers that load
-  // as ZERO — a direct lie about the next-spawn contract. Throw a clear message
-  // instead (the UI also hides the trigger for these via
-  // `runtimeSupportsProfileMcp`, so this is the belt-and-braces guard).
-  switch (runtime) {
-    case "claude":
-    case "qoder":
-      toClaudeMcpConfig(config, "profile");
-      return;
-    case "codex":
-      toCodexMcpOverrides(config, "profile");
-      return;
-    default:
-      throw new Error(`Profile MCP is not loaded for ${runtimeLabel(runtime)}.`);
-  }
 }
 
 /**
