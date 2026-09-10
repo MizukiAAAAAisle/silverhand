@@ -7,7 +7,7 @@ import {
   type AgentSideSection,
 } from "../model/side-section-access";
 import { useEffect, useState } from "react";
-import { Activity, CalendarClock, FolderTree, Lock, User } from "lucide-react";
+import { Activity, AlarmClock, FolderTree, Lock, User } from "lucide-react";
 import type { AgentDto, AgentRuntimeParticipation, AgentRuntimeStateDto } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { SidePanelHeader } from "@/components/layout/SidePanelHeader";
@@ -263,7 +263,7 @@ const SIDE_SECTIONS: ReadonlyArray<SideSectionItem> = [
   { id: "activity", label: "Activity", icon: Activity },
   { id: "profile", label: "Profile", icon: User },
   { id: "workspace", label: "Workspace", icon: FolderTree },
-  { id: "schedules", label: "Schedules", icon: CalendarClock },
+  { id: "schedules", label: "Schedules", icon: AlarmClock },
 ];
 
 function readSideSection(): SideSectionItem["id"] {
