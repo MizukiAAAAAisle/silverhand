@@ -11,6 +11,19 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
+export function SidebarChevron({ expanded }: { expanded: boolean }): JSX.Element {
+  return (
+    <ChevronDown
+      aria-hidden
+      data-sidebar-section-caret
+      className={cn(
+        "size-3 shrink-0 transition-transform duration-150",
+        expanded ? "rotate-0" : "-rotate-90",
+      )}
+    />
+  );
+}
+
 export async function copyConversationName(name: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(name);
@@ -166,14 +179,7 @@ export function SidebarSectionHeader({
   const headerInner = (
     <span className="flex min-w-0 items-center gap-2">
       {collapsible ? (
-        <ChevronDown
-          aria-hidden
-          data-sidebar-section-caret
-          className={cn(
-            "size-3 shrink-0 transition-transform duration-150",
-            expanded ? "rotate-0" : "-rotate-90",
-          )}
-        />
+        <SidebarChevron expanded={expanded} />
       ) : icon ? (
         <span
           data-sidebar-section-icon
@@ -349,9 +355,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         )}
       >
         {icon ? (
-          <span className="inline-flex shrink-0 items-center leading-none">
-            {icon}
-          </span>
+          <span className="inline-flex shrink-0 items-center leading-none">{icon}</span>
         ) : null}
         <span
           className={cn(

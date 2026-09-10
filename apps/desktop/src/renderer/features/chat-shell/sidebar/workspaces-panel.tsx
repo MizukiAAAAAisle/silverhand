@@ -2,7 +2,7 @@ import * as Popover from "@radix-ui/react-popover";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentDto, SortGroup } from "@silverhand/shared";
 import { useSortable } from "@dnd-kit/sortable";
-import { ChevronDown, MoreVertical, Plus, Settings } from "lucide-react";
+import { MoreVertical, Plus, Settings } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { WorkspaceIcon } from "@/components/WorkspaceIcon";
@@ -13,6 +13,7 @@ import {
 } from "@/components/layout/list-drag-sort";
 import {
   OUTER_GLYPH_INSET,
+  SidebarChevron,
   MutedMarker,
   useSidebarSectionExpanded,
 } from "../../../components/layout/sidebar-shared";
@@ -119,24 +120,18 @@ function WorkspaceRow({
   return (
     <div
       className={cn(
-        "sidebar-row-gutter group/ws flex h-7 w-full items-center text-text-secondary hover:text-text-primary",
+        "sidebar-row-gutter group/ws flex h-6 w-full items-center text-text-primary",
         OUTER_GLYPH_INSET,
+        SidebarChevron,
       )}
     >
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-medium leading-4"
+        className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs font-medium leading-4"
       >
-        <ChevronDown
-          aria-hidden
-          data-sidebar-branch-caret
-          className={cn(
-            "size-4 shrink-0 transition-transform duration-150",
-            !expanded && "-rotate-90",
-          )}
-        />
+        <SidebarChevron expanded={expanded} />
         {icon ? (
           <span className="flex size-5.5 shrink-0 items-center justify-center">{icon}</span>
         ) : null}
