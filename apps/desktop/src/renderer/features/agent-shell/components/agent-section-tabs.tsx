@@ -56,18 +56,6 @@ export const AGENT_SECTIONS: ReadonlyArray<SectionItem> = [
   },
 ];
 
-interface AgentSidebarProps {
-  active: AgentSection;
-  onChange: (section: AgentSection) => void;
-  canAudit: boolean;
-}
-
-export function AgentSidebar({ active, onChange, canAudit }: AgentSidebarProps): JSX.Element {
-  const sections = canAudit ? AGENT_SECTIONS : AGENT_SECTIONS.filter((item) => !item.ownerOnly);
-
-  return <AgentSectionTabs sections={sections} active={active} onChange={onChange} />;
-}
-
 export function AgentSectionTabs<T extends string>({
   sections,
   active,

@@ -14,7 +14,7 @@ export function SecondaryPaneContent({ model }: { model: SecondaryPaneModel }) {
     case "none":
       return null;
     case "agent":
-      return <AgentView variant="side" key={`side-${model.props.agentId}`} {...model.props} />;
+      return <AgentView mode="side" key={`side-${model.props.agentId}`} {...model.props} />;
     case "human":
       return <HumanView variant="side" key={`human-${model.props.userId}`} {...model.props} />;
     case "files":

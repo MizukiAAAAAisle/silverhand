@@ -18,7 +18,7 @@ interface AgentHeaderProps {
   runtimeState: AgentRuntimeStateDto | undefined;
   onDeleted: () => void;
   onClose?: () => void;
-  compact?: boolean;
+  mode: "full" | "side";
   onMessageAgent?: (agentId: string) => void;
 }
 
@@ -28,8 +28,10 @@ export function AgentHeader({
   onDeleted,
   onMessageAgent,
   onClose,
-  compact = false,
+  mode,
 }: AgentHeaderProps): JSX.Element {
+  const compact = mode === "side";
+
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const stopAgent = useStopAgent(agent.id);

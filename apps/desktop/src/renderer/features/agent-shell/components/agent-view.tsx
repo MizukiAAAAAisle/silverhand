@@ -1,14 +1,10 @@
 import { sideAgentWorkspaceSource } from "../model/workspace-source";
 import "./agent-page.css";
 import { AgentPageLayout } from "./agent-page-layout";
-import {
-  visibleAgentSideSections,
-  resolveAgentSideSection,
-  type AgentSideSection,
-} from "../model/side-section-access";
+import { visibleAgentSideSections, type AgentSideSection } from "../model/side-section-access";
 import { useEffect, useState } from "react";
-import { Activity, AlarmClock, FolderTree, Lock, User } from "lucide-react";
-import type { AgentDto, AgentRuntimeParticipation, AgentRuntimeStateDto } from "@silverhand/shared";
+import { Lock } from "lucide-react";
+import type { AgentDto, AgentRuntimeStateDto } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { SidePanelHeader } from "@/components/layout/SidePanelHeader";
 import { AgentHeader } from "./agent-header";
@@ -20,7 +16,7 @@ import { AgentActivityPane } from "./agent-activity-pane";
 import { AgentActivityTimeline, AgentStreamActivityTimeline } from "./agent-activity-timeline";
 import { AgentChatsPane } from "./agent-chats-pane";
 import { AGENT_PANE_INSET } from "../model/agent-pane-layout";
-import { AgentSidebar, AgentSectionTabs, type AgentSection } from "./agent-sidebar";
+import { AGENT_SECTIONS, AgentSectionTabs, type AgentSection } from "./agent-section-tabs";
 import { useAgent, useAgentRuntimeState } from "../hooks/hooks";
 import {
   canAuditAgentChats,
@@ -28,58 +24,36 @@ import {
   canViewAgentFiles,
 } from "../model/permissions";
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/session/hooks";
-import { paneChrome } from "@/components/layout/pane-chrome";
 
-const SECTION_STORAGE_KEY = "silverhand:layout.agent-section";
-const VALID_SECTIONS: ReadonlyArray<AgentSection> = [
-  "profile",
-  "workspace",
-  "mcp",
-  "activity",
-  "schedules",
-  "chats",
-];
+const SECTION_STORAGE_KEYS = {
+  full: "silverhand:layout.agent-section",
+  side: "silverhand:layout.agent-side-section",
+};
+const SIDE_SECTION_STORAGE_KEY = SECTION_STORAGE_KEYS.side;
+export type AgentViewMode = "full" | "side";
 
-function readSection(): AgentSection {
+function readSection(mode: AgentViewMode): AgentSection {
   try {
-    const raw = localStorage.getItem(SECTION_STORAGE_KEY);
-    if (raw && (VALID_SECTIONS as readonly string[]).includes(raw)) {
+    const raw = localStorage.getItem(SECTION_STORAGE_KEYS[mode]);
+    if (AGENT_SECTIONS.some((section) => section.id === raw)) {
       return raw as AgentSection;
     }
   } catch {
-    /* private mode / quota — fall back to default */
+    // Storage can be unavailable in private mode.
   }
-  return "profile";
+  return mode === "side" ? "activity" : "profile";
 }
-
-export type AgentViewVariant = "full" | "side";
 
 interface AgentViewProps {
   agentId: string;
-  /** Called after a successful delete so the parent can navigate
-   *  away (back to channels, typically). */
+  mode?: AgentViewMode;
   onDeleted: () => void;
-  /** full only: open a row of the Chats list in the ordinary chat surface. Only
-   *  offered for a conversation the VIEWER takes part in — the verdict is made
-   *  inside the pane; this is the navigation half of it. `workspaceId: null` is a
-   *  `direct_pair`, which has no container (#task:2040). */
   onOpenChat?: (target: { conversationId: string; workspaceId: string | null }) => void;
-  /** Open the direct line with this agent — the existing pair's route, or the
-   *  pre-mint draft when there is none. Wired on BOTH variants (@shiki,
-   *  #task:2039: reaching the agent through the side panel must not be the one
-   *  way that loses the DM entry). Navigation only — nothing is created here. */
   onMessageAgent?: (agentId: string) => void;
-  /** Both modes share presentation; side content is bound to the docked channel. */
-  variant?: AgentViewVariant;
-  /** side only: the conversation the panel is docked beside. The Activity
-   *  tab locks to this channel (no roster picker) — that's the dual-screen
-   *  "watch this channel's agent activity" use case (A, shiki #task:1189). */
+  /** Docked activity follows this conversation; full mode provides its own picker. */
   contextConversationId?: string | null;
-  /** side only: the workspace the docked channel belongs to. The Workspace tab
-   *  scopes to this workspace's L2 memory (#task:1191). A DM/agent-home id
-   *  resolves back to the agent home dir on the backend — no frontend branch. */
+  /** Docked workspace memory follows this workspace, except for cross-conversation agents. */
   contextWorkspaceId?: string | null;
-  /** side only: close the panel (the × button). */
   onClose?: () => void;
 }
 
@@ -88,7 +62,7 @@ export function AgentView({
   onDeleted,
   onOpenChat,
   onMessageAgent,
-  variant = "full",
+  mode = "full",
   contextConversationId = null,
   contextWorkspaceId = null,
   onClose,
@@ -97,185 +71,234 @@ export function AgentView({
   const runtimeQuery = useAgentRuntimeState(agentId);
   const viewerQuery = useViewerUser();
 
-  // Selected section persists globally (not per-agent) so the user
-  // doesn't have to re-pick after switching agents — the more common
-  // case is repeatedly viewing the same section across different agents.
-  const [section, setSection] = useState<AgentSection>(() => readSection());
-  const agentForPermissions = agentQuery.data;
-  const viewerForPermissions =
+  const [selection, setSelection] = useState(() => ({
+    full: readSection("full"),
+    side: readSection("side"),
+  }));
+
+  const section = selection[mode];
+  const setSection = (next: AgentSection) => {
+    setSelection((current) => ({ ...current, [mode]: next }));
+  };
+
+  const agent = agentQuery.data;
+  const viewer =
     viewerQuery.data &&
     !isBackendUnreachable(viewerQuery.data) &&
     !isUpdateRequired(viewerQuery.data)
       ? viewerQuery.data
       : undefined;
-  const scheduleAccessKnown = Boolean(agentForPermissions && viewerForPermissions);
-  const canManageSchedules =
-    agentForPermissions && viewerForPermissions
-      ? canManageAgentSchedules(viewerForPermissions, agentForPermissions)
-      : false;
-  // Agent workspace files (L1 home + L2 workspace memory) are owner-private —
-  // mirror the backend owner gate so non-owners get a neutral private state and
-  // we never fire the doomed tree/file requests (#task:1220 / #task:1219).
-  const fileAccessKnown = Boolean(agentForPermissions && viewerForPermissions);
-  const canViewFiles =
-    agentForPermissions && viewerForPermissions
-      ? canViewAgentFiles(viewerForPermissions, agentForPermissions)
-      : false;
-  // The Chats audit section is owner-only and hidden entirely for non-owners.
-  // Backend re-checks (404 → 403) on every request; this only gates the entry.
-  const canAuditChats =
-    agentForPermissions && viewerForPermissions
-      ? canAuditAgentChats(viewerForPermissions, agentForPermissions)
-      : false;
-  // A persisted `chats` selection must not strand a non-owner (or a viewer whose
-  // ownership hasn't resolved yet) on a section the rail won't show. Clamp the
-  // effective section back to Profile until owner access is known.
-  const effectiveSection: AgentSection =
-    section === "chats" && !canAuditChats ? "profile" : section;
+  const accessKnown = Boolean(agent && viewer);
+  const canManageSchedules = Boolean(agent && viewer && canManageAgentSchedules(viewer, agent));
+  const canViewFiles = Boolean(agent && viewer && canViewAgentFiles(viewer, agent));
+  const canAuditChats = Boolean(agent && viewer && canAuditAgentChats(viewer, agent));
+  const visibleSections =
+    mode === "side"
+      ? visibleAgentSideSections(canViewFiles, canManageSchedules)
+      : AGENT_SECTIONS.filter((item) => !item.ownerOnly || canAuditChats).map((item) => item.id);
+  const sections = visibleSections.map((id) => AGENT_SECTIONS.find((item) => item.id === id)!);
+  const effectiveSection = visibleSections.some((id) => id === section)
+    ? section
+    : mode === "side"
+      ? "activity"
+      : "profile";
 
   useEffect(() => {
     try {
-      localStorage.setItem(SECTION_STORAGE_KEY, section);
+      localStorage.setItem(SECTION_STORAGE_KEYS[mode], section);
     } catch {
-      /* ignore */
+      // Selection remains usable when storage is unavailable.
     }
-  }, [section]);
+  }, [mode, section]);
 
-  if (agentQuery.isLoading) {
-    return variant === "side" ? (
-      <SidePanelShell onClose={onClose}>
-        <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
-          Loading agent…
-        </div>
-      </SidePanelShell>
-    ) : (
-      <main
-        className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-        style={{ ...paneChrome, overflow: "hidden" }}
-      >
-        Loading agent
-      </main>
-    );
-  }
-  if (agentQuery.isError || !agentQuery.data) {
-    return variant === "side" ? (
-      <SidePanelShell onClose={onClose}>
-        <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
-          Agent not found.
-        </div>
-      </SidePanelShell>
-    ) : (
-      <main
-        className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-        style={{ ...paneChrome, overflow: "hidden" }}
-      >
-        Agent not found.
-      </main>
-    );
-  }
+  useEffect(() => {
+    if (mode !== "side") {
+      return;
+    }
 
-  const agent = agentQuery.data;
+    const onFocus = (event: Event) => {
+      const detail = (event as CustomEvent<AgentSideSectionFocusDetail>).detail;
+      if (detail?.agentId === agentId) {
+        setSelection((current) => ({ ...current, side: detail.section }));
+      }
+    };
+    window.addEventListener(AGENT_SIDE_SECTION_FOCUS_EVENT, onFocus);
+    return () => window.removeEventListener(AGENT_SIDE_SECTION_FOCUS_EVENT, onFocus);
+  }, [agentId, mode]);
 
-  if (variant === "side") {
-    return (
-      <AgentSidePanel
-        agent={agent}
-        runtimeState={runtimeQuery.data}
-        canManageSchedules={canManageSchedules}
-        canViewFiles={canViewFiles}
-        contextConversationId={contextConversationId}
-        contextWorkspaceId={contextWorkspaceId}
-        onClose={onClose}
-        onDeleted={onDeleted}
-        onMessageAgent={onMessageAgent}
-      />
-    );
-  }
+  const ready = !agentQuery.isLoading && !agentQuery.isError && agent;
 
   return (
     <AgentPageLayout
-      host="agent"
+      host={mode === "side" ? "side" : "agent"}
       header={
-        <AgentHeader
-          agent={agent}
-          runtimeState={runtimeQuery.data}
-          onDeleted={onDeleted}
-          onMessageAgent={onMessageAgent}
-        />
+        ready ? (
+          <AgentHeader
+            mode={mode}
+            agent={agent}
+            runtimeState={runtimeQuery.data}
+            onDeleted={onDeleted}
+            onMessageAgent={onMessageAgent}
+            onClose={onClose}
+          />
+        ) : mode === "side" ? (
+          <SidePanelHeader onClose={onClose}>{null}</SidePanelHeader>
+        ) : null
       }
       navigation={
-        <AgentSidebar active={effectiveSection} onChange={setSection} canAudit={canAuditChats} />
+        ready ? (
+          <AgentSectionTabs sections={sections} active={effectiveSection} onChange={setSection} />
+        ) : null
       }
     >
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {effectiveSection === "workspace" ? (
-          <div className={cn("flex min-h-0 flex-1 flex-col", AGENT_PANE_INSET)}>
-            {canViewFiles ? (
-              <AgentWorkspacePane agentId={agent.id} />
-            ) : (
-              <AgentWorkspaceFilesPermissionState loading={!fileAccessKnown} />
-            )}
-          </div>
-        ) : effectiveSection === "activity" ? (
-          <AgentActivityPane
-            sessionScope={agent.session_scope}
-            agentId={agent.id}
-            state={runtimeQuery.data}
-          />
-        ) : effectiveSection === "chats" ? (
-          <AgentChatsPane agentId={agent.id} onOpenChat={onOpenChat} />
-        ) : (
-          <div
-            className={cn(
-              "flex-1 overflow-y-auto",
-              effectiveSection === "profile" && "[scrollbar-gutter:stable]",
-            )}
-          >
-            <div className={AGENT_PANE_INSET}>
-              {effectiveSection === "profile" ? <AgentProfileCard agent={agent} /> : null}
-              {effectiveSection === "mcp" ? (
-                <AgentMcpPane agentId={agent.id} runtime={agent.runtime} />
-              ) : null}
-              {effectiveSection === "schedules" ? (
-                canManageSchedules ? (
-                  <AgentSchedulesCard agentId={agent.id} />
-                ) : (
-                  <AgentSchedulesPermissionState loading={!scheduleAccessKnown} />
-                )
-              ) : null}
-            </div>
-          </div>
-        )}
-      </div>
+      {ready ? (
+        <AgentSectionContent
+          mode={mode}
+          section={effectiveSection}
+          agent={agent}
+          runtimeState={runtimeQuery.data}
+          accessKnown={accessKnown}
+          canViewFiles={canViewFiles}
+          canManageSchedules={canManageSchedules}
+          contextConversationId={contextConversationId}
+          contextWorkspaceId={contextWorkspaceId}
+          onOpenChat={onOpenChat}
+        />
+      ) : (
+        <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
+          {agentQuery.isLoading ? "Loading agent…" : "Agent not found."}
+        </div>
+      )}
     </AgentPageLayout>
   );
 }
 
-const SIDE_SECTION_STORAGE_KEY = "silverhand:layout.agent-side-section";
+function AgentSectionContent({
+  mode,
+  section,
+  agent,
+  runtimeState,
+  accessKnown,
+  canViewFiles,
+  canManageSchedules,
+  contextConversationId,
+  contextWorkspaceId,
+  onOpenChat,
+}: {
+  mode: AgentViewMode;
+  section: AgentSection;
+  agent: AgentDto;
+  runtimeState: AgentRuntimeStateDto | undefined;
+  accessKnown: boolean;
+  canViewFiles: boolean;
+  canManageSchedules: boolean;
+  contextConversationId: string | null;
+  contextWorkspaceId: string | null;
+  onOpenChat: AgentViewProps["onOpenChat"];
+}): JSX.Element {
+  const inset = mode === "side" ? "p-4" : AGENT_PANE_INSET;
 
-interface SideSectionItem {
-  id: AgentSideSection;
-  label: string;
-  icon: typeof Activity;
+  switch (section) {
+    case "activity":
+      return mode === "full" ? (
+        <AgentActivityPane
+          sessionScope={agent.session_scope}
+          agentId={agent.id}
+          state={runtimeState}
+        />
+      ) : (
+        <AgentContextActivity
+          agent={agent}
+          runtimeState={runtimeState}
+          conversationId={contextConversationId}
+        />
+      );
+    case "workspace": {
+      const source = sideAgentWorkspaceSource(agent.session_scope, contextWorkspaceId);
+      const sourceKey = source.kind === "home" ? "home" : source.workspaceId;
+
+      return (
+        <div className={cn("flex min-h-0 flex-1 flex-col", mode === "full" && inset)}>
+          {!canViewFiles ? (
+            <AgentWorkspaceFilesPermissionState loading={!accessKnown} />
+          ) : mode === "full" ? (
+            <AgentWorkspacePane agentId={agent.id} />
+          ) : (
+            <AgentWorkspaceContainer
+              key={sourceKey}
+              agentId={agent.id}
+              source={source}
+              layout="compact"
+            />
+          )}
+        </div>
+      );
+    }
+    case "chats":
+      return <AgentChatsPane agentId={agent.id} onOpenChat={onOpenChat} />;
+    case "profile":
+    case "mcp":
+    case "schedules":
+      return (
+        <div
+          className={cn(
+            "min-w-0 flex-1 overflow-y-auto",
+            section === "profile" && "[scrollbar-gutter:stable]",
+          )}
+        >
+          <div className={inset}>
+            {section === "profile" ? (
+              <AgentProfileCard agent={agent} />
+            ) : section === "mcp" ? (
+              <AgentMcpPane agentId={agent.id} runtime={agent.runtime} />
+            ) : canManageSchedules ? (
+              <AgentSchedulesCard agentId={agent.id} />
+            ) : (
+              <AgentSchedulesPermissionState loading={!accessKnown} />
+            )}
+          </div>
+        </div>
+      );
+  }
 }
 
-const SIDE_SECTIONS: ReadonlyArray<SideSectionItem> = [
-  { id: "activity", label: "Activity", icon: Activity },
-  { id: "profile", label: "Profile", icon: User },
-  { id: "workspace", label: "Workspace", icon: FolderTree },
-  { id: "schedules", label: "Schedules", icon: AlarmClock },
-];
-
-function readSideSection(): SideSectionItem["id"] {
-  try {
-    const raw = localStorage.getItem(SIDE_SECTION_STORAGE_KEY);
-    if (raw === "activity" || raw === "workspace" || raw === "profile" || raw === "schedules") {
-      return raw;
-    }
-  } catch {
-    /* private mode / quota — fall back to default */
+function AgentContextActivity({
+  agent,
+  runtimeState,
+  conversationId,
+}: {
+  agent: AgentDto;
+  runtimeState: AgentRuntimeStateDto | undefined;
+  conversationId: string | null;
+}): JSX.Element {
+  if (agent.session_scope === "agent") {
+    return <AgentStreamActivityTimeline key={agent.id} agentId={agent.id} />;
   }
-  return "activity";
+  if (!conversationId) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">
+        Open a channel to see this agent's activity there.
+      </div>
+    );
+  }
+  if (!runtimeState) {
+    return <p className="py-8 text-center text-xs text-text-muted">Loading…</p>;
+  }
+  // The activity endpoint requires participation; absence is not a network error.
+  if (!runtimeState.participations.some((item) => item.conversation_id === conversationId)) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">
+        {agent.display_name || agent.name} is not in this channel.
+      </div>
+    );
+  }
+  return (
+    <AgentActivityTimeline
+      key={conversationId}
+      conversationId={conversationId}
+      agentId={agent.id}
+    />
+  );
 }
 
 /** Event that redirects an ALREADY-mounted docked agent panel to a section.
@@ -287,7 +310,7 @@ const AGENT_SIDE_SECTION_FOCUS_EVENT = "silverhand:agent-side-section-focus";
 
 interface AgentSideSectionFocusDetail {
   agentId: string;
-  section: SideSectionItem["id"];
+  section: AgentSideSection;
 }
 
 /**
@@ -298,7 +321,7 @@ interface AgentSideSectionFocusDetail {
  * before `openAgentPanel(agentId)` when a caller must land on a specific tab
  * (e.g. the Activity bubble → Activity), regardless of the last-used tab.
  */
-export function focusAgentSideSection(agentId: string, section: SideSectionItem["id"]): void {
+export function focusAgentSideSection(agentId: string, section: AgentSideSection): void {
   try {
     localStorage.setItem(SIDE_SECTION_STORAGE_KEY, section);
   } catch {
@@ -308,159 +331,6 @@ export function focusAgentSideSection(agentId: string, section: SideSectionItem[
     new CustomEvent<AgentSideSectionFocusDetail>(AGENT_SIDE_SECTION_FOCUS_EVENT, {
       detail: { agentId, section },
     }),
-  );
-}
-
-function SidePanelShell({
-  onClose,
-  children,
-}: {
-  onClose?: () => void;
-  children: React.ReactNode;
-}): JSX.Element {
-  return (
-    <AgentPageLayout
-      host="side"
-      header={<SidePanelHeader onClose={onClose}>{null}</SidePanelHeader>}
-    >
-      {children}
-    </AgentPageLayout>
-  );
-}
-
-function AgentSidePanel({
-  agent,
-  runtimeState,
-  canManageSchedules,
-  canViewFiles,
-  contextConversationId,
-  contextWorkspaceId,
-  onClose,
-  onDeleted,
-  onMessageAgent,
-}: {
-  agent: AgentDto;
-  runtimeState: AgentRuntimeStateDto | undefined;
-  canManageSchedules: boolean;
-  canViewFiles: boolean;
-  contextConversationId: string | null;
-  contextWorkspaceId: string | null;
-  onClose?: () => void;
-  onDeleted: () => void;
-  onMessageAgent?: (agentId: string) => void;
-}): JSX.Element {
-  const [section, setSection] = useState<SideSectionItem["id"]>(() => readSideSection());
-
-  const workspaceSource = sideAgentWorkspaceSource(agent.session_scope, contextWorkspaceId);
-  const workspaceKey = workspaceSource.kind === "home" ? "home" : workspaceSource.workspaceId;
-
-  const visibleSections = visibleAgentSideSections(canViewFiles, canManageSchedules);
-  const effectiveSection = resolveAgentSideSection(section, visibleSections);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(SIDE_SECTION_STORAGE_KEY, section);
-    } catch {
-      /* ignore */
-    }
-  }, [section]);
-  // Honor a `focusAgentSideSection` jump when this panel is ALREADY mounted for
-  // the target agent (closed / different-agent opens remount and read the
-  // section on mount instead). Keeps "click a bubble agent → Activity"
-  // converging even when the panel already sits on another tab.
-  useEffect(() => {
-    const onFocus = (e: Event): void => {
-      const detail = (e as CustomEvent<AgentSideSectionFocusDetail>).detail;
-      if (detail && detail.agentId === agent.id) {
-        setSection(detail.section);
-      }
-    };
-    window.addEventListener(AGENT_SIDE_SECTION_FOCUS_EVENT, onFocus);
-    return () => window.removeEventListener(AGENT_SIDE_SECTION_FOCUS_EVENT, onFocus);
-  }, [agent.id]);
-
-  // A=Activity-follows-channel membership gate (#task:1189, Cindy P2): the
-  // per-(agent, conversation) activity endpoint is membership-gated, so blindly
-  // mounting the timeline for a channel the agent isn't in renders the backend
-  // 404 as "Couldn't load activity." — a network-error look for a benign
-  // "not in this channel" state. The runtime roster already lists every
-  // conversation the agent belongs to, so check it first and show a light empty
-  // state instead. `undefined` runtime = not loaded yet → neutral, not absent.
-  const runtimeLoaded = runtimeState !== undefined;
-  const inThisChannel =
-    contextConversationId !== null &&
-    (runtimeState?.participations ?? []).some((r) => r.conversation_id === contextConversationId);
-
-  return (
-    <AgentPageLayout
-      host="side"
-      header={
-        <AgentHeader
-          agent={agent}
-          runtimeState={runtimeState}
-          onDeleted={onDeleted}
-          onMessageAgent={onMessageAgent}
-          onClose={onClose}
-          compact
-        />
-      }
-      navigation={
-        <AgentSectionTabs
-          sections={SIDE_SECTIONS.filter((tab) => visibleSections.includes(tab.id))}
-          active={effectiveSection}
-          onChange={setSection}
-        />
-      }
-    >
-      {/* content */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {effectiveSection === "activity" ? (
-          agent.session_scope === "agent" ? (
-            <AgentStreamActivityTimeline key={agent.id} agentId={agent.id} />
-          ) : !contextConversationId ? (
-            <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">
-              Open a channel to see this agent's activity there.
-            </div>
-          ) : !runtimeLoaded ? (
-            <p className="py-8 text-center text-xs text-text-muted">Loading…</p>
-          ) : !inThisChannel ? (
-            <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">
-              {agent.display_name || agent.name} is not in this channel.
-            </div>
-          ) : (
-            <div className="flex min-h-0 flex-1 flex-col">
-              <AgentActivityTimeline
-                key={contextConversationId}
-                conversationId={contextConversationId}
-                agentId={agent.id}
-              />
-            </div>
-          )
-        ) : effectiveSection === "workspace" ? (
-          canViewFiles ? (
-            <div className="flex min-h-0 flex-1 flex-col">
-              <AgentWorkspaceContainer
-                // Key by source so switching workspace remounts with fresh
-                // selection — a path picked under workspace A never transiently
-                // fetches under B (Cindy #task:1191 P1).
-                key={workspaceKey}
-                agentId={agent.id}
-                source={workspaceSource}
-                layout="compact"
-              />
-            </div>
-          ) : null
-        ) : effectiveSection === "profile" ? (
-          <div className="flex-1 overflow-y-auto px-4 py-4 [scrollbar-gutter:stable]">
-            <AgentProfileCard agent={agent} />
-          </div>
-        ) : canManageSchedules ? (
-          <div className="flex-1 overflow-y-auto px-4 py-4">
-            <AgentSchedulesCard agentId={agent.id} />
-          </div>
-        ) : null}
-      </div>
-    </AgentPageLayout>
   );
 }
 
