@@ -1,10 +1,12 @@
-//! Native equivalents of the shared plan's nine procedural preconditions.
+//! Native equivalents of the shared plan's procedural preconditions.
 //! DDL/data SQL remains generated from that plan; persisted-name keying reuses
 //! the same pinned core normalization/fold as ordinary Rust writers.
 use super::{DatabaseStartupError, HashSet};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use silverhand_backend_core::foundation::name_canonicalization::canonicalize_stored_name;
 use sqlx::{Executor, Row, SqliteConnection};
+
+mod task_title_v96;
 
 pub(super) async fn run(db: &mut SqliteConnection, step: i64) -> Result<(), DatabaseStartupError> {
     match step {
@@ -47,16 +49,12 @@ pub(super) async fn run(db: &mut SqliteConnection, step: i64) -> Result<(), Data
         81 => reject_count(db, "SELECT COUNT(*) FROM saved_messages sm JOIN conversations c ON c.id=sm.conversation_id WHERE sm.workspace_id IS NOT c.workspace_id", "step81 saved-message workspace mismatch").await?,
         87 => reject_count(db, "SELECT COUNT(*) FROM messages m WHERE m.task_number IS NOT NULL AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.id=m.id)", "step87 retired task carrier has no canonical task; restore backfill before upgrading").await?,
         96 => {
-            use silverhand_backend_core::conversation_messaging::messaging::task::TaskTitle;
-
             db.execute("CREATE TEMP TABLE task_title_backfill (id TEXT PRIMARY KEY, title TEXT NOT NULL)").await?;
             let rows = sqlx::query("SELECT id, title FROM tasks").fetch_all(&mut *db).await?;
             for row in rows {
                 let id: String = row.try_get("id")?;
                 let raw: String = row.try_get("title")?;
-                let title = TaskTitle::parse(&raw).map_err(|_| DatabaseStartupError::Integrity(
-                    "step96: tasks.title cannot satisfy the canonical title contract".to_owned()
-                ))?;
+                let title = task_title_v96::canonicalize(&raw).map_err(|reason| DatabaseStartupError::Integrity(reason.to_owned()))?;
                 if title.as_str() != raw {
                     sqlx::query("INSERT INTO task_title_backfill VALUES (?, ?)")
                         .bind(id).bind(title.as_str()).execute(&mut *db).await?;

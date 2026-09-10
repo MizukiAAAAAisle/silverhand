@@ -1,4 +1,4 @@
-import { TaskTitleSchema } from '../api/task.js';
+import { canonicalizeTaskTitleV96 } from './migration-contracts/task-title-v96.js';
 import { randomBytes } from 'node:crypto';
 import {
   auditConversationTitleAddresses,
@@ -4213,7 +4213,7 @@ export const migrations: Migration[] = [
   {
     version: 96,
     name: 'canonical_task_titles',
-    // v60 only trimmed ASCII edge spaces. Reuse the writer's exact contract,
+    // v60 only trimmed ASCII edge spaces. Freeze the v96 title contract,
     // including ECMAScript whitespace and the UTF-16 length bound.
     precondition: (db) => {
       const handle = db as {
@@ -4228,11 +4228,8 @@ export const migrations: Migration[] = [
       )`);
       const insert = handle.prepare('INSERT INTO task_title_backfill VALUES (?, ?)');
       for (const row of handle.prepare('SELECT id, title FROM tasks').all()) {
-        const title = TaskTitleSchema.safeParse(row.title);
-        if (!title.success) {
-          throw new Error('step96: tasks.title cannot satisfy the canonical title contract');
-        }
-        if (title.data !== row.title) insert.run(row.id, title.data);
+        const title = canonicalizeTaskTitleV96(row.title);
+        if (title !== row.title) insert.run(row.id, title);
       }
     },
     up: `

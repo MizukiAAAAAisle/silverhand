@@ -10,6 +10,25 @@ const cases = JSON.parse(
 const step = migrations.find((m) => m.version === 96)!;
 
 describe('task title forward migration', () => {
+  it('keeps generated migration inputs independent of current API validators', () => {
+    const plan = JSON.parse(
+      readFileSync(
+        new URL('../../shared/src/db/rust-migrations.generated.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const inputs = Object.keys(plan.inputs);
+    expect(inputs).toContain('packages/shared/src/db/migration-contracts/task-title-v96.ts');
+    expect(
+      inputs.some(
+        (path) =>
+          path.includes('node_modules/') ||
+          path.includes('/api/') ||
+          path.endsWith('/runtime-catalog.ts'),
+      ),
+    ).toBe(false);
+  });
+
   it('uses the writer contract for all ECMAScript whitespace and preserves other fields', () => {
     const db = new Database(':memory:');
     try {
