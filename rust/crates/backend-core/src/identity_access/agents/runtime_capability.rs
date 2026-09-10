@@ -45,6 +45,7 @@ fn baseline_reasoning_effort_options(kind: RuntimeKind) -> &'static [&'static st
         RuntimeKind::Claude | RuntimeKind::Opencode | RuntimeKind::Cursor | RuntimeKind::Gemini => {
             &[]
         }
+        RuntimeKind::Grok => &["low", "medium", "high"],
         RuntimeKind::Pi => &["off", "minimal", "low", "medium", "high"],
         RuntimeKind::Codex => &["low", "medium", "high", "xhigh"],
         RuntimeKind::Qoder => &["none", "low", "medium", "high", "xhigh", "max"],
@@ -66,7 +67,11 @@ fn per_model_reasoning_effort_options(
             "gpt-5.6-terra" | "gpt-5.6-luna" => Some(&["low", "medium", "high", "xhigh", "max"]),
             _ => None,
         },
-        // No other runtime carries a per-model override today.
+        RuntimeKind::Grok => match model_id {
+            "grok-4.6" => Some(&["low", "medium", "high", "xhigh"]),
+            _ => None,
+        },
+        // Remaining runtimes use the baseline.
         RuntimeKind::Claude
         | RuntimeKind::Qoder
         | RuntimeKind::Opencode
@@ -135,7 +140,8 @@ pub fn runtime_default_model(kind: RuntimeKind) -> Option<&'static str> {
         | RuntimeKind::Opencode
         | RuntimeKind::Cursor
         | RuntimeKind::Gemini
-        | RuntimeKind::Pi => None,
+        | RuntimeKind::Pi
+        | RuntimeKind::Grok => None,
     }
 }
 

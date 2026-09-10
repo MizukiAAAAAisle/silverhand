@@ -4238,6 +4238,25 @@ export const migrations: Migration[] = [
       DROP TABLE task_title_backfill;
     `,
   },
+  {
+    version: 97,
+    name: 'grok_runtime_transition_target',
+    up: `
+      DROP TRIGGER agents_runtime_transition_pair_insert;
+      DROP TRIGGER agents_runtime_transition_pair_update;
+      CREATE TRIGGER agents_runtime_transition_pair_insert BEFORE INSERT ON agents
+      WHEN (NEW.runtime_transition_target IS NULL) != (NEW.runtime_transition_started_at IS NULL)
+        OR (NEW.runtime_transition_target IS NOT NULL AND NEW.runtime_transition_target NOT IN
+          ('claude','codex','cursor','gemini','qoder','opencode','pi','grok'))
+      BEGIN SELECT RAISE(ABORT, 'invalid agents runtime transition lock'); END;
+      CREATE TRIGGER agents_runtime_transition_pair_update
+      BEFORE UPDATE OF runtime_transition_target, runtime_transition_started_at ON agents
+      WHEN (NEW.runtime_transition_target IS NULL) != (NEW.runtime_transition_started_at IS NULL)
+        OR (NEW.runtime_transition_target IS NOT NULL AND NEW.runtime_transition_target NOT IN
+          ('claude','codex','cursor','gemini','qoder','opencode','pi','grok'))
+      BEGIN SELECT RAISE(ABORT, 'invalid agents runtime transition lock'); END;
+    `,
+  },
 ];
 
 /**

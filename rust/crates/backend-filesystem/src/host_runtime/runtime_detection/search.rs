@@ -53,6 +53,7 @@ fn executable_name(kind: RuntimeKind) -> &'static str {
         RuntimeKind::Qoder => "qodercli",
         RuntimeKind::Opencode => "opencode",
         RuntimeKind::Pi => "pi",
+        RuntimeKind::Grok => "grok",
     }
 }
 

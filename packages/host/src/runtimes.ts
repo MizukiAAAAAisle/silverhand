@@ -18,6 +18,7 @@ const DETECT_BINARIES: Record<RuntimeKind, string> = {
   qoder: 'qodercli',
   opencode: 'opencode',
   pi: 'pi',
+  grok: 'grok',
 };
 
 const DEFAULT_RUNTIME_DETECTION_CACHE_TTL_MS = 30_000;
@@ -50,7 +51,9 @@ const COMMAND_TIMEOUT_MS = 5_000;
  * incompatibility surfaces, fix the driver to handle both — don't fall
  * back to the slow wrapper.
  */
-const PLATFORM_CANDIDATES: Partial<Record<RuntimeKind, Partial<Record<NodeJS.Platform, string[]>>>> = {
+const PLATFORM_CANDIDATES: Partial<
+  Record<RuntimeKind, Partial<Record<NodeJS.Platform, string[]>>>
+> = {
   codex: {
     darwin: [
       '/Applications/ChatGPT.app/Contents/Resources/codex',
@@ -95,7 +98,7 @@ async function runCommand(
   args: readonly string[],
   timeoutMs = COMMAND_TIMEOUT_MS,
 ): Promise<CommandResult | null> {
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     const proc = spawn(command, [...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -119,7 +122,7 @@ async function runCommand(
       err += chunk.toString();
     });
     proc.on('error', () => finish(null));
-    proc.on('close', code => {
+    proc.on('close', (code) => {
       finish({ code, stdout: out, stderr: err });
     });
   });
@@ -129,7 +132,7 @@ function splitPath(value: string | undefined | null): string[] {
   if (!value) return [];
   return value
     .split(delimiter)
-    .map(p => p.trim())
+    .map((p) => p.trim())
     .filter(Boolean);
 }
 
@@ -140,9 +143,7 @@ function unique(values: readonly string[]): string[] {
 async function existingChildDirs(parent: string, childSuffix: string): Promise<string[]> {
   try {
     const entries = await readdir(parent, { withFileTypes: true });
-    return entries
-      .filter(e => e.isDirectory())
-      .map(e => join(parent, e.name, childSuffix));
+    return entries.filter((e) => e.isDirectory()).map((e) => join(parent, e.name, childSuffix));
   } catch {
     return [];
   }
@@ -251,11 +252,15 @@ async function collectPathDirs(options: RuntimeDetectionOptions): Promise<string
   const home = options.homeDir ?? homedir();
   const shellPath =
     options.shellPath === undefined
-      ? (platform === 'darwin' ? (process.env.SHELL ?? null) : null)
+      ? platform === 'darwin'
+        ? (process.env.SHELL ?? null)
+        : null
       : options.shellPath;
   const pathHelperPath =
     options.pathHelperPath === undefined
-      ? (platform === 'darwin' ? '/usr/libexec/path_helper' : null)
+      ? platform === 'darwin'
+        ? '/usr/libexec/path_helper'
+        : null
       : options.pathHelperPath;
 
   const dirs = [
@@ -265,10 +270,7 @@ async function collectPathDirs(options: RuntimeDetectionOptions): Promise<string
     ...(options.extraCandidateDirs ?? []),
     ...(options.includeDefaultCandidateDirs === false
       ? []
-      : [
-          ...commonCandidateDirs(home),
-          ...(await versionManagerCandidateDirs(home)),
-        ]),
+      : [...commonCandidateDirs(home), ...(await versionManagerCandidateDirs(home))]),
   ];
   return unique(dirs);
 }
@@ -313,7 +315,7 @@ async function resolveBinary(
  * inlined above; full postmortem in git history.
  */
 async function probeVersion(bin: string): Promise<string | null> {
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     const proc = spawn(bin, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
@@ -345,7 +347,7 @@ async function probeVersion(bin: string): Promise<string | null> {
 }
 
 function runtimeProbeKinds(): RuntimeKind[] {
-  return RUNTIME_CATALOG.filter(entry => entry.selectable).map(entry => entry.kind);
+  return RUNTIME_CATALOG.filter((entry) => entry.selectable).map((entry) => entry.kind);
 }
 
 async function detectRuntime(
@@ -403,9 +405,7 @@ async function buildRuntimeCatalog(
   const platform = options.platform ?? process.platform;
   const kinds = [...(options.detectKinds ?? runtimeProbeKinds())];
   const pathDirs = await collectPathDirs(options);
-  const results = await Promise.all(
-    kinds.map(kind => detectRuntime(kind, pathDirs, platform)),
-  );
+  const results = await Promise.all(kinds.map((kind) => detectRuntime(kind, pathDirs, platform)));
   const response = { runtimes: results, detected_at: now } satisfies RuntimeCatalogResponse;
   if (cacheable) {
     runtimeDetectionCache = {

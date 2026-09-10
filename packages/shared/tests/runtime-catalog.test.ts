@@ -37,7 +37,7 @@ describe('runtime catalog (shared source of truth)', () => {
   });
 
   it('only offers spawnable runtimes: selectable is a strict subset per product curation', () => {
-    // claude/codex/qoder/opencode are the offered set today; cursor/gemini are
+    // The implemented runtimes are offered; cursor/gemini remain
     // roadmap. The host-side test asserts selectable ⇒ hasDriver.
     const selectable = RUNTIME_CATALOG.filter((e) => e.selectable).map((e) => e.kind);
     expect(selectable).toEqual(['claude', 'codex', 'qoder', 'opencode', 'pi', 'grok']);

@@ -31,11 +31,12 @@ import {
   type RuntimeDeliveryPresentation,
 } from '@silverhand/shared';
 
-import { getDriver as getDefaultDriver, type Driver } from '../../drivers/index.js';
 import {
-  detectRuntimes,
-  platformBinaryCandidates,
-} from '../../runtimes.js';
+  getDriver as getDefaultDriver,
+  type Driver,
+  type DriverSpawnContext,
+} from '../../drivers/index.js';
+import { detectRuntimes, platformBinaryCandidates } from '../../runtimes.js';
 import {
   describeSpawnError,
   redactSpawnArgs,
@@ -77,10 +78,7 @@ import {
 } from '../../protocol.js';
 import type { DaemonLogger } from '../logger.js';
 import { buildPromptContextFromRuntimeStartOptions } from '../prompt-context.js';
-import type {
-  ResolvedStartOptions,
-  RuntimeStartResolveDeps,
-} from '../runtime-start-resolve.js';
+import type { ResolvedStartOptions, RuntimeStartResolveDeps } from '../runtime-start-resolve.js';
 import {
   isResolvedAgentStartOptions,
   resolveRuntimeActionWorkdir,
@@ -88,16 +86,10 @@ import {
   RuntimeStartResolveError,
 } from '../runtime-start-resolve.js';
 import { bundleCwdUsable } from '../agent-materialize/index.js';
-import {
-  unlinkRuntimePidfile,
-  writeRuntimePidfile,
-} from '../runtime-pidfiles.js';
+import { unlinkRuntimePidfile, writeRuntimePidfile } from '../runtime-pidfiles.js';
 import { buildDaemonSpawnEnv } from '../spawn-env.js';
 import { readDaemonProxyConfig } from '../proxy-config.js';
-import {
-  prepareSpawnFiles,
-  type SilverhandCliLauncher,
-} from '../spawn-prep.js';
+import { prepareSpawnFiles, type SilverhandCliLauncher } from '../spawn-prep.js';
 import { buildProfileMcpSpawnArgs } from '../mcp-spawn.js';
 import { chooseSilverhandCliLauncher } from '../silverhand-cli-launcher.js';
 import {
@@ -106,10 +98,7 @@ import {
   AgentHomeMutationCoordinator,
   AgentQuiesceFailedError,
 } from '../agent-home-mutation-coordinator.js';
-import type {
-  DeliveryOwnerContext,
-  SupervisorContract,
-} from '../supervisor-contract.js';
+import type { DeliveryOwnerContext, SupervisorContract } from '../supervisor-contract.js';
 import { DaemonTypedError } from '../typed-error.js';
 import type {
   ActivitySnippetKind,
@@ -179,10 +168,7 @@ const ACTIVITY_SNIPPET_MAX_CHARS = 200;
 const ACTIVITY_SNIPPET_BUFFER_MAX_CHARS = ACTIVITY_SNIPPET_MAX_CHARS * 4;
 const SEND_MESSAGE_TOOL_NAME = 'silverhand message send';
 
-type InitTimeoutTier =
-  | 'initLivenessSilenceMs'
-  | 'initPreProtocolCapMs'
-  | 'initPostProtocolMs';
+type InitTimeoutTier = 'initLivenessSilenceMs' | 'initPreProtocolCapMs' | 'initPostProtocolMs';
 
 /** Per-(conv,agent) init-failure counter + cooldown clock. Sticky
  *  across attempts within the same incident window — cleared on a
@@ -253,15 +239,8 @@ export interface SupervisorOptions {
    *  `getDriver(kind)` + `detectRuntimes` + node's spawn.
    */
   driverFor?: (kind: RuntimeKind) => Driver;
-  resolveRuntime?: (
-    kind: RuntimeKind,
-    fallback: string,
-  ) => Promise<ResolvedRuntime | null>;
-  spawnFn?: (
-    binary: string,
-    args: ReadonlyArray<string>,
-    options: SpawnOptions,
-  ) => ChildProcess;
+  resolveRuntime?: (kind: RuntimeKind, fallback: string) => Promise<ResolvedRuntime | null>;
+  spawnFn?: (binary: string, args: ReadonlyArray<string>, options: SpawnOptions) => ChildProcess;
   /** Time supplier override; lets tests pin `started_at` / event
    *  timestamps. */
   now?: () => number;
@@ -323,7 +302,11 @@ export interface SupervisorOptions {
  *  matches `FakeSupervisor` so log diffs across the two
  *  implementations stay clean. */
 function key(conversationId: string, agentId: string): string {
-  return runtimeScopeKey({ kind: 'conversation', conversation_id: conversationId, agent_id: agentId });
+  return runtimeScopeKey({
+    kind: 'conversation',
+    conversation_id: conversationId,
+    agent_id: agentId,
+  });
 }
 
 function runtimeScopeKey(scope: RuntimeScope): string {
@@ -337,10 +320,7 @@ function runtimeScopeKey(scope: RuntimeScope): string {
  * atomic so no frame can route to B while carrying A in its payload. */
 function bindRuntimeFocus(handle: RuntimeHandle, conversationId: string): void {
   handle.conversationId = conversationId;
-  if (
-    handle.runState
-    && handle.runState.conversationId !== conversationId
-  ) {
+  if (handle.runState && handle.runState.conversationId !== conversationId) {
     handle.runState = {
       ...handle.runState,
       conversationId,
@@ -451,12 +431,10 @@ function spliceBoundedDeferredPrefix(queue: DeferredEntry[]): DeferredEntry[] {
   for (const entry of queue) {
     if (take > 0 && entry.conversationId !== conversationId) break;
     const entryBytes =
-      Buffer.byteLength(entry.text, 'utf8') +
-      DEFERRED_BATCH_PER_ENTRY_OVERHEAD_BYTES;
+      Buffer.byteLength(entry.text, 'utf8') + DEFERRED_BATCH_PER_ENTRY_OVERHEAD_BYTES;
     if (
       take > 0 &&
-      (take >= DEFERRED_BATCH_MAX_ENTRIES ||
-        bytes + entryBytes > DEFERRED_BATCH_MAX_TEXT_BYTES)
+      (take >= DEFERRED_BATCH_MAX_ENTRIES || bytes + entryBytes > DEFERRED_BATCH_MAX_TEXT_BYTES)
     ) {
       break;
     }
@@ -471,7 +449,7 @@ function spliceBoundedDeferredPrefix(queue: DeferredEntry[]): DeferredEntry[] {
  *  non-empty across the whole chain, this is the SINGLE derivation of that
  *  scalar — there is no stored field and no wire scalar to drift from it. */
 function deliveredUpToSeqOf(deliveries: readonly RuntimeDelivery[]): number {
-  return Math.max(...deliveries.map(delivery => delivery.seq));
+  return Math.max(...deliveries.map((delivery) => delivery.seq));
 }
 
 /** Fold a drained deferred batch into a single `StartupDeliveryState` for the
@@ -486,20 +464,18 @@ function combineDeferredBatch(
   gated: boolean,
 ): StartupDeliveryState {
   const conversationId = batch[0]?.conversationId;
-  if (!conversationId || batch.some(entry => entry.conversationId !== conversationId)) {
+  if (!conversationId || batch.some((entry) => entry.conversationId !== conversationId)) {
     throw new Error('cannot combine delivery presentation across conversation targets');
   }
-  const deliveryIds = batch.flatMap(e => [...e.deliveryIds]);
-  const texts = batch.map(e => e.text);
+  const deliveryIds = batch.flatMap((e) => [...e.deliveryIds]);
+  const texts = batch.map((e) => e.text);
   // `batch` is non-empty by contract (flushDeferred only calls this after
   // checking the queue has entries), so `texts[0]` is always present; the
   // `?? ''` satisfies the compiler's index-widening without masking a real
   // empty text.
   const text =
-    gated && texts.length > 1
-      ? combineGatedBatch(texts, SEND_MESSAGE_TOOL)
-      : (texts[0] ?? '');
-  const deliveries = batch.flatMap(e => [...e.deliveries]);
+    gated && texts.length > 1 ? combineGatedBatch(texts, SEND_MESSAGE_TOOL) : (texts[0] ?? '');
+  const deliveries = batch.flatMap((e) => [...e.deliveries]);
   return {
     conversationId,
     actionWorkdir: batch[0]!.actionWorkdir,
@@ -532,7 +508,7 @@ function parseObjectJson(text: string): Record<string, unknown> | null {
   try {
     const value = JSON.parse(text) as unknown;
     return value && typeof value === 'object' && !Array.isArray(value)
-      ? value as Record<string, unknown>
+      ? (value as Record<string, unknown>)
       : null;
   } catch {
     return null;
@@ -560,10 +536,10 @@ function extractStaleConflict(bodyText: string): PendingStaleEvent | null {
   // Fail CLOSED: absent/blank id or target ⇒ no armed event.
   const targetConversationIdRaw = d['target_conversation_id'];
   if (
-    typeof id !== 'string'
-    || id.length === 0
-    || typeof targetConversationIdRaw !== 'string'
-    || targetConversationIdRaw.length === 0
+    typeof id !== 'string' ||
+    id.length === 0 ||
+    typeof targetConversationIdRaw !== 'string' ||
+    targetConversationIdRaw.length === 0
   ) {
     return null;
   }
@@ -652,17 +628,11 @@ export class Supervisor implements SupervisorContract {
    *  register and squat the slot for the full wait window). Call-scoped
    *  only: entries are added at call entry and removed in its
    *  `finally`; no persistent state. */
-  private readonly activePullCallsByOwner = new Map<
-    string,
-    Set<{ cancelled: boolean }>
-  >();
+  private readonly activePullCallsByOwner = new Map<string, Set<{ cancelled: boolean }>>();
   /** Unsettled stale-receive custody, indexed independently of the current
    * runtime handle. A handle may exit or be replaced after reserving a batch;
    * deletion must still wait for the old response handoff proof. */
-  private readonly pullReservationsByAgent = new Map<
-    string,
-    Set<PullReservation>
-  >();
+  private readonly pullReservationsByAgent = new Map<string, Set<PullReservation>>();
   /** Per-RuntimeScope lifecycle serialization (Cindy plan v2 issue
    *  #6 + tightening `ixAq6GPTn4fVSpCF`). Each entry is the tail
    *  promise for the *most recent* lifecycle operation on that key;
@@ -692,21 +662,17 @@ export class Supervisor implements SupervisorContract {
     this.resolveRuntime = opts.resolveRuntime ?? defaultResolveRuntime;
     this.spawnFn = opts.spawnFn ?? nodeSpawn;
     this.now = opts.now ?? Date.now;
-    this.sigtermToSigkillMs =
-      opts.sigtermToSigkillMs ?? DEFAULT_SIGTERM_TO_SIGKILL_MS;
+    this.sigtermToSigkillMs = opts.sigtermToSigkillMs ?? DEFAULT_SIGTERM_TO_SIGKILL_MS;
     this.sigkillTimeoutMs = opts.sigkillTimeoutMs ?? DEFAULT_SIGKILL_TIMEOUT_MS;
     this.deletionCustodySettleTimeoutMs =
-      opts.deletionCustodySettleTimeoutMs
-      ?? DEFAULT_DELETION_CUSTODY_SETTLE_TIMEOUT_MS;
+      opts.deletionCustodySettleTimeoutMs ?? DEFAULT_DELETION_CUSTODY_SETTLE_TIMEOUT_MS;
     this.reservationStallWarnMs =
       opts.reservationStallWarnMs ?? NEXT_TURN_RESERVATION_STALL_WARN_MS;
     this.daemonInstanceId = opts.daemonInstanceId ?? null;
     this.runtimePidRootDir = opts.runtimePidRootDir ?? null;
     const proxyConfigPath = opts.proxyConfigPath ?? null;
     this.proxyConfigPath =
-      typeof proxyConfigPath === 'function'
-        ? proxyConfigPath
-        : () => proxyConfigPath;
+      typeof proxyConfigPath === 'function' ? proxyConfigPath : () => proxyConfigPath;
     this.localSilverhandCliLauncher = opts.localSilverhandCliLauncher ?? null;
     this.controlPlaneServerUrl = opts.controlPlaneServerUrl ?? (() => null);
     this.daemonSocketPath = opts.daemonSocketPath ?? null;
@@ -719,8 +685,7 @@ export class Supervisor implements SupervisorContract {
     this.initMaxRetries = opts.initMaxRetries ?? DEFAULT_INIT_TIMEOUT_MAX_RETRIES;
     this.initFailureCooldownThreshold =
       opts.initFailureCooldownThreshold ?? DEFAULT_INIT_FAILURE_COOLDOWN_THRESHOLD;
-    this.initFailureCooldownMs =
-      opts.initFailureCooldownMs ?? DEFAULT_INIT_FAILURE_COOLDOWN_MS;
+    this.initFailureCooldownMs = opts.initFailureCooldownMs ?? DEFAULT_INIT_FAILURE_COOLDOWN_MS;
     this.compactionStaleMs = opts.compactionStaleMs ?? DEFAULT_COMPACTION_STALE_MS;
     this.emitRawRuntimeOutput = opts.emitRawRuntimeOutput ?? false;
     this.daemonStartedAt = this.now();
@@ -732,10 +697,7 @@ export class Supervisor implements SupervisorContract {
    *  their `command_lifecycle` / `input_lifecycle` frames, where a matching
    *  `started` is the per-payload admission proof; `write-success` drivers
    *  (opencode, cursor, qoder<1.1.17) don't correlate it. Bounded FIFO. */
-  private mintInputPayloadUuid(
-    handle: RuntimeHandle,
-    deliveryIds: readonly number[],
-  ): string {
+  private mintInputPayloadUuid(handle: RuntimeHandle, deliveryIds: readonly number[]): string {
     const uuid = randomUUID();
     handle.inputPayloadUuids.set(uuid, {
       deliveryIds: [...deliveryIds],
@@ -763,7 +725,7 @@ export class Supervisor implements SupervisorContract {
     context: string,
   ): void {
     const idSet = new Set(deliveryIds);
-    const metaSet = new Set(deliveries.map(d => d.delivery_id));
+    const metaSet = new Set(deliveries.map((d) => d.delivery_id));
     let mismatch = idSet.size !== metaSet.size;
     if (!mismatch) {
       for (const id of idSet) {
@@ -787,24 +749,22 @@ export class Supervisor implements SupervisorContract {
         'delivery metadata id-set does not match delivery_ids (backend bug)',
       );
       throw new Error(
-        `delivery metadata mismatch in ${context}: `
-          + `delivery_ids=[${[...idSet].join(',')}] `
-          + `deliveries=[${[...metaSet].join(',')}]`,
+        `delivery metadata mismatch in ${context}: ` +
+          `delivery_ids=[${[...idSet].join(',')}] ` +
+          `deliveries=[${[...metaSet].join(',')}]`,
       );
     }
   }
 
-  private getHandleForAgentIntent(
-    scope: AgentRuntimeIntentScope,
-    agentId: string,
-  ): RuntimeHandle {
-    const runtimeScope: RuntimeScope = scope.kind === 'agent'
-      ? { kind: 'agent', agent_id: agentId }
-      : {
-          kind: 'conversation',
-          conversation_id: scope.conversation_id,
-          agent_id: agentId,
-        };
+  private getHandleForAgentIntent(scope: AgentRuntimeIntentScope, agentId: string): RuntimeHandle {
+    const runtimeScope: RuntimeScope =
+      scope.kind === 'agent'
+        ? { kind: 'agent', agent_id: agentId }
+        : {
+            kind: 'conversation',
+            conversation_id: scope.conversation_id,
+            agent_id: agentId,
+          };
     const handle = this.handles.get(runtimeScopeKey(runtimeScope));
     if (!handle || handle.phase === 'exited') {
       throw new Error(
@@ -814,16 +774,10 @@ export class Supervisor implements SupervisorContract {
     return handle;
   }
 
-  private async backendPost(
-    handle: RuntimeHandle,
-    path: string,
-    body: unknown,
-  ): Promise<Response> {
+  private async backendPost(handle: RuntimeHandle, path: string, body: unknown): Promise<Response> {
     const serverUrl = this.controlPlaneServerUrl();
     if (!serverUrl) {
-      throw new Error(
-        'agent side-effect requested before daemon has a control-plane server URL',
-      );
+      throw new Error('agent side-effect requested before daemon has a control-plane server URL');
     }
     return fetch(`${serverUrl}${path}`, {
       method: 'POST',
@@ -836,13 +790,8 @@ export class Supervisor implements SupervisorContract {
     });
   }
 
-  async agentMessageSend(
-    params: AgentMessageSendParams,
-  ): Promise<AgentMessageSendResult> {
-    const handle = this.getHandleForAgentIntent(
-      params.runtime_scope,
-      params.agent_id,
-    );
+  async agentMessageSend(params: AgentMessageSendParams): Promise<AgentMessageSendResult> {
+    const handle = this.getHandleForAgentIntent(params.runtime_scope, params.agent_id);
     // P1-2 v2 (#task:1614): settlement-before-send ordering barrier.
     // The response frame can reach the CLI BEFORE this process runs the
     // write callback (the kernel gives no cross-process ordering), so a
@@ -900,9 +849,7 @@ export class Supervisor implements SupervisorContract {
     };
     const res = await this.backendPost(
       handle,
-      internalPaths.agentSendConversationMessage(
-        params.agent_id,
-      ),
+      internalPaths.agentSendConversationMessage(params.agent_id),
       body,
     );
     if (!res.ok) {
@@ -955,8 +902,7 @@ export class Supervisor implements SupervisorContract {
     if (typeof landedConversationId !== 'string' || landedConversationId.length === 0) {
       throw new Error('backend send-message response missing conversation_id');
     }
-    const resolvedRoot =
-      typeof json['thread_root_id'] === 'string' ? json['thread_root_id'] : null;
+    const resolvedRoot = typeof json['thread_root_id'] === 'string' ? json['thread_root_id'] : null;
     // The send committed, so whatever conflict was armed for this runtime is now
     // resolved.
     handle.pendingStaleEvent = null;
@@ -966,10 +912,9 @@ export class Supervisor implements SupervisorContract {
     // unchanged. A field we cannot read is DROPPED, not repaired: the CLI must
     // never learn "every reference landed" from a response the daemon failed to
     // parse, and the send itself succeeded either way.
-    const unresolvedReferences =
-      AgentSendMessageOutputSchema.shape.unresolved_references.safeParse(
-        json['unresolved_references'],
-      );
+    const unresolvedReferences = AgentSendMessageOutputSchema.shape.unresolved_references.safeParse(
+      json['unresolved_references'],
+    );
     if (!unresolvedReferences.success) {
       // The field is `.optional()`, so an ABSENT key parses successfully: a
       // failure here means the backend sent something we cannot read. Dropping
@@ -985,7 +930,7 @@ export class Supervisor implements SupervisorContract {
           action: 'send_unresolved_references_shape_mismatch',
           conversationId: handle.conversationId,
           agent_id: params.agent_id,
-          issues: unresolvedReferences.error.issues.map(issue => ({
+          issues: unresolvedReferences.error.issues.map((issue) => ({
             code: issue.code,
             path: issue.path.join('.'),
           })),
@@ -1005,13 +950,8 @@ export class Supervisor implements SupervisorContract {
     };
   }
 
-  async agentStaleResolve(
-    params: AgentStaleResolveParams,
-  ): Promise<AgentStaleResolveResult> {
-    const handle = this.getHandleForAgentIntent(
-      params.runtime_scope,
-      params.agent_id,
-    );
+  async agentStaleResolve(params: AgentStaleResolveParams): Promise<AgentStaleResolveResult> {
+    const handle = this.getHandleForAgentIntent(params.runtime_scope, params.agent_id);
     const pending = handle.pendingStaleEvent;
     if (!pending) {
       return { ok: true, resolved: false, reason: 'no_pending_stale_event' };
@@ -1032,9 +972,7 @@ export class Supervisor implements SupervisorContract {
     }
     const res = await this.backendPost(
       handle,
-      internalPaths.agentResolveStaleMessage(
-        params.agent_id,
-      ),
+      internalPaths.agentResolveStaleMessage(params.agent_id),
       {
         // The backend requires the conversation as its authorization subject
         // (#task:2095 F17); fed VERBATIM from the 409's `target_conversation_id`
@@ -1078,10 +1016,7 @@ export class Supervisor implements SupervisorContract {
         'agent_stale_receive requires an ingress that proves response transport handoff (control socket only)',
       );
     }
-    const handle = this.getHandleForAgentIntent(
-      params.runtime_scope,
-      params.agent_id,
-    );
+    const handle = this.getHandleForAgentIntent(params.runtime_scope, params.agent_id);
     const pending = handle.pendingStaleEvent;
     if (!pending) {
       return { ok: true, outcome: 'no_pending_stale' };
@@ -1131,14 +1066,7 @@ export class Supervisor implements SupervisorContract {
     try {
       for (;;) {
         const step = await this.withLifecycleLock(k, async () =>
-          this.evaluateStaleReceiveLocked(
-            k,
-            handle,
-            staleEventId,
-            waiterToken,
-            pullCall,
-            ctx,
-          ),
+          this.evaluateStaleReceiveLocked(k, handle, staleEventId, waiterToken, pullCall, ctx),
         );
         if (step.kind === 'cancelled') return cancelledOutcome();
         if (step.kind === 'result') return step.result;
@@ -1159,7 +1087,7 @@ export class Supervisor implements SupervisorContract {
         // into the deadline check above.
         const woke = await Promise.race([
           step.wakePromise,
-          new Promise<'timer'>(resolve => {
+          new Promise<'timer'>((resolve) => {
             const timer = setTimeout(() => resolve('timer'), remaining);
             timer.unref?.();
           }),
@@ -1237,11 +1165,7 @@ export class Supervisor implements SupervisorContract {
         'another stale-receive pull is already active for this runtime',
       );
     }
-    if (
-      live.deferredQueue.length > 0 &&
-      live.startupDelivery === null &&
-      live.phase === 'ready'
-    ) {
+    if (live.deferredQueue.length > 0 && live.startupDelivery === null && live.phase === 'ready') {
       // TAKE — the single release-winner moment. Identical selection to
       // `flushDeferred` (same bounded FIFO prefix, same combine), so the
       // pull returns exactly what the next auto-flush would have written.
@@ -1251,7 +1175,7 @@ export class Supervisor implements SupervisorContract {
         : live.deferredQueue.splice(0, 1);
       const combined = combineDeferredBatch(batch, gated);
       let markSettled!: () => void;
-      const settled = new Promise<void>(resolve => {
+      const settled = new Promise<void>((resolve) => {
         markSettled = resolve;
       });
       const reservation = {
@@ -1270,7 +1194,7 @@ export class Supervisor implements SupervisorContract {
       agentReservations.add(reservation);
       // Custody settles only at the response transport handoff; the
       // ingress invokes this exactly once (#task:1614 proof point).
-      ctx.responseHandoff = handoffOk => {
+      ctx.responseHandoff = (handoffOk) => {
         void this.settleStaleReceiveHandoff(k, handle, handoffOk);
       };
       // #task:2095 F12: the outcome is a property of the QUEUE after the
@@ -1318,7 +1242,7 @@ export class Supervisor implements SupervisorContract {
     // the lock; the wait itself happens outside it. The waiter carries
     // this call's token (P1-3) and the issuing connection's owner
     // (P1-4 cancel leg).
-    const wakePromise = new Promise<PullWakeReason>(resolve => {
+    const wakePromise = new Promise<PullWakeReason>((resolve) => {
       live.pullWaiter = {
         staleEventId,
         token: waiterToken,
@@ -1437,11 +1361,7 @@ export class Supervisor implements SupervisorContract {
 
   /** Remove this CALL's own waiter under the lock, keyed by the call
    *  token (P1-3) — idempotent, never touches another call's waiter. */
-  private clearOwnPullWaiter(
-    k: string,
-    handle: RuntimeHandle,
-    waiterToken: number,
-  ): Promise<void> {
+  private clearOwnPullWaiter(k: string, handle: RuntimeHandle, waiterToken: number): Promise<void> {
     return this.withLifecycleLock(k, async () => {
       if (handle.pullWaiter?.token === waiterToken) {
         handle.pullWaiter = null;
@@ -1589,17 +1509,14 @@ export class Supervisor implements SupervisorContract {
     // child started here is driven.
     driver.bindRuntimeVersion?.(resolved.version);
 
-    const promptCtx =
-      await buildPromptContextFromRuntimeStartOptions(resolvedOptions);
+    const promptCtx = await buildPromptContextFromRuntimeStartOptions(resolvedOptions);
     const systemPromptText = buildSystemPromptFor(runtimeKind, promptCtx);
     const wireSilverhandCli = startOptions.env_policy.silverhand_cli;
     const serverSilverhandCli: SilverhandCliLauncher | null = wireSilverhandCli
       ? {
           command: wireSilverhandCli.command,
           args: wireSilverhandCli.args,
-          ...(wireSilverhandCli.env_vars
-            ? { env: wireSilverhandCli.env_vars }
-            : {}),
+          ...(wireSilverhandCli.env_vars ? { env: wireSilverhandCli.env_vars } : {}),
         }
       : null;
     const controlPlaneServerUrl = this.controlPlaneServerUrl();
@@ -1622,13 +1539,12 @@ export class Supervisor implements SupervisorContract {
           : {}),
         [SILVERHAND_AGENT_ID_ENV]: params.agent_id,
         [SILVERHAND_SERVER_URL_ENV]: controlPlaneServerUrl,
-        [SILVERHAND_AUTH_TOKEN_ENV]:
-          startOptions.env_policy.silverhand.auth_token,
+        [SILVERHAND_AUTH_TOKEN_ENV]: startOptions.env_policy.silverhand.auth_token,
       },
       daemonSocketPath: this.daemonSocketPath ?? undefined,
     });
 
-    const spawnCtx = {
+    const spawnCtx: DriverSpawnContext = {
       agentId: params.agent_id,
       agentName: startOptions.agent.name,
       workspacePath: resolvedOptions.cwd,
@@ -1637,9 +1553,7 @@ export class Supervisor implements SupervisorContract {
       reasoningEffort: startOptions.driver.reasoning_effort,
       fastMode: startOptions.driver.fast_mode,
       systemPromptPath: spawnPrep.systemPromptPath,
-      initialPrompt: driver.oneShot && params.startup_delivery
-        ? params.startup_delivery.text
-        : '',
+      initialPrompt: driver.oneShot && params.startup_delivery ? params.startup_delivery.text : '',
     };
 
     const args = driver.buildArgs(spawnCtx);
@@ -1657,6 +1571,7 @@ export class Supervisor implements SupervisorContract {
       logger: this.logger,
     });
     args.push(...(mcpSpawn.args ?? []));
+    spawnCtx.profileMcp = mcpSpawn.profileMcp;
     const daemonEnv = buildDaemonSpawnEnv({
       driver,
       options: startOptions,
@@ -1677,8 +1592,7 @@ export class Supervisor implements SupervisorContract {
       ...(mcpSpawn.env ?? {}),
       ...(startOptions.runtime_scope.kind === 'conversation'
         ? {
-            [SILVERHAND_CONVERSATION_ID_ENV]:
-              daemonEnv[SILVERHAND_CONVERSATION_ID_ENV],
+            [SILVERHAND_CONVERSATION_ID_ENV]: daemonEnv[SILVERHAND_CONVERSATION_ID_ENV],
           }
         : {}),
       [SILVERHAND_AGENT_ID_ENV]: daemonEnv[SILVERHAND_AGENT_ID_ENV],
@@ -1713,8 +1627,7 @@ export class Supervisor implements SupervisorContract {
         env_summary: summarizeSpawnEnv(env),
         silverhand_env_presence: {
           child: summarizeSilverhandEnvPresence(env, {
-            conversationIdRequired:
-              startOptions.runtime_scope.kind === 'conversation',
+            conversationIdRequired: startOptions.runtime_scope.kind === 'conversation',
           }),
           shim: spawnPrep.silverhandShimEnvPresence,
         },
@@ -1759,9 +1672,7 @@ export class Supervisor implements SupervisorContract {
 
     const pid = child.pid;
     if (typeof pid !== 'number') {
-      throw new Error(
-        `runtime_start: child spawned without a pid for runtime "${runtimeKind}"`,
-      );
+      throw new Error(`runtime_start: child spawned without a pid for runtime "${runtimeKind}"`);
     }
     try {
       this.writeRuntimePidfile({
@@ -1795,15 +1706,16 @@ export class Supervisor implements SupervisorContract {
         'startup_delivery',
       );
     }
-    const startupBatch = params.startup_delivery && !driver.oneShot
-      ? {
-          conversationId: params.startup_delivery.conversation_id,
-          actionWorkdir: params.startup_delivery.action_workdir,
-          deliveryIds: [...params.startup_delivery.delivery_ids],
-          deliveries: params.startup_delivery.deliveries,
-          text: params.startup_delivery.text,
-        }
-      : null;
+    const startupBatch =
+      params.startup_delivery && !driver.oneShot
+        ? {
+            conversationId: params.startup_delivery.conversation_id,
+            actionWorkdir: params.startup_delivery.action_workdir,
+            deliveryIds: [...params.startup_delivery.delivery_ids],
+            deliveries: params.startup_delivery.deliveries,
+            text: params.startup_delivery.text,
+          }
+        : null;
 
     const handle: RuntimeHandle = {
       runtimeScope: params.options.runtime_scope,
@@ -1910,10 +1822,7 @@ export class Supervisor implements SupervisorContract {
         handle,
         deliveredUpToSeqOf(params.startup_delivery.deliveries),
       );
-      this.emitStartupDeliveryConsumed(
-        handle,
-        params.startup_delivery.delivery_ids,
-      );
+      this.emitStartupDeliveryConsumed(handle, params.startup_delivery.delivery_ids);
     }
 
     // 3c-b: driver-side init handshake. Codex needs `bindIO` to send
@@ -2079,10 +1988,7 @@ export class Supervisor implements SupervisorContract {
       return;
     }
 
-    const payloadUuid = this.mintInputPayloadUuid(
-      handle,
-      deliveryIds,
-    );
+    const payloadUuid = this.mintInputPayloadUuid(handle, deliveryIds);
     const encoded = handle.driver.encodeStdinMessage(batch.text, handle.cliSessionId, {
       payloadUuid,
     });
@@ -2158,8 +2064,7 @@ export class Supervisor implements SupervisorContract {
       // guarded by the one `turnEndsBeforeWrite` snapshot below.
       const turnEndsBeforeWrite = handle.turnEndCount;
       await this.writeStdinPayload(handle, encoded);
-      const turnStartedByThisWriteStillRunning =
-        handle.turnEndCount === turnEndsBeforeWrite;
+      const turnStartedByThisWriteStillRunning = handle.turnEndCount === turnEndsBeforeWrite;
       if (turnStartedByThisWriteStillRunning) {
         // Profile-independent lifecycle fact (F25): set under the snapshot
         // guard ALONE, not gated on release profile, so this site stays
@@ -2258,10 +2163,7 @@ export class Supervisor implements SupervisorContract {
     // `runtime_ready_for_drain` remain blocked until session_init.
     // For self-init drivers (kickoffMode !== 'requires_first_message'),
     // or when initObserved is already true (e.g. resume path), settle now.
-    if (
-      handle.driver.kickoffMode === 'requires_first_message' &&
-      !handle.initObserved
-    ) {
+    if (handle.driver.kickoffMode === 'requires_first_message' && !handle.initObserved) {
       handle.startupAwaitingInit = true;
       this.logger.info(
         {
@@ -2387,10 +2289,7 @@ export class Supervisor implements SupervisorContract {
    * is backend's `markDelivered` trigger — the ONLY thing that flips
    * `delivered_at`.
    */
-  private emitStartupDeliveryConsumed(
-    handle: RuntimeHandle,
-    deliveryIds: readonly number[],
-  ): void {
+  private emitStartupDeliveryConsumed(handle: RuntimeHandle, deliveryIds: readonly number[]): void {
     this.emit({
       event: 'runtime_delivery_consumed',
       runtime_scope: handle.runtimeScope,
@@ -2480,9 +2379,7 @@ export class Supervisor implements SupervisorContract {
 
   // ── runtime_stop ───────────────────────────────────────────────
 
-  async stop(
-    params: RuntimeStopParams,
-  ): Promise<RuntimeStopResult> {
+  async stop(params: RuntimeStopParams): Promise<RuntimeStopResult> {
     const k = runtimeScopeKey(params.runtime_scope);
     return this.withLifecycleLock(k, async () => {
       const handle = this.handles.get(k);
@@ -2529,7 +2426,7 @@ export class Supervisor implements SupervisorContract {
     this.clearCompactionWatchdog(handle);
     this.emitState(handle);
 
-    const exitPromise = new Promise<RuntimeStopResult>(resolve => {
+    const exitPromise = new Promise<RuntimeStopResult>((resolve) => {
       const onExit = (code: number | null): void => {
         // The actual exit emit is handled by `attachChildListeners`;
         // we only resolve the stop() promise here.
@@ -2737,12 +2634,7 @@ export class Supervisor implements SupervisorContract {
       // current connection owner in place; only novel ids enter the FIFO.
       // Any non-refused disposition below means daemon custody covers the
       // caller's whole batch, so backend keeps every row in-flight.
-      const ownership = this.partitionDeliveryOwnership(
-        handle,
-        params,
-        actionWorkdir,
-        ctx.owner,
-      );
+      const ownership = this.partitionDeliveryOwnership(handle, params, actionWorkdir, ctx.owner);
       if (ownership.heldCount > 0) {
         if (ownership.novel.length > 0) {
           handle.deferredQueue.push(...ownership.novel);
@@ -2820,11 +2712,7 @@ export class Supervisor implements SupervisorContract {
       // `deferred` is a custody transfer, NOT an ack — `delivered_at` still
       // moves only on the async `runtime_delivery_consumed` the eventual
       // flush emits.
-      if (
-        writeInFlight ||
-        handle.pullReservation !== null ||
-        (gated && !boundaryOpen)
-      ) {
+      if (writeInFlight || handle.pullReservation !== null || (gated && !boundaryOpen)) {
         this.enqueueDeferred(handle, params, actionWorkdir, ctx.owner);
         this.scheduleReservationStallCheck(handle);
         return {
@@ -2904,9 +2792,7 @@ export class Supervisor implements SupervisorContract {
       if (handle.deferredQueue.length === 0) continue;
       const retained: DeferredEntry[] = [];
       for (const entry of handle.deferredQueue) {
-        const remainingIds = entry.deliveryIds.filter(
-          id => entry.owners.get(id) !== owner,
-        );
+        const remainingIds = entry.deliveryIds.filter((id) => entry.owners.get(id) !== owner);
         discarded += entry.deliveryIds.length - remainingIds.length;
         if (remainingIds.length > 0) {
           retained.push(this.subsetDeferredEntry(handle, entry, remainingIds));
@@ -2935,8 +2821,7 @@ export class Supervisor implements SupervisorContract {
     if (handle.reservationStallWarned) return;
     if (handle.reservationStallTimer !== null) return;
     if (handle.deferredQueue.length === 0) return;
-    const remaining =
-      this.reservationStallWarnMs - (this.now() - handle.nextTurnReservedAt);
+    const remaining = this.reservationStallWarnMs - (this.now() - handle.nextTurnReservedAt);
     if (remaining <= 0) {
       this.warnReservationStall(handle);
       return;
@@ -2963,9 +2848,7 @@ export class Supervisor implements SupervisorContract {
         conversation_id: handle.conversationId,
         agent_id: handle.agentId,
         reservation_age_ms:
-          handle.nextTurnReservedAt === null
-            ? null
-            : this.now() - handle.nextTurnReservedAt,
+          handle.nextTurnReservedAt === null ? null : this.now() - handle.nextTurnReservedAt,
         deferred_queue_depth: handle.deferredQueue.length,
       },
       'next-turn reservation held past stall threshold; deliveries deferring until terminal turn_end (fail closed, no write)',
@@ -2987,13 +2870,7 @@ export class Supervisor implements SupervisorContract {
     owner: string,
   ): void {
     handle.deferredQueue.push(
-      this.deferredEntryFromParams(
-        handle,
-        params,
-        params.delivery_ids,
-        actionWorkdir,
-        owner,
-      ),
+      this.deferredEntryFromParams(handle, params, params.delivery_ids, actionWorkdir, owner),
     );
     // A stale-receive waiter (#task:1614) may now have a takeable prefix.
     this.wakePullWaiter(handle);
@@ -3029,11 +2906,11 @@ export class Supervisor implements SupervisorContract {
     // presentation. #task:2106 made `deliveries` always present, so this is a
     // metadata-completeness check on the novel subset, never a hard refusal.
     {
-      const novelIds = params.delivery_ids.filter(id => !held.has(id));
+      const novelIds = params.delivery_ids.filter((id) => !held.has(id));
       if (novelIds.length > 0 && novelIds.length !== params.delivery_ids.length) {
         const novel = new Set(novelIds);
         this.requireDeliveryPresentations(
-          params.deliveries.filter(delivery => novel.has(delivery.delivery_id)),
+          params.deliveries.filter((delivery) => novel.has(delivery.delivery_id)),
         );
       }
     }
@@ -3060,8 +2937,8 @@ export class Supervisor implements SupervisorContract {
             action,
             conversation_id: handle.conversationId,
             agent_id: handle.agentId,
-            delivery_ids: rebound.map(item => item.id),
-            from_owners: [...new Set(rebound.map(item => item.from))],
+            delivery_ids: rebound.map((item) => item.id),
+            from_owners: [...new Set(rebound.map((item) => item.from))],
             to_owner: owner,
           },
           'rebound daemon-held delivery ids to current owner',
@@ -3069,23 +2946,15 @@ export class Supervisor implements SupervisorContract {
       }
     };
     if (handle.pullReservation) {
-      rebind(
-        handle.pullReservation.batch,
-        'stale_receive_reservation_rebind',
-      );
+      rebind(handle.pullReservation.batch, 'stale_receive_reservation_rebind');
     }
     rebind(handle.deferredQueue, 'deferred_owner_rebind');
 
-    const novelIds = params.delivery_ids.filter(id => !held.has(id));
-    const novel = novelIds.length > 0
-      ? [this.deferredEntryFromParams(
-          handle,
-          params,
-          novelIds,
-          actionWorkdir,
-          owner,
-        )]
-      : [];
+    const novelIds = params.delivery_ids.filter((id) => !held.has(id));
+    const novel =
+      novelIds.length > 0
+        ? [this.deferredEntryFromParams(handle, params, novelIds, actionWorkdir, owner)]
+        : [];
     let heldCount = 0;
     for (const id of incoming) {
       if (held.has(id)) heldCount += 1;
@@ -3102,12 +2971,10 @@ export class Supervisor implements SupervisorContract {
     owner: string,
   ): DeferredEntry {
     const isWholeBatch =
-      deliveryIds.length === params.delivery_ids.length
-      && deliveryIds.every((id, index) => id === params.delivery_ids[index]);
-    const byId = new Map(
-      params.deliveries.map(delivery => [delivery.delivery_id, delivery]),
-    );
-    const deliveries = deliveryIds.map(id => {
+      deliveryIds.length === params.delivery_ids.length &&
+      deliveryIds.every((id, index) => id === params.delivery_ids[index]);
+    const byId = new Map(params.deliveries.map((delivery) => [delivery.delivery_id, delivery]));
+    const deliveries = deliveryIds.map((id) => {
       const delivery = byId.get(id);
       if (!delivery) {
         throw new Error(`runtime_deliver missing payload for delivery_id=${id}`);
@@ -3125,7 +2992,7 @@ export class Supervisor implements SupervisorContract {
             this.requireDeliveryPresentations(deliveries),
             SEND_MESSAGE_TOOL,
           ),
-      owners: new Map(deliveryIds.map(id => [id, owner])),
+      owners: new Map(deliveryIds.map((id) => [id, owner])),
     };
   }
 
@@ -3137,9 +3004,7 @@ export class Supervisor implements SupervisorContract {
   ): DeferredEntry {
     if (deliveryIds.length === entry.deliveryIds.length) return entry;
     const selected = new Set(deliveryIds);
-    const deliveries = entry.deliveries.filter(delivery =>
-      selected.has(delivery.delivery_id)
-    );
+    const deliveries = entry.deliveries.filter((delivery) => selected.has(delivery.delivery_id));
     return {
       conversationId: entry.conversationId,
       actionWorkdir: entry.actionWorkdir,
@@ -3149,16 +3014,14 @@ export class Supervisor implements SupervisorContract {
         this.requireDeliveryPresentations(deliveries),
         SEND_MESSAGE_TOOL,
       ),
-      owners: new Map(
-        deliveryIds.map(id => [id, entry.owners.get(id)!]),
-      ),
+      owners: new Map(deliveryIds.map((id) => [id, entry.owners.get(id)!])),
     };
   }
 
   private requireDeliveryPresentations(
     deliveries: readonly RuntimeDelivery[],
   ): RuntimeDeliveryPresentation[] {
-    return deliveries.map(delivery => {
+    return deliveries.map((delivery) => {
       if (!delivery.presentation) {
         throw new Error(
           `runtime_deliver partial ownership overlap requires presentation metadata for delivery_id=${delivery.delivery_id}`,
@@ -3278,11 +3141,7 @@ export class Supervisor implements SupervisorContract {
       //     between seq spaces — it is the LAST value written, NOT a monotonic
       //     high-water. On an AgentSlot this value is DIAGNOSTIC ONLY and must
       //     NOT be used for dedup.
-      await writeFile(
-        handle.lastDeliveredSeqPath,
-        `${deliveredUpToSeq}\n`,
-        'utf-8',
-      );
+      await writeFile(handle.lastDeliveredSeqPath, `${deliveredUpToSeq}\n`, 'utf-8');
     } catch (err) {
       this.logger.warn(
         {
@@ -3305,10 +3164,7 @@ export class Supervisor implements SupervisorContract {
   status(params: RuntimeStatusParams): RuntimeStatusResult {
     const out: RuntimeStateDto[] = [];
     for (const handle of this.handles.values()) {
-      if (
-        params.conversation_id &&
-        params.conversation_id !== handle.conversationId
-      ) {
+      if (params.conversation_id && params.conversation_id !== handle.conversationId) {
         continue;
       }
       if (params.agent_id && params.agent_id !== handle.agentId) continue;
@@ -3328,9 +3184,7 @@ export class Supervisor implements SupervisorContract {
 
   // ── runtime_clear_session ──────────────────────────────────────
 
-  async clearSession(
-    params: RuntimeClearSessionParams,
-  ): Promise<RuntimeClearSessionResult> {
+  async clearSession(params: RuntimeClearSessionParams): Promise<RuntimeClearSessionResult> {
     // 3a semantics (per Cindy `OQCA05pivtB8nSTC` clarification note):
     // `cleared: true` here means **the host-side runtime was hard-
     // stopped** — the runtime handle is gone, so any subsequent
@@ -3379,7 +3233,7 @@ export class Supervisor implements SupervisorContract {
     }
     const count = livingKeys.length;
     await Promise.all(
-      livingKeys.map(k =>
+      livingKeys.map((k) =>
         this.withLifecycleLock(k, async () => {
           const handle = this.handles.get(k);
           if (!handle || handle.phase === 'exited') return;
@@ -3395,9 +3249,7 @@ export class Supervisor implements SupervisorContract {
    * under its existing lifecycle lock, and success requires the child's real
    * `exit` event rather than merely sending SIGKILL.
    */
-  async fenceAndQuiesceAgent(
-    agentId: string,
-  ): Promise<{ quiesced_count: number }> {
+  async fenceAndQuiesceAgent(agentId: string): Promise<{ quiesced_count: number }> {
     if (!this.agentHomeCoordinator.isFenced(agentId)) {
       throw new Error(
         `refusing to quiesce agent ${agentId} before the shared deletion fence is installed`,
@@ -3405,9 +3257,7 @@ export class Supervisor implements SupervisorContract {
     }
 
     const livingKeys = [...this.handles.entries()]
-      .filter(([, handle]) =>
-        handle.agentId === agentId && handle.phase !== 'exited'
-      )
+      .filter(([, handle]) => handle.agentId === agentId && handle.phase !== 'exited')
       .map(([k]) => k);
 
     // A stale-receive reservation is custody already removed from the normal
@@ -3416,21 +3266,19 @@ export class Supervisor implements SupervisorContract {
     // lifecycle lock so settlement can acquire that same lock. Timeout never
     // fabricates an outcome and never starts rm: the coordinator retains its
     // terminal fence in `fenced_retryable` for a later purge attempt.
-    const reservations = [
-      ...(this.pullReservationsByAgent.get(agentId) ?? []),
-    ];
+    const reservations = [...(this.pullReservationsByAgent.get(agentId) ?? [])];
     const custodySettled = await Promise.all(
-      reservations.map(reservation =>
-        this.waitForDeletionCustodySettlement(agentId, reservation)
+      reservations.map((reservation) =>
+        this.waitForDeletionCustodySettlement(agentId, reservation),
       ),
     );
-    const unsettledCount = custodySettled.filter(settled => !settled).length;
+    const unsettledCount = custodySettled.filter((settled) => !settled).length;
     if (unsettledCount > 0) {
       throw new AgentCustodySettlementTimeoutError(agentId, unsettledCount);
     }
 
     const outcomes = await Promise.all(
-      livingKeys.map(k =>
+      livingKeys.map((k) =>
         this.withLifecycleLock(k, async (): Promise<boolean> => {
           const handle = this.handles.get(k);
           this.initRetryStates.delete(k);
@@ -3442,7 +3290,7 @@ export class Supervisor implements SupervisorContract {
         }),
       ),
     );
-    const livingCount = outcomes.filter(stopped => !stopped).length;
+    const livingCount = outcomes.filter((stopped) => !stopped).length;
     if (livingCount > 0) {
       throw new AgentQuiesceFailedError(agentId, livingCount);
     }
@@ -3458,11 +3306,8 @@ export class Supervisor implements SupervisorContract {
     let timer: NodeJS.Timeout | null = null;
     const outcome = await Promise.race([
       settlement.then(() => 'settled' as const),
-      new Promise<'timeout'>(resolve => {
-        timer = setTimer(
-          () => resolve('timeout'),
-          this.deletionCustodySettleTimeoutMs,
-        );
+      new Promise<'timeout'>((resolve) => {
+        timer = setTimer(() => resolve('timeout'), this.deletionCustodySettleTimeoutMs);
         timer.unref();
       }),
     ]);
@@ -3484,9 +3329,7 @@ export class Supervisor implements SupervisorContract {
 
   // ── runtime_close_activity_log ─────────────────────────────────
 
-  closeActivityLog(
-    _params: RuntimeCloseActivityLogParams,
-  ): RuntimeCloseActivityLogResult {
+  closeActivityLog(_params: RuntimeCloseActivityLogParams): RuntimeCloseActivityLogResult {
     // The activity-log JSONL writer is backend-owned (per §3.4 /
     // §4.3); host has nothing to flush. Returning flushed=true keeps
     // backend's intent loop honest — if anything is in flight inside
@@ -3556,7 +3399,7 @@ export class Supervisor implements SupervisorContract {
       this.onChildExit(handle, code, signal);
     });
 
-    child.on('error', err => {
+    child.on('error', (err) => {
       // `error` fires for ENOENT / EACCES on spawn (rare here since
       // resolveBinary already verified existence) and for stdin write
       // failures (tolerated on the `runtime_deliver` write path). Log
@@ -3908,10 +3751,7 @@ export class Supervisor implements SupervisorContract {
    * here — run-state lifecycle starts when the agent actually does
    * something (text/thinking/tool_call/turn_end).
    */
-  private updateRunStateFromParsed(
-    handle: RuntimeHandle,
-    parsed: ParsedEvent,
-  ): void {
+  private updateRunStateFromParsed(handle: RuntimeHandle, parsed: ParsedEvent): void {
     if (parsed.kind === 'session_init') {
       if (!handle.initObserved) {
         handle.initObserved = true;
@@ -3997,10 +3837,7 @@ export class Supervisor implements SupervisorContract {
         // still persisted as a discrete activity row backend-side.
         const currentStatus = handle.runState?.status;
         if (parsed.status === 'waiting') {
-          if (
-            handle.busy.outstandingToolUses === 0 &&
-            !handle.busy.compacting
-          ) {
+          if (handle.busy.outstandingToolUses === 0 && !handle.busy.compacting) {
             this.transitionRunState(handle, {
               status: 'waiting',
               detail: null,
@@ -4039,10 +3876,7 @@ export class Supervisor implements SupervisorContract {
         // finished by the time the params arrive).
         break;
       case 'tool_output':
-        handle.busy.outstandingToolUses = Math.max(
-          0,
-          handle.busy.outstandingToolUses - 1,
-        );
+        handle.busy.outstandingToolUses = Math.max(0, handle.busy.outstandingToolUses - 1);
         if (handle.busy.outstandingToolUses === 0 && !handle.busy.compacting) {
           this.transitionRunState(handle, {
             status: 'thinking',
@@ -4074,9 +3908,7 @@ export class Supervisor implements SupervisorContract {
           compacting: false,
           compactingSince: null,
           compactionStale: false,
-          ...(handle.busy.outstandingToolUses === 0
-            ? { status: 'thinking', detail: null }
-            : {}),
+          ...(handle.busy.outstandingToolUses === 0 ? { status: 'thinking', detail: null } : {}),
         });
         break;
       case 'turn_end':
@@ -4216,9 +4048,7 @@ export class Supervisor implements SupervisorContract {
         startedAt: ts,
         updatedAt: ts,
         lastActivityAt: ts,
-        ...(patch.detail && patch.detail !== null
-          ? { detail: patch.detail }
-          : {}),
+        ...(patch.detail && patch.detail !== null ? { detail: patch.detail } : {}),
         ...(patch.terminalReason ? { terminalReason: patch.terminalReason } : {}),
         ...(patch.activitySnippet ? { activitySnippet: patch.activitySnippet } : {}),
         ...(patch.activitySnippet && patch.activitySnippetKind
@@ -4286,8 +4116,7 @@ export class Supervisor implements SupervisorContract {
       prev.terminalReason !== next.terminalReason ||
       prev.activitySnippet !== next.activitySnippet ||
       prev.activitySnippetKind !== next.activitySnippetKind ||
-      JSON.stringify(prev.toolCallCounts ?? {}) !==
-        JSON.stringify(next.toolCallCounts ?? {}) ||
+      JSON.stringify(prev.toolCallCounts ?? {}) !== JSON.stringify(next.toolCallCounts ?? {}) ||
       prev.compacting !== next.compacting ||
       prev.compactionStale !== next.compactionStale;
     if (shouldEmit) this.emitState(handle);
@@ -4303,17 +4132,10 @@ export class Supervisor implements SupervisorContract {
     }
     const runId = handle.runState?.runId;
     if (!runId) return;
-    const activitySnippet = this.appendActivitySnippetBuffer(
-      handle,
-      runId,
-      kind,
-      text,
-    );
+    const activitySnippet = this.appendActivitySnippetBuffer(handle, runId, kind, text);
     this.transitionRunState(
       handle,
-      activitySnippet
-        ? { activitySnippet, activitySnippetKind: kind }
-        : { status: 'thinking' },
+      activitySnippet ? { activitySnippet, activitySnippetKind: kind } : { status: 'thinking' },
     );
   }
 
@@ -4325,9 +4147,7 @@ export class Supervisor implements SupervisorContract {
   ): string | undefined {
     const current = handle.activitySnippetBuffer;
     const nextText =
-      current?.runId === runId && current.kind === kind
-        ? `${current.text}${text}`
-        : text;
+      current?.runId === runId && current.kind === kind ? `${current.text}${text}` : text;
     const boundedText =
       nextText.length <= ACTIVITY_SNIPPET_BUFFER_MAX_CHARS
         ? nextText
@@ -4336,10 +4156,7 @@ export class Supervisor implements SupervisorContract {
     return trimActivitySnippet(boundedText);
   }
 
-  private clearActivitySnippetBuffer(
-    handle: RuntimeHandle,
-    runId?: string,
-  ): void {
+  private clearActivitySnippetBuffer(handle: RuntimeHandle, runId?: string): void {
     const current = handle.activitySnippetBuffer;
     if (!current) return;
     if (runId && current.runId !== runId) return;
@@ -4373,9 +4190,7 @@ export class Supervisor implements SupervisorContract {
     reason: NonNullable<AgentRunState['terminalReason']>,
   ): void {
     const terminalStatus: AgentRunState['status'] =
-      reason === 'replied' || reason === 'turn_ended' || reason === 'replaced'
-        ? 'idle'
-        : 'failed';
+      reason === 'replied' || reason === 'turn_ended' || reason === 'replaced' ? 'idle' : 'failed';
     const ts = this.now();
     const base: AgentRunState = handle.runState
       ? {
@@ -4442,11 +4257,8 @@ export class Supervisor implements SupervisorContract {
         reject(new Error('child stdin is not writable'));
         return;
       }
-      const line =
-        typeof payload === 'string' ? payload : JSON.stringify(payload);
-      const ok = stdin.write(line + '\n', err =>
-        err ? reject(err) : resolve(),
-      );
+      const line = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      const ok = stdin.write(line + '\n', (err) => (err ? reject(err) : resolve()));
       if (!ok) {
         stdin.once('drain', () => resolve());
       }
@@ -4630,11 +4442,7 @@ export class Supervisor implements SupervisorContract {
       if (deferLifecycleGate) {
         handle.startupGateExitReason = reason;
       } else {
-        this.emitStartupDeliveryFailed(
-          handle,
-          handle.startupDelivery.deliveryIds,
-          reason,
-        );
+        this.emitStartupDeliveryFailed(handle, handle.startupDelivery.deliveryIds, reason);
         this.clearStartupGate(handle);
       }
     }
@@ -4663,11 +4471,7 @@ export class Supervisor implements SupervisorContract {
     // — internalRespawnForRetry calls it WITHOUT bypassing because
     // `startUnlocked` does its own gate check that distinguishes
     // `initAttempt === 0` vs `> 0`).
-    if (
-      handle.initTimedOut &&
-      handle.initRetryPlanned &&
-      !handle.intentionalExit
-    ) {
+    if (handle.initTimedOut && handle.initRetryPlanned && !handle.intentionalExit) {
       const newAttempt = handle.initAttempt + 1;
       this.emit({
         event: 'runtime_init_retrying',
@@ -4748,16 +4552,15 @@ export class Supervisor implements SupervisorContract {
     //   non-zero / signal exit   → `crashed`
     // `replied → idle`, `timeout|stopped|crashed → failed` per CM's
     // terminalStatus table (Cindy `GMbjEkGUHrB1BBMe`).
-    const reason: NonNullable<AgentRunState['terminalReason']> =
-      handle.initTimedOut
-        ? 'timeout'
-        : intentional
-          ? 'stopped'
-          : preInitFailure
-            ? 'crashed'
-            : code === 0
-              ? 'replied'
-              : 'crashed';
+    const reason: NonNullable<AgentRunState['terminalReason']> = handle.initTimedOut
+      ? 'timeout'
+      : intentional
+        ? 'stopped'
+        : preInitFailure
+          ? 'crashed'
+          : code === 0
+            ? 'replied'
+            : 'crashed';
     this.resolveRun(handle, reason);
     this.emit({
       event: 'runtime_exit',
@@ -5083,9 +4886,7 @@ export class Supervisor implements SupervisorContract {
       retrying: retry,
       retry_attempt: handle.initAttempt,
       max_retries: this.initMaxRetries,
-      ...(cooldownUntilOnEvent !== null
-        ? { cooldown_until: cooldownUntilOnEvent }
-        : {}),
+      ...(cooldownUntilOnEvent !== null ? { cooldown_until: cooldownUntilOnEvent } : {}),
       ts: this.now(),
     });
 
@@ -5214,7 +5015,7 @@ export class Supervisor implements SupervisorContract {
   private async withLifecycleLock<T>(k: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.lifecycleTails.get(k);
     let resolveTail!: () => void;
-    const tail = new Promise<void>(r => {
+    const tail = new Promise<void>((r) => {
       resolveTail = r;
     });
     this.lifecycleTails.set(k, tail);
@@ -5378,9 +5179,7 @@ async function ensureRuntimeScopeCwd(
   options: ResolvedStartOptions,
   logger: DaemonLogger,
 ): Promise<void> {
-  const workspace = isResolvedAgentStartOptions(options)
-    ? null
-    : options.workspace;
+  const workspace = isResolvedAgentStartOptions(options) ? null : options.workspace;
   const cwd = options.cwd;
   // shiki + Cindy 2026-08-04: the session cwd is the ONLY hard-ensured runtime
   // base; L1/L2 CONTENT is best-effort and never gates a spawn. This creates
@@ -5419,9 +5218,9 @@ async function ensureRuntimeScopeCwd(
       'workspace_bundle_missing',
       workspace
         ? `runtime_start: session cwd for workspace ${workspace.id} ` +
-          'could not be created or entered on this computer'
+            'could not be created or entered on this computer'
         : `runtime_start: agent-scoped session cwd for ${options.agent.id} ` +
-          'could not be created or entered on this computer',
+            'could not be created or entered on this computer',
     );
   // Best-effort create — idempotent when the dir (or a parent chain) already
   // exists. A conflicting non-directory file at the path throws EEXIST/ENOTDIR
@@ -5469,9 +5268,7 @@ function trimActivitySnippet(text: string): string | undefined {
  * `present` vs `present_unverified`, and this resolver already awaited that
  * catalog — it simply used to drop the version on the floor.
  */
-async function detectedRuntimes(
-  force = false,
-): Promise<Map<RuntimeKind, ResolvedRuntime>> {
+async function detectedRuntimes(force = false): Promise<Map<RuntimeKind, ResolvedRuntime>> {
   const infos = await detectRuntimes({ force });
   const m = new Map<RuntimeKind, ResolvedRuntime>();
   for (const info of infos) {

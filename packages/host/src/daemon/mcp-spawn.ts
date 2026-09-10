@@ -6,9 +6,7 @@ import {
   buildOpencodeConfigContent,
   parseMcpConfig,
   runtimeMcpServerName,
-  toClaudeMcpConfig,
-  toCodexMcpOverrides,
-  toOpencodeMcpConfig,
+  projectProfileMcpForRuntime,
   type McpConfig,
   type RuntimeKind,
 } from '@silverhand/shared';
@@ -36,6 +34,9 @@ import type { DaemonLogger } from './logger.js';
  *    because opencode needs a config env for its standing prompt even when
  *    there is no MCP layer at all.
  *
+ *  - **grok:** pass canonical MCP to the driver for shared ACP projection
+ *    in session/new or session/resume. No native config file is modified.
+ *
  * Failure semantics (locked, §6): the WRITE path already validated, so a
  * read/parse failure here means a hand-edited / half-written file. We drop the
  * ENTIRE MCP layer (never a silent partial subset), log loud, and still spawn.
@@ -62,8 +63,9 @@ export interface ProfileMcpSpawnInput {
   logger: DaemonLogger;
 }
 
-/** What to append to a spawn: argv (claude/codex/qoder) and/or env (opencode). */
+/** Spawn inputs: argv, env, or canonical MCP for an ACP session request. */
 export interface ProfileMcpSpawnResult {
+  profileMcp?: McpConfig;
   args?: string[];
   env?: Record<string, string>;
 }
@@ -85,7 +87,7 @@ export async function buildProfileMcpSpawnArgs(
     const standingPrompt = readFileSync(systemPromptPath, 'utf-8');
     const content = buildOpencodeConfigContent({
       standingPrompt,
-      mcpConfig: mcpConfig ? toOpencodeMcpConfig(mcpConfig, 'profile') : null,
+      mcpConfig: mcpConfig ? opencodeProfileProjection(mcpConfig) : null,
     });
     return content ? { env: { OPENCODE_CONFIG_CONTENT: content } } : { args: [] };
   }
@@ -93,19 +95,21 @@ export async function buildProfileMcpSpawnArgs(
   if (!mcpConfig) return { args: [] };
 
   try {
-    switch (runtimeKind) {
-      case 'claude':
-      case 'qoder': {
-        const claudeConfig = toClaudeMcpConfig(mcpConfig, 'profile');
+    const projection = projectProfileMcpForRuntime(mcpConfig, runtimeKind);
+    switch (projection.kind) {
+      case 'claude': {
+        const claudeConfig = projection.config;
         if (!claudeConfig) return { args: [] };
         const outPath = join(spawnDir, 'profile-mcp.json');
         await writeFile(outPath, JSON.stringify(claudeConfig, null, 2), 'utf-8');
         return { args: ['--mcp-config', outPath] };
       }
       case 'codex': {
-        const overrides = toCodexMcpOverrides(mcpConfig, 'profile');
-        return { args: overrides.flatMap(o => ['-c', o]) };
+        const overrides = projection.overrides;
+        return { args: overrides.flatMap((o) => ['-c', o]) };
       }
+      case 'acp':
+        return { profileMcp: mcpConfig };
       default:
         // cursor / others: no profile MCP support in v1. Loud so a user who
         // configured MCP for an unsupported runtime isn't silently ignored.
@@ -137,9 +141,7 @@ export async function buildProfileMcpSpawnArgs(
  * failure is loud (a hand-edited / half-written file) but still yields `null`
  * so the caller can spawn without the layer.
  */
-async function loadProfileMcp(
-  input: ProfileMcpSpawnInput,
-): Promise<McpConfig | null> {
+async function loadProfileMcp(input: ProfileMcpSpawnInput): Promise<McpConfig | null> {
   const { runtimeKind, agentHomeDir, agentId, logger } = input;
   const filePath = join(agentHomeDir, MCP_CONFIG_FILENAME);
 
@@ -185,4 +187,10 @@ async function loadProfileMcp(
   }
 
   return parsed.config;
+}
+
+function opencodeProfileProjection(config: McpConfig) {
+  const projection = projectProfileMcpForRuntime(config, 'opencode');
+  if (projection.kind !== 'opencode') throw new Error('Unexpected OpenCode MCP projection.');
+  return projection.config;
 }

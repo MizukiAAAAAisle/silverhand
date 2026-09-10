@@ -16,6 +16,7 @@ pub enum RuntimeKind {
     Qoder,
     Opencode,
     Pi,
+    Grok,
 }
 
 impl RuntimeKind {
@@ -30,6 +31,7 @@ impl RuntimeKind {
             RuntimeKind::Qoder => "qoder",
             RuntimeKind::Opencode => "opencode",
             RuntimeKind::Pi => "pi",
+            RuntimeKind::Grok => "grok",
         }
     }
 
@@ -45,13 +47,14 @@ impl RuntimeKind {
             "qoder" => Some(RuntimeKind::Qoder),
             "opencode" => Some(RuntimeKind::Opencode),
             "pi" => Some(RuntimeKind::Pi),
+            "grok" => Some(RuntimeKind::Grok),
             _ => None,
         }
     }
 
     /// Every runtime in the set, so a caller that must cover all of them reads the
     /// owner instead of restating the tokens.
-    pub const ALL: [RuntimeKind; 7] = [
+    pub const ALL: [RuntimeKind; 8] = [
         RuntimeKind::Claude,
         RuntimeKind::Codex,
         RuntimeKind::Cursor,
@@ -59,6 +62,7 @@ impl RuntimeKind {
         RuntimeKind::Qoder,
         RuntimeKind::Opencode,
         RuntimeKind::Pi,
+        RuntimeKind::Grok,
     ];
 }
 
@@ -93,6 +97,7 @@ mod tests {
                 RuntimeKind::Qoder => "qoder",
                 RuntimeKind::Opencode => "opencode",
                 RuntimeKind::Pi => "pi",
+                RuntimeKind::Grok => "grok",
             };
             assert_eq!(kind.as_str(), spelling);
             assert!(seen.insert(spelling), "{spelling} is listed twice");

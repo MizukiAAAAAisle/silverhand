@@ -46,6 +46,14 @@ export interface AcpPermissionPolicy {
 export interface AcpRuntimeAdapter {
   readonly runtimeLabel: string;
   readonly permissionPolicy?: AcpPermissionPolicy;
+  /** Vendor busy-input extensions are opt-in; ordinary ACP remains serialized. */
+  buildBusyRequest?(
+    sessionId: string,
+    text: string,
+  ): { method: string; params: Record<string, unknown> };
+  sessionMethod?(ctx: DriverSpawnContext, initializeResult: unknown): string;
+  validateSession?(ctx: DriverSpawnContext, result: unknown): string | null;
+  readonly suppressPreSessionUpdates?: boolean;
 
   buildInitializeParams(ctx: DriverSpawnContext): Record<string, unknown>;
   buildSessionParams(ctx: DriverSpawnContext): Record<string, unknown>;
@@ -72,6 +80,7 @@ export class AcpClient {
   private activePromptRequestId: JsonRpcId | null = null;
   private sessionId: string | null = null;
   private sessionAnnounced = false;
+  private sessionResult: Record<string, unknown> = {};
   private emittedToolCalls = new Set<string>();
 
   constructor(private readonly adapter: AcpRuntimeAdapter) {}
@@ -87,12 +96,19 @@ export class AcpClient {
   }
 
   readyToEncode(): boolean {
-    return this.sessionAnnounced && this.activePromptRequestId === null;
+    return (
+      this.sessionAnnounced &&
+      (this.activePromptRequestId === null || !!this.adapter.buildBusyRequest)
+    );
   }
 
   encodeStdinMessage(text: string): string | null {
     if (!this.readyToEncode() || !this.sessionId) return null;
     const id = this.nextRequestId();
+    if (this.activePromptRequestId !== null && this.adapter.buildBusyRequest) {
+      const request = this.adapter.buildBusyRequest(this.sessionId, text);
+      return serialize({ jsonrpc: '2.0', id, ...request });
+    }
     this.activePromptRequestId = id;
     return serialize({
       jsonrpc: '2.0',
@@ -134,6 +150,7 @@ export class AcpClient {
     if (!('method' in message) || typeof message.method !== 'string') return [];
 
     if (message.method === 'session/update') {
+      if (this.adapter.suppressPreSessionUpdates && !this.sessionAnnounced) return [];
       return this.mapSessionUpdate((message as JsonRpcNotification).params);
     }
 
@@ -186,10 +203,18 @@ export class AcpClient {
       this.initializeRequestId = null;
       const ctx = this.io?.spawnCtx;
       if (ctx) {
-        this.sessionRequestId = this.sendRequest(
-          ctx.cliSessionId ? 'session/resume' : 'session/new',
-          this.adapter.buildSessionParams(ctx),
-        );
+        try {
+          const method =
+            this.adapter.sessionMethod?.(ctx, message.result) ??
+            (ctx.cliSessionId ? 'session/resume' : 'session/new');
+          this.sessionRequestId = this.sendRequest(method, this.adapter.buildSessionParams(ctx));
+        } catch (error) {
+          events.push({
+            kind: 'error',
+            message: error instanceof Error ? error.message : 'ACP session setup failed',
+            fatal: true,
+          });
+        }
       }
       return events;
     }
@@ -197,6 +222,7 @@ export class AcpClient {
     if (message.id === this.sessionRequestId) {
       this.sessionRequestId = null;
       const ctx = this.io?.spawnCtx;
+      this.sessionResult = recordField(message.result);
       const sessionId =
         typeof message.result?.sessionId === 'string'
           ? message.result.sessionId
@@ -214,6 +240,7 @@ export class AcpClient {
 
     if (message.id === this.activeSessionConfigRequestId) {
       this.activeSessionConfigRequestId = null;
+      this.sessionResult = { ...this.sessionResult, ...recordField(message.result) };
       this.sendNextSessionConfigOrAnnounce(events);
       return events;
     }
@@ -240,10 +267,7 @@ export class AcpClient {
     if (this.activeSessionConfigRequestId !== null) return;
     const next = this.pendingSessionConfigRequests.shift();
     if (next) {
-      this.activeSessionConfigRequestId = this.sendRequest(
-        'session/set_config_option',
-        next,
-      );
+      this.activeSessionConfigRequestId = this.sendRequest('session/set_config_option', next);
       return;
     }
     this.announceSession(events);
@@ -251,6 +275,12 @@ export class AcpClient {
 
   private announceSession(events: ParsedEvent[]): void {
     if (!this.sessionId || this.sessionAnnounced) return;
+    const ctx = this.io?.spawnCtx;
+    const failure = ctx && this.adapter.validateSession?.(ctx, this.sessionResult);
+    if (failure) {
+      events.push({ kind: 'error', message: failure, fatal: true });
+      return;
+    }
     this.sessionAnnounced = true;
     events.push({ kind: 'session_init', sessionId: this.sessionId });
   }
@@ -346,10 +376,7 @@ export class AcpClient {
       return;
     }
 
-    if (
-      message.method.startsWith('fs/') ||
-      message.method.startsWith('terminal/')
-    ) {
+    if (message.method.startsWith('fs/') || message.method.startsWith('terminal/')) {
       void this.writeLine(
         serialize({
           jsonrpc: '2.0',
@@ -462,7 +489,7 @@ function acpToolOutcome(status: unknown): ToolOutcome {
 function planSummary(entries: unknown): string | null {
   if (!Array.isArray(entries)) return null;
   const lines = entries
-    .map(entry => {
+    .map((entry) => {
       const e = recordField(entry);
       const content = stringField(e.content);
       const status = stringField(e.status);
@@ -472,15 +499,10 @@ function planSummary(entries: unknown): string | null {
   return lines.length > 0 ? lines.join('\n') : null;
 }
 
-function selectPermissionOption(
-  options: unknown[],
-  allowed: boolean,
-): string | null {
-  const wanted = allowed
-    ? ['allow_always', 'allow_once']
-    : ['reject_once', 'reject_always'];
+function selectPermissionOption(options: unknown[], allowed: boolean): string | null {
+  const wanted = allowed ? ['allow_always', 'allow_once'] : ['reject_once', 'reject_always'];
   for (const kind of wanted) {
-    const found = options.find(option => recordField(option).kind === kind);
+    const found = options.find((option) => recordField(option).kind === kind);
     const optionId = stringField(recordField(found).optionId);
     if (optionId) return optionId;
   }

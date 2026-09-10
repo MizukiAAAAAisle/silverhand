@@ -17,7 +17,7 @@
  * of `@silverhand/backend` / `better-sqlite3` dependencies (enforced
  * by `tests/dependency-guard.test.ts`).
  */
-import type { ParsedEvent, RuntimeKind, ToolOutcome } from '@silverhand/shared';
+import type { McpConfig, ParsedEvent, RuntimeKind, ToolOutcome } from '@silverhand/shared';
 
 export type { ParsedEvent, ToolOutcome };
 
@@ -47,6 +47,8 @@ export interface DriverSpawnContext {
    *  (claude, codex) ignore this and let the supervisor post-drain via
    *  stdin after `session_init`. */
   initialPrompt: string;
+  /** Validated additive profile layer for runtimes using a session protocol. */
+  profileMcp?: McpConfig;
 }
 
 /** Stdin writer + spawn context handed to drivers via `bindIO`. Codex
@@ -229,6 +231,7 @@ import { CodexDriver } from './codex.js';
 import { CursorDriver } from './cursor.js';
 import { OpenCodeDriver } from './opencode.js';
 import { PiDriver } from './pi.js';
+import { GrokDriver } from './grok.js';
 import { QoderDriver } from './qoder.js';
 
 /** Per-spawn factory: codex/cursor hold per-handle state (threadId,
@@ -240,6 +243,7 @@ const FACTORIES: Partial<Record<RuntimeKind, () => Driver>> = {
   opencode: () => new OpenCodeDriver(),
   qoder: () => new QoderDriver(),
   pi: () => new PiDriver(),
+  grok: () => new GrokDriver(),
 };
 
 /** Returns a fresh driver instance for `kind`, or throws. */

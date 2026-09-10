@@ -46,12 +46,13 @@ use crate::identity_access::agents::runtime::RuntimeKind;
 /// constant to a checked-in artifact the TypeScript half signs from the real product
 /// catalogue, so offering a runtime — or reordering the picker — on one side only fails
 /// on both.
-pub const SELECTABLE_RUNTIMES: [RuntimeKind; 5] = [
+pub const SELECTABLE_RUNTIMES: [RuntimeKind; 6] = [
     RuntimeKind::Claude,
     RuntimeKind::Codex,
     RuntimeKind::Qoder,
     RuntimeKind::Opencode,
     RuntimeKind::Pi,
+    RuntimeKind::Grok,
 ];
 
 /// How many runtimes a detection pass must answer for. Named so an adapter states
@@ -230,6 +231,7 @@ mod tests {
             RuntimeDetection::Absent,
             RuntimeDetection::ProbeFailed,
             RuntimeDetection::Absent,
+            RuntimeDetection::Absent,
         ]);
         let paired: Vec<(RuntimeKind, Option<&str>)> = catalog
             .entries()
@@ -244,6 +246,7 @@ mod tests {
                 (RuntimeKind::Qoder, None),
                 (RuntimeKind::Opencode, None),
                 (RuntimeKind::Pi, None),
+                (RuntimeKind::Grok, None),
             ]
         );
     }

@@ -51,7 +51,7 @@ function makeCtx(overrides: Partial<DriverSpawnContext> = {}): {
 
 describe('runtime catalog ⟺ host invariants', () => {
   it('catalog covers every RuntimeKind exactly once', () => {
-    const kinds = RUNTIME_CATALOG.map(e => e.kind).sort();
+    const kinds = RUNTIME_CATALOG.map((e) => e.kind).sort();
     expect(kinds).toEqual([...RuntimeKindSchema.options].sort());
   });
 
@@ -63,15 +63,42 @@ describe('runtime catalog ⟺ host invariants', () => {
     }
   });
 
-  it('reasoningEffortOptions non-empty ⟺ the driver forwards the value', () => {
+  it('reasoningEffortOptions non-empty ⟺ the driver forwards the value', async () => {
     // Only exercise runtimes with a driver that accepts stdin-style
     // buildArgs (skip cursor's one-shot argv kickoff / gemini's absence).
     for (const entry of RUNTIME_CATALOG) {
       if (entry.kind === 'cursor' || entry.kind === 'gemini') continue;
       const built = makeCtx({ reasoningEffort: 'high' });
       try {
-        const args = getDriver(entry.kind).buildArgs(built.ctx);
-        const forwardsReasoning = args.some(a => a.includes('high'));
+        const driver = getDriver(entry.kind);
+        const args = driver.buildArgs(built.ctx);
+        const requests: any[] = [];
+        if (entry.kind === 'grok') {
+          driver.bindIO!({
+            spawnCtx: built.ctx,
+            writeLine: async (line) => {
+              requests.push(JSON.parse(line));
+            },
+          });
+          await Promise.resolve();
+          driver.parseLine(
+            JSON.stringify({
+              id: requests[0].id,
+              result: { protocolVersion: 1, agentCapabilities: {} },
+            }),
+          );
+          driver.parseLine(
+            JSON.stringify({ id: requests[1].id, result: { sessionId: 'fixture' } }),
+          );
+        }
+        const forwardsReasoning =
+          args.some((a) => a.includes('high')) ||
+          requests.some(
+            (r) =>
+              r.method === 'session/set_config_option' &&
+              r.params.configId === 'reasoning_effort' &&
+              r.params.value === 'high',
+          );
         expect(forwardsReasoning).toBe(entry.reasoningEffortOptions.length > 0);
       } finally {
         built.cleanup();
@@ -119,10 +146,10 @@ describe('runtime catalog ⟺ host invariants', () => {
         // the MCP layer is specifically the presence of an `mcp` section.
         const hasMcpLayer =
           entry.kind === 'opencode'
-            ? Boolean(
-                JSON.parse(result.env?.OPENCODE_CONFIG_CONTENT ?? '{}').mcp,
-              )
-            : (result.args?.length ?? 0) > 0;
+            ? Boolean(JSON.parse(result.env?.OPENCODE_CONFIG_CONTENT ?? '{}').mcp)
+            : entry.kind === 'grok'
+              ? Boolean(result.profileMcp)
+              : (result.args?.length ?? 0) > 0;
         expect(hasMcpLayer).toBe(entry.supportsProfileMcp);
       } finally {
         rmSync(tmp, { recursive: true, force: true });

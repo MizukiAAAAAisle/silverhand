@@ -6186,3 +6186,195 @@ async fn initial_and_refined_tool_inputs_share_ts_limits_in_both_activity_scopes
         fixture.server.abort();
     }
 }
+
+/// Runs the installed logged-out Grok through the actual host supervisor, then
+/// transports its pre-session error through the real daemon WS and activity reads.
+#[tokio::test]
+#[ignore = "requires GROK_TEST_BINARY pointing to an explicitly authorized logged-out installation"]
+async fn grok_pre_session_auth_error_reaches_durable_http_and_live_activity() {
+    use std::{process::Stdio, time::Duration};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    const AUTH_AGENT: &str = "grok-auth-agent";
+    assert!(std::env::var_os("GROK_TEST_BINARY").is_some());
+    for scope_kind in ["conversation", "agent"] {
+        let fixture = fixture("grok-auth.sqlite").await;
+        let mut db = open(&fixture.path).await;
+        seed_grok_auth_agent(&mut db, scope_kind).await;
+        let scope = if scope_kind == "agent" {
+            format!("agent:{AUTH_AGENT}")
+        } else {
+            format!("conversation-side:{CONVERSATION}")
+        };
+        let (mut live, _) = connect_event_scope_with_ack(fixture.address, &scope).await;
+        let mut daemon = connect(fixture.address).await;
+        complete_attachment(&mut daemon, &fixture.controller).await;
+
+        let effects = fixture.effects.clone();
+        let start = tokio::spawn(async move {
+            IdleStart::start_if_idle(
+                &effects,
+                &AgentId::parse(AUTH_AGENT).unwrap(),
+                &ConversationId::parse(CONVERSATION).unwrap(),
+            )
+            .await
+        });
+        let command = next_json(&mut daemon).await;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let mut host =
+            tokio::process::Command::new(root.join("packages/host/node_modules/.bin/tsx"))
+                .arg(root.join("packages/host/tests/fixtures/grok/auth-host.mts"))
+                .current_dir(&root)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+        let mut stdin = host.stdin.take().unwrap();
+        stdin
+            .write_all(format!("{}\n", command["params"]).as_bytes())
+            .await
+            .unwrap();
+        let mut output = BufReader::new(host.stdout.take().unwrap()).lines();
+        let mut error_event = None;
+        let mut started = false;
+        while error_event.is_none() || !started {
+            let line = tokio::time::timeout(Duration::from_secs(20), output.next_line())
+                .await
+                .unwrap()
+                .unwrap()
+                .expect("host closed before auth error");
+            let frame: Value = serde_json::from_str(&line).unwrap();
+            assert!(frame.get("bridge_error").is_none(), "{frame}");
+            if frame.get("result").is_some() {
+                respond(&mut daemon, &command, frame["result"].clone()).await;
+                started = true;
+            }
+            if frame["event"]["parsed"]["kind"] == "error" {
+                error_event = Some(frame["event"].clone());
+            } else if frame.get("event").is_some() {
+                assert_ne!(frame["event"]["parsed"]["kind"], "session_init");
+            }
+        }
+        start.await.unwrap().unwrap();
+        let event = error_event.unwrap();
+        assert_eq!(event["agent_id"], AUTH_AGENT);
+        assert_eq!(event["conversation_id"], CONVERSATION);
+        assert_eq!(
+            event["runtime_generation"],
+            command["params"]["runtime_generation"]
+        );
+        assert_eq!(event["parsed"]["message"], "Authentication required");
+        let generation = event["runtime_generation"].as_i64().unwrap();
+        send_product(
+            &mut daemon,
+            product_frame_for(
+                "runtime_parsed_event",
+                Some(generation),
+                json!({ "parsed": event["parsed"], "ts": event["ts"] }),
+                AUTH_AGENT,
+                CONVERSATION,
+                scope_kind,
+            ),
+        )
+        .await;
+
+        let activity = loop {
+            let frame = next_json(&mut live).await;
+            if frame["kind"] == "conversation_activity" || frame["kind"] == "agent_stream_activity"
+            {
+                break frame;
+            }
+        };
+        assert_eq!(
+            activity["payload"]["payload"]["message"],
+            "Authentication required"
+        );
+        let id = activity["payload"]["id"].as_i64().unwrap();
+        assert_grok_auth_activity_reads(&fixture.path, &mut db, scope_kind, id).await;
+
+        stdin.shutdown().await.unwrap();
+        drop(stdin);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), host.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success()
+        );
+        fixture.event_controller.close().await;
+        fixture.controller.close().await;
+        fixture.server.abort();
+    }
+}
+
+async fn seed_grok_auth_agent(db: &mut SqliteConnection, scope_kind: &str) {
+    sqlx::query(
+        "INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,
+         display_name,created_by_user_id,session_scope)
+         VALUES('grok-auth-agent','grok-auth-agent','grok','host-1',1,1,
+         'Grok Auth','user-1',?)",
+    )
+    .bind(scope_kind)
+    .execute(&mut *db)
+    .await
+    .unwrap();
+
+    sqlx::raw_sql(
+        "INSERT INTO workspace_members(workspace_id,agent_id,joined_at)
+         VALUES('workspace-1','grok-auth-agent',1);
+         INSERT INTO conversation_agents(conversation_id,agent_id,joined_at)
+         VALUES('conversation0001','grok-auth-agent',1);
+         INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at)
+         VALUES('grok-auth-wake','conversation0001','user','user-1','wake',2,2);
+         INSERT INTO conversation_inboxes(conversation_id,agent_id,message_id,created_at,delivery_kind)
+         VALUES('conversation0001','grok-auth-agent','grok-auth-wake',2,'turn');",
+    )
+    .execute(&mut *db)
+    .await
+    .unwrap();
+}
+
+async fn assert_grok_auth_activity_reads(
+    path: &std::path::Path,
+    db: &mut SqliteConnection,
+    scope_kind: &str,
+    id: i64,
+) {
+    use silverhand_backend_server::conversation_messaging::messaging::collaboration::conversation_agent_activity as activity_reads;
+
+    let payload: String = sqlx::query_scalar("SELECT payload FROM conversation_events WHERE id=?")
+        .bind(id)
+        .fetch_one(&mut *db)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&payload).unwrap()["message"],
+        "Authentication required"
+    );
+    let reads = MessagingStore::open(path)
+        .await
+        .unwrap()
+        .conversation_agent_activity();
+    let (http, path) = if scope_kind == "agent" {
+        (
+            activity_reads::agent_router(reads),
+            "/api/agents/grok-auth-agent/activity".to_owned(),
+        )
+    } else {
+        (
+            activity_reads::router(reads),
+            format!("/api/conversations/{CONVERSATION}/agents/grok-auth-agent/activity"),
+        )
+    };
+    let (status, page) = management_request(&http, "GET", &path, "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        page["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == id && row["payload"]["message"] == "Authentication required")
+    );
+}
