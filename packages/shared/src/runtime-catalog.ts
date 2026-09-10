@@ -1,8 +1,4 @@
-import {
-  type ReasoningEffort,
-  type RuntimeKind,
-  RuntimeKindSchema,
-} from './db/schema.js';
+import { type ReasoningEffort, type RuntimeKind, RuntimeKindSchema } from './db/schema.js';
 
 /**
  * Single source of truth for per-runtime UI facts.
@@ -50,9 +46,7 @@ export interface RuntimeCatalogEntry {
    * baseline: free-text model ids are open-ended, so Silverhand must not
    * promise a model-specific effort without an explicit capability entry.
    */
-  reasoningEffortOptionsByModel?: Readonly<
-    Record<string, readonly ReasoningEffort[]>
-  >;
+  reasoningEffortOptionsByModel?: Readonly<Record<string, readonly ReasoningEffort[]>>;
   /** Whether the runtime accepts the persisted fast-mode tri-state. */
   supportsFastMode: boolean;
   /**
@@ -158,6 +152,17 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     supportsProfileMcp: false,
     modelSuggestions: [],
   },
+  grok: {
+    kind: 'grok',
+    label: 'Grok',
+    cliLabel: 'Grok Build',
+    selectable: true,
+    reasoningEffortOptions: ['low', 'medium', 'high'],
+    reasoningEffortOptionsByModel: { 'grok-4.6': ['low', 'medium', 'high', 'xhigh'] },
+    supportsFastMode: false,
+    supportsProfileMcp: true,
+    modelSuggestions: ['grok-4.6', 'grok-4.5'],
+  },
   cursor: {
     kind: 'cursor',
     label: 'Cursor',
@@ -192,6 +197,7 @@ const RUNTIME_ORDER: readonly RuntimeKind[] = [
   'qoder',
   'opencode',
   'pi',
+  'grok',
   'cursor',
   'gemini',
 ];
@@ -199,7 +205,7 @@ const RUNTIME_ORDER: readonly RuntimeKind[] = [
 /** All runtime entries in display order. Proxy form lists every kind
  *  (availability-agnostic); create/profile filter on `selectable`. */
 export const RUNTIME_CATALOG: readonly RuntimeCatalogEntry[] = RUNTIME_ORDER.map(
-  kind => CATALOG[kind],
+  (kind) => CATALOG[kind],
 );
 
 /** All known runtime kinds in display order. */
@@ -240,10 +246,7 @@ export function reasoningEffortOptionsForRuntime(
   const entry = CATALOG[kind];
   const modelId = model?.trim();
   if (!modelId) return entry.reasoningEffortOptions;
-  return (
-    entry.reasoningEffortOptionsByModel?.[modelId]
-    ?? entry.reasoningEffortOptions
-  );
+  return entry.reasoningEffortOptionsByModel?.[modelId] ?? entry.reasoningEffortOptions;
 }
 
 /** True when the runtime exposes the fast-mode control. */
@@ -277,10 +280,7 @@ export function reasoningEffortValidForRuntime(
  *  sends when the target host's daemon advertises `runtime.codex.reasoning.v1`;
  *  product validity (which model may use it) is enforced by the static product
  *  table (`reasoningEffortOptionsByModel`). */
-export function isBaselineReasoningEffort(
-  kind: RuntimeKind,
-  value: ReasoningEffort,
-): boolean {
+export function isBaselineReasoningEffort(kind: RuntimeKind, value: ReasoningEffort): boolean {
   return CATALOG[kind].reasoningEffortOptions.includes(value);
 }
 
@@ -295,6 +295,6 @@ export function reasoningEffortLabel(value: ReasoningEffort): string {
 export function runtimeCatalogCoversAllKinds(): boolean {
   return (
     RUNTIME_ORDER.length === RuntimeKindSchema.options.length &&
-    RuntimeKindSchema.options.every(k => RUNTIME_ORDER.includes(k))
+    RuntimeKindSchema.options.every((k) => RUNTIME_ORDER.includes(k))
   );
 }

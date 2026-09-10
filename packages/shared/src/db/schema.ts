@@ -8,6 +8,7 @@ export const RuntimeKindSchema = z.enum([
   'qoder',
   'opencode',
   'pi',
+  'grok',
 ]);
 export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
 
@@ -63,14 +64,8 @@ export type FastMode = z.infer<typeof FastModeSchema>;
 export const HostKindSchema = z.enum(['local', 'remote']);
 export type HostKind = z.infer<typeof HostKindSchema>;
 
-export const HostProvisioningSourceSchema = z.enum([
-  'app_install',
-  'user_invite',
-  'system',
-]);
-export type HostProvisioningSource = z.infer<
-  typeof HostProvisioningSourceSchema
->;
+export const HostProvisioningSourceSchema = z.enum(['app_install', 'user_invite', 'system']);
+export type HostProvisioningSource = z.infer<typeof HostProvisioningSourceSchema>;
 
 export const HostCredentialKindSchema = z.enum(['long_lived', 'bootstrap']);
 export type HostCredentialKind = z.infer<typeof HostCredentialKindSchema>;
@@ -108,13 +103,8 @@ export type HostCredentialKind = z.infer<typeof HostCredentialKindSchema>;
  * genuinely admits `direct_pair` — carries this word and needs it
  * (`api/agent.ts`).
  */
-export const ConversationPlacementKindSchema = z.enum([
-  'workspace',
-  'direct_pair',
-]);
-export type ConversationPlacementKind = z.infer<
-  typeof ConversationPlacementKindSchema
->;
+export const ConversationPlacementKindSchema = z.enum(['workspace', 'direct_pair']);
+export type ConversationPlacementKind = z.infer<typeof ConversationPlacementKindSchema>;
 
 /**
  * WHETHER a conversation's roster can change: `open` (members may be added or
@@ -122,9 +112,7 @@ export type ConversationPlacementKind = z.infer<
  * immutable). Independent of placement.
  */
 export const ConversationRosterPolicySchema = z.enum(['open', 'fixed']);
-export type ConversationRosterPolicy = z.infer<
-  typeof ConversationRosterPolicySchema
->;
+export type ConversationRosterPolicy = z.infer<typeof ConversationRosterPolicySchema>;
 
 /**
  * WHICH KIND OF PRINCIPAL a `direct_pair` endpoint names (migration v73,
@@ -138,9 +126,7 @@ export type ConversationRosterPolicy = z.infer<
  * teaching the birth trigger a new table.
  */
 export const ConversationEndpointKindSchema = z.enum(['human', 'agent']);
-export type ConversationEndpointKind = z.infer<
-  typeof ConversationEndpointKindSchema
->;
+export type ConversationEndpointKind = z.infer<typeof ConversationEndpointKindSchema>;
 
 /**
  * Channel visibility. `private` is the historical, membership-
@@ -163,24 +149,13 @@ export const ConversationStatusSchema = z.enum([
 ]);
 export type ConversationStatus = z.infer<typeof ConversationStatusSchema>;
 
-export const ConversationAgentStatusSchema = z.enum([
-  'idle',
-  'starting',
-  'active',
-  'crashed',
-]);
+export const ConversationAgentStatusSchema = z.enum(['idle', 'starting', 'active', 'crashed']);
 export type ConversationAgentStatus = z.infer<typeof ConversationAgentStatusSchema>;
 
 export const FromKindSchema = z.enum(['user', 'agent', 'system']);
 export type FromKind = z.infer<typeof FromKindSchema>;
 
-export const TaskStatusSchema = z.enum([
-  'todo',
-  'in_progress',
-  'in_review',
-  'done',
-  'closed',
-]);
+export const TaskStatusSchema = z.enum(['todo', 'in_progress', 'in_review', 'done', 'closed']);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
 export const TaskAssigneeTypeSchema = z.enum(['agent', 'user']);
@@ -232,9 +207,7 @@ export const AgentMaterializationStatusSchema = z.enum([
   'active',
   'failed',
 ]);
-export type AgentMaterializationStatus = z.infer<
-  typeof AgentMaterializationStatusSchema
->;
+export type AgentMaterializationStatus = z.infer<typeof AgentMaterializationStatusSchema>;
 
 export interface HostRow {
   id: string;
@@ -726,11 +699,7 @@ export interface TaskRow {
  *  a later mention never rewrites a `manual` follow's provenance. Single
  *  authority: the follower repo and the message-domain ports both name THIS
  *  type instead of re-declaring the union (#task:1981). */
-export type ThreadFollowerSource =
-  | 'reply'
-  | 'mention'
-  | 'manual'
-  | 'target_author';
+export type ThreadFollowerSource = 'reply' | 'mention' | 'manual' | 'target_author';
 
 /**
  * Thread delivery/notification subscription (v43) — NOT membership or

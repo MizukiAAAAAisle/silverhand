@@ -21,10 +21,8 @@ import {
 describe('runtime catalog (shared source of truth)', () => {
   it('covers every RuntimeKind exactly once, in order', () => {
     expect(runtimeCatalogCoversAllKinds()).toBe(true);
-    expect([...RUNTIME_ORDER_LIST].sort()).toEqual(
-      [...RuntimeKindSchema.options].sort(),
-    );
-    expect(RUNTIME_CATALOG.map(e => e.kind)).toEqual([...RUNTIME_ORDER_LIST]);
+    expect([...RUNTIME_ORDER_LIST].sort()).toEqual([...RuntimeKindSchema.options].sort());
+    expect(RUNTIME_CATALOG.map((e) => e.kind)).toEqual([...RUNTIME_ORDER_LIST]);
   });
 
   it('exposes short + CLI labels for every kind', () => {
@@ -41,8 +39,8 @@ describe('runtime catalog (shared source of truth)', () => {
   it('only offers spawnable runtimes: selectable is a strict subset per product curation', () => {
     // claude/codex/qoder/opencode are the offered set today; cursor/gemini are
     // roadmap. The host-side test asserts selectable ⇒ hasDriver.
-    const selectable = RUNTIME_CATALOG.filter(e => e.selectable).map(e => e.kind);
-    expect(selectable).toEqual(['claude', 'codex', 'qoder', 'opencode']);
+    const selectable = RUNTIME_CATALOG.filter((e) => e.selectable).map((e) => e.kind);
+    expect(selectable).toEqual(['claude', 'codex', 'qoder', 'opencode', 'pi', 'grok']);
   });
 
   it('every catalog reasoning option is a structurally-valid bounded token', () => {
@@ -53,9 +51,7 @@ describe('runtime catalog (shared source of truth)', () => {
       for (const opt of entry.reasoningEffortOptions) {
         expect(ReasoningEffortTokenSchema.safeParse(opt).success).toBe(true);
       }
-      for (const options of Object.values(
-        entry.reasoningEffortOptionsByModel ?? {},
-      )) {
+      for (const options of Object.values(entry.reasoningEffortOptionsByModel ?? {})) {
         for (const opt of options) {
           expect(ReasoningEffortTokenSchema.safeParse(opt).success).toBe(true);
         }
@@ -125,9 +121,7 @@ describe('runtime catalog (shared source of truth)', () => {
       'Lite',
     ]);
     expect(runtimeDefaultModel('qoder')).toBe('Ultimate');
-    expect(runtimeCatalogEntry('qoder').modelSuggestions).toContain(
-      runtimeDefaultModel('qoder'),
-    );
+    expect(runtimeCatalogEntry('qoder').modelSuggestions).toContain(runtimeDefaultModel('qoder'));
 
     for (const kind of ['claude', 'codex', 'opencode', 'cursor', 'gemini'] as const) {
       expect(runtimeDefaultModel(kind)).toBeNull();
@@ -146,15 +140,17 @@ describe('runtime catalog (shared source of truth)', () => {
   });
 
   it('enables profile MCP for runtimes with spawn adapters', () => {
-    expect(
-      RUNTIME_CATALOG.filter(e => e.supportsProfileMcp).map(e => e.kind),
-    ).toEqual(['claude', 'codex', 'qoder', 'opencode']);
+    expect(RUNTIME_CATALOG.filter((e) => e.supportsProfileMcp).map((e) => e.kind)).toEqual([
+      'claude',
+      'codex',
+      'qoder',
+      'opencode',
+      'grok',
+    ]);
   });
 
   it('exposes fast mode only for codex', () => {
-    expect(RUNTIME_CATALOG.filter(e => e.supportsFastMode).map(e => e.kind)).toEqual([
-      'codex',
-    ]);
+    expect(RUNTIME_CATALOG.filter((e) => e.supportsFastMode).map((e) => e.kind)).toEqual(['codex']);
     for (const entry of RUNTIME_CATALOG) {
       expect(runtimeSupportsFastMode(entry.kind)).toBe(entry.supportsFastMode);
     }
@@ -177,29 +173,15 @@ describe('runtime catalog (shared source of truth)', () => {
     expect(reasoningEffortValidForRuntime('codex', 'max')).toBe(false);
     expect(reasoningEffortValidForRuntime('codex', 'none')).toBe(false);
     // Max is valid for every verified 5.6 model, not for others.
-    expect(reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.6-sol')).toBe(
-      true,
-    );
-    expect(
-      reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.6-terra'),
-    ).toBe(true);
-    expect(reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.6-luna')).toBe(
-      true,
-    );
-    expect(reasoningEffortValidForRuntime('codex', 'max', 'my-proxy-model')).toBe(
-      false,
-    );
+    expect(reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.6-sol')).toBe(true);
+    expect(reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.6-terra')).toBe(true);
+    expect(reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.6-luna')).toBe(true);
+    expect(reasoningEffortValidForRuntime('codex', 'max', 'my-proxy-model')).toBe(false);
     expect(reasoningEffortValidForRuntime('codex', 'max', null)).toBe(false);
     // Ultra remains sol-only, even among the 5.6 family.
-    expect(
-      reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol'),
-    ).toBe(true);
-    expect(
-      reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-terra'),
-    ).toBe(false);
-    expect(
-      reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-luna'),
-    ).toBe(false);
+    expect(reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol')).toBe(true);
+    expect(reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-terra')).toBe(false);
+    expect(reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-luna')).toBe(false);
     expect(reasoningEffortValidForRuntime('codex', 'ultra', null)).toBe(false);
     // qoder accepts its full allowed set.
     for (const v of ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
@@ -230,59 +212,56 @@ describe('runtime catalog (shared source of truth)', () => {
 
     it('Max is offered + valid for every verified 5.6 model, refused elsewhere', () => {
       for (const model of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
-        expect(reasoningEffortOptionsForRuntime('codex', model)).toContain(
-          'max',
-        );
+        expect(reasoningEffortOptionsForRuntime('codex', model)).toContain('max');
         expect(reasoningEffortValidForRuntime('codex', 'max', model)).toBe(true);
       }
-      expect(reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.5')).toBe(
-        false,
-      );
-      expect(
-        reasoningEffortValidForRuntime('codex', 'max', 'my-proxy-model'),
-      ).toBe(false);
+      expect(reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.5')).toBe(false);
+      expect(reasoningEffortValidForRuntime('codex', 'max', 'my-proxy-model')).toBe(false);
       expect(reasoningEffortValidForRuntime('codex', 'max', null)).toBe(false);
     });
 
     it('Ultra is offered + valid only for gpt-5.6-sol', () => {
-      expect(reasoningEffortOptionsForRuntime('codex', 'gpt-5.6-sol')).toContain(
-        'ultra',
-      );
-      expect(
-        reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol'),
-      ).toBe(true);
+      expect(reasoningEffortOptionsForRuntime('codex', 'gpt-5.6-sol')).toContain('ultra');
+      expect(reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol')).toBe(true);
     });
 
     it('Ultra refused on other 5.6 / unlisted / default models (they keep Max but not Ultra)', () => {
       // terra/luna get Max but NOT Ultra — Ultra stays sol-only.
-      expect(reasoningEffortOptionsForRuntime('codex', 'gpt-5.6-terra')).toEqual(
-        ['low', 'medium', 'high', 'xhigh', 'max'],
-      );
-      expect(
-        reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-terra'),
-      ).toBe(false);
-      expect(
-        reasoningEffortValidForRuntime('codex', 'ultra', 'my-proxy-model'),
-      ).toBe(false);
+      expect(reasoningEffortOptionsForRuntime('codex', 'gpt-5.6-terra')).toEqual([
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+      ]);
+      expect(reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-terra')).toBe(false);
+      expect(reasoningEffortValidForRuntime('codex', 'ultra', 'my-proxy-model')).toBe(false);
       expect(reasoningEffortValidForRuntime('codex', 'ultra', null)).toBe(false);
       // Baseline High stays valid for any model.
-      expect(
-        reasoningEffortValidForRuntime('codex', 'high', 'gpt-5.6-terra'),
-      ).toBe(true);
+      expect(reasoningEffortValidForRuntime('codex', 'high', 'gpt-5.6-terra')).toBe(true);
       expect(reasoningEffortValidForRuntime('codex', 'high', null)).toBe(true);
     });
 
     it('null effort is always valid (unset = driver default)', () => {
-      expect(reasoningEffortValidForRuntime('codex', null, 'gpt-5.6-sol')).toBe(
-        true,
-      );
+      expect(reasoningEffortValidForRuntime('codex', null, 'gpt-5.6-sol')).toBe(true);
     });
   });
 });
 
 describe('ReasoningEffortTokenSchema — "open" is bounded, not arbitrary', () => {
   it('accepts well-formed lowercase tokens (known + never-seen)', () => {
-    for (const token of ['none', 'high', 'xhigh', 'max', 'ultra', 'giga', 'a', 'v2', 'multi-agent', 'a'.repeat(32)]) {
+    for (const token of [
+      'none',
+      'high',
+      'xhigh',
+      'max',
+      'ultra',
+      'giga',
+      'a',
+      'v2',
+      'multi-agent',
+      'a'.repeat(32),
+    ]) {
       expect(ReasoningEffortTokenSchema.safeParse(token).success).toBe(true);
     }
   });
@@ -301,5 +280,24 @@ describe('ReasoningEffortTokenSchema — "open" is bounded, not arbitrary', () =
     ]) {
       expect(ReasoningEffortTokenSchema.safeParse(token).success).toBe(false);
     }
+  });
+});
+
+describe('Grok runtime capabilities', () => {
+  it('offers native MCP and model-specific effort without forcing a model', () => {
+    expect(runtimeCatalogEntry('grok')).toMatchObject({
+      selectable: true,
+      supportsProfileMcp: true,
+      supportsFastMode: false,
+    });
+    expect(reasoningEffortOptionsForRuntime('grok', 'grok-4.6')).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+    ]);
+    expect(reasoningEffortOptionsForRuntime('grok', 'grok-4.5')).toEqual(['low', 'medium', 'high']);
+    expect(reasoningEffortValidForRuntime('grok', 'xhigh', 'custom')).toBe(false);
+    expect(runtimeDefaultModel('grok')).toBeNull();
   });
 });
