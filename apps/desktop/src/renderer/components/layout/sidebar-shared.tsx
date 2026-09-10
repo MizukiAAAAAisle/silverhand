@@ -113,7 +113,7 @@ export function SidebarBranchLayout({
   children?: ReactNode;
 }): JSX.Element {
   return (
-    <section className="group/sectionscope mb-3 flex flex-col gap-1">
+    <section className="group/sectionscope mb-2 flex flex-col gap-1">
       {header}
       {children ? <ul className="space-y-1">{children}</ul> : null}
     </section>
