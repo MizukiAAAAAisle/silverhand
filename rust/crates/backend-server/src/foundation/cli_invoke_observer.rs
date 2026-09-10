@@ -86,6 +86,28 @@ pub const CLI_INVOKE_PRODUCTION_PERIMETER: &[(CliInvokeMethod, &str)] = &[
         CliInvokeMethod::Post,
         "/internal/agents/{aid}/schedules/cancel",
     ),
+    (
+        CliInvokeMethod::Get,
+        "/internal/agents/{aid}/list-workspaces",
+    ),
+    (CliInvokeMethod::Get, "/internal/agents/{aid}/list-channels"),
+    (
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/follow-thread",
+    ),
+    (
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/unfollow-thread",
+    ),
+    (
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/search-messages",
+    ),
+    (CliInvokeMethod::Post, "/internal/agents/{aid}/read-history"),
+    (
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/create-channel",
+    ),
 ];
 
 #[derive(Clone, Copy)]
@@ -263,7 +285,7 @@ const ROUTES: &[RouteDescriptor] = &[
         CliInvokeMethod::Post,
         "/internal/agents/{aid}/tasks/update-status",
         "task",
-        "update status",
+        "status",
         "tasks/update-status",
         &[],
     ),
@@ -305,6 +327,62 @@ const ROUTES: &[RouteDescriptor] = &[
         "schedule",
         "cancel",
         "schedules/cancel",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Get,
+        "/internal/agents/{aid}/list-workspaces",
+        "workspace",
+        "list",
+        "list-workspaces",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Get,
+        "/internal/agents/{aid}/list-channels",
+        "channel",
+        "list",
+        "list-channels",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/follow-thread",
+        "thread",
+        "follow",
+        "follow-thread",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/unfollow-thread",
+        "thread",
+        "unfollow",
+        "unfollow-thread",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/search-messages",
+        "message",
+        "search",
+        "search-messages",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/read-history",
+        "message",
+        "history",
+        "read-history",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/create-channel",
+        "channel",
+        "create",
+        "create-channel",
         &[],
     ),
 ];
@@ -705,7 +783,7 @@ mod tests {
                 left.path
             );
         }
-        assert_eq!(ROUTES.len(), 25);
+        assert_eq!(ROUTES.len(), 32);
         let mut accounted: Vec<_> = ROUTES
             .iter()
             .map(|route| (route.method, route.path))
@@ -722,6 +800,37 @@ mod tests {
             accounted, perimeter,
             "every production face is mapped, intentionally unmapped, or trace-excluded"
         );
+    }
+
+    #[test]
+    fn rust_audit_identity_matches_the_cli_route_contract_in_both_directions() {
+        // The TS map is itself checked against internalPaths and COMMAND_GROUPS.
+        // Comparing complete sets catches both missing Rust doors and stale entries.
+        let reference = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../packages/backend/src/observability/cli-route-map.ts"
+        ));
+        let mut expected = std::collections::BTreeSet::new();
+        for line in reference
+            .lines()
+            .filter(|line| line.trim().starts_with("{ method: '"))
+        {
+            let fields: Vec<_> = line.split("'").collect();
+            expected.insert((fields[1], fields[3], fields[5], fields[7]));
+        }
+        let actual: std::collections::BTreeSet<_> = ROUTES
+            .iter()
+            .map(|r| {
+                (
+                    r.method.as_str(),
+                    r.route.route_suffix,
+                    r.route.noun,
+                    r.route.verb,
+                )
+            })
+            .collect();
+        assert!(!expected.is_empty());
+        assert_eq!(actual, expected);
     }
 
     #[tokio::test]

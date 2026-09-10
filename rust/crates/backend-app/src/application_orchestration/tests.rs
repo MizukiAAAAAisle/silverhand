@@ -839,6 +839,13 @@ async fn prepared_residual_faces_share_one_drained_cli_audit_owner() {
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
 
     let faces = [
+        ("GET", "/internal/agents/agent-cli-audit/list-workspaces"),
+        ("GET", "/internal/agents/agent-cli-audit/list-channels"),
+        ("POST", "/internal/agents/agent-cli-audit/follow-thread"),
+        ("POST", "/internal/agents/agent-cli-audit/unfollow-thread"),
+        ("POST", "/internal/agents/agent-cli-audit/search-messages"),
+        ("POST", "/internal/agents/agent-cli-audit/read-history"),
+        ("POST", "/internal/agents/agent-cli-audit/create-channel"),
         ("POST", reaction_path),
         ("DELETE", reaction_path),
         ("POST", "/internal/agents/agent-cli-audit/attachments"),
@@ -890,12 +897,19 @@ async fn prepared_residual_faces_share_one_drained_cli_audit_owner() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(lines.len(), 7, "six invokes plus the one cli-trace fact");
+    assert_eq!(
+        lines.len(),
+        14,
+        "thirteen invokes plus the one cli-trace fact"
+    );
     let invokes: Vec<_> = lines
         .iter()
         .filter(|line| line["category"] == "cli.invoke")
         .collect();
-    assert_eq!(invokes.len(), 6, "one invoke per admitted residual face");
+    assert_eq!(invokes.len(), 13, "one invoke per admitted residual face");
+    assert!(invokes[..7].iter().any(|line| line["http_status"] == 200));
+    assert!(invokes[..7].iter().any(|line| line["http_status"] == 400));
+
     let actual: Vec<_> = invokes
         .iter()
         .map(|line| {
@@ -913,6 +927,13 @@ async fn prepared_residual_faces_share_one_drained_cli_audit_owner() {
     assert_eq!(
         actual,
         [
+            ("workspace", "list", "GET", "list-workspaces"),
+            ("channel", "list", "GET", "list-channels"),
+            ("thread", "follow", "POST", "follow-thread"),
+            ("thread", "unfollow", "POST", "unfollow-thread"),
+            ("message", "search", "POST", "search-messages"),
+            ("message", "history", "POST", "read-history"),
+            ("channel", "create", "POST", "create-channel"),
             ("message", "react", "POST", "react-message"),
             ("message", "react", "DELETE", "react-message"),
             ("file", "upload", "POST", "attachments"),
@@ -2994,7 +3015,7 @@ async fn the_composition_mounts_every_declared_route() {
         assert_eq!(body, unauthorized, "{method} {path}");
     }
 
-    // The 28 runtime-perimeter internal doors. Anonymous → the runtime credential
+    // The 35 runtime-perimeter internal doors. Anonymous → the runtime credential
     // perimeter's `401` on the matched route, never `404`. The original three (#2226-era
     // send/tasks/stale), the #2234 CP7a self-scope profile family (`/profile` GET+POST,
     // `/avatar` POST+DELETE, `/peer-profile` GET), the #2234 CP7b profile-MCP family
@@ -3002,7 +3023,7 @@ async fn the_composition_mounts_every_declared_route() {
     // cli-trace door, and #2262's six reaction/attachment doors. All eighteen ride the
     // ONE `require_runtime_credential` layer, so anon
     // on any listed method is the same bodiless 401.
-    assert_eq!(CLI_INVOKE_PRODUCTION_PERIMETER.len(), 28);
+    assert_eq!(CLI_INVOKE_PRODUCTION_PERIMETER.len(), 35);
     for (method, path_template) in CLI_INVOKE_PRODUCTION_PERIMETER {
         let path = path_template.replace("{aid}", "agent-1");
         let method = (*method).as_str();
