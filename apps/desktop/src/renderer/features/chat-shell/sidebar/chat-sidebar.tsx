@@ -2,6 +2,8 @@ import { useMemo, type ReactNode } from "react";
 import { Archive, Bookmark, Plus, Search } from "lucide-react";
 import type { AgentDto } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
+import { Button } from "@/components/ui/button";
+import { neutralAction } from "@/components/common/control-ink-border";
 import {
   useAgentAvatarObjectUrls,
   type AgentAvatarSource,
@@ -234,18 +236,16 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
               onSelectDirectDraft={props.onSelectDirectDraft}
             />
           </nav>
-          <div className="shrink-0 pt-2">
-            <button
+          <div className="shrink-0 px-1 pb-1 pt-2">
+            <Button
               type="button"
+              variant="outline"
               onClick={props.onCreateWorkspace}
-              className={cn(
-                "flex h-8 w-full items-center gap-2 text-left text-sm leading-4 text-text-muted transition-colors hover:text-text-primary focus-outline",
-                OUTER_GLYPH_INSET,
-              )}
+              {...neutralAction("h-8 w-full bg-bg-elevated")}
             >
               <Plus className="size-4" />
               <span>New workspace</span>
-            </button>
+            </Button>
           </div>
         </>
       }
