@@ -1,14 +1,7 @@
 //! Authenticated cold face for the viewer's complete workspace list
 //! (`GET /api/workspaces`), product parity.
 //!
-//! The whole envelope — the visible workspaces AND the viewer's sort state for
-//! the workspace rail — is one value read from a single database snapshot behind
-//! [`WorkspaceColdReadUnitOfWork`]. The two halves are separate bounded contexts
-//! joined only here at the wire, and `viewer_sort` is delivered on this same
-//! response rather than a second endpoint: the client re-reads this one authority
-//! after a `viewer_workspaces_changed` hint, so splitting the halves across
-//! responses would reintroduce the very membership/sort skew the single snapshot
-//! removes.
+//! Workspace identity is read from one snapshot; sidebar order is a separate endpoint.
 //!
 //! There is exactly one authentication perimeter in front of this route — the
 //! human-session layer that injects the sole [`UserId`]. Its absence is a
@@ -17,8 +10,6 @@
 //! persistence failure (including a committed row the domain refuses to decode)
 //! is likewise never rendered as product detail: it is logged once here with its
 //! full source chain and answered with the same safe `500`.
-
-use std::collections::BTreeMap;
 
 use axum::{
     Json, Router,
@@ -32,7 +23,6 @@ use silverhand_backend_core::{
     foundation::identity::UserId,
     identity_access::workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
     identity_access::workspace_face::WorkspaceFace,
-    viewer_read_model::viewer_workspace_sort::{ViewerSortState, WORKSPACE_SORT_LIST_KEY},
 };
 
 use crate::foundation::error;
@@ -77,11 +67,10 @@ where
     }
 }
 
-/// The whole envelope: `{ workspaces, viewer_sort }`.
+/// The whole envelope: `{ workspaces }`.
 #[derive(Serialize)]
 struct WorkspaceColdReadResponse {
     workspaces: Vec<ViewerWorkspaceDto>,
-    viewer_sort: ViewerSortStateDto,
 }
 
 impl From<&WorkspaceColdRead> for WorkspaceColdReadResponse {
@@ -92,7 +81,6 @@ impl From<&WorkspaceColdRead> for WorkspaceColdReadResponse {
                 .iter()
                 .map(ViewerWorkspaceDto::from)
                 .collect(),
-            viewer_sort: ViewerSortStateDto::from(&cold_read.viewer_sort),
         }
     }
 }
@@ -148,57 +136,8 @@ impl From<&WorkspaceFace> for ViewerWorkspaceDto {
     }
 }
 
-/// The viewer's sort state for the workspace rail: `{ list_key, modes, entries }`.
-/// `list_key` is the constant `"workspaces"`; `modes` is the per-scope mode map
-/// (scope string → mode string); `entries` carries each preference with its
-/// nullable numeric stamps as explicit `null`s, exactly as the product schema.
-#[derive(Serialize)]
-struct ViewerSortStateDto {
-    list_key: &'static str,
-    modes: BTreeMap<&'static str, &'static str>,
-    entries: Vec<ViewerSortEntryDto>,
-}
-
-impl From<&ViewerSortState> for ViewerSortStateDto {
-    fn from(state: &ViewerSortState) -> Self {
-        Self {
-            list_key: WORKSPACE_SORT_LIST_KEY,
-            modes: state
-                .modes
-                .iter()
-                .map(|(scope, mode)| (scope.as_str(), mode.as_str()))
-                .collect(),
-            entries: state.entries.iter().map(ViewerSortEntryDto::from).collect(),
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct ViewerSortEntryDto {
-    entity_id: String,
-    rank: Option<i64>,
-    last_accessed_at: Option<i64>,
-    starred_at: Option<i64>,
-}
-
-impl From<&silverhand_backend_core::viewer_read_model::viewer_workspace_sort::ViewerSortEntry>
-    for ViewerSortEntryDto
-{
-    fn from(
-        entry: &silverhand_backend_core::viewer_read_model::viewer_workspace_sort::ViewerSortEntry,
-    ) -> Self {
-        Self {
-            entity_id: entry.entity_id.as_str().to_owned(),
-            rank: entry.rank,
-            last_accessed_at: entry.last_accessed_at,
-            starred_at: entry.starred_at,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use axum::{
         body::{Body, to_bytes},
@@ -210,9 +149,6 @@ mod tests {
         foundation::persistence::PersistenceFailure,
         identity_access::workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
         identity_access::workspace_face::WorkspaceFace,
-        viewer_read_model::viewer_workspace_sort::{
-            SortMode, ViewerSortEntry, ViewerSortState, WorkspaceSortScope,
-        },
     };
     use tower::ServiceExt;
 
@@ -275,9 +211,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_envelope_carries_both_halves_with_the_published_field_shape() {
-        let mut modes = BTreeMap::new();
-        modes.insert(WorkspaceSortScope::Regular, SortMode::Manual);
+    async fn the_envelope_contains_only_workspace_identity() {
         let cold_read = WorkspaceColdRead {
             workspaces: vec![WorkspaceFace {
                 id: WorkspaceId::parse("ws-agent").unwrap(),
@@ -300,15 +234,6 @@ mod tests {
                 created_at: 1,
                 updated_at: 200,
             }],
-            viewer_sort: ViewerSortState {
-                modes,
-                entries: vec![ViewerSortEntry {
-                    entity_id: WorkspaceId::parse("ws-agent").unwrap(),
-                    rank: Some(0),
-                    last_accessed_at: None,
-                    starred_at: None,
-                }],
-            },
         };
 
         let (status, body) = get_workspaces(FakeUnitOfWork::Reads(cold_read), true).await;
@@ -329,16 +254,7 @@ mod tests {
                     "created_at": 1,
                     "updated_at": 200
                 }],
-                "viewer_sort": {
-                    "list_key": "workspaces",
-                    "modes": { "regular": "manual" },
-                    "entries": [{
-                        "entity_id": "ws-agent",
-                        "rank": 0,
-                        "last_accessed_at": null,
-                        "starred_at": null
-                    }]
-                }
+
             })
         );
     }
@@ -347,10 +263,6 @@ mod tests {
     async fn an_empty_face_is_the_empty_envelope_not_a_missing_field() {
         let cold_read = WorkspaceColdRead {
             workspaces: Vec::new(),
-            viewer_sort: ViewerSortState {
-                modes: BTreeMap::new(),
-                entries: Vec::new(),
-            },
         };
 
         let (status, body) = get_workspaces(FakeUnitOfWork::Reads(cold_read), true).await;
@@ -360,7 +272,7 @@ mod tests {
             body,
             json!({
                 "workspaces": [],
-                "viewer_sort": { "list_key": "workspaces", "modes": {}, "entries": [] }
+
             })
         );
     }
@@ -369,10 +281,6 @@ mod tests {
     async fn a_regular_workspace_publishes_its_nulls_verbatim() {
         let cold_read = WorkspaceColdRead {
             workspaces: vec![regular("ws-1")],
-            viewer_sort: ViewerSortState {
-                modes: BTreeMap::new(),
-                entries: Vec::new(),
-            },
         };
 
         let (status, body) = get_workspaces(FakeUnitOfWork::Reads(cold_read), true).await;
@@ -389,10 +297,6 @@ mod tests {
     async fn a_missing_principal_is_a_safe_500_not_a_product_answer() {
         let cold_read = WorkspaceColdRead {
             workspaces: Vec::new(),
-            viewer_sort: ViewerSortState {
-                modes: BTreeMap::new(),
-                entries: Vec::new(),
-            },
         };
         let (status, _) = get_workspaces(FakeUnitOfWork::Reads(cold_read), false).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);

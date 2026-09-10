@@ -1,5 +1,12 @@
 # List sort v1 — per-user workspace & channel list ordering
 
+> Historical v1 design and migration record. The workspace/agent-space grouping,
+> workspace sort endpoints and inline workspace `viewer_sort` described below
+> have been removed from the frontend, shared contract and Rust implementation.
+> Current top-level ordering is defined in [Sidebar sorting](sidebar-sort.md).
+> Channel and favorites sorting remain active; this document preserves their
+> original design and retired migration rationale, not an additional runtime contract.
+
 Status: backend landed (#task:1147); renderer (#task:1146, Norman) consumes this
 contract. Design converged with @Cindy (review) + @Norman (renderer) and
 approved by shiki 2026-06-16.

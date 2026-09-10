@@ -9,11 +9,6 @@ const preloadRoot = fileURLToPath(new URL("../../preload", import.meta.url));
 const rendererRoot = fileURLToPath(new URL("../../renderer", import.meta.url));
 const desktopRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
-const allowedBackendImports = [
-  { path: "outbound-attach.ts", symbol: "HostWsAttachment", typeOnly: true },
-  { path: "outbound-reload.ts", symbol: "HostWsAttachment", typeOnly: true },
-];
-
 const allowedServerImports: string[] = [];
 
 const cataloguedIpcHandlers = [
@@ -130,7 +125,7 @@ describe("desktop protocol purity catalogue", () => {
       );
     expect(
       scan(`import type {\n HostWsAttachment,\n} from ${quote}@silverhand/backend${quote};`),
-    ).toEqual([allowedBackendImports[0]]);
+    ).toEqual([{ path: "outbound-attach.ts", symbol: "HostWsAttachment", typeOnly: true }]);
     expect(
       scan(`import { HostWsAttachment } from ${quote}@silverhand/backend${quote};`)[0]?.typeOnly,
     ).toBe(false);
@@ -145,16 +140,16 @@ describe("desktop protocol purity catalogue", () => {
       );
     }
     expect(scan(`import { unknownSymbol } from ${quote}@silverhand/backend${quote};`)).not.toEqual([
-      allowedBackendImports[0],
+      { path: "outbound-attach.ts", symbol: "HostWsAttachment", typeOnly: true },
     ]);
   });
 
-  it("keeps direct @silverhand/backend imports fenced to the embedded boot path allowlist", () => {
+  it("rejects all direct @silverhand/backend imports, including type-only imports", () => {
     const imports = sourceFiles(mainRoot, new Set([".ts"]))
       .flatMap((source) => packageImportSites(source, "@silverhand/backend"))
       .sort((a, b) => a.path.localeCompare(b.path));
 
-    expect(imports).toEqual(allowedBackendImports);
+    expect(imports).toEqual([]);
   });
 
   it("keeps direct @silverhand/server imports fenced to the embedded boot path allowlist", () => {

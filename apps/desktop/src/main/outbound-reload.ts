@@ -4,7 +4,7 @@ import type {
   ServerUrlClassification,
   ServerUrlRejectionReason,
 } from "@silverhand/shared";
-import type { HostWsAttachment } from "@silverhand/backend";
+import type { OutboundAttachmentSnapshot } from "./outbound-attach.js";
 import type { HostOutboundReloadFailureReason, HostOutboundReloadResult } from "@silverhand/host";
 import {
   startAttachWatchdog,
@@ -97,7 +97,7 @@ export type WriteDaemonHostConfigFn = (config: DaemonHostConfig) => void;
  * Returning `null` (rather than `undefined`) keeps the contract
  * boring for `attachmentSatisfies`.
  */
-export type GetHostAttachmentFn = (hostId: string) => HostWsAttachment | null;
+export type GetHostAttachmentFn = (hostId: string) => OutboundAttachmentSnapshot | null;
 
 /**
  * IPC binding — `HostClient.hostOutboundReload()` exactly.
@@ -386,7 +386,7 @@ export async function performOutboundReload(
  * what kind of mode-specific edge happened.
  */
 export function bindAttachmentAccessor(
-  controller: { getAttachment(hostId: string): HostWsAttachment | null } | null,
+  controller: { getAttachment(hostId: string): OutboundAttachmentSnapshot | null } | null,
 ): GetHostAttachmentFn | null {
   if (controller === null) return null;
   return (hostId) => controller.getAttachment(hostId);

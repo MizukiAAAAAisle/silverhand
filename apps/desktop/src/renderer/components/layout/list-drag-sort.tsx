@@ -27,7 +27,7 @@ import {
 
 /**
  * Shared drag-reorder LOGIC for the per-user sortable lists (#task:1146) —
- * the channel sidebar AND the workspace rail. This is the single source of
+ * channel and favorites lists. This is the single source of
  * the CDP-tuned, counter-intuitive flicker invariants documented in
  * docs/list-sort-v1.md §Renderer composition. There are TWO consumers, so the
  * invariants live here ONCE: a hand-copied second copy would drift the moment
@@ -37,7 +37,7 @@ import {
  * machine — it is list-agnostic over a generic `GroupKey` + item type. The
  * consumer keeps everything visual: the live partition (star/kind → groups),
  * the per-row `SortableXxxItem` shell (calls `useSortable` + `sortableItemStyle`),
- * the row component (ChannelRow / WorkspaceRow), and the
+ * the consumer's row component, and the
  * header chrome (SortModeMenu, add button). Row-shape differences and 2-vs-3
  * groups never leak in — only the `GroupKey` union changes.
  *
@@ -74,23 +74,14 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
   viewerSort: ViewerSortStateDto | undefined;
   getId: (t: T) => string;
   getCreatedAt: (t: T) => number;
-  /** Maps a group to the mode SCOPE that governs it — the SINGLE source for
-   *  both READ (which mode orders this group) and WRITE (which scope's mode the
-   *  drop flips to `manual`). Omit for a list-wide list (channel sidebar: every
-   *  group resolves to scope `''`, one shared mode — behaviour unchanged). The
-   *  rail passes `g => g` so each section toggles independently. INVARIANT: read
-   *  and write MUST go through this same mapping, or the menu shows a false
-   *  state / a single-group drag appears to flip the whole list's mode. */
-  modeScopeOf?: (group: GroupKey) => SortGroup | undefined;
 }): ListDragSort<GroupKey, T> {
-  const { listKey, groups, viewerSort, getId, getCreatedAt, modeScopeOf } = params;
+  const { listKey, groups, viewerSort, getId, getCreatedAt } = params;
   const lookup = sortEntryLookup(viewerSort);
   const applySortOrder = useApplySortOrder();
   const reorderSort = useReorderSort();
 
-  // The mode that orders ONE group — read through `modeScopeOf` (omitted ⇒
-  // list-wide scope ''). Single source shared with the optimistic write below.
-  const modeFor = (group: GroupKey) => sortModeOf(viewerSort, modeScopeOf?.(group));
+  // Channel/favorites modes are list-wide.
+  const modeFor = (_group: GroupKey) => sortModeOf(viewerSort);
 
   // Recent-mode visible order is a FROZEN read model (#task:1161): freeze each
   // id's recent key (`last_accessed_at`) at entry so opening a row can't reflow
@@ -107,7 +98,7 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
   // enter at their natural recent slot.
   const recentScopes = new Set<string>();
   for (const group of Object.keys(groups) as GroupKey[]) {
-    if (modeFor(group) === "recent") recentScopes.add(modeScopeOf?.(group) ?? "");
+    if (modeFor(group) === "recent") recentScopes.add("");
   }
   const snapshotToken = recentSnapshotToken(listKey, recentScopes, viewerSort !== undefined);
   const recentSnapshot = useRecentKeySnapshot(snapshotToken, () => {
@@ -122,8 +113,7 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
   });
 
   // `byGroup` is keyed by the GroupKey union — zero hard-coded group literals,
-  // so the same state covers channel (starred/unstarred) and rail (agent_space /
-  // regular).
+  // so each active group retains its own drag state.
   const [pendingDrop, setPendingDrop] = useState<{
     listKey: string;
     byGroup: Partial<Record<GroupKey, string[]>>;
@@ -194,7 +184,7 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
     }
     // `groups` is rebuilt each render (consumer partition) — same instability the
     // prior in-place version had; the body is cheap + idempotent.
-  }, [pendingDrop, listKey, viewerSort, modeScopeOf, lookup, groups, getId, getCreatedAt]);
+  }, [pendingDrop, listKey, viewerSort, lookup, groups, getId, getCreatedAt]);
 
   const onReorder = (group: GroupKey, orderedIds: string[]): void => {
     if (!listKey) return;
@@ -212,7 +202,7 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
     // the SAME scope as the read (modeFor), so a single-group drag flips only
     // that group's mode. On error, drop the override so the invalidate-driven
     // revert to the old order shows.
-    applySortOrder(listKey, modeScopeOf?.(group), orderedIds);
+    applySortOrder(listKey, orderedIds);
     reorderSort.mutate(
       { list_key: listKey, group, ordered_ids: orderedIds },
       { onError: () => setPendingDrop(null) },

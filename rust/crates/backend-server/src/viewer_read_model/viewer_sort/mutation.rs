@@ -278,10 +278,6 @@ where
 
 fn refusal_response(refusal: SortMutationRefusal) -> Response {
     match refusal {
-        SortMutationRefusal::RetiredList => error(
-            StatusCode::GONE,
-            "workspace sorting is retired; use sidebar",
-        ),
         SortMutationRefusal::ReorderOnly => {
             error(StatusCode::BAD_REQUEST, "sidebar only supports reorder")
         }
@@ -297,9 +293,6 @@ fn refusal_response(refusal: SortMutationRefusal) -> Response {
         ),
         SortMutationRefusal::UnknownEntity => {
             error(StatusCode::BAD_REQUEST, "unknown entity_id for this list")
-        }
-        SortMutationRefusal::GroupRequiredForList { group } => {
-            group_refusal("group is required and must be valid for this list", group)
         }
         SortMutationRefusal::GroupNotSupportedForList { group } => group_refusal(
             "group is not supported for this list (list-wide mode)",

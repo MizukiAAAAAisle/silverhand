@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { HostWsAttachment } from "@silverhand/backend";
+import type { OutboundAttachmentSnapshot } from "./outbound-attach.js";
 import type {
   ClassifyServerUrlOptions,
   DaemonHostConfig,
@@ -29,13 +29,13 @@ interface FakeState {
   }[];
 }
 
-function makeAttachment(overrides?: Partial<HostWsAttachment>): HostWsAttachment {
+function makeAttachment(
+  overrides?: Partial<OutboundAttachmentSnapshot>,
+): OutboundAttachmentSnapshot {
   return {
     hostId: "host-1",
     connectionId: "conn-old",
     attachedAt: 1_700_000_000_000,
-    hostname: null,
-    capabilities: [],
     ...overrides,
   };
 }
@@ -46,7 +46,7 @@ interface FakeOptions {
   writeThrows?: Error;
   reloadResult?: HostOutboundReloadResult;
   reloadThrows?: Error;
-  attachment?: HostWsAttachment | null;
+  attachment?: OutboundAttachmentSnapshot | null;
   /** When provided, watchdog resolves with this outcome immediately. */
   watchdogOutcome?: AttachWatchdogOutcome;
   hostId?: string | null;

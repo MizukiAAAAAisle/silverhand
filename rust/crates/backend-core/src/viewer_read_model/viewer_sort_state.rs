@@ -1,19 +1,6 @@
 //! The viewer-sort write authority and its generalized read projection.
 //!
-//! [`viewer_workspace_sort`](super::viewer_workspace_sort) owns the READ of the
-//! `workspaces` rail's sort preferences that the workspace cold read composes.
-//! This module owns the rest of the viewer-sort bounded context: the closed
-//! `list_key` / group / mode-scope algebra shared by every list, the write
-//! authority behind the six sort/favorite mutation routes, and the generalized
-//! [`ViewerSortStateProjection`] the mutations echo back for any list (not just
-//! the workspace rail).
-//!
-//! The domain owns the RULES; the persistence adapter owns the SQL. Every rule
-//! the TS `sort` service enforced — the `list_key` grammar, the per-list legal
-//! group set, the mode scope derivation, the reorder completeness invariant, and
-//! the star/favorite-rank coupling — lives here as pure, table-free logic tested
-//! in isolation. The adapter replays the reorder as ONE transaction, exactly as
-//! the reference `sort.reorder` wraps its mode+rank rewrites.
+//! Sidebar ordering is manual-only; channels and favorites retain recent/manual modes.
 use std::collections::BTreeMap;
 
 use crate::foundation::identity::UserId;
@@ -32,7 +19,6 @@ use std::future::Future;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SortListKey {
     Sidebar,
-    Workspaces,
     Favorites,
     Channels(String),
 }
@@ -42,13 +28,12 @@ const CHANNELS_PREFIX: &str = "channels:";
 
 impl SortListKey {
     /// Parse a wire `list_key`. Returns `None` only for a string outside the closed
-    /// grammar (`workspaces`, `favorites`, or a `channels:`-prefixed key) — matching
+    /// grammar (`sidebar`, `favorites`, or a `channels:`-prefixed key) — matching
     /// the TS `startsWith('channels:')` refinement, which admits `channels:` with an
     /// empty suffix (that becomes a list `404`, not an admission failure).
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
             "sidebar" => Some(Self::Sidebar),
-            "workspaces" => Some(Self::Workspaces),
             "favorites" => Some(Self::Favorites),
             other => other
                 .strip_prefix(CHANNELS_PREFIX)
@@ -60,17 +45,13 @@ impl SortListKey {
     pub fn as_stored(&self) -> String {
         match self {
             Self::Sidebar => "sidebar".to_owned(),
-            Self::Workspaces => "workspaces".to_owned(),
             Self::Favorites => "favorites".to_owned(),
             Self::Channels(workspace) => format!("{CHANNELS_PREFIX}{workspace}"),
         }
     }
 }
 
-/// The renderer's ordering mode for one scope. The closed set mirrors the
-/// `user_list_sort_mode.mode` CHECK; distinct from the workspace-rail-scoped
-/// [`viewer_workspace_sort::SortMode`](super::viewer_workspace_sort::SortMode)
-/// only in that this one is the write-authority vocabulary shared by every list.
+/// The ordering mode shared by active lists.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SortMode {
     Recent,
@@ -100,8 +81,6 @@ impl SortMode {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SortGroup {
     Sidebar,
-    AgentSpace,
-    Regular,
     Channels,
     Favorites,
 }
@@ -110,8 +89,6 @@ impl SortGroup {
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
             "sidebar" => Some(Self::Sidebar),
-            "agent_space" => Some(Self::AgentSpace),
-            "regular" => Some(Self::Regular),
             "channels" => Some(Self::Channels),
             "favorites" => Some(Self::Favorites),
             _ => None,
@@ -121,8 +98,6 @@ impl SortGroup {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Sidebar => "sidebar",
-            Self::AgentSpace => "agent_space",
-            Self::Regular => "regular",
             Self::Channels => "channels",
             Self::Favorites => "favorites",
         }
@@ -132,32 +107,20 @@ impl SortGroup {
 impl SortListKey {
     /// The groups that legally partition this list, mirroring the TS
     /// `legalGroups(listKey)`:
-    ///   - `workspaces`      → `agent_space`, `regular`
+    ///   - `sidebar`         → `sidebar`
     ///   - `favorites`       → `favorites`
     ///   - `channels:<ws>`   → `channels`
     pub fn legal_groups(&self) -> &'static [SortGroup] {
         match self {
             Self::Sidebar => &[SortGroup::Sidebar],
-            Self::Workspaces => &[SortGroup::AgentSpace, SortGroup::Regular],
             Self::Favorites => &[SortGroup::Favorites],
             Self::Channels(_) => &[SortGroup::Channels],
         }
     }
 
-    /// The persisted `user_list_sort_mode.scope` for a `(list_key, group)` pair,
-    /// mirroring the TS `modeScopeOf`: only the workspace rail stores a non-empty
-    /// scope (its hard group), every other list is the `''` list-wide sentinel.
-    pub fn mode_scope(&self, group: Option<SortGroup>) -> &'static str {
-        match self {
-            Self::Workspaces => match group {
-                Some(SortGroup::AgentSpace) => "agent_space",
-                Some(SortGroup::Regular) => "regular",
-                // Unreachable for a validated workspace-rail write, but the
-                // sentinel keeps the function total.
-                _ => "",
-            },
-            Self::Sidebar | Self::Favorites | Self::Channels(_) => "",
-        }
+    /// Every active list uses the list-wide scope.
+    pub fn mode_scope(&self) -> &'static str {
+        ""
     }
 }
 
@@ -248,7 +211,7 @@ pub struct ResolvedListGroups {
 }
 
 /// Why `resolveListGroups` refused: the list's workspace does not exist (404) or
-/// the viewer cannot view it (403). The `workspaces` and `favorites` lists never
+/// the viewer cannot view it (403). The `sidebar` and `favorites` lists never
 /// refuse (they are the viewer's own state); only `channels:<ws>` can.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ListGroupsRefusal {
@@ -287,7 +250,6 @@ pub enum SortMutation {
 /// group mismatch, reorder id-not-in-group / not-exact-members).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SortMutationRefusal {
-    RetiredList,
     ReorderOnly,
     SidebarSetChanged,
     /// The list's workspace does not exist (channels list) — 404 `list not found`
@@ -300,11 +262,6 @@ pub enum SortMutationRefusal {
     /// `entity_id` is not a live member of the list — 400 `unknown entity_id`
     /// (touch) / 404 `not found` (star).
     UnknownEntity,
-    /// `group` is required-and-valid for the workspace rail but was absent/invalid
-    /// — 400 `group is required and must be valid for this list`, echoing the group.
-    GroupRequiredForList {
-        group: Option<SortGroup>,
-    },
     /// `group` was supplied for a list-wide list (favorites/channels) — 400 `group
     /// is not supported for this list (list-wide mode)`, echoing the group.
     GroupNotSupportedForList {
@@ -384,10 +341,7 @@ mod tests {
 
     #[test]
     fn list_key_parses_the_closed_grammar_and_rejects_the_rest() {
-        assert_eq!(
-            SortListKey::parse("workspaces"),
-            Some(SortListKey::Workspaces)
-        );
+        assert_eq!(SortListKey::parse("workspaces"), None);
         assert_eq!(
             SortListKey::parse("favorites"),
             Some(SortListKey::Favorites)
@@ -409,7 +363,7 @@ mod tests {
 
     #[test]
     fn list_key_round_trips_through_stored_form() {
-        for raw in ["workspaces", "favorites", "channels:ws-42"] {
+        for raw in ["sidebar", "favorites", "channels:ws-42"] {
             let parsed = SortListKey::parse(raw).unwrap();
             assert_eq!(parsed.as_stored(), raw);
             assert_eq!(SortListKey::parse(&parsed.as_stored()), Some(parsed));
@@ -418,10 +372,7 @@ mod tests {
 
     #[test]
     fn legal_groups_partition_each_list() {
-        assert_eq!(
-            SortListKey::Workspaces.legal_groups(),
-            &[SortGroup::AgentSpace, SortGroup::Regular]
-        );
+        assert_eq!(SortListKey::Sidebar.legal_groups(), &[SortGroup::Sidebar]);
         assert_eq!(
             SortListKey::Favorites.legal_groups(),
             &[SortGroup::Favorites]
@@ -433,24 +384,14 @@ mod tests {
     }
 
     #[test]
-    fn mode_scope_is_the_hard_group_only_for_the_workspace_rail() {
-        assert_eq!(
-            SortListKey::Workspaces.mode_scope(Some(SortGroup::AgentSpace)),
-            "agent_space"
-        );
-        assert_eq!(
-            SortListKey::Workspaces.mode_scope(Some(SortGroup::Regular)),
-            "regular"
-        );
-        assert_eq!(
-            SortListKey::Favorites.mode_scope(Some(SortGroup::Favorites)),
-            ""
-        );
-        assert_eq!(
-            SortListKey::Channels("ws-1".to_owned()).mode_scope(Some(SortGroup::Channels)),
-            ""
-        );
-        assert_eq!(SortListKey::Favorites.mode_scope(None), "");
+    fn mode_scope_is_always_list_wide() {
+        for list in [
+            SortListKey::Sidebar,
+            SortListKey::Favorites,
+            SortListKey::Channels("ws-1".to_owned()),
+        ] {
+            assert_eq!(list.mode_scope(), "");
+        }
     }
 
     #[test]

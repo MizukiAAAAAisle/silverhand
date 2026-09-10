@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { HostWsAttachment } from "@silverhand/backend";
+import type { OutboundAttachmentSnapshot } from "./outbound-attach.js";
 import type { DaemonHostConfig, ServerConnectionProfile } from "@silverhand/shared";
 import type { HostOutboundReloadResult } from "@silverhand/host";
 import type {
@@ -27,13 +27,13 @@ interface FakeState {
   }[];
 }
 
-function makeAttachment(overrides?: Partial<HostWsAttachment>): HostWsAttachment {
+function makeAttachment(
+  overrides?: Partial<OutboundAttachmentSnapshot>,
+): OutboundAttachmentSnapshot {
   return {
     hostId: "host-1",
     connectionId: "conn-old",
     attachedAt: 1_700_000_000_000,
-    hostname: null,
-    capabilities: [],
     ...overrides,
   };
 }
@@ -54,7 +54,7 @@ interface FakeOptions {
   reloadThrows?: Error;
   /** Initial attachment snapshot. Profile application captures `previousConnectionId`
    *  from this before the write. */
-  attachment?: HostWsAttachment | null;
+  attachment?: OutboundAttachmentSnapshot | null;
   /** When provided, watchdog resolves with this outcome immediately. */
   watchdogOutcome?: AttachWatchdogOutcome;
   /** undefined = default 'host-1'; null = explicit null (Setup Wizard pre-auth). */

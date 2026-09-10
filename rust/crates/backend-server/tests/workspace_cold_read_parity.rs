@@ -1,20 +1,7 @@
-//! Rust half of the cross-language GET /api/workspaces cold-read parity gate
-//! (#task:2190).
-//!
-//! The SAME checked-in fixture the TypeScript oracle replays
-//! (packages/backend/tests/workspace-cold-read-parity.test.ts) is replayed here:
-//! one `seed.sql` executed verbatim against a fresh current-schema database, and
-//! one `expected-envelope.json` the projector's serialized wire body must equal.
-//! Here the value is produced by the REAL production stack — the SQLite
-//! `SqliteWorkspaceColdRead` adapter over one `BEGIN DEFERRED` snapshot, driven
-//! through the real `workspaces::router` so the actual `WorkspaceColdReadResponse`
-//! wire projector (snake_case, null-verbatim, `dm_channel_ids` array, two-key
-//! order, visible-and-non-archived sort filter) is what gets compared.
-//!
-//! The TS side runs first as the oracle: the expected JSON is hand-authored but
-//! signed by the real TS authority before the Rust side is asked to match it, so
-//! this test is a pure differential against that ratified artifact — the two
-//! implementations cannot drift on any facet of the envelope.
+//! Current Rust GET /api/workspaces envelope over the real SQLite adapter and router.
+//! Reuses the historical seed, with a Rust-owned expected envelope: workspace
+//! identity no longer includes retired sort preferences. The TS backend is not
+//! updated because it is scheduled for removal.
 
 use axum::{
     Router,
@@ -35,10 +22,8 @@ mod current_schema;
 const SEED_SQL: &str =
     include_str!("../../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql");
 
-/// The one expected envelope both projectors are held to.
-const EXPECTED_ENVELOPE: &str = include_str!(
-    "../../../../packages/backend/tests/fixtures/workspace-cold-read/expected-envelope.json"
-);
+/// Current Rust envelope; the retired TS backend is intentionally not updated.
+const EXPECTED_ENVELOPE: &str = include_str!("fixtures/workspace-cold-read-envelope.json");
 
 async fn seed(path: &std::path::Path) {
     let mut db = current_schema::create_current_schema(path).await;
@@ -49,7 +34,7 @@ async fn seed(path: &std::path::Path) {
 }
 
 #[tokio::test]
-async fn the_real_wire_projector_produces_the_shared_expected_envelope() {
+async fn the_real_wire_projector_publishes_workspace_identity_without_legacy_sort() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("cold-read.sqlite");
     seed(&path).await;

@@ -1,10 +1,7 @@
 //! The workspace list bounded context: a human viewer's published face of the
 //! workspaces they are a member of.
 //!
-//! This is one of the two contexts the authenticated workspace cold read
-//! (`GET /api/workspaces`) composes. It owns only the workspace half — the
-//! viewer's sort preferences are a separate context ([`crate::viewer_read_model::viewer_workspace_sort`])
-//! read over the SAME snapshot, never fused into this one.
+//! Workspace identity is independent of sidebar ordering and viewer preferences.
 //!
 //! [`WorkspaceFace`] is the projected fact, not a storage row: every
 //! identity-bearing coordinate is already a typed identity, so a reader that

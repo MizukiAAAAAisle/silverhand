@@ -498,6 +498,16 @@ async fn sidebar_http_commit_emits_viewer_hint_and_conflicts_do_not_write() {
         sidebar_request(&http, None, false).await.0,
         StatusCode::UNAUTHORIZED
     );
+    for (list_key, group) in [("workspaces", "regular"), ("sidebar", "agent_space")] {
+        let retired = serde_json::json!({
+            "list_key": list_key, "group": group, "ordered_ids": []
+        });
+        assert_eq!(
+            sidebar_request(&http, Some(retired), true).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
     let body = serde_json::json!({"list_key":"sidebar","group":"sidebar","ordered_ids":["workspace:workspace-1", "section:direct_messages", "section:starred"]});
     let (status, value) = sidebar_request(&http, Some(body), true).await;
     assert_eq!(status, StatusCode::OK);

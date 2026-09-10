@@ -5,7 +5,6 @@ import { AGENT_CAPABILITIES } from '../db/schema.js';
 import { AgentDtoSchema } from './agent.js';
 import { UserDtoSchema } from './user.js';
 import { WorkspaceNameSchema } from './name.js';
-import { ViewerSortStateDtoSchema } from './sort.js';
 
 //
 // New naming model for workspace -> channel/dm_channel/thread. The
@@ -80,23 +79,9 @@ export const ViewerWorkspaceDtoSchema = z.object({
 });
 export type ViewerWorkspaceDto = z.infer<typeof ViewerWorkspaceDtoSchema>;
 
-/**
- * The whole envelope of `GET /api/workspaces` (#task:2190): the viewer's visible
- * workspaces AND their workspace-rail sort state, read from ONE database snapshot
- * and joined only here at the wire. `viewer_sort` rides this response rather than
- * a second endpoint precisely so a `viewer_workspaces_changed` hint re-reads one
- * authority — splitting the halves across responses would reintroduce the
- * membership/sort skew the single snapshot removes.
- *
- * This is the shared contract the TypeScript route and the Rust
- * `WorkspaceColdReadResponse` projector are held to (see
- * `tests/workspace-cold-read-parity.test.ts` and the Rust parity test): both emit
- * a value that must validate against this schema and equal the checked-in
- * fixture envelope.
- */
+/** Visible workspace identities. Sidebar ordering is read separately. */
 export const WorkspaceColdReadResponseSchema = z.object({
   workspaces: z.array(ViewerWorkspaceDtoSchema),
-  viewer_sort: ViewerSortStateDtoSchema,
 });
 export type WorkspaceColdReadResponse = z.infer<typeof WorkspaceColdReadResponseSchema>;
 

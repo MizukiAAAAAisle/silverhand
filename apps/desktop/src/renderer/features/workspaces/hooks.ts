@@ -25,6 +25,7 @@ import type {
   UpdateWorkspaceHumanMemberRoleResponse,
   UpdateWorkspaceInput,
   ViewerWorkspaceDto,
+  WorkspaceColdReadResponse,
   WorkspaceHumanMemberDto,
   WorkspaceMembersResponse,
   WorkspaceRole,
@@ -163,17 +164,14 @@ export function sortConversationList(items: ChannelListItem[]): ChannelListItem[
   return [...items].sort((a, b) => a.created_at - b.created_at);
 }
 
-/** Cache writers preserve the retired viewerSort field; sidebar ordering has its own read. */
+/** Workspace identity cache; sidebar ordering has its own read. */
 export interface WorkspaceListPayload {
   items: WorkspaceListItem[];
-  viewerSort: ViewerSortStateDto;
 }
 
 async function fetchWorkspaces(): Promise<WorkspaceListPayload> {
-  const res = await api<{ workspaces: ViewerWorkspaceDto[]; viewer_sort: ViewerSortStateDto }>(
-    apiPaths.workspaces,
-  );
-  return { items: res.workspaces.map(workspaceToListItem), viewerSort: res.viewer_sort };
+  const res = await api<WorkspaceColdReadResponse>(apiPaths.workspaces);
+  return { items: res.workspaces.map(workspaceToListItem) };
 }
 
 export function useWorkspaces(options?: { enabled?: boolean }) {
@@ -785,7 +783,7 @@ function sortListQueryKey(listKey: string): readonly unknown[] | null {
 }
 
 /** A list's sort cache: its query key + how to READ/WRITE the inline viewer-sort
- *  state, abstracting the per-feature cache SHAPE. The rail / channel caches
+ *  state, abstracting the per-feature cache SHAPE. The channel cache
  *  store it camelCase (`viewerSort`, the `SortCachePayload` shape); the global
  *  Favorites cache (`ListFavoritesDto`, `list_key='favorites'`) stores it
  *  snake_case (`viewer_sort`) under `favoritesKey`. ALL sort mutations (mode /
@@ -836,12 +834,11 @@ export function useSetSortMode() {
       const prev = qc.getQueryData(adapter.key);
       const prevVs = adapter.read(prev);
       if (prevVs) {
-        const scope = input.group ?? "";
         qc.setQueryData(
           adapter.key,
           adapter.write(prev, {
             ...prevVs,
-            modes: { ...prevVs.modes, [scope]: input.mode },
+            modes: { ...prevVs.modes, "": input.mode },
           }),
         );
       }
@@ -859,15 +856,9 @@ export function useSetSortMode() {
   });
 }
 
-/** Apply a group's new drag order to the inline viewer-sort cache: dense
- *  0..n ranks for the dragged ids + flip the dragged group's SCOPE mode to
- *  `manual` (mirrors the backend's atomic, per-scope `order ⟹ manual`). The
- *  `scope` is the same one `sortModeOf`/`useSetSortMode` use for this group
- *  (rail: the group; channel: `''`) — dragging one rail group must flip ONLY
- *  that group's mode, never the whole rail. Pure — returns the next payload. */
+/** Apply dense ranks and the list-wide manual mode for channel/favorites lists. */
 export function applyOrderToViewerSort(
   prev: ViewerSortStateDto,
-  scope: SortGroup | undefined,
   orderedIds: string[],
 ): ViewerSortStateDto {
   const byId = new Map(prev.entries.map((e) => [e.entity_id, e] as const));
@@ -878,10 +869,9 @@ export function applyOrderToViewerSort(
       e ? { ...e, rank } : { entity_id: id, rank, last_accessed_at: null, starred_at: null },
     );
   });
-  const scopeKey = scope ?? "";
   return {
     ...prev,
-    modes: { ...prev.modes, [scopeKey]: "manual" },
+    modes: { ...prev.modes, "": "manual" },
     entries: [...byId.values()],
   };
 }
@@ -900,16 +890,13 @@ export function applyOrderToViewerSort(
  *  refetch. */
 export function useApplySortOrder() {
   const qc = useQueryClient();
-  return (listKey: string, scope: SortGroup | undefined, orderedIds: string[]): void => {
+  return (listKey: string, orderedIds: string[]): void => {
     const adapter = sortCacheAdapter(listKey);
     if (!adapter) return;
     const prev = qc.getQueryData(adapter.key);
     const prevVs = adapter.read(prev);
     if (prevVs) {
-      qc.setQueryData(
-        adapter.key,
-        adapter.write(prev, applyOrderToViewerSort(prevVs, scope, orderedIds)),
-      );
+      qc.setQueryData(adapter.key, adapter.write(prev, applyOrderToViewerSort(prevVs, orderedIds)));
     }
   };
 }

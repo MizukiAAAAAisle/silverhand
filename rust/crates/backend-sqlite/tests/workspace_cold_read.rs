@@ -37,7 +37,7 @@ async fn seed_parity_fixture(path: &std::path::Path) {
 }
 
 #[tokio::test]
-async fn whole_envelope_is_membership_scoped_ordered_and_carries_both_halves() {
+async fn workspace_envelope_is_membership_scoped_and_ordered() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("cold-read.sqlite");
     seed_parity_fixture(&path).await;
@@ -92,9 +92,6 @@ async fn whole_envelope_is_membership_scoped_ordered_and_carries_both_halves() {
             .collect::<Vec<_>>(),
         ["conv-onboarding", "conv-dm"]
     );
-
-    assert!(read.viewer_sort.modes.is_empty());
-    assert!(read.viewer_sort.entries.is_empty());
 }
 
 /// Opens a fresh schema database with check constraints disabled, so a corruption
@@ -160,8 +157,7 @@ async fn retired_sort_entity_ids_are_not_read() {
          updated_at) VALUES ('ws-1', 'Regular', 'regular', NULL, 'user-1', 1, 1)",
         "INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) \
          VALUES ('ws-1', 'user-1', 1, 'owner')",
-        // Empty entity id: never in the visible set, so a filter-before-parse reader
-        // would silently drop it. Parse-before-filter makes it a safe 500.
+        // Retired malformed sort entries must not affect workspace identity reads.
         "INSERT INTO user_sort_entry (user_id, list_key, entity_id, rank) \
          VALUES ('user-1', 'workspaces', '', 0)",
     ] {
@@ -175,8 +171,8 @@ async fn retired_sort_entity_ids_are_not_read() {
         .load_workspace_cold_read(&UserId::parse("user-1").unwrap())
         .await
         .unwrap();
-    assert!(read.viewer_sort.modes.is_empty());
-    assert!(read.viewer_sort.entries.is_empty());
+    assert_eq!(read.workspaces.len(), 1);
+    assert_eq!(read.workspaces[0].id.as_str(), "ws-1");
 }
 
 #[tokio::test]
@@ -191,8 +187,7 @@ async fn retired_sort_scopes_are_not_read() {
          updated_at) VALUES ('ws-1', 'Regular', 'regular', NULL, 'user-1', 1, 1)",
         "INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) \
          VALUES ('ws-1', 'user-1', 1, 'owner')",
-        // '' is the flat-list sentinel; on the two-group workspace rail it is
-        // unreachable through the write path, so a stored '' is corruption.
+        // Historical grouping state has no current reader.
         "INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at) \
          VALUES ('user-1', 'workspaces', '', 'manual', 1)",
     ] {
@@ -206,8 +201,8 @@ async fn retired_sort_scopes_are_not_read() {
         .load_workspace_cold_read(&UserId::parse("user-1").unwrap())
         .await
         .unwrap();
-    assert!(read.viewer_sort.modes.is_empty());
-    assert!(read.viewer_sort.entries.is_empty());
+    assert_eq!(read.workspaces.len(), 1);
+    assert_eq!(read.workspaces[0].id.as_str(), "ws-1");
 }
 
 #[tokio::test]
@@ -235,6 +230,6 @@ async fn retired_sort_modes_are_not_read() {
         .load_workspace_cold_read(&UserId::parse("user-1").unwrap())
         .await
         .unwrap();
-    assert!(read.viewer_sort.modes.is_empty());
-    assert!(read.viewer_sort.entries.is_empty());
+    assert_eq!(read.workspaces.len(), 1);
+    assert_eq!(read.workspaces[0].id.as_str(), "ws-1");
 }

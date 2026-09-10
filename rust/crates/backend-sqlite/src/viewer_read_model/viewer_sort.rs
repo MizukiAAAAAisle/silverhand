@@ -155,7 +155,7 @@ async fn resolve_list_groups_tx(
                 starred: HashSet::new(),
             }))
         }
-        SortListKey::Workspaces => Ok(Err(ListGroupsRefusal::NotFound)),
+
         SortListKey::Favorites => {
             // The favorites list IS the starred set — membership is the projected
             // conversation-favorites set, keyed by favorite_key.
@@ -400,9 +400,7 @@ impl ViewerSortMutationWriter for SqliteViewerSort {
         // the lock is held and the fresh gates pass, and drives this write + its
         // post-image. Every decision fact is re-resolved here, never a pre-lock
         // witness; a refusal rolls back with no write.
-        if matches!(list_key, SortListKey::Workspaces) {
-            return Ok(Err(SortMutationRefusal::RetiredList));
-        }
+
         if matches!(list_key, SortListKey::Sidebar)
             && !matches!(mutation, SortMutation::Reorder { .. })
         {
@@ -454,16 +452,6 @@ impl ViewerSortMutationWriter for SqliteViewerSort {
             SortMutation::SetMode { group, mode } => {
                 // Group/list consistency under the lock.
                 match list_key {
-                    SortListKey::Workspaces => {
-                        if !matches!(
-                            group,
-                            Some(SortGroup::AgentSpace) | Some(SortGroup::Regular)
-                        ) {
-                            return Ok(Err(SortMutationRefusal::GroupRequiredForList {
-                                group: *group,
-                            }));
-                        }
-                    }
                     SortListKey::Sidebar | SortListKey::Favorites | SortListKey::Channels(_) => {
                         if group.is_some() {
                             return Ok(Err(SortMutationRefusal::GroupNotSupportedForList {
@@ -472,7 +460,7 @@ impl ViewerSortMutationWriter for SqliteViewerSort {
                         }
                     }
                 }
-                let scope = list_key.mode_scope(*group);
+                let scope = list_key.mode_scope();
                 sqlx::query(
                     "INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at) \
                      VALUES (?, ?, ?, ?, ?) \
@@ -520,7 +508,7 @@ impl ViewerSortMutationWriter for SqliteViewerSort {
                         return Ok(Err(SortMutationRefusal::NotExactMembers { expected_count }));
                     }
                 }
-                let scope = list_key.mode_scope(Some(*group));
+                let scope = list_key.mode_scope();
                 sqlx::query(
                     "INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at) \
                      VALUES (?, ?, ?, 'manual', ?) \
@@ -776,19 +764,6 @@ INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, titl
                 Err(SortMutationRefusal::ReorderOnly)
             );
         }
-        assert_eq!(
-            store
-                .apply_sort_mutation(
-                    &viewer,
-                    &SortListKey::Workspaces,
-                    &SortMutation::Touch {
-                        entity_id: "ws-1".to_owned()
-                    }
-                )
-                .await
-                .unwrap(),
-            Err(SortMutationRefusal::RetiredList)
-        );
 
         // A newly visible workspace invalidates the old full-set drag and follows
         // ranked branches. Archiving it removes it from the authorized read.

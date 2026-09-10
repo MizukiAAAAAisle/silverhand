@@ -178,7 +178,7 @@ describe("recent ordering with a frozen snapshot (#task:1161)", () => {
 
 describe("recentSnapshotToken (re-capture policy)", () => {
   it("is a stable loading token until viewer_sort has loaded", () => {
-    expect(recentSnapshotToken("ws1", ["starred"], false)).toBe("__loading__");
+    expect(recentSnapshotToken("ws1", ["group-c"], false)).toBe("__loading__");
     expect(recentSnapshotToken(null, [], false)).toBe("__loading__");
   });
 
@@ -187,15 +187,15 @@ describe("recentSnapshotToken (re-capture policy)", () => {
   });
 
   it("is order-independent across the recent-scope set (no spurious recapture)", () => {
-    expect(recentSnapshotToken("ws1", ["regular", "starred", "agent_space"], true)).toBe(
-      recentSnapshotToken("ws1", ["agent_space", "starred", "regular"], true),
+    expect(recentSnapshotToken("ws1", ["group-b", "group-c", "group-a"], true)).toBe(
+      recentSnapshotToken("ws1", ["group-a", "group-c", "group-b"], true),
     );
   });
 
-  it("changes when a scope toggles into / out of recent (rail scopes isolated)", () => {
-    const both = recentSnapshotToken("ws1", ["starred", "agent_space"], true);
-    expect(both).not.toBe(recentSnapshotToken("ws1", ["starred"], true)); // agent_space left recent
-    expect(both).not.toBe(recentSnapshotToken("ws1", ["starred", "agent_space", "regular"], true));
+  it("changes when a scope toggles into / out of recent (independent scopes)", () => {
+    const both = recentSnapshotToken("ws1", ["group-c", "group-a"], true);
+    expect(both).not.toBe(recentSnapshotToken("ws1", ["group-c"], true)); // group-a left recent
+    expect(both).not.toBe(recentSnapshotToken("ws1", ["group-c", "group-a", "group-b"], true));
   });
 
   it("uses the list-wide sentinel scope for the channel sidebar", () => {

@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { HostWsAttachment } from "@silverhand/backend";
+import type { OutboundAttachmentSnapshot } from "./outbound-attach.js";
 import {
   attachmentSatisfies,
   startAttachWatchdog,
   type ExpectedAttachWindow,
 } from "./outbound-attach.js";
 
-function makeAttachment(over: Partial<HostWsAttachment> = {}): HostWsAttachment {
+function makeAttachment(
+  over: Partial<OutboundAttachmentSnapshot> = {},
+): OutboundAttachmentSnapshot {
   return {
     hostId: "host-local-1",
     connectionId: "conn-A",
     attachedAt: 1_000_000,
-    hostname: null,
-    capabilities: [],
     ...over,
   };
 }

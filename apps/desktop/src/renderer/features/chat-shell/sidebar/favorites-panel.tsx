@@ -76,7 +76,7 @@ export function FavoritesGroup(props: {
     getCreatedAt: (r) => r.created_at,
   });
   const ordered = orderedGroups[FAVORITES_GROUP];
-  const mode = sortModeOf(viewerSort, undefined);
+  const mode = sortModeOf(viewerSort);
 
   if (items.length === 0) return null;
 

@@ -339,7 +339,6 @@ async fn retired_workspace_starred_mode_upgrades_from_87_and_88_without_losing_o
             .await
             .unwrap();
         assert_eq!(result.workspaces.len(), 3);
-        assert_eq!(result.viewer_sort.modes.len(), 2);
     }
 }
 

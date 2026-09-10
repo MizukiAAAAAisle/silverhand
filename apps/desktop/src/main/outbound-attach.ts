@@ -1,4 +1,10 @@
-import type { HostWsAttachment } from "@silverhand/backend";
+/** Desktop observation needed to prove a fresh outbound attachment.
+ * No backend registry internals or daemon capability payload are required. */
+export interface OutboundAttachmentSnapshot {
+  hostId: string;
+  connectionId: string;
+  attachedAt: number;
+}
 
 /** Snapshot taken BEFORE writing daemon-config + sending the
  *  `host_outbound_attach` IPC. The watchdog uses this to distinguish
@@ -39,7 +45,7 @@ export interface ExpectedAttachWindow {
  *                       AND connectionId !== previousConnectionId ) )
  */
 export function attachmentSatisfies(
-  attachment: HostWsAttachment | null,
+  attachment: OutboundAttachmentSnapshot | null,
   window: ExpectedAttachWindow,
 ): boolean {
   if (attachment === null) return false;
@@ -67,7 +73,7 @@ export function attachmentSatisfies(
 
 export interface AttachWatchdogDeps {
   /** Returns the current attachment snapshot for `hostId`, or null. */
-  getAttachment(hostId: string): HostWsAttachment | null;
+  getAttachment(hostId: string): OutboundAttachmentSnapshot | null;
   /**
    * Poll interval in ms. Default 250. Kept injectable so tests can
    * drive the loop deterministically with a fake scheduler.
@@ -92,7 +98,7 @@ export interface AttachWatchdogDeps {
 }
 
 export type AttachWatchdogOutcome =
-  | { ok: true; attachment: HostWsAttachment; elapsedMs: number }
+  | { ok: true; attachment: OutboundAttachmentSnapshot; elapsedMs: number }
   | { ok: false; reason: "timeout"; elapsedMs: number }
   | {
       ok: false;

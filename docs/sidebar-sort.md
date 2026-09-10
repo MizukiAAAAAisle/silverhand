@@ -8,6 +8,6 @@
 
 成功提交后，当前 viewer scope 收到 `sidebar_sort_changed` 空payload hint，读取权限与顺序不由通知携带。收到hint、WS重连、workspace可见性变化时重新GET；失败不发布hint。通知沿现有WS恢复机制，不增加持久状态机。
 
-step98 仅删除 user_list_sort_mode/user_sort_entry 中 list_key=workspaces 的旧顶层数据。channels:*、favorites、starred_at 收藏事实和其他偏好不清。旧 workspaces mutation 返回410；公开 WorkspaceListResponse 的必需 viewer_sort 字段保留为空退休投影，不再读取旧排序表。
+step98 仅删除 user_list_sort_mode/user_sort_entry 中 list_key=workspaces 的旧顶层数据。channels:*、favorites、starred_at 收藏事实和其他偏好不清。前端/Rust/shared 已移除旧 workspaces 排序合同与 regular/agent_space 分组；旧 key/group 按普通非法输入拒绝。WorkspaceListResponse 仅返回 workspaces，不携带旧 viewer_sort。
 
-新读写由 Rust server 实现。参考 TS server 对 sidebar 显式501，旧workspaces写入同样410，不能把新key误当channels。旧客户端不会消费新的完整混排读面；本次不自行调整API epoch或部署。
+新读写由 Rust server 实现。参考 TS server 对 sidebar 显式501，旧workspaces写入同样410，不能把新key误当channels。下一次强制更新，不保留前端/Rust的旧排序兼容层；参考TS backend留待整体删除，未同步本次合同删除。本次不自行调整API epoch或部署。

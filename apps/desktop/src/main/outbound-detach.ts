@@ -75,9 +75,7 @@ export interface GracefulDetachDeps {
    * Return-shape contract: the helper only checks `=== null` — it
    * doesn't read any field of the attachment. The accessor signature
    * is therefore intentionally `unknown` rather than the concrete
-   * `HostWsAttachment` shape, which keeps the desktop main
-   * protocol-purity fence at one allowed @silverhand/backend type
-   * import (consumed by `outbound-attach.ts` only). Callers should
+   * backend attachment shape. Desktop has no import dependency on the backend. Callers should
    * still pass the real attachment row — never abuse the loose
    * return type to fabricate a different sentinel.
    */

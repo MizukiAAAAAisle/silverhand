@@ -142,7 +142,7 @@ describe("Favorites sort cache wiring (#task:1254)", () => {
   // through `sortCacheAdapter`. Favorites was UNRESOLVED (sortListQueryKey →
   // null), so setMode/reorder wrote the backend but silently no-op'd the local
   // cache — the UI only caught up on a later refetch. The adapter also has to
-  // bridge the cache SHAPE: rail/channel caches store `viewerSort` (camelCase);
+  // bridge the cache SHAPE: channel caches store `viewerSort` (camelCase);
   // the Favorites cache (ListFavoritesDto) stores `viewer_sort` (snake_case).
   const vs = (
     entries: ViewerSortStateDto["entries"],
@@ -191,7 +191,6 @@ describe("Favorites sort cache wiring (#task:1254)", () => {
         ],
         { "": "recent" },
       ),
-      undefined, // list-wide scope (favorites has no per-group axis)
       ["conversation:c2", "conversation:c1"],
     );
     expect(next.modes[""]).toBe("manual");
@@ -204,7 +203,7 @@ describe("Favorites sort cache wiring (#task:1254)", () => {
 
   it("a favorites cache write lands on favoritesKey and never touches workspaces/channels caches", () => {
     const client = new QueryClient();
-    const workspacesCache = { items: [], viewerSort: vs([], { regular: "recent" }) };
+    const workspacesCache = { items: [] };
     const channelsCache = { items: [], viewerSort: vs([], { "": "recent" }) };
     client.setQueryData(["workspaces"], workspacesCache);
     client.setQueryData(["workspaces", "w1", "channels"], channelsCache);
@@ -234,10 +233,7 @@ describe("Favorites sort cache wiring (#task:1254)", () => {
     const prevOrderVs = orderAdapter.read(prevOrder)!;
     client.setQueryData(
       orderAdapter.key,
-      orderAdapter.write(
-        prevOrder,
-        applyOrderToViewerSort(prevOrderVs, undefined, ["conversation:c1"]),
-      ),
+      orderAdapter.write(prevOrder, applyOrderToViewerSort(prevOrderVs, ["conversation:c1"])),
     );
 
     const favAfter = client.getQueryData<{ viewer_sort: ViewerSortStateDto }>(favoritesKey)!;
