@@ -167,73 +167,87 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
       name="workspaces"
       width="var(--sidebar-width)"
       sidebar={
-        <nav className="scrollbar-hide flex-1 overflow-y-auto">
-          <div className="mb-3 space-y-1">
-            <SidebarNavigationButton onClick={props.onSelectSearch} active={props.searchActive}>
-              <Search className="size-4" />
-              <span>Search</span>
-            </SidebarNavigationButton>
+        <>
+          <nav className="scrollbar-hide min-h-0 flex-1 overflow-y-auto">
+            <div className="mb-3 space-y-1">
+              <SidebarNavigationButton onClick={props.onSelectSearch} active={props.searchActive}>
+                <Search className="size-4" />
+                <span>Search</span>
+              </SidebarNavigationButton>
 
-            <SidebarNavigationButton onClick={props.onSelectSaved} active={props.savedActive}>
-              <Bookmark className={cn("size-4", props.savedActive ? "fill-current" : "")} />
-              <span>Saved</span>
-              {props.savedCount !== undefined && props.savedCount > 0 ? (
-                <span
-                  data-sidebar-count
-                  className={cn(
-                    "text-xs tabular-nums",
-                    props.savedActive ? "text-text-nav-selected/70" : "text-text-muted",
-                  )}
-                >
-                  {props.savedCount}
-                </span>
-              ) : null}
-            </SidebarNavigationButton>
+              <SidebarNavigationButton onClick={props.onSelectSaved} active={props.savedActive}>
+                <Bookmark className={cn("size-4", props.savedActive ? "fill-current" : "")} />
+                <span>Saved</span>
+                {props.savedCount !== undefined && props.savedCount > 0 ? (
+                  <span
+                    data-sidebar-count
+                    className={cn(
+                      "text-xs tabular-nums",
+                      props.savedActive ? "text-text-nav-selected/70" : "text-text-muted",
+                    )}
+                  >
+                    {props.savedCount}
+                  </span>
+                ) : null}
+              </SidebarNavigationButton>
 
-            <SidebarNavigationButton onClick={props.onSelectArchived} active={props.archivedActive}>
-              <Archive className="size-4" />
-              <span>Archived</span>
-            </SidebarNavigationButton>
+              <SidebarNavigationButton
+                onClick={props.onSelectArchived}
+                active={props.archivedActive}
+              >
+                <Archive className="size-4" />
+                <span>Archived</span>
+              </SidebarNavigationButton>
+            </div>
+
+            <FavoritesGroup
+              selectedChannelId={props.selectedChannelId}
+              watchWorkspaceIds={watchWorkspaceIds}
+              onSelectConversation={props.onSelectConversation}
+            />
+            <WorkspaceList
+              workspaces={orderedRegular}
+              selected={selected}
+              onSelectChannel={props.onSelectChannel}
+              onCreateChannel={props.onCreateChannel}
+              onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
+              agentsById={props.agentsById}
+              ownerAgentAvatarUrls={ownerAgentAvatarUrls}
+              sortMenu={sortMenuFor("regular")}
+              sort={sortConfigFor("regular")}
+            />
+            <WorkspaceList
+              workspaces={orderedAgentSpaces}
+              selected={selected}
+              onSelectChannel={props.onSelectChannel}
+              onCreateChannel={props.onCreateChannel}
+              onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
+              agentsById={props.agentsById}
+              ownerAgentAvatarUrls={ownerAgentAvatarUrls}
+              sortMenu={sortMenuFor("agent_space")}
+              sort={sortConfigFor("agent_space")}
+            />
+            <DirectMessagesGroup
+              selectedChannelId={props.selectedChannelId}
+              onSelectDirectPair={props.onSelectDirectPair}
+              draftAgentId={props.directDraftAgentId}
+              onSelectDirectDraft={props.onSelectDirectDraft}
+            />
+          </nav>
+          <div className="shrink-0 pt-2">
+            <button
+              type="button"
+              onClick={props.onCreateWorkspace}
+              className={cn(
+                "flex h-8 w-full items-center gap-2 text-left text-sm leading-4 text-text-muted transition-colors hover:text-text-primary focus-outline",
+                OUTER_GLYPH_INSET,
+              )}
+            >
+              <Plus className="size-4" />
+              <span>New workspace</span>
+            </button>
           </div>
-
-          <FavoritesGroup
-            selectedChannelId={props.selectedChannelId}
-            watchWorkspaceIds={watchWorkspaceIds}
-            onSelectConversation={props.onSelectConversation}
-          />
-          <WorkspaceList
-            workspaces={orderedRegular}
-            selected={selected}
-            onSelectChannel={props.onSelectChannel}
-            onCreateChannel={props.onCreateChannel}
-            onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
-            agentsById={props.agentsById}
-            ownerAgentAvatarUrls={ownerAgentAvatarUrls}
-            sortMenu={sortMenuFor("regular")}
-            sort={sortConfigFor("regular")}
-          />
-          <WorkspaceList
-            workspaces={orderedAgentSpaces}
-            selected={selected}
-            onSelectChannel={props.onSelectChannel}
-            onCreateChannel={props.onCreateChannel}
-            onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
-            agentsById={props.agentsById}
-            ownerAgentAvatarUrls={ownerAgentAvatarUrls}
-            sortMenu={sortMenuFor("agent_space")}
-            sort={sortConfigFor("agent_space")}
-          />
-          <SidebarNavigationButton onClick={props.onCreateWorkspace} active={false}>
-            <Plus className="size-4" />
-            <span>New workspace</span>
-          </SidebarNavigationButton>
-          <DirectMessagesGroup
-            selectedChannelId={props.selectedChannelId}
-            onSelectDirectPair={props.onSelectDirectPair}
-            draftAgentId={props.directDraftAgentId}
-            onSelectDirectDraft={props.onSelectDirectDraft}
-          />
-        </nav>
+        </>
       }
     />
   );
