@@ -84,7 +84,10 @@ describe('runtime catalog ⟺ host invariants', () => {
           driver.parseLine(
             JSON.stringify({
               id: requests[0].id,
-              result: { protocolVersion: 1, agentCapabilities: {} },
+              result: {
+                protocolVersion: 1,
+                agentCapabilities: { sessionCapabilities: { resume: {} } },
+              },
             }),
           );
           driver.parseLine(

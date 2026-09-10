@@ -52,6 +52,10 @@ export interface AcpRuntimeAdapter {
     text: string,
   ): { method: string; params: Record<string, unknown> };
   sessionMethod?(ctx: DriverSpawnContext, initializeResult: unknown): string;
+  buildSessionFinalizeRequest?(
+    ctx: DriverSpawnContext,
+    sessionId: string,
+  ): { method: string; params: Record<string, unknown> };
   validateSession?(ctx: DriverSpawnContext, result: unknown): string | null;
   readonly suppressPreSessionUpdates?: boolean;
 
@@ -77,6 +81,8 @@ export class AcpClient {
   private sessionRequestId: JsonRpcId | null = null;
   private activeSessionConfigRequestId: JsonRpcId | null = null;
   private pendingSessionConfigRequests: Array<Record<string, unknown>> = [];
+  private sessionFinalizeRequestId: JsonRpcId | null = null;
+  private sessionFinalized = false;
   private activePromptRequestId: JsonRpcId | null = null;
   private sessionId: string | null = null;
   private sessionAnnounced = false;
@@ -245,6 +251,14 @@ export class AcpClient {
       return events;
     }
 
+    if (message.id === this.sessionFinalizeRequestId) {
+      this.sessionFinalizeRequestId = null;
+      this.sessionFinalized = true;
+      this.sessionResult = { ...this.sessionResult, ...recordField(message.result) };
+      this.announceSession(events);
+      return events;
+    }
+
     if (message.id === this.activePromptRequestId) {
       this.activePromptRequestId = null;
       events.push({ kind: 'turn_end', sessionId: this.sessionId ?? undefined });
@@ -257,6 +271,7 @@ export class AcpClient {
   private clearPendingForResponse(id: JsonRpcId): void {
     if (id === this.initializeRequestId) this.initializeRequestId = null;
     if (id === this.sessionRequestId) this.sessionRequestId = null;
+    if (id === this.sessionFinalizeRequestId) this.sessionFinalizeRequestId = null;
     if (id === this.activeSessionConfigRequestId) {
       this.activeSessionConfigRequestId = null;
       this.pendingSessionConfigRequests = [];
@@ -279,6 +294,21 @@ export class AcpClient {
     const failure = ctx && this.adapter.validateSession?.(ctx, this.sessionResult);
     if (failure) {
       events.push({ kind: 'error', message: failure, fatal: true });
+      return;
+    }
+    if (!this.sessionFinalized && ctx && this.adapter.buildSessionFinalizeRequest) {
+      if (this.sessionFinalizeRequestId === null) {
+        try {
+          const request = this.adapter.buildSessionFinalizeRequest(ctx, this.sessionId);
+          this.sessionFinalizeRequestId = this.sendRequest(request.method, request.params);
+        } catch (error) {
+          events.push({
+            kind: 'error',
+            message: error instanceof Error ? error.message : 'ACP session finalization failed',
+            fatal: true,
+          });
+        }
+      }
       return;
     }
     this.sessionAnnounced = true;

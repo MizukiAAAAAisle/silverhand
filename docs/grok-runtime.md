@@ -32,7 +32,12 @@ failure never falls back to a fresh or most-recent session.
 The materialized Silverhand standing prompt is passed as
 `_meta.systemPromptOverride` on both new and restore requests. Model and reasoning
 settings use ACP `session/set_config_option`, model first. Readiness waits for
-configuration completion and verifies the returned selected values. A model that
+configuration completion and verifies the returned selected values. Grok model
+switches can rebuild the system head, so the driver then reattaches to that exact
+resident session with the standing prompt and awaits its response before readiness.
+Resident reattachment flushes the selected model to persistence; it does not create
+a new session or restore workspace code. Model/effort are checked again after
+reattachment, and no later configuration request can overwrite the identity. A model that
 ignores a requested effort fails explicitly rather than silently downgrading.
 An unset model preserves the runtime's default; catalog suggestions are not an
 allowlist of all models available to the account. Fast mode is not offered.
@@ -80,6 +85,10 @@ changed by development tests.
 - `packages/host/tests/drivers/grok.test.ts`: handshake, auth error, exact restore,
   historical-update suppression, busy duplicate identity, async refusal, cancel,
   configuration confirmation, tool input and output-marker boundaries.
+- `packages/host/tests/drivers/grok-identity.real.test.ts`: opt-in installed Grok
+  with an isolated home and local controlled model endpoint. Actual model input
+  and response must contain a fresh identity marker after A → B, both on new and
+  exact cold restore. This is not external-provider inference acceptance.
 - `packages/shared/tests/profile-mcp-projection.test.ts` and host catalog invariant
   tests: catalog/checked projection/actual host converter agreement.
 - `packages/backend/tests/grok-runtime-migration.test.ts`: real step-96 upgrade,

@@ -17,6 +17,7 @@ async function setup(
     loadSession: true,
     mcpCapabilities: { http: true, sse: true },
   },
+  finalize = true,
 ) {
   const root = mkdtempSync(join(tmpdir(), 'silverhand-grok-'));
   roots.push(root);
@@ -44,14 +45,28 @@ async function setup(
     },
   });
   await Promise.resolve();
-  const response = (id: number, result: unknown) =>
+  const rawResponse = (id: number, result: unknown) =>
     driver.parseLine(JSON.stringify({ jsonrpc: '2.0', id, result }));
+  const response = (id: number, result: unknown) => {
+    const count = sent.length;
+    const events = rawResponse(id, result);
+    const request = sent.at(-1);
+    if (
+      finalize &&
+      count >= 2 &&
+      sent.length > count &&
+      ['session/resume', 'session/load'].includes(request.method)
+    ) {
+      return [...events, ...rawResponse(request.id, result)];
+    }
+    return events;
+  };
   const initialized = response(sent[0].id, {
     protocolVersion: 1,
     agentCapabilities: capabilities,
     authMethods: [{ id: 'grok.com' }],
   });
-  return { driver, ctx, sent, response, initialized };
+  return { driver, ctx, sent, response, rawResponse, initialized };
 }
 
 function update(driver: GrokDriver, update: unknown) {
@@ -232,6 +247,28 @@ describe('Grok ACP lifecycle', () => {
     });
     expect(JSON.stringify(output)).not.toContain('PRIVATE OUTPUT');
     expect(output).toContainEqual(expect.objectContaining({ kind: 'tool_output' }));
+  });
+
+  it('keeps input blocked until identity reattachment completes, and refuses reattachment errors', async () => {
+    const { driver, sent, response } = await setup({ model: 'grok-4.6' }, undefined, false);
+    response(sent[1].id, { sessionId: 's' });
+    expect(
+      response(sent[2].id, { configOptions: [{ id: 'model', currentValue: 'grok-4.6' }] }),
+    ).toEqual([]);
+    expect(sent[3]).toMatchObject({
+      method: 'session/resume',
+      params: {
+        sessionId: 's',
+        _meta: { systemPromptOverride: 'SILVERHAND IDENTITY', 'x.ai/restore_code': false },
+      },
+    });
+    expect(driver.encodeStdinMessage('too early')).toBeNull();
+    expect(
+      driver.parseLine(
+        JSON.stringify({ id: sent[3].id, error: { code: -32000, message: 'attach failed' } }),
+      ),
+    ).toEqual([{ kind: 'error', message: 'attach failed' }]);
+    expect(driver.readyToEncode()).toBe(false);
   });
 
   it('rejects unknown/old binaries before startup', () => {

@@ -14,6 +14,7 @@ class GrokAcpAdapter implements AcpRuntimeAdapter {
   readonly runtimeLabel = 'Grok';
   readonly permissionPolicy = { shouldAllow: () => true };
   readonly suppressPreSessionUpdates = true;
+  private attachMethod = 'session/resume';
 
   buildInitializeParams(): Record<string, unknown> {
     return {
@@ -34,10 +35,10 @@ class GrokAcpAdapter implements AcpRuntimeAdapter {
         throw new Error(`Grok does not advertise MCP ${server.type} support.`);
       }
     }
-    if (!ctx.cliSessionId) return 'session/new';
-    if (record(capabilities.sessionCapabilities).resume) return 'session/resume';
-    if (capabilities.loadSession === true) return 'session/load';
-    throw new Error('Grok does not support restoring this session.');
+    if (record(capabilities.sessionCapabilities).resume) this.attachMethod = 'session/resume';
+    else if (capabilities.loadSession === true) this.attachMethod = 'session/load';
+    else throw new Error('Grok does not support restoring this session.');
+    return ctx.cliSessionId ? this.attachMethod : 'session/new';
   }
 
   buildSessionParams(ctx: DriverSpawnContext): Record<string, unknown> {
@@ -50,6 +51,16 @@ class GrokAcpAdapter implements AcpRuntimeAdapter {
       // Reapply the current Silverhand identity on both new and resumed sessions.
       _meta: { systemPromptOverride: readFileSync(ctx.systemPromptPath, 'utf8') },
     };
+  }
+
+  buildSessionFinalizeRequest(ctx: DriverSpawnContext, sessionId: string) {
+    // Model changes may rebuild Grok's harness and replace its system head.
+    // Reattach after all configuration: resident attach flushes persisted model
+    // state, then reapplies the identity with no further model change. Await its
+    // response before exposing session_init or allowing the first input.
+    const params = this.buildSessionParams({ ...ctx, cliSessionId: sessionId });
+    params._meta = { ...(params._meta as Record<string, unknown>), 'x.ai/restore_code': false };
+    return { method: this.attachMethod, params };
   }
 
   validateSession(ctx: DriverSpawnContext, value: unknown): string | null {
