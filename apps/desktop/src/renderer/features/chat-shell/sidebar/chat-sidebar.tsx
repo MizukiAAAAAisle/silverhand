@@ -2,7 +2,6 @@ import { useMemo, type ReactNode } from "react";
 import { Archive, Bookmark, Plus, Search } from "lucide-react";
 import type { AgentDto } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
-import { Button } from "@/components/ui/button";
 import {
   useAgentAvatarObjectUrls,
   type AgentAvatarSource,
@@ -12,13 +11,7 @@ import { sortModeOf } from "@/lib/viewer-sort";
 import { railSortGroupOf, type RailSortGroup } from "@/features/workspaces/rail-sort-group";
 import { useListDragSort } from "../../../components/layout/list-drag-sort";
 import { SortModeMenu } from "../../../components/layout/SortModeMenu";
-import {
-  AGENT_SPACES_SECTION_GLYPH,
-  WORKSPACES_SECTION_GLYPH,
-  WorkspaceGroup,
-  type WorkspaceItem,
-  type WorkspaceSortConfig,
-} from "./workspaces-panel";
+import { WorkspaceList, type WorkspaceItem, type WorkspaceSortConfig } from "./workspaces-panel";
 import { FavoritesGroup } from "./favorites-panel";
 import { DirectMessagesGroup } from "./direct-messages-panel";
 import { useStarMembership } from "@/features/favorites/hooks";
@@ -32,7 +25,7 @@ import { Sidebar } from "../../../components/layout/sidebar";
 interface ChatSidebarProps {
   workspaces: WorkspaceItem[];
   /** Workspace agents indexed by id. Threaded through to
-   *  `WorkspaceGroup` so an agent space's row can resolve `owner_agent_id` and
+   *  `WorkspaceList` so an agent space's row can resolve `owner_agent_id` and
    *  render the agent's uploaded avatar (or runtime icon fallback) instead of
    *  the generic User glyph. Optional — when absent, those rows fall back
    *  to the User icon. #task:919 */
@@ -149,8 +142,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
   const orderedAgentSpaces = orderedGroups.agent_space;
   const orderedRegular = orderedGroups.regular;
 
-  // Each rail section owns its own sort menu (reads + writes that group's scope)
-  // and its own single-group drag config.
+  // Row sort menus retain the existing ownership-scoped ordering authority.
   const sortMenuFor = (group: RailGroup): JSX.Element => (
     <SortModeMenu
       mode={sortModeOf(viewerSort, group)}
@@ -209,54 +201,37 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
             watchWorkspaceIds={watchWorkspaceIds}
             onSelectConversation={props.onSelectConversation}
           />
-          <WorkspaceGroup
-            label="WORKSPACES"
-            icon={WORKSPACES_SECTION_GLYPH}
+          <WorkspaceList
             workspaces={orderedRegular}
             selected={selected}
             onSelectChannel={props.onSelectChannel}
             onCreateChannel={props.onCreateChannel}
             onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
-            headerAction={
-              <span className="flex items-center">
-                {sortMenuFor("regular")}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={props.onCreateWorkspace}
-                  aria-label="add WORKSPACES"
-                >
-                  <Plus className="size-3.5" />
-                </Button>
-              </span>
-            }
-            emptyHint={<>No workspaces</>}
             agentsById={props.agentsById}
             ownerAgentAvatarUrls={ownerAgentAvatarUrls}
+            sortMenu={sortMenuFor("regular")}
             sort={sortConfigFor("regular")}
-            persistId="workspaces"
           />
-          <DirectMessagesGroup
-            selectedChannelId={props.selectedChannelId}
-            onSelectDirectPair={props.onSelectDirectPair}
-            draftAgentId={props.directDraftAgentId}
-            onSelectDirectDraft={props.onSelectDirectDraft}
-          />
-          <WorkspaceGroup
-            label="AGENT SPACES"
-            icon={AGENT_SPACES_SECTION_GLYPH}
+          <WorkspaceList
             workspaces={orderedAgentSpaces}
             selected={selected}
             onSelectChannel={props.onSelectChannel}
             onCreateChannel={props.onCreateChannel}
             onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
-            emptyHint="No agents"
             agentsById={props.agentsById}
             ownerAgentAvatarUrls={ownerAgentAvatarUrls}
-            headerAction={sortMenuFor("agent_space")}
+            sortMenu={sortMenuFor("agent_space")}
             sort={sortConfigFor("agent_space")}
-            persistId="dm"
+          />
+          <SidebarNavigationButton onClick={props.onCreateWorkspace} active={false}>
+            <Plus className="size-4" />
+            <span>New workspace</span>
+          </SidebarNavigationButton>
+          <DirectMessagesGroup
+            selectedChannelId={props.selectedChannelId}
+            onSelectDirectPair={props.onSelectDirectPair}
+            draftAgentId={props.directDraftAgentId}
+            onSelectDirectDraft={props.onSelectDirectDraft}
           />
         </nav>
       }
