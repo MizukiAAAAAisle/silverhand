@@ -1,8 +1,6 @@
 import { RangeInput } from "@/components/ui/range-input";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
-  AlignLeft,
-  AlignRight,
   Check,
   Code2,
   LogOut,
@@ -321,45 +319,58 @@ function AppearancePane({
   );
 }
 
-const MESSAGE_LAYOUT_META: Record<MessageLayoutMode, { label: string; icon: typeof AlignLeft }> = {
-  "all-left": { label: "All left", icon: AlignLeft },
-  "user-right": { label: "Mine right", icon: AlignRight },
+const MESSAGE_LAYOUT_META: Record<MessageLayoutMode, string> = {
+  "all-left": "All left",
+  "user-right": "Mine right",
 };
 
 function MessageAlignmentControl(): JSX.Element {
   const mode = useMessageLayoutMode();
+
   return (
-    <div className="grid gap-2 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-text-primary">Message alignment</h3>
-          <p className="truncate text-xs text-text-muted">Only your own messages move</p>
-        </div>
-        <div role="radiogroup" aria-label="Message alignment" className="flex shrink-0 gap-2">
-          {MESSAGE_LAYOUT_MODES.map((id) => {
-            const meta = MESSAGE_LAYOUT_META[id];
-            const selected = id === mode;
-            const Icon = meta.icon;
-            return (
-              <button
-                key={id}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => setMessageLayoutMode(id)}
-                className={cn(
-                  "flex items-center justify-center gap-1.5 rounded-(--control-radius) border-(length:--control-border-width) px-3 py-1.5 text-xs font-medium transition-colors focus-outline",
-                  selected
-                    ? "border-(--border-row-selected) bg-(--bg-row-selected) text-text-on-selected"
-                    : "border-border-subtle bg-bg-base text-text-secondary hover:border-(--border-control-hover) hover:bg-(--bg-option-hover) hover:text-text-primary",
-                )}
-              >
-                <Icon className="size-3.5" />
-                {meta.label}
-              </button>
-            );
-          })}
-        </div>
+    <div className="grid gap-3 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
+      <h3 className="text-sm font-semibold text-text-primary">Message alignment</h3>
+      <div role="radiogroup" aria-label="Message alignment" className="grid grid-cols-2 gap-3">
+        {MESSAGE_LAYOUT_MODES.map((id) => {
+          const selected = id === mode;
+
+          return (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => setMessageLayoutMode(id)}
+              className={cn(
+                "flex min-w-0 flex-col gap-3 rounded-(--control-radius) border-(length:--control-border-width) p-3 text-xs font-medium transition-colors focus-outline",
+                selected
+                  ? "border-(--border-row-selected) bg-(--bg-row-selected) text-text-on-selected"
+                  : "border-border-subtle bg-bg-base text-text-secondary hover:border-(--border-control-hover) hover:bg-(--bg-option-hover) hover:text-text-primary",
+              )}
+            >
+              <div aria-hidden="true" className="flex w-full flex-col gap-2">
+                {[0, 1, 2].map((row) => (
+                  <div
+                    key={row}
+                    className={cn(
+                      "flex w-3/4 items-center gap-1.5",
+                      id === "user-right" && row === 1 && "self-end flex-row-reverse",
+                    )}
+                  >
+                    <span className="size-4 shrink-0 rounded-(--control-radius) bg-current opacity-40" />
+                    <span
+                      className={cn(
+                        "h-3 rounded-(--control-radius) bg-current opacity-20",
+                        row === 2 ? "w-2/3" : "flex-1",
+                      )}
+                    />
+                  </div>
+                ))}
+              </div>
+              <span className="self-center">{MESSAGE_LAYOUT_META[id]}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
