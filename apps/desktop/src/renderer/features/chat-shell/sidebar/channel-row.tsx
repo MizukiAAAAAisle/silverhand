@@ -1,4 +1,5 @@
 import { forwardRef, type ComponentProps, type HTMLAttributes } from "react";
+import { cn } from "@/lib/cn";
 import { ChannelIcon } from "@/components/ChannelIcon";
 import type { RowBadge } from "@/features/attention/attention-mode";
 import {
@@ -27,7 +28,9 @@ export const ChannelRow = forwardRef<HTMLDivElement, ChannelRowProps>(function C
       <div className="flex size-5.5 shrink-0 items-center justify-center">
         <ChannelIcon variant="sticker" visibility={visibility} />
       </div>
-      <span className="min-w-0 truncate">{channelTitle}</span>
+      <span className={cn("min-w-0 truncate", layout.selected && "font-medium")}>
+        {channelTitle}
+      </span>
       {muted ? (
         <span className="flex shrink-0 items-center">
           <MutedMarker />
