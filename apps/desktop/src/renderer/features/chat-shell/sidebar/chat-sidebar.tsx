@@ -115,7 +115,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
     starred: selectedStar,
   };
 
-  const { order, reorder, pending } = useSidebarSort();
+  const { order, reorder, pending, ready } = useSidebarSort();
   const branches = sidebarBranches(props.workspaces, order);
   const workspaceContext = {
     selected,
@@ -169,7 +169,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                 <SortableSidebarBranch
                   key={branch.id}
                   id={branch.id}
-                  disabled={pending || branch.kind === "hidden"}
+                  disabled={!ready || pending || branch.kind === "hidden"}
                 >
                   {branch.kind === "starred" ? (
                     <FavoritesGroup

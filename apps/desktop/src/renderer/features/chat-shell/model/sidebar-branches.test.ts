@@ -9,6 +9,22 @@ const workspaces: WorkspaceItem[] = [
 ];
 
 describe("sidebar branch projection", () => {
+  it("falls back to fixed sections, workspaces, then agent spaces without a sort response", () => {
+    const input = [
+      ...workspaces,
+      { id: "z", name: "Z", owner_agent_id: null, created_at: 0 },
+      { id: "a", name: "A", owner_agent_id: null, created_at: 0 },
+      { id: "archived", name: "Old", owner_agent_id: null, created_at: -1, archived: true },
+    ];
+    expect(sidebarBranches(input, undefined).map((branch) => branch.id)).toEqual([
+      ...SIDEBAR_FIXED_BRANCH_IDS,
+      "workspace:a",
+      "workspace:z",
+      "workspace:team",
+      "workspace:agent-home",
+    ]);
+  });
+
   it("consumes the server order without regrouping or sorting", () => {
     const order = [
       "workspace:agent-home",

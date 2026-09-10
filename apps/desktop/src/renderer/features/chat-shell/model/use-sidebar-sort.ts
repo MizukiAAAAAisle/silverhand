@@ -93,8 +93,8 @@ export function useSidebarSort() {
   return {
     order:
       (pendingOrder?.viewerId === viewerId ? pendingOrder?.ids : null) ??
-      query.data?.viewer_sort.entries.map((entry) => entry.entity_id) ??
-      [],
+      query.data?.viewer_sort.entries.map((entry) => entry.entity_id),
+    ready: query.data !== undefined,
     reorder,
     pending: pendingOrder !== null && pendingOrder.viewerId === viewerId,
   };

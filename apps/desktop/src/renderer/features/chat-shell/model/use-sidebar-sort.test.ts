@@ -66,6 +66,17 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 describe("sidebar sort persistence", () => {
+  it("leaves ordering to the fallback when the read is unavailable and does not submit an incomplete set", async () => {
+    const { cleanup } = setup();
+    h.data = undefined;
+    const model = useSidebarSort();
+    expect(model.order).toBeUndefined();
+    expect(model.ready).toBe(false);
+    await model.reorder(ids);
+    expect(h.request).not.toHaveBeenCalled();
+    cleanup();
+  });
+
   it("sends the complete mixed order including empty fixed sections", async () => {
     const { model, invalidate, cleanup } = setup();
     h.request.mockResolvedValue(response);
