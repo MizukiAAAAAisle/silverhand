@@ -46,6 +46,7 @@ export const SortGroupSchema = z.enum([
   'regular',
   'channels', // one workspace's conversations (#task:1888) — star moved them out
   'favorites',
+  'sidebar',
 ]);
 export type SortGroup = z.infer<typeof SortGroupSchema>;
 
@@ -65,10 +66,9 @@ export type SortGroup = z.infer<typeof SortGroupSchema>;
 export const SortListKeySchema = z
   .string()
   .refine(
-    v => v === 'workspaces' || v === 'favorites' || v.startsWith('channels:'),
+    (v) => v === 'sidebar' || v === 'workspaces' || v === 'favorites' || v.startsWith('channels:'),
     {
-      message:
-        "list_key must be 'workspaces', 'favorites', or 'channels:<ws_id>'",
+      message: "list_key must be 'sidebar', 'workspaces', 'favorites', or 'channels:<ws_id>'",
     },
   );
 
@@ -150,3 +150,33 @@ export const SortTouchInputSchema = z.object({
   entity_id: z.string(),
 });
 export type SortTouchInput = z.infer<typeof SortTouchInputSchema>;
+
+/** Stable top-level identities; labels, counts and visibility do not change them. */
+export const SIDEBAR_SORT_LIST_KEY = 'sidebar' as const;
+export const SIDEBAR_SORT_GROUP = 'sidebar' as const;
+export const SIDEBAR_FIXED_BRANCH_IDS = ['section:starred', 'section:direct_messages'] as const;
+export function sidebarWorkspaceBranchId(workspaceId: string): string {
+  return `workspace:${workspaceId}`;
+}
+
+/** Server-ordered complete branch set, including hidden/empty fixed branches.
+ * Default: Starred, Direct messages, regular workspaces, agent spaces; workspace
+ * ties use created_at then id. Ranked branches precede new/unranked branches.
+ * Consume entries in response order, never through a recent-mode sorter.
+ * PUT /api/sort/order submits ALL entity_ids with list_key/group = sidebar.
+ * 409 means refetch this read and reconcile the drag against its complete set.
+ * Sidebar touch/mode are rejected. Legacy workspaces writes are retired.
+ */
+export const SidebarSortResponseSchema = z.object({
+  viewer_sort: ViewerSortStateDtoSchema.extend({
+    list_key: z.literal(SIDEBAR_SORT_LIST_KEY),
+    modes: z.object({ '': z.literal('manual') }).strict(),
+  }),
+});
+export type SidebarSortResponse = z.infer<typeof SidebarSortResponseSchema>;
+
+/** Viewer-scoped WS invalidation after a committed sidebar reorder.
+ * Payload carries no order or entity IDs; refetch the authorized sidebar read.
+ * Also refetch after viewer reconnect and workspace visibility changes.
+ */
+export const SIDEBAR_SORT_CHANGED_EVENT = 'sidebar_sort_changed' as const;
