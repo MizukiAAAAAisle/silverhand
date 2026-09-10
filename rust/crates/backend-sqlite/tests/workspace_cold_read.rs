@@ -4,10 +4,8 @@
 use std::error::Error;
 
 use silverhand_backend_core::{
-    foundation::identity::UserId,
-    foundation::persistence::PersistenceFailure,
+    foundation::identity::UserId, foundation::persistence::PersistenceFailure,
     identity_access::workspace_cold_read::WorkspaceColdReadUnitOfWork,
-    viewer_read_model::viewer_workspace_sort::{SortMode, WorkspaceSortScope},
 };
 use silverhand_backend_sqlite::identity_access::workspace_cold_read::{
     SqliteWorkspaceColdRead, WorkspaceColdReadError,
@@ -95,25 +93,8 @@ async fn whole_envelope_is_membership_scoped_ordered_and_carries_both_halves() {
         ["conv-onboarding", "conv-dm"]
     );
 
-    // Sort modes are decoded against their closed set, keyed by hard group.
-    assert_eq!(
-        read.viewer_sort.modes.get(&WorkspaceSortScope::Regular),
-        Some(&SortMode::Recent)
-    );
-    assert_eq!(
-        read.viewer_sort.modes.get(&WorkspaceSortScope::AgentSpace),
-        Some(&SortMode::Manual)
-    );
-
-    // Only entries for the visible, non-archived workspaces survive.
-    let mut entries: Vec<_> = read
-        .viewer_sort
-        .entries
-        .iter()
-        .map(|entry| entry.entity_id.as_str())
-        .collect();
-    entries.sort_unstable();
-    assert_eq!(entries, ["ws-agent", "ws-regular"]);
+    assert!(read.viewer_sort.modes.is_empty());
+    assert!(read.viewer_sort.entries.is_empty());
 }
 
 /// Opens a fresh schema database with check constraints disabled, so a corruption
@@ -168,7 +149,7 @@ async fn an_empty_committed_workspace_id_is_corruption_not_an_empty_wire_id() {
 }
 
 #[tokio::test]
-async fn an_empty_sort_entity_id_is_parsed_before_the_visible_set_and_is_corruption() {
+async fn retired_sort_entity_ids_are_not_read() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("corrupt-entity.sqlite");
     let mut db = corrupt_schema(&path).await;
@@ -188,14 +169,18 @@ async fn an_empty_sort_entity_id_is_parsed_before_the_visible_set_and_is_corrupt
     }
     db.close().await.unwrap();
 
-    assert!(matches!(
-        corruption_source(&cold_read_failure(&path).await),
-        WorkspaceColdReadError::MalformedIdentity { field } if *field == "user_sort_entry.entity_id"
-    ));
+    let read = SqliteWorkspaceColdRead::open(&path)
+        .await
+        .unwrap()
+        .load_workspace_cold_read(&UserId::parse("user-1").unwrap())
+        .await
+        .unwrap();
+    assert!(read.viewer_sort.modes.is_empty());
+    assert!(read.viewer_sort.entries.is_empty());
 }
 
 #[tokio::test]
-async fn a_list_wide_scope_on_the_workspace_rail_is_corruption() {
+async fn retired_sort_scopes_are_not_read() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("corrupt-scope.sqlite");
     let mut db = corrupt_schema(&path).await;
@@ -215,14 +200,18 @@ async fn a_list_wide_scope_on_the_workspace_rail_is_corruption() {
     }
     db.close().await.unwrap();
 
-    assert!(matches!(
-        corruption_source(&cold_read_failure(&path).await),
-        WorkspaceColdReadError::UnknownSortScope(scope) if scope.is_empty()
-    ));
+    let read = SqliteWorkspaceColdRead::open(&path)
+        .await
+        .unwrap()
+        .load_workspace_cold_read(&UserId::parse("user-1").unwrap())
+        .await
+        .unwrap();
+    assert!(read.viewer_sort.modes.is_empty());
+    assert!(read.viewer_sort.entries.is_empty());
 }
 
 #[tokio::test]
-async fn an_out_of_set_sort_mode_is_corruption_not_the_recent_default() {
+async fn retired_sort_modes_are_not_read() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("corrupt-mode.sqlite");
     let mut db = corrupt_schema(&path).await;
@@ -240,8 +229,12 @@ async fn an_out_of_set_sort_mode_is_corruption_not_the_recent_default() {
     }
     db.close().await.unwrap();
 
-    assert!(matches!(
-        corruption_source(&cold_read_failure(&path).await),
-        WorkspaceColdReadError::UnknownSortMode(mode) if mode == "chronological"
-    ));
+    let read = SqliteWorkspaceColdRead::open(&path)
+        .await
+        .unwrap()
+        .load_workspace_cold_read(&UserId::parse("user-1").unwrap())
+        .await
+        .unwrap();
+    assert!(read.viewer_sort.modes.is_empty());
+    assert!(read.viewer_sort.entries.is_empty());
 }

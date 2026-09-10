@@ -15,14 +15,14 @@ use axum::{
     extract::{Extension, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{post, put},
+    routing::{get, post, put},
 };
 use serde::Serialize;
 use silverhand_backend_core::{
     foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
     viewer_read_model::viewer_sort_state::{
-        SortGroup, SortListKey, SortMode, SortMutation, SortMutationRefusal,
+        SortGroup, SortListKey, SortMode, SortMutation, SortMutationRefusal, ViewerSidebarRead,
         ViewerSortMutationWriter,
     },
 };
@@ -39,6 +39,7 @@ pub const SORT_ORDER_PATH: &str = "/api/sort/order";
 /// The one dependency the three mutation routes share: the transactional writer.
 pub struct SortMutationState<W> {
     pub writer: W,
+    pub hub: crate::foundation::scope_event_transport::ScopeEventHub,
 }
 
 struct Shared<W>(Arc<SortMutationState<W>>);
@@ -50,9 +51,10 @@ impl<W> Clone for Shared<W> {
 
 pub fn sort_mutation_router<W>(state: SortMutationState<W>) -> Router
 where
-    W: ViewerSortMutationWriter + Send + Sync + 'static,
+    W: ViewerSortMutationWriter + ViewerSidebarRead + Send + Sync + 'static,
 {
     Router::new()
+        .route("/api/sort/sidebar", get(sidebar::<W>))
         .route(SORT_TOUCH_PATH, post(touch::<W>))
         .route(SORT_MODE_PATH, put(set_mode::<W>))
         .route(SORT_ORDER_PATH, put(reorder::<W>))
@@ -79,7 +81,7 @@ async fn touch<W>(
     body: Result<ValidatedJson<TouchBody>, ValidatedJsonRejection>,
 ) -> Response
 where
-    W: ViewerSortMutationWriter + Send + Sync + 'static,
+    W: ViewerSortMutationWriter + ViewerSidebarRead + Send + Sync + 'static,
 {
     let Some(Extension(viewer)) = principal else {
         return registration_required();
@@ -135,7 +137,7 @@ async fn set_mode<W>(
     body: Result<ValidatedJson<SetModeBody>, ValidatedJsonRejection>,
 ) -> Response
 where
-    W: ViewerSortMutationWriter + Send + Sync + 'static,
+    W: ViewerSortMutationWriter + ViewerSidebarRead + Send + Sync + 'static,
 {
     let Some(Extension(viewer)) = principal else {
         return registration_required();
@@ -186,7 +188,7 @@ async fn reorder<W>(
     body: Result<ValidatedJson<ReorderBody>, ValidatedJsonRejection>,
 ) -> Response
 where
-    W: ViewerSortMutationWriter + Send + Sync + 'static,
+    W: ViewerSortMutationWriter + ViewerSidebarRead + Send + Sync + 'static,
 {
     let Some(Extension(viewer)) = principal else {
         return registration_required();
@@ -239,7 +241,7 @@ async fn apply<W>(
     echo: Echo,
 ) -> Response
 where
-    W: ViewerSortMutationWriter + Send + Sync + 'static,
+    W: ViewerSortMutationWriter + ViewerSidebarRead + Send + Sync + 'static,
 {
     match state
         .0
@@ -247,16 +249,28 @@ where
         .apply_sort_mutation(viewer, list_key, &mutation)
         .await
     {
-        Ok(Ok(projection)) => match echo {
-            Echo::Touch => (StatusCode::OK, Json(OkBody { ok: true })).into_response(),
-            Echo::State => (
-                StatusCode::OK,
-                Json(ViewerSortResponse {
-                    viewer_sort: ViewerSortStateDto::from(projection),
-                }),
-            )
-                .into_response(),
-        },
+        Ok(Ok(projection)) => {
+            if matches!(list_key, SortListKey::Sidebar) {
+                use crate::foundation::scope_event_wire::ProductEvent;
+                use silverhand_backend_core::foundation::scope_event::EventScope;
+                if let Err(error) = state.0.hub.publish(
+                    EventScope::Viewer(viewer.clone()),
+                    ProductEvent::SidebarSortChanged {},
+                ) {
+                    tracing::warn!(%error, "sidebar sort invalidation failed after commit");
+                }
+            }
+            match echo {
+                Echo::Touch => (StatusCode::OK, Json(OkBody { ok: true })).into_response(),
+                Echo::State => (
+                    StatusCode::OK,
+                    Json(ViewerSortResponse {
+                        viewer_sort: ViewerSortStateDto::from(projection),
+                    }),
+                )
+                    .into_response(),
+            }
+        }
         Ok(Err(refusal)) => refusal_response(refusal),
         Err(cause) => internal(cause, "sort mutation write failed"),
     }
@@ -264,6 +278,17 @@ where
 
 fn refusal_response(refusal: SortMutationRefusal) -> Response {
     match refusal {
+        SortMutationRefusal::RetiredList => error(
+            StatusCode::GONE,
+            "workspace sorting is retired; use sidebar",
+        ),
+        SortMutationRefusal::ReorderOnly => {
+            error(StatusCode::BAD_REQUEST, "sidebar only supports reorder")
+        }
+        SortMutationRefusal::SidebarSetChanged => error(
+            StatusCode::CONFLICT,
+            "sidebar set changed; refetch /api/sort/sidebar",
+        ),
         SortMutationRefusal::ListNotFound => error(StatusCode::NOT_FOUND, "list not found"),
         SortMutationRefusal::Forbidden => error(StatusCode::FORBIDDEN, "forbidden"),
         SortMutationRefusal::FavoritesNotTouchable => error(
@@ -366,4 +391,23 @@ fn internal(cause: PersistenceFailure, log: &'static str) -> Response {
         "{log}"
     );
     (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+}
+
+async fn sidebar<W>(
+    State(state): State<Shared<W>>,
+    principal: Option<Extension<UserId>>,
+) -> Response
+where
+    W: ViewerSortMutationWriter + ViewerSidebarRead + Send + Sync + 'static,
+{
+    let Some(Extension(viewer)) = principal else {
+        return registration_required();
+    };
+    match state.0.writer.sidebar_sort(&viewer).await {
+        Ok(projection) => Json(ViewerSortResponse {
+            viewer_sort: projection.into(),
+        })
+        .into_response(),
+        Err(cause) => internal(cause, "sidebar sort read failed"),
+    }
 }

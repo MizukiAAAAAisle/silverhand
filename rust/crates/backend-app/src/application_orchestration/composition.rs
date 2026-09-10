@@ -1150,6 +1150,7 @@ pub(super) async fn compose_after_audit(
             }))
             .merge(sort_mutation_router(SortMutationState {
                 writer: sort_mutation_writer,
+                hub: hub.clone(),
             }))
             .merge(favorites_router(FavoritesState {
                 reads: sort_favorites,

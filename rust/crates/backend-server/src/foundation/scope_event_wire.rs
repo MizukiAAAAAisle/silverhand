@@ -10,6 +10,7 @@ use serde_json::Value;
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
 pub(crate) enum ProductEvent {
+    SidebarSortChanged {},
     DirectPairsChanged {
         conversation_id: String,
     },

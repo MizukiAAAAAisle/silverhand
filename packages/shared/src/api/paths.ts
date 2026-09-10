@@ -269,6 +269,7 @@ export const apiPaths = {
    *  Read state is carried inline on the workspace / channel list responses;
    *  these only WRITE preferences. All viewer-scoped. */
   sortMode: '/api/sort/mode',
+  /** Complete server-ordered sidebar; mutations use sortOrder with sidebar group. */
   sidebarSort: '/api/sort/sidebar',
   sortOrder: '/api/sort/order',
   sortTouch: '/api/sort/touch',

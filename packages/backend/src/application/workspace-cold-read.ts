@@ -5,11 +5,7 @@
 // cross-language parity oracle (`tests/workspace-cold-read-parity.test.ts`) call
 // the SAME composition: there is no second place the envelope can be assembled,
 // so the two cannot drift.
-import type {
-  ViewerWorkspaceDto,
-  Workspace,
-  WorkspaceColdReadResponse,
-} from '@silverhand/shared';
+import type { ViewerWorkspaceDto, Workspace, WorkspaceColdReadResponse } from '@silverhand/shared';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { SortRepo } from '../repos/sort-repo.js';
 
@@ -73,15 +69,10 @@ export function buildWorkspaceColdReadEnvelope(
   deps: WorkspaceColdReadDeps,
   viewerUserId: string,
 ): WorkspaceColdReadResponse {
-  const visible = deps.workspaces
-    .list()
-    .filter(workspace => deps.canViewWorkspace(workspace.id));
+  const visible = deps.workspaces.list().filter((workspace) => deps.canViewWorkspace(workspace.id));
   return {
     workspaces: visible.map(toViewerWorkspace),
-    viewer_sort: deps.sort.getState(
-      viewerUserId,
-      WORKSPACE_SORT_LIST_KEY,
-      visible.filter(w => w.archived_at == null).map(w => w.id),
-    ),
+    // Retained required response field; old ordering is no longer read.
+    viewer_sort: { list_key: WORKSPACE_SORT_LIST_KEY, modes: {}, entries: [] },
   };
 }

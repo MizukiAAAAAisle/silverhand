@@ -4257,6 +4257,16 @@ export const migrations: Migration[] = [
       BEGIN SELECT RAISE(ABORT, 'invalid agents runtime transition lock'); END;
     `,
   },
+  {
+    version: 98,
+    name: 'retire_workspace_sort_for_sidebar',
+    // Only the superseded top-level ordering is discarded. Channel favorites,
+    // child ordering and all other preferences retain their existing authority.
+    up: `
+      DELETE FROM user_list_sort_mode WHERE list_key = 'workspaces';
+      DELETE FROM user_sort_entry WHERE list_key = 'workspaces';
+    `,
+  },
 ];
 
 /**

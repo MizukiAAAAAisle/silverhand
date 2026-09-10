@@ -39,10 +39,7 @@
   ],
   "viewer_sort": {
     "list_key": "workspaces",
-    "modes": { "agent_space": "manual", "regular": "recent" },
-    "entries": [
-      { "entity_id": "ws-regular", "rank": 1, "last_accessed_at": 50, "starred_at": null },
-      { "entity_id": "ws-agent", "rank": 2, "last_accessed_at": null, "starred_at": 70 }
-    ]
+    "modes": {},
+    "entries": []
   }
 }

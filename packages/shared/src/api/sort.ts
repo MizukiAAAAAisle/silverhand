@@ -1,11 +1,7 @@
-// Per-user (viewer-scoped) list sort state — workspace rail + channel sidebar
-// ordering (#task:1146 / #task:1147). Bounded context: sort. Re-exported via
-// api/index.ts → @silverhand/shared.
-//
-// This is personal VIEW STATE, not an aggregate field. The backend persists
-// preferences and exposes them; the renderer composes the final order with a
-// pure helper (live hard-grouping → within-group by mode). See
-// docs/list-sort-v1.md.
+// Viewer-scoped sorting. Sidebar is a server-ordered, manual-only flat list;
+// channels and favorites retain their existing recent/manual behavior.
+// Legacy workspaces vocabulary is accepted for an explicit retirement response,
+// not as an active sorting surface. See docs/sidebar-sort.md.
 import { z } from 'zod';
 
 /**
@@ -20,7 +16,7 @@ export type SortMode = z.infer<typeof SortModeSchema>;
  * sort time, never stored on the entity. Exactly ONE list has star at all
  * (#task:1899) and there it is EXCLUSIVE (#task:1888): the CONVERSATION list.
  * Star never creates a hard group anywhere.
- *   workspace rail : 'agent_space' | 'regular' — by OWNERSHIP only
+ *   retired workspace rail : 'agent_space' | 'regular' — by OWNERSHIP only
  *     (`workspaces.owner_agent_id`). A container is not
  *     starrable, so the rail's order is mode + rank and nothing else.
  *   channel sidebar: 'channels' — a single group holding the workspace's
@@ -35,6 +31,7 @@ export type SortMode = z.infer<typeof SortModeSchema>;
  * (`starred_at`), never as a shared aggregate field.
  */
 export const SortGroupSchema = z.enum([
+  // Legacy DTO vocabulary for the retired workspace rail.
   // #task:2045 Delta 4: this member was spelled `dm` until 2026-08. It names the
   // rail's AGENT SPACE section (`workspaces.owner_agent_id IS NOT NULL`), which
   // is a different domain concept from a DirectPair DM — the old spelling was the
@@ -52,7 +49,8 @@ export type SortGroup = z.infer<typeof SortGroupSchema>;
 
 /**
  * `list_key` namespaces a list:
- *   'workspaces'        — the workspace rail (one per viewer)
+ *   'sidebar'           — server-ordered top-level branches, manual-only
+ *   'workspaces'        — retired: mutations return 410; inline read is empty
  *   'channels:<ws_id>'  — one workspace's conversation list
  *   'favorites'         — the global Favorites list's ordering state (#task:1252 C):
  *                         rank + the list-wide mode only, keyed by

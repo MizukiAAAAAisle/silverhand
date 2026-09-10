@@ -1,8 +1,8 @@
 //! SQLite cold-read adapter for the authenticated `GET /api/workspaces` envelope.
 //!
 //! The whole envelope is one deferred-read snapshot: the workspace list and the
-//! viewer's sort state are read on the SAME transaction, so the sortable set the
-//! sort read is scoped to cannot drift from the workspace set it was derived from.
+//! retired sort DTO share the envelope. The sort DTO is always empty; live
+//! top-level ordering belongs to GET /api/sort/sidebar.
 //! The two bounded-context ports ([`WorkspaceFaceReadPort`],
 //! [`ViewerWorkspaceSortReadPort`]) are implemented on a private snapshot that
 //! borrows that transaction; the [`WorkspaceColdReadUnitOfWork`] impl opens it,
@@ -10,13 +10,13 @@
 //!
 //! Every committed row is decoded through the domain's typed identities and
 //! closed enums. A stored value that cannot be a legal domain value — an empty or
-//! malformed identity, a sort mode or workspace scope outside its closed set, a
+//! malformed identity, a
 //! non-null column holding the wrong type, unreadable JSON — is corruption of a
 //! committed row and surfaces as a `PersistenceFailure` (a safe `500`), never a
 //! product `4xx` and never coerced to a default. `name` is the one non-identity
 //! string and is carried verbatim: the schema places no non-empty invariant on it.
 
-use std::{collections::HashSet, path::Path, time::Duration};
+use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
@@ -25,10 +25,7 @@ use silverhand_backend_core::{
         WorkspaceColdRead, WorkspaceColdReadUnitOfWork, compose_workspace_cold_read,
     },
     identity_access::workspace_face::{WorkspaceFace, WorkspaceFaceReadPort},
-    viewer_read_model::viewer_workspace_sort::{
-        SortMode, ViewerSortEntry, ViewerSortState, ViewerWorkspaceSortReadPort,
-        WORKSPACE_SORT_LIST_KEY, WorkspaceSortScope,
-    },
+    viewer_read_model::viewer_workspace_sort::{ViewerSortState, ViewerWorkspaceSortReadPort},
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,
@@ -92,11 +89,6 @@ SELECT \
       ) \
  ORDER BY CASE WHEN w.owner_agent_id IS NULL THEN 0 ELSE 1 END, \
           w.updated_at DESC";
-
-const SELECT_SORT_MODES: &str =
-    "SELECT scope, mode FROM user_list_sort_mode WHERE user_id = ? AND list_key = ?";
-const SELECT_SORT_ENTRIES: &str = "SELECT entity_id, rank, last_accessed_at, starred_at \
-     FROM user_sort_entry WHERE user_id = ? AND list_key = ?";
 
 #[derive(Clone)]
 pub struct SqliteWorkspaceColdRead {
@@ -187,9 +179,13 @@ impl ViewerWorkspaceSortReadPort for ColdReadSnapshot<'_> {
         viewer: &UserId,
         sortable: &[WorkspaceId],
     ) -> Result<ViewerSortState, PersistenceFailure> {
-        self.read_sort_state(viewer, sortable)
-            .await
-            .map_err(PersistenceFailure::from_source)
+        // Keep the published DTO field for existing readers, but never consult
+        // retired workspace ordering. Sidebar has its own authoritative read.
+        let _ = (viewer, sortable);
+        Ok(ViewerSortState {
+            modes: Default::default(),
+            entries: Vec::new(),
+        })
     }
 }
 
@@ -207,55 +203,6 @@ impl ColdReadSnapshot<'_> {
             faces.push(decode_face(row)?);
         }
         Ok(faces)
-    }
-
-    async fn read_sort_state(
-        &mut self,
-        viewer: &UserId,
-        sortable: &[WorkspaceId],
-    ) -> Result<ViewerSortState, WorkspaceColdReadError> {
-        let mode_rows = sqlx::query(SELECT_SORT_MODES)
-            .bind(viewer.as_str())
-            .bind(WORKSPACE_SORT_LIST_KEY)
-            .fetch_all(&mut *self.tx)
-            .await?;
-        let mut modes = std::collections::BTreeMap::new();
-        for row in &mode_rows {
-            let scope_raw: String = row.try_get("scope")?;
-            let mode_raw: String = row.try_get("mode")?;
-            let scope = WorkspaceSortScope::parse(&scope_raw)
-                .ok_or_else(|| WorkspaceColdReadError::UnknownSortScope(scope_raw))?;
-            let mode = SortMode::parse(&mode_raw)
-                .ok_or_else(|| WorkspaceColdReadError::UnknownSortMode(mode_raw))?;
-            modes.insert(scope, mode);
-        }
-
-        // The visible set an entry may survive against. Membership is tested only
-        // AFTER the stored entity id is typed-parsed, so a malformed stored id is
-        // corruption rather than a row silently dropped by the "not visible" filter.
-        let visible: HashSet<&str> = sortable.iter().map(WorkspaceId::as_str).collect();
-        let entry_rows = sqlx::query(SELECT_SORT_ENTRIES)
-            .bind(viewer.as_str())
-            .bind(WORKSPACE_SORT_LIST_KEY)
-            .fetch_all(&mut *self.tx)
-            .await?;
-        let mut entries = Vec::new();
-        for row in &entry_rows {
-            let entity_id = parse_identity::<WorkspaceId>(
-                row.try_get("entity_id")?,
-                "user_sort_entry.entity_id",
-            )?;
-            if !visible.contains(entity_id.as_str()) {
-                continue;
-            }
-            entries.push(ViewerSortEntry {
-                entity_id,
-                rank: row.try_get("rank")?,
-                last_accessed_at: row.try_get("last_accessed_at")?,
-                starred_at: row.try_get("starred_at")?,
-            });
-        }
-        Ok(ViewerSortState { modes, entries })
     }
 }
 
@@ -401,18 +348,12 @@ mod snapshot_isolation_tests {
             .unwrap();
         snapshot.tx.commit().await.unwrap();
 
-        assert_eq!(
-            sort.modes.get(&WorkspaceSortScope::Regular),
-            Some(&SortMode::Recent),
-            "the sort half read a value the workspace half's snapshot never saw — a torn read across the two contexts",
-        );
+        assert!(sort.modes.is_empty());
+        assert!(sort.entries.is_empty());
 
-        // The write is real: a FRESH snapshot after the commit does observe 'manual',
-        // so the invisibility above is snapshot isolation, not a lost update.
+        // Even a fresh read ignores legacy sorting, including newly written rows.
         let after = adapter.load_workspace_cold_read(&viewer).await.unwrap();
-        assert_eq!(
-            after.viewer_sort.modes.get(&WorkspaceSortScope::Regular),
-            Some(&SortMode::Manual),
-        );
+        assert!(after.viewer_sort.modes.is_empty());
+        assert!(after.viewer_sort.entries.is_empty());
     }
 }

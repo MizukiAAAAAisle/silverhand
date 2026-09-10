@@ -31,6 +31,7 @@ use std::future::Future;
 /// to `list not found`, never a stricter admission `422`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SortListKey {
+    Sidebar,
     Workspaces,
     Favorites,
     Channels(String),
@@ -46,6 +47,7 @@ impl SortListKey {
     /// empty suffix (that becomes a list `404`, not an admission failure).
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
+            "sidebar" => Some(Self::Sidebar),
             "workspaces" => Some(Self::Workspaces),
             "favorites" => Some(Self::Favorites),
             other => other
@@ -57,6 +59,7 @@ impl SortListKey {
     /// The exact stored/echoed `list_key` string.
     pub fn as_stored(&self) -> String {
         match self {
+            Self::Sidebar => "sidebar".to_owned(),
             Self::Workspaces => "workspaces".to_owned(),
             Self::Favorites => "favorites".to_owned(),
             Self::Channels(workspace) => format!("{CHANNELS_PREFIX}{workspace}"),
@@ -96,6 +99,7 @@ impl SortMode {
 /// members are LEGAL for a given list is decided by [`SortListKey::legal_groups`].
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SortGroup {
+    Sidebar,
     AgentSpace,
     Regular,
     Channels,
@@ -105,6 +109,7 @@ pub enum SortGroup {
 impl SortGroup {
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
+            "sidebar" => Some(Self::Sidebar),
             "agent_space" => Some(Self::AgentSpace),
             "regular" => Some(Self::Regular),
             "channels" => Some(Self::Channels),
@@ -115,6 +120,7 @@ impl SortGroup {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Sidebar => "sidebar",
             Self::AgentSpace => "agent_space",
             Self::Regular => "regular",
             Self::Channels => "channels",
@@ -131,6 +137,7 @@ impl SortListKey {
     ///   - `channels:<ws>`   → `channels`
     pub fn legal_groups(&self) -> &'static [SortGroup] {
         match self {
+            Self::Sidebar => &[SortGroup::Sidebar],
             Self::Workspaces => &[SortGroup::AgentSpace, SortGroup::Regular],
             Self::Favorites => &[SortGroup::Favorites],
             Self::Channels(_) => &[SortGroup::Channels],
@@ -149,7 +156,7 @@ impl SortListKey {
                 // sentinel keeps the function total.
                 _ => "",
             },
-            Self::Favorites | Self::Channels(_) => "",
+            Self::Sidebar | Self::Favorites | Self::Channels(_) => "",
         }
     }
 }
@@ -280,6 +287,9 @@ pub enum SortMutation {
 /// group mismatch, reorder id-not-in-group / not-exact-members).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SortMutationRefusal {
+    RetiredList,
+    ReorderOnly,
+    SidebarSetChanged,
     /// The list's workspace does not exist (channels list) — 404 `list not found`
     /// (touch/mode/order) or 404 `not found` (star).
     ListNotFound,
@@ -292,17 +302,27 @@ pub enum SortMutationRefusal {
     UnknownEntity,
     /// `group` is required-and-valid for the workspace rail but was absent/invalid
     /// — 400 `group is required and must be valid for this list`, echoing the group.
-    GroupRequiredForList { group: Option<SortGroup> },
+    GroupRequiredForList {
+        group: Option<SortGroup>,
+    },
     /// `group` was supplied for a list-wide list (favorites/channels) — 400 `group
     /// is not supported for this list (list-wide mode)`, echoing the group.
-    GroupNotSupportedForList { group: Option<SortGroup> },
+    GroupNotSupportedForList {
+        group: Option<SortGroup>,
+    },
     /// A reorder named a group not valid for the list — 400 `group is not valid for
     /// this list`, echoing the group.
-    GroupNotValidForList { group: Option<SortGroup> },
+    GroupNotValidForList {
+        group: Option<SortGroup>,
+    },
     /// A reorder id is not a live member of the declared group — 400, carrying it.
-    IdNotInGroup { id: String },
+    IdNotInGroup {
+        id: String,
+    },
     /// The reorder ids are not exactly the group's live members — 400, count.
-    NotExactMembers { expected_count: usize },
+    NotExactMembers {
+        expected_count: usize,
+    },
 }
 
 /// The one transactional sort-mutation authority: a single connection-bound writer
@@ -471,4 +491,12 @@ mod tests {
     fn favorite_key_prefixes_the_conversation_id() {
         assert_eq!(favorite_key("conv-1"), "conversation:conv-1");
     }
+}
+
+/// Read the complete, authorized, server-ordered sidebar in one snapshot.
+pub trait ViewerSidebarRead {
+    fn sidebar_sort(
+        &self,
+        viewer: &UserId,
+    ) -> impl Future<Output = Result<ViewerSortStateProjection, PersistenceFailure>> + Send;
 }

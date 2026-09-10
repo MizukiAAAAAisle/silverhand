@@ -148,30 +148,14 @@ async fn resolve_list_groups_tx(
     list_key: &SortListKey,
 ) -> Result<Result<ResolvedListGroups, ListGroupsRefusal>, PersistenceFailure> {
     match list_key {
-        SortListKey::Workspaces => {
-            let rows = sqlx::query(SELECT_SORTABLE_WORKSPACES_TX)
-                .bind(viewer.as_str())
-                .fetch_all(&mut **tx)
-                .await
-                .map_err(ViewerSortStoreError::from)?;
-            let mut groups = BTreeMap::new();
-            for row in &rows {
-                let id: String = row.try_get("id").map_err(ViewerSortStoreError::from)?;
-                let owner_agent_id: Option<String> = row
-                    .try_get("owner_agent_id")
-                    .map_err(ViewerSortStoreError::from)?;
-                let group = if owner_agent_id.is_some() {
-                    SortGroup::AgentSpace
-                } else {
-                    SortGroup::Regular
-                };
-                groups.insert(id, group);
-            }
+        SortListKey::Sidebar => {
+            let ids = sidebar_ids_tx(tx, viewer).await?;
             Ok(Ok(ResolvedListGroups {
-                groups,
+                groups: ids.into_iter().map(|id| (id, SortGroup::Sidebar)).collect(),
                 starred: HashSet::new(),
             }))
         }
+        SortListKey::Workspaces => Ok(Err(ListGroupsRefusal::NotFound)),
         SortListKey::Favorites => {
             // The favorites list IS the starred set — membership is the projected
             // conversation-favorites set, keyed by favorite_key.
@@ -239,13 +223,6 @@ async fn resolve_list_groups_tx(
     }
 }
 
-const SELECT_SORTABLE_WORKSPACES_TX: &str = "\
-    SELECT w.id AS id, w.owner_agent_id AS owner_agent_id \
-      FROM workspaces w \
-     WHERE w.archived_at IS NULL \
-       AND EXISTS (SELECT 1 FROM workspace_users wu \
-                    WHERE wu.workspace_id = w.id AND wu.user_id = ?)";
-
 const SELECT_FAVORITE_KEYS_TX: &str = "\
     SELECT use.entity_id AS entity_id \
       FROM user_sort_entry use \
@@ -288,6 +265,9 @@ async fn read_post_image_tx(
     list_key: &SortListKey,
     visible_entity_ids: &[String],
 ) -> Result<ViewerSortStateProjection, PersistenceFailure> {
+    if matches!(list_key, SortListKey::Sidebar) {
+        return sidebar_projection_tx(tx, viewer).await;
+    }
     let stored_list_key = list_key.as_stored();
     let mode_rows = sqlx::query(
         "SELECT scope, mode FROM user_list_sort_mode WHERE user_id = ? AND list_key = ?",
@@ -420,6 +400,14 @@ impl ViewerSortMutationWriter for SqliteViewerSort {
         // the lock is held and the fresh gates pass, and drives this write + its
         // post-image. Every decision fact is re-resolved here, never a pre-lock
         // witness; a refusal rolls back with no write.
+        if matches!(list_key, SortListKey::Workspaces) {
+            return Ok(Err(SortMutationRefusal::RetiredList));
+        }
+        if matches!(list_key, SortListKey::Sidebar)
+            && !matches!(mutation, SortMutation::Reorder { .. })
+        {
+            return Ok(Err(SortMutationRefusal::ReorderOnly));
+        }
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
@@ -476,7 +464,7 @@ impl ViewerSortMutationWriter for SqliteViewerSort {
                             }));
                         }
                     }
-                    SortListKey::Favorites | SortListKey::Channels(_) => {
+                    SortListKey::Sidebar | SortListKey::Favorites | SortListKey::Channels(_) => {
                         if group.is_some() {
                             return Ok(Err(SortMutationRefusal::GroupNotSupportedForList {
                                 group: *group,
@@ -520,9 +508,15 @@ impl ViewerSortMutationWriter for SqliteViewerSort {
                 match decide_reorder(&live_group_ids, ordered_ids) {
                     ReorderVerdict::Accepted => {}
                     ReorderVerdict::IdNotInGroup { id } => {
+                        if matches!(list_key, SortListKey::Sidebar) {
+                            return Ok(Err(SortMutationRefusal::SidebarSetChanged));
+                        }
                         return Ok(Err(SortMutationRefusal::IdNotInGroup { id }));
                     }
                     ReorderVerdict::NotExactMembers { expected_count } => {
+                        if matches!(list_key, SortListKey::Sidebar) {
+                            return Ok(Err(SortMutationRefusal::SidebarSetChanged));
+                        }
                         return Ok(Err(SortMutationRefusal::NotExactMembers { expected_count }));
                     }
                 }
@@ -664,6 +658,178 @@ INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, titl
     }
     fn channels(ws: &str) -> SortListKey {
         SortListKey::Channels(ws.to_owned())
+    }
+
+    #[tokio::test]
+    async fn sidebar_default_order_places_agent_spaces_after_regular_workspaces() {
+        use silverhand_backend_core::viewer_read_model::viewer_sort_state::ViewerSidebarRead;
+        let (_dir, store, pool) = open_seeded().await;
+        for statement in [
+            "INSERT INTO hosts(id,name,kind,created_at) VALUES('host-1','Host','local',0)",
+            "INSERT INTO agents(id,name,display_name,runtime,host_id,created_by_user_id,created_at,updated_at) VALUES('agent-1','agent','Agent','claude','host-1','user-1',0,0)",
+            "INSERT INTO workspaces(id,name,name_key,owner_agent_id,created_at,updated_at) VALUES('space-1','Space',NULL,'agent-1',0,0)",
+            "INSERT INTO workspaces(id,name,name_key,owner_user_id,created_at,updated_at) VALUES('ws-0','Earlier','earlier','user-1',0,0)",
+            "INSERT INTO workspace_users(workspace_id,user_id,joined_at,role) VALUES('space-1','user-1',0,'member'),('ws-0','user-1',0,'owner')",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+
+        let state = store
+            .sidebar_sort(&UserId::parse("user-1").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .entries
+                .iter()
+                .map(|e| e.entity_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "section:starred",
+                "section:direct_messages",
+                "workspace:ws-0",
+                "workspace:ws-1",
+                "workspace:space-1"
+            ]
+        );
+        assert_eq!(state.modes.get(""), Some(&SortMode::Manual));
+    }
+
+    #[tokio::test]
+    async fn sidebar_order_is_complete_private_and_manual_only() {
+        use silverhand_backend_core::viewer_read_model::viewer_sort_state::ViewerSidebarRead;
+        let (_dir, store, pool) = open_seeded().await;
+        let viewer = UserId::parse("user-1").unwrap();
+        let ids = |state: ViewerSortStateProjection| {
+            state
+                .entries
+                .into_iter()
+                .map(|e| e.entity_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(store.sidebar_sort(&viewer).await.unwrap()),
+            vec![
+                "section:starred",
+                "section:direct_messages",
+                "workspace:ws-1"
+            ]
+        );
+
+        let ordered = vec![
+            "workspace:ws-1".to_owned(),
+            "section:direct_messages".to_owned(),
+            "section:starred".to_owned(),
+        ];
+        let mutation = SortMutation::Reorder {
+            group: SortGroup::Sidebar,
+            ordered_ids: ordered.clone(),
+        };
+        assert_eq!(
+            ids(store
+                .apply_sort_mutation(&viewer, &SortListKey::Sidebar, &mutation)
+                .await
+                .unwrap()
+                .unwrap()),
+            ordered
+        );
+        assert_eq!(ids(store.sidebar_sort(&viewer).await.unwrap()), ordered);
+
+        for ordered_ids in [
+            vec!["workspace:ws-1".to_owned()],
+            vec!["section:starred".to_owned(); 3],
+            vec![
+                "section:starred".to_owned(),
+                "section:direct_messages".to_owned(),
+                "workspace:invisible".to_owned(),
+            ],
+        ] {
+            assert_eq!(
+                store
+                    .apply_sort_mutation(
+                        &viewer,
+                        &SortListKey::Sidebar,
+                        &SortMutation::Reorder {
+                            group: SortGroup::Sidebar,
+                            ordered_ids
+                        }
+                    )
+                    .await
+                    .unwrap(),
+                Err(SortMutationRefusal::SidebarSetChanged)
+            );
+        }
+        for mutation in [
+            SortMutation::Touch {
+                entity_id: "section:starred".to_owned(),
+            },
+            SortMutation::SetMode {
+                group: None,
+                mode: SortMode::Recent,
+            },
+        ] {
+            assert_eq!(
+                store
+                    .apply_sort_mutation(&viewer, &SortListKey::Sidebar, &mutation)
+                    .await
+                    .unwrap(),
+                Err(SortMutationRefusal::ReorderOnly)
+            );
+        }
+        assert_eq!(
+            store
+                .apply_sort_mutation(
+                    &viewer,
+                    &SortListKey::Workspaces,
+                    &SortMutation::Touch {
+                        entity_id: "ws-1".to_owned()
+                    }
+                )
+                .await
+                .unwrap(),
+            Err(SortMutationRefusal::RetiredList)
+        );
+
+        // A newly visible workspace invalidates the old full-set drag and follows
+        // ranked branches. Archiving it removes it from the authorized read.
+        sqlx::query("INSERT INTO workspaces(id,name,name_key,owner_user_id,created_at,updated_at) VALUES('ws-2','Second','second','user-1',2,2)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO workspace_users(workspace_id,user_id,joined_at,role) VALUES('ws-2','user-1',2,'owner')")
+            .execute(&pool).await.unwrap();
+        assert_eq!(
+            store
+                .apply_sort_mutation(&viewer, &SortListKey::Sidebar, &mutation)
+                .await
+                .unwrap(),
+            Err(SortMutationRefusal::SidebarSetChanged)
+        );
+        assert_eq!(
+            ids(store.sidebar_sort(&viewer).await.unwrap())
+                .last()
+                .unwrap(),
+            "workspace:ws-2"
+        );
+        sqlx::query("UPDATE workspaces SET archived_at=3 WHERE id='ws-2'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(ids(store.sidebar_sort(&viewer).await.unwrap()), ordered);
+
+        sqlx::query("DELETE FROM workspace_users WHERE user_id='user-1' AND workspace_id='ws-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            ids(store.sidebar_sort(&viewer).await.unwrap()),
+            vec!["section:direct_messages", "section:starred"]
+        );
+        assert_eq!(
+            store
+                .apply_sort_mutation(&viewer, &SortListKey::Sidebar, &mutation)
+                .await
+                .unwrap(),
+            Err(SortMutationRefusal::SidebarSetChanged)
+        );
     }
 
     #[tokio::test]
@@ -972,5 +1138,81 @@ INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, titl
             entry.last_accessed_at.is_some(),
             "home last_accessed_at preserved"
         );
+    }
+}
+
+async fn sidebar_ids_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    viewer: &UserId,
+) -> Result<Vec<String>, PersistenceFailure> {
+    let rows = sqlx::query("SELECT w.id FROM workspaces w WHERE w.archived_at IS NULL AND EXISTS (SELECT 1 FROM workspace_users wu WHERE wu.workspace_id=w.id AND wu.user_id=?) ORDER BY (w.owner_agent_id IS NOT NULL), w.created_at, w.id")
+        .bind(viewer.as_str()).fetch_all(&mut **tx).await.map_err(ViewerSortStoreError::from)?;
+    let mut ids = vec![
+        "section:starred".to_owned(),
+        "section:direct_messages".to_owned(),
+    ];
+    for row in rows {
+        ids.push(format!(
+            "workspace:{}",
+            row.try_get::<String, _>("id")
+                .map_err(ViewerSortStoreError::from)?
+        ));
+    }
+    Ok(ids)
+}
+
+async fn sidebar_projection_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    viewer: &UserId,
+) -> Result<ViewerSortStateProjection, PersistenceFailure> {
+    let ids = sidebar_ids_tx(tx, viewer).await?;
+    let rows = sqlx::query(
+        "SELECT entity_id,rank FROM user_sort_entry WHERE user_id=? AND list_key='sidebar'",
+    )
+    .bind(viewer.as_str())
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ViewerSortStoreError::from)?;
+    let mut ranks = BTreeMap::new();
+    for row in rows {
+        ranks.insert(
+            row.try_get::<String, _>("entity_id")
+                .map_err(ViewerSortStoreError::from)?,
+            vs_js_safe(row.try_get("rank").map_err(ViewerSortStoreError::from)?)?,
+        );
+    }
+    let mut entries: Vec<_> = ids
+        .into_iter()
+        .map(|entity_id| ViewerSortEntryProjection {
+            rank: ranks.get(&entity_id).copied().flatten(),
+            entity_id,
+            last_accessed_at: None,
+            starred_at: None,
+        })
+        .collect();
+    // Stable sort preserves the explicit default order for unranked/tied rows.
+    entries.sort_by_key(|e| (e.rank.is_none(), e.rank));
+    Ok(ViewerSortStateProjection {
+        list_key: SortListKey::Sidebar,
+        modes: BTreeMap::from([("".to_owned(), SortMode::Manual)]),
+        entries,
+    })
+}
+
+impl silverhand_backend_core::viewer_read_model::viewer_sort_state::ViewerSidebarRead
+    for SqliteViewerSort
+{
+    async fn sidebar_sort(
+        &self,
+        viewer: &UserId,
+    ) -> Result<ViewerSortStateProjection, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(ViewerSortStoreError::from)?;
+        let result = sidebar_projection_tx(&mut tx, viewer).await?;
+        tx.commit().await.map_err(ViewerSortStoreError::from)?;
+        Ok(result)
     }
 }

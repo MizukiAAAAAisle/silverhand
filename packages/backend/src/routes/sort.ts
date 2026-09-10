@@ -42,6 +42,24 @@ export interface SortRouteDeps {
  */
 export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  // The reference TS server does not implement the new Rust sidebar read/write.
+  // Fail explicitly rather than treating sidebar as a channels list.
+  app.use('/api/sort/*', async (c, next) => {
+    if (c.req.method === 'GET' && c.req.path === apiPaths.sidebarSort) {
+      return c.json({ error: 'sidebar sorting requires the Rust server' }, 501);
+    }
+    const body = await c.req.raw
+      .clone()
+      .json()
+      .catch(() => null);
+    if (body && typeof body === 'object' && 'list_key' in body && body.list_key === 'workspaces') {
+      return c.json({ error: 'workspace sorting is retired; use sidebar' }, 410);
+    }
+    if (body && typeof body === 'object' && 'list_key' in body && body.list_key === 'sidebar') {
+      return c.json({ error: 'sidebar sorting requires the Rust server' }, 501);
+    }
+    return next();
+  });
   const { ctx, favorites, workspaces, conversations, sort } = deps;
 
   /** The legal hard groups for a list.
@@ -82,11 +100,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
    * whose `favorites` rows carry rank only. Every other list reads straight from
    * the sort repo, filtered to the live visible set.
    */
-  function viewerSortFor(
-    c: AppContext,
-    listKey: string,
-    visibleEntityIds: Iterable<string>,
-  ) {
+  function viewerSortFor(c: AppContext, listKey: string, visibleEntityIds: Iterable<string>) {
     const principal = getUserPrincipal(c);
     if (listKey === 'favorites') {
       return favorites.list({ viewerUserId: principal.userId }).viewer_sort;
@@ -140,8 +154,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
       // the GET response can never diverge. Always the viewer's own state — no
       // 404/403 (the route gate is canViewOwnedState). This list IS the starred
       // set, so there is no star sub-exclusion: `starred` is empty.
-      for (const item of favorites.list({ viewerUserId: principal.userId })
-        .items) {
+      for (const item of favorites.list({ viewerUserId: principal.userId }).items) {
         groups.set(item.favorite_key, 'favorites');
       }
       return { ok: true, groups, starred: new Set() };
@@ -152,9 +165,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     // returned in the exclusion set below. `groups` is still the FULL visible set
     // (incl. starred) so the `viewer_sort` it backs exposes every `starred_at`
     // and a starred conversation stays a valid star/touch target.
-    const channelStarred = new Set(
-      sort.listStarredEntityIds(principal.userId, listKey),
-    );
+    const channelStarred = new Set(sort.listStarredEntityIds(principal.userId, listKey));
     const wsId = listKey.slice('channels:'.length);
     const workspace = workspaces.get(wsId);
     if (!workspace) return { ok: false, status: 404 };
@@ -165,10 +176,9 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     // always a real per-viewer fact. A regular workspace's sidebar sort set is
     // the DISCOVERY UNION (joined + browse-only public) — every visible item is
     // orderable; a DM workspace's is the viewer's membership-filtered DMs.
-    const channels =
-      !isAgentHomeWorkspace(workspace)
-        ? conversations.listActiveChannelsForViewer(workspace.id, principal.userId)
-        : conversations.listActiveDmChannelsForViewer(workspace.id, principal.userId);
+    const channels = !isAgentHomeWorkspace(workspace)
+      ? conversations.listActiveChannelsForViewer(workspace.id, principal.userId)
+      : conversations.listActiveDmChannelsForViewer(workspace.id, principal.userId);
     for (const ch of channels) {
       groups.set(ch.id, 'channels');
     }
@@ -177,11 +187,11 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     return {
       ok: true,
       groups,
-      starred: new Set([...channelStarred].filter(id => groups.has(id))),
+      starred: new Set([...channelStarred].filter((id) => groups.has(id))),
     };
   }
 
-  app.put(apiPaths.sortMode, async c => {
+  app.put(apiPaths.sortMode, async (c) => {
     const principal = getUserPrincipal(c);
     const body = await c.req.json().catch(() => ({}));
     const parsed = SetSortModeInputSchema.safeParse(body);
@@ -203,16 +213,10 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     const { list_key: listKey, group, mode } = parsed.data;
     if (listKey === 'workspaces') {
       if (group === undefined || !legalGroups(listKey).includes(group)) {
-        return c.json(
-          { error: 'group is required and must be valid for this list', group },
-          400,
-        );
+        return c.json({ error: 'group is required and must be valid for this list', group }, 400);
       }
     } else if (group !== undefined) {
-      return c.json(
-        { error: 'group is not supported for this list (list-wide mode)', group },
-        400,
-      );
+      return c.json({ error: 'group is not supported for this list (list-wide mode)', group }, 400);
     }
     const scope = group !== undefined ? modeScopeOf(listKey, group) : '';
     sort.setMode(principal.userId, listKey, scope, mode);
@@ -221,7 +225,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     });
   });
 
-  app.put(apiPaths.sortOrder, async c => {
+  app.put(apiPaths.sortOrder, async (c) => {
     const principal = getUserPrincipal(c);
     const body = await c.req.json().catch(() => ({}));
     const parsed = SortReorderInputSchema.safeParse(body);
@@ -251,10 +255,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     // membership alone.
     for (const id of orderedIds) {
       if (resolved.groups.get(id) !== group || resolved.starred.has(id)) {
-        return c.json(
-          { error: 'ordered_ids contains an id not in the declared group', id },
-          400,
-        );
+        return c.json({ error: 'ordered_ids contains an id not in the declared group', id }, 400);
       }
     }
     // Enforce the whole-group contract: ordered_ids must be EXACTLY the live
@@ -268,10 +269,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
       .filter(([id, g]) => g === group && !resolved.starred.has(id))
       .map(([id]) => id);
     const uniqueOrdered = new Set(orderedIds);
-    if (
-      uniqueOrdered.size !== orderedIds.length
-      || orderedIds.length !== liveGroupIds.length
-    ) {
+    if (uniqueOrdered.size !== orderedIds.length || orderedIds.length !== liveGroupIds.length) {
       return c.json(
         {
           error: 'ordered_ids must be exactly the live members of the group',
@@ -280,18 +278,13 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
         400,
       );
     }
-    sort.reorder(
-      principal.userId,
-      listKey,
-      modeScopeOf(listKey, group),
-      orderedIds,
-    );
+    sort.reorder(principal.userId, listKey, modeScopeOf(listKey, group), orderedIds);
     return c.json({
       viewer_sort: viewerSortFor(c, listKey, resolved.groups.keys()),
     });
   });
 
-  app.post(apiPaths.sortTouch, async c => {
+  app.post(apiPaths.sortTouch, async (c) => {
     const principal = getUserPrincipal(c);
     const body = await c.req.json().catch(() => ({}));
     const parsed = SortTouchInputSchema.safeParse(body);
@@ -305,10 +298,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     // dead `user_sort_entry(list_key='favorites').last_accessed_at` the read-model
     // never reads — looking semantic but inert. Reject it; touch the home entity.
     if (listKey === 'favorites') {
-      return c.json(
-        { error: 'favorites does not support touch; touch the home entity' },
-        400,
-      );
+      return c.json({ error: 'favorites does not support touch; touch the home entity' }, 400);
     }
     const resolved = resolveListGroups(c, listKey);
     if (!resolved.ok) {
@@ -381,8 +371,8 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     });
   }
 
-  app.post(apiPaths.channelStar(':id'), c => channelStar(c, true));
-  app.delete(apiPaths.channelStar(':id'), c => channelStar(c, false));
+  app.post(apiPaths.channelStar(':id'), (c) => channelStar(c, true));
+  app.delete(apiPaths.channelStar(':id'), (c) => channelStar(c, false));
 
   return app;
 }
