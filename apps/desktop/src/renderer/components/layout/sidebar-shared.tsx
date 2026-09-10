@@ -103,6 +103,21 @@ interface SectionProps {
   children: ReactNode;
 }
 
+export function SidebarBranchLayout({
+  header,
+  children,
+}: {
+  header: ReactNode;
+  children?: ReactNode;
+}): JSX.Element {
+  return (
+    <section className="group/sectionscope flex flex-col gap-1 pb-1">
+      {header}
+      {children ? <ul className="space-y-1">{children}</ul> : null}
+    </section>
+  );
+}
+
 export function SidebarSection({
   label,
   icon,
@@ -126,19 +141,22 @@ export function SidebarSection({
   const body = showBody ? children : collapsedContent;
 
   return (
-    <section className="group/sectionscope pb-2">
-      <SidebarSectionHeader
-        label={label}
-        icon={icon}
-        count={count}
-        onAdd={onAdd}
-        action={action}
-        collapsible={collapsible}
-        expanded={expanded}
-        onToggle={() => toggleExpanded()}
-      />
-      {body ? <ul className="space-y-1">{body}</ul> : null}
-    </section>
+    <SidebarBranchLayout
+      header={
+        <SidebarSectionHeader
+          label={label}
+          icon={icon}
+          count={count}
+          onAdd={onAdd}
+          action={action}
+          collapsible={collapsible}
+          expanded={expanded}
+          onToggle={() => toggleExpanded()}
+        />
+      }
+    >
+      {body}
+    </SidebarBranchLayout>
   );
 }
 
@@ -221,7 +239,7 @@ export function SidebarSectionHeader({
     <header
       data-sidebar-group-heading={collapsible ? "" : undefined}
       className={cn(
-        "mb-1 text-xs leading-4 font-medium",
+        "text-xs leading-4 font-medium",
         collapsible ? "tracking-wide text-text-primary" : "tracking-wider text-text-muted",
       )}
     >

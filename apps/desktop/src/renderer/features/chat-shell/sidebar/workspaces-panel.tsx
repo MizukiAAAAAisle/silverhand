@@ -13,6 +13,7 @@ import {
 } from "@/components/layout/list-drag-sort";
 import {
   SidebarSectionHeader,
+  SidebarBranchLayout,
   MutedMarker,
   useSidebarSectionExpanded,
 } from "../../../components/layout/sidebar-shared";
@@ -224,27 +225,28 @@ function WorkspaceBranch({
   const wakeGate = isWorkspaceAwake(workspace);
 
   return (
-    <>
-      <WorkspaceHeaderRow
-        workspace={workspace}
-        ctx={ctx}
-        expanded={expanded}
-        onToggle={() => setExpanded()}
-        dragHandleProps={dragHandleProps}
-      />
+    <SidebarBranchLayout
+      header={
+        <WorkspaceHeaderRow
+          workspace={workspace}
+          ctx={ctx}
+          expanded={expanded}
+          onToggle={() => setExpanded()}
+          dragHandleProps={dragHandleProps}
+        />
+      }
+    >
       {expanded || holdsSelection || wakeGate ? (
-        <ul className="space-y-1">
-          <WorkspaceChannels
-            workspaceId={workspace.id}
-            selectedChannelId={ctx.selected.channelId}
-            onSelectChannel={ctx.onSelectChannel}
-            onCreateChannel={ctx.onCreateChannel}
-            collapsed={!expanded}
-            pokeUnread={wakeGate}
-          />
-        </ul>
+        <WorkspaceChannels
+          workspaceId={workspace.id}
+          selectedChannelId={ctx.selected.channelId}
+          onSelectChannel={ctx.onSelectChannel}
+          onCreateChannel={ctx.onCreateChannel}
+          collapsed={!expanded}
+          pokeUnread={wakeGate}
+        />
       ) : null}
-    </>
+    </SidebarBranchLayout>
   );
 }
 
@@ -303,7 +305,7 @@ function WorkspaceHeaderRow({
   // (the hazard `ChannelRow` documents). Wrapping also scopes the surface to the
   // header — a pointerdown on a child channel row can never start a workspace drag.
   return (
-    <div className="mt-1.5 cursor-grab select-none active:cursor-grabbing" {...dragHandleProps}>
+    <div className="cursor-grab select-none active:cursor-grabbing" {...dragHandleProps}>
       <WorkspaceContextMenu
         trigger={row}
         muteWorkspaceId={canMuteWorkspace(workspace) ? workspace.id : null}
