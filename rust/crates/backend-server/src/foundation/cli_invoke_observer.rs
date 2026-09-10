@@ -344,7 +344,7 @@ const ROUTES: &[RouteDescriptor] = &[
         "channel",
         "list",
         "list-channels",
-        &[],
+        &["workspace_id"],
     ),
     route(
         CliInvokeMethod::Post,
@@ -809,35 +809,144 @@ mod tests {
         );
     }
 
+    type RouteIdentity = (String, String, String, String);
+
+    fn reference_route_objects(body: &str) -> std::collections::BTreeSet<RouteIdentity> {
+        // Parse complete literal objects, never formatting-dependent lines. Any
+        // unsupported syntax fails closed instead of silently dropping an entry.
+        let body = body
+            .lines()
+            .map(|line| line.split_once("//").map_or(line, |(code, _)| code))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut rest = body.as_str();
+        let mut routes = std::collections::BTreeSet::new();
+        loop {
+            rest = rest.trim_start_matches(|c: char| c.is_whitespace() || c == ',');
+            if rest.is_empty() {
+                break;
+            }
+            let object = rest
+                .strip_prefix('{')
+                .expect("route must be a literal object");
+            let (object, tail) = object.split_once('}').expect("closed route object");
+            rest = tail;
+            let mut fields = std::collections::BTreeMap::new();
+            for field in object.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                let (key, value) = field.split_once(':').expect("literal field");
+                let value = value.trim();
+                let quote = value.chars().next().unwrap();
+                assert!(quote == '\'' || quote == '"');
+                let value = value
+                    .strip_prefix(quote)
+                    .unwrap()
+                    .strip_suffix(quote)
+                    .expect("quoted value");
+                assert!(!value.contains(['\\', '\'', '"']));
+                assert!(fields.insert(key.trim(), value.to_owned()).is_none());
+            }
+            assert_eq!(fields.len(), 4, "route has exactly four identity fields");
+            let mut take = |key| fields.remove(key).expect("required route identity field");
+            assert!(
+                routes.insert((take("method"), take("suffix"), take("noun"), take("verb"))),
+                "duplicate reference route"
+            );
+        }
+        routes
+    }
+
+    #[test]
+    fn reference_contract_includes_multiline_and_reordered_objects() {
+        let expected = reference_route_objects(
+            r#"
+            { method: 'GET', suffix: 'tasks', noun: 'task', verb: 'list' },
+            // A formatter may move every property onto its own line.
+            {
+                verb: "list",
+                method: "GET",
+                noun: "channel",
+                suffix: "list-channels",
+            },
+        "#,
+        );
+        assert_eq!(expected.len(), 2);
+        assert!(expected.contains(&(
+            "GET".into(),
+            "list-channels".into(),
+            "channel".into(),
+            "list".into()
+        )));
+        let missing_multiline = reference_route_objects(
+            "{ method: 'GET', suffix: 'tasks', noun: 'task', verb: 'list' }",
+        );
+        assert_ne!(
+            missing_multiline, expected,
+            "a missing multiline route must fail parity"
+        );
+    }
+
     #[test]
     fn rust_audit_identity_matches_the_cli_route_contract_in_both_directions() {
-        // The TS map is itself checked against internalPaths and COMMAND_GROUPS.
-        // Comparing complete sets catches both missing Rust doors and stale entries.
+        // The TS map is also checked against internalPaths and COMMAND_GROUPS.
         let reference = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../../packages/backend/src/observability/cli-route-map.ts"
         ));
-        let mut expected = std::collections::BTreeSet::new();
-        for line in reference
-            .lines()
-            .filter(|line| line.trim().starts_with("{ method: '"))
-        {
-            let fields: Vec<_> = line.split("'").collect();
-            expected.insert((fields[1], fields[3], fields[5], fields[7]));
-        }
+        let (_, array) = reference
+            .split_once("export const CLI_INVOKE_ROUTES:")
+            .unwrap();
+        let (_, array) = array.split_once("= [").unwrap();
+        let (body, _) = array.split_once("];").unwrap();
+        let expected = reference_route_objects(body);
         let actual: std::collections::BTreeSet<_> = ROUTES
             .iter()
             .map(|r| {
                 (
-                    r.method.as_str(),
-                    r.route.route_suffix,
-                    r.route.noun,
-                    r.route.verb,
+                    r.method.as_str().to_owned(),
+                    r.route.route_suffix.to_owned(),
+                    r.route.noun.to_owned(),
+                    r.route.verb.to_owned(),
                 )
             })
             .collect();
         assert!(!expected.is_empty());
         assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn channel_list_records_only_the_allowed_workspace_key() {
+        let sink = RecordingSink::default();
+        let app = audit_cli_invocations(
+            Router::new().route(
+                "/internal/agents/{aid}/list-channels",
+                get(|| async { StatusCode::BAD_REQUEST }),
+            ),
+            sink.clone(),
+        );
+        for query in [
+            "",
+            "?workspace_id=private-workspace&unknown=private-value&workspace_id=second",
+        ] {
+            app.clone()
+                .oneshot(request(
+                    "GET",
+                    &format!("/internal/agents/a1/list-channels{query}"),
+                    "",
+                ))
+                .await
+                .unwrap();
+        }
+        let records = sink.recorded();
+        assert!(records[0].query_keys.is_empty());
+        assert_eq!(records[1].query_keys, vec!["workspace_id"]);
+        assert_eq!(records[1].route.unwrap().noun, "channel");
+        // The typed fact contains only allowlisted static keys, never query values.
+        assert!(
+            records[1]
+                .query_keys
+                .iter()
+                .all(|key| !key.contains("private"))
+        );
     }
 
     #[tokio::test]
