@@ -144,7 +144,7 @@ function DirectMessageRow({
   return (
     <ConversationRowLayout
       selected={row.selected}
-      column="outer"
+      column="nested"
       onSelect={() => {
         // A draft row stays on the draft even when a pair for the same agent
         // exists: that is what makes it one row instead of two.

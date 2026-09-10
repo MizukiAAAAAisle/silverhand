@@ -211,7 +211,7 @@ function FavoriteRow({
   const row = (
     <ChannelRow
       selected={isPrimary}
-      column="outer"
+      column="nested"
       draggable={draggable}
       title={`${item.title} — ${item.parent_title}`}
       onSelect={() => onSelectConversation(item.workspace_id, item.entity_id)}
