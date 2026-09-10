@@ -109,7 +109,7 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     // Suggested model ids for the Model combobox. Free text still accepted;
     // these are quick-picks only (no `defaultModel` — codex has no forced
     // create-time default).
-    modelSuggestions: ['gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra'],
+    modelSuggestions: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'],
   },
   qoder: {
     kind: 'qoder',
