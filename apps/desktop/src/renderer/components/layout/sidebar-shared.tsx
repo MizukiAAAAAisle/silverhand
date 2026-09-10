@@ -244,7 +244,7 @@ export function SidebarSectionHeader({
     <header
       data-sidebar-group-heading={collapsible ? "" : undefined}
       className={cn(
-        "text-xs leading-4 font-medium",
+        "text-[13px] leading-4 font-medium",
         collapsible ? "tracking-wide text-text-primary" : "tracking-wider text-text-muted",
       )}
     >
@@ -264,7 +264,7 @@ export function SidebarSectionHeader({
             }
           }}
           className={cn(
-            "group/sectionheader sidebar-row-gutter flex h-6 min-w-0 items-center justify-between",
+            "group/sectionheader sidebar-row-gutter flex h-7 min-w-0 items-center justify-between",
             "cursor-pointer text-left",
             OUTER_GLYPH_INSET,
           )}
