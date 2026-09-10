@@ -478,7 +478,7 @@ export const ConversationRowLayout = forwardRef<HTMLDivElement, ConversationRowL
           type="button"
           onClick={onSelect}
           title={title}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium leading-4"
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[13px] font-normal leading-4"
         >
           {children}
         </button>
