@@ -504,7 +504,7 @@ function SharedFontSizeControl({
             type="button"
             onClick={onReset}
             disabled={!isOverride}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-(--control-radius) border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-(--control-radius) border border-border-subtle bg-bg-elevated px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
           >
             <RotateCcw className="size-3.5" />
             Reset
@@ -631,7 +631,7 @@ function MarkdownFontControl({
           type="button"
           onClick={onReset}
           disabled={!fontValue}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-(--control-radius) border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-(--control-radius) border border-border-subtle bg-bg-elevated px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
         >
           <RotateCcw className="size-3.5" />
           Reset
@@ -661,7 +661,7 @@ function MarkdownFontControl({
                   "rounded-(--pill-radius) border px-2 py-1 text-(length:--text-meta) font-medium transition-colors focus-outline",
                   isSelected
                     ? "border-accent bg-accent text-text-on-accent"
-                    : "border-border-subtle bg-bg-primary text-text-secondary hover:border-(--border-control-hover) hover:text-text-primary",
+                    : "border-border-subtle bg-bg-elevated text-text-secondary hover:border-(--border-control-hover) hover:text-text-primary",
                 )}
               >
                 {preset.label}
