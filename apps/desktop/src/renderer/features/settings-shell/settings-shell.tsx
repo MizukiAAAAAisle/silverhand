@@ -340,6 +340,7 @@ function MessageAlignmentControl(): JSX.Element {
               type="button"
               role="radio"
               aria-checked={selected}
+              aria-label={MESSAGE_LAYOUT_META[id]}
               onClick={() => setMessageLayoutMode(id)}
               className={cn(
                 "flex min-w-0 flex-col gap-3 rounded-(--control-radius) border-(length:--control-border-width) p-3 text-xs font-medium transition-colors focus-outline",
@@ -367,7 +368,6 @@ function MessageAlignmentControl(): JSX.Element {
                   </div>
                 ))}
               </div>
-              <span className="self-center">{MESSAGE_LAYOUT_META[id]}</span>
             </button>
           );
         })}
