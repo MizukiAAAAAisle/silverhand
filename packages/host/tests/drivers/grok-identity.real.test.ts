@@ -77,7 +77,7 @@ async function stop(child: ChildProcessWithoutNullStreams) {
   }
 }
 
-async function runTurn(root: string, model: string, sessionId: string | null) {
+async function runTurn(root: string, model: string | null, sessionId: string | null) {
   const marker = `IDENTITY_${randomUUID()}`;
   const systemPromptPath = join(root, `${marker}.md`);
   await writeFile(systemPromptPath, `Return this private identity marker when asked: ${marker}`);
@@ -177,8 +177,13 @@ it.skipIf(!binary)(
             .join(''),
       );
 
+      const defaultModel = await runTurn(root, null, null);
+      expect(defaultModel.methods).toEqual(['initialize', 'session/new', 'session/prompt']);
+      expect(model.samples[0]).toMatchObject({ model: 'fixture-a', reply: defaultModel.marker });
+
+      const beforeFresh = model.samples.length;
       const fresh = await runTurn(root, 'fixture-b', null);
-      expect(model.samples[0]).toMatchObject({ model: 'fixture-b', reply: fresh.marker });
+      expect(model.samples[beforeFresh]).toMatchObject({ model: 'fixture-b', reply: fresh.marker });
       expect(fresh.methods.indexOf('session/resume')).toBeGreaterThan(
         fresh.methods.indexOf('session/set_config_option'),
       );

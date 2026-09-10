@@ -55,7 +55,7 @@ export interface AcpRuntimeAdapter {
   buildSessionFinalizeRequest?(
     ctx: DriverSpawnContext,
     sessionId: string,
-  ): { method: string; params: Record<string, unknown> };
+  ): { method: string; params: Record<string, unknown> } | null;
   validateSession?(ctx: DriverSpawnContext, result: unknown): string | null;
   readonly suppressPreSessionUpdates?: boolean;
 
@@ -297,19 +297,22 @@ export class AcpClient {
       return;
     }
     if (!this.sessionFinalized && ctx && this.adapter.buildSessionFinalizeRequest) {
-      if (this.sessionFinalizeRequestId === null) {
-        try {
-          const request = this.adapter.buildSessionFinalizeRequest(ctx, this.sessionId);
+      if (this.sessionFinalizeRequestId !== null) return;
+      try {
+        const request = this.adapter.buildSessionFinalizeRequest(ctx, this.sessionId);
+        if (request) {
           this.sessionFinalizeRequestId = this.sendRequest(request.method, request.params);
-        } catch (error) {
-          events.push({
-            kind: 'error',
-            message: error instanceof Error ? error.message : 'ACP session finalization failed',
-            fatal: true,
-          });
+          return;
         }
+        this.sessionFinalized = true;
+      } catch (error) {
+        events.push({
+          kind: 'error',
+          message: error instanceof Error ? error.message : 'ACP session finalization failed',
+          fatal: true,
+        });
+        return;
       }
-      return;
     }
     this.sessionAnnounced = true;
     events.push({ kind: 'session_init', sessionId: this.sessionId });

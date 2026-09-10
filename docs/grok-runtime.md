@@ -33,10 +33,12 @@ The materialized Silverhand standing prompt is passed as
 `_meta.systemPromptOverride` on both new and restore requests. Model and reasoning
 settings use ACP `session/set_config_option`, model first. Readiness waits for
 configuration completion and verifies the returned selected values. Grok model
-switches can rebuild the system head, so the driver then reattaches to that exact
+switches can rebuild the system head, so when a model was explicitly configured,
+the driver then reattaches to that exact
 resident session with the standing prompt and awaits its response before readiness.
 Resident reattachment flushes the selected model to persistence; it does not create
-a new session or restore workspace code. Model/effort are checked again after
+a new session or restore workspace code. Default-model and reasoning-only paths
+skip this extra attachment and do not require restore capabilities for new sessions. Model/effort are checked again after
 reattachment, and no later configuration request can overwrite the identity. A model that
 ignores a requested effort fails explicitly rather than silently downgrading.
 An unset model preserves the runtime's default; catalog suggestions are not an

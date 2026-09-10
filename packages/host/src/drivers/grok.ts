@@ -37,7 +37,8 @@ class GrokAcpAdapter implements AcpRuntimeAdapter {
     }
     if (record(capabilities.sessionCapabilities).resume) this.attachMethod = 'session/resume';
     else if (capabilities.loadSession === true) this.attachMethod = 'session/load';
-    else throw new Error('Grok does not support restoring this session.');
+    else if (ctx.cliSessionId || ctx.model)
+      throw new Error('Grok does not support restoring this session.');
     return ctx.cliSessionId ? this.attachMethod : 'session/new';
   }
 
@@ -54,6 +55,8 @@ class GrokAcpAdapter implements AcpRuntimeAdapter {
   }
 
   buildSessionFinalizeRequest(ctx: DriverSpawnContext, sessionId: string) {
+    if (!ctx.model) return null;
+
     // Model changes may rebuild Grok's harness and replace its system head.
     // Reattach after all configuration: resident attach flushes persisted model
     // state, then reapplies the identity with no further model change. Await its

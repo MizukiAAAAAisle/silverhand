@@ -271,6 +271,34 @@ describe('Grok ACP lifecycle', () => {
     expect(driver.readyToEncode()).toBe(false);
   });
 
+  it('uses one new session without config or restore capabilities for the default model', async () => {
+    const { driver, sent, response } = await setup({}, {} as any, false);
+    expect(response(sent[1].id, { sessionId: 'default' })).toEqual([
+      { kind: 'session_init', sessionId: 'default' },
+    ]);
+    expect(sent.map((request) => request.method)).toEqual(['initialize', 'session/new']);
+    expect(driver.readyToEncode()).toBe(true);
+  });
+
+  it('applies reasoning-only configuration without reattaching', async () => {
+    const { driver, sent, response } = await setup({ reasoningEffort: 'high' }, {} as any, false);
+    expect(response(sent[1].id, { sessionId: 'default' })).toEqual([]);
+    expect(sent[2].params).toEqual({
+      sessionId: 'default',
+      configId: 'reasoning_effort',
+      value: 'high',
+    });
+    expect(
+      response(sent[2].id, { configOptions: [{ id: 'reasoning_effort', currentValue: 'high' }] }),
+    ).toEqual([{ kind: 'session_init', sessionId: 'default' }]);
+    expect(sent.map((request) => request.method)).toEqual([
+      'initialize',
+      'session/new',
+      'session/set_config_option',
+    ]);
+    expect(driver.readyToEncode()).toBe(true);
+  });
+
   it('rejects unknown/old binaries before startup', () => {
     for (const version of [null, '0.9.0', '1.0.23', 'garbage']) {
       expect(() => new GrokDriver().bindRuntimeVersion(version)).toThrow();
