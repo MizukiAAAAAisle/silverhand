@@ -1,5 +1,5 @@
 import { type ComponentType, type SVGProps } from "react";
-import { Activity, AlarmClock, FolderTree, MessagesSquare, Plug, User } from "lucide-react";
+import { Activity, AlarmClock, FolderPen, MessagesSquare, Plug, User } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 export type AgentSection = "profile" | "workspace" | "mcp" | "activity" | "schedules" | "chats";
@@ -39,7 +39,7 @@ export const AGENT_SECTIONS: ReadonlyArray<SectionItem> = [
   {
     id: "workspace",
     label: "Workspace",
-    icon: FolderTree,
+    icon: FolderPen,
     hint: "L1 system prompt, MEMORY, notes.",
   },
   {
