@@ -3,7 +3,7 @@ import { Archive, Bookmark, Plus, Search } from "lucide-react";
 import type { AgentDto } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
-import { neutralAction } from "@/components/common/control-ink-border";
+import { primaryAction } from "@/components/common/primary-action";
 import {
   useAgentAvatarObjectUrls,
   type AgentAvatarSource,
@@ -239,9 +239,9 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
           <div className="shrink-0 px-1 pb-1 pt-2">
             <Button
               type="button"
-              variant="outline"
+              variant="default"
               onClick={props.onCreateWorkspace}
-              {...neutralAction("h-8 w-full bg-bg-elevated")}
+              {...primaryAction("h-8 w-full")}
             >
               <Plus className="size-4" />
               <span>New workspace</span>
