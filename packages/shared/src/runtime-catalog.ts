@@ -42,11 +42,14 @@ export interface RuntimeCatalogEntry {
   reasoningEffortOptions: readonly ReasoningEffort[];
   /**
    * Full replacement option lists for models whose effort capability differs
-   * from the runtime baseline. Unknown / default models deliberately use the
+   * from the runtime baseline. Default and unlisted models outside approved families use the
    * baseline: free-text model ids are open-ended, so Silverhand must not
    * promise a model-specific effort without an explicit capability entry.
    */
   reasoningEffortOptionsByModel?: Readonly<Record<string, readonly ReasoningEffort[]>>;
+  /** Approved model families: matches the exact family or a nonempty `family-*`
+   * suffix. Exact model entries take precedence; unrelated names use baseline. */
+  reasoningEffortOptionsByModelFamily?: Readonly<Record<string, readonly ReasoningEffort[]>>;
   /** Whether the runtime accepts the persisted fast-mode tri-state. */
   supportsFastMode: boolean;
   /**
@@ -91,26 +94,22 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     cliLabel: 'Codex CLI',
     selectable: true,
     reasoningEffortOptions: ['low', 'medium', 'high', 'xhigh'],
-    // Codex Max/Ultra are product-level efforts beyond the conservative
-    // baseline, gated per model. Per shiki's App testing, all gpt-5.6 models
-    // (sol/terra/luna) expose Max; Ultra (the proactive multi-agent mode) is
-    // currently product-exposed only for sol. Product eligibility is the
-    // contract users can actually exercise; other and unknown models stay on
-    // the conservative runtime baseline above. A newly-verified 5.6 model is a
-    // one-line addition here (exact model id, matching modelSuggestions) — we
-    // deliberately do NOT prefix-match `gpt-5.6-*`, which would grant Max to an
-    // unverified future id and flip the conservative-fallback default.
+    // 5.6 remains exact-model gated. Shiki approved the GPT-6 family for
+    // Max/Ultra; its family boundary must not match gpt-60 or proxy aliases.
     reasoningEffortOptionsByModel: {
       'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
       'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
       'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
+    },
+    reasoningEffortOptionsByModelFamily: {
+      'gpt-6': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     },
     supportsFastMode: true,
     supportsProfileMcp: true,
     // Suggested model ids for the Model combobox. Free text still accepted;
     // these are quick-picks only (no `defaultModel` — codex has no forced
     // create-time default).
-    modelSuggestions: ['gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+    modelSuggestions: ['gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra'],
   },
   qoder: {
     kind: 'qoder',
@@ -238,7 +237,7 @@ export function runtimeSupportsReasoningEffort(kind: RuntimeKind): boolean {
 
 /** Model-aware reasoning options. The runtime baseline is the safe fallback
  * for driver-default, custom, and future model ids whose capability has not
- * been explicitly verified. */
+ * been explicitly verified, either individually or as an approved family. */
 export function reasoningEffortOptionsForRuntime(
   kind: RuntimeKind,
   model: string | null | undefined,
@@ -246,7 +245,16 @@ export function reasoningEffortOptionsForRuntime(
   const entry = CATALOG[kind];
   const modelId = model?.trim();
   if (!modelId) return entry.reasoningEffortOptions;
-  return entry.reasoningEffortOptionsByModel?.[modelId] ?? entry.reasoningEffortOptions;
+  const exact = entry.reasoningEffortOptionsByModel?.[modelId];
+  if (exact) return exact;
+  for (const [family, options] of Object.entries(entry.reasoningEffortOptionsByModelFamily ?? {})) {
+    if (
+      modelId === family ||
+      (modelId.startsWith(`${family}-`) && modelId.length > family.length + 1)
+    )
+      return options;
+  }
+  return entry.reasoningEffortOptions;
 }
 
 /** True when the runtime exposes the fast-mode control. */

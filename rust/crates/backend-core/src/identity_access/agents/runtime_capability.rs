@@ -28,7 +28,7 @@
 //!
 //! ## The per-model overrides are an exact-id table, never a prefix match
 //!
-//! Codex `max`/`ultra` are gated on the exact verified model ids. A future
+//! Codex `max`/`ultra` use exact verified 5.6 model ids and an approved GPT-6 family. A future
 //! `gpt-5.6-*` id is deliberately NOT matched by prefix — it stays on the
 //! conservative runtime baseline until an explicit entry verifies it, matching the
 //! TypeScript comment that refuses to grant `max` to an unverified id.
@@ -56,13 +56,21 @@ fn baseline_reasoning_effort_options(kind: RuntimeKind) -> &'static [&'static st
 /// runtime baseline. The exact-id table mirrors `reasoningEffortOptionsByModel`:
 /// all `gpt-5.6` models expose `max`; only `sol` additionally exposes `ultra`. An
 /// unknown, custom, or driver-default model returns `None` and stays on the
-/// conservative baseline — no prefix match.
+/// conservative baseline. GPT-6 additionally has an approved, hyphen-delimited
+/// family rule matching the shared catalog; 5.6 remains exact-id only.
 fn per_model_reasoning_effort_options(
     kind: RuntimeKind,
     model_id: &str,
 ) -> Option<&'static [&'static str]> {
     match kind {
         RuntimeKind::Codex => match model_id {
+            id if id == "gpt-6"
+                || id
+                    .strip_prefix("gpt-6-")
+                    .is_some_and(|suffix| !suffix.is_empty()) =>
+            {
+                Some(&["low", "medium", "high", "xhigh", "max", "ultra"])
+            }
             "gpt-5.6-sol" => Some(&["low", "medium", "high", "xhigh", "max", "ultra"]),
             "gpt-5.6-terra" | "gpt-5.6-luna" => Some(&["low", "medium", "high", "xhigh", "max"]),
             _ => None,
@@ -199,6 +207,40 @@ mod tests {
                 model
             ));
         }
+    }
+
+    #[test]
+    fn codex_gpt6_family_accepts_ultra_without_widening_other_models() {
+        for model in ["gpt-6", "gpt-6-astra", "gpt-6-future", " gpt-6-astra "] {
+            for effort in ["max", "ultra"] {
+                assert!(reasoning_effort_valid_for_runtime(
+                    RuntimeKind::Codex,
+                    Some(effort),
+                    Some(model)
+                ));
+            }
+        }
+        for model in [
+            None,
+            Some(""),
+            Some("gpt-6-"),
+            Some("gpt-60"),
+            Some("gpt-6astra"),
+            Some("proxy/gpt-6-astra"),
+            Some("gpt-5.6-future"),
+            Some("gpt-5.6-terra"),
+        ] {
+            assert!(!reasoning_effort_valid_for_runtime(
+                RuntimeKind::Codex,
+                Some("ultra"),
+                model
+            ));
+        }
+        assert!(!reasoning_effort_valid_for_runtime(
+            RuntimeKind::Grok,
+            Some("ultra"),
+            Some("gpt-6-astra")
+        ));
     }
 
     #[test]

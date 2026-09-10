@@ -100,8 +100,8 @@ describe('runtime catalog (shared source of truth)', () => {
         'max',
       ]);
     }
-    // Non-5.6 / unlisted / default models stay on the conservative baseline —
-    // we do NOT prefix-match the family, so an unverified id gets nothing extra.
+    // Unlisted models outside approved families and the driver default
+    // stay on the conservative baseline.
     for (const model of ['gpt-5.5', 'future-model', null]) {
       expect(reasoningEffortOptionsForRuntime('codex', model)).toEqual([
         'low',
@@ -134,6 +134,7 @@ describe('runtime catalog (shared source of truth)', () => {
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',
+      'gpt-6-astra',
     ]);
     // Suggestions only — codex must not force a create-time default.
     expect(runtimeDefaultModel('codex')).toBeNull();
@@ -178,7 +179,7 @@ describe('runtime catalog (shared source of truth)', () => {
     expect(reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.6-luna')).toBe(true);
     expect(reasoningEffortValidForRuntime('codex', 'max', 'my-proxy-model')).toBe(false);
     expect(reasoningEffortValidForRuntime('codex', 'max', null)).toBe(false);
-    // Ultra remains sol-only, even among the 5.6 family.
+    // Within 5.6, Ultra remains sol-only.
     expect(reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol')).toBe(true);
     expect(reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-terra')).toBe(false);
     expect(reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-luna')).toBe(false);
@@ -197,8 +198,8 @@ describe('runtime catalog (shared source of truth)', () => {
   // Reasoning validity is decided by the STATIC product table alone (no host
   // probe). The table encodes model-specific rules: Codex Max is offered for
   // every verified gpt-5.6 model (sol/terra/luna); Ultra is a further extension
-  // offered only for sol; every other / unlisted / default model stays on the
-  // historical baseline. Both are per-runtime, per-model — never derived from
+  // offered for sol and the approved GPT-6 family; unrelated or default models
+  // stay on the historical baseline. Both are per-runtime, per-model — never derived from
   // another runtime's catalog/set (e.g. qoder's `max`).
   describe('#1486 static reasoning-effort product table', () => {
     it('isBaselineReasoningEffort: historical baseline vs extension', () => {
@@ -220,7 +221,7 @@ describe('runtime catalog (shared source of truth)', () => {
       expect(reasoningEffortValidForRuntime('codex', 'max', null)).toBe(false);
     });
 
-    it('Ultra is offered + valid only for gpt-5.6-sol', () => {
+    it('Ultra remains offered + valid for gpt-5.6-sol', () => {
       expect(reasoningEffortOptionsForRuntime('codex', 'gpt-5.6-sol')).toContain('ultra');
       expect(reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol')).toBe(true);
     });
@@ -299,5 +300,37 @@ describe('Grok runtime capabilities', () => {
     expect(reasoningEffortOptionsForRuntime('grok', 'grok-4.5')).toEqual(['low', 'medium', 'high']);
     expect(reasoningEffortValidForRuntime('grok', 'xhigh', 'custom')).toBe(false);
     expect(runtimeDefaultModel('grok')).toBeNull();
+  });
+});
+
+describe('Codex GPT-6 family reasoning', () => {
+  it('offers and accepts Max/Ultra throughout the approved family', () => {
+    for (const model of ['gpt-6', 'gpt-6-astra', 'gpt-6-future', ' gpt-6-astra ']) {
+      expect(reasoningEffortOptionsForRuntime('codex', model)).toEqual([
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+        'ultra',
+      ]);
+      expect(reasoningEffortValidForRuntime('codex', 'ultra', model)).toBe(true);
+    }
+  });
+
+  it('keeps unrelated, missing and similarly named models on baseline', () => {
+    for (const model of [
+      null,
+      '',
+      'gpt-6-',
+      'gpt-60',
+      'gpt-6astra',
+      'proxy/gpt-6-astra',
+      'gpt-5.6-future',
+      'gpt-5.6-terra',
+    ]) {
+      expect(reasoningEffortValidForRuntime('codex', 'ultra', model)).toBe(false);
+    }
+    expect(reasoningEffortValidForRuntime('grok', 'ultra', 'gpt-6-astra')).toBe(false);
   });
 });

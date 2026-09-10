@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentRow } from '@silverhand/shared';
 
-import {
-  AgentServiceError,
-  normalizeRuntimeTuning,
-} from '../../src/services/agent-service.js';
+import { AgentServiceError, normalizeRuntimeTuning } from '../../src/services/agent-service.js';
 
 /**
  * `normalizeRuntimeTuning` is the write-boundary guard for reasoning/runtime
@@ -60,14 +57,14 @@ describe('normalizeRuntimeTuning — reasoning valid for the agent runtime', () 
   });
 
   it('accepts an explicit reasoning value the runtime supports', () => {
-    expect(
-      normalizeRuntimeTuning(row({ runtime: 'codex' }), { reasoning_effort: 'high' }),
-    ).toEqual({ reasoning_effort: 'high' });
+    expect(normalizeRuntimeTuning(row({ runtime: 'codex' }), { reasoning_effort: 'high' })).toEqual(
+      { reasoning_effort: 'high' },
+    );
     // qoder takes its full allowed set.
     for (const v of ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
-      expect(
-        normalizeRuntimeTuning(row({ runtime: 'qoder' }), { reasoning_effort: v }),
-      ).toEqual({ reasoning_effort: v });
+      expect(normalizeRuntimeTuning(row({ runtime: 'qoder' }), { reasoning_effort: v })).toEqual({
+        reasoning_effort: v,
+      });
     }
   });
 
@@ -92,9 +89,20 @@ describe('normalizeRuntimeTuning — reasoning valid for the agent runtime', () 
       model: 'gpt-5.6-sol',
       reasoning_effort: 'ultra',
     });
-    expect(() =>
-      normalizeRuntimeTuning(ultra, { model: 'gpt-5.5' }),
-    ).toThrow(/reasoning_effort 'ultra'/);
+    expect(() => normalizeRuntimeTuning(ultra, { model: 'gpt-5.5' })).toThrow(
+      /reasoning_effort 'ultra'/,
+    );
+  });
+
+  it('accepts GPT-6 Ultra updates and rejects switching that effort to an unsupported model', () => {
+    const current = row({ runtime: 'codex', model: 'gpt-6-astra', reasoning_effort: 'high' });
+    expect(normalizeRuntimeTuning(current, { reasoning_effort: 'ultra' })).toEqual({
+      reasoning_effort: 'ultra',
+    });
+    const ultra = row({ runtime: 'codex', model: 'gpt-6-astra', reasoning_effort: 'ultra' });
+    expect(() => normalizeRuntimeTuning(ultra, { model: 'gpt-5.6-terra' })).toThrow(
+      /reasoning_effort 'ultra'/,
+    );
   });
 
   it('accepts Codex Max on a verified 5.6 model, rejects it off one (#task:1492)', () => {
@@ -110,9 +118,9 @@ describe('normalizeRuntimeTuning — reasoning valid for the agent runtime', () 
       model: 'gpt-5.6-sol',
       reasoning_effort: 'max',
     });
-    expect(() =>
-      normalizeRuntimeTuning(sol, { model: 'gpt-5.5' }),
-    ).toThrow(/reasoning_effort 'max'/);
+    expect(() => normalizeRuntimeTuning(sol, { model: 'gpt-5.5' })).toThrow(
+      /reasoning_effort 'max'/,
+    );
     // Max with no model at all stays rejected (conservative baseline).
     expect(() =>
       normalizeRuntimeTuning(row({ runtime: 'codex' }), { reasoning_effort: 'max' }),
@@ -120,26 +128,26 @@ describe('normalizeRuntimeTuning — reasoning valid for the agent runtime', () 
   });
 
   it('allows explicit null (clearing) on any runtime', () => {
-    expect(
-      normalizeRuntimeTuning(row({ runtime: 'codex' }), { reasoning_effort: null }),
-    ).toEqual({ reasoning_effort: null });
+    expect(normalizeRuntimeTuning(row({ runtime: 'codex' }), { reasoning_effort: null })).toEqual({
+      reasoning_effort: null,
+    });
   });
 
   it('leaves non-reasoning updates untouched', () => {
-    expect(
-      normalizeRuntimeTuning(row({ runtime: 'codex' }), { display_name: 'New' }),
-    ).toEqual({ display_name: 'New' });
+    expect(normalizeRuntimeTuning(row({ runtime: 'codex' }), { display_name: 'New' })).toEqual({
+      display_name: 'New',
+    });
   });
 
   it('allows non-null fast mode only on runtimes that support it', () => {
-    expect(
-      normalizeRuntimeTuning(row({ runtime: 'codex' }), { fast_mode: true }),
-    ).toEqual({ fast_mode: true });
-    expect(() =>
-      normalizeRuntimeTuning(row({ runtime: 'claude' }), { fast_mode: false }),
-    ).toThrow(/fast_mode is not valid for runtime 'claude'/);
-    expect(
-      normalizeRuntimeTuning(row({ runtime: 'claude' }), { fast_mode: null }),
-    ).toEqual({ fast_mode: null });
+    expect(normalizeRuntimeTuning(row({ runtime: 'codex' }), { fast_mode: true })).toEqual({
+      fast_mode: true,
+    });
+    expect(() => normalizeRuntimeTuning(row({ runtime: 'claude' }), { fast_mode: false })).toThrow(
+      /fast_mode is not valid for runtime 'claude'/,
+    );
+    expect(normalizeRuntimeTuning(row({ runtime: 'claude' }), { fast_mode: null })).toEqual({
+      fast_mode: null,
+    });
   });
 });

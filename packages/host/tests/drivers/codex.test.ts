@@ -65,7 +65,7 @@ function makeSpawnCtx(overrides: Partial<DriverSpawnContext> = {}): {
 
 /** Wait one microtask tick so `bindIO`'s `queueMicrotask` runs. */
 async function tick(): Promise<void> {
-  await new Promise(r => queueMicrotask(() => r(undefined)));
+  await new Promise((r) => queueMicrotask(() => r(undefined)));
 }
 
 describe('CodexDriver static config', () => {
@@ -95,9 +95,9 @@ describe('CodexDriver static config', () => {
 describe('CodexDriver.classifyInitProgress', () => {
   it('treats the initialize response as protocol-ready', () => {
     const d = new CodexDriver();
-    expect(
-      d.classifyInitProgress(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })),
-    ).toBe('protocol_ready');
+    expect(d.classifyInitProgress(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }))).toBe(
+      'protocol_ready',
+    );
   });
 
   it('treats thread/started as session-ready', () => {
@@ -134,7 +134,7 @@ describe('CodexDriver.buildArgs', () => {
       const args = new CodexDriver().buildArgs(ctx);
       expect(args.slice(0, 3)).toEqual(['app-server', '--listen', 'stdio://']);
       const kv = collectCArgs(args);
-      expect([...kv.keys()].some(k => k.startsWith('mcp_servers.chat'))).toBe(false);
+      expect([...kv.keys()].some((k) => k.startsWith('mcp_servers.chat'))).toBe(false);
     } finally {
       cleanup();
     }
@@ -152,7 +152,7 @@ describe('CodexDriver.buildArgs', () => {
   });
 
   it('passes Ultra verbatim to Codex app-server', () => {
-    const { ctx, cleanup } = makeSpawnCtx({ reasoningEffort: 'ultra' });
+    const { ctx, cleanup } = makeSpawnCtx({ model: 'gpt-6-astra', reasoningEffort: 'ultra' });
     try {
       const kv = collectCArgs(new CodexDriver().buildArgs(ctx));
       expect(kv.get('model_reasoning_effort')).toBe('"ultra"');
@@ -261,10 +261,8 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
     expect(frame.params.clientUserMessageId).toBe('uuid-A');
 
     // Transport ack: silent.
-    const events = driver.parseLine(
-      JSON.stringify({ jsonrpc: '2.0', id: frame.id, result: {} }),
-    );
-    expect(events.filter(e => e.kind === 'input_lifecycle')).toEqual([]);
+    const events = driver.parseLine(JSON.stringify({ jsonrpc: '2.0', id: frame.id, result: {} }));
+    expect(events.filter((e) => e.kind === 'input_lifecycle')).toEqual([]);
   });
 
   it('stamps clientUserMessageId on turn/start too', () => {
@@ -296,7 +294,7 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
         },
       }),
     );
-    expect(startedEvents.filter(e => e.kind === 'input_lifecycle')).toEqual([
+    expect(startedEvents.filter((e) => e.kind === 'input_lifecycle')).toEqual([
       { kind: 'input_lifecycle', commandUuid: 'uuid-A', state: 'started' },
     ]);
     // The real completed arrives as its OWN frame later — mapped then,
@@ -316,7 +314,7 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
         },
       }),
     );
-    expect(completedEvents.filter(e => e.kind === 'input_lifecycle')).toEqual([
+    expect(completedEvents.filter((e) => e.kind === 'input_lifecycle')).toEqual([
       { kind: 'input_lifecycle', commandUuid: 'uuid-A', state: 'completed' },
     ]);
   });
@@ -336,7 +334,7 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
         },
       }),
     );
-    expect(events.filter(e => e.kind === 'input_lifecycle')).toEqual([]);
+    expect(events.filter((e) => e.kind === 'input_lifecycle')).toEqual([]);
   });
 
   it('a steer response carrying a turn id still updates activeTurnId (generic result handling)', () => {
@@ -354,7 +352,7 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
         result: { turn: { id: 'turn-9' } },
       }),
     );
-    expect(events.filter(e => e.kind === 'input_lifecycle')).toEqual([]);
+    expect(events.filter((e) => e.kind === 'input_lifecycle')).toEqual([]);
     // Next encode steers into the announced turn.
     const second = driver.encodeStdinMessage('mid-turn', 'thread-abc');
     expect(JSON.parse(second!).method).toBe('turn/steer');
@@ -374,8 +372,8 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
         error: { message: 'steer rejected' },
       }),
     );
-    expect(events.filter(e => e.kind === 'input_lifecycle')).toEqual([]);
-    expect(events.some(e => e.kind === 'error')).toBe(true);
+    expect(events.filter((e) => e.kind === 'input_lifecycle')).toEqual([]);
+    expect(events.some((e) => e.kind === 'error')).toBe(true);
   });
 });
 
@@ -409,9 +407,7 @@ describe('CodexDriver JSON-RPC handshake', () => {
 
     // Server replies to initialize → driver should send `initialized`
     // notification + `thread/start` request.
-    const events1 = driver.parseLine(
-      JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }),
-    );
+    const events1 = driver.parseLine(JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }));
     expect(events1).toEqual([]);
     expect(io.lines).toHaveLength(3);
     const initialized = JSON.parse(io.lines[1]!);
@@ -453,7 +449,7 @@ describe('CodexDriver JSON-RPC handshake', () => {
         params: { thread: { id: 'thread-abc' } },
       }),
     );
-    expect(events3.find(e => e.kind === 'session_init')).toBeUndefined();
+    expect(events3.find((e) => e.kind === 'session_init')).toBeUndefined();
   });
 
   it('uses thread/resume when cliSessionId is set', async () => {
@@ -466,9 +462,7 @@ describe('CodexDriver JSON-RPC handshake', () => {
     await tick();
     const init = JSON.parse(io.lines[0]!);
 
-    driver.parseLine(
-      JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }),
-    );
+    driver.parseLine(JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }));
     const threadCall = JSON.parse(io.lines[2]!);
     expect(threadCall.method).toBe('thread/resume');
     expect(threadCall.params).toMatchObject({
@@ -478,8 +472,8 @@ describe('CodexDriver JSON-RPC handshake', () => {
     expect(threadCall.params).not.toHaveProperty('model');
   });
 
-  it('uses an explicitly configured model for thread/start', async () => {
-    const built = makeSpawnCtx({ model: 'gpt-5.4' });
+  it.each(['gpt-5.4', 'gpt-6-astra'])('uses %s for thread/start', async (model) => {
+    const built = makeSpawnCtx({ model });
     cleanup = built.cleanup;
     const io = makeIO(built.ctx);
     const driver = new CodexDriver();
@@ -488,14 +482,12 @@ describe('CodexDriver JSON-RPC handshake', () => {
     await tick();
     const init = JSON.parse(io.lines[0]!);
 
-    driver.parseLine(
-      JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }),
-    );
+    driver.parseLine(JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }));
     const threadCall = JSON.parse(io.lines[2]!);
     expect(threadCall).toMatchObject({
       method: 'thread/start',
       params: {
-        model: 'gpt-5.4',
+        model,
       },
     });
   });
@@ -509,9 +501,7 @@ describe('CodexDriver JSON-RPC handshake', () => {
     driver.bindIO(io);
     await tick();
     const init = JSON.parse(io.lines[0]!);
-    driver.parseLine(
-      JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }),
-    );
+    driver.parseLine(JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }));
     const resume = JSON.parse(io.lines[2]!);
     expect(resume.method).toBe('thread/resume');
 
@@ -547,9 +537,7 @@ describe('CodexDriver JSON-RPC handshake', () => {
     driver.bindIO(io);
     await tick();
     const init = JSON.parse(io.lines[0]!);
-    driver.parseLine(
-      JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }),
-    );
+    driver.parseLine(JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }));
     // thread/started → triggers session_init AND startInitialTurn
     driver.parseLine(
       JSON.stringify({
@@ -598,9 +586,7 @@ describe('CodexDriver JSON-RPC handshake', () => {
     driver.bindIO(io);
     await tick();
     const init = JSON.parse(io.lines[0]!);
-    driver.parseLine(
-      JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }),
-    );
+    driver.parseLine(JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }));
 
     const resume = JSON.parse(io.lines[2]!);
     expect(resume.method).toBe('thread/resume');
@@ -632,9 +618,7 @@ describe('CodexDriver JSON-RPC handshake', () => {
     driver.bindIO(io);
     await tick();
     const init = JSON.parse(io.lines[0]!);
-    driver.parseLine(
-      JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }),
-    );
+    driver.parseLine(JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }));
 
     const resume = JSON.parse(io.lines[2]!);
     expect(resume.method).toBe('thread/resume');
@@ -707,7 +691,7 @@ describe('CodexDriver.parseLine event mapping', () => {
         params: { item: { type: 'agentMessage', id: 'msg-1', text: 'Hello' } },
       }),
     );
-    expect(completion.find(e => e.kind === 'text')).toBeUndefined();
+    expect(completion.find((e) => e.kind === 'text')).toBeUndefined();
   });
 
   it('emits text on item/completed agentMessage when no delta was streamed', () => {
@@ -772,9 +756,7 @@ describe('CodexDriver.parseLine event mapping', () => {
         params: { item: { type: 'commandExecution', command: 'ls -al' } },
       }),
     );
-    expect(start).toEqual([
-      { kind: 'tool_call', name: 'shell', input: { command: 'ls -al' } },
-    ]);
+    expect(start).toEqual([{ kind: 'tool_call', name: 'shell', input: { command: 'ls -al' } }]);
     const end = driver.parseLine(
       JSON.stringify({
         jsonrpc: '2.0',
@@ -856,7 +838,9 @@ describe('CodexDriver.parseLine event mapping', () => {
         params: { item: { type: 'webSearch', id: 'ws-1' } },
       }),
     );
-    expect(end).toEqual([{ kind: 'tool_output', name: 'web_search', toolCallId: 'ws-1', outcome: 'completed' }]);
+    expect(end).toEqual([
+      { kind: 'tool_output', name: 'web_search', toolCallId: 'ws-1', outcome: 'completed' },
+    ]);
   });
 
   it('emits one tool_output per fileChange entry on completion', () => {
@@ -878,8 +862,18 @@ describe('CodexDriver.parseLine event mapping', () => {
       }),
     );
     expect(start).toEqual([
-      { kind: 'tool_call', name: 'file_change', input: { path: 'a.ts', kind: 'modify' }, toolCallId: 'fc-1' },
-      { kind: 'tool_call', name: 'file_change', input: { path: 'b.ts', kind: 'create' }, toolCallId: 'fc-1' },
+      {
+        kind: 'tool_call',
+        name: 'file_change',
+        input: { path: 'a.ts', kind: 'modify' },
+        toolCallId: 'fc-1',
+      },
+      {
+        kind: 'tool_call',
+        name: 'file_change',
+        input: { path: 'b.ts', kind: 'create' },
+        toolCallId: 'fc-1',
+      },
     ]);
 
     const end = driver.parseLine(
@@ -1020,11 +1014,19 @@ function collectCArgs(args: string[]): Map<string, string> {
   return out;
 }
 
-
 it('emits only terminal markers for command and MCP results', () => {
-  for (const item of [{ type: 'commandExecution', aggregatedOutput: 'private body' }, { type: 'mcpToolCall', server: 'example', tool: 'read', result: { content: 'private body' } }]) {
-    const events = new CodexDriver().parseLine(JSON.stringify({ jsonrpc: '2.0', method: 'item/completed', params: { item: { id: 'marker-call', status: 'completed', exitCode: 0, ...item } } }));
-    const marker = events.find(event => event.kind === 'tool_output');
+  for (const item of [
+    { type: 'commandExecution', aggregatedOutput: 'private body' },
+    { type: 'mcpToolCall', server: 'example', tool: 'read', result: { content: 'private body' } },
+  ]) {
+    const events = new CodexDriver().parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'item/completed',
+        params: { item: { id: 'marker-call', status: 'completed', exitCode: 0, ...item } },
+      }),
+    );
+    const marker = events.find((event) => event.kind === 'tool_output');
     expect(marker).toBeDefined();
     expect(marker).not.toHaveProperty('output');
     expect(JSON.stringify(events)).not.toContain('private body');
