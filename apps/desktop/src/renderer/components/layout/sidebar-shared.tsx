@@ -88,6 +88,7 @@ export function sidebarRowStateClass(selected: boolean | undefined): string {
 
 interface SectionProps {
   label: string;
+  labelClassName?: string;
   icon?: ReactNode;
   count?: number;
   onAdd?: () => void;
@@ -120,6 +121,7 @@ export function SidebarBranchLayout({
 
 export function SidebarSection({
   label,
+  labelClassName,
   icon,
   count,
   onAdd,
@@ -145,6 +147,7 @@ export function SidebarSection({
       header={
         <SidebarSectionHeader
           label={label}
+          labelClassName={labelClassName}
           icon={icon}
           count={count}
           onAdd={onAdd}
@@ -162,6 +165,7 @@ export function SidebarSection({
 
 interface SectionHeaderProps {
   label: string;
+  labelClassName?: string;
   leading?: ReactNode;
   trailing?: ReactNode;
   icon?: ReactNode;
@@ -177,6 +181,7 @@ interface SectionHeaderProps {
 /** Collapse state belongs to the caller; this header only presents it. */
 export function SidebarSectionHeader({
   label,
+  labelClassName,
   leading,
   trailing,
   icon,
@@ -211,7 +216,7 @@ export function SidebarSectionHeader({
         </span>
       ) : null}
       {leading}
-      <span className="truncate">{label}</span>
+      <span className={cn("truncate", labelClassName)}>{label}</span>
       {trailing}
       {typeof count === "number" ? (
         <span data-sidebar-count className="shrink-0 font-medium text-text-muted/70">

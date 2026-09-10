@@ -73,6 +73,7 @@ export function DirectMessagesGroup(props: {
   return (
     <SidebarSection
       label="DIRECT MESSAGES"
+      labelClassName="text-[11px] tracking-normal"
       icon={<MessageSquare className="size-3.5" />}
       // The count is the number of lines the section shows, draft included —
       // a count that disagreed with the visible rows would read as a bug.
