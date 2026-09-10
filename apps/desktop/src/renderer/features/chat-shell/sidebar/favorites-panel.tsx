@@ -89,7 +89,7 @@ export function FavoritesGroup(props: {
 
   return (
     <SidebarSection
-      label="Starred"
+      label="STARRED"
       icon={<Star className="size-3.5" />}
       count={items.length}
       collapsible
