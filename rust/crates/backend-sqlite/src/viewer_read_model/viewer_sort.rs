@@ -1145,8 +1145,21 @@ async fn sidebar_ids_tx(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
 ) -> Result<Vec<String>, PersistenceFailure> {
-    let rows = sqlx::query("SELECT w.id FROM workspaces w WHERE w.archived_at IS NULL AND EXISTS (SELECT 1 FROM workspace_users wu WHERE wu.workspace_id=w.id AND wu.user_id=?) ORDER BY (w.owner_agent_id IS NOT NULL), w.created_at, w.id")
-        .bind(viewer.as_str()).fetch_all(&mut **tx).await.map_err(ViewerSortStoreError::from)?;
+    let rows = sqlx::query(
+        "SELECT w.id
+         FROM workspaces w
+         WHERE w.archived_at IS NULL
+           AND EXISTS (
+               SELECT 1 FROM workspace_users wu
+               WHERE wu.workspace_id = w.id AND wu.user_id = ?
+           )
+         ORDER BY (w.owner_agent_id IS NOT NULL), w.created_at, w.id",
+    )
+    .bind(viewer.as_str())
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ViewerSortStoreError::from)?;
+
     let mut ids = vec![
         "section:starred".to_owned(),
         "section:direct_messages".to_owned(),

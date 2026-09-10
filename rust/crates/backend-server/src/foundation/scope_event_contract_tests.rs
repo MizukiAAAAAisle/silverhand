@@ -4475,6 +4475,7 @@ const SUPPORTED_EVENT_KINDS: &[&str] = &[
     "unread_updated",
     "attention_badge_updated",
     "viewer_workspaces_changed",
+    "sidebar_sort_changed",
     "saved_changed",
     "message_reaction_changed",
     "attachment_changed",
@@ -4511,6 +4512,7 @@ fn wire_kind(event: &ProductEvent) -> &'static str {
         ProductEvent::NotificationDismissed { .. } => "unread_updated",
         ProductEvent::AttentionBadgeUpdated(_) => "attention_badge_updated",
         ProductEvent::ViewerWorkspacesChanged { .. } => "viewer_workspaces_changed",
+        ProductEvent::SidebarSortChanged {} => "sidebar_sort_changed",
         ProductEvent::SavedChanged(_) => "saved_changed",
         ProductEvent::MessageReactionChanged(_) => "message_reaction_changed",
         ProductEvent::AttachmentChanged(_) => "attachment_changed",
@@ -4607,6 +4609,7 @@ fn the_supported_wire_kinds_are_a_closed_named_set() {
             workspace_id: "w-1".to_owned(),
             role: None,
         },
+        ProductEvent::SidebarSortChanged {},
         // A representative saved-set toggle. Its inner `Value` is illustrative, exactly
         // as the other opaque-payload samples above are (`Message`, `AgentActivity`, …):
         // this gate pins the variant→`kind` mapping, the serde tag, and set membership,
