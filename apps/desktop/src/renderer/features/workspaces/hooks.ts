@@ -163,10 +163,7 @@ export function sortConversationList(items: ChannelListItem[]): ChannelListItem[
   return [...items].sort((a, b) => a.created_at - b.created_at);
 }
 
-/** The workspace rail list cache now carries the viewer's inline sort state
- *  (#task:1146). Readers default to the items array via `select` (so existing
- *  consumers are untouched); `useWorkspaceSortState` selects `viewerSort` off
- *  the same cache. Writers (e.g. optimistic create) must preserve the shape. */
+/** Cache writers preserve the retired viewerSort field; sidebar ordering has its own read. */
 export interface WorkspaceListPayload {
   items: WorkspaceListItem[];
   viewerSort: ViewerSortStateDto;
@@ -185,16 +182,6 @@ export function useWorkspaces(options?: { enabled?: boolean }) {
     queryFn: fetchWorkspaces,
     select: (r) => r.items,
     enabled: options?.enabled ?? true,
-  });
-}
-
-/** The viewer's sort state (`mode` + sparse per-entity `entries`) for the
- *  workspace rail, read off the same `useWorkspaces` cache. */
-export function useWorkspaceSortState() {
-  return useQuery({
-    queryKey: workspacesKey,
-    queryFn: fetchWorkspaces,
-    select: (r) => r.viewerSort,
   });
 }
 
@@ -791,7 +778,6 @@ export function useArchivedChannelsAcrossWorkspaces(workspaceIds: readonly strin
 type SortCachePayload = { items: unknown; viewerSort: ViewerSortStateDto };
 
 function sortListQueryKey(listKey: string): readonly unknown[] | null {
-  if (listKey === "workspaces") return workspacesKey;
   if (listKey.startsWith("channels:")) {
     return channelsKey(listKey.slice("channels:".length));
   }
@@ -832,13 +818,7 @@ export function sortCacheAdapter(listKey: string): SortCacheAdapter | null {
   return null;
 }
 
-/** Toggle one SCOPE's sort mode (recent|manual). The scope is selected by
- *  `group`: `'workspaces'` requires a rail group (`agent_space|regular`; star is the
- *  Favorites overlay, not a rail group — #task:1252),
- *  `'channels:<id>'` omits it (list-wide scope `''`). Optimistic on the list
- *  cache's inline `viewerSort.modes`, reconciled with the authoritative server
- *  state. The optimistic scope key MUST match what the backend derives from
- *  (list_key, group) so the menu can't show a false state. */
+/** Toggle the channel/favorites list mode and reconcile its cache. */
 export function useSetSortMode() {
   const qc = useQueryClient();
   return useMutation({

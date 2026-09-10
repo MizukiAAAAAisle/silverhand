@@ -1,16 +1,11 @@
 import * as Popover from "@radix-ui/react-popover";
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentDto, SortGroup } from "@silverhand/shared";
-import { useSortable } from "@dnd-kit/sortable";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { AgentDto } from "@silverhand/shared";
 import { MoreVertical, Plus, Settings } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { WorkspaceIcon } from "@/components/WorkspaceIcon";
-import {
-  SortableGroup,
-  animateLayoutChanges,
-  sortableItemStyle,
-} from "@/components/layout/list-drag-sort";
+
 import {
   SidebarSectionHeader,
   SidebarBranchLayout,
@@ -53,24 +48,6 @@ export interface WorkspaceItem {
   created_at: number;
 }
 
-/** Sorting retains separate ownership scopes even though the list has no group headers. */
-export interface WorkspaceSortConfig<GroupKey extends SortGroup = SortGroup> {
-  /** Sub-group render order. Each rail section now drives a single group:
-   *  `['agent_space']` or `['regular']` — one flat, drag-ordered list per section.
-   *  These are `SortGroup` WIRE + DB tokens, produced in exactly one place
-   *  (`railSortGroupOf`); they are not display words. */
-  order: GroupKey[];
-  /** The hard group a workspace lives in (agent-owned | people-owned). */
-  groupKeyOf: (workspace: WorkspaceItem) => GroupKey;
-  /** Commit a group's new full order. */
-  onReorder: (group: GroupKey, orderedIds: string[]) => void;
-}
-
-interface WorkspaceListProps<GroupKey extends SortGroup = SortGroup> extends RailRowContext {
-  workspaces: WorkspaceItem[];
-  sort: WorkspaceSortConfig<GroupKey>;
-}
-
 /** Per-row context shared by every entry point so a row is the SAME component
  *  regardless of where it is rendered (one entity, one shape). */
 interface RailRowContext {
@@ -80,7 +57,6 @@ interface RailRowContext {
   onOpenWorkspaceSettings: (workspaceId: string) => void;
   agentsById?: ReadonlyMap<string, AgentDto>;
   ownerAgentAvatarUrls: ReadonlyMap<string, string | null>;
-  sortMenu: ReactNode;
 }
 
 function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element {
@@ -134,89 +110,12 @@ function WorkspaceRow({
   );
 }
 
-export function WorkspaceList<GroupKey extends SortGroup = SortGroup>({
-  workspaces,
-  sort,
-  ...ctx
-}: WorkspaceListProps<GroupKey>): JSX.Element {
-  return <ul>{renderSortableGroups(workspaces, sort, ctx)}</ul>;
-}
-
-/** Render the workspaces as drag-sortable hard sub-groups in `sort.order`,
- *  each its own DnD context (no cross-group drag), a divider between non-empty
- *  groups. The workspaces are already in final order (Sidebar sorted them), so
- *  partitioning preserves within-group order. */
-function renderSortableGroups<GroupKey extends SortGroup>(
-  workspaces: WorkspaceItem[],
-  sort: WorkspaceSortConfig<GroupKey>,
-  ctx: RailRowContext,
-): ReactNode {
-  const partitions = sort.order
-    .map((key) => ({ key, items: workspaces.filter((w) => sort.groupKeyOf(w) === key) }))
-    .filter((p) => p.items.length > 0);
-
-  return partitions.map((p, i) => (
-    <Fragment key={p.key}>
-      {i > 0 ? (
-        <li>
-          <div className="mx-2 my-1 border-t border-border-subtle" />
-        </li>
-      ) : null}
-      <SortableGroup
-        ids={p.items.map((w) => w.id)}
-        onReorder={(ordered) => sort.onReorder(p.key, ordered)}
-      >
-        {p.items.map((w) => (
-          <SortableWorkspaceItem key={w.id} workspace={w} ctx={ctx} />
-        ))}
-      </SortableGroup>
-    </Fragment>
-  ));
-}
-
-/** Drag-sortable workspace BRANCH — the `<li>` is the sortable node and holds
- *  the transform, so an expanded workspace's channel children travel with their
- *  parent while it is dragged (they live inside this `<li>`).
- *
- *  The drag SURFACE, however, is the header row only: `attributes` + `listeners`
- *  are handed down and spread on the header `<div>`, not here. Putting them on the
- *  `<li>` (what the flat rail did) would make a pointerdown on any CHILD row start
- *  a workspace drag. Whole-row drag on the header (no grip), 4px activation; the
- *  drag style comes from the shared list-drag-sort helpers. */
-function SortableWorkspaceItem({
+export function WorkspaceBranch({
   workspace,
   ctx,
 }: {
   workspace: WorkspaceItem;
   ctx: RailRowContext;
-}): JSX.Element {
-  const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({
-    id: workspace.id,
-    animateLayoutChanges,
-  });
-  return (
-    <li
-      ref={setNodeRef}
-      style={sortableItemStyle({ transform, transition, isDragging })}
-      className="touch-none group/wsbranch"
-    >
-      <WorkspaceBranch
-        workspace={workspace}
-        ctx={ctx}
-        dragHandleProps={{ ...attributes, ...listeners }}
-      />
-    </li>
-  );
-}
-
-function WorkspaceBranch({
-  workspace,
-  ctx,
-  dragHandleProps,
-}: {
-  workspace: WorkspaceItem;
-  ctx: RailRowContext;
-  dragHandleProps: Record<string, unknown>;
 }): JSX.Element {
   const [expanded, setExpanded] = useSidebarSectionExpanded(`ws.${workspace.id}`, false);
 
@@ -232,7 +131,6 @@ function WorkspaceBranch({
           ctx={ctx}
           expanded={expanded}
           onToggle={() => setExpanded()}
-          dragHandleProps={dragHandleProps}
         />
       }
     >
@@ -255,13 +153,11 @@ function WorkspaceHeaderRow({
   ctx,
   expanded,
   onToggle,
-  dragHandleProps,
 }: {
   workspace: WorkspaceItem;
   ctx: RailRowContext;
   expanded: boolean;
   onToggle: () => void;
-  dragHandleProps: Record<string, unknown>;
 }): JSX.Element {
   const title = workspaceRowTitle(workspace, ctx);
   const icon = isAgentSpace(workspace) ? rowIconFor(workspace, ctx) : null;
@@ -286,7 +182,6 @@ function WorkspaceHeaderRow({
           <span className="size-1.5 rounded-full bg-success" />
         ) : null}
         <span className={cn("flex items-center", hoverOnly)}>
-          {ctx.sortMenu}
           <WorkspaceActions
             title={title}
             onCreate={() => ctx.onCreateChannel(workspace.id)}
@@ -299,13 +194,8 @@ function WorkspaceHeaderRow({
     </WorkspaceRow>
   );
 
-  // The drag surface is a WRAPPER around the header, not the header itself: the
-  // context-menu trigger below goes through a Radix `Slot`, which swallows the
-  // dnd-kit pointer activation when the listeners are cloned onto the same element
-  // (the hazard `ChannelRow` documents). Wrapping also scopes the surface to the
-  // header — a pointerdown on a child channel row can never start a workspace drag.
   return (
-    <div className="cursor-grab select-none active:cursor-grabbing" {...dragHandleProps}>
+    <div className="group/wsbranch">
       <WorkspaceContextMenu
         trigger={row}
         muteWorkspaceId={canMuteWorkspace(workspace) ? workspace.id : null}

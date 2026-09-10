@@ -39,8 +39,6 @@ export function useSelectionPersistenceEffects(params: {
   // `<workspaceId>:<channelId>` we stamped, so re-renders that don't change
   // the selection don't re-POST /api/sort/touch.
   const lastTouchedChannelRef = useRef<string | null>(null);
-  // Same dedup for the workspace rail's recent-opened stamp (#task:1146).
-  const lastTouchedWorkspaceRef = useRef<string | null>(null);
 
   // Record the user's selection so we can restore it next time they
   // come back to this workspace. Persist on every change so quitting
@@ -89,20 +87,6 @@ export function useSelectionPersistenceEffects(params: {
       entity_id: selectedChannelId,
     });
   }, [selectedWorkspaceId, selectedChannelId, activeChannels]);
-
-  // Stamp "recently opened" for the workspace rail whenever the viewer selects
-  // a workspace (#task:1146). Same write-point (selection, not activity) +
-  // fire-and-forget + per-workspace dedup as the channel stamp above. Archived
-  // workspaces are out of the rail's sort scope, so skip them (the backend
-  // filters them on read anyway, but this avoids the redundant POST).
-  useEffect(() => {
-    if (!selectedWorkspaceId) return;
-    const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
-    if (!ws || ws.archived_at !== null) return;
-    if (lastTouchedWorkspaceRef.current === selectedWorkspaceId) return;
-    lastTouchedWorkspaceRef.current = selectedWorkspaceId;
-    touchSort.mutate({ list_key: "workspaces", entity_id: selectedWorkspaceId });
-  }, [selectedWorkspaceId, workspaces]);
 
   // Remember the workspace the user is actively viewing so returning to the
   // chat section (via bare `/chat`) restores it rather than `workspaces[0]`.

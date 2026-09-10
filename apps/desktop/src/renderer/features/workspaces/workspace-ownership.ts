@@ -22,9 +22,7 @@
  * does the published one: the local `WorkspaceUiKind` alias went out with its last
  * consumer, so no expression under `src/renderer` can produce a container-kind
  * token at all. A same-shaped local union re-declared "for readability" brings the
- * subset drift straight back (@Paul, #task:2069) — the axis is this file. The one
- * container word the renderer still mints is the rail's SORT SCOPE
- * (`./rail-sort-group.ts`), which is storage, not this question.
+ * subset drift straight back (@Paul, #task:2069) — the axis is this file.
  *
  * A ZERO-IMPORT LEAF on purpose. The parameter is structural, so the SAME
  * predicate serves the domain object (`WorkspaceListItem`) and the wire refs that

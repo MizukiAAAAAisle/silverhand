@@ -165,8 +165,8 @@ describe("Favorites sort cache wiring (#task:1254)", () => {
     expect("viewerSort" in written).toBe(false);
   });
 
-  it("keeps resolving workspaces/channels to the camelCase viewerSort field (no regression)", () => {
-    for (const listKey of ["workspaces", "channels:w1"]) {
+  it("keeps channel sort caching and retires workspace sorting", () => {
+    for (const listKey of ["channels:w1"]) {
       const adapter = sortCacheAdapter(listKey);
       expect(adapter).not.toBeNull();
       const cache = { items: [], viewerSort: vs([], { "": "recent" }) };
@@ -176,7 +176,7 @@ describe("Favorites sort cache wiring (#task:1254)", () => {
       expect(written.viewerSort).toEqual(next);
       expect("viewer_sort" in written).toBe(false);
     }
-    expect(sortCacheAdapter("workspaces")!.key).toEqual(["workspaces"]);
+    expect(sortCacheAdapter("workspaces")).toBeNull();
     expect(sortCacheAdapter("channels:w1")!.key).toEqual(["workspaces", "w1", "channels"]);
   });
 

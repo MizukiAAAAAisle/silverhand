@@ -8,12 +8,11 @@ import {
   useAgentAvatarObjectUrls,
   type AgentAvatarSource,
 } from "@/features/agent-shell/hooks/avatar-hooks";
-import { useSetSortMode, useWorkspaceSortState } from "@/features/workspaces/hooks";
-import { sortModeOf } from "@/lib/viewer-sort";
-import { railSortGroupOf, type RailSortGroup } from "@/features/workspaces/rail-sort-group";
-import { useListDragSort } from "../../../components/layout/list-drag-sort";
-import { SortModeMenu } from "../../../components/layout/SortModeMenu";
-import { WorkspaceList, type WorkspaceItem, type WorkspaceSortConfig } from "./workspaces-panel";
+import { SortableGroup } from "@/components/layout/list-drag-sort";
+import { SortableSidebarBranch } from "@/components/layout/sidebar-branch-drag";
+import { useSidebarSort } from "../model/use-sidebar-sort";
+import { sidebarBranches } from "../model/sidebar-branches";
+import { WorkspaceBranch, type WorkspaceItem } from "./workspaces-panel";
 import { FavoritesGroup } from "./favorites-panel";
 import { DirectMessagesGroup } from "./direct-messages-panel";
 import { useStarMembership } from "@/features/favorites/hooks";
@@ -26,11 +25,7 @@ import { Sidebar } from "../../../components/layout/sidebar";
 
 interface ChatSidebarProps {
   workspaces: WorkspaceItem[];
-  /** Workspace agents indexed by id. Threaded through to
-   *  `WorkspaceList` so an agent space's row can resolve `owner_agent_id` and
-   *  render the agent's uploaded avatar (or runtime icon fallback) instead of
-   *  the generic User glyph. Optional — when absent, those rows fall back
-   *  to the User icon. #task:919 */
+  /** Owner agents supply agent-space avatars. */
   agentsById?: ReadonlyMap<string, AgentDto>;
   /** The workspace the primary pane is in. Since #task:1889 it never highlights
    *  anything — with `selectedChannelId` and the star fact it decides which
@@ -78,29 +73,12 @@ interface ChatSidebarProps {
   savedCount: number | undefined;
 }
 
-type RailGroup = RailSortGroup;
-
-const railGroupKeyOf = (workspace: WorkspaceItem): RailGroup => railSortGroupOf(workspace);
-
 export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
-  // Home rail groups by OWNERSHIP (agent_space / regular). Containers have exactly
-  // ONE ordering authority — the viewer's sort mode plus manual drag (#task:1900: the container
-  // star was a second one, applied on top of the drag, and it is gone). Archived
-  // workspaces are dropped outright (#task:1889): the top-level `Archived` entry is
-  // the one archive index. `props.workspaces` is the RAW full visible set; these are
-  // the home projections (see features/chat-shell/model/home-grouping).
-  //
-  // `allVisibleIds` comes out of the SAME call, not a second derivation: it is
-  // STARRED's freshness scope (every workspace the viewer can see, archived
-  // included — a restore is exactly when a hidden star returns), and taking it from
-  // the projections would silently disarm the parents that show nothing. It is
-  // branded `FavoritesWatchScope` so that substitution does not typecheck — the
-  // shapes were identical before, so the wrong wiring compiled green.
-  const {
-    agentSpaces: homeAgentSpaces,
-    regular: homeRegular,
-    allVisibleIds: watchWorkspaceIds,
-  } = useMemo(() => partitionRailWorkspaces(props.workspaces), [props.workspaces]);
+  // Favorites watch all visible workspaces, including archived ones that may be restored.
+  const { allVisibleIds: watchWorkspaceIds } = useMemo(
+    () => partitionRailWorkspaces(props.workspaces),
+    [props.workspaces],
+  );
 
   // Resolve owner-agent avatar object URLs ONCE for the whole rail, over the
   // STABLE union of every owning agent (across every section, archived included)
@@ -111,12 +89,18 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
   // ordering. #task:1146
   const ownerAvatarSources = useMemo<AgentAvatarSource[]>(() => {
     const agentsById = props.agentsById;
-    if (!agentsById) return [];
+    if (!agentsById) {
+      return [];
+    }
     const out: AgentAvatarSource[] = [];
     for (const w of props.workspaces) {
-      if (!w.owner_agent_id) continue;
+      if (!w.owner_agent_id) {
+        continue;
+      }
       const agent = agentsById.get(w.owner_agent_id);
-      if (!agent) continue;
+      if (!agent) {
+        continue;
+      }
       out.push({ id: agent.id, avatar_url: agent.avatar_url });
     }
     return out;
@@ -131,38 +115,16 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
     starred: selectedStar,
   };
 
-  const { data: viewerSort } = useWorkspaceSortState();
-  const setSortMode = useSetSortMode();
-  const { orderedGroups, onReorder } = useListDragSort<RailGroup, WorkspaceItem>({
-    listKey: "workspaces",
-    groups: { agent_space: homeAgentSpaces, regular: homeRegular },
-    viewerSort,
-    getId: (w) => w.id,
-    getCreatedAt: (w) => w.created_at,
-    modeScopeOf: (g) => g,
-  });
-  const orderedAgentSpaces = orderedGroups.agent_space;
-  const orderedRegular = orderedGroups.regular;
-
-  // Row sort menus retain the existing ownership-scoped ordering authority.
-  const sortMenuFor = (group: RailGroup): JSX.Element => (
-    <SortModeMenu
-      mode={sortModeOf(viewerSort, group)}
-      onChange={(m) => setSortMode.mutate({ list_key: "workspaces", group, mode: m })}
-    />
-  );
-  const sortConfigFor = (group: RailGroup): WorkspaceSortConfig<RailGroup> => ({
-    order: [group],
-    groupKeyOf: railGroupKeyOf,
-    onReorder,
-  });
-
-  // Saved / Search / Archived are top-level views, and on those routes there is
-  // no `/w/:id/c/:id` to parse — so `selectedChannelId` is ALREADY null and the
-  // tree already shows no FILL. The old `topLevelViewActive` suppressor existed
-  // only because a container row used to highlight off `selectedWorkspaceId`;
-  // with the workspace header demoted to pure chrome (#task:1889) selection is
-  // one object (the open conversation) and there is nothing left to suppress.
+  const { order, reorder, pending } = useSidebarSort();
+  const branches = sidebarBranches(props.workspaces, order);
+  const workspaceContext = {
+    selected,
+    onSelectChannel: props.onSelectChannel,
+    onCreateChannel: props.onCreateChannel,
+    onOpenWorkspaceSettings: props.onOpenWorkspaceSettings,
+    agentsById: props.agentsById,
+    ownerAgentAvatarUrls,
+  };
 
   return (
     <Sidebar
@@ -202,39 +164,32 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
               </SidebarNavigationButton>
             </div>
 
-            <FavoritesGroup
-              selectedChannelId={props.selectedChannelId}
-              watchWorkspaceIds={watchWorkspaceIds}
-              onSelectConversation={props.onSelectConversation}
-            />
-            <WorkspaceList
-              workspaces={orderedRegular}
-              selected={selected}
-              onSelectChannel={props.onSelectChannel}
-              onCreateChannel={props.onCreateChannel}
-              onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
-              agentsById={props.agentsById}
-              ownerAgentAvatarUrls={ownerAgentAvatarUrls}
-              sortMenu={sortMenuFor("regular")}
-              sort={sortConfigFor("regular")}
-            />
-            <WorkspaceList
-              workspaces={orderedAgentSpaces}
-              selected={selected}
-              onSelectChannel={props.onSelectChannel}
-              onCreateChannel={props.onCreateChannel}
-              onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
-              agentsById={props.agentsById}
-              ownerAgentAvatarUrls={ownerAgentAvatarUrls}
-              sortMenu={sortMenuFor("agent_space")}
-              sort={sortConfigFor("agent_space")}
-            />
-            <DirectMessagesGroup
-              selectedChannelId={props.selectedChannelId}
-              onSelectDirectPair={props.onSelectDirectPair}
-              draftAgentId={props.directDraftAgentId}
-              onSelectDirectDraft={props.onSelectDirectDraft}
-            />
+            <SortableGroup ids={branches.map((branch) => branch.id)} onReorder={reorder}>
+              {branches.map((branch) => (
+                <SortableSidebarBranch
+                  key={branch.id}
+                  id={branch.id}
+                  disabled={pending || branch.kind === "hidden"}
+                >
+                  {branch.kind === "starred" ? (
+                    <FavoritesGroup
+                      selectedChannelId={props.selectedChannelId}
+                      watchWorkspaceIds={watchWorkspaceIds}
+                      onSelectConversation={props.onSelectConversation}
+                    />
+                  ) : branch.kind === "direct-messages" ? (
+                    <DirectMessagesGroup
+                      selectedChannelId={props.selectedChannelId}
+                      onSelectDirectPair={props.onSelectDirectPair}
+                      draftAgentId={props.directDraftAgentId}
+                      onSelectDirectDraft={props.onSelectDirectDraft}
+                    />
+                  ) : branch.kind === "workspace" ? (
+                    <WorkspaceBranch workspace={branch.workspace} ctx={workspaceContext} />
+                  ) : null}
+                </SortableSidebarBranch>
+              ))}
+            </SortableGroup>
           </nav>
           <div className="shrink-0 px-1 pb-1 pt-2">
             <Button

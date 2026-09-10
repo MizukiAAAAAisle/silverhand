@@ -10,6 +10,7 @@ import { BellOff, ChevronDown, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { useSidebarBranchDrag } from "./sidebar-branch-drag";
 
 export function SidebarChevron({ expanded }: { expanded: boolean }): JSX.Element {
   return (
@@ -192,6 +193,8 @@ export function SidebarSectionHeader({
   expanded = true,
   onToggle,
 }: SectionHeaderProps): JSX.Element {
+  const drag = useSidebarBranchDrag();
+
   // Keep menu actions visible while keyboard-focused or portaled menus are open.
   const actionReveal = cn(
     "flex items-center",
@@ -235,7 +238,11 @@ export function SidebarSectionHeader({
     ) : null);
 
   const actionSlot = actions ? (
-    <span className={actionReveal} onClick={(event) => event.stopPropagation()}>
+    <span
+      className={actionReveal}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
       {actions}
     </span>
   ) : null;
@@ -250,11 +257,17 @@ export function SidebarSectionHeader({
     >
       {collapsible ? (
         <div
+          {...drag?.attributes}
+          {...drag?.listeners}
+          ref={drag?.setActivatorNodeRef}
           role="button"
           tabIndex={0}
           onClick={onToggle}
           onKeyDown={(event) => {
-            if (event.target !== event.currentTarget) {
+            if (event.code !== "Enter") {
+              drag?.listeners?.onKeyDown?.(event);
+            }
+            if (event.defaultPrevented || event.target !== event.currentTarget) {
               return;
             }
 
@@ -266,6 +279,7 @@ export function SidebarSectionHeader({
           className={cn(
             "group/sectionheader sidebar-row-gutter flex h-7 min-w-0 items-center justify-between",
             "cursor-pointer text-left",
+            drag && "touch-none cursor-grab active:cursor-grabbing",
             OUTER_GLYPH_INSET,
           )}
           aria-expanded={expanded}
