@@ -205,7 +205,7 @@ function TaskPopoverBody({
         />
       </div>
       <p className="wrap-break-word text-xs font-medium text-text-primary">{task.title}</p>
-      <p className="flex items-baseline gap-1.5 text-(length:--text-meta) text-text-muted">
+      <p className="flex items-center gap-1.5 text-(length:--text-meta) text-text-muted">
         <span className="shrink-0 text-text-secondary">
           {task.assignee ? task.assignee.name : <em>unassigned</em>}
         </span>
@@ -216,7 +216,7 @@ function TaskPopoverBody({
         ) : null}
         <span className="inline-flex shrink-0 items-center gap-1" title={absolute}>
           <Clock className="size-3 shrink-0" aria-hidden />
-          {relative}
+          <span>{relative}</span>
         </span>
       </p>
     </div>
