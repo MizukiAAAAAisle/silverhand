@@ -146,7 +146,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                   <span
                     data-sidebar-count
                     className={cn(
-                      "text-xs tabular-nums",
+                      "text-[10px] tabular-nums",
                       props.savedActive ? "text-text-nav-selected/70" : "text-text-muted",
                     )}
                   >
