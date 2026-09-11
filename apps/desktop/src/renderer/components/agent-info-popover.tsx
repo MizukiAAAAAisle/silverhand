@@ -566,11 +566,7 @@ function AgentManagementActions({
               <AlertTriangle className="size-4" />
               Clear session for {agentLabel}
             </DialogTitle>
-            <DialogDescription>
-              This removes only this conversation's CLI resume session for {agentLabel}. MEMORY,
-              notes, and queued deliveries are kept. The next start will begin with a fresh CLI
-              session.
-            </DialogDescription>
+            <DialogDescription>A new session begins on the next start.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button
