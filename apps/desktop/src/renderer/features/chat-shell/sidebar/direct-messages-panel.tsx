@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { MessageSquare } from "lucide-react";
+import { cn } from "@/lib/cn";
 import { useAgent } from "@/features/agent-shell/hooks/hooks";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
@@ -164,7 +165,9 @@ function DirectMessageRow({
           humanAvatarUrls={humanAvatarUrls}
         />
       </div>
-      <span className="min-w-0 truncate">{counterpart.label}</span>
+      <span className={cn("min-w-0 truncate", row.selected && "font-medium")}>
+        {counterpart.label}
+      </span>
       {counterpart.isDeleted ? (
         <span className="flex shrink-0 items-center">
           <DeletedActorMarker />
