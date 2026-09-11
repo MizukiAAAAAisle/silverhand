@@ -75,7 +75,7 @@
   --bg-nav-hover: rgba(31, 26, 18, 0.06);
   --bg-nav-rail: #1b2030;
   --bg-nav-selected: var(--studio-light-brand-bar);
-  --bg-row-selected: #ffffff;
+  --bg-row-selected: var(--brand-primary);
   --border-nav-rail-hover: transparent;
   --border-nav-rail-selected: transparent;
   --border-row-hover: transparent;
