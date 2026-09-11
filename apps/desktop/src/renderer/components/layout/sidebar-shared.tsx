@@ -115,7 +115,7 @@ export function SidebarBranchLayout({
   const drag = useSidebarBranchDrag();
 
   return (
-    <section className="group/sectionscope mb-2 flex flex-col gap-1">
+    <section className="group/sectionscope mb-2 flex select-none flex-col gap-1">
       {header}
       {children ? (
         <ul className={cn("space-y-1", drag?.isDragging && "hidden")}>{children}</ul>
