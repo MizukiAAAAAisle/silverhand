@@ -522,7 +522,7 @@ function RuntimePicker({
             state === "absent"
               ? "Not detected on this computer"
               : state === "present_unverified"
-                ? "Installed · version unverified"
+                ? "Installed, version unverified"
                 : state === "unknown"
                   ? "Couldn't verify — you can still create"
                   : undefined;
@@ -539,7 +539,7 @@ function RuntimePicker({
               aria-pressed={isSelected}
             >
               {entry.cliLabel}
-              {absent ? <span className="ml-1.5 text-text-muted">· not installed</span> : null}
+              {absent ? <span className="ml-1.5 text-text-muted">not installed</span> : null}
             </button>
           );
         })}

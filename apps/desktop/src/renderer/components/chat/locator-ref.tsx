@@ -204,10 +204,10 @@ function Segment({ sigil, label }: { sigil: JSX.Element; label: string }): JSX.E
  *  does; a thread renames the whole coordinate because the thread IS what a
  *  thread-bearing locator points at. */
 function locatorTooltip(locator: Locator): string {
-  if (locator.kind === "workspace") return `Workspace · ${locator.workspace.name}`;
+  if (locator.kind === "workspace") return `Workspace ${locator.workspace.name}`;
   const [kind, path] =
     locator.kind === "channel"
       ? [faceLabel("channel"), `${locator.workspace.name} / ${locator.channel.title}`]
       : [faceLabel("direct_line"), `${locator.endpoints[0]} & ${locator.endpoints[1]}`];
-  return locator.threadRootId === null ? `${kind} · ${path}` : `Thread · ${path}`;
+  return locator.threadRootId === null ? `${kind} ${path}` : `Thread ${path}`;
 }

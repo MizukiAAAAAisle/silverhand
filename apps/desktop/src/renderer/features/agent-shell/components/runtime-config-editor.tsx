@@ -715,7 +715,7 @@ function RuntimeSelect({
                   : state === "absent"
                     ? "Not detected on this computer"
                     : state === "present_unverified"
-                      ? "Installed · version unverified"
+                      ? "Installed, version unverified"
                       : state === "unknown"
                         ? "Couldn't verify — you can still pick"
                         : undefined;
@@ -729,7 +729,7 @@ function RuntimeSelect({
                 >
                   <Select.ItemText>{runtimeCliLabel(t.kind)}</Select.ItemText>
                   {absent ? (
-                    <span className="ml-auto text-xs text-text-muted">· not installed</span>
+                    <span className="ml-auto text-xs text-text-muted">not installed</span>
                   ) : null}
                 </Select.Item>
               );

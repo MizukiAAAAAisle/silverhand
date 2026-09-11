@@ -131,7 +131,7 @@ function ContextCardShell({
           onOpen={onOpenConversationRef}
         />
         {model.sourceAuthorLabel ? (
-          <span className="text-text-secondary">· {model.sourceAuthorLabel}</span>
+          <span className="text-text-secondary">{model.sourceAuthorLabel}</span>
         ) : null}
         {model.timestamp !== null ? <ContextCardRelativeTime epochMs={model.timestamp} /> : null}
         {collapsible ? (

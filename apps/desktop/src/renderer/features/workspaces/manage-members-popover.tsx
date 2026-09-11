@@ -152,7 +152,7 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
         />
       ) : null}
 
-      <Section title={`MEMBERS · ${members.length}`}>
+      <Section title={`MEMBERS ${members.length}`}>
         {membersLoading ? (
           <Hint>Loading…</Hint>
         ) : members.length === 0 ? (

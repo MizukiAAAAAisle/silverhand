@@ -79,7 +79,7 @@ export function ConversationRef({ id, conversation, onOpen }: ConversationRefPro
   }
 
   const label = resolved.title;
-  const tooltip = `${faceLabel(resolved.face)} · ${resolved.title}`;
+  const tooltip = `${faceLabel(resolved.face)} ${resolved.title}`;
   const icon = conversationIcon(resolved.face);
   const chipBody = (
     <>

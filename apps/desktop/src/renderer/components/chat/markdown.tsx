@@ -640,7 +640,7 @@ function StaticConversationRef({
   return (
     <span
       className="inline-flex max-w-55 items-center gap-0.5 rounded-(--chip-radius) bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent"
-      aria-label={conversation ? `${faceLabel("channel")} · ${label}` : `Conversation #conv:${id}`}
+      aria-label={conversation ? `${faceLabel("channel")} ${label}` : `Conversation #conv:${id}`}
       data-conversation-ref={id}
     >
       {icon}
@@ -949,7 +949,7 @@ function OversizedContent({ content, bytes }: { content: string; bytes: number }
   return (
     <div className="markdown-body">
       <div className="flex items-center gap-2 text-xs opacity-60">
-        <span>{label} · too large to render as Markdown</span>
+        <span>{label} too large to render as Markdown</span>
         <button type="button" onClick={onCopy} className="underline hover:opacity-80">
           {copied ? "Copied" : "Copy full text"}
         </button>

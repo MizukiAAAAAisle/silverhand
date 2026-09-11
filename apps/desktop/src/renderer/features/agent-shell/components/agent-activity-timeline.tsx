@@ -508,7 +508,7 @@ function EventRow({
     const pk = str(payload, "parsed_kind");
     title = (
       <span className="text-warning">
-        {pk ? `${pk} · dropped (too large)` : "Event dropped (too large)"}
+        {pk ? `${pk} dropped (too large)` : "Event dropped (too large)"}
       </span>
     );
   } else if (kind === "message_stale") {

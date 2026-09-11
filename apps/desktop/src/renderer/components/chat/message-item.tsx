@@ -477,9 +477,9 @@ function ActorMessageItem({
   // enriched chip appends the last-reply time, the fallback stays bare.
   const replyBadgeTitle =
     threadUnreadCount > 0
-      ? `${replyBadgeLabel} · ${threadUnreadCount} new — jump to first unread`
+      ? `${replyBadgeLabel} ${threadUnreadCount} new — jump to first unread`
       : enrichedReply
-        ? `${replyBadgeLabel} · last reply ${replyRelativeTime}`
+        ? `${replyBadgeLabel} last reply ${replyRelativeTime}`
         : replyBadgeLabel;
   // Thread repliers now arrive as the SAME server-authoritative
   // {@link MessageAuthorDto} the byline uses (#task:1791/#task:1792), so their
@@ -1011,7 +1011,7 @@ function MessageTaskTag({
     : null;
   const title = [`Task #${linkedTask.task_number}`, label, assignee, linkedTask.title]
     .filter(Boolean)
-    .join(" · ");
+    .join(" ");
 
   // Shared chip body — identical glyph / number / assignee across both the
   // interactive and read-only forms, so a non-member reads the exact same
@@ -1027,7 +1027,7 @@ function MessageTaskTag({
           than to the label alone). Space Mono digits read poorly in forza6
           (@shiki `sLh6CqwNw0uAtThk`, #task:1757). */}
       <span className="shrink-0">#{linkedTask.task_number}</span>
-      {assignee ? <span className="min-w-0 truncate font-normal">· {assignee}</span> : null}
+      {assignee ? <span className="min-w-0 truncate font-normal">{assignee}</span> : null}
     </>
   );
 

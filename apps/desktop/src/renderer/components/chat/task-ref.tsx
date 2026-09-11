@@ -36,7 +36,7 @@ export function TaskRefStaticChip({
   return (
     <span
       className="inline-flex max-w-55 items-center gap-1 rounded-(--chip-radius) font-medium text-accent"
-      title={`Task #${task.task_number} · ${task.title}`}
+      title={`Task #${task.task_number} ${task.title}`}
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved"
     >
@@ -69,7 +69,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
     return <>{bare ? `#${taskNumber}` : inertLabel}</>;
   }
 
-  const label = `#${task.task_number} · ${task.title}`;
+  const label = `#${task.task_number} ${task.title}`;
   const tooltip = `Task ${label}`;
   // The number sits in its own `data-task-ref-num` span so a theme can give
   // digits their own display face while the title keeps prose sans. By default
@@ -209,18 +209,10 @@ function TaskPopoverBody({
           {task.assignee ? task.assignee.name : <em>unassigned</em>}
         </span>
         {channelLabel !== null ? (
-          <>
-            <span aria-hidden className="shrink-0 text-text-muted/60">
-              ·
-            </span>
-            <span className="min-w-0 truncate text-text-secondary" title={channelLabel}>
-              in {channelLabel}
-            </span>
-          </>
+          <span className="min-w-0 truncate text-text-secondary" title={channelLabel}>
+            in {channelLabel}
+          </span>
         ) : null}
-        <span aria-hidden className="shrink-0 text-text-muted/60">
-          ·
-        </span>
         <span className="shrink-0" title={absolute}>
           {relative}
         </span>

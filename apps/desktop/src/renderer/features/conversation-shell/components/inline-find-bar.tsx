@@ -116,7 +116,7 @@ export function InlineFindBar({
         data-sticker-size="md"
         data-sticker-tone="neutral"
         onClick={onOpenAdvanced}
-        title="Open advanced search (cross-channel · filters)"
+        title="Open advanced search (cross-channel filters)"
         className="flex h-7 shrink-0 items-center whitespace-nowrap rounded-(--control-radius) px-2 text-xs font-medium text-text-primary hover:bg-bg-hover"
       >
         Advanced

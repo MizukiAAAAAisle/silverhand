@@ -331,12 +331,7 @@ function ArchivedChannelRow({
               <span className="font-medium text-text-primary">
                 {archivedRowWorkspaceLabel(item)}
               </span>
-              {item.workspace.archived_at !== null ? (
-                <>
-                  <span>·</span>
-                  <span>archived workspace</span>
-                </>
-              ) : null}
+              {item.workspace.archived_at !== null ? <span>archived workspace</span> : null}
             </span>
             <span className="mt-1 block truncate text-sm font-medium text-text-primary">
               {item.channel.title}

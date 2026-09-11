@@ -1059,10 +1059,10 @@ export function Composer({
                       // trigger whose picker opens on nothing promises a menu that
                       // never appears (#task:2118). The withheld arm offers neither.
                       offersChannels
-                      ? "Enter to send · Shift + Enter for a new line · @member · #channel"
+                      ? "Enter to send, Shift + Enter for a new line @member #channel"
                       : offersMentions
-                        ? "Enter to send · Shift + Enter for a new line · @member"
-                        : "Enter to send · Shift + Enter for a new line"
+                        ? "Enter to send, Shift + Enter for a new line @member"
+                        : "Enter to send, Shift + Enter for a new line"
             }
             // No bottom/right padding to dodge buttons anymore — they
             // live in the toolbar below. `min-h-[60px]` keeps the
@@ -1231,7 +1231,6 @@ function AttachmentChip({
               <span className="shrink-0 font-mono">{item.label}</span>
             )
           ) : null}
-          {item.label ? <span aria-hidden>·</span> : null}
           <span className="shrink-0">{item.state === "uploading" ? "Uploading…" : sizeLabel}</span>
         </div>
       </div>
@@ -1881,7 +1880,6 @@ function Row({
             </span>
             <div className="flex items-center gap-1.5 text-(length:--text-meta) text-text-muted">
               <span className="truncate font-mono">@{item.agent.name}</span>
-              <span aria-hidden>·</span>
               <span data-agent-runtime className="shrink-0">
                 {item.agent.runtime}
               </span>
@@ -1901,7 +1899,6 @@ function Row({
             </span>
             <div className="flex items-center gap-1.5 text-(length:--text-meta) text-text-muted">
               <span className="truncate font-mono">@{item.human.name}</span>
-              <span aria-hidden>·</span>
               <span data-participant-kind className="shrink-0">
                 human
               </span>

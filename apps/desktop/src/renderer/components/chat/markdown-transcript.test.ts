@@ -169,7 +169,7 @@ describe("buildMarkdownTranscript", () => {
     });
     const out = buildMarkdownTranscript([m1], { formatTime: fixedTime });
     // Trailing newline is intentional — POSIX-friendly file ending.
-    expect(out).toBe("## @Alice · T1000\n\nhello\n");
+    expect(out).toBe("## @Alice T1000\n\nhello\n");
   });
 
   it("always includes the sender header even for a single-message transcript", () => {
@@ -182,7 +182,7 @@ describe("buildMarkdownTranscript", () => {
       created_at: 1000,
     });
     const out = buildMarkdownTranscript([m1], { formatTime: fixedTime });
-    expect(out).toContain("## Shiki · T1000");
+    expect(out).toContain("## Shiki T1000");
     expect(out).toContain("shiki says hi");
   });
 
@@ -198,7 +198,7 @@ describe("buildMarkdownTranscript", () => {
       created_at: 2000,
     });
     const out = buildMarkdownTranscript([m1, m2], { formatTime: fixedTime });
-    expect(out).toBe("## @Alice · T1000\n\nfirst\n\n\n## Shiki · T2000\n\nsecond\n");
+    expect(out).toBe("## @Alice T1000\n\nfirst\n\n\n## Shiki T2000\n\nsecond\n");
   });
 
   it("preserves the order in which messages are passed in", () => {

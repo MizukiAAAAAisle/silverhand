@@ -101,7 +101,7 @@ export function MentionCcCard({
     : null;
   const sourceLocationLabel = workspaceName
     ? conversationTitle
-      ? `${workspaceName} · ${conversationTitle}`
+      ? `${workspaceName} ${conversationTitle}`
       : workspaceName
     : (conversationTitle ?? null);
   // Collapse the byline when the mention's author IS the reader. The card

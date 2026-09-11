@@ -486,7 +486,7 @@ function SharedFontSizeControl({
           <h3 className="text-sm font-semibold text-text-primary">Font size</h3>
           <p className="truncate text-xs text-text-muted">
             Shared by prose and code
-            {isOverride ? "" : " · theme default"}
+            {isOverride ? "" : " theme default"}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">

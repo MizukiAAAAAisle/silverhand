@@ -894,7 +894,7 @@ export function ThreadPanel({
             title={parentTitle || "Thread"}
             subtitle={
               <>
-                Thread · {replyCount} {replyCount === 1 ? "reply" : "replies"}
+                Thread {replyCount} {replyCount === 1 ? "reply" : "replies"}
               </>
             }
           />

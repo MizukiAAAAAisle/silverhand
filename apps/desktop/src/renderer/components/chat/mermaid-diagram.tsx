@@ -276,7 +276,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
         <div className="code-block__header">
           <span className="code-block__lang">mermaid</span>
           <span className="mermaid-fallback__note" title={state.message}>
-            Unable to render · source shown
+            Unable to render. Source shown
           </span>
         </div>
         <pre>

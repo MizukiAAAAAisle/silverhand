@@ -174,7 +174,7 @@ export function DirectPairDraftPane({
             onCompositionStart={() => setComposing(true)}
             onCompositionEnd={() => setComposing(false)}
             aria-label={`Message ${title}`}
-            placeholder="Enter to send · Shift + Enter for a new line"
+            placeholder="Enter to send, Shift + Enter for a new line"
             className="block max-h-48 min-h-15 w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           />
           <div className="flex items-center justify-end px-2 py-1.5">

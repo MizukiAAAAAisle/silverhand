@@ -110,7 +110,7 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
         <span className="font-serif text-sm font-semibold text-text-primary">
           {selectedChannelName ? `Tasks in #${selectedChannelName}` : "All Tasks"}
         </span>
-        <span className="text-xs text-text-muted">· {boardCountLabel(totalTaskCount(counts))}</span>
+        <span className="text-xs text-text-muted">{boardCountLabel(totalTaskCount(counts))}</span>
         <span className="ml-auto text-(length:--text-badge) text-text-muted">
           {boardCountLabel(activeTaskCount(counts))} active
         </span>

@@ -349,7 +349,7 @@ function ProbeResult({ probe }: { probe: ReturnType<typeof useMcpProbe> }): JSX.
       {result.server_info?.name ? (
         <span className="text-text-muted">
           {" "}
-          · {result.server_info.name}
+          {result.server_info.name}
           {result.server_info.version ? ` ${result.server_info.version}` : ""}
         </span>
       ) : null}
@@ -369,7 +369,7 @@ function ProbeTools({ tools }: { tools: NonNullable<McpProbeResult["tools"]> }):
       >
         <ShieldCheck className="size-3.5 shrink-0" />
         <span>
-          Connected · {list.length} tool{list.length === 1 ? "" : "s"}
+          Connected {list.length} tool{list.length === 1 ? "" : "s"}
         </span>
         {list.length > 0 ? (
           <ChevronRight
@@ -507,7 +507,7 @@ function CheckBadge({ result }: { result: ConfigCheckResult }): JSX.Element {
       <div className="flex items-center gap-1.5 text-xs text-success">
         <ShieldCheck className="size-3.5 shrink-0" />
         <span>
-          Config OK · {result.count} server{result.count === 1 ? "" : "s"}
+          Config OK {result.count} server{result.count === 1 ? "" : "s"}
         </span>
       </div>
     );

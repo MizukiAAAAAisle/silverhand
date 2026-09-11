@@ -507,7 +507,7 @@ function WorkspaceFilePreview({
             {path}
           </span>
           <span className="shrink-0 text-(length:--text-meta) text-text-muted">
-            {formatBytes(file.size)} · {dayjs(file.mtime).format("YYYY-MM-DD HH:mm")}
+            {formatBytes(file.size)} {dayjs(file.mtime).format("YYYY-MM-DD HH:mm")}
           </span>
           <button
             type="button"

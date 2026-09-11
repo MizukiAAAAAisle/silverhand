@@ -272,7 +272,7 @@ export function ComposerActivityHeader({
           >
             <Loader2 className="size-3 shrink-0 animate-spin text-accent" />
             <span className="font-medium text-text-secondary">
-              Running{active.length > 1 ? ` · ${active.length} agents` : ""}
+              Running{active.length > 1 ? ` ${active.length} agents` : ""}
             </span>
             <span className="min-w-0 flex-1" />
             <ChevronUp className="size-3 shrink-0 text-text-muted/60" />

@@ -1521,10 +1521,7 @@ function AgentCard({
             {/* `handle` is already `@<name>` per backend DTO contract —
              *  do NOT prefix here or the UI shows `@@<name>`. */}
             <span className="font-mono">{agent.handle}</span>
-            <span className="mx-1.5" aria-hidden>
-              ·
-            </span>
-            <span className="uppercase tracking-wide">{agent.runtime}</span>
+            <span className="ml-3 uppercase tracking-wide">{agent.runtime}</span>
           </span>
         </div>
         <AgentStatusPip online={online} />

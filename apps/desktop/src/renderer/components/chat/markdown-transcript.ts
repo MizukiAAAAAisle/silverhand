@@ -6,12 +6,12 @@ import { authorStateLabel, presentAuthor } from "./author-presentation";
  *
  * Format (per @shiki + Cindy spec):
  *
- *   ## <displayName> · <isoTime>
+ *   ## <displayName> <isoTime>
  *
  *   <content>
  *
  *
- *   ## <displayName> · <isoTime>
+ *   ## <displayName> <isoTime>
  *
  *   <content>
  *
@@ -57,7 +57,7 @@ export function buildMarkdownTranscript(
   const blocks = messages.map((m) => {
     const sender = formatSenderLabel(m);
     const time = formatTime(m.created_at);
-    const header = `## ${sender} · ${time}`;
+    const header = `## ${sender} ${time}`;
     return `${header}\n\n${m.content}`;
   });
 
