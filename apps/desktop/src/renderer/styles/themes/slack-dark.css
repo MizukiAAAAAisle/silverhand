@@ -295,7 +295,10 @@
   border-color: var(--bg-row-selected);
 }
 
-[data-theme="slack-dark"] [data-create-agent-dialog] [data-primary-action="cancel"] {
+/* Hooks: Neutral cancel actions */
+
+[data-theme="slack-dark"] [data-primary-action="cancel"],
+[data-theme="slack-dark"] [data-destructive-action="cancel"] {
   border-color: var(--border);
 }
 
