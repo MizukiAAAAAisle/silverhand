@@ -112,10 +112,14 @@ export function SidebarBranchLayout({
   header: ReactNode;
   children?: ReactNode;
 }): JSX.Element {
+  const drag = useSidebarBranchDrag();
+
   return (
     <section className="group/sectionscope mb-2 flex flex-col gap-1">
       {header}
-      {children ? <ul className="space-y-1">{children}</ul> : null}
+      {children ? (
+        <ul className={cn("space-y-1", drag?.isDragging && "hidden")}>{children}</ul>
+      ) : null}
     </section>
   );
 }
@@ -209,7 +213,7 @@ export function SidebarSectionHeader({
   const headerInner = (
     <span className="flex min-w-0 items-center gap-2">
       {collapsible ? (
-        <SidebarChevron expanded={expanded} />
+        <SidebarChevron expanded={expanded && !drag?.isDragging} />
       ) : icon ? (
         <span
           data-sidebar-section-icon
@@ -283,7 +287,7 @@ export function SidebarSectionHeader({
             drag?.isDragging && "cursor-grabbing",
             OUTER_GLYPH_INSET,
           )}
-          aria-expanded={expanded}
+          aria-expanded={expanded && !drag?.isDragging}
           aria-label={label}
         >
           {headerInner}
