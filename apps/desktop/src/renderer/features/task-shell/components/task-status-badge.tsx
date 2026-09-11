@@ -212,9 +212,6 @@ export function StatusPicker({
           // task-card context where nothing floats this high. #task:923
           className="z-(--z-popover-nested) min-w-34 bg-bg-floating p-1 shadow-popover outline-none"
         >
-          <div className="px-1.5 pb-1 pt-0.5 text-(length:--text-badge) font-medium uppercase tracking-wider text-text-muted">
-            Move to
-          </div>
           {ALL_STATUSES.filter((s) => s !== current).map((s) => (
             <button
               key={s}

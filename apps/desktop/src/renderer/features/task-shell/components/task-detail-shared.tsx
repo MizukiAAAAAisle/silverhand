@@ -444,9 +444,6 @@ function CandidateList({
 }): JSX.Element {
   return (
     <div className="flex flex-col gap-1">
-      <p className="chrome-label px-2 pt-1 text-(length:--text-badge) font-medium text-text-muted">
-        Assign to
-      </p>
       {candidates.length === 0 ? (
         <p className="px-2 py-1.5 text-(length:--text-meta) italic text-text-muted">
           {placeholder}
