@@ -41,11 +41,6 @@ import {
 // at runtime (see the runtime-catalog probe below), never baked in here.
 const SELECTABLE_RUNTIMES = RUNTIME_CATALOG.filter((entry) => entry.selectable);
 
-// Shared chip styling for the Runtime + "Computer" pickers: ink border +
-// the theme's own selection fill (`--bg-row-selected`), border WIDTH /
-// radius via the per-theme control tokens (forza6 2px poster, warm/slack
-// 1px). Text held constant at text-primary across states. Kept identical
-// across both rows so the dialog reads as one control family (#task:1214).
 const CHIP_BASE =
   "rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs transition-colors ";
 
@@ -56,7 +51,7 @@ function chipClass(isSelected: boolean, isDisabled = false): string {
   return (
     CHIP_BASE +
     (isSelected
-      ? "border-text-primary bg-[var(--bg-row-selected)] text-text-primary"
+      ? "border-text-primary bg-[var(--bg-row-selected)] text-text-on-selected"
       : "border-border-subtle text-text-primary hover:border-border")
   );
 }

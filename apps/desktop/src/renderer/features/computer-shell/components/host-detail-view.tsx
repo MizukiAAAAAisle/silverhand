@@ -997,7 +997,7 @@ function ProxySection({
                       "flex min-w-0 items-center gap-3 rounded-(--control-radius) border px-3 py-2 transition-colors",
                       proxyEnabled ? "cursor-pointer" : "cursor-not-allowed",
                       checked
-                        ? "border-accent bg-(--bg-row-selected,var(--bg-selected))"
+                        ? "border-accent bg-(--bg-row-selected,var(--bg-selected)) text-text-on-selected"
                         : "border-border-subtle bg-bg-floating hover:bg-(--bg-option-hover)",
                     )}
                   >
@@ -1022,10 +1022,20 @@ function ProxySection({
                       <Check className="size-3" />
                     </span>
                     <AgentAvatar runtime={kind} size={AVATAR_PX.sm} />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+                    <span
+                      className={cn(
+                        "min-w-0 flex-1 truncate text-sm font-medium",
+                        !checked && "text-text-primary",
+                      )}
+                    >
                       {runtimeLabel(kind)}
                     </span>
-                    <span className="shrink-0 font-mono text-(length:--text-meta) text-text-muted">
+                    <span
+                      className={cn(
+                        "shrink-0 font-mono text-(length:--text-meta)",
+                        !checked && "text-text-muted",
+                      )}
+                    >
                       {kind}
                     </span>
                   </label>

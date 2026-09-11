@@ -45,7 +45,7 @@
   --text-inverse: #f7f9fc;
   --text-muted: #616a7f;
   --text-on-dark-pop: #9db6f7;
-  --text-on-selected: var(--text-primary);
+  --text-on-selected: #ffffff;
   --text-on-structure: #f2f5f9;
   --text-primary: #111725;
   --text-secondary: #495064;

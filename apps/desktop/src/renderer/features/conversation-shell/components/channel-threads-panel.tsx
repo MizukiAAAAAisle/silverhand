@@ -216,7 +216,7 @@ export function ChannelThreadsContent({
               className={
                 "inline-flex items-center gap-1.5 border-(length:--control-border-width) rounded-(--chip-radius) px-2.5 py-1 text-xs font-medium transition-colors " +
                 (on
-                  ? "border-(--border-control-hover) bg-(--bg-row-selected) text-text-primary"
+                  ? "border-(--border-control-hover) bg-(--bg-row-selected) text-text-on-selected"
                   : "border-border bg-bg-floating text-text-muted hover:border-(--border-control-hover) hover:text-text-primary")
               }
             >
