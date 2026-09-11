@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type ReactNode,
+} from "react";
 import { AnimatedPanel } from "./animated-panel";
 import { PANE_RADIUS } from "./pane-chrome";
 import { SplitterTrack } from "./splitter-track";
@@ -26,6 +33,8 @@ export function SplitPane({
   const containerRef = useRef<HTMLDivElement>(null);
   const dividerRef = useRef<HTMLDivElement>(null);
   const hasRight = right !== null && right !== undefined;
+  // Let the shell paint before mounting heavy content, without retaining a closed pane.
+  const contentReady = useDeferredValue(hasRight);
 
   const initialRatioRef = useRef<number>(
     (() => {
@@ -203,7 +212,7 @@ export function SplitPane({
               style={{ contain: "layout paint", borderRadius: PANE_RADIUS }}
               className="flex h-full min-w-0 flex-1 overflow-hidden bg-bg-base"
             >
-              {right}
+              {hasRight && contentReady ? right : null}
             </div>
           </div>
         )}

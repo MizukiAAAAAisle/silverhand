@@ -23,9 +23,9 @@ export function AnimatedPanel({ open, width, children, overlay }: AnimatedPanelP
     }
 
     shell.inert = !open;
-    const from = shell.getBoundingClientRect().width;
+    const from = shell.style.width || "0px";
     shell.style.width = open ? width : "0px";
-    const to = shell.getBoundingClientRect().width;
+    const to = open ? width : "0px";
     const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
 
     const complete = () => {
@@ -38,12 +38,12 @@ export function AnimatedPanel({ open, width, children, overlay }: AnimatedPanelP
       setSettledOpen(open);
     };
 
-    if (!initializedRef.current || preference.matches || Math.abs(to - from) < 1) {
+    if (!initializedRef.current || preference.matches || to === from) {
       initializedRef.current = true;
       complete();
     } else {
       setSettledOpen(null);
-      const animation = shell.animate([{ width: `${from}px` }, { width: `${to}px` }], {
+      const animation = shell.animate([{ width: from }, { width: to }], {
         duration: 220,
         easing: "cubic-bezier(0.32, 0.72, 0, 1)",
       });
