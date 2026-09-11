@@ -197,13 +197,13 @@ export function SplitPane({
           </div>
         }
       >
-        {(settledOpen) => (
+        {() => (
           <div className="flex h-full min-w-0 flex-1" style={{ paddingLeft: "var(--pane-gap)" }}>
             <div
               style={{ contain: "layout paint", borderRadius: PANE_RADIUS }}
               className="flex h-full min-w-0 flex-1 overflow-hidden bg-bg-base"
             >
-              {settledOpen ? right : null}
+              {right}
             </div>
           </div>
         )}
