@@ -260,7 +260,7 @@ export function CreateAgentDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent aria-describedby={undefined}>
+      <DialogContent data-create-agent-dialog aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>New Agent</DialogTitle>
         </DialogHeader>
@@ -536,6 +536,7 @@ function RuntimePicker({
                 if (!absent) onSelect(entry.kind);
               }}
               className={chipClass(isSelected, absent)}
+              aria-pressed={isSelected}
             >
               {entry.cliLabel}
               {absent ? <span className="ml-1.5 text-text-muted">· not installed</span> : null}
