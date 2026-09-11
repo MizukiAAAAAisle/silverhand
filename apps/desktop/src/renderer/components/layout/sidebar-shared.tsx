@@ -226,7 +226,10 @@ export function SidebarSectionHeader({
       <span className={cn("truncate", labelClassName)}>{label}</span>
       {trailing}
       {typeof count === "number" ? (
-        <span data-sidebar-count className="shrink-0 font-medium text-text-muted/70">
+        <span
+          data-sidebar-count
+          className="shrink-0 text-[10px] font-medium tracking-normal tabular-nums text-text-muted/70"
+        >
           {count}
         </span>
       ) : null}

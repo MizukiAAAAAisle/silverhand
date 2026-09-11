@@ -175,10 +175,6 @@
   border: none;
   box-shadow: none;
   font-family: var(--appearance-code-font, var(--font-mono));
-  font-feature-settings: "tnum";
-  font-weight: 500;
-  font-size: 10px;
-  letter-spacing: 0;
   padding: 0;
   opacity: 1;
 }
