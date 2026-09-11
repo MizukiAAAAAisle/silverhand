@@ -1,5 +1,6 @@
 import { taskChannelLabel } from "../../features/task-shell/model/task-place.js";
 import { useState } from "react";
+import { Clock } from "lucide-react";
 import { useTaskByNumber } from "@/features/task-shell/hooks/use-task-by-number";
 import { useTaskRefContext } from "@/features/task-shell/components/task-ref-context";
 import { useUpdateTaskStatus } from "@/features/task-shell/hooks/hooks";
@@ -213,7 +214,8 @@ function TaskPopoverBody({
             in {channelLabel}
           </span>
         ) : null}
-        <span className="shrink-0" title={absolute}>
+        <span className="inline-flex shrink-0 items-center gap-1" title={absolute}>
+          <Clock className="size-3 shrink-0" aria-hidden />
           {relative}
         </span>
       </p>
