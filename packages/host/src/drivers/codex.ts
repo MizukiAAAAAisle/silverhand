@@ -54,13 +54,9 @@ export class CodexDriver implements Driver {
   readonly supportsNativeStandingPrompt = true;
   readonly initLivenessSilenceMs = 60 * 1000;
   readonly initPreProtocolCapMs = 5 * 60 * 1000;
-  // 60s post-protocol budget. Codex's `app-server` happy-path completes
-  // initialize → thread/started in ~4s with proxy / ~11s without. The wider
-  // window absorbs proxy half-up flakes (e.g. `socks5://127.0.0.1:7897`
-  // momentarily refusing connections) where codex still emits its first
-  // protocol frame promptly but stalls on `thread/start` while the MCP
-  // chat client retries connecting back to silverhand.
-  readonly initPostProtocolMs = 60 * 1000;
+  // Restoring a large persisted thread can outlast the first protocol response.
+  // Keep a finite two-minute budget for session readiness after that response.
+  readonly initPostProtocolMs = 2 * 60 * 1000;
 
   private io: DriverIO | null = null;
   private requestId = 0;
@@ -140,9 +136,7 @@ export class CodexDriver implements Driver {
     // request is constructed. THAT echo is the generation-boundary
     // evidence (see handleItemEvent); the JSON-RPC response to this
     // request is a transport ack and must never become evidence.
-    const clientUserMessageId = opts?.payloadUuid
-      ? { clientUserMessageId: opts.payloadUuid }
-      : {};
+    const clientUserMessageId = opts?.payloadUuid ? { clientUserMessageId: opts.payloadUuid } : {};
     if (this.activeTurnId) {
       return JSON.stringify({
         jsonrpc: '2.0',
@@ -206,10 +200,7 @@ export class CodexDriver implements Driver {
         this.initializeRequestId = null;
         this.sendNotification('initialized', {});
         if (this.pendingThreadRequest) {
-          this.sendRequest(
-            this.pendingThreadRequest.method,
-            this.pendingThreadRequest.params,
-          );
+          this.sendRequest(this.pendingThreadRequest.method, this.pendingThreadRequest.params);
           this.pendingThreadRequest = null;
         }
         return events;
@@ -333,7 +324,12 @@ export class CodexDriver implements Driver {
     }
 
     if (!message || typeof message !== 'object') return null;
-    if (message.jsonrpc !== '2.0' && !('method' in message) && !('result' in message) && !('error' in message)) {
+    if (
+      message.jsonrpc !== '2.0' &&
+      !('method' in message) &&
+      !('result' in message) &&
+      !('error' in message)
+    ) {
       return null;
     }
 
@@ -347,11 +343,7 @@ export class CodexDriver implements Driver {
 
   // ── internals ──────────────────────────────────────────────────────
 
-  private handleItemEvent(
-    method: string,
-    item: any,
-    events: ParsedEvent[],
-  ): void {
+  private handleItemEvent(method: string, item: any, events: ParsedEvent[]): void {
     const isStarted = method === 'item/started';
     const isCompleted = method === 'item/completed';
     switch (item.type) {
@@ -386,11 +378,7 @@ export class CodexDriver implements Driver {
         }
         break;
       case 'reasoning':
-        if (
-          isCompleted &&
-          typeof item.id === 'string' &&
-          !this.streamedReasoningIds.has(item.id)
-        ) {
+        if (isCompleted && typeof item.id === 'string' && !this.streamedReasoningIds.has(item.id)) {
           const text = joinReasoningText(item);
           if (text) events.push({ kind: 'thinking', text });
         }
@@ -472,9 +460,7 @@ export class CodexDriver implements Driver {
       }
       case 'mcpToolCall': {
         const toolName =
-          item.server === 'chat'
-            ? `mcp_chat_${item.tool}`
-            : `mcp_${item.server}_${item.tool}`;
+          item.server === 'chat' ? `mcp_chat_${item.tool}` : `mcp_${item.server}_${item.tool}`;
         const callId = typeof item.id === 'string' ? item.id : undefined;
         if (isStarted) {
           events.push({
@@ -511,7 +497,12 @@ export class CodexDriver implements Driver {
           // only terminal state, so its outcome stays the neutral `completed`.
           const id = typeof item.id === 'string' ? item.id : null;
           if (id && this.pendingWebSearchIds.delete(id)) {
-            events.push({ kind: 'tool_output', name: 'web_search', toolCallId: id, outcome: 'completed' });
+            events.push({
+              kind: 'tool_output',
+              name: 'web_search',
+              toolCallId: id,
+              outcome: 'completed',
+            });
           }
         }
         break;
@@ -557,7 +548,8 @@ export class CodexDriver implements Driver {
     if (ctx.cliSessionId) {
       return {
         method: 'thread/resume',
-        params: { threadId: ctx.cliSessionId, ...params },
+        // History stays inside Codex; Silverhand only needs the resume state.
+        params: { threadId: ctx.cliSessionId, ...params, excludeTurns: true },
       };
     }
     return { method: 'thread/start', params };
@@ -631,9 +623,9 @@ function ensureGitRepoForCodex(workspacePath: string): void {
   if (existsSync(join(workspacePath, '.git'))) return;
   execSync('git init', { cwd: workspacePath, stdio: 'pipe' });
   execSync(
-    "git -c user.name=silverhand -c user.email=silverhand@local " +
-      "-c commit.gpgsign=false add -A && " +
-      "git -c user.name=silverhand -c user.email=silverhand@local " +
+    'git -c user.name=silverhand -c user.email=silverhand@local ' +
+      '-c commit.gpgsign=false add -A && ' +
+      'git -c user.name=silverhand -c user.email=silverhand@local ' +
       "-c commit.gpgsign=false commit --allow-empty -m 'init'",
     { cwd: workspacePath, stdio: 'pipe' },
   );

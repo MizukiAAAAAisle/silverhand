@@ -429,6 +429,7 @@ describe('CodexDriver JSON-RPC handshake', () => {
       },
     });
     expect(threadStart.params).not.toHaveProperty('model');
+    expect(threadStart.params).not.toHaveProperty('excludeTurns');
 
     // Either `thread/started` notification OR a `result.thread` reply
     // surfaces the threadId. Try the notification path here.
@@ -452,7 +453,7 @@ describe('CodexDriver JSON-RPC handshake', () => {
     expect(events3.find((e) => e.kind === 'session_init')).toBeUndefined();
   });
 
-  it('uses thread/resume when cliSessionId is set', async () => {
+  it('resumes the exact session without returning history or replacing its context', async () => {
     const built = makeSpawnCtx({ cliSessionId: 'thread-resumed' });
     cleanup = built.cleanup;
     const io = makeIO(built.ctx);
@@ -465,9 +466,13 @@ describe('CodexDriver JSON-RPC handshake', () => {
     driver.parseLine(JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }));
     const threadCall = JSON.parse(io.lines[2]!);
     expect(threadCall.method).toBe('thread/resume');
-    expect(threadCall.params).toMatchObject({
+    expect(threadCall.params).toEqual({
       threadId: 'thread-resumed',
       cwd: built.ctx.workspacePath,
+      approvalPolicy: 'never',
+      sandbox: 'danger-full-access',
+      developerInstructions: 'STANDING PROMPT\n',
+      excludeTurns: true,
     });
     expect(threadCall.params).not.toHaveProperty('model');
   });
