@@ -3,7 +3,8 @@
  * onto any Button variant without touching fill, text, or hover fill —
  * the underlying variant keeps its action hierarchy.
  */
-export const CONTROL_INK_BORDER = "border-[length:var(--control-border-width)] border-border-focus";
+export const CONTROL_INK_BORDER =
+  "border-[length:var(--control-border-width)] border-border-control";
 
 /**
  * The transition tuple the control family's hover states need, WITHOUT the

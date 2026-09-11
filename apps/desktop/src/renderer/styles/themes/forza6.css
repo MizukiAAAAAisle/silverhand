@@ -117,6 +117,7 @@
   --bg-neutral-action-hover: var(--bg-floating);
   --bg-option-hover: var(--forza6-lime-pale);
   --bg-primary-action-hover: var(--bg-control-primary);
+  --border-control: var(--forza6-ink);
   --border-control-hover: var(--forza6-ink);
   --control-border-width: 2px;
   --control-radius: 0;

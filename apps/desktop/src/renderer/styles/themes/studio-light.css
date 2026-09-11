@@ -97,6 +97,7 @@
   --bg-neutral-action-hover: var(--bg-option-hover);
   --bg-option-hover: var(--bg-hover);
   --bg-primary-action-hover: var(--bg-control-primary-hover);
+  --border-control: rgba(17, 23, 37, 0.32);
   --border-control-hover: color-mix(in oklab, var(--text-primary) 26%, transparent);
   --control-border-width: 1px;
   --control-radius: 6px;

@@ -98,6 +98,7 @@
   --bg-neutral-action-hover: var(--bg-option-hover);
   --bg-option-hover: var(--bg-hover);
   --bg-primary-action-hover: var(--bg-control-primary-hover);
+  --border-control: rgba(31, 26, 18, 0.34);
   --border-control-hover: rgba(31, 26, 18, 0.28);
   --control-border-width: 1px;
   --control-radius: 8px;
