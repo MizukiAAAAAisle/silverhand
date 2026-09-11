@@ -1,12 +1,12 @@
 import {
+  startTransition,
   useCallback,
-  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
-import { AnimatedPanel } from "./animated-panel";
 import { PANE_RADIUS } from "./pane-chrome";
 import { SplitterTrack } from "./splitter-track";
 
@@ -22,6 +22,34 @@ interface SplitPaneProps {
   maxRatio?: number;
 }
 
+/** Width transition duration. Kept in sync with the CSS `transition`
+ *  string on the left pane below. Two-stage mount uses it to time when
+ *  the heavy `right` content lands. */
+const TRANSITION_MS = 220;
+const TRANSITION_CSS = "220ms cubic-bezier(0.4, 0, 0.2, 1)";
+
+/**
+ * Vertical split pane (two panes side-by-side, draggable divider).
+ *
+ * Open / close is two-stage to avoid jank when the right side is heavy
+ * (e.g. opening a thread mounts a fresh ChannelView that fires 4+ react
+ * queries on mount): the shell mounts first and the width animates,
+ * then — after the width transition completes — the actual `right`
+ * content mounts into the now-stable pane. Closing is the mirror: drop
+ * heavy content first, animate the left pane back, then unmount shell.
+ *
+ * Width is driven by a single CSS custom property `--split-left-width`
+ * that we write directly via `setProperty` — we deliberately do NOT
+ * keep it in React `style` props, because re-renders would clobber
+ * mid-transition values and prevent the CSS transition from firing at
+ * all. The initial value is seeded via `useLayoutEffect` so first
+ * paint is correct without any visible jump.
+ *
+ * Drag pathway: pointer move drives the same CSS variable via rAF +
+ * `setProperty`. The width transition is suppressed for the duration
+ * of the drag by writing `transition: none` directly on the left pane
+ * so the divider tracks the cursor 1:1.
+ */
 export function SplitPane({
   left,
   right,
@@ -31,22 +59,17 @@ export function SplitPane({
   maxRatio = 0.75,
 }: SplitPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
+  const leftPaneRef = useRef<HTMLDivElement>(null);
   const dividerRef = useRef<HTMLDivElement>(null);
   const hasRight = right !== null && right !== undefined;
-  // Let the shell paint before mounting heavy content, without retaining a closed pane.
-  const contentReady = useDeferredValue(hasRight);
 
   const initialRatioRef = useRef<number>(
     (() => {
-      if (!storageKey) {
-        return defaultRatio;
-      }
+      if (!storageKey) return defaultRatio;
       try {
         const v = localStorage.getItem(storageKey);
         const n = v !== null ? Number(v) : NaN;
-        if (Number.isFinite(n) && n >= minRatio && n <= maxRatio) {
-          return n;
-        }
+        if (Number.isFinite(n) && n >= minRatio && n <= maxRatio) return n;
       } catch {
         /* ignore */
       }
@@ -57,42 +80,116 @@ export function SplitPane({
   const ratioRef = useRef(initialRatioRef.current);
   const dragFrameRef = useRef<number | null>(null);
 
-  const updateGeometry = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) {
-      return;
+  // Lagging visibility state. `shellOpen` controls whether the divider
+  // and right-pane wrapper are mounted; `contentMounted` controls
+  // whether the actual `right` payload is rendered inside that wrapper.
+  // Initial mount with hasRight=true skips the animation so first paint
+  // doesn't slide in from nothing.
+  const [shellOpen, setShellOpen] = useState(hasRight);
+  const [contentMounted, setContentMounted] = useState(hasRight);
+
+  const openRafRef = useRef<number | null>(null);
+  const openTimerRef = useRef<number | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
+
+  const clearOpenScheduled = useCallback(() => {
+    if (openRafRef.current !== null) {
+      cancelAnimationFrame(openRafRef.current);
+      openRafRef.current = null;
     }
-    const width = container.clientWidth;
-    container.style.setProperty("--split-container-width", `${width}px`);
-    container.style.setProperty("--split-left-width", `${width * ratioRef.current}px`);
+    if (openTimerRef.current !== null) {
+      window.clearTimeout(openTimerRef.current);
+      openTimerRef.current = null;
+    }
   }, []);
 
+  const clearCloseScheduled = useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const setLeftWidthVar = useCallback((value: string) => {
+    containerRef.current?.style.setProperty("--split-left-width", value);
+  }, []);
+
+  // Seed the CSS variable before first paint. useLayoutEffect runs
+  // synchronously between commit and paint, so the very first frame
+  // already has the right width — no inline style on the container,
+  // which means React re-renders cannot clobber animated values.
   useLayoutEffect(() => {
-    updateGeometry();
-    const container = containerRef.current;
-    if (!container) {
+    setLeftWidthVar(hasRight ? `${ratioRef.current * 100}%` : "100%");
+    // Intentional: this runs once at mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Drive shell / content mount lifecycle from `hasRight`.
+  // First render's states already match `hasRight`, so this effect
+  // only does work on real transitions (skipped on initial mount).
+  const prevHasRightRef = useRef(hasRight);
+  useEffect(() => {
+    if (prevHasRightRef.current === hasRight) return;
+    prevHasRightRef.current = hasRight;
+
+    if (hasRight) {
+      // OPEN: at this point shellOpen/contentMounted are false from
+      // the previous close. The current DOM `--split-left-width` is
+      // already '100%' (close path set it). Mount the shell, then on
+      // the next frame flip the width — that gap is what lets the CSS
+      // transition pick up the change instead of folding both
+      // mutations into a single commit.
+      clearCloseScheduled();
+      setShellOpen(true);
+
+      clearOpenScheduled();
+      openRafRef.current = requestAnimationFrame(() => {
+        openRafRef.current = null;
+        setLeftWidthVar(`${ratioRef.current * 100}%`);
+        openTimerRef.current = window.setTimeout(() => {
+          openTimerRef.current = null;
+          // `startTransition` lets React interrupt the heavy
+          // ChannelView mount if the user keeps interacting, so the
+          // splitter remains responsive even mid-mount.
+          startTransition(() => {
+            setContentMounted(true);
+          });
+        }, TRANSITION_MS);
+      });
       return;
     }
-    const observer = new ResizeObserver(updateGeometry);
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, [updateGeometry]);
 
+    // CLOSE: unmount the heavy payload immediately so the main thread
+    // is free to animate, flip the width target back to 100% so the
+    // CSS transition fires, then unmount the shell after the
+    // animation completes.
+    clearOpenScheduled();
+    setContentMounted(false);
+    setLeftWidthVar("100%");
+
+    clearCloseScheduled();
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      setShellOpen(false);
+    }, TRANSITION_MS);
+  }, [hasRight, clearOpenScheduled, clearCloseScheduled, setLeftWidthVar]);
+
+  // Cleanup pending timers + drag styles on unmount.
   useEffect(() => {
     return () => {
       if (dragFrameRef.current !== null) {
         cancelAnimationFrame(dragFrameRef.current);
       }
+      clearOpenScheduled();
+      clearCloseScheduled();
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, []);
+  }, [clearOpenScheduled, clearCloseScheduled]);
 
   const persistRatio = useCallback(
     (next: number): void => {
-      if (!storageKey) {
-        return;
-      }
+      if (!storageKey) return;
       try {
         localStorage.setItem(storageKey, String(next));
       } catch {
@@ -105,15 +202,13 @@ export function SplitPane({
   const scheduleRatio = useCallback(
     (next: number): void => {
       ratioRef.current = next;
-      if (dragFrameRef.current !== null) {
-        return;
-      }
+      if (dragFrameRef.current !== null) return;
       dragFrameRef.current = requestAnimationFrame(() => {
         dragFrameRef.current = null;
-        updateGeometry();
+        setLeftWidthVar(`${ratioRef.current * 100}%`);
       });
     },
-    [updateGeometry],
+    [setLeftWidthVar],
   );
 
   const flushRatio = useCallback((): void => {
@@ -121,13 +216,18 @@ export function SplitPane({
       cancelAnimationFrame(dragFrameRef.current);
       dragFrameRef.current = null;
     }
-    updateGeometry();
-  }, [updateGeometry]);
+    setLeftWidthVar(`${ratioRef.current * 100}%`);
+  }, [setLeftWidthVar]);
 
   const dragging = useRef(false);
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     dragging.current = true;
     dividerRef.current?.setAttribute("data-active", "true");
+    // Suppress the width transition for the duration of the drag so
+    // the pane tracks the cursor 1:1 instead of trailing behind.
+    if (leftPaneRef.current) {
+      leftPaneRef.current.style.transition = "none";
+    }
     e.currentTarget.setPointerCapture(e.pointerId);
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
@@ -135,13 +235,9 @@ export function SplitPane({
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
-      if (!dragging.current) {
-        return;
-      }
+      if (!dragging.current) return;
       const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect || rect.width === 0) {
-        return;
-      }
+      if (!rect) return;
       const next = (e.clientX - rect.left) / rect.width;
       const clamped = Math.min(maxRatio, Math.max(minRatio, next));
       scheduleRatio(clamped);
@@ -151,11 +247,13 @@ export function SplitPane({
 
   const onPointerUp = useCallback(
     (e: React.PointerEvent) => {
-      if (!dragging.current) {
-        return;
-      }
+      if (!dragging.current) return;
       dragging.current = false;
       dividerRef.current?.removeAttribute("data-active");
+      // Restore the width transition that onPointerDown suppressed.
+      if (leftPaneRef.current) {
+        leftPaneRef.current.style.transition = `width ${TRANSITION_CSS}`;
+      }
       flushRatio();
       const next = ratioRef.current;
       persistRatio(next);
@@ -172,51 +270,50 @@ export function SplitPane({
     <div
       ref={containerRef}
       className="flex h-full min-w-0 flex-1 overflow-hidden"
-      style={
-        {
-          // Match the previous left-pane ratio; the gutter is deducted from the right.
-          "--split-right-width":
-            "max(0px, calc(var(--split-container-width, 0px) - var(--split-left-width, 0px) - var(--pane-gap)))",
-        } as React.CSSProperties
-      }
+      // The gutter between left | right is `--pane-gap`, same token the
+      // section sheet uses between sidebar | page — so the two seams a user
+      // sees side by side (sidebar↔conversation via VerticalSplitter, and
+      // conversation↔thread here) are always the SAME width. Without this the
+      // divider was a bare 4px flex item flush against both panes: an 8px
+      // gutter on the left, a 4px lane in the middle (#task:1965 residual,
+      // #task:1971). The divider straddles the gap with a negative margin
+      // (see below), so the VISIBLE distance stays exactly `--pane-gap`.
+      style={{ gap: "var(--pane-gap)" }}
     >
-      <div className="flex h-full min-w-0 flex-1 overflow-hidden">
-        <div
-          className="flex h-full shrink-0 overflow-hidden"
-          style={{
-            width: hasRight ? "var(--split-left-width)" : "var(--split-container-width)",
-            contain: "layout paint",
-          }}
-        >
-          {left}
-        </div>
-      </div>
-      <AnimatedPanel
-        open={hasRight}
-        width="calc(var(--split-right-width) + var(--pane-gap))"
-        overlay={
-          <div className="absolute inset-y-0 flex w-0" style={{ left: "var(--pane-gap)" }}>
-            <SplitterTrack
-              ref={dividerRef}
-              onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              onPointerCancel={onPointerUp}
-            />
-          </div>
-        }
+      <div
+        ref={leftPaneRef}
+        // `contain: layout paint` isolates the left pane's layout from
+        // the right pane's reconciliation, so opening a thread doesn't
+        // ripple a reflow through the message list.
+        style={{
+          width: "var(--split-left-width)",
+          transition: `width ${TRANSITION_CSS}`,
+          contain: "layout paint",
+        }}
+        className="flex h-full min-w-0 overflow-hidden"
       >
-        {() => (
-          <div className="flex h-full min-w-0 flex-1" style={{ paddingLeft: "var(--pane-gap)" }}>
-            <div
-              style={{ contain: "layout paint", borderRadius: PANE_RADIUS }}
-              className="flex h-full min-w-0 flex-1 overflow-hidden bg-bg-base"
-            >
-              {hasRight && contentReady ? right : null}
-            </div>
+        {left}
+      </div>
+      {shellOpen ? (
+        <>
+          <SplitterTrack
+            ref={dividerRef}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerUp}
+          />
+          <div
+            style={{
+              contain: "layout paint",
+              borderRadius: PANE_RADIUS,
+            }}
+            className="flex h-full min-w-0 flex-1 overflow-hidden bg-bg-base"
+          >
+            {contentMounted ? right : null}
           </div>
-        )}
-      </AnimatedPanel>
+        </>
+      ) : null}
     </div>
   );
 }
