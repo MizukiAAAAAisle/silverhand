@@ -99,12 +99,14 @@ function WorkspaceRow({
       collapsible
       expanded={expanded}
       onToggle={onToggle}
-      leading={
-        icon ? (
-          <span className="flex size-5.5 shrink-0 items-center justify-center">{icon}</span>
-        ) : undefined
+      trailing={
+        <>
+          {icon ? (
+            <span className="flex size-5.5 shrink-0 items-center justify-center">{icon}</span>
+          ) : null}
+          {muted ? <MutedMarker /> : null}
+        </>
       }
-      trailing={muted ? <MutedMarker /> : undefined}
       action={children}
     />
   );
