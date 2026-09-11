@@ -279,7 +279,8 @@ export function SidebarSectionHeader({
           className={cn(
             "group/sectionheader sidebar-row-gutter flex h-7 min-w-0 items-center justify-between",
             "cursor-pointer text-left",
-            drag && "touch-none cursor-grab active:cursor-grabbing",
+            drag && "touch-none",
+            drag?.isDragging && "cursor-grabbing",
             OUTER_GLYPH_INSET,
           )}
           aria-expanded={expanded}

@@ -4,7 +4,7 @@ import { animateLayoutChanges, sortableItemStyle } from "./list-drag-sort";
 
 type BranchDragHandle = Pick<
   ReturnType<typeof useSortable>,
-  "attributes" | "listeners" | "setActivatorNodeRef"
+  "attributes" | "listeners" | "setActivatorNodeRef" | "isDragging"
 >;
 const BranchDragContext = createContext<BranchDragHandle | null>(null);
 
@@ -33,7 +33,9 @@ export function SortableSidebarBranch({
 
   return (
     <div ref={setNodeRef} style={sortableItemStyle({ transform, transition, isDragging })}>
-      <BranchDragContext.Provider value={{ attributes, listeners, setActivatorNodeRef }}>
+      <BranchDragContext.Provider
+        value={{ attributes, listeners, setActivatorNodeRef, isDragging }}
+      >
         {children}
       </BranchDragContext.Provider>
     </div>
