@@ -4,7 +4,7 @@ import {
   type ChannelAttentionModeRowDto,
   type ConversationVisibility,
 } from "@silverhand/shared";
-import { Plus } from "lucide-react";
+import { cn } from "@/lib/cn";
 import { useSortable } from "@dnd-kit/sortable";
 import { ChannelRow } from "./channel-row";
 import { AppContextMenu } from "@/components/menus/app-context-menu";
@@ -63,9 +63,6 @@ interface WorkspaceChannelsProps {
    *  workspace can match. */
   selectedChannelId: string | null;
   onSelectChannel: (channelId: string, workspaceId: string) => void;
-  /** Create a channel in THIS workspace — the empty-state action, and the
-   *  compensation for `/chat/w/:id` having no highlight of its own. */
-  onCreateChannel: (workspaceId: string) => void;
   /** COLLAPSED partial render: show only a subset — no drag, no sort, no empty-state
    *  action (see the file header). Always keeps the open channel's row; a starred
    *  selection is excluded and shows in STARRED, so it may render nothing. Both a
@@ -96,7 +93,6 @@ export function WorkspaceChannels({
   workspaceId,
   selectedChannelId,
   onSelectChannel,
-  onCreateChannel,
   collapsed = false,
   pokeUnread = false,
   revealCaption,
@@ -183,21 +179,9 @@ export function WorkspaceChannels({
   }
 
   if (ordered.length === 0) {
-    // An expanded workspace with nothing to show offers the action instead of a
-    // dead "No channels yet" line — the same affordance `/chat/w/:id` needs.
     return (
-      <li>
-        <button
-          type="button"
-          onClick={() => onCreateChannel(workspaceId)}
-          className={
-            "flex h-7 w-full items-center gap-1.5 text-left text-xs text-text-muted hover:text-text-primary " +
-            NESTED_GLYPH_INSET
-          }
-        >
-          <Plus className="size-3.5 shrink-0" />
-          <span className="truncate">New channel</span>
-        </button>
+      <li className={cn("flex h-7 items-center text-xs text-text-muted", NESTED_GLYPH_INSET)}>
+        No channels
       </li>
     );
   }

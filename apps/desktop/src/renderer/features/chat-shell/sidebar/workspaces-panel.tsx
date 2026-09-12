@@ -139,7 +139,6 @@ export function WorkspaceBranch({
           workspaceId={workspace.id}
           selectedChannelId={ctx.selected.channelId}
           onSelectChannel={ctx.onSelectChannel}
-          onCreateChannel={ctx.onCreateChannel}
           collapsed={!expanded}
           pokeUnread={wakeGate}
         />
