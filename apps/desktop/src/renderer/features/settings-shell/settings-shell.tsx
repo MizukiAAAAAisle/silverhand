@@ -673,7 +673,7 @@ function MarkdownFontControl({
 
       <div
         className={cn(
-          "rounded-(--control-radius) border border-border-subtle bg-bg-primary px-3 py-2 text-text-primary",
+          "rounded-(--control-radius) border border-border-subtle bg-bg-elevated px-3 py-2 text-text-primary",
           code ? "font-mono" : "",
         )}
         style={sampleStyle}
