@@ -195,15 +195,13 @@ function WorkspaceHeaderRow({
   );
 
   return (
-    <div className="group/wsbranch">
-      <WorkspaceContextMenu
-        trigger={row}
-        muteWorkspaceId={canMuteWorkspace(workspace) ? workspace.id : null}
-        leaveWorkspace={
-          canLeaveWorkspaceRow(workspace) ? { id: workspace.id, name: workspace.name } : null
-        }
-      />
-    </div>
+    <WorkspaceContextMenu
+      trigger={<div className="group/wsbranch">{row}</div>}
+      muteWorkspaceId={canMuteWorkspace(workspace) ? workspace.id : null}
+      leaveWorkspace={
+        canLeaveWorkspaceRow(workspace) ? { id: workspace.id, name: workspace.name } : null
+      }
+    />
   );
 }
 
