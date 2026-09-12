@@ -1,5 +1,7 @@
 # Daemon outbound protocol
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 This document defines the WebSocket transport for the daemon. The orchestration
 boundary remains
 `docs/orchestration-boundary-v1.md`: server owns DB/control-plane state, daemon
@@ -136,7 +138,7 @@ Close-code handling is explicit:
 
 Version skew is a semantic break, not a range: the server accepts exactly
 `OUTBOUND_PROTOCOL_VERSION` and does not dual-accept. The terminal close only
-stops the *new* daemon's retry loop; already-deployed older daemons keep dialing
+stops the _new_ daemon's retry loop; already-deployed older daemons keep dialing
 until upgraded, which is harmless to the server because a refused generation is
 invisible to every business reader.
 
@@ -182,17 +184,17 @@ host placement fails before any frame is written to the wire.
 Default command timeout is 30 seconds. Callers should override it by command
 shape rather than treating the default as product policy:
 
-| Command | Recommended timeout | Reason |
-| --- | ---: | --- |
-| `runtime_status` | 5s | read-only snapshot; used for reconnect hydrate |
-| `runtime_deliver` | 10s | spawn/admit/refuse custody decision; consumed ack is still async |
-| `runtime_stop` hard | 10s | signal dispatch ack, not full process-drain guarantee |
-| `runtime_stop` soft | 15s | directive encode + stdin write |
-| `runtime_start` | 30s | pure lifecycle spawn acceptance and pid report (no batch) |
-| `runtime_clear_session` | 15s | hard-stop + session reset ack |
-| `runtime_stop_all` / `runtime_close_activity_log` | 30s | shutdown/drain control path |
-| `runtime_output_pause` / `runtime_output_resume` | 5s | local daemon bookkeeping |
-| `rotate_token` | 10s | daemon config atomic write |
+| Command                                           | Recommended timeout | Reason                                                           |
+| ------------------------------------------------- | ------------------: | ---------------------------------------------------------------- |
+| `runtime_status`                                  |                  5s | read-only snapshot; used for reconnect hydrate                   |
+| `runtime_deliver`                                 |                 10s | spawn/admit/refuse custody decision; consumed ack is still async |
+| `runtime_stop` hard                               |                 10s | signal dispatch ack, not full process-drain guarantee            |
+| `runtime_stop` soft                               |                 15s | directive encode + stdin write                                   |
+| `runtime_start`                                   |                 30s | pure lifecycle spawn acceptance and pid report (no batch)        |
+| `runtime_clear_session`                           |                 15s | hard-stop + session reset ack                                    |
+| `runtime_stop_all` / `runtime_close_activity_log` |                 30s | shutdown/drain control path                                      |
+| `runtime_output_pause` / `runtime_output_resume`  |                  5s | local daemon bookkeeping                                         |
+| `rotate_token`                                    |                 10s | daemon config atomic write                                       |
 
 ## Heartbeat
 

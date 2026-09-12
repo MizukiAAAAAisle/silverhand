@@ -70,7 +70,8 @@ describe('desktop-server-api-epoch contract root', () => {
   it('refuses deployed epoch 3 in both directions and accepts epoch 4 peers', () => {
     const classify = (clientEpoch: number, serverEpoch: number) =>
       classifyDesktopServerApiCompatibility({
-        clientEpoch, serverEpoch,
+        clientEpoch,
+        serverEpoch,
         minimumClientEpoch: MINIMUM_CLIENT_API_EPOCH,
         minimumServerEpoch: MINIMUM_SERVER_API_EPOCH,
       });
@@ -91,9 +92,9 @@ describe('desktop-server-api-epoch contract root', () => {
     expect(parseDesktopApiEpochHeader('0')).toBe(0);
     expect(parseDesktopApiEpochHeader('1')).toBe(1);
     expect(parseDesktopApiEpochHeader(' 42 ')).toBe(42);
-    expect(
-      parseDesktopApiEpochHeader(String(DESKTOP_SERVER_API_EPOCH)),
-    ).toBe(DESKTOP_SERVER_API_EPOCH);
+    expect(parseDesktopApiEpochHeader(String(DESKTOP_SERVER_API_EPOCH))).toBe(
+      DESKTOP_SERVER_API_EPOCH,
+    );
   });
 
   it('minimum-vs-current invariants, and the pre-epoch generation (0) now fails closed', () => {
@@ -102,12 +103,8 @@ describe('desktop-server-api-epoch contract root', () => {
     // compiled minimum rather than a literal, so it states the CURRENT rule
     // either way: while a minimum was 0 the pre-epoch generation was admitted;
     // now that §6 raised it, absence (normalized to 0) is refused.
-    expect(MINIMUM_CLIENT_API_EPOCH).toBeLessThanOrEqual(
-      DESKTOP_SERVER_API_EPOCH,
-    );
-    expect(MINIMUM_SERVER_API_EPOCH).toBeLessThanOrEqual(
-      DESKTOP_SERVER_API_EPOCH,
-    );
+    expect(MINIMUM_CLIENT_API_EPOCH).toBeLessThanOrEqual(DESKTOP_SERVER_API_EPOCH);
+    expect(MINIMUM_SERVER_API_EPOCH).toBeLessThanOrEqual(DESKTOP_SERVER_API_EPOCH);
     expect(
       classifyDesktopServerApiCompatibility({
         clientEpoch: 0,
@@ -154,19 +151,12 @@ describe('desktop-server-api-epoch contract root', () => {
     // The shared reminder helper points at the real file and exits non-zero
     // when it is missing (dangling doc references die silently otherwise —
     // audit #8).
-    const reminder = readFileSync(
-      join(REPO_ROOT, 'scripts/epoch-runbook-reminder.mjs'),
-      'utf8',
-    );
+    const reminder = readFileSync(join(REPO_ROOT, 'scripts/epoch-runbook-reminder.mjs'), 'utf8');
     expect(reminder).toContain(runbook);
     expect(reminder).toContain('process.exit(1)');
-    // Both real build entries invoke it: the desktop packaging script and
-    // the standalone server bundle build.
-    expect(
-      readFileSync(join(REPO_ROOT, 'scripts/package.sh'), 'utf8'),
-    ).toContain('epoch-runbook-reminder.mjs');
-    expect(
-      readFileSync(join(REPO_ROOT, 'packages/server/package.json'), 'utf8'),
-    ).toContain('epoch-runbook-reminder.mjs');
+    // The Desktop packaging entry invokes it.
+    expect(readFileSync(join(REPO_ROOT, 'scripts/package.sh'), 'utf8')).toContain(
+      'epoch-runbook-reminder.mjs',
+    );
   });
 });

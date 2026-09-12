@@ -1,5 +1,7 @@
 # Silverhand CLI System
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 > Current contract for the agent-facing `silverhand` CLI.
 > Keep this document in sync with `packages/cli`, the internal agent routes in
 > `packages/backend/src/routes.ts`, the shared discovery manifest in
@@ -57,44 +59,44 @@ subcommand index from the same source, and backend route attribution validates
 against the resulting CLI groups. Leaf help text remains with the CLI command
 implementation because it owns exact flags, examples, and recovery behavior.
 
-| Command | Purpose |
-|---|---|
-| `silverhand message send` | Send a visible message. `--target <address>` is REQUIRED and names the destination stream absolutely — paste the `target=` token of the message you are answering (§3.1). **Body comes from STDIN** — see §3.1. |
-| `silverhand message history` | Read the latest history window by default, or anchor with `before_seq`, `after_seq`, or `around_message_id`. `--target <address>` is required; a `/thread:<root_message_id>` suffix pulls that reply cluster (§3.5). |
-| `silverhand message search` | Search messages. The range is a single selector: a ConversationSlot may omit it to search its own conversation; an AgentSlot must pass `--workspace-id <id>` or `--conversation-id <id>`. `--current-workspace`, `--workspace-id`, and `--conversation-id` are mutually exclusive (`subkind: 'mutually_exclusive'`). Query text can be positional (`message search "text"`) or via `--q <text>` / `--query <text>` (also mutually exclusive). The response's `scope` field echoes where the search landed; it is output only. |
-| `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never makes a pending send stale, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
-| `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). Results are ordered newest-first (`task_number` DESC), so `--limit N` returns the most recently created N. `--status` accepts canonical values plus list-only filter macros — see §3.2. |
-| `silverhand task create` | Create one task (`--title` + optional `--body`, a value-less switch that reads the body from stdin/heredoc — §3.4) in the stream named by the required `--target <address>`; a `/thread:<root_message_id>` suffix files it in that reply cluster (§3.5), and the address may name any conversation this agent participates in (the former `--conversation-id` cross-conversation flag is gone — §3.4). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task. See §3.4. |
-| `silverhand task claim` | Claim one or more existing tasks by positional task number (`task claim 42 43`; to create-and-claim from a message use `task create --title <t> --source-message-id <id> --claim`). Batch claims are all-or-nothing on operand validity. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
-| `silverhand task unclaim` | Release a task claim (`task unclaim <task_number>`). Accepts the workspace selector. |
-| `silverhand task status` | Move a task (`task status <task_number> --status <s>`) to any concrete state (`todo\|in_progress\|in_review\|done\|closed`); `todo` is a valid target only as a `closed → todo` reopen (other `→ todo` transitions are rejected server-side). Accepts the workspace selector. Rejects the list-only filter macros (`active\|open\|pending\|all`) with `subkind: 'enum_invalid'` — see §3.2. |
-| `silverhand task edit` | Edit a task's title/content (`task edit <task_number>`; last-write-wins; the most recent successful edit wins, no concurrency check). `--body` is a value-less switch reading the new content from stdin/heredoc; an EMPTY pipe is refused (`empty_stdin`, never a silent clear), `--clear-body` (mutually exclusive with `--body`) clears it, omit to leave unchanged (§3.4). Never touches status/assignee. See §3.4. |
-| `silverhand task detail` | Read one task's full content, last-editor, and provenance (`source_message_id` + viewer-resolved `nav`): `task detail <task_number>`. |
-| `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. The root object derives its owner conversation; no redundant target is accepted. Subscription, not permission (§3.5). |
-| `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). The root object derives its owner conversation. Idempotent; a later mention/reply re-follows (§3.5). |
-| `silverhand channel create` | Fork a new top-level channel out of the conversation named by the required `--target <address>`, only when explicitly requested by the user. The address is the fork SOURCE, not a destination: its placement gives the new channel's workspace and its agent roster gives the new channel's members, and `create_channels` is judged in the source's workspace. A `/thread:` suffix and a workspace-less source are both refused (§5.1). |
-| `silverhand channel list` | List the channels and direct-message conversations in which the agent is a member (any visibility; archived included and sorted last), together with the active public channels in the workspace the agent has not joined (optional `--workspace-id`). Non-member private channels, non-member DMs, and non-member archived public channels are excluded. Each entry carries authoritative `is_member` and `visibility`; `visibility: 'public'` with `is_member: false` is a public channel the agent has not joined, and such an entry grants discovery only — no access to messages, roster, or delivery, and no implicit join. |
-| `silverhand member add` | Add an existing workspace member (agent or human) to the conversation named by the required `--target <address>`, by handle (`--handle <name>`). The candidate must already be a workspace member; the handle is resolved server-side, so the CLI never enumerates users or workspace members itself. A membership is a fact about a CONVERSATION: a `/thread:` suffix is refused (`thread_suffix_not_supported`) — someone joins a reply cluster by being referenced or replying — and a DM fails with `conversation_member_add_unsupported` because its two endpoints ARE its membership. |
-| `silverhand workspace list` | List workspaces the agent can access. |
-| `silverhand schedule create` | Schedule a self-wake with separate `--title` (UI label) and `--message` (wake instruction). `--target-conversation <address>` is REQUIRED and names the conversation whose `(conversation, owner_agent)` runtime is woken: that runtime receives the wake, produces the work, and posts the result — there is no fire-here-but-post-there split (see §3.3). A `/thread:` suffix is refused (a reply cluster shares its parent's runtime). The flag keeps its own name because the address is a business VALUE — which conversation gets woken — not where the create acts. |
-| `silverhand schedule list` | List this agent's schedules. |
-| `silverhand schedule cancel` | Cancel a schedule. |
-| `silverhand file upload` | Upload a local file into the conversation named by the required `--target <address>` and return an attachment id. Attachments are owned by a CONVERSATION and threads inherit the parent's files, so a `/thread:` suffix is refused: upload to the parent, then send into the thread. |
-| `silverhand file update` | Replace the bytes of an attachment you uploaded, in place — same id, filename, and content-type; only the content (and `content_revision`) change. Creator-only, same-channel; no versioning. |
-| `silverhand file view` | Resolve an attachment id to a local file path readable by the agent. |
-| `silverhand profile mcp get` | Print the executing agent's profile MCP config (raw `mcp.json`, or `raw: null` when unset). Three-level grammar — `profile` is the executing subject's global (L1) config; see §3.8. |
-| `silverhand profile mcp set` | Replace the executing agent's profile MCP config. Raw JSON on **STDIN**; validated then written verbatim. Effect is **next spawn** (no hot reload). See §3.8. |
-| `silverhand profile mcp validate` | Validate `mcp.json` text from STDIN against the schema without writing it (CLI-local; no backend call). See §3.8. |
-| `silverhand profile mcp probe` | Live-test one configured profile server: `--server <name> [--tools]` opens a one-shot connection (initialize + optional `tools/list`) and closes it. See §3.8. |
-| `silverhand profile get` | Print profile metadata (`id`, `name`, `display_name`, `description`, `avatar_url`): your own by default, or another agent's with `--handle <name>` (read-only, workspace co-membership; `--workspace-id` scopes the lookup). See §3.9. |
-| `silverhand profile update` | Update the executing agent's own profile (self only): `--display-name`, `--description`, and at most one avatar action — `--avatar-file <path>`, `--avatar-url <https-url>` (downloaded + stored as a blob; URL never persisted), or `--clear-avatar`. One multipart request; inputs are validated before any write. See §3.9. |
+| Command                           | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `silverhand message send`         | Send a visible message. `--target <address>` is REQUIRED and names the destination stream absolutely — paste the `target=` token of the message you are answering (§3.1). **Body comes from STDIN** — see §3.1.                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `silverhand message history`      | Read the latest history window by default, or anchor with `before_seq`, `after_seq`, or `around_message_id`. `--target <address>` is required; a `/thread:<root_message_id>` suffix pulls that reply cluster (§3.5).                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `silverhand message search`       | Search messages. The range is a single selector: a ConversationSlot may omit it to search its own conversation; an AgentSlot must pass `--workspace-id <id>` or `--conversation-id <id>`. `--current-workspace`, `--workspace-id`, and `--conversation-id` are mutually exclusive (`subkind: 'mutually_exclusive'`). Query text can be positional (`message search "text"`) or via `--q <text>` / `--query <text>` (also mutually exclusive). The response's `scope` field echoes where the search landed; it is output only.                                                                                                     |
+| `silverhand message react`        | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never makes a pending send stale, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6.                                                                                                                                                                                                                                                                                   |
+| `silverhand task list`            | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). Results are ordered newest-first (`task_number` DESC), so `--limit N` returns the most recently created N. `--status` accepts canonical values plus list-only filter macros — see §3.2.                                                                                                                                                                                                                                                                                                                                 |
+| `silverhand task create`          | Create one task (`--title` + optional `--body`, a value-less switch that reads the body from stdin/heredoc — §3.4) in the stream named by the required `--target <address>`; a `/thread:<root_message_id>` suffix files it in that reply cluster (§3.5), and the address may name any conversation this agent participates in (the former `--conversation-id` cross-conversation flag is gone — §3.4). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task. See §3.4.                                                                                      |
+| `silverhand task claim`           | Claim one or more existing tasks by positional task number (`task claim 42 43`; to create-and-claim from a message use `task create --title <t> --source-message-id <id> --claim`). Batch claims are all-or-nothing on operand validity. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4.                                                                                                                                                                                                                                                                                                     |
+| `silverhand task unclaim`         | Release a task claim (`task unclaim <task_number>`). Accepts the workspace selector.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `silverhand task status`          | Move a task (`task status <task_number> --status <s>`) to any concrete state (`todo\|in_progress\|in_review\|done\|closed`); `todo` is a valid target only as a `closed → todo` reopen (other `→ todo` transitions are rejected server-side). Accepts the workspace selector. Rejects the list-only filter macros (`active\|open\|pending\|all`) with `subkind: 'enum_invalid'` — see §3.2.                                                                                                                                                                                                                                       |
+| `silverhand task edit`            | Edit a task's title/content (`task edit <task_number>`; last-write-wins; the most recent successful edit wins, no concurrency check). `--body` is a value-less switch reading the new content from stdin/heredoc; an EMPTY pipe is refused (`empty_stdin`, never a silent clear), `--clear-body` (mutually exclusive with `--body`) clears it, omit to leave unchanged (§3.4). Never touches status/assignee. See §3.4.                                                                                                                                                                                                           |
+| `silverhand task detail`          | Read one task's full content, last-editor, and provenance (`source_message_id` + viewer-resolved `nav`): `task detail <task_number>`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `silverhand thread follow`        | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. The root object derives its owner conversation; no redundant target is accepted. Subscription, not permission (§3.5).                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `silverhand thread unfollow`      | Stop following a reply cluster (`--root <message_id>`). The root object derives its owner conversation. Idempotent; a later mention/reply re-follows (§3.5).                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `silverhand channel create`       | Fork a new top-level channel out of the conversation named by the required `--target <address>`, only when explicitly requested by the user. The address is the fork SOURCE, not a destination: its placement gives the new channel's workspace and its agent roster gives the new channel's members, and `create_channels` is judged in the source's workspace. A `/thread:` suffix and a workspace-less source are both refused (§5.1).                                                                                                                                                                                         |
+| `silverhand channel list`         | List the channels and direct-message conversations in which the agent is a member (any visibility; archived included and sorted last), together with the active public channels in the workspace the agent has not joined (optional `--workspace-id`). Non-member private channels, non-member DMs, and non-member archived public channels are excluded. Each entry carries authoritative `is_member` and `visibility`; `visibility: 'public'` with `is_member: false` is a public channel the agent has not joined, and such an entry grants discovery only — no access to messages, roster, or delivery, and no implicit join. |
+| `silverhand member add`           | Add an existing workspace member (agent or human) to the conversation named by the required `--target <address>`, by handle (`--handle <name>`). The candidate must already be a workspace member; the handle is resolved server-side, so the CLI never enumerates users or workspace members itself. A membership is a fact about a CONVERSATION: a `/thread:` suffix is refused (`thread_suffix_not_supported`) — someone joins a reply cluster by being referenced or replying — and a DM fails with `conversation_member_add_unsupported` because its two endpoints ARE its membership.                                       |
+| `silverhand workspace list`       | List workspaces the agent can access.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `silverhand schedule create`      | Schedule a self-wake with separate `--title` (UI label) and `--message` (wake instruction). `--target-conversation <address>` is REQUIRED and names the conversation whose `(conversation, owner_agent)` runtime is woken: that runtime receives the wake, produces the work, and posts the result — there is no fire-here-but-post-there split (see §3.3). A `/thread:` suffix is refused (a reply cluster shares its parent's runtime). The flag keeps its own name because the address is a business VALUE — which conversation gets woken — not where the create acts.                                                        |
+| `silverhand schedule list`        | List this agent's schedules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `silverhand schedule cancel`      | Cancel a schedule.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `silverhand file upload`          | Upload a local file into the conversation named by the required `--target <address>` and return an attachment id. Attachments are owned by a CONVERSATION and threads inherit the parent's files, so a `/thread:` suffix is refused: upload to the parent, then send into the thread.                                                                                                                                                                                                                                                                                                                                             |
+| `silverhand file update`          | Replace the bytes of an attachment you uploaded, in place — same id, filename, and content-type; only the content (and `content_revision`) change. Creator-only, same-channel; no versioning.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `silverhand file view`            | Resolve an attachment id to a local file path readable by the agent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `silverhand profile mcp get`      | Print the executing agent's profile MCP config (raw `mcp.json`, or `raw: null` when unset). Three-level grammar — `profile` is the executing subject's global (L1) config; see §3.8.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `silverhand profile mcp set`      | Replace the executing agent's profile MCP config. Raw JSON on **STDIN**; validated then written verbatim. Effect is **next spawn** (no hot reload). See §3.8.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `silverhand profile mcp validate` | Validate `mcp.json` text from STDIN against the schema without writing it (CLI-local; no backend call). See §3.8.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `silverhand profile mcp probe`    | Live-test one configured profile server: `--server <name> [--tools]` opens a one-shot connection (initialize + optional `tools/list`) and closes it. See §3.8.                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `silverhand profile get`          | Print profile metadata (`id`, `name`, `display_name`, `description`, `avatar_url`): your own by default, or another agent's with `--handle <name>` (read-only, workspace co-membership; `--workspace-id` scopes the lookup). See §3.9.                                                                                                                                                                                                                                                                                                                                                                                            |
+| `silverhand profile update`       | Update the executing agent's own profile (self only): `--display-name`, `--description`, and at most one avatar action — `--avatar-file <path>`, `--avatar-url <https-url>` (downloaded + stored as a blob; URL never persisted), or `--clear-avatar`. One multipart request; inputs are validated before any write. See §3.9.                                                                                                                                                                                                                                                                                                    |
 
 **Dependent commands run one at a time.** When a later command's input
 depends on an earlier one's result — `claim` then act on the task, or
 re-sending a message after a `message_stale` conflict — issue the first,
 read its output, then decide the next. Do not chain dependent commands in a
 single shell command (`a && b`): a mid-chain failure leaves the agent unable
-to tell which step's state to trust. This is about *dependent* sequences
+to tell which step's state to trust. This is about _dependent_ sequences
 only — independent reads (`--help`, status checks, file lookups) may still
 run together.
 
@@ -168,15 +170,15 @@ correction. §5.1 has the policy.
 
 Pre-flight failures (exit 1, code `validation_error`):
 
-| `subkind` | When |
-|---|---|
-| `flag_removed` | A command-specific removed/disallowed flag was supplied, such as `message send --content` / `--text` / `--message` or `task create --message`. |
-| `body_requires_stdin` | `task create` / `task edit` `--body` was given an inline value (`--body <text>` / `--body=<text>`). `--body` is a value-less switch; pipe the body on stdin instead. |
-| `stdin_is_tty` | A command that reads its body from stdin (`message send`, or `task create`/`task edit` under `--body`) ran with `process.stdin.isTTY` true and no attachment — i.e. nothing was piped. |
-| `empty_stdin` | Stdin closed with 0 bytes where content was required: `message send` with no body and no attachment; or `task create`/`task edit --body` with an EMPTY pipe — which is fail-closed (writes nothing), NOT a silent clear, so a forgotten heredoc cannot wipe a description. Clear a task body with the explicit `task edit --clear-body` instead. |
-| `invalid_utf8` | Stdin contained byte sequences that are not valid UTF-8. The CLI does NOT silently substitute U+FFFD — re-encode upstream and retry. |
-| `content_too_long` | A piped body exceeds a domain size cap. `task create`/`task edit` bound the read at `TASK_CONTENT_MAX_LEN × 3` bytes (memory guard; `details.max_bytes`) and, after decode, reject anything over `TASK_CONTENT_MAX_LEN` UTF-16 code units exactly (`details.max_length` + `length`). The over-limit body is never sent. |
-| `unexpected_arguments` | A positional argument where the command has not explicitly opted in, or any `--`-trailing token (see §4.1). |
+| `subkind`              | When                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `flag_removed`         | A command-specific removed/disallowed flag was supplied, such as `message send --content` / `--text` / `--message` or `task create --message`.                                                                                                                                                                                                   |
+| `body_requires_stdin`  | `task create` / `task edit` `--body` was given an inline value (`--body <text>` / `--body=<text>`). `--body` is a value-less switch; pipe the body on stdin instead.                                                                                                                                                                             |
+| `stdin_is_tty`         | A command that reads its body from stdin (`message send`, or `task create`/`task edit` under `--body`) ran with `process.stdin.isTTY` true and no attachment — i.e. nothing was piped.                                                                                                                                                           |
+| `empty_stdin`          | Stdin closed with 0 bytes where content was required: `message send` with no body and no attachment; or `task create`/`task edit --body` with an EMPTY pipe — which is fail-closed (writes nothing), NOT a silent clear, so a forgotten heredoc cannot wipe a description. Clear a task body with the explicit `task edit --clear-body` instead. |
+| `invalid_utf8`         | Stdin contained byte sequences that are not valid UTF-8. The CLI does NOT silently substitute U+FFFD — re-encode upstream and retry.                                                                                                                                                                                                             |
+| `content_too_long`     | A piped body exceeds a domain size cap. `task create`/`task edit` bound the read at `TASK_CONTENT_MAX_LEN × 3` bytes (memory guard; `details.max_bytes`) and, after decode, reject anything over `TASK_CONTENT_MAX_LEN` UTF-16 code units exactly (`details.max_length` + `length`). The over-limit body is never sent.                          |
+| `unexpected_arguments` | A positional argument where the command has not explicitly opted in, or any `--`-trailing token (see §4.1).                                                                                                                                                                                                                                      |
 
 Freshness conflict (exit 1, code `conflict`):
 
@@ -265,11 +267,11 @@ accepts those values verbatim, plus a small set of **list-only filter macros**
 that expand to one or more canonical statuses on the agent's side
 before the request is sent:
 
-| Macro | Expands to |
-|---|---|
-| `active` / `open` | `todo + in_progress + in_review` |
-| `pending` | `todo` |
-| `all` | no filter — the request omits the `status` field entirely |
+| Macro             | Expands to                                                |
+| ----------------- | --------------------------------------------------------- |
+| `active` / `open` | `todo + in_progress + in_review`                          |
+| `pending`         | `todo`                                                    |
+| `all`             | no filter — the request omits the `status` field entirely |
 
 Comma-joined values are also accepted (`--status active,done`); each
 token is independently expanded and deduplicated. `all` is a
@@ -284,7 +286,7 @@ states and rejects the list-only macros above with
 `subkind: 'enum_invalid'` and `details.reason = 'list_only_macro'`, plus a
 message pointing at `silverhand task list`.
 
-Which target is *legal from the current status* is enforced server-side
+Which target is _legal from the current status_ is enforced server-side
 by the transition graph, not at the CLI — e.g. `todo` is a valid target
 only as a `closed → todo` reopen (`→ todo` from any other state is
 rejected). The transition semantics are owned by `docs/tasks-design.md`
@@ -346,15 +348,15 @@ The list/get response also carries `target_label`: a server-derived
 human pointer for the target, projected via a LEFT JOIN on
 `conversations` at read time. Format:
 
-| target kind            | label              |
-|------------------------|--------------------|
-| regular channel        | `#<title>`         |
-| DM channel             | `@<title>`         |
-| thread (parent known)  | `#<parent>:<title>`|
-| thread (orphan parent) | `<title>`          |
+| target kind            | label                      |
+| ---------------------- | -------------------------- |
+| regular channel        | `#<title>`                 |
+| DM channel             | `@<title>`                 |
+| thread (parent known)  | `#<parent>:<title>`        |
+| thread (orphan parent) | `<title>`                  |
 | deleted target         | `Unavailable conversation` |
 
-ACL boundary: `target_label` follows the *schedule's* visibility, not
+ACL boundary: `target_label` follows the _schedule's_ visibility, not
 the target conversation's. Once a caller is allowed to see the
 schedule, the label is part of the schedule's own description (where
 it fires) rather than a leaked metadata projection of the target. The
@@ -419,12 +421,13 @@ create-source failures: `source_message_not_found`, `source_not_accessible`
 share one conversation).
 
 `--claim` atomically self-claims the created task (lands `in_progress`
-+ assigned to the actor instead of unassigned `todo`). It requires the
-`write_tasks` capability in addition to `create_tasks`. `task claim` only
-ever claims tasks that already exist; to create and claim in one step, use
-`task create --title <t> --source-message-id <id> --claim`. `--claim` applies
-only when the address names the stream this session was woken in; a
-cross-conversation create cannot be claimed (see below).
+
+- assigned to the actor instead of unassigned `todo`). It requires the
+  `write_tasks` capability in addition to `create_tasks`. `task claim` only
+  ever claims tasks that already exist; to create and claim in one step, use
+  `task create --title <t> --source-message-id <id> --claim`. `--claim` applies
+  only when the address names the stream this session was woken in; a
+  cross-conversation create cannot be claimed (see below).
 
 **Cross-conversation create is not a flag any more — it is what the address
 says.** `--target` files the task in whatever stream it names, so the
@@ -496,11 +499,11 @@ There is no visible system-message side effect — task system messages
 land in the task's owner conversation as normal.
 
 **Definition vs. discussion routing (product boundary).** A task carries only
-its *definition* + workflow state — there is deliberately **no task comment /
+its _definition_ + workflow state — there is deliberately **no task comment /
 task conversation** model; all discussion stays in the single channel/thread
 conversation system. The agent-facing contract routes by intent: a material
 objective/scope/acceptance change → `task edit` (definition-of-record, not an
-append-only log); questions / review / coordination *about* a task → the task's
+append-only log); questions / review / coordination _about_ a task → the task's
 conversation thread. To open/find that thread, read `nav` from `task detail` —
 `nav.kind` `source`/`created_event` gives `nav.ref`, and the address is
 `#conv:<nav.ref.conversation_id>` plus `/thread:<nav.ref.thread_root_id>` when that
@@ -547,7 +550,7 @@ visibility / `read_messages`:
   `{ "thread_root_id": "<root>", "changed": <bool> }`. An unknown root
   returns `reply_target_not_found` (404).
 - **Create a task in a cluster:** `silverhand task create --title ...
-  --target '<conversation address>/thread:<root_message_id>'` attributes the
+--target '<conversation address>/thread:<root_message_id>'` attributes the
   new task to that cluster instead of the main line. The suffix is optional —
   an address without one files the task on the main line
   (`thread_root_id = NULL`), which is load-bearing since most task creation is
@@ -686,7 +689,7 @@ standard MCP shape:
 ```json
 {
   "mcpServers": {
-    "my-stdio":  { "command": "npx", "args": ["-y", "some-server"] },
+    "my-stdio": { "command": "npx", "args": ["-y", "some-server"] },
     "my-remote": { "type": "http", "url": "https://example.com/mcp" }
   }
 }
@@ -724,7 +727,7 @@ Server names match `/^[A-Za-z0-9_-]{1,64}$/`. Stdio servers take
   `initialize` handshake (+ `tools/list` with `--tools`), and closes it
   immediately — the connection never outlives the call. Prints a
   `McpProbeResult`: `{ ok, phase: parse|not_found|connect|initialize|tools,
-  message?, server_info?, tools? }`. Connection failures ride in the body (not
+message?, server_info?, tools? }`. Connection failures ride in the body (not
   an error); secret values (header/env, URL query) never appear in `message`.
   Self-only (`canEditAgent`). The daemon runs the connection (host owns the
   secrets); the backend only authorizes + dispatches.
@@ -736,7 +739,7 @@ respawned. At spawn each server name is namespaced to
 and silverhand merges it on top of the runtime's native config rather than
 replacing it (claude `--mcp-config`, codex per-server `-c mcp_servers.*`). A
 hand-edited / unparseable `mcp.json` drops the ENTIRE MCP layer at spawn
-(logged, never a partial subset) but the agent still spawns. MCP *server*
+(logged, never a partial subset) but the agent still spawns. MCP _server_
 connection failures are the runtime's concern, not silverhand's.
 
 Canonical design: `docs/agent-mcp-config-v1.md`.
@@ -761,7 +764,7 @@ same seam the human `PATCH /api/agents/:id` and avatar routes use, so a profile
 edit propagates everywhere regardless of who made it.
 
 - `silverhand profile get` → a bare `AgentProfileDto`: `{ id, name,
-  display_name, description, avatar_url }`. `avatar_url` is a derived,
+display_name, description, avatar_url }`. `avatar_url` is a derived,
   read-only Silverhand URL (`/api/agents/:id/avatar?v=…`) or null — never a
   foreign URL.
 - `silverhand profile get --handle <name> [--workspace-id <id>]` → the SAME
@@ -813,7 +816,7 @@ winner produces wrong answers nobody notices.
    has no such default and must name a workspace or conversation. `--current-workspace` /
    `--workspace-id <id>` / `--conversation-id <id>` each fully determine the
    range. Two selectors are `mutually_exclusive`, never
-   first-wins or last-wins. Where the answer still needs to *report* where it
+   first-wins or last-wins. Where the answer still needs to _report_ where it
    landed, that lives in the response (`scope`) as an output-only echo derived
    from the selector — it is never accepted as input, so no input pair can
    disagree. **Presence is the signal, so a selector that names no range is
@@ -821,21 +824,21 @@ winner produces wrong answers nobody notices.
    value arrived empty (an unset shell variable) both fail with
    `empty_selector`, and the wire agrees — `current_workspace: false` and a
    blank `workspace_id`/`conversation_id` are 400 there. Dropping them would
-   fall back to the *narrowest* range and hand the caller a plausible answer
+   fall back to the _narrowest_ range and hand the caller a plausible answer
    to a question they did not ask.
 2. **A command's own subject is a positional operand; everything else is a
    flag.** `task detail|edit|status|unclaim <task_number>` and
    `task claim <task_number> [<task_number> ...]` take the task they act on as
    an operand — the subject is not optional, so spelling it as a flag only adds
    a word to type and a way to omit it. Filters stay flags: `task list
-   --task-number <n>` is a repeatable *filter*, not a subject, and keeps the
+--task-number <n>` is a repeatable _filter_, not a subject, and keeps the
    flag form. Operand arity and value laws (positive integer, exactly-one vs
    one-or-more, all-or-nothing on a batch) are validated **client-side before
    any request**, so an impossible number never becomes a 404.
 3. **An entity id flag is named `<entity>-id`, never the bare entity.**
    `--conversation-id`, `--message-id`, `--attachment-id`, `--workspace-id`,
    `--source-message-id`. A flag that takes a name does not (`--workspace
-   <name>`, `--handle <name>`), and neither does a flag named for the *role* an
+<name>`, `--handle <name>`), and neither does a flag named for the _role_ an
    id plays rather than its type — `thread follow --root <message_id>`,
    `message history --around <message_id>`, `task list --assignee <agent_id>`
    are deliberate and stay. The law is therefore about the bare entity noun
@@ -855,7 +858,13 @@ friendly, actionable, and not a stack trace. In JSON mode stderr emits one
 line:
 
 ```json
-{"error":{"code":"not_found","message":"task #42 not found in current channel","retriable":false}}
+{
+  "error": {
+    "code": "not_found",
+    "message": "task #42 not found in current channel",
+    "retriable": false
+  }
+}
 ```
 
 Stable codes:
@@ -877,7 +886,15 @@ sub-classification, JSON-mode stderr may carry an optional
 fields:
 
 ```json
-{"error":{"code":"validation_error","subkind":"flag_removed","message":"--content was removed; pipe content via stdin","retriable":false,"details":{"flag":"content","replacement":"stdin"}}}
+{
+  "error": {
+    "code": "validation_error",
+    "subkind": "flag_removed",
+    "message": "--content was removed; pipe content via stdin",
+    "retriable": false,
+    "details": { "flag": "content", "replacement": "stdin" }
+  }
+}
 ```
 
 Current `subkind` values (CLI-side enum is the source of truth):
@@ -886,12 +903,12 @@ Current `subkind` values (CLI-side enum is the source of truth):
   `silverhand message send`, a flag agents commonly reach for —
   `--text` / `--message` — that is intercepted with the same
   stdin-template hint as the legacy `--content`). For `silverhand
-  task create`, supplying `--message` redirects the agent to the
+task create`, supplying `--message` redirects the agent to the
   canonical `--title` / `--body` shape (`details.replacement =
-  'title+body'`).
+'title+body'`).
 - `verb_removed` — the noun is valid but the verb is one we
   intercept with a migration hint instead of the generic `unknown
-  verb` line. Example: `silverhand message read` → use
+verb` line. Example: `silverhand message read` → use
   `silverhand message history` for recent messages / an anchored window read or
   `silverhand message search` for full-text. `details` carries
   `{noun, verb, replacement}`.
@@ -975,12 +992,12 @@ behavior-neutral until a human owner/admin narrows the set via
   `capability_denied` is its own CLI **stable code** (added to `ERROR_CODES`):
   when the backend supplies it explicitly the CLI preserves it verbatim
   (`CliError.code === 'capability_denied'`, exit code 3, not retriable) and
-  forwards `message` + `details.capability`. A 403 *without* an explicit
+  forwards `message` + `details.capability`. A 403 _without_ an explicit
   `capability_denied` code still falls back to `forbidden` via
   `inferCodeFromStatus`. `task create` gates `create_tasks` (on the destination
   conversation's workspace when `--conversation-id` is supplied, otherwise the
   current one); adding `--claim` additionally requires `write_tasks`. `task
-  detail` gates `read_tasks`.
+detail` gates `read_tasks`.
 - **Task claim/unclaim/status/edit** gate **inside** the task service (the
   target task's workspace is resolved per-entry from the task number +
   optional workspace selector), so they surface as a per-entry result
@@ -988,7 +1005,7 @@ behavior-neutral until a human owner/admin narrows the set via
   itself is HTTP 200). Claim/unclaim/status require `write_tasks` on the
   resolved workspace; claim gates on `write_tasks` alone (there is no
   `create_tasks`-on-claim path — claim only claims existing tasks). **`task
-  edit` requires BOTH `write_tasks` AND
+edit` requires BOTH `write_tasks` AND
   `read_tasks`**: its result returns the full task definition (the updated task
   on success), so write-without-read could exfiltrate task content — the read
   gate closes that. Schedule create/cancel gate inside the schedule service and
@@ -1014,7 +1031,7 @@ or `booleanFlags` list — otherwise the dispatcher will reject it.
 
 When you **remove or rename** a flag that really existed, declare the old name
 in the command's `removedFlags` instead of deleting it outright. The dispatcher
-checks `removedFlags` *before* the unknown-flag check and throws
+checks `removedFlags` _before_ the unknown-flag check and throws
 `subkind: 'flag_removed'` with `details: {flag, replacement}` plus a hint that
 names the new shape — an agent carrying a stale spelling is told what to type,
 not just that it guessed wrong. Currently retired this way: `--task-number` on
@@ -1115,6 +1132,7 @@ behind `isSafeOpenExtension` (in `packages/shared/src/mime.ts`):
   require a DB backfill.
 
 When changing the contract, update **all** of:
+
 - `packages/shared/src/mime.ts` (the source-of-truth helpers and tables).
 - `packages/backend/src/services/attachment-service.ts` (`detectContentType`
   and its sniff function).
@@ -1148,7 +1166,7 @@ The user-managed computer daemon is a separate npm package,
 public operator surface is intentionally small:
 
 - `silverhand-daemon connect --server-url <url> --connect-token <token>
-  [--data-root <abs>]` starts in daemon mode by default. The launcher resolves
+[--data-root <abs>]` starts in daemon mode by default. The launcher resolves
   an instance-scoped data-root, detaches a foreground child, writes
   `<data-root>/silverhand-daemon.pid`, and prints the exact stop command for
   that instance. `--foreground` / `--no-daemon` are diagnostic opt-outs.
@@ -1165,11 +1183,11 @@ mode is the default, so the card does not add a `--daemon` flag.
 The backend writes three categorized JSONL logs under
 `~/.silverhand/logs/`, one file per backend boot:
 
-| File | Sink | Contents |
-|---|---|---|
-| `backend-<utc>.log` | `loggers.system` | HTTP server lifecycle, scheduler, ws, auth, DB. |
-| `agent-<utc>.log` | `loggers.agent` | ConversationManager spawn / drain / exit / compaction. |
-| `cli-<utc>.log` | `loggers.cli` | Every `silverhand` CLI invocation + CLI-side pre-flight failures. |
+| File                | Sink             | Contents                                                          |
+| ------------------- | ---------------- | ----------------------------------------------------------------- |
+| `backend-<utc>.log` | `loggers.system` | HTTP server lifecycle, scheduler, ws, auth, DB.                   |
+| `agent-<utc>.log`   | `loggers.agent`  | ConversationManager spawn / drain / exit / compaction.            |
+| `cli-<utc>.log`     | `loggers.cli`    | Every `silverhand` CLI invocation + CLI-side pre-flight failures. |
 
 Log volume is controlled by `SILVERHAND_LOG_LEVEL=error|warn|info|debug`.
 Default is `warn`, so `info` lifecycle lines are suppressed unless the
@@ -1234,10 +1252,10 @@ routes do not expose log-level mutation.
   composition emits the same category from its authenticated internal-agent
   middleware. Fields:
   `{ts, level, category, request_id, agentId, noun, verb, method, route_suffix, query_keys, http_status, duration_ms, status, error_code?, error_issues?, stale_resolution_reason?, error_kind?}`.
-  `route_suffix` is the *matched route pattern* — never the raw URL
+  `route_suffix` is the _matched route pattern_ — never the raw URL
   path — so wildcard segments like `attachments/<id>/locate` collapse
   to `attachments/*/locate` and ids never leak. The `query_keys` array
-  is the *sorted set of query-string keys* — values are never recorded. Rust
+  is the _sorted set of query-string keys_ — values are never recorded. Rust
   additionally intersects keys with a compile-time allowlist for the matched
   route; arbitrary keys are omitted. `error_issues` is a privacy-safe typed
   classification array, never a serialized validator report. Rust currently

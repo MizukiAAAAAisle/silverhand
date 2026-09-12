@@ -106,7 +106,7 @@ mod tests {
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../rust/test-fixtures/migration-baseline/schema-current.sql");
 
     // A host + creator, then four agents exercising every reachable stored shape:
     //  - `a-present`: a valid key + allowlisted content type (the serve coordinate);

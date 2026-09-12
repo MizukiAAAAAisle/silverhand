@@ -38,7 +38,7 @@ function readMinifySetting(): false | "oxc" {
 
 const minify = readMinifySetting();
 
-const workspaceDeps = ["@silverhand/shared", "@silverhand/backend"];
+const workspaceDeps = ["@silverhand/shared"];
 // Workspace packages are bundled here and must stay out of packaged app
 // production dependencies; electron-builder follows pnpm workspace symlinks
 // outside apps/desktop and fails packaging.

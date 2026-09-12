@@ -320,7 +320,7 @@ mod tests {
     use std::sync::Mutex;
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../rust/test-fixtures/migration-baseline/schema-current.sql");
 
     /// A host, one regular workspace (unowned), and two conversations in it — so
     /// the backfill has real workspace + conversation rows to claim.

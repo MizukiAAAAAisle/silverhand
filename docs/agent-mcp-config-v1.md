@@ -1,5 +1,7 @@
 # Profile MCP v1 — per-subject custom MCP servers
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 Status: **canonical** (locked 2026-06-15, shiki + Alice + Cindy). Implements
 #task:1135.
 
@@ -21,7 +23,7 @@ servers are an **additive layer**, never a replacement.
   workspace. `profile` is deliberately subject-agnostic: a human can have a
   profile too, with no change to the CLI language. (Human/Agent isomorphism —
   see `docs/architecture-principles.md`.)
-- **Workspace-scoped MCP is explicitly future**, under a *different* domain
+- **Workspace-scoped MCP is explicitly future**, under a _different_ domain
   noun (`silverhand workspace mcp …`), not this doc. See §9.
 
 ## 2. Storage — local L1 file, single source of truth
@@ -37,13 +39,13 @@ slot's `agents` root and the agent id (`resolveAgentDir`, #task:1813). No
 process derives it from `homedir()`, and no fs path crosses the wire.
 
 - **The file is the only source of truth for the raw config.** The backend / DB
-  store **no** raw JSON. (A future column MAY cache *derived* metadata —
+  store **no** raw JSON. (A future column MAY cache _derived_ metadata —
   `has_mcp_config`, `updated_at`, `last_validation_error`, a hash — purely for
   list/status display; never the raw bytes. Not in v1.)
 - Rationale (locked): (a) consistent with the existing L1 model —
   `system_prompt.md` / `MEMORY.md` are already host-local-fs truth the backend
   never reads/writes as content; MCP config is the same identity layer. (b) The
-  spawn consumer needs the config *on the host fs* anyway. (c) The write flow is
+  spawn consumer needs the config _on the host fs_ anyway. (c) The write flow is
   agent-mediated (an agent runs the CLI while live on its host), so the host is
   always online when writing — the one advantage of DB (offline central edit) is
   unused. DB-as-truth would split the agent-identity model and add a sync path.
@@ -60,10 +62,10 @@ compatible with what users already know:
     "github": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": { "GITHUB_TOKEN": "ghp_…" }
+      "env": { "GITHUB_TOKEN": "ghp_…" },
     },
-    "linear": { "type": "http", "url": "https://mcp.linear.app/sse" }
-  }
+    "linear": { "type": "http", "url": "https://mcp.linear.app/sse" },
+  },
 }
 ```
 
@@ -79,7 +81,7 @@ interception — this is the user's own trusted local file (locked: shiki).
 ## 3. Runtime name prefixing — domain in the name from v1
 
 Each server's **raw name is the user-visible truth** (CLI/UI always show it).
-The name handed to the *runtime* is private and **carries the scope domain as a
+The name handed to the _runtime_ is private and **carries the scope domain as a
 prefix from v1**:
 
 ```
@@ -105,7 +107,7 @@ into the spawn. Pure agent-global; effect takes hold on the **next spawn** (no
 hot reload).
 
 The adapter contract is **mechanism-agnostic** — given the canonical config it
-returns spawn-time *additions*: extra argv, extra env, and/or temp files to
+returns spawn-time _additions_: extra argv, extra env, and/or temp files to
 write under the per-spawn temp dir. Both adapters compose with the existing
 spawn-prep temp dir (`spawn-prep.ts`) and are cleaned up with it.
 
@@ -113,7 +115,7 @@ spawn-prep temp dir (`spawn-prep.ts`) and are cleaned up with it.
 
 - Generate a per-spawn temp JSON file containing the prefixed `mcpServers` map.
 - Pass `--mcp-config <tempPath>` (verified present in claude 2.1.174).
-- **Never** pass `--strict-mcp-config` (that *replaces* the user's MCP). Plain
+- **Never** pass `--strict-mcp-config` (that _replaces_ the user's MCP). Plain
   `--mcp-config` is additive on top of the user's own MCP.
 - **Never** call `claude mcp add` (that writes the user's config).
 
@@ -125,7 +127,7 @@ and merge over the user's `~/.codex/config.toml`. So:
 
 - Emit **one `-c` override per server**:
   `-c mcp_servers.<prefixedName>=<inline-TOML-table>`. Per-server (not one
-  override of the whole `mcp_servers` table) so it *merges* with the user's
+  override of the whole `mcp_servers` table) so it _merges_ with the user's
   existing servers instead of replacing the table.
 - The inline-TOML value is produced by a **TOML serializer** (handles
   string/array/nested-table quoting for `args` / `env` / `http_headers`), never
@@ -140,9 +142,9 @@ and merge over the user's `~/.codex/config.toml`. So:
 - **Never** write `~/.codex/config.toml`; **never** call `codex mcp add`.
 - **Verified** against the bundled binary `codex-cli 0.140.0`
   (`/Applications/Codex.app/Contents/Resources/codex` — the native bundle the
-  daemon prefers via `runtimes.ts` PLATFORM_CANDIDATES, *not* a PATH `codex`):
+  daemon prefers via `runtimes.ts` PLATFORM_CANDIDATES, _not_ a PATH `codex`):
   `codex app-server` accepts the `-c mcp_servers.*` overrides; `codex mcp add
-  --url …` round-trips to `url` / `http_headers` (table) / `bearer_token_env_var`
+--url …` round-trips to `url` / `http_headers` (table) / `bearer_token_env_var`
   / `env_http_headers` with transport `streamable_http` and no `type` key,
   matching the projection. Canonical `env_http_headers` / `bearer_token_env_var`
   are a future schema addition (v1 canonical carries only `headers`).
@@ -151,7 +153,7 @@ and merge over the user's `~/.codex/config.toml`. So:
 
 `profile` is a new top-level domain noun for the **executing subject's global
 config**. MCP is its first facet; avatar / display-name / model prefs are
-expected future facets — which is exactly why MCP is *not* a bare top-level
+expected future facets — which is exactly why MCP is _not_ a bare top-level
 `mcp` noun. This requires a three-level grammar `silverhand profile <facet>
 <verb>` (a contained sub-noun extension of the otherwise two-level dispatcher;
 no other noun is affected).
@@ -170,7 +172,7 @@ silverhand profile mcp validate < mcp.json # validate only; never writes
 
 ## 6. Failure semantics — write strict, spawn loud-but-non-blocking
 
-Two distinct stages, and within spawn two distinct failure *classes*:
+Two distinct stages, and within spawn two distinct failure _classes_:
 
 - **Write stage (`set` / `validate`): strict fail-loud.** Bad JSON, bad schema,
   or a config the adapters can't map → the CLI returns a readable error and
@@ -197,8 +199,8 @@ no drift. When the workspace layer lands it sits beside it as **Workspace MCP**.
 The pane reads via the public mirror `GET /api/agents/:id/profile/mcp`
 (`{ raw: string | null }`, null = no `mcp.json`). Its read gate is **stricter
 than agent visibility**: raw `mcp.json` can carry secrets (env tokens, HTTP auth
-headers), so a same-workspace teammate who can *see* the agent (`canViewAgent`)
-is still **403**'d unless they can *edit* it (`canEditAgent` = creator/self).
+headers), so a same-workspace teammate who can _see_ the agent (`canViewAgent`)
+is still **403**'d unless they can _edit_ it (`canEditAgent` = creator/self).
 "We don't censor the owner's own secrets" means we don't inspect the file, NOT
 that any viewer may read it.
 

@@ -1,5 +1,7 @@
 # Thread Unread — per-stream read cursor (v1)
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 Status: **implemented (backend)**（#task:1226；**unread 读模型重构见 §4.2,为权威**）。
 本 doc 是 #1226 的 canonical 规范；与代码冲突时以本 doc 为准直至代码修正。**Activity/Inbox 是独立后续(`notes`/单独 task),不在本 doc 范围**——本 doc 只交付 per-stream read cursor 底座 + thread 未读三表面。
 
@@ -9,7 +11,7 @@ Status: **implemented (backend)**（#task:1226；**unread 读模型重构见 §4
 > mark-read route(`/api/channels/:id/mark-read`,handler `markConversationRead`)+ schema `MarkConversationReadInputSchema`
 > (字段 `snapshot_seq`)描述「推进 per-stream cursor」这一动作。该 route + schema 已**删除**(#1232);
 > cursor 推进现统一经**单一 eliminate 原语 `observe()`**:`POST /api/attention/observe`,source `{kind:'stream',
-> conversation_id, thread_root_id, position}`,其中 `position = {kind:'at_seq', seq}`(原 `snapshot_seq`)或
+conversation_id, thread_root_id, position}`,其中 `position = {kind:'at_seq', seq}`(原 `snapshot_seq`)或
 > `{kind:'stream_head'}`(server 解析当前 head)。**下文的快照 / no-swallow / 按 stream 非对称 / fail-loud 校验语义
 > 全部原样保留**,只是承载从「专用 route + `snapshot_seq` 字段」迁到「observe `stream` source + `at_seq` position」;
 > 凡读到 `MarkConversationReadInputSchema` / route `markConversationRead` / `snapshot_seq` **字段名**处,按此对应阅读。
@@ -124,10 +126,11 @@ unread(S) = count(messages m
 
 > **承载已迁 observe()(#1231/#1232,见顶部退役提要):** 下文 `markRead(…, snapshotSeq)` / `snapshot_seq` 字段 /
 > 「省略 fallback」均为退役前专用 route 的形态。现等价 = `observe({stream, conversation_id, thread_root_id,
-> position})`:显式 snapshot → `position:{at_seq: snapshotSeq}`;主线「省略=取当前 head」→ caller 显式给
+position})`:显式 snapshot → `position:{at_seq: snapshotSeq}`;主线「省略=取当前 head」→ caller 显式给
 > `position:{stream_head}`。快照 / no-swallow / `at_seq <= head` fail-loud 语义**原样保留**,resolveSource 复刻同一套校验。
 
 打开一条流时:
+
 1. 读取该流的 `conversation_stream_heads.latest_seq` 作为 **open-time snapshot**。
 2. mark-read **只推进到这个 snapshot**,不是「当下最新」:
 
@@ -209,6 +212,7 @@ firstUnread(S) = messages m (同 §3.3 过滤) ORDER BY m.seq ASC LIMIT 1
 per-stream 后,`conversation_reads` 每个 (user, conversation) **不再只有一行**。因此**除 §3.5 的 roll-up 聚合外,所有 read/write 都必须显式限定 `thread_root_id IS NULL` 或 `= ?`**,否则会取到主线或任意 thread 行、结果不确定。
 
 **非 repo callsite 必须一并审计(已知)**:
+
 - `mention-cc.ts:337` `viewerHasNotReadMessage` —— 现在 `SELECT last_read_seq ... WHERE user_id=? AND conversation_id=?` 无 stream 条件。必须改成:先取该 message 的 `thread_root_id`(主线消息=NULL),再查**对应 stream 的 cursor**(`thread_root_id IS NULL` 或 `= 该 root`)做比较。否则被检查的消息是 thread reply 时,会错误地拿主线/任意 cursor 判断。
 - 实现期 grep `conversation_reads` 全仓,逐一确认每处都带 stream 限定;新增的 callsite 同此纪律。
 
@@ -261,7 +265,7 @@ per-stream 后,`conversation_reads` 每个 (user, conversation) **不再只有�
 9. **客户端消费 freshness(client-side):snapshot 必须来自「本次打开」的窗口 read,不能是上次打开遗留的缓存值。** React Query 重开同一 thread 会先同步吐旧 cache 的 `stream_head_seq`、再后台 refetch;若 effect 见到非 null head 即 mark 并用「per-root 永久 once-guard」锁死,新响应的更高 head 会被 ref-gate 吞掉 → cursor 停在上次快照、且 snapshot 源自上次 read,破契约。要求:①打开时保证一次 window refetch(`refetchOnMount: 'always'` 或 open 时 invalidate);②mark 仅当**本次 open 触发的 window fetch 已成功完成**;③once-guard **仅在通过②的成功门控后、per-open 重新 arm**(keyed by open/epoch,非永久 per-root;等待/失败态不得提前锁死)。
    - **门控信号必须是「本次 window fetch 成功」本身,不能裸用 `dataUpdatedAt`:** `dataUpdatedAt` 只是「数据更新时刻」代理,`setQueryData`(乐观 `patchReplySummary` / live-append)同样会 bump 它,会在真正 window refetch 完成前把门提前打开 → 用非窗口成功响应当 snapshot 源。优先吃一个 current-open fetch epoch / fetch promise success / `lastWindowFetchSucceededAt`(只在 window fetch 成功路径写,不被 `setQueryData` 触达)。若最终仍用 `dataUpdatedAt`,测试必须覆盖两类负例:(a) 旧 cache 先返回 → 不 mark;(b) 本次 open 的 refetch 成功完成前、即便 `setQueryData` 更新了 query data → 仍不 mark。
    - **后端无法兜底**——stale `S` 是合法 seq ≤ head,后端区分不了「本次/上次打开」,故 freshness 是 client 消费纪律。
-10. **this-open window fetch 必须尊重打开意图(latest vs jump-around);强制 refetch 不得 clobber jump-open 的 around-window。** reply chip「跳 first-unread」走 `primeAround` 把 **around-first-unread 窗口**写进 cluster cache;但 `refetchOnMount:'always'` 的 mount-refetch 若 queryFn 无 `aroundMessageId`、按 **latest** 拉,会覆盖该 around-window → 目标被抹、locate 不稳,破 surface 3「点 chip 跳 first unread」。要求:**jump-open(带 `jumpMessageId`)时,本次 open 的权威 window fetch = around-target 那一次**(它 stamp `windowFetchSucceededAt`、arm gate、锚定 RAF locate),**不得**先写 around-window 再被 target-less latest refetch 抹掉(让 primeAround 的 around-fetch 本身充当 this-open window fetch,或 `useThreadCluster` 在 jump open 时按 around target 发本次 fetch)。    - **空缓存 jump-open 的 latest initial fetch 同样要挡:`refetchOnMount:false` 只挡「有缓存时 mount refetch」,挡不住「空缓存首次启用的 initial fetch」**——`useInfiniteQuery` `enabled=true` + 无缓存 → mount 必跑一次 target-less latest(React Query 行为,`hooks.ts:868-875` 注释自陈)。首次点 chip 打开从未打开过的 thread 时,该 latest initial fetch 可能抢在 primeAround 之前写 `clusterMessagesKey` + epoch、开 gate、mark 并切到 latest 窗口 → first-unread 不在 DOM、locate 不稳,race 仍破 §9.10。**精确不变量:jump-open 时,第一个写 `clusterMessagesKey`/epoch 的 fetch 必须是 around-target,latest 不得抢跑。** 修法:让 `useThreadCluster` 接 open intent/around target、jump-open 的 initial fetch 本身按 around 拉(最干净:一条 intent-参数化的 query,initial page 即 around);或 jump-open 到 primeAround commit 前禁 cluster query 的自动 initial fetch(`enabled` 门控)、仍反应式读 cache。回归需证**空缓存 jump-open 下 latest initial fetch 不抢跑**(纯 `threadOpenNeedsLatestRefetch(jump)=false` 只证 effect 不手动 refetch、epoch-carrier 只证 primeAround 能开 gate,都没证 latest initial fetch 不能先开 gate)——若无 RTL/jsdom mount harness,至少在 hook-config 层断言 jump-open 时 cluster query 不以「latest initial fetch enabled」形态挂上。**抑制的是 FETCH,不是已到达 around-window 的 RENDER:** prime-pending 期压 `enabled` + 显 loader 是对的,但 `useMessageJumpController` 语义上 primeAround 成功**不**清 `primePending`(等可视层 locate/flash 成功才 `onJumped→clearJump`)。故 loader/empty-state **只能在「还无可渲染 cluster window」时**压(如 `cluster.isLoading || (jumpPrimePending && messages.length === 0)`),around-window 一进 cache 必须立即渲染——否则 loader 一直遮住消息,locate effect 找不到 `#msg-${jumpMessageId}`、超时才清 pending,jump 已失败:**抑制饿死了它本要服务的 locate**。回归补「prime success + pending 仍 true + window present → 渲染消息而非 loader」。
+10. **this-open window fetch 必须尊重打开意图(latest vs jump-around);强制 refetch 不得 clobber jump-open 的 around-window。** reply chip「跳 first-unread」走 `primeAround` 把 **around-first-unread 窗口**写进 cluster cache;但 `refetchOnMount:'always'` 的 mount-refetch 若 queryFn 无 `aroundMessageId`、按 **latest** 拉,会覆盖该 around-window → 目标被抹、locate 不稳,破 surface 3「点 chip 跳 first unread」。要求:**jump-open(带 `jumpMessageId`)时,本次 open 的权威 window fetch = around-target 那一次**(它 stamp `windowFetchSucceededAt`、arm gate、锚定 RAF locate),**不得**先写 around-window 再被 target-less latest refetch 抹掉(让 primeAround 的 around-fetch 本身充当 this-open window fetch,或 `useThreadCluster` 在 jump open 时按 around target 发本次 fetch)。 - **空缓存 jump-open 的 latest initial fetch 同样要挡:`refetchOnMount:false` 只挡「有缓存时 mount refetch」,挡不住「空缓存首次启用的 initial fetch」**——`useInfiniteQuery` `enabled=true` + 无缓存 → mount 必跑一次 target-less latest(React Query 行为,`hooks.ts:868-875` 注释自陈)。首次点 chip 打开从未打开过的 thread 时,该 latest initial fetch 可能抢在 primeAround 之前写 `clusterMessagesKey` + epoch、开 gate、mark 并切到 latest 窗口 → first-unread 不在 DOM、locate 不稳,race 仍破 §9.10。**精确不变量:jump-open 时,第一个写 `clusterMessagesKey`/epoch 的 fetch 必须是 around-target,latest 不得抢跑。** 修法:让 `useThreadCluster` 接 open intent/around target、jump-open 的 initial fetch 本身按 around 拉(最干净:一条 intent-参数化的 query,initial page 即 around);或 jump-open 到 primeAround commit 前禁 cluster query 的自动 initial fetch(`enabled` 门控)、仍反应式读 cache。回归需证**空缓存 jump-open 下 latest initial fetch 不抢跑**(纯 `threadOpenNeedsLatestRefetch(jump)=false` 只证 effect 不手动 refetch、epoch-carrier 只证 primeAround 能开 gate,都没证 latest initial fetch 不能先开 gate)——若无 RTL/jsdom mount harness,至少在 hook-config 层断言 jump-open 时 cluster query 不以「latest initial fetch enabled」形态挂上。**抑制的是 FETCH,不是已到达 around-window 的 RENDER:** prime-pending 期压 `enabled` + 显 loader 是对的,但 `useMessageJumpController` 语义上 primeAround 成功**不**清 `primePending`(等可视层 locate/flash 成功才 `onJumped→clearJump`)。故 loader/empty-state **只能在「还无可渲染 cluster window」时**压(如 `cluster.isLoading || (jumpPrimePending && messages.length === 0)`),around-window 一进 cache 必须立即渲染——否则 loader 一直遮住消息,locate effect 找不到 `#msg-${jumpMessageId}`、超时才清 pending,jump 已失败:**抑制饿死了它本要服务的 locate**。回归补「prime success + pending 仍 true + window present → 渲染消息而非 loader」。
 
 ## 9. 迁移安全 / 验证
 

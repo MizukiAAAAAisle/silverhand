@@ -28,7 +28,7 @@ use super::{ListQueryWire, changed_event, list_query, router};
 fn fixture_case(name: &str) -> Value {
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/saved-wire.json"
+        "/../../../rust/test-fixtures/fixtures/saved-wire.json"
     )))
     .unwrap();
     fixture
@@ -411,7 +411,7 @@ async fn the_shared_fixture_is_a_closed_set_of_all_three_saved_surfaces() {
     }
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/saved-wire.json"
+        "/../../../rust/test-fixtures/fixtures/saved-wire.json"
     )))
     .unwrap();
     let mut surfaces = fixture
@@ -490,7 +490,7 @@ async fn malformed_persisted_metadata_fails_closed_instead_of_emitting_an_invali
 fn the_rust_query_boundary_consumes_the_ts_signed_trim_and_coercion_contract() {
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/saved-query-wire.json"
+        "/../../../rust/test-fixtures/fixtures/saved-query-wire.json"
     )))
     .unwrap();
     for case in fixture.as_array().unwrap() {
@@ -567,7 +567,7 @@ async fn valid_since_beyond_i64_is_empty_only_after_workspace_authority() {
     );
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/saved-query-wire.json"
+        "/../../../rust/test-fixtures/fixtures/saved-query-wire.json"
     )))
     .unwrap();
     for case in fixture
@@ -704,7 +704,7 @@ async fn same_millisecond_saved_rows_have_one_total_order_across_the_cap() {
     let (_directory, path, store, events) = seeded().await;
     let ordering: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/saved-ordering.json"
+        "/../../../rust/test-fixtures/fixtures/saved-ordering.json"
     )))
     .unwrap();
     let count = ordering["seed_count"].as_i64().unwrap();

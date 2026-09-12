@@ -24,7 +24,7 @@ use super::router;
 fn fixture() -> Vec<Value> {
     serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/channel-directory-wire.json"
+        "/../../../rust/test-fixtures/fixtures/channel-directory-wire.json"
     )))
     .unwrap()
 }

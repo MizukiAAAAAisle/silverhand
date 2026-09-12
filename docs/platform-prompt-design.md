@@ -1,17 +1,19 @@
 # Platform Prompt — Design Contract
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 > The authoring contract for the standing agent operating manual built by
 > `buildPlatformPrompt` in `packages/shared/src/platform-prompt.ts`.
 >
 > **Read this before editing the platform prompt.** This doc governs the
-> prompt's *structure and invariants* — what must stay true no matter how the
+> prompt's _structure and invariants_ — what must stay true no matter how the
 > wording evolves. It is not the prompt itself, and agents never see it; it
 > exists so a future edit doesn't silently undo a load-bearing rule, weaken a
 > security defense, or scramble the deliberate section order.
 >
 > Related: `docs/agent-system-prompt-memory.md` (the internal storage and
-> spawn-time assembly model). This doc is the forward contract: *what must
-> hold in the agent-visible manual*.
+> spawn-time assembly model). This doc is the forward contract: _what must
+> hold in the agent-visible manual_.
 
 ---
 
@@ -26,7 +28,7 @@ appended as the trailing **Initial role** section.
 The render is assembled from a single template literal plus a few helper
 renderers (`renderSessionContext`, `renderSilverhandCliManual`,
 `renderInjectedFile`, `renderWorkspaceMemoryIndex`, `renderMemberLine`). The
-template's order *is* the document's order. The CLI domain index is generated
+template's order _is_ the document's order. The CLI domain index is generated
 from `packages/shared/src/cli-command-manifest.ts`; it is not a second
 hand-written command inventory.
 
@@ -55,7 +57,7 @@ on them being present.
 1. **This Context** — injected (`renderSessionContext`): the structured
    runtime facts, one bullet each — Agent ID, Computer (the daemon's
    authenticated computer id), Workspace (name + the local root resolved on
-   *this* computer), Channel (title + conversation id), Channel members,
+   _this_ computer), Channel (title + conversation id), Channel members,
    mention rule. Agent-scoped sessions expose only the observable contract:
    deliveries provide a target and working directory. Internal placement,
    storage, and memory-tier names do not render. The incoming message header is
@@ -91,7 +93,7 @@ on them being present.
 - This Context (1) precedes every operational rule: runtime facts before rules.
   The contract (2–3) precedes all knowledge/reference sections. Never demote
   the contract below references.
-- The CLI manual is a *reference* (section 7), not an opener. It was once at the
+- The CLI manual is a _reference_ (section 7), not an opener. It was once at the
   top, ahead of the rules; that was a structural bug. Keep it after the
   product/coordination sections.
 - The injected tail (Active Memory / optional Workspace Index / Initial role)
@@ -216,9 +218,9 @@ be a deliberate, called-out decision — never a side effect of rewording.
   aligned with your part in the work, unfollowing is silent, you announce the
   departure before unfollowing, and a later mention brings you back. Four things
   about that shape are decided, not stylistic:
-  1. **No conditions.** Earlier drafts scoped it — first to threads *where only
-     agents are working* and a participant brought in *for a single question*,
-     then to a *temporary participant* who declares no remaining work depends on
+  1. **No conditions.** Earlier drafts scoped it — first to threads _where only
+     agents are working_ and a participant brought in _for a single question_,
+     then to a _temporary participant_ who declares no remaining work depends on
      them. Ruled out by shiki (2026-08-06): "两版都有点太死板了，应该提供一个理念，
      而不是一个规则", and on the risk of an agent leaving too early, "我可以接受判断
      失误，可以实验". Whether an agent is still part of the work is its own
@@ -231,7 +233,7 @@ be a deliberate, called-out decision — never a side effect of rewording.
   3. **The order is mechanism, not manners.** `applyThreadFollowEffects`
      (`packages/backend/src/services/conversation-message/thread-follow.ts`)
      registers the author of **every** reply as a follower (`source='reply'`), so
-     announcing *after* unfollowing silently re-follows the announcer and the
+     announcing _after_ unfollowing silently re-follows the announcer and the
      guidance executes as a no-op. The sentence order is what preserves this;
      never rewrite it as "unfollow, then announce".
   4. **The thread root's author needs no written exception.** That author is
@@ -257,10 +259,10 @@ be a deliberate, called-out decision — never a side effect of rewording.
   neither of which has a computer dimension (`computer=` is a property of each
   message), so a computer-keyed thread would promise a locality the system cannot
   implement. The settled model (shiki, 2026-08-06) is that locality-first work
-  remains a legitimate *means* — a focused thread keeps one computer's iteration
+  remains a legitimate _means_ — a focused thread keeps one computer's iteration
   off the main line and reduces cross-machine spectating of intermediate states —
   but a thread is never the isolation container, which is why `### Cross-computer
-  work` prescribes boundary reporting and mentions a thread only as an option.
+work` prescribes boundary reporting and mentions a thread only as an option.
 - **Implementation mechanics.** Wake-up cost of a thread reply, the follower
   table, delivery fan-out (shiki, 2026-08-06: agents need not perceive that
   opening a thread is not free). The prompt states observable behavior; the
@@ -297,7 +299,7 @@ their logic requires understanding the attack they prevent; the tests in
 - **`pickFence(body)`** — picks a code fence strictly longer than the longest
   backtick run in injected file content (`N = max(3, longestRun + 1)`), so the
   body cannot close the fence and escape into top-level prompt instructions.
-- **`quotePromptValue(value)`** — JSON-quotes untrusted `display_name`, *and*
+- **`quotePromptValue(value)`** — JSON-quotes untrusted `display_name`, _and_
   escapes the three Unicode line/paragraph separators that `JSON.stringify`
   leaves literal (U+2028, U+2029, U+0085). Without the post-process a crafted
   name can still inject a fake line.
@@ -333,7 +335,7 @@ and injects metadata only — never note bodies.
   No migration history, no "this used to be X", no rationale for removed flags,
   no colloquial filler ("think of yourself as a colleague…"). The prompt is a
   contract, not a changelog.
-- **Exact flags defer to `--help`.** The Tool Reference is a command *index*
+- **Exact flags defer to `--help`.** The Tool Reference is a command _index_
   (Domain trigger + full subcommand names + which `--help` to read), not a flag
   manual. Every index entry keeps its full command name — never abbreviate
   `silverhand schedule list` to `list`.
@@ -360,7 +362,7 @@ and injects metadata only — never note bodies.
 - **CLI facts ↔ manifest ↔ `docs/cli-system.md`.** Any change to `packages/cli`,
   `packages/shared/src/cli-command-manifest.ts`, agent-facing DTO schemas,
   internal agent routes, task behavior, or `silverhand` command guidance must
-  keep `cli-system.md` and the platform prompt in sync *in the same change*. A
+  keep `cli-system.md` and the platform prompt in sync _in the same change_. A
   pure prose reorg that changes no command/flag/behavior fact does not require a
   `cli-system.md` edit.
 - **Internal memory model ↔ `docs/agent-system-prompt-memory.md`.** The
@@ -369,7 +371,7 @@ and injects metadata only — never note bodies.
   document's behavior while keeping its implementation vocabulary out of the
   agent-visible manual.
 - **Thread delivery/follow semantics ↔ `### Threads` / `### Cross-computer
-  work`.** Those sections assume thread delivery is governed by conversation
+work`.** Those sections assume thread delivery is governed by conversation
   membership and follower state — with no computer dimension — that unfollow
   stops only future delivery, that the author of every reply is re-followed, and
   that the thread root's author is therefore unable to leave. If
@@ -383,7 +385,7 @@ and injects metadata only — never note bodies.
 
 The test file is `packages/backend/tests/drivers/platform-prompt.test.ts`.
 
-- **Contract guards, not exact-wording guards.** Assert the *behavior/content*
+- **Contract guards, not exact-wording guards.** Assert the _behavior/content_
   survives, tolerant to rewording and line-wrapping (use `toMatch(/…\s+…/)` for
   phrases that may wrap across the template's hard newlines). Brittle
   exact-string guards make every legitimate edit a test rewrite.

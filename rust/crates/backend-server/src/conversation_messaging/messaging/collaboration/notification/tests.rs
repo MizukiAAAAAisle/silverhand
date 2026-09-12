@@ -420,7 +420,7 @@ fn fixture_body<'a>(fixture: &'a Value, entry: &'a Value) -> &'a Value {
 async fn production_router_consumes_the_ts_signed_notification_wire_closed_set() {
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/notification-wire.json"
+        "/../../../rust/test-fixtures/fixtures/notification-wire.json"
     )))
     .unwrap();
     let mut surfaces = std::collections::BTreeSet::new();

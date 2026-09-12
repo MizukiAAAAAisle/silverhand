@@ -1,5 +1,7 @@
 # Agent-scoped Session v1 —— DDD 目标模型与改造路径
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 Status: **design under review**（设计 @Alice，#task:2009；review gate @Cindy）。
 产品语义权威 = **#task:2005 的 Acceptance Summary**；本 doc 是**技术目标模型的单一权威**，#task:2009 的 body
 只保留可独立验收的 Acceptance Summary，不复制正文。
@@ -50,21 +52,21 @@ per-`(conversation,agent)` 的 `pid/status/cli_session_id` 直接冲突，且 AC
 
 只读快照 `embedded-server-backup-20260813T053019Z`：
 
-| 量 | 值 |
-|---|---|
-| `kind='dm_channel'` 行数 | **14**，成员基数**全部**是 (1 agent, 1 user) |
-| 它们所在 workspace | **全部 `workspace_kind='agent_home'`**（7 个 home，无一在 regular workspace） |
-| 同一 (human, agent) pair 的 dm 行数 | **4 / 3 / 2 / 2 / 1 / 1 / 1** |
-| agent_home 内的 task | **39** |
-| agent_home 内的 saved_messages | 0 |
+| 量                                  | 值                                                                            |
+| ----------------------------------- | ----------------------------------------------------------------------------- |
+| `kind='dm_channel'` 行数            | **14**，成员基数**全部**是 (1 agent, 1 user)                                  |
+| 它们所在 workspace                  | **全部 `workspace_kind='agent_home'`**（7 个 home，无一在 regular workspace） |
+| 同一 (human, agent) pair 的 dm 行数 | **4 / 3 / 2 / 2 / 1 / 1 / 1**                                                 |
+| agent_home 内的 task                | **39**                                                                        |
+| agent_home 内的 saved_messages      | 0                                                                             |
 
 两个结论直接改写了目标模型：
 
 1. **`kind='dm_channel'` 今天不表示「与 X 的那个 DM」。** 同一对 (human, agent) 有 **4 条**这样的会话
    （标题是 "mac mini" / "pod ops" / "working with ai" 之类自由标题）。它表示的是「roster 固定为 home owner
-   + 该 human 的私有会话」。⇒ **`UNIQUE(pair_key)` 的 DirectPair 无法承接这批行**（11 行会塌成 4 个 pair 键冲突），
-   「P0-a 把现有 `dm_channel` backfill 成 DirectPair」在数据上不可行。DirectPair 只能是**新概念、只由新
-   get-or-create 路径创建**。
+   - 该 human 的私有会话」。⇒ **`UNIQUE(pair_key)` 的 DirectPair 无法承接这批行**（11 行会塌成 4 个 pair 键冲突），
+     「P0-a 把现有 `dm_channel` backfill 成 DirectPair」在数据上不可行。DirectPair 只能是**新概念、只由新
+     get-or-create 路径创建**。
 2. **`agent_home` 今天就是 DM 的 task board**，持有 39 条按该 workspace 编号的 task。⇒ 「删掉 workspace 的
    `agent_home` 支」不是清理，是搬迁 14 条会话 + 39 条已编号 task 的迁移工程。
 
@@ -136,12 +138,12 @@ CREATE UNIQUE INDEX … (workspace_id,name) WHERE placement_kind='workspace';
 
 回填（**行为零变化**）：
 
-| 现状 | placement | roster |
-|---|---|---|
-| `kind='channel'` | `workspace` | `open` |
-| `kind='dm_channel'`（14 行，全在 agent_home） | `workspace` | **`fixed`** |
-| 新的产品级 DM（`dm:@handle`） | `direct_pair` | `fixed` |
-| Mentions | `agent_inbox` | `fixed` |
+| 现状                                          | placement     | roster      |
+| --------------------------------------------- | ------------- | ----------- |
+| `kind='channel'`                              | `workspace`   | `open`      |
+| `kind='dm_channel'`（14 行，全在 agent_home） | `workspace`   | **`fixed`** |
+| 新的产品级 DM（`dm:@handle`）                 | `direct_pair` | `fixed`     |
+| Mentions                                      | `agent_inbox` | `fixed`     |
 
 `kind` 在 v69–v78 期间是 **SQLite GENERATED ALWAYS … VIRTUAL 兼容桥**，由
 `roster_policy` 单向派生；它从来不是第二个可写权威。v79 在所有生产、wire 与测试读点改用
@@ -188,18 +190,18 @@ RAISE(ABORT)` 守。两个理由否掉它：
 
 1. **拒绝型 trigger 无法保证「投影一定存在」** —— 它只能挡错误变更，挡不住漏建。
 2. **它会把 actor 删除整个 abort。** 实测（sqlite 3.54.0）：`conversation_agents.agent_id … ON DELETE
-   CASCADE` 的级联删除**会**触发子表 `BEFORE DELETE` trigger，`RAISE(ABORT)` 上抛后 `DELETE FROM agents`
+CASCADE` 的级联删除**会**触发子表 `BEFORE DELETE` trigger，`RAISE(ABORT)` 上抛后 `DELETE FROM agents`
    整条失败、agent 存活。而 `agent-repo.ts:571` 今天就是硬删 `DELETE FROM agents WHERE id = ?`。
    ⇒ 该设计不是 tombstone，是**让删除失败**。
 
 目标形态：**participant set 由 placement 派生，单一权威、无投影**。
 
-| placement | participants |
-|---|---|
-| `workspace` + `open` | `conversation_agents` / `conversation_users` roster 行（现状） |
-| `workspace` + `fixed` | 同上，但 roster 变更 API 不可达（现有 14 行沿用现状） |
-| `direct_pair` | **两个 endpoint 列**（无 roster 行） |
-| `agent_inbox` | `inbox_agent_id` 一个 owner（无 roster 行）—— **已退役，#task:2072** |
+| placement             | participants                                                         |
+| --------------------- | -------------------------------------------------------------------- |
+| `workspace` + `open`  | `conversation_agents` / `conversation_users` roster 行（现状）       |
+| `workspace` + `fixed` | 同上，但 roster 变更 API 不可达（现有 14 行沿用现状）                |
+| `direct_pair`         | **两个 endpoint 列**（无 roster 行）                                 |
+| `agent_inbox`         | `inbox_agent_id` 一个 owner（无 roster 行）—— **已退役，#task:2072** |
 
 ⇒ 存在性由 `NOT NULL` + 互斥弧证明；成员表在这两支**根本没有行**，所以既无双权威也无 cascade 冲突。
 ACL 读面收敛到**一个** placement-aware `participantsOf(conversation)` 解析器（今天 `permissions.ts` 直接读
@@ -208,7 +210,7 @@ ACL 读面收敛到**一个** placement-aware `participantsOf(conversation)` 解
 配套三件（缺一不可）：
 
 - **endpoint 不可变**：`BEFORE UPDATE OF endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id,
-  pair_key ON conversations → RAISE(ABORT)`（CHECK 管不了 UPDATE 后仍自洽的整体改写）。
+pair_key ON conversations → RAISE(ABORT)`（CHECK 管不了 UPDATE 后仍自洽的整体改写）。
 - **typed principal 校验**：endpoint kind ∈ {`human`,`agent`} 且 id 在对应表存在 —— 条件 FK 不可表达 ⇒
   `BEFORE INSERT` trigger 子查询校验，fail-closed。
 - **endpoint identity 在 actor 硬删后存活（新增前置件 P0-e，**范围收在 endpoint 一侧**）**：endpoint 列是
@@ -238,13 +240,13 @@ ACL 读面收敛到**一个** placement-aware `participantsOf(conversation)` 解
 旧稿「一 scope 一当前 slot」与 `UNIQUE(…, daemon_instance_id)` 自相矛盾（换 daemon 就有两行都自称当前），
 而且把三种不同权威的字段并成了「DB runtime aggregate」。拆开：
 
-| 关注点 | 权威 | 落位 |
-|---|---|---|
-| **slot identity**（这个 scope 的 runtime 名额） | DB | `agent_runtime_slots`：**按 scope 唯一**，不含 daemon id |
-| **generation**（这一代的身份 + 抢占） | DB，**CAS** | slot 行上单调递增，`UPDATE … WHERE generation = ?` |
-| **进程观测**（`status` / `pid` / liveness / 当前 daemon） | **daemon/supervisor**，DB 是 event projection | slot 行上明确标注为 projection 字段，不作判据 |
-| **resume state**（`cli_session_id`） | 持久厂商状态 | 独立列，**不随进程退出清空** |
-| **历史世代** | append-only | `agent_runtime_events`（不靠保留退出行来记历史） |
+| 关注点                                                    | 权威                                          | 落位                                                     |
+| --------------------------------------------------------- | --------------------------------------------- | -------------------------------------------------------- |
+| **slot identity**（这个 scope 的 runtime 名额）           | DB                                            | `agent_runtime_slots`：**按 scope 唯一**，不含 daemon id |
+| **generation**（这一代的身份 + 抢占）                     | DB，**CAS**                                   | slot 行上单调递增，`UPDATE … WHERE generation = ?`       |
+| **进程观测**（`status` / `pid` / liveness / 当前 daemon） | **daemon/supervisor**，DB 是 event projection | slot 行上明确标注为 projection 字段，不作判据            |
+| **resume state**（`cli_session_id`）                      | 持久厂商状态                                  | 独立列，**不随进程退出清空**                             |
+| **历史世代**                                              | append-only                                   | `agent_runtime_events`（不靠保留退出行来记历史）         |
 
 ```sql
 agent_runtime_slots:
@@ -280,11 +282,11 @@ conversation 的 placement 派生**（`--board` 不存在）。
 
 派生表（**全函数，非法弧由 DB 拒**）：
 
-| placement | board | 说明 |
-|---|---|---|
-| `workspace` | `WorkspaceBoard(workspace_id)` | 含 `agent_home`（现有 14 行会话 **原地不动**，新建的 home 同样走这一支，§9.2） |
-| `direct_pair` | `DirectPairBoard(pair_key)` | 每条私线一个编号空间，与 placement 同构；agent↔agent 与 human↔human 都只有一个解 |
-| `agent_inbox` | **无 board** | Mentions 是通知读面，不是工作面 ⇒ 向 inbox 建 task 一律拒（trigger），不是「静默落到某处」。**该 placement 已退役（#task:2072）**：两支穷尽后由 `board_key` 的互斥弧 CHECK 承担，无 trigger |
+| placement     | board                          | 说明                                                                                                                                                                                        |
+| ------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace`   | `WorkspaceBoard(workspace_id)` | 含 `agent_home`（现有 14 行会话 **原地不动**，新建的 home 同样走这一支，§9.2）                                                                                                              |
+| `direct_pair` | `DirectPairBoard(pair_key)`    | 每条私线一个编号空间，与 placement 同构；agent↔agent 与 human↔human 都只有一个解                                                                                                            |
+| `agent_inbox` | **无 board**                   | Mentions 是通知读面，不是工作面 ⇒ 向 inbox 建 task 一律拒（trigger），不是「静默落到某处」。**该 placement 已退役（#task:2072）**：两支穷尽后由 `board_key` 的互斥弧 CHECK 承担，无 trigger |
 
 **零搬迁在 B 下同样成立**（这是我原先反对 B 的唯一理由，已被「旧行保持旧形态、新概念只承接新行」消解）：
 `agent_home` 永久属于 `workspace` placement ⇒ 它就是 WorkspaceBoard，现有 14 条会话与 39 条 task
@@ -352,13 +354,13 @@ CAS finalize。OS 进程与 host IO 不能进 SQLite tx。
 即使跨聚合**（CC 副本就是这一类）；**只有跨进程 / 跨主机的后果**才走 durable intent + 外部副作用 +
 ack/project + CAS finalize。
 
-| 流程 | durable intent | 外部副作用 | ack / project | finalize | 重试幂等键 |
-|---|---|---|---|---|---|
-| Create Agent(scope) | reserve 行（`agents.name` UNIQUE） | `agent_materialize` | 典型 ack 交叉核对 | dependent-row tx / `flipToFailed` | reserved row id |
-| Start / respawn | slot 行 + `generation++` | daemon spawn | `observed_*` 投影 | CAS on `generation` | `(scope, generation)` |
-| Stop / crash | slot 行状态意图 | daemon signal | 同上 | CAS | `(scope, generation)` |
-| Delete Agent | 现有 durable deletion intent | host purge | purge count | CAS finalize（现状） | attempt id |
-| **Mention CC** | **副本行本身**（与 source message 同 tx 写入） | 唤醒 / 通知（best-effort） | —— | 同 tx commit | **`(source_message_id, target_inbox_conversation_id)`** |
+| 流程                | durable intent                                 | 外部副作用                 | ack / project     | finalize                          | 重试幂等键                                              |
+| ------------------- | ---------------------------------------------- | -------------------------- | ----------------- | --------------------------------- | ------------------------------------------------------- |
+| Create Agent(scope) | reserve 行（`agents.name` UNIQUE）             | `agent_materialize`        | 典型 ack 交叉核对 | dependent-row tx / `flipToFailed` | reserved row id                                         |
+| Start / respawn     | slot 行 + `generation++`                       | daemon spawn               | `observed_*` 投影 | CAS on `generation`               | `(scope, generation)`                                   |
+| Stop / crash        | slot 行状态意图                                | daemon signal              | 同上              | CAS                               | `(scope, generation)`                                   |
+| Delete Agent        | 现有 durable deletion intent                   | host purge                 | purge count       | CAS finalize（现状）              | attempt id                                              |
+| **Mention CC**      | **副本行本身**（与 source message 同 tx 写入） | 唤醒 / 通知（best-effort） | ——                | 同 tx commit                      | **`(source_message_id, target_inbox_conversation_id)`** |
 
 **Mention CC 的「commit 后可重试」旧稿是空口承诺**：`post-commit.ts` 的 effect 是 best-effort、失败只
 `logger.warn`，**没有任何持久记录**⇒ commit 后崩溃即永久丢 CC（正是今天 `warn`+`return` 的同族缺陷，
@@ -400,12 +402,13 @@ plan + **Mention CC 副本**）、board 内 task 取号。
   surface，要定版本。**授权投影按 viewer 逐字段裁**（@Cindy 第三轮小项 2 —— 一律只显示「本会话忙」会丢掉
   可解释性）：
 
-  | viewer 对 focus conversation 的权限 | 可见内容 |
-  |---|---|
-  | 有 | **绝对 target**（`#ws/channel`、`thread:<root>`、`dm:@handle`）+ 排队深度 |
-  | 无 | `focus='other'` + 排队深度 —— 知道「在别处忙」但**不泄露**该会话的 id / 标题 / 对端 |
+  | viewer 对 focus conversation 的权限 | 可见内容                                                                            |
+  | ----------------------------------- | ----------------------------------------------------------------------------------- |
+  | 有                                  | **绝对 target**（`#ws/channel`、`thread:<root>`、`dm:@handle`）+ 排队深度           |
+  | 无                                  | `focus='other'` + 排队深度 —— 知道「在别处忙」但**不泄露**该会话的 id / 标题 / 对端 |
 
   ⇒ 「忙」永远可解释，而会话身份不经 presence 侧漏。
+
 - **Delivery invariant = §0 第一条**（此处不复述，只补一句与既有模型的关系）：它与 #task:2000 的四层投递模型
   不冲突 —— 那里说的「thread reply 的 follower 插入能扩张收件人」，前提是**该 principal 已是本 conversation
   成员**；§0 管的是「不是成员的 principal 不因被引用而获得投递」。
@@ -433,9 +436,9 @@ RuntimePrincipal =
   | ConversationSlot(conversation_id, agent_id, generation, daemon_instance_id) -- session_scope='conversation'
 ```
 
-| principal | verifier 判据 |
-|---|---|
-| `AgentSlot` | live AgentSlot 的 exact generation + daemon instance |
+| principal          | verifier 判据                                                                 |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `AgentSlot`        | live AgentSlot 的 exact generation + daemon instance                          |
 | `ConversationSlot` | live `(conversation_id, agent_id)` slot 的 exact generation + daemon instance |
 
 verifier 不接 destination，也不做 membership：它只证明“这份 bearer 现在仍拥有哪一个 runtime”。目的地先由
@@ -445,16 +448,16 @@ DeliveryTarget / object id 解析，再由 placement participation 与 C″ reac
 **「隔离与今天等价」在拆分后必须按事实读，不能按字面读，而事实是逐门不同的**（`origin/main` 逐门核过，
 @Cindy 的 C 提案迫使我把它量清楚；ConversationSlot 凭据 → destination ≠ 凭据那条 conversation）：
 
-| 门 | `origin/main` | 闸门 | P4（**已裁定 C″**） |
-|---|---|---|---|
-| `read-history` / `search` | **已发布跨流**（含跨 workspace） | 目标会话 membership | 两支都保留跨流（改为按址） |
-| `channels list` / `workspaces list` | **已发布跨 workspace 读**（`?workspace_id=`） | `canAgentAccessWorkspace` ＋ `read_messages` | 同 |
-| `tasks/create` | **已发布跨流**（`conversation_id: B`） | 目标 workspace membership | 两支都保留跨流（改为按址） |
-| `schedule create` 的 wake destination | **已发布跨流**（`target_conversation_id: B`） | 目标会话 membership ＋ 目标 workspace `manage_schedules` | 两支都保留跨流（改为按址） |
-| `message send` | 钉死 `principal.conversationId` | —— | ConversationSlot 限自身 stream；AgentSlot 按 participation |
-| `file upload` | 钉死 `principal.conversationId` | —— | ConversationSlot 限自身 stream；AgentSlot 按 participation |
-| `member add` | 钉死 `principal.conversationId` | —— | ConversationSlot 限自身 stream；AgentSlot 按 participation |
-| `channel create`（**fork source ＋ 随它派生的 workspace / roster**） | 钉死 `principal.conversationId`：input 只有 title / context / initial_prompt | —— | ConversationSlot 限自身 stream；AgentSlot 按 participation |
+| 门                                                                   | `origin/main`                                                                | 闸门                                                     | P4（**已裁定 C″**）                                        |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------- |
+| `read-history` / `search`                                            | **已发布跨流**（含跨 workspace）                                             | 目标会话 membership                                      | 两支都保留跨流（改为按址）                                 |
+| `channels list` / `workspaces list`                                  | **已发布跨 workspace 读**（`?workspace_id=`）                                | `canAgentAccessWorkspace` ＋ `read_messages`             | 同                                                         |
+| `tasks/create`                                                       | **已发布跨流**（`conversation_id: B`）                                       | 目标 workspace membership                                | 两支都保留跨流（改为按址）                                 |
+| `schedule create` 的 wake destination                                | **已发布跨流**（`target_conversation_id: B`）                                | 目标会话 membership ＋ 目标 workspace `manage_schedules` | 两支都保留跨流（改为按址）                                 |
+| `message send`                                                       | 钉死 `principal.conversationId`                                              | ——                                                       | ConversationSlot 限自身 stream；AgentSlot 按 participation |
+| `file upload`                                                        | 钉死 `principal.conversationId`                                              | ——                                                       | ConversationSlot 限自身 stream；AgentSlot 按 participation |
+| `member add`                                                         | 钉死 `principal.conversationId`                                              | ——                                                       | ConversationSlot 限自身 stream；AgentSlot 按 participation |
+| `channel create`（**fork source ＋ 随它派生的 workspace / roster**） | 钉死 `principal.conversationId`：input 只有 title / context / initial_prompt | ——                                                       | ConversationSlot 限自身 stream；AgentSlot 按 participation |
 
 ⇒ 把表里的规则无差别套到 destination 上会**回收上半已发货能力**（读三项 ＋ task filing ＋ schedule wake）；
 而把 P4 的按址 reach 无差别给 ConversationSlot 则是**下半四门的新增写能力**（从未获批）。两头都不是「现状」。
@@ -494,17 +497,17 @@ B（按字面回收上半）已被否决，不是开放项**；本节此前的�
 
 没有 ambient conversation 之后，每个面都要显式携带目标；**只改 `message --target` 不够**：
 
-| 面 | 目标寻址 | 额外 frame |
-|---|---|---|
-| `message send` / `history` | `--target`（一条绝对地址：`#<ws>/<title>` / `#conv:<id>` / `dm:@handle`，可带 `/thread:<root>`） | —— |
-| `message search` | **不按址**：`--workspace-id` / `--conversation-id` 是**范围 selector**（可省 ⇒ 该 agent 有权的全部），不是投递地址 | 见 §7.2.2 |
-| `message react` | **不按址**：目标是 `--message-id` 这个对象，会话由它派生 | —— |
-| `task *` | **全局 `tasks.id`**（§4.5）；`create` 用 `--target`，board 由它派生（§7.2.1）；`list` 只有范围 selector（§7.2.2） | provenance = source message |
-| `file upload` | `--target`（同 `message send` 的地址语汇） | —— |
-| `file update/view` | **不按址**：目标是 `--attachment-id` 这个对象，conversation 由它派生（attachment 本就 conversation-owned） | —— |
-| `schedule create/list/cancel` | 目标 conversation（`create` 用 `--target-conversation <address>`，无默认） | 触发时唤醒该 target |
-| `thread follow/unfollow`、`member add`、`channel create` | `follow/unfollow` 由 `--root` 对象派生 owner conversation；`member add` / `channel create` 用显式地址 | —— |
-| 任何写文件的工具动作 | —— | **绝对 workdir**（cwd = agent root，相对路径会静默写错） |
+| 面                                                       | 目标寻址                                                                                                           | 额外 frame                                               |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| `message send` / `history`                               | `--target`（一条绝对地址：`#<ws>/<title>` / `#conv:<id>` / `dm:@handle`，可带 `/thread:<root>`）                   | ——                                                       |
+| `message search`                                         | **不按址**：`--workspace-id` / `--conversation-id` 是**范围 selector**（可省 ⇒ 该 agent 有权的全部），不是投递地址 | 见 §7.2.2                                                |
+| `message react`                                          | **不按址**：目标是 `--message-id` 这个对象，会话由它派生                                                           | ——                                                       |
+| `task *`                                                 | **全局 `tasks.id`**（§4.5）；`create` 用 `--target`，board 由它派生（§7.2.1）；`list` 只有范围 selector（§7.2.2）  | provenance = source message                              |
+| `file upload`                                            | `--target`（同 `message send` 的地址语汇）                                                                         | ——                                                       |
+| `file update/view`                                       | **不按址**：目标是 `--attachment-id` 这个对象，conversation 由它派生（attachment 本就 conversation-owned）         | ——                                                       |
+| `schedule create/list/cancel`                            | 目标 conversation（`create` 用 `--target-conversation <address>`，无默认）                                         | 触发时唤醒该 target                                      |
+| `thread follow/unfollow`、`member add`、`channel create` | `follow/unfollow` 由 `--root` 对象派生 owner conversation；`member add` / `channel create` 用显式地址              | ——                                                       |
+| 任何写文件的工具动作                                     | ——                                                                                                                 | **绝对 workdir**（cwd = agent root，相对路径会静默写错） |
 
 #### 7.2.1 task 的坐标：target ≠ board，且 origin 不是服务端能推出来的
 
@@ -547,15 +550,15 @@ ambient board 可依，局部 `#task:<n>` 只在「当前 board 已由 `--target
 
 上一版只定了「单对象 mutation 解析到全局 id」，**漏了集合读面**（@Cindy 第四轮 finding 6）。现状逐个核过：
 
-| 面 | 今天的作用域 | agent-scoped 目标 |
-|---|---|---|
-| `task list` | help 原文「the default is **the actor's current workspace**」（`commands/task.ts:312…`），由 token 路径的 conversation → workspace 推出 | **默认 = 该 agent 有权的全部 board 并集**；收窄只靠范围 selector `--workspace-id` / `--conversation-id` / `--status` / `--assignee` / `--mine`（**发货形态没有 `--target`**：集合读面没有投递目的地这根轴） |
-| `message history` | 路径 conversation（`client.ts:198`） | **`--target` 必填**（读一条流必须指名，没有"当前流"）；窗口用 `--before-seq` / `--after-seq` / `--around` |
-| `message search` | 路径 conversation（`client.ts:224`） | **不按址**：`--workspace-id` / `--conversation-id` 是可省的范围 selector，省略 ⇒ 该 agent 有权的全部范围 |
-| `channel list` / `workspace list` | 路径 conversation 推 actor 范围（`client.ts:206/213`） | 语义不变（本就是"我能看到什么"），但范围改由 **live membership 并集**派生 |
-| `file view` / `update` | 路径 conversation | **不按址**：`--attachment-id` 即目标，conversation 由 attachment 对象派生（attachment 本就 conversation-owned） |
-| `file upload` | 路径 conversation | 写面 ⇒ **`--target` 必填**（同 `message send`） |
-| `schedule list` | 同上 | 默认全部我拥有的 schedule + 每行带 target |
+| 面                                | 今天的作用域                                                                                                                            | agent-scoped 目标                                                                                                                                                                                           |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task list`                       | help 原文「the default is **the actor's current workspace**」（`commands/task.ts:312…`），由 token 路径的 conversation → workspace 推出 | **默认 = 该 agent 有权的全部 board 并集**；收窄只靠范围 selector `--workspace-id` / `--conversation-id` / `--status` / `--assignee` / `--mine`（**发货形态没有 `--target`**：集合读面没有投递目的地这根轴） |
+| `message history`                 | 路径 conversation（`client.ts:198`）                                                                                                    | **`--target` 必填**（读一条流必须指名，没有"当前流"）；窗口用 `--before-seq` / `--after-seq` / `--around`                                                                                                   |
+| `message search`                  | 路径 conversation（`client.ts:224`）                                                                                                    | **不按址**：`--workspace-id` / `--conversation-id` 是可省的范围 selector，省略 ⇒ 该 agent 有权的全部范围                                                                                                    |
+| `channel list` / `workspace list` | 路径 conversation 推 actor 范围（`client.ts:206/213`）                                                                                  | 语义不变（本就是"我能看到什么"），但范围改由 **live membership 并集**派生                                                                                                                                   |
+| `file view` / `update`            | 路径 conversation                                                                                                                       | **不按址**：`--attachment-id` 即目标，conversation 由 attachment 对象派生（attachment 本就 conversation-owned）                                                                                             |
+| `file upload`                     | 路径 conversation                                                                                                                       | 写面 ⇒ **`--target` 必填**（同 `message send`）                                                                                                                                                             |
+| `schedule list`                   | 同上                                                                                                                                    | 默认全部我拥有的 schedule + 每行带 target                                                                                                                                                                   |
 
 两条规则（**读写不对称是刻意的**）：
 
@@ -570,11 +573,11 @@ ambient board 可依，局部 `#task:<n>` 只在「当前 board 已由 `--target
 v64 已确立：workspace 不在 DB 里拥有路径，bundle 解析到终局确定性坐标
 `<agent home>/workspaces/<workspace_id>`，每台 host 同一算法、无 DB 列无 registry。补齐缺口：
 
-| RuntimeScope | cwd |
-|---|---|
-| `Agent(aid)` | `<agent home>` |
+| RuntimeScope                                  | cwd                                                  |
+| --------------------------------------------- | ---------------------------------------------------- |
+| `Agent(aid)`                                  | `<agent home>`                                       |
 | `Conversation(cid,aid)` + workspace placement | `<agent home>/workspaces/<workspace_id>`（现状不变） |
-| `Conversation(cid,aid)` + **workspace-less** | `<agent home>/conversations/<conversation_id>` |
+| `Conversation(cid,aid)` + **workspace-less**  | `<agent home>/conversations/<conversation_id>`       |
 
 进程 cwd 就是唯一被硬保证的 runtime base（`supervisor/index.ts:2142/2269/2281/5374`），claude/qoder 按
 **cwd slug hash** 定址厂商 session（`session-migration.ts:117/128/144`）⇒ 复用 agent root 会把本应隔离的
@@ -607,13 +610,13 @@ L1」—— 那只是把同一个能力从 prompt 挪到 frame，`workspace memo
 
 目标（`RuntimeScope` 派生的两种注入形态，各自封闭；**两列互不影响** —— #2005 只授权改 agent-scoped 那一列）：
 
-| 注入项 | conversation-scoped | agent-scoped |
-| --- | --- | --- |
-| L1 role prompt（`system_prompt.md`） | 注入（不变） | 注入 |
-| **该 workspace 的 L2**：`memoryDirFor(workspace)` 下的 `MEMORY.md` + `notes/` catalog | 注入（**逐字节不变**） | **不存在** |
-| **agent-global `MEMORY.md` + catalog**（新增载体，`<agent home>`） | **不注入** —— 现状没有这一项，本 doc 也不新增 | **注入（唯一的持久记忆）** |
-| `workspaceMemoryIndex`（`{label, memoryPath}[]`） | 注入（不变） | **空集，且 frame / header / 任何读面都不给 L2 路径** |
-| `sessionContext.workspaceName` / `workspacePath` | 注入（不变） | **不注入**（cwd = §7.3 的 agent home，与任何 workspace 无关） |
+| 注入项                                                                                | conversation-scoped                           | agent-scoped                                                  |
+| ------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------- |
+| L1 role prompt（`system_prompt.md`）                                                  | 注入（不变）                                  | 注入                                                          |
+| **该 workspace 的 L2**：`memoryDirFor(workspace)` 下的 `MEMORY.md` + `notes/` catalog | 注入（**逐字节不变**）                        | **不存在**                                                    |
+| **agent-global `MEMORY.md` + catalog**（新增载体，`<agent home>`）                    | **不注入** —— 现状没有这一项，本 doc 也不新增 | **注入（唯一的持久记忆）**                                    |
+| `workspaceMemoryIndex`（`{label, memoryPath}[]`）                                     | 注入（不变）                                  | **空集，且 frame / header / 任何读面都不给 L2 路径**          |
+| `sessionContext.workspaceName` / `workspacePath`                                      | 注入（不变）                                  | **不注入**（cwd = §7.3 的 agent home，与任何 workspace 无关） |
 
 第三行是 @Cindy 第六轮 finding 1 收正的：我上一版把「L1 memory 两列都注入」与「conversation-scoped 逐字节
 不变」同时写下，二者不能同真 —— 现行 `currentMemoryDir = memoryDirFor(options.workspace)` 只读**当前
@@ -703,7 +706,7 @@ P5 端到端 slice ← 全部
   **`task list` 无参数时返回该 agent 有权的全部 board 并集**（不是某个 workspace），每行带
   `conversation_id` + board + 局部编号 + 全局 id；`message history/search` 缺 `--target` 时**报错而不是猜**。
 - **P0-f** 39 条 legacy task **零搬迁零重编号**（`board_key='ws:'||workspace_id` 回填后 `(board_key,
-  task_number)` 与旧 `(workspace_id, task_number)` 逐行同解）；每条 DirectPair 私线**各自从 1 编号**且互不冲突；
+task_number)` 与旧 `(workspace_id, task_number)` 逐行同解）；每条 DirectPair 私线**各自从 1 编号**且互不冲突；
   **agent↔agent 与 human↔human 的私线都恰好解析到一个 board**（AgentBoard 的反例不复现）；
   **向 `agent_inbox` 建 task 被 DB 拒**（该 placement 退役后此条作废，见页首）；`UPDATE board_key` 被拒；**同一 board 上无权 viewer 看不到不属于
   自己的 task**（ACL 逐 task 由 `conversation_id` 判，不由 board）。
@@ -774,53 +777,53 @@ AgentSlot 的 exact-generation `cli_session_id=NULL` 在同一 DB 事务提交�
 
 ## 10. 被否方案与其失效形态
 
-| 方案 | 失效形态 |
-|---|---|
-| P0-a 就删 `kind` | 118 处读点 + wire literal 失去判别式，而 DirectPair 到 P3 才存在；14 行私有会话的 fixed-roster 语义无处落 |
-| 把 `kind` 保留成**普通列**（回填后靠代码维持一致） | 第二个可写权威 ⇒ 只能靠纪律防漂移。正解是 GENERATED VIRTUAL 列：写它在解析期就报错，一致性由 DB 证明 |
-| `Board = Workspace \| Agent`（AgentBoard） | 对 DirectPair 不是全函数：agent↔agent 对应两个 board（actor-dependent）、human↔human 一个都没有 ⇒ 与「board 由 placement 派生、无 `--board`」不相容 |
-| 向 Mentions inbox 建 task（或让它静默落到某个 board） | inbox 是通知读面、无 board ⇒ 必须由 trigger 拒绝，而不是猜一个归属 |
-| `inbox_agent_id` 不带 delete 语义 | owner 删除后 inbox 无 survivor 也无家：要么 FK 挡住 agent 删除，要么留孤儿会话。正解 `ON DELETE CASCADE`（把今天经 `workspaces.owner_agent_id` 的那条 cascade 缩短一环） |
-| `cc_source_message_id` 带 FK | 删源会话会连带删掉别人 inbox 里已收到的通知 = 追溯改写认知 |
-| CC 靠「source replay + 写入时 UNIQUE」 | 重放要重算收件人，而收件资格时变（membership / handle / placement / inbox 存在性）⇒ 可能算出另一个键，UNIQUE 挡不住。正解是与 source message 同 tx 按 send-time plan 原子写入 |
-| 把现有 `dm_channel` backfill 成 DirectPair | 实测同一 pair 有 4/3/2/2 行 ⇒ `UNIQUE(pair_key)` 直接冲突 |
-| `visibility='private' OR placement_kind='workspace'` | 会允许 public 的固定 roster 会话；忠实改写是 `roster_policy='open'` |
-| 把「删 `workspaces` 的 `agent_home` 支」排进 P6（或任何票） | `agent_home` 是永久共存的 placement 家族（§9.2：#2005 只授权 agent-scoped 不建 home，conversation-scoped 的产品入口不在授权内）⇒ 那一臂的前置件永不成立 = 假承诺。`kind` 生成列的删除独立收敛于「读点清零 + wire epoch」，与 home 无关 |
-| 顺手让 conversation-scoped 也不再创建 `agent_home`（我上一版的推荐，已撤回） | 越过 #2005 的授权范围删产品入口；且我给的理由（DM 形态二分）不成立 —— 新 DM 一律 `direct_pair` + `workspace_id IS NULL`，与对端有无 home 行无关 |
-| 用 `ALTER TABLE ADD COLUMN … GENERATED … VIRTUAL` 迁移 `kind` | 同名普通列已存在：SQLite 没有 alter-column-to-generated、`ADD COLUMN` 撞名、`DROP COLUMN` 被引用它的 `visibility` CHECK 挡住。正解是 `conversations` table rebuild（v64 已有同一 idiom），生成列只是终态 |
-| rebuild 时只断言「新列已存在」 | rebuild 的失效方式是**静默丢约束/丢索引**（`DROP TABLE` 连带丢索引、FK 在迁移中是关的）⇒ 必须断言 schema fingerprint 全量、数据逐行、`foreign_key_check` 为空 |
-| 把 conversation scope 当成 rollout 临时态 / 待收敛的兼容分支 | @shiki 2026-08-14 02:41 明确它是永久并存的一等模型 ⇒ 任何以「它将来会消失」为前提的清理票都是假承诺（P6 上一版就踩到）。反过来也不许把 agent-scoped 实现成「conversation-scoped + nullable conversationId」 |
-| 把现有 `agent_home` 搬迁成新形态的 board（重编号 / 换键） | 与「DirectPair 只承接新行」不同构；旧 home 还挂着 cwd / L2 / vendor session，降级即一次全量迁移。正解是 `board_key` 让 `agent_home` 原地成为 WorkspaceBoard（它是永久家族，不是待迁形态） |
-| principal token = 扁平 `(agent_id, generation)` | conversation-scoped 同一 agent 有 N 个 slot、generation 可同值 ⇒ 指不出 slot，且 A 的 runtime 能凭 live membership 操作 B，破坏现有隔离。正解是判别联合 + 两种 target policy |
-| 「服务端从 delivery frame 自动记录 command origin」 | Agent token + `--target` 的请求到达时 server 无从关联投递；「取最近一条消息」是猜 ⇒ 虚构 authority。要么不承诺，要么显式可校验的 `origin_message_id` |
-| Mention CC 只靠 source replay（无写入时 dedupe） | source 行只证明输入存在，不证明副本已写 ⇒ 崩溃重放重复投递 |
-| 为 CC 幂等新建 outbox / per-item 状态机 | 同 tx 原子写入已经没有「commit 后还要决定一次」的窗口；新表只是多一份可漂移状态 |
-| `task list` 等集合读面沿用 ambient workspace 默认 | agent-scoped 没有「当前 workspace」⇒ 静默收窄，agent 看不到自己有权的 task 且无红灯。正解：默认并集 + 每行自带坐标，收窄靠显式 flag |
+| 方案                                                                               | 失效形态                                                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0-a 就删 `kind`                                                                   | 118 处读点 + wire literal 失去判别式，而 DirectPair 到 P3 才存在；14 行私有会话的 fixed-roster 语义无处落                                                                                                                                                                 |
+| 把 `kind` 保留成**普通列**（回填后靠代码维持一致）                                 | 第二个可写权威 ⇒ 只能靠纪律防漂移。正解是 GENERATED VIRTUAL 列：写它在解析期就报错，一致性由 DB 证明                                                                                                                                                                      |
+| `Board = Workspace \| Agent`（AgentBoard）                                         | 对 DirectPair 不是全函数：agent↔agent 对应两个 board（actor-dependent）、human↔human 一个都没有 ⇒ 与「board 由 placement 派生、无 `--board`」不相容                                                                                                                       |
+| 向 Mentions inbox 建 task（或让它静默落到某个 board）                              | inbox 是通知读面、无 board ⇒ 必须由 trigger 拒绝，而不是猜一个归属                                                                                                                                                                                                        |
+| `inbox_agent_id` 不带 delete 语义                                                  | owner 删除后 inbox 无 survivor 也无家：要么 FK 挡住 agent 删除，要么留孤儿会话。正解 `ON DELETE CASCADE`（把今天经 `workspaces.owner_agent_id` 的那条 cascade 缩短一环）                                                                                                  |
+| `cc_source_message_id` 带 FK                                                       | 删源会话会连带删掉别人 inbox 里已收到的通知 = 追溯改写认知                                                                                                                                                                                                                |
+| CC 靠「source replay + 写入时 UNIQUE」                                             | 重放要重算收件人，而收件资格时变（membership / handle / placement / inbox 存在性）⇒ 可能算出另一个键，UNIQUE 挡不住。正解是与 source message 同 tx 按 send-time plan 原子写入                                                                                             |
+| 把现有 `dm_channel` backfill 成 DirectPair                                         | 实测同一 pair 有 4/3/2/2 行 ⇒ `UNIQUE(pair_key)` 直接冲突                                                                                                                                                                                                                 |
+| `visibility='private' OR placement_kind='workspace'`                               | 会允许 public 的固定 roster 会话；忠实改写是 `roster_policy='open'`                                                                                                                                                                                                       |
+| 把「删 `workspaces` 的 `agent_home` 支」排进 P6（或任何票）                        | `agent_home` 是永久共存的 placement 家族（§9.2：#2005 只授权 agent-scoped 不建 home，conversation-scoped 的产品入口不在授权内）⇒ 那一臂的前置件永不成立 = 假承诺。`kind` 生成列的删除独立收敛于「读点清零 + wire epoch」，与 home 无关                                    |
+| 顺手让 conversation-scoped 也不再创建 `agent_home`（我上一版的推荐，已撤回）       | 越过 #2005 的授权范围删产品入口；且我给的理由（DM 形态二分）不成立 —— 新 DM 一律 `direct_pair` + `workspace_id IS NULL`，与对端有无 home 行无关                                                                                                                           |
+| 用 `ALTER TABLE ADD COLUMN … GENERATED … VIRTUAL` 迁移 `kind`                      | 同名普通列已存在：SQLite 没有 alter-column-to-generated、`ADD COLUMN` 撞名、`DROP COLUMN` 被引用它的 `visibility` CHECK 挡住。正解是 `conversations` table rebuild（v64 已有同一 idiom），生成列只是终态                                                                  |
+| rebuild 时只断言「新列已存在」                                                     | rebuild 的失效方式是**静默丢约束/丢索引**（`DROP TABLE` 连带丢索引、FK 在迁移中是关的）⇒ 必须断言 schema fingerprint 全量、数据逐行、`foreign_key_check` 为空                                                                                                             |
+| 把 conversation scope 当成 rollout 临时态 / 待收敛的兼容分支                       | @shiki 2026-08-14 02:41 明确它是永久并存的一等模型 ⇒ 任何以「它将来会消失」为前提的清理票都是假承诺（P6 上一版就踩到）。反过来也不许把 agent-scoped 实现成「conversation-scoped + nullable conversationId」                                                               |
+| 把现有 `agent_home` 搬迁成新形态的 board（重编号 / 换键）                          | 与「DirectPair 只承接新行」不同构；旧 home 还挂着 cwd / L2 / vendor session，降级即一次全量迁移。正解是 `board_key` 让 `agent_home` 原地成为 WorkspaceBoard（它是永久家族，不是待迁形态）                                                                                 |
+| principal token = 扁平 `(agent_id, generation)`                                    | conversation-scoped 同一 agent 有 N 个 slot、generation 可同值 ⇒ 指不出 slot，且 A 的 runtime 能凭 live membership 操作 B，破坏现有隔离。正解是判别联合 + 两种 target policy                                                                                              |
+| 「服务端从 delivery frame 自动记录 command origin」                                | Agent token + `--target` 的请求到达时 server 无从关联投递；「取最近一条消息」是猜 ⇒ 虚构 authority。要么不承诺，要么显式可校验的 `origin_message_id`                                                                                                                      |
+| Mention CC 只靠 source replay（无写入时 dedupe）                                   | source 行只证明输入存在，不证明副本已写 ⇒ 崩溃重放重复投递                                                                                                                                                                                                                |
+| 为 CC 幂等新建 outbox / per-item 状态机                                            | 同 tx 原子写入已经没有「commit 后还要决定一次」的窗口；新表只是多一份可漂移状态                                                                                                                                                                                           |
+| `task list` 等集合读面沿用 ambient workspace 默认                                  | agent-scoped 没有「当前 workspace」⇒ 静默收窄，agent 看不到自己有权的 task 且无红灯。正解：默认并集 + 每行自带坐标，收窄靠显式 flag                                                                                                                                       |
 | agent-scoped 仍能拿到某个 workspace 的 L2（注入正文**或**只给路径 / memory index） | 一进程服务 N 会话时「哪个 workspace」无解；给路径只是把同一个能力从 prompt 挪到 frame，仍会出现「首次 spawn 与 respawn 形态不同」的相位漂移与跨 workspace 串味。正解：agent-scoped **没有 workspace L2 这个概念**，只有 L1；项目事实从仓库 / docs / 任务板 / 频道历史现取 |
-| 顺手给 conversation-scoped 也注入 agent-global `MEMORY.md` | 现状 `memoryDirFor(options.workspace)` 只读当前 workspace 的 L2 ⇒ 加这一项就与「conversation-scoped 逐字节不变」直接冲突，而 #2005 只授权改 agent-scoped 那一列。两条不能同真时，改的是**方案**不是 falsifier |
-| 把 `agent_home` 或 conversation scope 归入「legacy」 | 新的 conversation-scoped Agent 继续创建 home ⇒ 它是永久共存的 placement 家族。「legacy」只指旧的 14 条固定 roster 会话 + 那 39 条 task 行，以及临时的 `kind` bridge |
-| 把 `agents`/`users` 整体改软删当 P0-e 前置件 | 牵动全部 FK cascade、handle 唯一性、登录/list、`created_by`、teardown；本 feature 只需要 endpoint 侧身份存活 |
-| Board 当 ACL 单位 | WorkspaceBoard 聚合该 workspace 全部会话的 task（含成员集合不同的会话）⇒ 取 board 判权即越权；board 形态本身还会演进（A→B 就换过一次）。ACL 必须逐 task 由 `conversation_id` 判 |
-| 局部 `task_number` 当跨 conversation identity | agent-scoped 无 ambient board ⇒ `task detail <n>` 不可解析；identity 必须是全局 `tasks.id` |
-| `agent_status` 一律只显示「本会话忙」 | 失去可解释性；正解是按 viewer 权限分档（有权 → 绝对 target，无权 → `focus='other'` + 队列深度） |
-| endpoints 投影成成员行 + 拒绝型 trigger | 保证不了投影存在；且实测 cascade 会触发子表 trigger ⇒ `DELETE FROM agents` 整条 ABORT，不是 tombstone |
-| `Board = Workspace \| Conversation` | 要求 39 条 task 重编号，并新造一层歧义换取零收益 |
-| 「一 scope 一 slot」但 UNIQUE 含 `daemon_instance_id` | 换 daemon 即有两行自称当前 |
-| 把 `status/pid` 与 `cli_session_id` 当同一种 DB 权威 | 前者是 daemon 观测投影、后者是持久 resume state；混为一谈会在崩溃后清掉可 resume 的会话 |
-| 靠保留退出行记历史 | authority 查询无法判断哪行当前；历史该进 append-only 事件表 |
-| Create/start/delete 标「同 tx」 | 现网就是 reserve→materialize→finalize / durable intent→purge→CAS，OS 进程进不了 SQLite tx |
-| Mention CC「commit 后可重试」而无重放判据 | `post-commit` 是 best-effort + `logger.warn` ⇒ 崩溃即永久丢 CC |
-| 「generation 自增即旧 token 失效」而 verifier 不比较 | token store 是 in-memory Map、无 generation 概念，旧 token 继续有效 |
-| 保留两套 auth 路由长期共存 | 永久双权威；正确形态是单路由 + 按 `session_scope` 取值的 lifecycle policy |
-| 「wire 保持现有 `agent_status` 形状」 | 现 payload 无 focus/pending/queue，与「N 会话解释一个 runtime」矛盾 |
-| `UNIQUE(scope_kind, conversation_id, …)` | SQLite 下 NULL 互不相等 ⇒ agent scope 可重复插 |
-| 「schema 无 UPDATE 路径」当约束 | SQL 仍可 UPDATE，必须 trigger |
-| 「一事务只写一个聚合」blanket rule | 留下 conversation 已建而 endpoints 未落的半状态 |
-| `pair_key` 由 handle 派生 | handle 是公开寻址面；内部身份必须用 `(kind,id)` 与之解耦（#2005 原文） |
-| workspace-less 会话复用 agent root 当 cwd | vendor storage 按 cwd 定址 ⇒ 本应隔离的 session 被合并 |
-| 把 file/saved/favorite 塞进 Board | attachment 本就 conversation-owned 且无 workspace_id；saved/favorite 是 user-owned state |
-| 单标量 seq 复用多流 | 静默漏投 / 重投 |
-| `busy/focus` 投影当写权威 | 多流聚合写回会丢单流状态 |
+| 顺手给 conversation-scoped 也注入 agent-global `MEMORY.md`                         | 现状 `memoryDirFor(options.workspace)` 只读当前 workspace 的 L2 ⇒ 加这一项就与「conversation-scoped 逐字节不变」直接冲突，而 #2005 只授权改 agent-scoped 那一列。两条不能同真时，改的是**方案**不是 falsifier                                                             |
+| 把 `agent_home` 或 conversation scope 归入「legacy」                               | 新的 conversation-scoped Agent 继续创建 home ⇒ 它是永久共存的 placement 家族。「legacy」只指旧的 14 条固定 roster 会话 + 那 39 条 task 行，以及临时的 `kind` bridge                                                                                                       |
+| 把 `agents`/`users` 整体改软删当 P0-e 前置件                                       | 牵动全部 FK cascade、handle 唯一性、登录/list、`created_by`、teardown；本 feature 只需要 endpoint 侧身份存活                                                                                                                                                              |
+| Board 当 ACL 单位                                                                  | WorkspaceBoard 聚合该 workspace 全部会话的 task（含成员集合不同的会话）⇒ 取 board 判权即越权；board 形态本身还会演进（A→B 就换过一次）。ACL 必须逐 task 由 `conversation_id` 判                                                                                           |
+| 局部 `task_number` 当跨 conversation identity                                      | agent-scoped 无 ambient board ⇒ `task detail <n>` 不可解析；identity 必须是全局 `tasks.id`                                                                                                                                                                                |
+| `agent_status` 一律只显示「本会话忙」                                              | 失去可解释性；正解是按 viewer 权限分档（有权 → 绝对 target，无权 → `focus='other'` + 队列深度）                                                                                                                                                                           |
+| endpoints 投影成成员行 + 拒绝型 trigger                                            | 保证不了投影存在；且实测 cascade 会触发子表 trigger ⇒ `DELETE FROM agents` 整条 ABORT，不是 tombstone                                                                                                                                                                     |
+| `Board = Workspace \| Conversation`                                                | 要求 39 条 task 重编号，并新造一层歧义换取零收益                                                                                                                                                                                                                          |
+| 「一 scope 一 slot」但 UNIQUE 含 `daemon_instance_id`                              | 换 daemon 即有两行自称当前                                                                                                                                                                                                                                                |
+| 把 `status/pid` 与 `cli_session_id` 当同一种 DB 权威                               | 前者是 daemon 观测投影、后者是持久 resume state；混为一谈会在崩溃后清掉可 resume 的会话                                                                                                                                                                                   |
+| 靠保留退出行记历史                                                                 | authority 查询无法判断哪行当前；历史该进 append-only 事件表                                                                                                                                                                                                               |
+| Create/start/delete 标「同 tx」                                                    | 现网就是 reserve→materialize→finalize / durable intent→purge→CAS，OS 进程进不了 SQLite tx                                                                                                                                                                                 |
+| Mention CC「commit 后可重试」而无重放判据                                          | `post-commit` 是 best-effort + `logger.warn` ⇒ 崩溃即永久丢 CC                                                                                                                                                                                                            |
+| 「generation 自增即旧 token 失效」而 verifier 不比较                               | token store 是 in-memory Map、无 generation 概念，旧 token 继续有效                                                                                                                                                                                                       |
+| 保留两套 auth 路由长期共存                                                         | 永久双权威；正确形态是单路由 + 按 `session_scope` 取值的 lifecycle policy                                                                                                                                                                                                 |
+| 「wire 保持现有 `agent_status` 形状」                                              | 现 payload 无 focus/pending/queue，与「N 会话解释一个 runtime」矛盾                                                                                                                                                                                                       |
+| `UNIQUE(scope_kind, conversation_id, …)`                                           | SQLite 下 NULL 互不相等 ⇒ agent scope 可重复插                                                                                                                                                                                                                            |
+| 「schema 无 UPDATE 路径」当约束                                                    | SQL 仍可 UPDATE，必须 trigger                                                                                                                                                                                                                                             |
+| 「一事务只写一个聚合」blanket rule                                                 | 留下 conversation 已建而 endpoints 未落的半状态                                                                                                                                                                                                                           |
+| `pair_key` 由 handle 派生                                                          | handle 是公开寻址面；内部身份必须用 `(kind,id)` 与之解耦（#2005 原文）                                                                                                                                                                                                    |
+| workspace-less 会话复用 agent root 当 cwd                                          | vendor storage 按 cwd 定址 ⇒ 本应隔离的 session 被合并                                                                                                                                                                                                                    |
+| 把 file/saved/favorite 塞进 Board                                                  | attachment 本就 conversation-owned 且无 workspace_id；saved/favorite 是 user-owned state                                                                                                                                                                                  |
+| 单标量 seq 复用多流                                                                | 静默漏投 / 重投                                                                                                                                                                                                                                                           |
+| `busy/focus` 投影当写权威                                                          | 多流聚合写回会丢单流状态                                                                                                                                                                                                                                                  |
 
 ---
 

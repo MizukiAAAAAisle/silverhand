@@ -875,7 +875,7 @@ mod tests {
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str = include_str!(
-        "../../../../../../../packages/backend/tests/migration-baseline/schema-current.sql"
+        "../../../../../../../rust/test-fixtures/migration-baseline/schema-current.sql"
     );
 
     // A regular workspace `ws` with channel `chan`; agent-a is a member + has

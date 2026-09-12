@@ -1,5 +1,7 @@
 # Building & Releasing the Desktop App
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 End-to-end recipe for producing a distributable `.dmg` from the
 silverhand source tree, plus the **list of footguns we already
 stepped on** so the next person doesn't.
@@ -29,6 +31,7 @@ pnpm package -- --no-minify  # debug dmg/zip with readable JS bundles
 ```
 
 Artifacts land in `apps/desktop/release/`:
+
 - `Silverhand-<version>-arm64.dmg`
 - `Silverhand-<version>-arm64-mac.zip`
 - `mac-arm64/Silverhand.app/` (raw bundle)
@@ -76,25 +79,16 @@ scripts/package.sh
 `pnpm package` minifies shipped JavaScript by default; `pnpm package:dir` does
 not, because the raw `.app` path is for smoke/debug iteration. The minified
 release path covers the Electron main/preload/renderer output plus the extra
-shipped CLI and daemon bundles; the same `SILVERHAND_MINIFY=true` switch also
-minifies the standalone server bundle (`pnpm --filter @silverhand/server
-build`). Use `--no-minify` (or `SILVERHAND_MINIFY=false`) when producing a
+shipped CLI and daemon bundles. The standalone server is built with Cargo. Use `--no-minify` (or `SILVERHAND_MINIFY=false`) when producing a
 debug dmg/zip whose JS should remain readable, or `--minify` to force a
 minified `--dir` build. This is a size/readability knob, not an obfuscation or
 security boundary.
 
 Three things this dance handles that electron-builder alone can't:
 
-1. **better-sqlite3 ABI swap.** `dev.sh` and `test.sh` swap the
-   `.node` binding between Electron's ABI (130 for Electron 33) and
-   system Node's (137 for Node 24) on every invocation, cached by
-   ABI under `node_modules/.native-binding-cache/`. `package.sh`
-   does the same dance before kicking off electron-builder, so
-   inside builder `npmRebuild: false` is safe — the binding sitting
-   in node_modules is already the right ABI. If you let
-   electron-builder rebuild, it builds for system Node ABI and the
-   packaged app crashes on launch with "wrong ELF class" /
-   "NODE_MODULE_VERSION mismatch" the first time it touches the DB.
+1. **Rust sidecar staging.** Embedded builds include the verified Rust binary
+   and manifest. Remote-only builds omit both. No JavaScript SQLite binding or
+   Electron ABI swap is involved.
 
 2. **Silverhand CLI bundling.** `packages/cli` produces a single
    esbuild bundle at `dist/cli.js` (≈200KB, emitted as ESM).
@@ -105,10 +99,10 @@ Three things this dance handles that electron-builder alone can't:
    In dev the repo file is loaded directly because
    `packages/cli/package.json` already sets `type: module`. Both paths
    invoke it through Electron's own Node runtime (`process.execPath`
-   + `ELECTRON_RUN_AS_NODE=1`) so no extra Node or Bun runtime is
-   bundled. The backend exposes it to spawned agents by writing a
-   per-spawn `bin/silverhand` shim and prepending that `bin/` to
-   `PATH`.
+   - `ELECTRON_RUN_AS_NODE=1`) so no extra Node or Bun runtime is
+     bundled. The backend exposes it to spawned agents by writing a
+     per-spawn `bin/silverhand` shim and prepending that `bin/` to
+     `PATH`.
 
 3. **PATH from login shell.** GUI-launched .app's inherit
    launchd's minimal `/usr/bin:/bin:/usr/sbin:/sbin` — they do NOT
@@ -117,7 +111,7 @@ Three things this dance handles that electron-builder alone can't:
    `patchPathFromLoginShell()` runs `$SHELL -ilc 'printenv PATH'`
    at startup and copies the result into `process.env.PATH` (only
    in packaged darwin builds). `printenv` is used instead of `echo
-   $PATH` because it's a real binary, so the same incantation
+$PATH` because it's a real binary, so the same incantation
    works in fish (which doesn't accept `${VAR}` syntax) AND
    bash/zsh.
 
@@ -125,17 +119,17 @@ Three things this dance handles that electron-builder alone can't:
 
 ## Footguns the easy way (i.e. retrospective)
 
-| # | symptom | cause | fix |
-|---|---|---|---|
-| 1 | `EOF` / `bad file descriptor` downloading `electron-v33.x.x-darwin-x64.zip` | github.com/electron/electron releases unreliable from CN | `scripts/package.sh` exports `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` |
-| 2 | `ERR_ELECTRON_BUILDER` "must be under apps/desktop/" walking into `packages/backend/dist/...` | electron-builder follows the pnpm symlink for workspace deps | `@silverhand/backend` + `@silverhand/shared` moved to `devDependencies` (electron-vite bundles them at build time, no runtime require). electron-builder by default only walks production deps |
-| 3 | "runtime 'codex' is not installed (no binary on PATH)" only in packaged build, fine in dev | macOS GUI apps inherit launchd PATH, not the shell PATH | login-shell PATH probe in `main/index.ts` (see point 3 above) |
-| 4 | `silverhand: command not found` inside an agent | CLI bundle missing from the packaged resources, or the per-spawn PATH shim was not prepended | ensure `pnpm --filter @silverhand/cli build` runs before packaging and `extraResources` copies to `silverhand-cli/cli.mjs` (the `.mjs` rename is required — Node rejects ESM `.js` without a sibling `package.json` type=module) |
-| 5 | codex spawns OK but can't reach chatgpt.com | proxy URL had `https://` scheme; almost all local proxies (Clash/mihomo) speak plain HTTP CONNECT | `expandProxyEnv()` in `packages/backend/src/proxy.ts` rewrites `https://` → `http://` and derives `socks5://` for `all_proxy` |
-| 6 | packaged `.app` won't open / "is damaged" after `package.sh` | `mac.identity: null` does NOT ad-hoc sign — electron-builder *skips* signing, leaving only Electron's stub sig (Identifier=Electron, no CodeResources) → invalid bundle | `scripts/afterPack.cjs` ad-hoc deep-signs the .app before dmg/zip are built. See "Signing & notarization" below |
-| 7 | (electron-builder **26+**) dmg step fails with `404` for `cdn.npmmirror.com/binaries/electron/dmg-builder@.../dmgbuild-bundle-*.tar.gz` | v26's dmg-builder fetches a `dmgbuild` bundle via `@electron/get`, which honors `ELECTRON_MIRROR` over the mirror it passes — so our *electron* mirror hijacks the *electron-builder-binaries* URL to a path that 404s | `scripts/package.sh` `stage_dmgbuild_bundle()` pre-downloads the bundle from the electron-builder-binaries mirror (github fallback), checksum-verifies it, and exports `CUSTOM_DMGBUILD_PATH` so dmg-builder skips the network |
-| 8 | packaged app crashes at launch: `Error: Failed to load native binding` from `app.asar/node_modules/@node-rs/argon2/index.js` | `@node-rs/argon2`'s native binding ships in a platform-specific optional dep (`@node-rs/argon2-darwin-arm64`) that pnpm nests in its virtual store; electron-builder doesn't pull nested optional native deps into the asar (electron-userland/electron-builder#6289) | declare `@node-rs/argon2-darwin-arm64` as a direct `optionalDependencies` entry in `apps/desktop/package.json` (surfaces it so electron-builder includes it) **and** add it to `asarUnpack` so the `.node` lands on disk. Chose this over `node-linker=hoisted` to avoid reshaping the whole monorepo's node_modules (would disrupt the better-sqlite3 ABI swap) |
-| 9 | packaged app **AND** `pnpm dev` both fail with `NODE_MODULE_VERSION 137 vs 130` for `better-sqlite3` from the workspace path — even right after a successful `pnpm package` | `_native.sh` `ensure_binding` trusted its `.active-abi` stamp blindly: if a later `pnpm install` re-extracted the Node-ABI prebuild on top of the .node file, the stamp still said "130 (Electron)", so dev/test/package all skipped the swap and shipped the Node-ABI binding. electron-builder can also materialize `app.asar.unpacked` after the workspace-level swap, so the final app must be checked too | `_native.sh` now records the binding's SHA-256 at swap time and re-checks it on every call; hash drift → log a clear "file was replaced — probably by pnpm install" line and re-swap from the per-package-version/per-ABI cache. `package.sh` also stages the Electron-ABI binding for `afterPack`, restores it into `app.asar.unpacked`, and runs an Electron smoke require against the packaged app |
+| #   | symptom                                                                                                                                                                     | cause                                                                                                                                                                                                                                                                                                                                                                                                          | fix                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `EOF` / `bad file descriptor` downloading `electron-v33.x.x-darwin-x64.zip`                                                                                                 | github.com/electron/electron releases unreliable from CN                                                                                                                                                                                                                                                                                                                                                       | `scripts/package.sh` exports `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`                                                                                                                                                                                                                                                                                                                |
+| 2   | `ERR_ELECTRON_BUILDER` "must be under apps/desktop/" walking into `packages/backend/dist/...`                                                                               | electron-builder follows the pnpm symlink for workspace deps                                                                                                                                                                                                                                                                                                                                                   | `@silverhand/backend` + `@silverhand/shared` moved to `devDependencies` (electron-vite bundles them at build time, no runtime require). electron-builder by default only walks production deps                                                                                                                                                                                                        |
+| 3   | "runtime 'codex' is not installed (no binary on PATH)" only in packaged build, fine in dev                                                                                  | macOS GUI apps inherit launchd PATH, not the shell PATH                                                                                                                                                                                                                                                                                                                                                        | login-shell PATH probe in `main/index.ts` (see point 3 above)                                                                                                                                                                                                                                                                                                                                         |
+| 4   | `silverhand: command not found` inside an agent                                                                                                                             | CLI bundle missing from the packaged resources, or the per-spawn PATH shim was not prepended                                                                                                                                                                                                                                                                                                                   | ensure `pnpm --filter @silverhand/cli build` runs before packaging and `extraResources` copies to `silverhand-cli/cli.mjs` (the `.mjs` rename is required — Node rejects ESM `.js` without a sibling `package.json` type=module)                                                                                                                                                                      |
+| 5   | codex spawns OK but can't reach chatgpt.com                                                                                                                                 | proxy URL had `https://` scheme; almost all local proxies (Clash/mihomo) speak plain HTTP CONNECT                                                                                                                                                                                                                                                                                                              | `expandProxyEnv()` in `packages/host/src/proxy.ts` rewrites `https://` → `http://` and derives `socks5://` for `all_proxy`                                                                                                                                                                                                                                                                            |
+| 6   | packaged `.app` won't open / "is damaged" after `package.sh`                                                                                                                | `mac.identity: null` does NOT ad-hoc sign — electron-builder _skips_ signing, leaving only Electron's stub sig (Identifier=Electron, no CodeResources) → invalid bundle                                                                                                                                                                                                                                        | `scripts/afterPack.cjs` ad-hoc deep-signs the .app before dmg/zip are built. See "Signing & notarization" below                                                                                                                                                                                                                                                                                       |
+| 7   | (electron-builder **26+**) dmg step fails with `404` for `cdn.npmmirror.com/binaries/electron/dmg-builder@.../dmgbuild-bundle-*.tar.gz`                                     | v26's dmg-builder fetches a `dmgbuild` bundle via `@electron/get`, which honors `ELECTRON_MIRROR` over the mirror it passes — so our _electron_ mirror hijacks the _electron-builder-binaries_ URL to a path that 404s                                                                                                                                                                                         | `scripts/package.sh` `stage_dmgbuild_bundle()` pre-downloads the bundle from the electron-builder-binaries mirror (github fallback), checksum-verifies it, and exports `CUSTOM_DMGBUILD_PATH` so dmg-builder skips the network                                                                                                                                                                        |
+| 8   | packaged app crashes at launch: `Error: Failed to load native binding` from `app.asar/node_modules/@node-rs/argon2/index.js`                                                | `@node-rs/argon2`'s native binding ships in a platform-specific optional dep (`@node-rs/argon2-darwin-arm64`) that pnpm nests in its virtual store; electron-builder doesn't pull nested optional native deps into the asar (electron-userland/electron-builder#6289)                                                                                                                                          | declare `@node-rs/argon2-darwin-arm64` as a direct `optionalDependencies` entry in `apps/desktop/package.json` (surfaces it so electron-builder includes it) **and** add it to `asarUnpack` so the `.node` lands on disk. Chose this over `node-linker=hoisted` to avoid reshaping the whole monorepo's node_modules (would disrupt the better-sqlite3 ABI swap)                                      |
+| 9   | packaged app **AND** `pnpm dev` both fail with `NODE_MODULE_VERSION 137 vs 130` for `better-sqlite3` from the workspace path — even right after a successful `pnpm package` | `_native.sh` `ensure_binding` trusted its `.active-abi` stamp blindly: if a later `pnpm install` re-extracted the Node-ABI prebuild on top of the .node file, the stamp still said "130 (Electron)", so dev/test/package all skipped the swap and shipped the Node-ABI binding. electron-builder can also materialize `app.asar.unpacked` after the workspace-level swap, so the final app must be checked too | `_native.sh` now records the binding's SHA-256 at swap time and re-checks it on every call; hash drift → log a clear "file was replaced — probably by pnpm install" line and re-swap from the per-package-version/per-ABI cache. `package.sh` also stages the Electron-ABI binding for `afterPack`, restores it into `app.asar.unpacked`, and runs an Electron smoke require against the packaged app |
 
 ---
 
@@ -178,7 +172,7 @@ electron-builder cache (`~/Library/Caches/electron/`) then retry.
 
 The app is **ad-hoc signed** so macOS will open it on the build machine.
 Important gotcha that bit us once: `mac.identity: null` does **NOT** ad-hoc
-sign. In electron-builder it means *skip signing entirely* — the packager logs
+sign. In electron-builder it means _skip signing entirely_ — the packager logs
 `skipped macOS code signing  reason=identity explicitly is set to null` and
 returns (see `app-builder-lib` `macPackager.js`: `if (qualifier === null) {
 ...; return false }`). With signing skipped, the bundle keeps only Electron's
@@ -196,21 +190,21 @@ signature (`Identifier=com.silverhand.desktop`, `Info.plist` bound,
 
 - Why `afterPack`, not `afterSign`: electron-builder **skips the `afterSign`
   hook when no signing occurred** (`skipping "afterSign" hook as no signing
-  occurred`). Since builtin signing is disabled, only `afterPack` runs.
+occurred`). Since builtin signing is disabled, only `afterPack` runs.
 - We keep `identity: null` so the builtin signer cleanly no-ops; the hook is
   the single source of the signature. (electron-builder 26 additionally prints
   `arm64 requires signing, but identity is set to null and signing is being
-  skipped` — that warning is expected and harmless; our hook covers it.)
+skipped` — that warning is expected and harmless; our hook covers it.)
 - Ad-hoc apps still fail `spctl -a` (rejected) — that's why
   `gatekeeperAssess: false` is set. They launch fine once the quarantine xattr
   is cleared (right-click → Open the first time, or `xattr -dr
-  com.apple.quarantine <app>`).
+com.apple.quarantine <app>`).
 
 ### For wider distribution (not yet wired)
 
 - Get an Apple Developer ID Application certificate, set `mac.identity:
-  "Developer ID Application: <name> (<team-id>)"`, set `mac.hardenedRuntime:
-  true`. With a real identity the builtin signer runs (and `afterSign` fires),
+"Developer ID Application: <name> (<team-id>)"`, set `mac.hardenedRuntime:
+true`. With a real identity the builtin signer runs (and `afterSign` fires),
   so move notarization into an `afterSign` hook calling `@electron/notarize`
   and drop / guard the ad-hoc `afterPack` step.
 - For the App Store: completely different config (`mas` target,
@@ -220,13 +214,12 @@ signature (`Identifier=com.silverhand.desktop`, `Info.plist` bound,
 
 ## Where the magic lives
 
-| file | role |
-|---|---|
-| `scripts/package.sh` | wrapper: build → ABI swap → stage dmgbuild bundle → electron-builder |
-| `scripts/_native.sh` | shared with `dev.sh`/`test.sh`; per-ABI binding cache |
-| `apps/desktop/electron-builder.yml` | files / asarUnpack / extraResources / mac config |
+| file                                 | role                                                                                    |
+| ------------------------------------ | --------------------------------------------------------------------------------------- |
+| `scripts/package.sh`                 | wrapper: build → stage Rust sidecar (embedded only) → electron-builder                  |
+| `apps/desktop/electron-builder.yml`  | files / asarUnpack / extraResources / mac config                                        |
 | `apps/desktop/scripts/afterPack.cjs` | ad-hoc `codesign --deep` of the .app (builtin signing is disabled via `identity: null`) |
-| `apps/desktop/build/` | icon + README with `sips` recipe |
-| `apps/desktop/build/icon.icns` | gets baked into `Contents/Resources/icon.icns` |
-| `apps/desktop/src/main/index.ts` | `patchPathFromLoginShell()` + `resolveSilverhandCliLauncher()` packaged-build path |
-| `packages/backend/src/proxy.ts` | one-URL → three env-vars expansion |
+| `apps/desktop/build/`                | icon + README with `sips` recipe                                                        |
+| `apps/desktop/build/icon.icns`       | gets baked into `Contents/Resources/icon.icns`                                          |
+| `apps/desktop/src/main/index.ts`     | `patchPathFromLoginShell()` + `resolveSilverhandCliLauncher()` packaged-build path      |
+| `packages/host/src/proxy.ts`         | one-URL → three env-vars expansion                                                      |

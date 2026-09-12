@@ -319,7 +319,7 @@ mod tests {
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../rust/test-fixtures/migration-baseline/schema-current.sql");
 
     // A viewer (`user-1`) who has starred a channel `chan` that lives in an AGENT-HOME
     // workspace `home` owned by `agent-a`. `parent_title` therefore derives from the

@@ -416,7 +416,7 @@ mod tests {
     async fn fixture_store() -> (tempfile::TempDir, std::path::PathBuf, MessagingStore) {
         const SCHEMA: &str = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+            "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
         ));
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("activity-observe-wire.sqlite");
@@ -689,7 +689,7 @@ mod tests {
         // continues to sign its own full 19/19 legacy behavior.
         let fixture: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../packages/backend/tests/fixtures/activity-observe-wire.json"
+            "/../../../rust/test-fixtures/fixtures/activity-observe-wire.json"
         )))
         .unwrap();
         let mut consumed = 0;
@@ -730,7 +730,7 @@ mod tests {
         // does increment when a well-formed batch is admitted.
         let fixture: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../packages/backend/tests/fixtures/activity-observe-wire.json"
+            "/../../../rust/test-fixtures/fixtures/activity-observe-wire.json"
         )))
         .unwrap();
         let mut checked = 0;

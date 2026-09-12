@@ -89,7 +89,7 @@ const HOST_TOKEN_HASH: &str = "3fQKxe8pqexFp6vP8YxtFscumzfMzrDjOG4Jz-e7j1E";
 /// `user-1` a member of `ws-archived`/`ws-regular`/`ws-agent` and NOT of
 /// `ws-foreign`.
 const ENROLLMENT_SEED_SQL: &str =
-    include_str!("../../../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql");
+    include_str!("../../../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql");
 
 struct Fixture {
     _directory: TempDir,
@@ -3243,7 +3243,7 @@ async fn the_three_reviewed_lanes_mount_exactly_forty_five_routes() {
     }
 }
 
-/// The canonical TypeScript registry remains the route-universe authority while the
+/// The frozen route registry is an independent expected route universe while the
 /// final composed Rust app is the mount authority.  This gate deduplicates the former
 /// by exact method+path identity, concretizes each parameter, and then probes the
 /// latter through its real perimeter.  A matched protected route is `401`; a residual
@@ -3254,7 +3254,7 @@ async fn the_live_registry_closes_at_one_hundred_eighty_one_mounted_and_zero_res
     const EXPECTED_RESIDUAL: [&str; 0] = [];
     let rows: Vec<String> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/routes/endpoint-registry-snapshot.json"
+        "/../../../rust/test-fixtures/routes/endpoint-registry-snapshot.json"
     )))
     .unwrap();
     assert_eq!(rows.len(), 184, "canonical registration-row denominator");
@@ -11164,7 +11164,7 @@ mod presence_composition {
     /// why the leaf's whole-wire gate deliberately excludes it — and why this
     /// composition consumes the value rather than self-signing it.
     const PRESENCE_REFUSAL: &str = include_str!(
-        "../../../../../packages/backend/tests/fixtures/presence/unauthorized/refusal.json"
+        "../../../../../rust/test-fixtures/fixtures/presence/unauthorized/refusal.json"
     );
 
     /// The refusal fixture's two fields: an exact status and the raw body TEXT, so

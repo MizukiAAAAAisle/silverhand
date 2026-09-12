@@ -20,7 +20,7 @@ mod current_schema;
 
 /// The shared seed both languages replay byte-identically.
 const SEED_SQL: &str =
-    include_str!("../../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql");
+    include_str!("../../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql");
 
 /// Current Rust envelope; the retired TS backend is intentionally not updated.
 const EXPECTED_ENVELOPE: &str = include_str!("fixtures/workspace-cold-read-envelope.json");

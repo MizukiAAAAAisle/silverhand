@@ -22,7 +22,6 @@
  *   - apps/desktop/src/main
  *   - apps/desktop/src/preload
  *   - packages/host/src
- *   - packages/backend/src
  *   - packages/shared/src
  *   - packages/cli/src
  *
@@ -57,7 +56,6 @@ const PRODUCTION_PATHS: ReadonlyArray<string> = [
   'apps/desktop/src/main',
   'apps/desktop/src/preload',
   'packages/host/src',
-  'packages/backend/src',
   'packages/shared/src',
   'packages/cli/src',
 ];
@@ -135,7 +133,7 @@ async function walkSourceFiles(absDir: string): Promise<string[]> {
       (ent as unknown as { path?: string }).path ??
       absDir;
     const abs = join(parent, name);
-    if (!SOURCE_EXTENSIONS.some(ext => abs.endsWith(ext))) continue;
+    if (!SOURCE_EXTENSIONS.some((ext) => abs.endsWith(ext))) continue;
     // Defensive skip for common derived dirs even though the scope
     // is supposed to be `src/`. A misconfiguration in tsconfig that
     // accidentally drops a `dist/` into `src/` should NOT make this
@@ -165,9 +163,7 @@ async function findOccurrences(): Promise<FoundOccurrence[]> {
         if (line === undefined) continue;
         if (!FORBIDDEN_PATTERN.test(line)) continue;
         found.push({
-          relPath: abs.startsWith(REPO_ROOT + '/')
-            ? abs.slice(REPO_ROOT.length + 1)
-            : abs,
+          relPath: abs.startsWith(REPO_ROOT + '/') ? abs.slice(REPO_ROOT.length + 1) : abs,
           line: i + 1,
           excerpt: line.trim(),
         });
@@ -186,7 +182,7 @@ describe('D4.a §8.3 — rejectUnauthorized:false production-path ban (CI grep g
       return;
     }
     const formatted = occurrences
-      .map(o => `  ${o.relPath}:${o.line}  →  ${o.excerpt}`)
+      .map((o) => `  ${o.relPath}:${o.line}  →  ${o.excerpt}`)
       .join('\n');
     throw new Error(
       [
@@ -219,7 +215,7 @@ describe('D4.a §8.3 — rejectUnauthorized:false production-path ban (CI grep g
     // catch.
     expect(PRODUCTION_PATHS.length).toBeGreaterThan(0);
     const reports = await Promise.all(
-      PRODUCTION_PATHS.map(async p => {
+      PRODUCTION_PATHS.map(async (p) => {
         const abs = join(REPO_ROOT, p);
         let exists = false;
         try {
@@ -234,10 +230,8 @@ describe('D4.a §8.3 — rejectUnauthorized:false production-path ban (CI grep g
     );
     // Report ALL violations at once so a maintainer fixing scope
     // drift sees the complete picture, not one error at a time.
-    const missingDirs = reports.filter(r => !r.exists).map(r => r.path);
-    const emptyDirs = reports
-      .filter(r => r.exists && r.fileCount === 0)
-      .map(r => r.path);
+    const missingDirs = reports.filter((r) => !r.exists).map((r) => r.path);
+    const emptyDirs = reports.filter((r) => r.exists && r.fileCount === 0).map((r) => r.path);
     if (missingDirs.length > 0 || emptyDirs.length > 0) {
       const lines: string[] = ['Production-path scope drift detected:'];
       if (missingDirs.length > 0) {
@@ -249,15 +243,9 @@ describe('D4.a §8.3 — rejectUnauthorized:false production-path ban (CI grep g
         for (const p of emptyDirs) lines.push(`    - ${p}`);
       }
       lines.push('');
-      lines.push(
-        'Either fix the scope list, or — if the path is genuinely optional —',
-      );
-      lines.push(
-        'introduce an explicit OPTIONAL_PRODUCTION_PATHS allowlist and add a',
-      );
-      lines.push(
-        'comment justifying each entry. Silent no-op scans are exactly the',
-      );
+      lines.push('Either fix the scope list, or — if the path is genuinely optional —');
+      lines.push('introduce an explicit OPTIONAL_PRODUCTION_PATHS allowlist and add a');
+      lines.push('comment justifying each entry. Silent no-op scans are exactly the');
       lines.push('regression this test exists to prevent.');
       throw new Error(lines.join('\n'));
     }

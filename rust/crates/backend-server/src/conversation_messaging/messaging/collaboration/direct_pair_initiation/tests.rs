@@ -705,7 +705,7 @@ async fn production_sqlite_route_keeps_a_minted_pair_when_the_existing_send_unit
 fn fixture() -> Vec<Value> {
     serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/direct-pair-initiation-wire.json"
+        "/../../../rust/test-fixtures/fixtures/direct-pair-initiation-wire.json"
     )))
     .unwrap()
 }

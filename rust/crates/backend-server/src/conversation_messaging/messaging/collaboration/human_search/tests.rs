@@ -205,7 +205,7 @@ struct AdmissionCell {
 async fn production_router_consumes_the_typescript_signed_admission_fixture() {
     let fixture: Vec<AdmissionCell> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/human-search-admission.json"
+        "/../../../rust/test-fixtures/fixtures/human-search-admission.json"
     )))
     .unwrap();
     for cell in fixture {

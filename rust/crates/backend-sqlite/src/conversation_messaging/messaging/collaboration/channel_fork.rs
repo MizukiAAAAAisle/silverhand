@@ -488,7 +488,7 @@ mod tests {
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str = include_str!(
-        "../../../../../../../packages/backend/tests/migration-baseline/schema-current.sql"
+        "../../../../../../../rust/test-fixtures/migration-baseline/schema-current.sql"
     );
 
     // ws-1 (agent-a member+create_channels, agent-b member) with source `src`

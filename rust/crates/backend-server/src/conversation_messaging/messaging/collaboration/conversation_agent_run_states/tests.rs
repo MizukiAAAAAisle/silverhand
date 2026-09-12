@@ -293,7 +293,7 @@ async fn sqlite_admission(
 ) -> (tempfile::TempDir, MessagingStore) {
     const SCHEMA: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+        "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
     ));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("agent-run-states-admission.sqlite");

@@ -34,12 +34,10 @@ use tower::ServiceExt;
 #[path = "../../backend-sqlite/tests/support/current_schema_snapshot.rs"]
 mod current_schema;
 
-const SEED_SQL: &str = include_str!(
-    "../../../../packages/backend/tests/fixtures/workspace-name-availability/seed.sql"
-);
-const CASES_JSON: &str = include_str!(
-    "../../../../packages/backend/tests/fixtures/workspace-name-availability/cases.json"
-);
+const SEED_SQL: &str =
+    include_str!("../../../../rust/test-fixtures/fixtures/workspace-name-availability/seed.sql");
+const CASES_JSON: &str =
+    include_str!("../../../../rust/test-fixtures/fixtures/workspace-name-availability/cases.json");
 
 async fn seed(path: &std::path::Path) {
     let mut db = current_schema::create_current_schema(path).await;

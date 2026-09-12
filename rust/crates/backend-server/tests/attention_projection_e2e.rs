@@ -47,7 +47,7 @@ async fn seed(path: &std::path::Path, setup: &str) {
 async fn real_sqlite_and_production_router_consume_the_ts_signed_fixture() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/attention-projection-wire.json"
+        "/../../../rust/test-fixtures/fixtures/attention-projection-wire.json"
     )))
     .unwrap();
     for entry in fixture.as_array().unwrap() {

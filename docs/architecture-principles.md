@@ -1,5 +1,7 @@
 # Silverhand — Architecture Principles
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 > 本 doc 锁定 silverhand "Human/Agent 同构"主线的架构约束。
 >
 > 本 doc 是 silverhand **后端**新功能 / 新 service / 新 DB 表 / 新 migration 必须遵守的约束清单，与 `core-design.md`（产品/数据模型权威）和鉴权模型权威（`auth-and-host-model.md` 身份/资源归属 + `graded-permissions-v1.md` 分级能力）平级。代码与本 doc 冲突时，以本 doc 为准。**（§11 是例外：compat / legacy / fallback shim 的退出条件是系统级约束，同样覆盖客户端 / renderer 的兼容 shim，不限后端。）**

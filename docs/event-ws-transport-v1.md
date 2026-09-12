@@ -1,7 +1,9 @@
 # Event-WS Transport — cursor & resume semantics (v1)
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 This doc owns the client↔server contract for the single-connection
-event bus *as a transport*: how scopes are subscribed, how per-scope sequence
+event bus _as a transport_: how scopes are subscribed, how per-scope sequence
 cursors are tracked, and how missed frames are recovered. Frame shapes live in
 `packages/shared/src/ws-frames.ts`; the client implementation is
 `apps/desktop/src/renderer/lib/ws-client.ts`; the server replay path is
@@ -23,7 +25,7 @@ committed.**
 Everything below is a corollary. The failure mode this rules out: if a frame the
 socket merely received — no consumer applied it, or it was an off-window /
 readerless no-op — advanced the resume floor, the next resume would start
-*after* it and the frame would be lost until a manual refetch.
+_after_ it and the frame would be lost until a manual refetch.
 
 - The two watermarks (see §4.1, §9): **`received`-high-water** advances on every
   in-order desired-scope frame and serves wire-continuity / forward-gap
@@ -39,7 +41,7 @@ readerless no-op — advanced the resume floor, the next resume would start
   so message-kind publish-log seqs look sparse; the cursor/resume space counts
   every kind, so it is dense and contiguous. The two are the **same** transport
   seq space — `EventFrame.seq` ≡ publish-log `seq` ≡ resume `lastSeq`/`currentSeq`
-  — just filtered differently in the log. Note this is the *transport* seq space,
+  — just filtered differently in the log. Note this is the _transport_ seq space,
   distinct from `messages.seq` / `stream_head_seq`; see §3.1.) An observed jump
   within the dense space is a real gap.
 - `epoch` is the backend's process-start UUID. An epoch change means the seq
@@ -49,7 +51,7 @@ readerless no-op — advanced the resume floor, the next resume would start
 > `conversation-ingestor.ts`, the App-level `ingestConversationFrame` /
 > `useConversationIngestor` — is the central consumer of conversation frames
 > across both transport scopes; it owns `frame → apply → markSatisfied`, and
-> components only *read* the resulting caches. Because a view hook
+> components only _read_ the resulting caches. Because a view hook
 > (`useConversationStream`) can also register an `onWsFrame`, the
 > lifecycle-coupled orphan-frame gate (§4.1) enforces the same applied-floor
 > invariant for those listeners.
@@ -61,11 +63,11 @@ per-scope water marks of §1/§9 (`receivedPositions` / `resumeFloorPositions`):
 one transport cursor concept, two watermarks, not a third read-facing cursor. It
 never touches read state:
 
-| State | Owner | Touched by transport recovery? |
-|---|---|---|
-| Transport watermarks (`receivedPositions` / `resumeFloorPositions`) | this doc | **Yes — and only these** |
-| Read cursor (`conversation_reads`, advanced by `observe()`) | activity-lifecycle-v1 | **Never** |
-| Directed read state (`notifications.read_at`) | activity-lifecycle-v1 §5.3.1 | **Never** |
+| State                                                               | Owner                        | Touched by transport recovery? |
+| ------------------------------------------------------------------- | ---------------------------- | ------------------------------ |
+| Transport watermarks (`receivedPositions` / `resumeFloorPositions`) | this doc                     | **Yes — and only these**       |
+| Read cursor (`conversation_reads`, advanced by `observe()`)         | activity-lifecycle-v1        | **Never**                      |
+| Directed read state (`notifications.read_at`)                       | activity-lifecycle-v1 §5.3.1 | **Never**                      |
 
 A replayed frame is **byte-identical** to a live `event` frame on the wire and
 read-inert by construction: it flows through `onFrame` into the message cache, and
@@ -78,7 +80,7 @@ above stands unchanged).
 the ws-client derives no provenance, `onFrame` carries no `meta`, and a
 replay-drain frame dispatches **identically** to fresh fanout. Replay
 idempotency is wholly the ingestor's responsibility — every non-idempotent
-projection recovers by *authoritative invalidate* (no optimistic `+1`), and rows
+projection recovers by _authoritative invalidate_ (no optimistic `+1`), and rows
 dedupe by id. The failure mode this forbids: a non-idempotent delta (a
 reply-count / thread-root bump, §4.1) applied optimistically on a replayed frame
 would double-count if a concurrent REST snapshot already covered it; recovering
@@ -113,10 +115,10 @@ invalidate-only effects may refetch once more, an accepted best-effort cost.
 
 The `subscribed` ack carries the server's high-watermark seq at registration
 time. **It is a baseline of last resort, not a re-baseline:** it sets the cursor
-*only* when no usable same-epoch cursor is already retained. A retained
+_only_ when no usable same-epoch cursor is already retained. A retained
 same-epoch cursor is client-authoritative — the ack must NOT advance it to head,
 or the resume's replay would look stale and the gap would be skipped. A retained
-cursor from a *stale* epoch is moot → baseline
+cursor from a _stale_ epoch is moot → baseline
 fresh from the ack; any optimistic resume against the old epoch self-heals via
 `snapshot_required`.
 
@@ -129,7 +131,7 @@ independent seq spaces and must never be mixed into one number.**
 - **Transport seq** — `EventFrame.seq` / `SubscribedFrame.seq` / `resumeFloorPositions[scope].lastSeq`.
   Minted in-memory by `scope-event-bus.nextSeq` (per scope, +1 over **all** event
   kinds), **reset to 0 on every backend boot**, paired with `epoch`. This is the
-  *only* space the transport cursor and `resume` understand.
+  _only_ space the transport cursor and `resume` understand.
 - **Message seq** — `ConversationMessagesDto.stream_head_seq`, i.e.
   `conversation_stream_heads.latest_seq`, which stores a value from the persisted
   conversation-global allocator (`messages.seq`). It **survives reboots** and is
@@ -148,9 +150,9 @@ The two water marks have disjoint jobs:
 1. **Transport baseline** (transport space, with `epoch`) — the cold-start floor
    for `resumeFloorPositions[scope]` / resume. It is the `subscribed` ack seq `S`, but it is
    **committed only after the REST snapshot has been applied** — the ack arriving
-   does *not* mean the store is applied to head. (The rule is not "never
+   does _not_ mean the store is applied to head. (The rule is not "never
    ack-baseline", it is "never advance the applied cursor off the ack head
-   *before* the snapshot is applied".)
+   _before_ the snapshot is applied".)
 2. **Message snapshot boundary** (message space) — `stream_head_seq`, used only to
    decide whether a buffered **message** payload is already covered by the
    snapshot: `payload.message.seq ≤ stream_head_seq` → drop/no-op,
@@ -174,8 +176,8 @@ listener attached" gap. A view with no message-window snapshot cannot independen
 seed the cursor — it must first obtain a snapshot or wait for an existing cursor.
 
 **Per-kind pre-S coverage vs drain idempotency — two different axes.**
-Idempotent apply only makes draining the buffer (frames *after* S)
-safe to replay; it says **nothing** about events that happened *before* S, which —
+Idempotent apply only makes draining the buffer (frames _after_ S)
+safe to replay; it says **nothing** about events that happened _before_ S, which —
 with no listener attached yet — were never buffered. So cold-start must define,
 per event kind, an explicit **pre-S state coverage**: where does the current state
 for everything up to S come from?
@@ -184,7 +186,7 @@ for everything up to S come from?
   (messages up to `stream_head_seq`; reaction aggregates and task fields embedded
   in the same DTO).
 - `agent_activity` — **not** in the message snapshot (it is `AgentRunState`, a
-  separate source). If the UI needs cold-start to show the correct *current* run
+  separate source). If the UI needs cold-start to show the correct _current_ run
   state, it **must** have its own snapshot/REST source; otherwise it must be
   declared **best-effort / live-only**. Pure idempotent apply does **not** cover
   it — that only replays S-after frames, it cannot rebuild the pre-S current state.
@@ -198,7 +200,7 @@ coverage relation — the two must not be conflated. Cross-ref
 
 `unsubscribe(scope)` drops the desired/confirmed/recovery state **but keeps both
 watermarks for the scope — `resumeFloorPositions[scope]` (the resume floor) and
-`receivedPositions[scope]` (the received-water)**. The scope becomes *detached*:
+`receivedPositions[scope]` (the received-water)**. The scope becomes _detached_:
 no live listener, both watermarks retained so a later resubscribe (§3) can
 replay anything published in the gap and gap detection continues seamlessly
 across the detachment.
@@ -234,13 +236,13 @@ processes the unsubscribe (tens of ms later). A frame landing in that window has
 **no consumer to apply it**. If the client let such a frame advance the received-water
 (or let a late `subscribed` ack re-baseline, or a late `snapshot_required`
 refetch), the received-water would move past a frame that was never applied — and the
-eventual resubscribe would resume *after* it, losing it until a manual refetch.
+eventual resubscribe would resume _after_ it, losing it until a manual refetch.
 
-Concretely: a live message published shortly *before* the user switches away
-(`listenerCount:1` server-side) can reach the client *after* the local listener
+Concretely: a live message published shortly _before_ the user switches away
+(`listenerCount:1` server-side) can reach the client _after_ the local listener
 has detached. If `acceptEventFrame` advanced the received-water for it (and the frames
 behind it) with nothing to apply them to, the switch-back resume would start
-above that seq and never recover it. (A batch published *after* the server stops
+above that seq and never recover it. (A batch published _after_ the server stops
 fanning out replays fine — only a frame caught in the local-unmount-vs-server-stop
 gap is at risk.)
 
@@ -295,10 +297,10 @@ socket-received.**
 ### 4.2 Recovery-class scope partition
 
 `conversation:<id>` carries kinds with **heterogeneous recovery models** in one
-transport seq space, and that forces a scope split. Some kinds are an *ordered
-patch stream over the message-window projection* whose missed frames are **not**
+transport seq space, and that forces a scope split. Some kinds are an _ordered
+patch stream over the message-window projection_ whose missed frames are **not**
 reliably recovered by refetch-on-mount — resume is load-bearing.
-Others are *own-cache / invalidate* projections that self-heal via their own REST
+Others are _own-cache / invalidate_ projections that self-heal via their own REST
 `refetchOnMount` / invalidate and need no ordered resume. A single per-scope cursor
 over both classes is **impossible**: the invalidate-class frames are frequently
 **readerless** (timeline closed, members panel closed), so `applied-high-water`
@@ -319,18 +321,18 @@ progress (re-introducing that drop). The two scopes are:
 
 **Kind matrix** — which scope each conversation-scope kind rides:
 
-| kind | scope | recovery |
-|---|---|---|
-| `message` | message-stream | optimistic append; resume load-bearing |
-| `message_reaction_changed` | message-stream | in-place aggregate patch; resume |
-| `task_changed` | message-stream | in-place chip patch; resume |
-| `agent_status` | side-channel | invalidate + buffer-replay |
-| `agent_activity` | side-channel | own `refetchOnMount:'always'` cold-start |
-| `conversation_activity` | side-channel | own REST infinite-query cold-start |
-| `conversation_members_changed` | side-channel | invalidate members query |
-| `agent_init_timeout` | side-channel | dev-only; invalidate/refetch-recoverable |
-| `compaction_stale` | side-channel | dev-only; invalidate/refetch-recoverable |
-| `agent_event` | side-channel | dev-only, **high-frequency**; own cache/refetch |
+| kind                           | scope          | recovery                                        |
+| ------------------------------ | -------------- | ----------------------------------------------- |
+| `message`                      | message-stream | optimistic append; resume load-bearing          |
+| `message_reaction_changed`     | message-stream | in-place aggregate patch; resume                |
+| `task_changed`                 | message-stream | in-place chip patch; resume                     |
+| `agent_status`                 | side-channel   | invalidate + buffer-replay                      |
+| `agent_activity`               | side-channel   | own `refetchOnMount:'always'` cold-start        |
+| `conversation_activity`        | side-channel   | own REST infinite-query cold-start              |
+| `conversation_members_changed` | side-channel   | invalidate members query                        |
+| `agent_init_timeout`           | side-channel   | dev-only; invalidate/refetch-recoverable        |
+| `compaction_stale`             | side-channel   | dev-only; invalidate/refetch-recoverable        |
+| `agent_event`                  | side-channel   | dev-only, **high-frequency**; own cache/refetch |
 
 `agent_init_timeout` / `compaction_stale` / `agent_event` are side-channel
 kinds, not message-stream kinds. `agent_event` in particular is
@@ -430,18 +432,18 @@ harvest a seq from), so the frame itself carries the baseline:
        forces REST cold-start). A warm cache left in place is satisfied **only** when
        the guard proves its remount does an authoritative refetch rather than serving
        a `gcTime`-residual stale cache.
-     The load-bearing hazard is the warm-unmounted cache: if a later mount could serve
-     it fresh **without** an authoritative refetch, committing the floor past
-     `currentSeq` is a **silent skip** (the floor moved past frames that cache never
-     applied). This must not rest on assumption — see the guard in §8.
-     **Commit signal — `allSettled`, not fail-fast.** Join the active
-     reconciles with `Promise.allSettled` (or equivalent): **all fulfilled** → fire
-     `commitSnapshotBaseline(scope, epoch)` once (multiple targets coalesce to one
-     commit); **any rejected / cancelled / aborted** →
-     **do not commit**, emit a diagnostic; the floor stays pinned and the next resume
-     retries (initiated ≠ committed, carried all the way to the floor). Fail-fast
-     `Promise.all` is wrong here — it would let the first rejection mask the other
-     targets' outcomes.
+       The load-bearing hazard is the warm-unmounted cache: if a later mount could serve
+       it fresh **without** an authoritative refetch, committing the floor past
+       `currentSeq` is a **silent skip** (the floor moved past frames that cache never
+       applied). This must not rest on assumption — see the guard in §8.
+       **Commit signal — `allSettled`, not fail-fast.** Join the active
+       reconciles with `Promise.allSettled` (or equivalent): **all fulfilled** → fire
+       `commitSnapshotBaseline(scope, epoch)` once (multiple targets coalesce to one
+       commit); **any rejected / cancelled / aborted** →
+       **do not commit**, emit a diagnostic; the floor stays pinned and the next resume
+       retries (initiated ≠ committed, carried all the way to the floor). Fail-fast
+       `Promise.all` is wrong here — it would let the first rejection mask the other
+       targets' outcomes.
   3. **Transport** commits on that signal: if the signalled epoch matches
      `pendingBaseline.epoch`, set `resumeFloorPositions[scope] = pendingBaseline`, clear
      pending, and drain the buffer `> seq` in transport-seq order. A stale-epoch or
@@ -497,7 +499,7 @@ half — `markSatisfied` call sites and `commitSnapshotBaseline` after the
 decisions correctness-first):
 
 - **Two watermarks only for content-gated scopes** (`isContentGated(scope) =
-  parseConversationScope(scope) !== null`, i.e. the message stream
+parseConversationScope(scope) !== null`, i.e. the message stream
   `conversation:<id>`). Every other scope (`viewer:` / `workspace:` / `app` /
   `conversation-side:`) has no content-apply seam, so its floor **auto-advances
   with `received`** — the single-cursor behavior for non-content-gated scopes,
@@ -540,38 +542,38 @@ decisions correctness-first):
   caller contract). The ingestor computes, per delivered
   frame, the full set of per-target effects and satisfies the seq once they all
   **commit** (`Promise.allSettled` all-fulfilled), never on dispatch:
-  - *content write* (mainline append, cluster append) → satisfied after the
+  - _content write_ (mainline append, cluster append) → satisfied after the
     `setQueryData`/reconcile writes;
-  - *derived-invalidate* (reply-count on mainline + thread-root) → satisfied only
+  - _derived-invalidate_ (reply-count on mainline + thread-root) → satisfied only
     after the invalidate's refetch **commits** (a rejected refetch pins the floor
     — commit-gated, not dispatch-gated);
-  - *warm-inactive target* (warm cache, no observer) → `removeQueries` then
+  - _warm-inactive target_ (warm cache, no observer) → `removeQueries` then
     satisfied (next open cold-starts authoritatively);
-  - *cold-absent* (no cache, no observer) → satisfied **vacuously** (cold-start is
+  - _cold-absent_ (no cache, no observer) → satisfied **vacuously** (cold-start is
     authoritative on next open; advancing past it can't strand a warm displayable
     cache);
-  - *side-scope frames* → never `markSatisfied` (the side floor auto-advances).
-  **Named exception — the hybrid gate.** `task_changed`
-  and `reaction` keep the **synchronous boolean** content-apply gate rather than
-  the async `allSettled` path, because they are pure idempotent patches (task sets
-  fields; reaction sets the absolute count). The criterion that governs whether an
-  effect joins the gated `allSettled` set is: **an effect is gated iff resume
-  correctness depends on its settle — i.e. it accumulates resume-replay-dependent
-  persistent state — NOT merely "it calls invalidate".** Reaction's cursor-inert
-  sub-effect `reactors_list_refresh` (the who-reacted popover) is
-  *authoritative-on-open* (a fresh REST fetch on hover) and accumulates **zero**
-  ingestor state, so it is **not** gated — advancing the floor past a reaction
-  frame strands nothing. Falsifier (test-locked): the ingestor must leave
-  `messageReactorsKey` untouched (`undefined`) after a reaction frame. This guards
-  against a future "unify everything onto the satisfaction path" refactor
-  wrongly pulling authoritative-on-open effects into the gate.
+  - _side-scope frames_ → never `markSatisfied` (the side floor auto-advances).
+    **Named exception — the hybrid gate.** `task_changed`
+    and `reaction` keep the **synchronous boolean** content-apply gate rather than
+    the async `allSettled` path, because they are pure idempotent patches (task sets
+    fields; reaction sets the absolute count). The criterion that governs whether an
+    effect joins the gated `allSettled` set is: **an effect is gated iff resume
+    correctness depends on its settle — i.e. it accumulates resume-replay-dependent
+    persistent state — NOT merely "it calls invalidate".** Reaction's cursor-inert
+    sub-effect `reactors_list_refresh` (the who-reacted popover) is
+    _authoritative-on-open_ (a fresh REST fetch on hover) and accumulates **zero**
+    ingestor state, so it is **not** gated — advancing the floor past a reaction
+    frame strands nothing. Falsifier (test-locked): the ingestor must leave
+    `messageReactorsKey` untouched (`undefined`) after a reaction frame. This guards
+    against a future "unify everything onto the satisfaction path" refactor
+    wrongly pulling authoritative-on-open effects into the gate.
 - **`snapshot_required` re-cold-start is fully apply-gated** (pendingBaseline +
   buffer `> currentSeq` + `commitSnapshotBaseline(scope, epoch)`, epoch-checked,
   drains post-commit). **Cold-start (first subscribe) is NOT pendingBaseline-gated
   in v1** — the `subscribed` ack baselines both water marks immediately. This is
   safe because the REST snapshot is the authoritative pre-S coverage (§3.1): a
   resume-from-S that "skips" transport seqs `1..S` loses nothing, since the
-  snapshot already reflects them. The live-vs-REST *ordering* at cold-start is the
+  snapshot already reflects them. The live-vs-REST _ordering_ at cold-start is the
   ingestor's concern (React Query), not a resume-floor correctness one.
 - **Orphan-frame gate retained** (§4.1). It is complementary to the applied floor
   (pre-filters non-desired scopes before any water-mark/dispatch touch) and is
@@ -582,4 +584,3 @@ decisions correctness-first):
   (`clearConnectionState` drops pending/buffer; resubscribe re-arms via a fresh
   `snapshot_required`). Matches §6 "floor stays pinned and the next resume
   retries."
-

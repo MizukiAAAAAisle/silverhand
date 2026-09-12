@@ -1,6 +1,9 @@
 # Cross-Host Channel — 跨 host agent 同 channel
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 > **⚠️ 部分被 supersede（`workspace-layout-relocation-v1.md` §3/§6/§7，2026-08）**：本文 **§4（workspace local root，per-host）与 §6（ownership / 删除权）已不是终态**，其中的 home/guest 非对称模型整体消失了：
+>
 > - **workspace 没有 home host**（`workspace_host_id` 已退役），因此没有"home host 的 local root = 用户 repo 路径"这一侧；`workspaces.workspace_path` 也已退役。
 > - **每个 agent（不分 home / guest）的 L2 锚点是同一个确定性 agent-centric 坐标**：`<agent home>/workspaces/<workspace_id>`——按 id 算出、首次 spawn 懒 seed，不查 DB 列、不查 daemon registry binding（registry 已降级为 marker-absent 只读 legacy inventory reader）。
 > - 于是 §6 的 ownership 二分（"用户 repo 永不删" vs "silverhand 自己建自己删"）**坍缩成单一形态**：所有 L2 bundle 都在 silverhand 自己的 agent home 下，永不落在用户项目目录里。§7 的 open question"ownership 怎么持久化"随之关闭——没有第二种 ownership 需要记。
@@ -73,10 +76,10 @@
 
 L2 workspace memory 今天锚在 workspace 路径下:
 
-| 路径 | 层 |
-| --- | --- |
-| `<workspace>/.silverhand/agents/<id>/MEMORY.md` | L2 |
-| `<workspace>/.silverhand/agents/<id>/notes/*` | L2 |
+| 路径                                            | 层  |
+| ----------------------------------------------- | --- |
+| `<workspace>/.silverhand/agents/<id>/MEMORY.md` | L2  |
+| `<workspace>/.silverhand/agents/<id>/notes/*`   | L2  |
 
 这里的 `<workspace>` = `workspaces.workspace_path`,是一个 **host-side 绝对路径**(host-local path authority 见 `docs/orchestration-boundary-v1.md` §5.1)。今天它隐含成立,是因为 workspace 的所有 agent 都在**同一个 host** 上,共享那一个路径。
 
@@ -143,12 +146,12 @@ guest local root 用 `<workspace_id>`,**不用** workspace name:
 
 今天 silverhand **从不创建、也从不删除一个 workspace 的 fs 根**——它只在已存在的目录里建 `.silverhand/agents/<id>/`。跨 host 第一次打破这条:guest root 是 silverhand 现场建的。于是出现两类 root:
 
-| | home root | guest root |
-| --- | --- | --- |
-| 物理位置 | `workspace_path`(用户的 repo) | `$HOME/joint-ws/<id>/` |
-| 谁创建 | 用户(先有目录才有 workspace) | **目标 host 的 daemon**(backend 记 intent,daemon 物化,见 6.2) |
-| 删除权 | **silverhand 永不删** | 仅在终态信号下、由该 host 的 daemon 删 |
-| 跨 membership churn | 不动 | **不动**(见 6.2) |
+|                     | home root                     | guest root                                                    |
+| ------------------- | ----------------------------- | ------------------------------------------------------------- |
+| 物理位置            | `workspace_path`(用户的 repo) | `$HOME/joint-ws/<id>/`                                        |
+| 谁创建              | 用户(先有目录才有 workspace)  | **目标 host 的 daemon**(backend 记 intent,daemon 物化,见 6.2) |
+| 删除权              | **silverhand 永不删**         | 仅在终态信号下、由该 host 的 daemon 删                        |
+| 跨 membership churn | 不动                          | **不动**(见 6.2)                                              |
 
 ### 6.2 物化:host-side materialize-on-first-use,leave 不删数据
 
@@ -171,9 +174,9 @@ L2 是 agent 在这个 workspace 攒下的**记忆**,正是最该留的东西:le
 
 引入这个概念不是为了一个"join 建 / leave 删"的开关——而**只是回答"删除权归谁"**:
 
-| ownership | 含义 |
-| --- | --- |
-| `user_owned`(home repo) | silverhand **永不删**;只读其存在性、在内部建 L2 子目录 |
+| ownership                        | 含义                                                                                         |
+| -------------------------------- | -------------------------------------------------------------------------------------------- |
+| `user_owned`(home repo)          | silverhand **永不删**;只读其存在性、在内部建 L2 子目录                                       |
 | `silverhand_managed`(guest root) | 目标 host 的 daemon 物化(backend 记 intent);**只有该 host 的 daemon** 在 §6.3 的终态信号下删 |
 
 **删除路径只敢碰 `silverhand_managed`。** 这条不变量同时挡住两个失败模式:

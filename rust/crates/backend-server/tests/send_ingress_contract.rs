@@ -54,7 +54,7 @@ const AGENT: &str = "agent-1";
 
 fn contract() -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../packages/backend/tests/send-ingress/contract.json");
+        .join("../../../rust/test-fixtures/send-ingress/contract.json");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("the checked-in contract is readable at {path:?}: {error}"));
     serde_json::from_str(&text).expect("the contract is JSON")

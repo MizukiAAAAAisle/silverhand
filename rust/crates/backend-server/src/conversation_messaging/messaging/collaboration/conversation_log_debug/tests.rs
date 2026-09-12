@@ -562,7 +562,7 @@ impl ConversationLogDebugAdmissionPort for SqliteAdmission {
 async fn sqlite_fixture(setup: &str) -> (tempfile::TempDir, SqliteAdmission) {
     const SCHEMA: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+        "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
     ));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("conversation-log-debug.sqlite");

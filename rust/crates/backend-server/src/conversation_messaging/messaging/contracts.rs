@@ -33,7 +33,7 @@ const REFERENCE_POSITIONS: &str = include_str!(concat!(
 
 const MENTION_CC: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../packages/backend/tests/mention-cc/contract.json"
+    "/../../../rust/test-fixtures/mention-cc/contract.json"
 ));
 
 struct GrantsNothing;

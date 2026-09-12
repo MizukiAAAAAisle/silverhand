@@ -1,5 +1,7 @@
 # Auth and Host model
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 This is the canonical contract for the auth/identity/host-credential model:
 resource ownership, authentication, registration, principal construction, the
 token/credential taxonomy, and host lifecycle. It states the current contract
@@ -8,6 +10,7 @@ only. Governance/capability grading is owned by `graded-permissions-v1.md`
 `packages/shared/src/db/schema.ts` + `packages/shared/src/db/migrations.ts`.
 
 > **Related docs**:
+>
 > - `graded-permissions-v1.md` — the two-axis authority model (human roles +
 >   agent capabilities) layered on top of the ownership base defined here.
 > - `silverhand-daemon.md` — daemon execution-plane scope.
@@ -27,11 +30,11 @@ Auth is **not one concern**. Treating it as one produces a phantom "owner"
 entity that crosses all three layers. The design splits into three orthogonal
 layers, each with its own implementation and tradeoffs:
 
-| Layer | Question it answers | Mechanism |
-|---|---|---|
-| **Resource ownership** | Once a user exists, what can they see and modify? | `users.id` is the ACL root; every resource resolves an owner user, directly or via parent. Workspace **governance roles** (owner/admin/member) grade what a member may do — see §2 and `graded-permissions-v1.md`. |
-| **Authentication** | This request — who is it from? | Email + password; server-issued session token (`user_token`). |
-| **Registration** | Who is allowed to create a user account, and when? | `POST /auth/signup` open by default; `SILVERHAND_DISABLE_SIGNUP=1` env to close. No bootstrap policy, no first-user-special role. |
+| Layer                  | Question it answers                                | Mechanism                                                                                                                                                                                                          |
+| ---------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Resource ownership** | Once a user exists, what can they see and modify?  | `users.id` is the ACL root; every resource resolves an owner user, directly or via parent. Workspace **governance roles** (owner/admin/member) grade what a member may do — see §2 and `graded-permissions-v1.md`. |
+| **Authentication**     | This request — who is it from?                     | Email + password; server-issued session token (`user_token`).                                                                                                                                                      |
+| **Registration**       | Who is allowed to create a user account, and when? | `POST /auth/signup` open by default; `SILVERHAND_DISABLE_SIGNUP=1` env to close. No bootstrap policy, no first-user-special role.                                                                                  |
 
 The layers are independent: changing the registration mechanism (open signup
 → invite-only) does **not** change the resource ownership model or the session
@@ -64,8 +67,8 @@ Three first-class concepts (conceptually independent, all sharing the `hosts`
 table):
 
 - **Host** — `id, user_id, kind=local|remote, provisioning_source, label,
-  capabilities, status, installation_id, created_at, last_seen_at,
-  revoked_at`. The execution environment. Identity unit users see, manage, and
+capabilities, status, installation_id, created_at, last_seen_at,
+revoked_at`. The execution environment. Identity unit users see, manage, and
   revoke.
 - **Daemon** — runtime connector running inside a Host. A replaceable instance
   that consumes a Host's credential and supervises agent processes. Daemon
@@ -75,7 +78,7 @@ table):
 
 Both Host kinds — `local` (the user's desktop, `provisioning_source =
 'app_install'`) and `remote` (a user-managed computer, `provisioning_source =
-'user_invite'`) — are live and first-class. *Sandbox is not a Host kind*:
+'user_invite'`) — are live and first-class. _Sandbox is not a Host kind_:
 sandboxing is a Host capability / mount concern, not an enum tag.
 
 ### 1.1 HOSTS uniformity (top-level invariant)
@@ -85,20 +88,21 @@ auth and wire layers. All differences are confined to provisioning and
 capability metadata; the credential, validation, transport, and lifecycle
 control plane are identical.
 
-| Concern | local Host | remote Host (user-managed computer) |
-|---|---|---|
-| DB row | `hosts` (`kind='local'`, `provisioning_source='app_install'`) | `hosts` (`kind='remote'`, `provisioning_source='user_invite'`) |
-| Credential row | `host_credentials` (one or more `kind=long_lived`) | `host_credentials` (one or more `kind=long_lived`) |
-| Mint authority | `user_token` session via `POST /api/hosts/claim_or_create` (§6.1) | `user_token` session via `POST /api/hosts` (§6.2) — desktop is always the trust anchor |
-| Wire auth | `Authorization: Bearer <host_token>` on the daemon connect/WS transport | identical (the `connect_token` is a long-lived `host_token`, used as both the `connect-token/resolve` bearer and the WS credential) |
-| Server validator | `HostTokenService.verifyHostToken()` | identical (no separate code path) |
-| Outbound transport | one outbound WebSocket per Host | identical |
-| Rotation | `POST /api/hosts/:id/rotate-token` + 60s grace (§6.4) | `POST /api/hosts/:id/connect-token/rotate` (§6.2) |
-| Revoke | `POST /api/hosts/:id/revoke` (hard deny, no grace) | for a user-managed computer, `DELETE /api/hosts/:id` (hard delete) / `POST /api/hosts/:id/disconnect` instead — revoke is local-only |
-| Placement key | `agent.host_id` → `RuntimeHostPlacementResolver` | identical (resolver is host-kind-agnostic) |
-| Capability layer | `host_capabilities.*` rows describe local fs / mounts | identical mechanism |
+| Concern            | local Host                                                              | remote Host (user-managed computer)                                                                                                  |
+| ------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| DB row             | `hosts` (`kind='local'`, `provisioning_source='app_install'`)           | `hosts` (`kind='remote'`, `provisioning_source='user_invite'`)                                                                       |
+| Credential row     | `host_credentials` (one or more `kind=long_lived`)                      | `host_credentials` (one or more `kind=long_lived`)                                                                                   |
+| Mint authority     | `user_token` session via `POST /api/hosts/claim_or_create` (§6.1)       | `user_token` session via `POST /api/hosts` (§6.2) — desktop is always the trust anchor                                               |
+| Wire auth          | `Authorization: Bearer <host_token>` on the daemon connect/WS transport | identical (the `connect_token` is a long-lived `host_token`, used as both the `connect-token/resolve` bearer and the WS credential)  |
+| Server validator   | `HostTokenService.verifyHostToken()`                                    | identical (no separate code path)                                                                                                    |
+| Outbound transport | one outbound WebSocket per Host                                         | identical                                                                                                                            |
+| Rotation           | `POST /api/hosts/:id/rotate-token` + 60s grace (§6.4)                   | `POST /api/hosts/:id/connect-token/rotate` (§6.2)                                                                                    |
+| Revoke             | `POST /api/hosts/:id/revoke` (hard deny, no grace)                      | for a user-managed computer, `DELETE /api/hosts/:id` (hard delete) / `POST /api/hosts/:id/disconnect` instead — revoke is local-only |
+| Placement key      | `agent.host_id` → `RuntimeHostPlacementResolver`                        | identical (resolver is host-kind-agnostic)                                                                                           |
+| Capability layer   | `host_capabilities.*` rows describe local fs / mounts                   | identical mechanism                                                                                                                  |
 
 What this invariant buys:
+
 - The desktop / a logged-in user session is always the trust anchor for any
   new Host. There is no zero-trust path where a Host claims itself into
   existence — every Host's first credential is minted by an authenticated user
@@ -115,7 +119,7 @@ failures collapse into a **closed set of three** typed codes so UI, logs, and
 runbooks share a stable surface: `host_tls_chain_invalid` (untrusted / unverifiable
 chain — the fallback for any TLS-class error not more specifically recognized),
 `host_tls_hostname_mismatch`, and `host_tls_expired` (covers both expired and
-not-yet-valid). Non-TLS errors (DNS / connect / timeout / HTTP 401/403) are *not*
+not-yet-valid). Non-TLS errors (DNS / connect / timeout / HTTP 401/403) are _not_
 folded into this taxonomy — they carry their own typed codes elsewhere.
 
 `http://` (no TLS) is accepted **only** for the loopback literals
@@ -148,7 +152,7 @@ membership edges.
 Layered on top of this base, workspace **governance roles**
 (`owner`/`admin`/`member`) grade what a member may do inside a workspace they
 can see (rename, archive, manage members/agents). Roles do not replace the
-visibility paths below — they refine authority *within* a visible resource.
+visibility paths below — they refine authority _within_ a visible resource.
 The role model, its storage, and the orthogonal agent-capability axis are
 owned by `graded-permissions-v1.md`; §2.4 records only the storage anchor.
 
@@ -156,25 +160,25 @@ owned by `graded-permissions-v1.md`; §2.4 records only the storage anchor.
 
 There are three classes of ACL path. Each resource picks exactly one:
 
-| Class | Mechanism | Examples |
-|---|---|---|
-| **A. Direct owner column** | Resource carries `user_id` (or equivalent) FK; viewer's user_id must match. | `hosts.user_id`, `notifications.user_id`, `agents.created_by_user_id` (existing). |
-| **B. Membership edge** | Resource is reachable iff there is a row in a join table linking `(viewer_user_id, resource_id)`. | `workspaces` via `workspace_users`; conversations via `conversation_users` (existing membership tables). |
-| **C. Inherited via parent** | Resource has no own ACL; resolves through its parent's class A or B path. | `messages` → conversation → workspace; `attachments` → message; `tasks` → message. |
+| Class                       | Mechanism                                                                                         | Examples                                                                                                 |
+| --------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **A. Direct owner column**  | Resource carries `user_id` (or equivalent) FK; viewer's user_id must match.                       | `hosts.user_id`, `notifications.user_id`, `agents.created_by_user_id` (existing).                        |
+| **B. Membership edge**      | Resource is reachable iff there is a row in a join table linking `(viewer_user_id, resource_id)`. | `workspaces` via `workspace_users`; conversations via `conversation_users` (existing membership tables). |
+| **C. Inherited via parent** | Resource has no own ACL; resolves through its parent's class A or B path.                         | `messages` → conversation → workspace; `attachments` → message; `tasks` → message.                       |
 
 ### 2.2 Resource → ACL path table
 
-| Resource | Class | Path |
-|---|---|---|
-| `users` | n/a | root identity |
-| `hosts` | A | `hosts.user_id` |
-| `agents` | A | `agents.created_by_user_id` |
-| `notifications` | A | `notifications.user_id` |
-| `workspaces` | B | `workspace_users(workspace_id, user_id)` membership |
-| `conversations` | B | `conversation_users(conversation_id, user_id)` membership (and inherited workspace membership) |
-| `messages` | C | inherited via `messages.conversation_id` → conversation membership |
-| `attachments` / `blobs` | C | inherited via parent message / workspace |
-| `tasks` | C | inherited via `tasks.message_id` → conversation |
+| Resource                | Class | Path                                                                                           |
+| ----------------------- | ----- | ---------------------------------------------------------------------------------------------- |
+| `users`                 | n/a   | root identity                                                                                  |
+| `hosts`                 | A     | `hosts.user_id`                                                                                |
+| `agents`                | A     | `agents.created_by_user_id`                                                                    |
+| `notifications`         | A     | `notifications.user_id`                                                                        |
+| `workspaces`            | B     | `workspace_users(workspace_id, user_id)` membership                                            |
+| `conversations`         | B     | `conversation_users(conversation_id, user_id)` membership (and inherited workspace membership) |
+| `messages`              | C     | inherited via `messages.conversation_id` → conversation membership                             |
+| `attachments` / `blobs` | C     | inherited via parent message / workspace                                                       |
+| `tasks`                 | C     | inherited via `tasks.message_id` → conversation                                                |
 
 Principal-source contract: a public route resolves a `user` principal from the
 session bearer (no principal ⇒ registration gate refuses the route); an
@@ -296,7 +300,7 @@ created_at, updated_at }` (no token, no TLS/insecure flag, no SPKI pin; insecure
 status is recomputed at runtime from the URL + env, never stored). The renderer
 only ever receives a redacted view (`{ server_url, updated_at }`).
 
-The daemon **never reads the profile.** It reads only the *derived*
+The daemon **never reads the profile.** It reads only the _derived_
 `daemon-config.json` (`{ server_url, host_id, host_token, profile_version?,
 allow_insecure_remote? }`). Updating the server URL is a two-phase operation:
 phase 1 commits the profile atomically (temp file → fsync → rename, so a crash
@@ -308,7 +312,7 @@ the daemon still runs the old config; this is recorded as
 `partial_apply_pending` and converges via a Retry, a daemon restart, or a
 boot-time reconciliation that re-derives state by comparing `profile.version`
 against `daemon-config.profile_version`. A pre-auth commit with no host claim
-yet is *not* pending — the next sign-in's host claim stamps the current profile
+yet is _not_ pending — the next sign-in's host claim stamps the current profile
 into the daemon-config it writes.
 
 `profile.version` is a monotonic **generation counter** (floor 1, bumped on
@@ -330,7 +334,7 @@ Default UI button label: "Logout". The "disable this host too" affordance lives 
 ### 3.4 Error response uniformity
 
 `/auth/*` and `/setup/*` errors MUST NOT leak account-state distinguishability
-(*email exists*, *email unknown*, *password wrong*, *credential row absent*).
+(_email exists_, _email unknown_, _password wrong_, _credential row absent_).
 The rule is **uniformity within the same route**, not "always 401":
 
 - `POST /auth/login` and `POST /auth/signup` credential-failure path: 401
@@ -340,7 +344,7 @@ The rule is **uniformity within the same route**, not "always 401":
   before responding so timing is similar).
 - Disabled signup (`SILVERHAND_DISABLE_SIGNUP=1`) returns 404 from
   `POST /auth/signup` — the same 404 a missing route returns. This is fine:
-  it does not distinguish *email A is taken* from *email B is free*; it
+  it does not distinguish _email A is taken_ from _email B is free_; it
   only signals that signup is closed, which `/api/server/info` already
   exposes truthfully.
 - Validation errors (malformed JSON, missing field) keep their normal 400
@@ -366,7 +370,7 @@ The rule is **uniformity within the same route**, not "always 401":
   configuration or request shape and read no identity state at all.) Accepted
   residual cost, stated rather than hidden: while signup is enabled an
   unauthenticated caller can probe whether a given handle exists, one full POST
-  at a time. The *cheap* oracle is what stays closed — there is no public,
+  at a time. The _cheap_ oracle is what stays closed — there is no public,
   unauthenticated handle-availability endpoint, and the authenticated
   agent/workspace availability probes are not reused here.
 
@@ -381,11 +385,11 @@ but the **input source** differs by route class and is not negotiable by the
 caller. This is the single authoritative statement of principal construction;
 other docs reference it, they do not restate it.
 
-| Route class | Principal kind | Source | Enforced by |
-|---|---|---|---|
-| public `/api/*` | `user` | session bearer (`user_token`) → `auth_sessions` subject | `bearer.ts` sets the principal; no request-declared header is trusted |
-| internal `/internal/agents/:aid/*` | `agent` | URL `aid` + live runtime-slot bearer（scope / generation / daemon instance）；conversation 由显式地址或对象派生后单独授权 | `installInternalPrincipalMiddleware` + `RuntimePrincipalVerifier` |
-| backend-internal code | `system` | not HTTP-originated | never resolved from a request |
+| Route class                        | Principal kind | Source                                                                                                                    | Enforced by                                                           |
+| ---------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| public `/api/*`                    | `user`         | session bearer (`user_token`) → `auth_sessions` subject                                                                   | `bearer.ts` sets the principal; no request-declared header is trusted |
+| internal `/internal/agents/:aid/*` | `agent`        | URL `aid` + live runtime-slot bearer（scope / generation / daemon instance）；conversation 由显式地址或对象派生后单独授权 | `installInternalPrincipalMiddleware` + `RuntimePrincipalVerifier`     |
+| backend-internal code              | `system`       | not HTTP-originated                                                                                                       | never resolved from a request                                         |
 
 - **Internal routes reject the principal header (400, not silent-ignore).**
   `X-Silverhand-Principal` on any `/internal/*` route returns
@@ -401,7 +405,7 @@ other docs reference it, they do not restate it.
 - **`from_kind='system'` messages are never HTTP-originated.** The `system`
   principal exists only for backend-internal triggers (onboarding, lifecycle,
   provision). No HTTP route resolves a `system` principal, so a `from_kind =
-  'system'` insert must always be traceable to backend-internal code; the repo
+'system'` insert must always be traceable to backend-internal code; the repo
   layer asserts this rather than relying on a route guard.
 
 ---
@@ -433,10 +437,10 @@ The first user is just the first row in `users`. They have no special global rol
 
 There are two live credential classes with **non-overlapping** lifetimes and authorities. Code treats them as distinct types (not generic `string`), and logs never print them in cleartext.
 
-| Credential | Bound to | Lifetime | Issued by | Used by | Revocation |
-|---|---|---|---|---|---|
-| `user_token` (session) | `(user_id, auth_sessions.id)` | Long-lived (config; default 30d), refreshed on use | `/auth/login` success | desktop UI / Electron main HTTP client | Logout invalidates one session; DELETE all user sessions on password change |
-| `host_token` | `(user_id, host_id)` | Long-lived, rotatable (`host_credentials.kind='long_lived'`) | `POST /api/hosts/claim_or_create` (local) or `POST /api/hosts` (remote/user-managed computer — returned as the `connect_token`) | Daemon outbound HTTP/WS only | `POST /api/hosts/:id/revoke` (local) or `DELETE`/`disconnect` (user-managed) invalidates immediately (hard deny, no grace). Rotation has 60s grace — see §6.4 |
+| Credential             | Bound to                      | Lifetime                                                     | Issued by                                                                                                                       | Used by                                | Revocation                                                                                                                                                    |
+| ---------------------- | ----------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user_token` (session) | `(user_id, auth_sessions.id)` | Long-lived (config; default 30d), refreshed on use           | `/auth/login` success                                                                                                           | desktop UI / Electron main HTTP client | Logout invalidates one session; DELETE all user sessions on password change                                                                                   |
+| `host_token`           | `(user_id, host_id)`          | Long-lived, rotatable (`host_credentials.kind='long_lived'`) | `POST /api/hosts/claim_or_create` (local) or `POST /api/hosts` (remote/user-managed computer — returned as the `connect_token`) | Daemon outbound HTTP/WS only           | `POST /api/hosts/:id/revoke` (local) or `DELETE`/`disconnect` (user-managed) invalidates immediately (hard deny, no grace). Rotation has 60s grace — see §6.4 |
 
 The `host_credentials.kind` enum has a second arm, `bootstrap`. It has **no
 live issuance path** today: both local and remote provisioning mint a
@@ -532,7 +536,8 @@ user runs the command in the target env (another machine / container)
 ```
 
 Notes:
-- The `connect_token` *is* a `long_lived` `host_token` (§5) — there is no
+
+- The `connect_token` _is_ a `long_lived` `host_token` (§5) — there is no
   separate bootstrap-exchange step. `connect-token/resolve` only maps the token
   to its `host_id`; the token itself remains the WS credential.
 - The connect command intentionally carries no host id; the daemon proves
@@ -608,8 +613,7 @@ treats `revoked_at != NULL` and missing row identically (deny).
 - **Local Host — `POST /api/hosts/:id/rotate-token`** issues a new long_lived token; the
   prior credential's `expires_at` is set to `min(now+60_000, prior)` so it
   remains valid for the 60-second grace window; the new token is returned
-  to the desktop main process, which writes `daemon-config.json` (mode
-  0600) atomically before the IPC return crosses the renderer boundary.
+  to the desktop main process, which writes `daemon-config.json` (mode 0600) atomically before the IPC return crosses the renderer boundary.
 - **User-managed computer — `POST /api/hosts/:id/connect-token/rotate`** issues a fresh `connect_token` for the remote host. Unlike the local path there is no local daemon-config write; the operator re-copies the new connect command.
 
 **Invariants (local `rotate-token`):**

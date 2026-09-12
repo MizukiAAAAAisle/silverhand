@@ -21,7 +21,7 @@ use tower::ServiceExt;
 
 const SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+    "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
 ));
 
 async fn store(setup: &str) -> (tempfile::TempDir, MessagingStore) {
@@ -104,7 +104,7 @@ async fn seed_messages(db: &mut SqliteConnection, conversation: &str) {
 async fn production_router_matches_the_typescript_signed_closed_set() {
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/message-unread-wire.json"
+        "/../../../rust/test-fixtures/fixtures/message-unread-wire.json"
     )))
     .unwrap();
     let entries = fixture.as_array().unwrap();

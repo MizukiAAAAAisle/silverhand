@@ -106,7 +106,7 @@ async fn call(port: Ports, path: &str, auth: bool) -> (u16, Value) {
 async fn production_router_consumes_the_ts_signed_two_surface_closed_set() {
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/attention-projection-wire.json"
+        "/../../../rust/test-fixtures/fixtures/attention-projection-wire.json"
     )))
     .unwrap();
     let mut surfaces = BTreeSet::new();

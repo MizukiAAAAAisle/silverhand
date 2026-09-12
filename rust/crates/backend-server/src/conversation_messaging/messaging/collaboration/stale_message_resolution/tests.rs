@@ -371,7 +371,7 @@ async fn source_splices_and_both_authority_refusals_never_reach_the_observer() {
 async fn production_sqlite_admission_and_capability_drive_the_route() {
     const SCHEMA: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+        "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
     ));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("stale-resolution-route.sqlite");

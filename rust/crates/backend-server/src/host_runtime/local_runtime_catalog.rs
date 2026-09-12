@@ -233,6 +233,7 @@ mod tests {
             RuntimeDetection::Absent,
             RuntimeDetection::ProbeFailed,
             RuntimeDetection::Absent,
+            RuntimeDetection::Absent,
         ])
     }
 
@@ -304,7 +305,8 @@ mod tests {
                         "binary": null,
                         "version": null
                     },
-                    {"kind":"pi","state":"absent","reason":"not_found","installed":false,"binary":null,"version":null}
+                    {"kind":"pi","state":"absent","reason":"not_found","installed":false,"binary":null,"version":null},
+                    {"kind":"grok","state":"absent","reason":"not_found","installed":false,"binary":null,"version":null}
                 ]
             })
         );

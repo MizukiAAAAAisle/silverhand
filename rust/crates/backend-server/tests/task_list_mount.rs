@@ -324,7 +324,7 @@ struct MigrationTitleCase {
 
 fn valid_migration_titles() -> Vec<MigrationTitleCase> {
     let cases: Vec<Value> = serde_json::from_str(include_str!(
-        "../../../../packages/backend/tests/fixtures/task-title-migration/cases.json"
+        "../../../../rust/test-fixtures/fixtures/task-title-migration/cases.json"
     ))
     .unwrap();
     cases

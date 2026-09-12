@@ -237,7 +237,7 @@ mod tests {
     async fn fixture_store(setup: &str) -> (tempfile::TempDir, MessagingStore, SqlitePool) {
         const SCHEMA: &str = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+            "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
         ));
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("conversation-agent-directory-wire.sqlite");
@@ -324,7 +324,7 @@ mod tests {
     async fn production_sqlite_and_router_consume_the_ts_signed_surface() {
         let fixture: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../packages/backend/tests/fixtures/conversation-agent-directory-wire.json"
+            "/../../../rust/test-fixtures/fixtures/conversation-agent-directory-wire.json"
         )))
         .unwrap();
         for case in fixture.as_array().unwrap() {

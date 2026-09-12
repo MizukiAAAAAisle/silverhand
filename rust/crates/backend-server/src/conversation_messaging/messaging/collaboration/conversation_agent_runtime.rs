@@ -255,7 +255,7 @@ mod tests {
     async fn production_store() -> (tempfile::TempDir, MessagingStore) {
         const SCHEMA: &str = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+            "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
         ));
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("conversation-agent-runtime-wire.sqlite");

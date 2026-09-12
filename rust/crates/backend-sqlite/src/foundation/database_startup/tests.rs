@@ -143,7 +143,7 @@ async fn empty_store_runs_shared_history_without_ts_then_current_is_noop() {
         normalized,
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../packages/backend/tests/migration-baseline/schema-current.normalized.txt"
+            "/../../../rust/test-fixtures/migration-baseline/schema-current.normalized.txt"
         ))
     );
 
@@ -163,7 +163,7 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
         .unwrap();
     db.execute(sqlx::raw_sql(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql"
+        "/../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql"
     ))))
     .await
     .unwrap();
@@ -296,7 +296,7 @@ async fn retired_workspace_starred_mode_upgrades_from_87_and_88_without_losing_o
             .unwrap();
         db.execute(sqlx::raw_sql(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql"
+            "/../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql"
         ))))
         .await
         .unwrap();
@@ -536,7 +536,7 @@ async fn agent_stream_upgrade_preserves_history_without_guessing_generation() {
         .unwrap();
     db.execute(sqlx::raw_sql(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql"
+        "/../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql"
     ))))
     .await
     .unwrap();
@@ -588,7 +588,7 @@ async fn agent_stream_upgrade_preserves_history_without_guessing_generation() {
 async fn task_title_migration_rejects_unrepairable_values_transactionally() {
     let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/task-title-migration/cases.json"
+        "/../../../rust/test-fixtures/fixtures/task-title-migration/cases.json"
     )))
     .unwrap();
     for case in cases.iter().filter(|c| c["canonical"].is_null()) {

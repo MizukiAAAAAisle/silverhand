@@ -105,7 +105,7 @@ mod tests {
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../rust/test-fixtures/migration-baseline/schema-current.sql");
     const SEED_SQL: &str = "\
 INSERT INTO users (id, name, display_name, created_at, updated_at) \
   VALUES ('user-1', 'one', 'One', 1, 1); \

@@ -265,7 +265,7 @@ async fn returned_coordinates_and_payload_bind_before_wire() {
 async fn production_router_reads_the_current_schema_snapshot() {
     const SCHEMA: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+        "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
     ));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("conversation-agent-activity-wire.sqlite");

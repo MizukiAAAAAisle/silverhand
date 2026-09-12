@@ -1208,7 +1208,7 @@ mod reply_lookup_tests {
         let mut db = pool.acquire().await.unwrap();
         db.execute(sqlx::raw_sql(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+            "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
         ))))
         .await
         .unwrap();
@@ -1264,7 +1264,7 @@ mod reply_lookup_tests {
             .unwrap();
         db.execute(sqlx::raw_sql(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+            "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
         ))))
         .await
         .unwrap();

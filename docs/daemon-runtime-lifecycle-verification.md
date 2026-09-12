@@ -1,5 +1,7 @@
 # Daemon runtime lifecycle verification
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 This is the review and installation gate for task 2174. It deliberately does
 not operate on a running Silverhand profile, database, daemon, or Qoder
 session.
@@ -55,12 +57,12 @@ as the 256KiB batch invariant.
 The incident hypothesis is a two-variable matrix, not an `auth_required`
 shortcut:
 
-| Authenticated | Resume id | Pending backlog | Required observation |
-| --- | --- | --- | --- |
-| yes | absent | 0 | spawn args, first ready/terminal/result, child/daemon PID |
-| yes | present | 0 | same, plus exact resume failure classification/cause |
-| yes | absent | ~90 | pending injection time and bounded batch sequence |
-| yes | present | ~90 | resume readiness vs first input, exit, and bounded drain |
+| Authenticated | Resume id | Pending backlog | Required observation                                      |
+| ------------- | --------- | --------------- | --------------------------------------------------------- |
+| yes           | absent    | 0               | spawn args, first ready/terminal/result, child/daemon PID |
+| yes           | present   | 0               | same, plus exact resume failure classification/cause      |
+| yes           | absent    | ~90             | pending injection time and bounded batch sequence         |
+| yes           | present   | ~90             | resume readiness vs first input, exit, and bounded drain  |
 
 Do not run this matrix against the current Qoder profile. The installed Qoder
 binary exposes `XDG_CONFIG_HOME`, but no reviewed contract yet proves that all

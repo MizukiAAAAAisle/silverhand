@@ -6046,7 +6046,7 @@ async fn agent_full_activity_has_one_http_ws_stream_across_focus_and_revocation(
 async fn initial_and_refined_tool_inputs_share_ts_limits_in_both_activity_scopes() {
     const INPUT_AGENT: &str = "input-agent";
     let cases: Vec<Value> = serde_json::from_str(include_str!(
-        "../../../../packages/backend/tests/fixtures/activity-input-sanitizer.json"
+        "../../../../rust/test-fixtures/fixtures/activity-input-sanitizer.json"
     ))
     .unwrap();
     for scope_kind in ["conversation", "agent"] {

@@ -39,17 +39,17 @@ use tower::ServiceExt;
 mod current_schema;
 
 const SUCCESS_SEED: &str =
-    include_str!("../../../../packages/backend/tests/fixtures/presence/success/seed.sql");
+    include_str!("../../../../rust/test-fixtures/fixtures/presence/success/seed.sql");
 const SUCCESS_ONLINE: &str =
-    include_str!("../../../../packages/backend/tests/fixtures/presence/success/online.json");
+    include_str!("../../../../rust/test-fixtures/fixtures/presence/success/online.json");
 const SUCCESS_EXPECTED: &str =
-    include_str!("../../../../packages/backend/tests/fixtures/presence/success/expected.json");
+    include_str!("../../../../rust/test-fixtures/fixtures/presence/success/expected.json");
 const EMPTY_SEED: &str =
-    include_str!("../../../../packages/backend/tests/fixtures/presence/empty/seed.sql");
+    include_str!("../../../../rust/test-fixtures/fixtures/presence/empty/seed.sql");
 const EMPTY_ONLINE: &str =
-    include_str!("../../../../packages/backend/tests/fixtures/presence/empty/online.json");
+    include_str!("../../../../rust/test-fixtures/fixtures/presence/empty/online.json");
 const EMPTY_EXPECTED: &str =
-    include_str!("../../../../packages/backend/tests/fixtures/presence/empty/expected.json");
+    include_str!("../../../../rust/test-fixtures/fixtures/presence/empty/expected.json");
 
 /// The fixture's liveness oracle: exactly the ids named in `online.json` read
 /// present, mirroring the TypeScript `ctx.presence.isOnline` the oracle drives.

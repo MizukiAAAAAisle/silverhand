@@ -1,5 +1,7 @@
 # Desktop↔Server API Epoch — contract & upgrade runbook
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 > #task:1761. This document is the operating manual for the
 > `DESKTOP_SERVER_API_EPOCH` axis defined in
 > `packages/shared/src/desktop-server-api-epoch.ts` (the admission-semantics
@@ -14,12 +16,12 @@
 One protocol axis per process boundary; an artifact only carries the axes it
 participates in:
 
-| Axis | Boundary | Constant |
-|---|---|---|
-| Host control wire | HostClient ↔ local daemon | `HOST_PROTOCOL_VERSION` (`packages/host/src/protocol.ts`) |
-| Outbound wire | remote daemon ↔ server | `OUTBOUND_PROTOCOL_VERSION` (`packages/host/src/outbound-protocol.ts`) |
+| Axis                        | Boundary                         | Constant                                                                       |
+| --------------------------- | -------------------------------- | ------------------------------------------------------------------------------ |
+| Host control wire           | HostClient ↔ local daemon        | `HOST_PROTOCOL_VERSION` (`packages/host/src/protocol.ts`)                      |
+| Outbound wire               | remote daemon ↔ server           | `OUTBOUND_PROTOCOL_VERSION` (`packages/host/src/outbound-protocol.ts`)         |
 | **Desktop application API** | desktop ↔ server REST + Event WS | `DESKTOP_SERVER_API_EPOCH` (`packages/shared/src/desktop-server-api-epoch.ts`) |
-| DB schema version | server binary ↔ database | migrations — not a network protocol |
+| DB schema version           | server binary ↔ database         | migrations — not a network protocol                                            |
 
 Never reuse one axis for another boundary, and never infer compatibility from
 app semver, git commit, or build identity.
@@ -34,7 +36,7 @@ the projection; Rust consumes the same artifact during its build. The DB schema
 version is a separate axis with its own authority.
 
 The contract is **safe version skew (default plan A)**: a compatible pair runs
-normally; an incompatible pair is rejected *before any business DTO is read* —
+normally; an incompatible pair is rejected _before any business DTO is read_ —
 structured HTTP 426 (JSON `UpgradeRequiredBody`) on REST **and** on the
 event-WS upgrade response, plus a typed full-screen gate in the desktop
 (`app_update_required` / `server_update_required`). We do NOT promise that old
@@ -43,7 +45,7 @@ desktops keep working against new servers.
 ## 2. Where the epoch flows
 
 - **Advertise**: `/api/server/info` → `desktop_api { current_epoch,
-  minimum_client_epoch }`.
+minimum_client_epoch }`.
 - **Carry (admission)**: the DEDICATED `x-silverhand-desktop-api-epoch`
   header — a compiled constant rendered to a decimal string, injected by the
   main-process `backendFetch` seam on every REST request and by the WS
@@ -69,7 +71,7 @@ upgrades bypass middleware anyway). `/auth/*`, `/readyz`, and `/internal/*`
 ## 3. When to bump — decision rule
 
 **Precondition — "one bump per RELEASED generation, not per breaking change."**
-The epoch names a *shipped* pair, so the question is never "does this diff break
+The epoch names a _shipped_ pair, so the question is never "does this diff break
 something?" in the abstract but **"can a peer at the current epoch already exist
 in the field?"** If the current epoch has NOT been published yet, a breaking
 change joins that still-unreleased generation and needs no second bump; both
@@ -115,9 +117,9 @@ appears in a published tag, fall back to the rules below.
   plan-B bridge must change that test together with its adapter and §11
   exit conditions.
 
-Review checklist line: *"Does this diff change any REST DTO / event shape /
+Review checklist line: _"Does this diff change any REST DTO / event shape /
 behavioral semantics in a way an old desktop would misread? If yes, are ALL
-THREE epoch constants bumped to the same value in this same commit?"*
+THREE epoch constants bumped to the same value in this same commit?"_
 
 ## Desktop 0.4.0 source boundary
 
@@ -240,7 +242,7 @@ exit; this section is the §11 record of its closure.
 
 ## 6. Release-time version-step check (all three wire axes) — MANUAL
 
-The single authorities remove *duplicate* version numbers; they do NOT prove
+The single authorities remove _duplicate_ version numbers; they do NOT prove
 the numbers move correctly across releases. That is a
 release-time discipline, done by a human against the release tags — deliberately
 NOT code and NOT a test. The rule for **every** wire axis
@@ -255,10 +257,10 @@ and its two minima):
 "what shipped". Take the newest tag for the artifact that carries the axis, then
 read the last shipped value FROM THAT TAG:
 
-| Axis (`PROTOCOL_VERSIONS` field) | Tag family | Location inside a pre-authority tag |
-|---|---|---|
-| `host` | `daemon-v*` | `packages/host/src/protocol.ts` → `HOST_PROTOCOL_VERSION` |
-| `outbound` | `daemon-v*` | `packages/host/src/outbound-protocol.ts` → `OUTBOUND_PROTOCOL_VERSION` |
+| Axis (`PROTOCOL_VERSIONS` field)                       | Tag family   | Location inside a pre-authority tag                                           |
+| ------------------------------------------------------ | ------------ | ----------------------------------------------------------------------------- |
+| `host`                                                 | `daemon-v*`  | `packages/host/src/protocol.ts` → `HOST_PROTOCOL_VERSION`                     |
+| `outbound`                                             | `daemon-v*`  | `packages/host/src/outbound-protocol.ts` → `OUTBOUND_PROTOCOL_VERSION`        |
 | `desktopApi` / `desktopMinClient` / `desktopMinServer` | `desktop-v*` | `packages/shared/src/desktop-server-api-epoch.ts` → the three epoch constants |
 
 ```

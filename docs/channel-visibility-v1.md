@@ -1,5 +1,7 @@
 # Channel visibility (public / private) — v1
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 This is the canonical contract for channel visibility: the storage model, the
 three authorization gates, the membership-scoped projections, self-join, and the
 discovery-union list. Code that conflicts with this doc is the bug.
@@ -17,8 +19,8 @@ A regular workspace conversation with `roster_policy = 'open'` has a stored, ide
   an explicit `conversation_users` (user) or `conversation_agents` (agent)
   member can see or interact with it. This is the historical behavior.
 - `public` — a widened surface for **workspace members**, actor-asymmetric:
-  - a **human** workspace member may *browse* it (pure reads) and *self-join*;
-  - an **agent** workspace member may only *discover* it in the
+  - a **human** workspace member may _browse_ it (pure reads) and _self-join_;
+  - an **agent** workspace member may only _discover_ it in the
     `silverhand channel list` union (§4.3) — a listing entry, not access.
 
   For either actor, read / join / interaction beyond the above still require
@@ -68,7 +70,7 @@ chip and the `?side` pane), message history, thread read, and the attachment
 place the public widening lives.
 
 A ref is deliberately on this gate rather than the stricter one: it is the
-*identity of a conversation the caller may already read*, so gating it more
+_identity of a conversation the caller may already read_, so gating it more
 narrowly than the read it introduces made every chip and side pane answer
 "unauthorized" for a channel whose full history the main pane renders. The ref
 payload carries no messages, no per-viewer unread and no roster, and its net
@@ -76,7 +78,7 @@ widening (`active` ∧ `public` ∧ same workspace ∧ non-member) is exactly th
 the discovery-union list already hands the same viewer (§4).
 
 Bytes-vs-affordance: once the backend serves the bytes of an in-message
-attachment to a public non-member, export cannot be *technically* prevented (the
+attachment to a public non-member, export cannot be _technically_ prevented (the
 same bytes back a preview and a save). The v1 boundary is therefore a **renderer
 affordance** one: for a public non-member the renderer offers **preview only** —
 no download / Save-As / open-external control. This is a UX/product line, not a
@@ -232,7 +234,7 @@ public channel" is therefore backend-consistent, not client-side suppression.
 
 Not a contradiction with §4: the two "sort" surfaces are different scopes. A
 channel's **local sidebar** manual order and local star (§4.2) are viewer-local
-*presentation* state over the visible list, so they legitimately cover the
+_presentation_ state over the visible list, so they legitimately cover the
 discovery union (an unjoined public channel a viewer can see can be positioned /
 locally starred). **Global** Favorites, `lastChannel` restore, default/fallback
 selection, and recent-touch persistence remain **membership-scoped** — an
@@ -242,7 +244,7 @@ projection.
 ## 6. Deliberate scope boundaries (v1)
 
 - Agent-side public-channel **discovery** is in scope via the
-  `silverhand channel list` union (§4.3): an agent can *list* active public
+  `silverhand channel list` union (§4.3): an agent can _list_ active public
   channels it has not joined, each carrying authoritative `visibility` +
   `is_member`. Agent public **read**, **join**, and **interaction** remain out
   of scope — the three gates (§2) are unwidened for agents and there is no agent

@@ -303,7 +303,7 @@ mod tests {
     use std::sync::Mutex;
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../rust/test-fixtures/migration-baseline/schema-current.sql");
 
     // A user `carol` holding the email `carol@example.com`, a host + agent `bender`
     // occupying that handle, and a user occupying the id the first entropy draw

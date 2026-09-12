@@ -411,7 +411,7 @@ async fn production_update_router_consumes_the_shared_schema_accepted_cells() {
     // parity test continues to sign its own full 9/9 legacy behavior.
     let cells: Vec<AdmissionCell> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/channel-lifecycle-update-admission.json"
+        "/../../../rust/test-fixtures/fixtures/channel-lifecycle-update-admission.json"
     )))
     .unwrap();
     let mut consumed = 0;
@@ -448,7 +448,7 @@ async fn schema_rejected_update_cells_take_the_native_axis_with_writer_zero_reac
     // structural faults (400/422, incl. the object-only floor). None reaches a write port.
     let cells: Vec<AdmissionCell> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/channel-lifecycle-update-admission.json"
+        "/../../../rust/test-fixtures/fixtures/channel-lifecycle-update-admission.json"
     )))
     .unwrap();
     let mut checked = 0;
@@ -567,7 +567,7 @@ async fn real_store() -> (
 ) {
     const SCHEMA: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+        "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
     ));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("channel-lifecycle-mutation-route.sqlite");

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // #task:1761 — desktop↔server API epoch release reminder, shared by every
 // build entry point (scripts/package.sh for the desktop artifact, the
-// standalone server bundle build in packages/server/package.json).
+// Desktop packaging).
 //
 // Fail-loud contract: if the runbook file is missing (renamed/deleted), the
 // BUILD FAILS — a dangling doc reference would otherwise silently kill the

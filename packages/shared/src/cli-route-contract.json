@@ -1,0 +1,194 @@
+[
+  {
+    "method": "POST",
+    "suffix": "send-message",
+    "noun": "message",
+    "verb": "send"
+  },
+  {
+    "method": "POST",
+    "suffix": "stale-message-resolution",
+    "noun": "message",
+    "verb": "stale-resolve"
+  },
+  {
+    "method": "POST",
+    "suffix": "react-message",
+    "noun": "message",
+    "verb": "react"
+  },
+  {
+    "method": "DELETE",
+    "suffix": "react-message",
+    "noun": "message",
+    "verb": "react"
+  },
+  {
+    "method": "POST",
+    "suffix": "read-history",
+    "noun": "message",
+    "verb": "history"
+  },
+  {
+    "method": "POST",
+    "suffix": "search-messages",
+    "noun": "message",
+    "verb": "search"
+  },
+  {
+    "method": "GET",
+    "suffix": "tasks",
+    "noun": "task",
+    "verb": "list"
+  },
+  {
+    "method": "POST",
+    "suffix": "tasks/create",
+    "noun": "task",
+    "verb": "create"
+  },
+  {
+    "method": "POST",
+    "suffix": "tasks/claim",
+    "noun": "task",
+    "verb": "claim"
+  },
+  {
+    "method": "POST",
+    "suffix": "tasks/unclaim",
+    "noun": "task",
+    "verb": "unclaim"
+  },
+  {
+    "method": "POST",
+    "suffix": "tasks/update-status",
+    "noun": "task",
+    "verb": "status"
+  },
+  {
+    "method": "POST",
+    "suffix": "tasks/edit",
+    "noun": "task",
+    "verb": "edit"
+  },
+  {
+    "method": "GET",
+    "suffix": "tasks/detail",
+    "noun": "task",
+    "verb": "detail"
+  },
+  {
+    "method": "POST",
+    "suffix": "follow-thread",
+    "noun": "thread",
+    "verb": "follow"
+  },
+  {
+    "method": "POST",
+    "suffix": "unfollow-thread",
+    "noun": "thread",
+    "verb": "unfollow"
+  },
+  {
+    "method": "POST",
+    "suffix": "create-channel",
+    "noun": "channel",
+    "verb": "create"
+  },
+  {
+    "method": "GET",
+    "suffix": "list-channels",
+    "noun": "channel",
+    "verb": "list"
+  },
+  {
+    "method": "POST",
+    "suffix": "members",
+    "noun": "member",
+    "verb": "add"
+  },
+  {
+    "method": "GET",
+    "suffix": "list-workspaces",
+    "noun": "workspace",
+    "verb": "list"
+  },
+  {
+    "method": "POST",
+    "suffix": "schedules",
+    "noun": "schedule",
+    "verb": "create"
+  },
+  {
+    "method": "POST",
+    "suffix": "schedules/list",
+    "noun": "schedule",
+    "verb": "list"
+  },
+  {
+    "method": "POST",
+    "suffix": "schedules/cancel",
+    "noun": "schedule",
+    "verb": "cancel"
+  },
+  {
+    "method": "POST",
+    "suffix": "attachments",
+    "noun": "file",
+    "verb": "upload"
+  },
+  {
+    "method": "PATCH",
+    "suffix": "attachments/*",
+    "noun": "file",
+    "verb": "update"
+  },
+  {
+    "method": "GET",
+    "suffix": "attachments/*/locate",
+    "noun": "file",
+    "verb": "view"
+  },
+  {
+    "method": "GET",
+    "suffix": "attachments/*/download",
+    "noun": "file",
+    "verb": "view"
+  },
+  {
+    "method": "GET",
+    "suffix": "profile/mcp",
+    "noun": "profile",
+    "verb": "mcp get"
+  },
+  {
+    "method": "POST",
+    "suffix": "profile/mcp",
+    "noun": "profile",
+    "verb": "mcp set"
+  },
+  {
+    "method": "POST",
+    "suffix": "profile/mcp/probe",
+    "noun": "profile",
+    "verb": "mcp probe"
+  },
+  {
+    "method": "GET",
+    "suffix": "profile",
+    "noun": "profile",
+    "verb": "get"
+  },
+  {
+    "method": "POST",
+    "suffix": "profile",
+    "noun": "profile",
+    "verb": "update"
+  },
+  {
+    "method": "GET",
+    "suffix": "peer-profile",
+    "noun": "profile",
+    "verb": "get"
+  }
+]

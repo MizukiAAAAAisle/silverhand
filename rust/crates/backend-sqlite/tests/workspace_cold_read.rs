@@ -22,7 +22,7 @@ mod current_schema;
 /// plus a workspace they cannot see; timestamps are mutually unequal so the
 /// published two-key order is unambiguous without an id tie-break.
 const SEED_SQL: &str =
-    include_str!("../../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql");
+    include_str!("../../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql");
 
 fn viewer() -> UserId {
     UserId::parse("user-1").unwrap()

@@ -497,7 +497,7 @@ async fn production_router_consumes_the_ts_signed_shared_cells() {
     const BODY_INVALID_SKIPPED: [&str; 2] = ["channel_invalid_enum", "workspace_missing_boolean"];
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/attention-preference-wire.json"
+        "/../../../rust/test-fixtures/fixtures/attention-preference-wire.json"
     )))
     .unwrap();
     let mut surfaces = std::collections::BTreeSet::new();

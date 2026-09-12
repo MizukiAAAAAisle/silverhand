@@ -32,9 +32,9 @@ use tower::ServiceExt;
 mod current_schema;
 
 const SEED_SQL: &str =
-    include_str!("../../../../packages/backend/tests/fixtures/workspace-detail/seed.sql");
+    include_str!("../../../../rust/test-fixtures/fixtures/workspace-detail/seed.sql");
 const CASES_JSON: &str =
-    include_str!("../../../../packages/backend/tests/fixtures/workspace-detail/cases.json");
+    include_str!("../../../../rust/test-fixtures/fixtures/workspace-detail/cases.json");
 
 async fn seed(path: &std::path::Path) {
     let mut db = current_schema::create_current_schema(path).await;

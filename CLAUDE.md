@@ -1,8 +1,8 @@
 # Silverhand
 
 Silverhand is a macOS-first IM for humans and multiple coding-agent CLIs. The
-pnpm monorepo runs one backend library either embedded in Electron or as a
-standalone server connected to agent-host daemons.
+repository runs the Rust backend as an Electron sidecar or standalone server
+connected to TypeScript agent-host daemons.
 
 ## Non-Negotiable Invariants
 
@@ -62,5 +62,5 @@ standalone server connected to agent-host daemons.
   backend-only.
 - `pnpm test`: complete test gate.
 - `./scripts/test.sh --scope <package> [vitest args]`: targeted tests; use this
-  entrypoint because it manages the `better-sqlite3` Node/Electron ABI.
+  entrypoint for explicit package selection. Rust tests run via `cargo test --workspace`.
 - `pnpm typecheck`, `pnpm build`, `pnpm package`, `pnpm package:dir`.

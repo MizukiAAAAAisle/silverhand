@@ -29,7 +29,7 @@ use super::{router, wire};
 fn fixture_case(name: &str) -> (StatusCode, Value) {
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/reaction-wire.json"
+        "/../../../rust/test-fixtures/fixtures/reaction-wire.json"
     )))
     .unwrap();
     let case = fixture
@@ -47,7 +47,7 @@ fn fixture_case(name: &str) -> (StatusCode, Value) {
 fn fixture_event(name: &str) -> Value {
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/reaction-wire.json"
+        "/../../../rust/test-fixtures/fixtures/reaction-wire.json"
     )))
     .unwrap();
     fixture
@@ -810,7 +810,7 @@ async fn production_routes_consume_the_shared_fixture_cases_and_every_case_is_ac
 
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/reaction-wire.json"
+        "/../../../rust/test-fixtures/fixtures/reaction-wire.json"
     )))
     .unwrap();
     let all_names = fixture

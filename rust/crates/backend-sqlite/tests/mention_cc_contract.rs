@@ -1,6 +1,6 @@
 //! The Rust half of the mention CC's durable-text contract.
 //!
-//! The artifact under `packages/backend/tests/mention-cc/` is the contract both
+//! The artifact under `rust/test-fixtures/mention-cc/` is the contract both
 //! implementations answer to: inputs and the expectation, checked in, with the
 //! other side asserting the same rows against its production renderer. Nothing
 //! here is a snapshot of this side's own output.
@@ -15,7 +15,7 @@ use silverhand_backend_core::conversation_messaging::messaging::{
 
 const CONTRACT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../packages/backend/tests/mention-cc/contract.json"
+    "/../../../rust/test-fixtures/mention-cc/contract.json"
 ));
 
 fn contract() -> serde_json::Value {

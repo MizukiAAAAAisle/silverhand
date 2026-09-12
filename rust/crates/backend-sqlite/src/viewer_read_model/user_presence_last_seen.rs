@@ -104,7 +104,7 @@ mod tests {
     use sqlx::{Connection, Executor, Row, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../rust/test-fixtures/migration-baseline/schema-current.sql");
 
     async fn seed(path: &Path, users_sql: &'static str) {
         let options = SqliteConnectOptions::new()

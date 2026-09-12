@@ -597,7 +597,7 @@ mod tests {
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../rust/test-fixtures/migration-baseline/schema-current.sql");
 
     // A regular workspace `ws-1` (user-1 owner) with two OPEN public channels the
     // viewer can see. `conv-a`,`conv-b` are the live `channels:ws-1` group.

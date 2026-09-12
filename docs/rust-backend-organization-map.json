@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Rust backend module organization map (#task:2265). Machine-readable classification authority consumed by the organization gates. Two axes: business_owner + structural_role. Every crate-root scanned is a row with independently-derived source_shape (file|directory|hybrid) and a STRICT tagged union: exactly one of target:{business_owner,structural_role} (settled) or split_required (residual). split_required is a kind-tagged object: directory_members (groups with members[] closed against the directory mod decls), file_responsibilities (logical grouping of a single large file, no child modules), or hybrid (a <m>.rs main body plus <m>/ production children — both child_groups closed against codec decls AND a non-empty file_responsibilities). This JSON is the ONLY classification authority the gates read; do not copy target allowlists elsewhere. A settled leaf is classified by its business ownership and structural role; it may have LANDED there by relocation (a former crate-root module moved to its owner namespace) OR have been BORN-AT-TARGET (a net-new #2341 migration feature module created directly under its owner namespace, marked `migration.born_at_target: true`, with no crate-root origin and no `resolved_splits` entry). Both are proven to physically reside at exactly their `physical_target` by the same mechanical landed-location check; `base_commit` remains the map's relocation-era origin, not a claim that born-at-target modules ever lived at the crate root. `resolved_splits` records completed split responsibilities at their real final leaves and is closed against the source tree by the gate. The 33-table half is closed against the replayed final schema; the non-table half is an OPEN presence ledger. impl_status (rust_writer_known | ts_only | no_known_writer) reflects AUDITED KNOWN writers — human-audited (path,function) evidence, not an exhaustive static proof; the gate does not run a SQL analyzer (see writers_note). Consumes the frozen #2267 (scope_events) and #2268 (daemon_delivery/daemon_events) owner splits. See docs/rust-backend-ddd-context-map-v1.md for the DDD rationale (that document links here for ownership; this JSON is authoritative).",
+  "note": "Rust backend module organization map (#task:2265). Machine-readable classification authority consumed by the organization gates. Two axes: business_owner + structural_role. Every crate-root scanned is a row with independently-derived source_shape (file|directory|hybrid) and a STRICT tagged union: exactly one of target:{business_owner,structural_role} (settled) or split_required (residual). split_required is a kind-tagged object: directory_members (groups with members[] closed against the directory mod decls), file_responsibilities (logical grouping of a single large file, no child modules), or hybrid (a <m>.rs main body plus <m>/ production children \u2014 both child_groups closed against codec decls AND a non-empty file_responsibilities). This JSON is the ONLY classification authority the gates read; do not copy target allowlists elsewhere. A settled leaf is classified by its business ownership and structural role; it may have LANDED there by relocation (a former crate-root module moved to its owner namespace) OR have been BORN-AT-TARGET (a net-new #2341 migration feature module created directly under its owner namespace, marked `migration.born_at_target: true`, with no crate-root origin and no `resolved_splits` entry). Both are proven to physically reside at exactly their `physical_target` by the same mechanical landed-location check; `base_commit` remains the map's relocation-era origin, not a claim that born-at-target modules ever lived at the crate root. `resolved_splits` records completed split responsibilities at their real final leaves and is closed against the source tree by the gate. The 33-table half is closed against the replayed final schema; the non-table half is an OPEN presence ledger. impl_status (rust_writer_known | no_known_writer) reflects AUDITED KNOWN writers \u2014 human-audited (path,function) evidence, not an exhaustive static proof; the gate does not run a SQL analyzer (see writers_note). Consumes the frozen #2267 (scope_events) and #2268 (daemon_delivery/daemon_events) owner splits. See docs/rust-backend-ddd-context-map-v1.md for the DDD rationale (that document links here for ownership; this JSON is authoritative).",
   "axes": {
     "business_owner": [
       "C1",
@@ -30,7 +30,7 @@
   },
   "charters": {
     "C1": "Identity & Access",
-    "C2": "Host & Runtime (control⟂execution)",
+    "C2": "Host & Runtime (control\u27c2execution)",
     "C3": "Conversation & Messaging (incl. roster born with the conversation, delivery, attachments)",
     "C4": "Tasks",
     "C5": "Scheduling",
@@ -54,7 +54,7 @@
     },
     "rule": "every scanned `mod` decl gets exactly one row; #[cfg(test)] rows carry target.structural_role=test_support in the map (no external whitelist)"
   },
-  "impl_status_rule": "AUDITED evidence, not an exhaustive static proof: impl_status ∈ rust_writer_known | ts_only | no_known_writer, derived from the recorded audited_rust_writers / audited_ts_writers. The gate only checks status agrees with that evidence shape and that each recorded writer path exists and is a production (non-test) source. Exhaustive write ownership is a named residual (residual_notes), not enforced here.",
+  "impl_status_rule": "AUDITED evidence, not an exhaustive static proof: impl_status \u2208 rust_writer_known | no_known_writer, derived from the recorded audited_rust_writers. The gate only checks status agrees with that evidence shape and that each recorded writer path exists and is a production (non-test) source. Exhaustive write ownership is a named residual (residual_notes), not enforced here.",
   "tables": [
     {
       "table": "users",
@@ -90,9 +90,6 @@
           "function": "write",
           "path": "rust/crates/backend-sqlite/src/viewer_read_model/user_presence_last_seen.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/user-repo.ts"
       ]
     },
     {
@@ -165,10 +162,6 @@
           "function": "stamp_agent_presence",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/agent-repo.ts",
-        "packages/backend/src/repos/agent-teardown-persistence.ts"
       ]
     },
     {
@@ -205,10 +198,6 @@
           "function": "delete_workspace",
           "path": "rust/crates/backend-sqlite/src/identity_access/workspace_deletion.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/user-persistence.ts",
-        "packages/backend/src/repos/workspace-repo.ts"
       ]
     },
     {
@@ -237,9 +226,6 @@
           "function": "provision_workspace",
           "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/workspace-repo.ts"
       ]
     },
     {
@@ -249,7 +235,7 @@
         "structural_role": "domain"
       },
       "impl_status": "rust_writer_known",
-      "invariant": "membership; member⇒capability atomic",
+      "invariant": "membership; member\u21d2capability atomic",
       "needs_ruling": false,
       "audited_rust_writers": [
         {
@@ -260,9 +246,6 @@
           "function": "provision_workspace",
           "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/workspace-repo.ts"
       ]
     },
     {
@@ -283,9 +266,6 @@
           "function": "provision_workspace",
           "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/agent-capability-repo.ts"
       ]
     },
     {
@@ -310,9 +290,6 @@
           "function": "verify_and_touch_transaction",
           "path": "rust/crates/backend-sqlite/src/identity_access/auth.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/auth-sessions-repo.ts"
       ]
     },
     {
@@ -329,9 +306,6 @@
           "function": "attempt",
           "path": "rust/crates/backend-sqlite/src/identity_access/human_registration.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/auth-credentials-repo.ts"
       ]
     },
     {
@@ -364,9 +338,6 @@
           "function": "revoke_computer",
           "path": "rust/crates/backend-sqlite/src/host_runtime/mod.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/host-repo.ts"
       ]
     },
     {
@@ -391,9 +362,6 @@
           "function": "revoke_computer",
           "path": "rust/crates/backend-sqlite/src/host_runtime/mod.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/host-credentials-repo.ts"
       ]
     },
     {
@@ -430,9 +398,6 @@
           "function": "settle_clear_bound",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/runtime-slot-repo.ts"
       ]
     },
     {
@@ -457,9 +422,6 @@
           "function": "settle_clear_bound",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/runtime-slot-repo.ts"
       ]
     },
     {
@@ -476,9 +438,6 @@
           "function": "settle_clear_bound",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/runtime-slot-repo.ts"
       ]
     },
     {
@@ -535,10 +494,6 @@
           "function": "provision_workspace",
           "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/conversation-repo.ts",
-        "packages/backend/src/repos/message-repo.ts"
       ]
     },
     {
@@ -583,10 +538,6 @@
           "function": "append_agent_onboarding_message",
           "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/message-repo.ts",
-        "packages/backend/src/runtime/reference-memo.ts"
       ]
     },
     {
@@ -603,9 +554,6 @@
           "function": "mutate",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/reaction/mutation.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/message-reaction-repo.ts"
       ]
     },
     {
@@ -626,9 +574,6 @@
           "function": "unsave",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/saved/mutation.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/saved-message-repo.ts"
       ]
     },
     {
@@ -653,9 +598,6 @@
           "function": "swap_attachment_content_row",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/attachment/write.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/attachment-repo.ts"
       ]
     },
     {
@@ -688,9 +630,6 @@
           "function": "follow_actor",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/thread-follower-repo.ts"
       ]
     },
     {
@@ -711,9 +650,6 @@
           "function": "settle_clear_bound",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/message-repo.ts"
       ]
     },
     {
@@ -754,9 +690,6 @@
           "function": "reclaim_transition_inboxes",
           "path": "rust/crates/backend-sqlite/src/host_runtime/runtime_transition.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/conversation-inbox-repo.ts"
       ]
     },
     {
@@ -789,9 +722,6 @@
           "function": "record_mentions_transaction",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/notification-repo.ts"
       ]
     },
     {
@@ -824,9 +754,6 @@
           "function": "provision_workspace",
           "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/conversation-repo.ts"
       ]
     },
     {
@@ -855,9 +782,6 @@
           "function": "provision_workspace",
           "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/conversation-repo.ts"
       ]
     },
     {
@@ -882,9 +806,6 @@
           "function": "upsert_text_activity",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/conversation-event-repo.ts"
       ]
     },
     {
@@ -893,12 +814,14 @@
         "business_owner": "C4",
         "structural_role": "domain"
       },
-      "impl_status": "ts_only",
-      "invariant": "board-key↔placement biconditional",
+      "impl_status": "rust_writer_known",
+      "invariant": "board-key\u2194placement biconditional",
       "needs_ruling": false,
-      "audited_rust_writers": [],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/task-repo.ts"
+      "audited_rust_writers": [
+        {
+          "function": "create_tasks",
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/task/create_write.rs"
+        }
       ]
     },
     {
@@ -927,9 +850,6 @@
           "function": "reset_stale_firing",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/schedule/mod.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/schedule-repo.ts"
       ]
     },
     {
@@ -946,9 +866,6 @@
           "function": "advance_cursor",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/activity/observe.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/conversation-read-repo.ts"
       ]
     },
     {
@@ -965,9 +882,6 @@
           "function": "commit_channel",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/attention_preference.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/channel-attention-preference-repo.ts"
       ]
     },
     {
@@ -984,9 +898,6 @@
           "function": "commit_workspace",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/attention_preference.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/workspace-attention-preference-repo.ts"
       ]
     },
     {
@@ -1003,9 +914,6 @@
           "function": "apply_sort_mutation",
           "path": "rust/crates/backend-sqlite/src/viewer_read_model/viewer_sort.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/sort-repo.ts"
       ]
     },
     {
@@ -1022,9 +930,6 @@
           "function": "apply_sort_mutation",
           "path": "rust/crates/backend-sqlite/src/viewer_read_model/viewer_sort.rs"
         }
-      ],
-      "audited_ts_writers": [
-        "packages/backend/src/repos/sort-repo.ts"
       ]
     },
     {
@@ -1036,8 +941,7 @@
       "impl_status": "no_known_writer",
       "invariant": "install-local (key,value) singleton; no production writer",
       "needs_ruling": false,
-      "audited_rust_writers": [],
-      "audited_ts_writers": []
+      "audited_rust_writers": []
     }
   ],
   "crate_roots": [
@@ -1942,7 +1846,7 @@
         "business_owner": "C1",
         "structural_role": "http"
       },
-      "note": "sibling auth/ holds only #[cfg(test)] JSON fixtures (no production child mods) → single target, not a hybrid",
+      "note": "sibling auth/ holds only #[cfg(test)] JSON fixtures (no production child mods) \u2192 single target, not a hybrid",
       "migration": {
         "physical_target": "backend-server::identity_access::auth"
       }
@@ -3763,7 +3667,7 @@
       "embedded_bootstrap": "embedded_bootstrap"
     }
   },
-  "writers_note": "audited_rust_writers / audited_ts_writers are KNOWN, human-audited write callsites (path + function), NOT an exhaustive static proof of every writer. impl_status = rust_writer_known | ts_only | no_known_writer reflects that audited evidence. Exhaustive write-ownership enforcement is a named residual for a future typed write-perimeter production refactor (see residual_notes); this map does not run a SQL static analyzer.",
+  "writers_note": "audited_rust_writers are KNOWN, human-audited write callsites (path + function), NOT an exhaustive static proof of every writer. impl_status = rust_writer_known | no_known_writer reflects that audited evidence. Exhaustive write-ownership enforcement is a named residual for a future typed write-perimeter production refactor (see residual_notes); this map does not run a SQL static analyzer.",
   "residual_notes": [
     "Exhaustive Rust SQL-write ownership is NOT enforced by this map/gate; it is deferred to a future production refactor that converges all writes behind a typed UnitOfWork / single DB write perimeter, where the invariant can be carried by types or one gate rather than a test-time static analyzer."
   ]

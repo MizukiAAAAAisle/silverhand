@@ -24,12 +24,10 @@ const REPO_ROOT = resolve(__dirname, '../../..');
 
 const PRODUCTION_ROOTS = [
   'packages/shared/src',
-  'packages/backend/src',
   'packages/host/src',
   'packages/cli/src',
-  'packages/server/src',
   'apps/desktop/src/main',
-].map(p => join(REPO_ROOT, p));
+].map((p) => join(REPO_ROOT, p));
 
 /** The resolver itself is the one place layout knowledge may live. */
 const AUTHORITY_FILE = 'packages/shared/src/app-data-layout.ts';
@@ -82,7 +80,8 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
     file: 'packages/host/src/drivers/pi.ts',
     token: '.silverhand',
     line: "const sessions = join(ctx.workspacePath, '.silverhand', 'pi-sessions', ctx.agentId);",
-    reason: 'workspace-local Pi session storage under the already resolved runtime cwd; never derives an application root',
+    reason:
+      'workspace-local Pi session storage under the already resolved runtime cwd; never derives an application root',
     count: 1,
   },
   {
@@ -271,9 +270,7 @@ function joinArgSpan(source: string, openParen: number): string {
  * SPAN, so a formatter splitting `join(root, CONST)` across lines does
  * not evade detection.
  */
-export function scanSourceForPathAuthorityViolations(
-  source: string,
-): PathAuthorityViolation[] {
+export function scanSourceForPathAuthorityViolations(source: string): PathAuthorityViolation[] {
   const stripped = stripCommentsPreservingLines(source);
   const lines = stripped.split('\n');
   const lineStarts: number[] = [0];
@@ -318,23 +315,16 @@ export function scanSourceForPathAuthorityViolations(
   for (const m of stripped.matchAll(/dirname\(\s*dirname\(/g)) {
     push(m.index!, 'parent inversion');
   }
-  for (const m of stripped.matchAll(
-    /dirname\(\s*(resolve\(\s*)?\w*[Ii]dentity\w*/g,
-  )) {
+  for (const m of stripped.matchAll(/dirname\(\s*(resolve\(\s*)?\w*[Ii]dentity\w*/g)) {
     push(m.index!, 'parent inversion');
   }
-  for (const m of stripped.matchAll(
-    /dirname\(\s*(resolve\(\s*)?workspacesRoot/g,
-  )) {
+  for (const m of stripped.matchAll(/dirname\(\s*(resolve\(\s*)?workspacesRoot/g)) {
     push(m.index!, 'parent inversion');
   }
 
   // Quoted app-data fragments — every occurrence of every token.
   for (const token of TOKENS) {
-    const quoted = new RegExp(
-      `['"\`]${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"\`]`,
-      'g',
-    );
+    const quoted = new RegExp(`['"\`]${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"\`]`, 'g');
     for (const m of stripped.matchAll(quoted)) {
       push(m.index!, token);
     }
@@ -352,11 +342,7 @@ function collectTsFiles(dir: string, out: string[] = []): string[] {
         continue;
       }
       collectTsFiles(path, out);
-    } else if (
-      name.endsWith('.ts') &&
-      !name.endsWith('.d.ts') &&
-      !name.endsWith('.test.ts')
-    ) {
+    } else if (name.endsWith('.ts') && !name.endsWith('.d.ts') && !name.endsWith('.test.ts')) {
       out.push(path);
     }
   }
@@ -376,7 +362,7 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
           // Exemption binding is EXACT (file, token, trimmed line): a
           // needle-substring can never authorize a whole edited line.
           const exemption = OCCURRENCE_INVENTORY.find(
-            e => e.file === rel && e.token === v.token && e.line === v.text,
+            (e) => e.file === rel && e.token === v.token && e.line === v.text,
           );
           if (exemption) {
             exemptionHits.set(exemption, (exemptionHits.get(exemption) ?? 0) + 1);
@@ -397,9 +383,9 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
     // an entry matching MORE occurrences than declared fails too (a new
     // hardcode cannot hide behind an existing exemption).
     const countMismatches = OCCURRENCE_INVENTORY.filter(
-      e => (exemptionHits.get(e) ?? 0) !== e.count,
+      (e) => (exemptionHits.get(e) ?? 0) !== e.count,
     ).map(
-      e =>
+      (e) =>
         `${e.file} :: ${e.token} :: ${e.line} — expected ${e.count}, saw ${exemptionHits.get(e) ?? 0}`,
     );
     expect(
@@ -408,7 +394,7 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
     ).toEqual([]);
   });
 
-   // ── Scanner falsifiers: the guard must demonstrably CATCH regressions ──
+  // ── Scanner falsifiers: the guard must demonstrably CATCH regressions ──
 
   it('catches single/double/backtick-quoted app-data literals', () => {
     expect(
@@ -424,9 +410,9 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
 
   it('catches fresh homedir() derivations and .silverhand roots — reporting EVERY match on the line', () => {
     expect(
-      scanSourceForPathAuthorityViolations(
-        `const root = join(homedir(), '.silverhand');`,
-      ).map(v => v.token),
+      scanSourceForPathAuthorityViolations(`const root = join(homedir(), '.silverhand');`).map(
+        (v) => v.token,
+      ),
     ).toEqual(['homedir()', '.silverhand']);
     expect(
       scanSourceForPathAuthorityViolations(`const root = join(base, '.silverhand');`),
@@ -437,70 +423,60 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
     expect(
       scanSourceForPathAuthorityViolations(
         `const p = join(stateRoot, 'computers', id, 'proxy-config.json');`,
-      ).map(v => v.token),
+      ).map((v) => v.token),
     ).toEqual(['app-data dir join', 'proxy-config.json']);
     expect(
-      scanSourceForPathAuthorityViolations(
-        `const q = join(appRoot, "daemon-config.json");`,
-      ),
+      scanSourceForPathAuthorityViolations(`const q = join(appRoot, "daemon-config.json");`),
     ).toHaveLength(1);
   });
 
   it('catches imported-filename-constant joins, app-data dir joins, and parent inversions', () => {
     expect(
-      scanSourceForPathAuthorityViolations(
-        `const a = join(dir, INSTALLATION_ID_FILENAME);`,
-      ).map(v => v.token),
+      scanSourceForPathAuthorityViolations(`const a = join(dir, INSTALLATION_ID_FILENAME);`).map(
+        (v) => v.token,
+      ),
     ).toEqual(['imported-filename-constant join']);
     expect(
-      scanSourceForPathAuthorityViolations(
-        `const b = join(root, DAEMON_HOST_CONFIG_FILENAME);`,
-      ),
+      scanSourceForPathAuthorityViolations(`const b = join(root, DAEMON_HOST_CONFIG_FILENAME);`),
+    ).toHaveLength(1);
+    expect(scanSourceForPathAuthorityViolations(`const c = join(root, 'computers');`)).toHaveLength(
+      1,
+    );
+    expect(
+      scanSourceForPathAuthorityViolations(`const d = join(config.dataDir.value, 'logs');`),
     ).toHaveLength(1);
     expect(
-      scanSourceForPathAuthorityViolations(`const c = join(root, 'computers');`),
-    ).toHaveLength(1);
-    expect(
-      scanSourceForPathAuthorityViolations(
-        `const d = join(config.dataDir.value, 'logs');`,
-      ),
-    ).toHaveLength(1);
-    expect(
-      scanSourceForPathAuthorityViolations(
-        `const e = join(stateRoot, 'workspaces');`,
-      ),
+      scanSourceForPathAuthorityViolations(`const e = join(stateRoot, 'workspaces');`),
     ).toHaveLength(1);
     // Nested inversion: both the dirname(dirname( rule and the
     // identity-child rule independently flag it — two reports, not one.
     expect(
-      scanSourceForPathAuthorityViolations(
-        `const f = dirname(dirname(daemonIdentityPath));`,
-      ).map(v => v.token),
+      scanSourceForPathAuthorityViolations(`const f = dirname(dirname(daemonIdentityPath));`).map(
+        (v) => v.token,
+      ),
     ).toEqual(['parent inversion', 'parent inversion']);
     expect(
-      scanSourceForPathAuthorityViolations(
-        `const g = dirname(resolve(workspacesRoot));`,
-      ).map(v => v.token),
+      scanSourceForPathAuthorityViolations(`const g = dirname(resolve(workspacesRoot));`).map(
+        (v) => v.token,
+      ),
     ).toEqual(['parent inversion']);
   });
 
   it('catches formatter-split MULTILINE joins and inversions (span scan, not line scan)', () => {
     expect(
       scanSourceForPathAuthorityViolations(
-        ['const a = join(', '  root,', '  DAEMON_HOST_CONFIG_FILENAME,', ');'].join(
-          '\n',
-        ),
-      ).map(v => v.token),
+        ['const a = join(', '  root,', '  DAEMON_HOST_CONFIG_FILENAME,', ');'].join('\n'),
+      ).map((v) => v.token),
     ).toEqual(['imported-filename-constant join']);
     expect(
       scanSourceForPathAuthorityViolations(
         ['const b = join(', '  base,', "  'computers',", ');'].join('\n'),
-      ).map(v => v.token),
+      ).map((v) => v.token),
     ).toEqual(['app-data dir join']);
     expect(
       scanSourceForPathAuthorityViolations(
         ['const c = dirname(', '  dirname(daemonIdentityPath),', ');'].join('\n'),
-      ).map(v => v.token),
+      ).map((v) => v.token),
     ).toEqual(['parent inversion', 'parent inversion']);
   });
 
@@ -509,7 +485,7 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
     // joins on one line are reported independently, so neither the exact
     // line match nor the count can absorb the newcomer.
     const line = `const dotDir = join(workspacePath, '.silverhand'); const evil = join(root, 'blobs');`;
-    expect(scanSourceForPathAuthorityViolations(line).map(v => v.token)).toEqual([
+    expect(scanSourceForPathAuthorityViolations(line).map((v) => v.token)).toEqual([
       '.silverhand',
       'app-data dir join',
     ]);
@@ -528,15 +504,11 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
 
   it('ignores comment mentions (line AND block) but not string contents', () => {
     expect(
-      scanSourceForPathAuthorityViolations(
-        `// the registry lives under 'workspace-data'`,
-      ),
+      scanSourceForPathAuthorityViolations(`// the registry lives under 'workspace-data'`),
     ).toHaveLength(0);
     expect(
       scanSourceForPathAuthorityViolations(
-        ['/**', " * lives under 'workspace-data' and `daemon-config.json`", ' */'].join(
-          '\n',
-        ),
+        ['/**', " * lives under 'workspace-data' and `daemon-config.json`", ' */'].join('\n'),
       ),
     ).toHaveLength(0);
     // A URL string containing `//` must not truncate the rest of the line.
@@ -546,5 +518,4 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
       ),
     ).toHaveLength(1);
   });
-
- });
+});

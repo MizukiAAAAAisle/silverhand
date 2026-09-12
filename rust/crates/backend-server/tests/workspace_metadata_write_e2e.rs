@@ -53,7 +53,7 @@ use sqlx::{Connection, Executor, SqliteConnection};
 use tower::ServiceExt;
 
 const CURRENT_SCHEMA: &str =
-    include_str!("../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+    include_str!("../../../../rust/test-fixtures/migration-baseline/schema-current.sql");
 
 // user-1 owns ws-1, user-2 is its admin, user-3 a member, user-9 a stranger. ws-2
 // holds the fold key `taken` for the collision case; ws-home is an agent-home

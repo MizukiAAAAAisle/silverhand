@@ -307,7 +307,7 @@ mod tests {
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../rust/test-fixtures/migration-baseline/schema-current.sql");
 
     // A regular workspace `ws-1` owned by user-1 (member user-2), holding two
     // conversations. `conv-a` has a ConversationSlot agent (`agent-conv`,

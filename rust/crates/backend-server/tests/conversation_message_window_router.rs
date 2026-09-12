@@ -21,7 +21,7 @@ struct FixtureEntry {
 async fn seed(path: &std::path::Path) {
     const SCHEMA: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+        "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
     ));
     let options = SqliteConnectOptions::new()
         .filename(path)
@@ -70,7 +70,7 @@ async fn seed(path: &std::path::Path) {
 async fn production_sqlite_router_consumes_the_typescript_wire_fixture() {
     let fixture: Vec<FixtureEntry> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/fixtures/conversation-message-window-wire.json"
+        "/../../../rust/test-fixtures/fixtures/conversation-message-window-wire.json"
     )))
     .unwrap();
     let dir = tempfile::tempdir().unwrap();

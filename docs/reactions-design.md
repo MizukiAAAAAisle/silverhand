@@ -1,5 +1,7 @@
 # Reactions
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 消息级 emoji reaction 的领域契约。诉求:一个简短的 ack 也发一条消息会刷消息流;
 用 message-level emoji reaction 表达轻量确认,不必发整条消息。本 doc 定义 reaction 的领域
 不变量与投递语义;具体 route/DTO/CLI 签名以 code 为准(`packages/backend/src/**/react*`、
@@ -10,12 +12,14 @@
 ## 1. 目标与非目标
 
 **目标**
+
 - 给单条消息加/去 emoji reaction,作为**轻量确认/关注信号**。
 - Human 与 Agent **同构**:同一条链路反应,渲染时聚合显示。
 - Agent 用 `silverhand message react` 代替"为了 ack 而发一条消息",降低消息流噪音(→ §7)。
 - Reaction 变化实时广播给在场 renderer(→ §5.2)。
 
 **非目标(v1 不做)**
+
 - 不做 reaction 通知 / 计入未读。reaction 是低优先级信号,不制造 unread(与 §4 同族)。
 - 不做自定义 / 图片 emoji。只接受 Unicode emoji(→ §5 emoji 校验)。
 - 不做 reaction 触发 workflow(如"👍 即 approve task")。reaction 不进任务状态机。
@@ -44,10 +48,12 @@ Reaction 是高频可变的多-actor 聚合数据,**独立 `message_reactions` �
 ## 3. 核心设计判断
 
 ### 3.1 Reaction 不是消息(独立表,非 message metadata)
+
 塞进 `messages.metadata`(JSON)会有并发写覆盖、无法按 reactor 唯一约束、无法索引的问题。
 独立表让写入不碰 message 行,也是 §4 freshness 排除的天然前提。
 
 ### 3.2 Isomorphism — `reactor_kind + reactor_id` 两列合一(强制)
+
 依据 `architecture-principles.md` §1 checklist #5:**禁止** `user_id` + `agent_id` 两列各占一边。
 与 AttachmentService 的 `createdByKind/createdById`、messages 的 `from_kind/from_*` 一脉相承。
 Service 入口接收 `Principal`,在 route boundary 构造,service 内不解析身份、不写
@@ -59,14 +65,17 @@ Service 入口接收 `Principal`,在 route boundary 构造,service 内不解析�
 > 拖成 system-event UI 重构。v1 只允许 human/agent message 被 react。
 
 ### 3.3 唯一性与幂等
+
 `UNIQUE(message_id, reactor_kind, reactor_id, emoji)`:add 幂等(重复 react 同 emoji 不报错),
 remove 幂等(不存在则 no-op)。CLI 重试、双击都安全。
 
 ### 3.4 toggle vs 显式 add/remove
+
 采纳**显式** add / remove,不做服务端 toggle。toggle 在并发下语义不稳(两个 client 同时点会
 互相抵消)。renderer 根据 `viewer_reacted` 决定这次点击发 add 还是 remove。
 
 ### 3.5 viewer 视角聚合
+
 列表查询按 emoji 聚合成 `{emoji, count, viewer_reacted}`,`viewer_reacted` 依据当前 viewer 的
 `Principal` 判断。**viewer 必须贯穿到查询层**:不能只在 row→DTO 映射里算,要从 route/service
 把 viewer principal 传进查询。agent `read-history` 返回 reactions 时,"agent 视角的
@@ -74,6 +83,7 @@ remove 幂等(不存在则 no-op)。CLI 重试、双击都安全。
 语义会不一致。避免把全量 reactor 明细打进 DTO;明细按需另拉。
 
 ### 3.6 closed / archived conversation 拒绝写入
+
 reaction 是写操作,必须和发消息一样拒绝 closed/archived 的 conversation——用**与发送消息同一
 套准入语义**(main line 与 thread 两路都要挡,含 thread parent + thread 本身)。注意:仅看
 membership 的可见性判断挡不住已 archived 但仍是成员的会话,准入必须覆盖 closed/archived 状态,
@@ -104,6 +114,7 @@ reaction 不进任何投递 / 唤醒 / freshness 通道。
 ## 5. 后端 API 与事件
 
 ### 5.1 路由(agent + human 同构,conversation-scoped)
+
 Agent 路由与 human 路由 **对称**:两条都在 route boundary 解析出 `Principal`,调用**同一个**
 service use-case(add / remove 一对),不各写一份逻辑。准入次序固定:解析 principal → 拒绝
 reactor/target 为 system(§3.2)→ 校验 emoji(见下)→ 校验 principal 属于该 message 所在
@@ -115,6 +126,7 @@ ZWJ emoji 序列长度边界很烦,保守即可);仅允许 emoji 码点
 (`\p{Extended_Pictographic}`/`\p{Emoji_Component}` 系列)。失败返回稳定错误码。
 
 ### 5.2 事件广播
+
 经 event bus 发到 `conversation:<cid>` scope(thread 共享父 channel scope),event 携带
 `message_id`、`emoji`、`op`、`reactor_kind/reactor_id`、`count`,并**必须带 `conversation_id +
 thread_root_id`**——transport 走扁平 scope,但 renderer 靠 thread 上下文把 chip 更新路由到正确
@@ -140,10 +152,10 @@ surface(主线 vs thread pane)。
 
 两个面能做的事**不对称**,判据是「这个载体能不能证明自己拿的是最新值」:
 
-| | 载体的序 | 收敛方式 | `viewer_reacted` |
-| --- | --- | --- | --- |
-| WS event | 每 scope 一条有序流,带 replay 与 `snapshot_required` 缺口栅栏 | **绝对赋值** payload 的聚合(§5.2) | `reactor_kind/reactor_id` 命中 viewer 时按 `op`;否则 `null`(这条变更不表态) |
-| HTTP ACK | 与 event 流、与另一次本地写的 ACK **都没有共同的序** | **权威重读**(invalidate → refetch),不写值 | 由重读结果给出 |
+|          | 载体的序                                                      | 收敛方式                                  | `viewer_reacted`                                                            |
+| -------- | ------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------- |
+| WS event | 每 scope 一条有序流,带 replay 与 `snapshot_required` 缺口栅栏 | **绝对赋值** payload 的聚合(§5.2)         | `reactor_kind/reactor_id` 命中 viewer 时按 `op`;否则 `null`(这条变更不表态) |
+| HTTP ACK | 与 event 流、与另一次本地写的 ACK **都没有共同的序**          | **权威重读**(invalidate → refetch),不写值 | 由重读结果给出                                                              |
 
 - **无版本的绝对值不能由两个各自有序的载体同时写。** 迟到的 ACK 可能比 cache 里已有的值更旧
   (它的聚合是「我这次写提交时」的),赋值下去会把更新的事实覆盖掉并**一直停在那**,直到下一条
@@ -178,10 +190,10 @@ surface(主线 vs thread pane)。
 - **不做 pre-ACK optimistic 写**:绝对聚合模型下本地 +/- 正是它要禁的漂移;提交前不写,也就没有
   回滚路径。
 
-
 ---
 
 ## 6. 性能(列表查询的 N+1)
+
 消息列表默认拉一窗口(~200 条)。**不要**每条消息单独查 reaction:对整窗 message id 做**一次**
 按 emoji 的聚合查询 + 一次 viewer_reacted 判断,内存里 join 进各 DTO——单次窗口查询只补一次聚合
 查询,O(1) 额外往返,而非 O(N)。该聚合是独立读 use-case,不散在 message 读路径里 ad-hoc 拼。也要能

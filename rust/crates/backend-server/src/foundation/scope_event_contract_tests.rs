@@ -753,9 +753,9 @@ fn user_presence_wire_parity_matches_the_typescript_signed_rows() {
     // replay is asked to match them, so the two impls cannot drift on scope,
     // discriminant, the online arm's suppressed `null`, or the offline stamp.
     const ONLINE: &str =
-        include_str!("../../../../../packages/backend/tests/fixtures/presence-event/online.json");
+        include_str!("../../../../../rust/test-fixtures/fixtures/presence-event/online.json");
     const OFFLINE: &str =
-        include_str!("../../../../../packages/backend/tests/fixtures/presence-event/offline.json");
+        include_str!("../../../../../rust/test-fixtures/fixtures/presence-event/offline.json");
 
     let hub = ScopeEventHub::test("epoch-1");
     // Drive the fixture replay through the PRODUCTION sink, not the hub helper:
@@ -5100,7 +5100,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
     const ADMIN_TOKEN: &str = "admin-token";
     const ADMIN_HASH: &str = "EKTHyfxSBtbzbcaUSoG7b0o8sOJQFK47EubD5ScSKSo";
     const SEED_SQL: &str =
-        include_str!("../../../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql");
+        include_str!("../../../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql");
 
     // The shared cold-read seed makes the target (user-1) a member of three
     // workspaces and NOT of `ws-foreign`. Add the enrolling admin, make it an

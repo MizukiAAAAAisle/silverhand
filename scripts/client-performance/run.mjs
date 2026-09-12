@@ -7,12 +7,7 @@ import { basename, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { CdpClient } from './cdp-client.mjs';
-import {
-  REPORT_SCHEMA_VERSION,
-  interpolate,
-  loadScenario,
-  summarizePhase,
-} from './lib.mjs';
+import { REPORT_SCHEMA_VERSION, interpolate, loadScenario, summarizePhase } from './lib.mjs';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const DEFAULT_CDP = 'http://127.0.0.1:9222';
@@ -130,7 +125,6 @@ async function runOwnedProfile(options) {
   assertInteractiveCompatibility(scenario, options);
   if (mode === 'release-profile') {
     await prepareHostBundle();
-    await prepareElectronBinding();
   }
   const child = launchProfileProcess({
     mode,
@@ -172,15 +166,6 @@ async function runOwnedProfile(options) {
   }
 }
 
-async function prepareElectronBinding() {
-  await runPreparation(
-    'Preparing better-sqlite3 for Electron ABI…',
-    'Electron ABI preparation',
-    'bash',
-    [join(import.meta.dirname, 'prepare-electron-binding.sh')],
-  );
-}
-
 async function prepareHostBundle() {
   await runPreparation(
     'Building the host daemon bundle used by release-profile…',
@@ -207,8 +192,10 @@ async function runPreparation(message, label, program, args) {
 }
 
 function assertInteractiveCompatibility(scenario, options) {
-  if (options.yes === true && scenario.phases.some(phase => phase.action.kind === 'manual')) {
-    fail('--yes cannot run a scenario with manual phases; their input window would measure idle time');
+  if (options.yes === true && scenario.phases.some((phase) => phase.action.kind === 'manual')) {
+    fail(
+      '--yes cannot run a scenario with manual phases; their input window would measure idle time',
+    );
   }
 }
 
@@ -240,7 +227,9 @@ async function runScenario(context) {
   const interactive = options.yes !== true;
   const rl = interactive ? createInterface({ input: stdin, output: stdout }) : null;
   if (interactive) {
-    console.log('\nInteractive phase control stays in this terminal; the App window does not show prompts.');
+    console.log(
+      '\nInteractive phase control stays in this terminal; the App window does not show prompts.',
+    );
   }
   const phases = [];
   try {
@@ -444,7 +433,9 @@ async function waitForAuthenticatedRenderer(client, timeoutMs) {
     }
     await sleep(250);
   }
-  throw new Error(`renderer did not authenticate within ${timeoutMs}ms (last=${JSON.stringify(last)})`);
+  throw new Error(
+    `renderer did not authenticate within ${timeoutMs}ms (last=${JSON.stringify(last)})`,
+  );
 }
 
 function fixtureSeedSource(scale, counts) {
@@ -464,17 +455,19 @@ function fixtureSeedSource(scale, counts) {
         bodyText: init.bodyText,
       });
       if (response.status < 200 || response.status >= 300) {
-        throw new Error(`${init.method ?? 'GET'} ${path} -> ${response.status}: ${response.bodyText ?? ''}`);
+        throw new Error(
+          `${init.method ?? 'GET'} ${path} -> ${response.status}: ${response.bodyText ?? ''}`,
+        );
       }
-      return response.status === 204 || !response.bodyText
-        ? null
-        : JSON.parse(response.bodyText);
+      return response.status === 204 || !response.bodyText ? null : JSON.parse(response.bodyText);
     };
     const savedRaw = localStorage.getItem(storageKey);
     let state = savedRaw ? JSON.parse(savedRaw) : null;
     if (!state) {
       const list = await request('/api/workspaces');
-      const collision = list.workspaces.find(workspace => workspace.name === config.workspaceName);
+      const collision = list.workspaces.find(
+        (workspace) => workspace.name === config.workspaceName,
+      );
       if (collision) {
         throw new Error(
           `workspace ${config.workspaceName} exists without fixture state; use a fresh isolated profile`,
@@ -554,7 +547,7 @@ function fixtureSeedSource(scale, counts) {
           const index = batchStart + offset;
           const paragraph =
             index % 7 === 0
-              ? "\n\n- deterministic list item\n- second list item\n\n`const frame = performance.now()`"
+              ? '\n\n- deterministic list item\n- second list item\n\n`const frame = performance.now()`'
               : '';
           await request(`/api/channels/${state.chatChannelId}/messages`, {
             method: 'POST',
@@ -619,17 +612,17 @@ function installProbeSource() {
     };
     const observe = (type, callback, options = {}) => {
       try {
-        const observer = new PerformanceObserver(list => callback(list.getEntries()));
+        const observer = new PerformanceObserver((list) => callback(list.getEntries()));
         observer.observe({ type, buffered: false, ...options });
         state.observers.push(observer);
       } catch {
         // Chromium can omit optional entry types; absence stays explicit in the report.
       }
     };
-    observe('longtask', entries => {
-      if (state.active) state.longTasksMs.push(...entries.map(entry => entry.duration));
+    observe('longtask', (entries) => {
+      if (state.active) state.longTasksMs.push(...entries.map((entry) => entry.duration));
     });
-    observe('layout-shift', entries => {
+    observe('layout-shift', (entries) => {
       if (!state.active) return;
       for (const entry of entries) {
         if (!entry.hadRecentInput) state.layoutShiftScore += entry.value;
@@ -637,13 +630,14 @@ function installProbeSource() {
     });
     observe(
       'event',
-      entries => {
-        if (state.active) state.eventDurationsMs.push(...entries.map(entry => entry.duration));
+      (entries) => {
+        if (state.active) state.eventDurationsMs.push(...entries.map((entry) => entry.duration));
       },
       { durationThreshold: 16 },
     );
-    const frame = now => {
-      if (state.active && state.lastFrameAt !== null) state.frameGapsMs.push(now - state.lastFrameAt);
+    const frame = (now) => {
+      if (state.active && state.lastFrameAt !== null)
+        state.frameGapsMs.push(now - state.lastFrameAt);
       state.lastFrameAt = now;
       state.raf = requestAnimationFrame(frame);
     };
@@ -694,12 +688,13 @@ function phaseSource(phaseId, action, settleMs, observeMs) {
   return `(${async function execute(phaseId, action, settleMs, observeMs) {
     const probe = globalThis.__silverhandClientPerfV1;
     if (!probe) throw new Error('performance probe is not installed');
-    const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-    const paint = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const sidebarButton = sidebar => {
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const paint = () =>
+      new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const sidebarButton = (sidebar) => {
       const prefix = sidebar === 'workspace' ? 'Workspace sidebar' : 'Channel sidebar';
       return [...document.querySelectorAll('button[title]')].find(
-        element => element instanceof HTMLButtonElement && element.title.startsWith(prefix),
+        (element) => element instanceof HTMLButtonElement && element.title.startsWith(prefix),
       );
     };
     // Make a directional sidebar phase reproducible even though visibility is
@@ -722,7 +717,8 @@ function phaseSource(phaseId, action, settleMs, observeMs) {
       location.hash = `#${action.path}`;
     } else if (action.kind === 'click') {
       const element = document.querySelector(action.selector);
-      if (!(element instanceof HTMLElement)) throw new Error(`selector did not resolve to an element: ${action.selector}`);
+      if (!(element instanceof HTMLElement))
+        throw new Error(`selector did not resolve to an element: ${action.selector}`);
       element.click();
     } else if (action.kind === 'type') {
       const element = document.querySelector(action.selector);
@@ -735,7 +731,8 @@ function phaseSource(phaseId, action, settleMs, observeMs) {
       element.dispatchEvent(new Event('input', { bubbles: true }));
     } else if (action.kind === 'scroll') {
       const element = document.querySelector(action.selector);
-      if (!(element instanceof HTMLElement)) throw new Error(`selector did not resolve to an element: ${action.selector}`);
+      if (!(element instanceof HTMLElement))
+        throw new Error(`selector did not resolve to an element: ${action.selector}`);
       element.scrollBy({ top: action.delta_y, behavior: 'instant' });
     } else if (action.kind === 'sidebar') {
       const button = sidebarButton(action.sidebar);
@@ -791,7 +788,7 @@ async function beginTrace(client, outputPath) {
     resolveComplete = resolvePromise;
     rejectComplete = rejectPromise;
   });
-  const remove = client.on('Tracing.tracingComplete', async params => {
+  const remove = client.on('Tracing.tracingComplete', async (params) => {
     try {
       const chunks = [];
       while (true) {
@@ -842,7 +839,8 @@ async function evaluate(client, expression) {
     returnByValue: true,
   });
   if (result.exceptionDetails) {
-    const description = result.exceptionDetails.exception?.description ?? result.exceptionDetails.text;
+    const description =
+      result.exceptionDetails.exception?.description ?? result.exceptionDetails.text;
     throw new Error(`renderer evaluation failed: ${description}`);
   }
   return result.result.value;
@@ -861,7 +859,7 @@ async function fetchTargets(endpoint) {
 
 async function pickTarget(endpoint) {
   const targets = await fetchTargets(endpoint);
-  const page = targets.find(target => target.type === 'page' && target.webSocketDebuggerUrl);
+  const page = targets.find((target) => target.type === 'page' && target.webSocketDebuggerUrl);
   if (!page) throw new Error(`no debuggable page target found at ${endpoint}`);
   return page;
 }
@@ -894,7 +892,9 @@ function formatPhaseSummary(summary) {
 
 function scenarioFile(value) {
   const raw = required({ scenario: value }, 'scenario');
-  const path = raw.endsWith('.json') ? resolve(raw) : join(import.meta.dirname, 'scenarios', `${raw}.json`);
+  const path = raw.endsWith('.json')
+    ? resolve(raw)
+    : join(import.meta.dirname, 'scenarios', `${raw}.json`);
   return path;
 }
 
@@ -961,7 +961,7 @@ function fail(message) {
 }
 
 function sleep(ms) {
-  return new Promise(resolvePromise => setTimeout(resolvePromise, ms));
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
 
 function printHelp() {

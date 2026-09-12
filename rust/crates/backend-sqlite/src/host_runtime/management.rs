@@ -209,7 +209,7 @@ mod tests {
     use super::*;
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../rust/test-fixtures/migration-baseline/schema-current.sql");
 
     async fn fixture() -> (tempfile::TempDir, SqliteHostRuntimeStore) {
         let directory = tempfile::tempdir().unwrap();

@@ -1,18 +1,21 @@
 # Orchestration boundary
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 This doc states the contract for where each responsibility lives in the
 remote-backend topology: which side owns authoritative data / control-plane
 state, which side owns machine-local execution, and the typed protocol
 surface that carries work across the boundary.
 
 **Related docs**:
+
 - `docs/remote-server-target-architecture.md` — target topology
 - `docs/auth-and-host-model.md` §5-§6 — host identity / token model
 - `docs/daemon-outbound-protocol.md` — per-host outbound routing / wire contract
 - `docs/silverhand-daemon.md` — current daemon intent surface
 - `docs/workspace-layout-relocation-v1.md` §3.2/§3.3 — the terminal on-disk
-  coordinate model this doc consumes. This doc owns *which side* resolves a
-  path; that doc owns *what the coordinate is*. Every path below is derived
+  coordinate model this doc consumes. This doc owns _which side_ resolves a
+  path; that doc owns _what the coordinate is_. Every path below is derived
   daemon-side from ids per its deterministic resolver; there is no stored
   path column and no registry lookup in the runtime path.
 
@@ -49,7 +52,7 @@ Therefore:
   per-spawn `system-prompt.md` the daemon materializes from local fs.
   The daemon-local filesystem holds only for the host the daemon runs
   on.
-- **Server never needs the *byte content* of `system_prompt.md` /
+- **Server never needs the _byte content_ of `system_prompt.md` /
   `MEMORY.md`.** The bytes are not used to compose
   anything server-side; the prompt rendered to the agent is rendered
   on the daemon-host from daemon-local fs reads.
@@ -58,7 +61,7 @@ Therefore:
   role labels). It owns **no path metadata**: there is no
   `agents.home_dir` column, no `workspaces.workspace_path` column, and
   nothing the server composes carries a host-local path — the only
-  path-shaped value it forwards is the calling agent's own *virtual*,
+  path-shaped value it forwards is the calling agent's own _virtual_,
   agent-home-relative path in the agent-file intents, confined and resolved
   daemon-side (class B in §3.3). Daemon-host derives cwd, prompt-file paths,
   spawn dirs, and local reads from the semantic ids
@@ -99,7 +102,7 @@ Server owns and is the only writer of:
 - Intent issuance: when the server decides "agent X in conversation Y
   must wake", that decision is server-side.
 - **Delivery text hydration / message formatting**: composing the
-  *unencoded* per-delivery text the daemon will hand to its driver
+  _unencoded_ per-delivery text the daemon will hand to its driver
   (today: `formatInboxBatch` / `formatLiveMessage`,
   plus attachment suffix, sender handle prefix,
   delivery instruction). Source data is exclusively server-owned DB
@@ -138,7 +141,7 @@ Server **must not**:
   permitted contact: it is in-process, transient, and grants none of the
   above.
 - Compose agent `process.env` (no `SILVERHAND_*` env synthesis bound
-  to a daemon process; server ships an env *policy*, daemon applies)
+  to a daemon process; server ships an env _policy_, daemon applies)
 - Spawn child processes or write per-spawn shim files
 - **Read the bytes of `system_prompt.md` / `MEMORY.md`,
   or any agent-managed `notes/*.md`, from disk —
@@ -340,30 +343,30 @@ family named in the invariant above (`agent_materialize`, `agent_l2_seed`,
 its canonical shapes live in `packages/host/src/protocol.ts` with the
 coordinate semantics owned by `workspace-layout-relocation-v1.md` §3.2/§3.4.
 
-| Intent | Request params | Response arms |
-|--------|----------------|---------------|
-| `runtime_start` | `{ conversation_id, agent_id, options }` where `options` carries typed server metadata: `agent: { id, name }`, `workspace: { id, name, kind }`, `workspace_memory_index[]` (the same semantic ref shape), `session: { conversation_id, kind, title, parent_conversation_id?, parent_title?, spawned_by_agent_id?, members[] }`, `driver: { kind, cli_session_id?, model?, reasoning_effort?, fast_mode? }`, and `env_policy` (§4.3). Every ref is path-free — the daemon resolves the L1 home and each L2 bundle itself (§5.1). `runtime_start` is a message-less lifecycle command only — it carries no inbox rows and no delivery semantics; message delivery (including spawn-with-batch) goes through `runtime_deliver`. See `daemon-authoritative-delivery-v1.md` §10.2.1. | discriminated by `started`: `{ started: true, pid, started_at }` / `{ started: false, reason: 'init_cooldown', cooldown_until }`. Success means only "the daemon has/created the handle" — not ready, deliverable, or safe-boundary. |
-| `runtime_stop` | `{ conversation_id, agent_id, mode: 'hard' }` (`mode` is a wire literal; the former `mode:'soft'` stdin-directive arm was deleted in #task:1558 — no product entry point) | `{ mode: 'hard', stopped, exit_code: number \| null }` (`exit_code` required-nullable — real value may ride on `runtime_exit` event when SIGTERM cascade still pending) |
-| `runtime_clear_session` | `{ conversation_id, agent_id }` | `{ cleared: boolean }` |
-| `runtime_deliver` | `{ conversation_id, agent_id, delivery_ids[], deliveries[], kind: 'message' \| 'schedule_fire', text, spawn_options }` where `deliveries[]` is **required and non-empty** (#task:2106 removed the optional container and the scalar `delivered_up_to_seq`; the daemon derives the disk sidecar high-water from `max(deliveries[].seq)`), `text` is the server-hydrated *unencoded* delivery text (the daemon's driver instance encodes via `encodeStdinMessage(text, cliSessionId)` before writing stdin) and `spawn_options` is consulted **only** if the daemon must spawn. The sole message-delivery command; the daemon inspects the real handle and picks spawn / write / enqueue / refuse. | a synchronous **custody disposition**, NOT a delivery ack: `{ disposition: 'spawning', pid, started_at }` / `{ disposition: 'admitted', pid, started_at }` / `{ disposition: 'deferred', pid, started_at }` / `{ disposition: 'refused', reason: 'startup_pending' \| 'draining' \| 'cooldown' (+ cooldown_until on cooldown) }`. "Sent to daemon" ≠ ack: rows stay in-flight (owner=connection) on `spawning`/`admitted`/`deferred`; `refused` rolls the batch back to pending (retriable). `delivered_at` moves **only** on the async `runtime_delivery_consumed` event. Full mechanism owned by `daemon-authoritative-delivery-v1.md` §10–§11. |
-| `runtime_status` | `{ conversation_id?, agent_id? }` (both optional) | `{ runtimes: RuntimeStateDto[] }` — cache snapshot constrained by filter; empty filter = full snapshot known to this daemon. Filter is a narrowing operator, not a topology key; host placement is decided server-side before the call. |
-| `runtime_stop_all` | `{}` (boot/shutdown sweep) | `{ stopped_count }` + per-agent `runtime_exit` events |
-| `runtime_close_activity_log` | `{}` (shutdown) | `{ flushed: boolean }`. Semantics: daemon flushes outbound buffers; **server then closes its activity-log writer** (per §3.1). |
-| `runtime_output_pause` | `{ conversation_id, agent_id }` (backend stays in always-flowing mode in v0) | `{ paused: boolean }` |
-| `runtime_output_resume` | `{ conversation_id, agent_id }` | `{ resumed: boolean }` |
+| Intent                       | Request params                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Response arms                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runtime_start`              | `{ conversation_id, agent_id, options }` where `options` carries typed server metadata: `agent: { id, name }`, `workspace: { id, name, kind }`, `workspace_memory_index[]` (the same semantic ref shape), `session: { conversation_id, kind, title, parent_conversation_id?, parent_title?, spawned_by_agent_id?, members[] }`, `driver: { kind, cli_session_id?, model?, reasoning_effort?, fast_mode? }`, and `env_policy` (§4.3). Every ref is path-free — the daemon resolves the L1 home and each L2 bundle itself (§5.1). `runtime_start` is a message-less lifecycle command only — it carries no inbox rows and no delivery semantics; message delivery (including spawn-with-batch) goes through `runtime_deliver`. See `daemon-authoritative-delivery-v1.md` §10.2.1. | discriminated by `started`: `{ started: true, pid, started_at }` / `{ started: false, reason: 'init_cooldown', cooldown_until }`. Success means only "the daemon has/created the handle" — not ready, deliverable, or safe-boundary.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `runtime_stop`               | `{ conversation_id, agent_id, mode: 'hard' }` (`mode` is a wire literal; the former `mode:'soft'` stdin-directive arm was deleted in #task:1558 — no product entry point)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `{ mode: 'hard', stopped, exit_code: number \| null }` (`exit_code` required-nullable — real value may ride on `runtime_exit` event when SIGTERM cascade still pending)                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `runtime_clear_session`      | `{ conversation_id, agent_id }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `{ cleared: boolean }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `runtime_deliver`            | `{ conversation_id, agent_id, delivery_ids[], deliveries[], kind: 'message' \| 'schedule_fire', text, spawn_options }` where `deliveries[]` is **required and non-empty** (#task:2106 removed the optional container and the scalar `delivered_up_to_seq`; the daemon derives the disk sidecar high-water from `max(deliveries[].seq)`), `text` is the server-hydrated _unencoded_ delivery text (the daemon's driver instance encodes via `encodeStdinMessage(text, cliSessionId)` before writing stdin) and `spawn_options` is consulted **only** if the daemon must spawn. The sole message-delivery command; the daemon inspects the real handle and picks spawn / write / enqueue / refuse.                                                                                | a synchronous **custody disposition**, NOT a delivery ack: `{ disposition: 'spawning', pid, started_at }` / `{ disposition: 'admitted', pid, started_at }` / `{ disposition: 'deferred', pid, started_at }` / `{ disposition: 'refused', reason: 'startup_pending' \| 'draining' \| 'cooldown' (+ cooldown_until on cooldown) }`. "Sent to daemon" ≠ ack: rows stay in-flight (owner=connection) on `spawning`/`admitted`/`deferred`; `refused` rolls the batch back to pending (retriable). `delivered_at` moves **only** on the async `runtime_delivery_consumed` event. Full mechanism owned by `daemon-authoritative-delivery-v1.md` §10–§11. |
+| `runtime_status`             | `{ conversation_id?, agent_id? }` (both optional)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `{ runtimes: RuntimeStateDto[] }` — cache snapshot constrained by filter; empty filter = full snapshot known to this daemon. Filter is a narrowing operator, not a topology key; host placement is decided server-side before the call.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `runtime_stop_all`           | `{}` (boot/shutdown sweep)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `{ stopped_count }` + per-agent `runtime_exit` events                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `runtime_close_activity_log` | `{}` (shutdown)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `{ flushed: boolean }`. Semantics: daemon flushes outbound buffers; **server then closes its activity-log writer** (per §3.1).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `runtime_output_pause`       | `{ conversation_id, agent_id }` (backend stays in always-flowing mode in v0)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `{ paused: boolean }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `runtime_output_resume`      | `{ conversation_id, agent_id }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `{ resumed: boolean }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 **Daemon → server unsolicited events (no reply; activity log / event-WebSocket fanout):**
 
-| Event | Payload | Notes |
-|-------|---------|-------|
-| `runtime_state` | `{ conversation_id, agent_id, state, ... }` | parsed run-state transitions |
-| `runtime_output` | `{ conversation_id, agent_id, chunk }` | **droppable**; raw stdout/stderr |
-| `runtime_exit` | `{ conversation_id, agent_id, code, signal, ... }` | child exit |
-| `runtime_ready_for_drain` | `{ conversation_id, agent_id }` | driver-confirmed replay nudge; server resubmits pending inbox rows as `runtime_deliver` |
-| `runtime_delivery_consumed` | `{ conversation_id, agent_id, delivery_ids[], ts }` | non-droppable; the **only** event that moves `delivered_at` (server `markDelivered`). Covers delivery via spawn, ready-write, or queued flush alike |
-| `runtime_delivery_failed` | `{ conversation_id, agent_id, delivery_ids[], reason, ts }` | non-droppable; server rolls rows back to pending (retriable) or marks failed (fatal, e.g. `driver_refused`). `reason in ['child_exit' \| 'init_watchdog' \| 'write_failed' \| 'driver_refused']` |
-| `runtime_output_dropped` / `_paused` / `_resumed` | flow-control bookkeeping | — |
-| `shutting_down` | `{}` | daemon-initiated shutdown notice |
+| Event                                             | Payload                                                     | Notes                                                                                                                                                                                            |
+| ------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `runtime_state`                                   | `{ conversation_id, agent_id, state, ... }`                 | parsed run-state transitions                                                                                                                                                                     |
+| `runtime_output`                                  | `{ conversation_id, agent_id, chunk }`                      | **droppable**; raw stdout/stderr                                                                                                                                                                 |
+| `runtime_exit`                                    | `{ conversation_id, agent_id, code, signal, ... }`          | child exit                                                                                                                                                                                       |
+| `runtime_ready_for_drain`                         | `{ conversation_id, agent_id }`                             | driver-confirmed replay nudge; server resubmits pending inbox rows as `runtime_deliver`                                                                                                          |
+| `runtime_delivery_consumed`                       | `{ conversation_id, agent_id, delivery_ids[], ts }`         | non-droppable; the **only** event that moves `delivered_at` (server `markDelivered`). Covers delivery via spawn, ready-write, or queued flush alike                                              |
+| `runtime_delivery_failed`                         | `{ conversation_id, agent_id, delivery_ids[], reason, ts }` | non-droppable; server rolls rows back to pending (retriable) or marks failed (fatal, e.g. `driver_refused`). `reason in ['child_exit' \| 'init_watchdog' \| 'write_failed' \| 'driver_refused']` |
+| `runtime_output_dropped` / `_paused` / `_resumed` | flow-control bookkeeping                                    | —                                                                                                                                                                                                |
+| `shutting_down`                                   | `{}`                                                        | daemon-initiated shutdown notice                                                                                                                                                                 |
 
 Embedded mode keeps server + daemon-host on the same machine, but the
 protocol contract above is the single contract for both embedded and
@@ -491,7 +494,7 @@ never invoked on the server), spawns the child, wires stdin/stdout.
 
 **`server_url` is NOT in the env policy and NOT on the `runtime_start`
 wire.** The agent's control-plane origin is host topology — what URL
-*this host* uses to reach the control plane — which the server cannot
+_this host_ uses to reach the control plane — which the server cannot
 know about itself. So the daemon injects `SILVERHAND_SERVER_URL` from a
 **host-local** source, never echoed down from the server:
 
@@ -594,14 +597,14 @@ intent), the daemon reads the following from its **own local fs**,
 keyed entirely by the semantic ids received in §4.0–§4.3. Every path in
 the table is derived locally, never received:
 
-| Source | Path (daemon resolves locally from ids) | Cap | Use |
-|--------|-----------------------------------------|-----|-----|
-| Agent identity (L1) | `resolveAgentDir(agent.id)` + `/system_prompt.md` | none (file is small) | "Initial role" block in per-spawn `system-prompt.md` |
-| Workspace memory (L2) | `<bundle>/MEMORY.md`, where `<bundle>` = `resolveAgentWorkspaceBundleDir(agent.id, workspace.id)` for a regular workspace and the agent L1 home for `agent_home` | `MEMORY_INJECT_CAP_BYTES` (16KB) | "Active Workspace Memory" block |
-| Workspace note catalog (L2) | `<bundle>/notes/**/*.md` | 16KB frontmatter read cap per note + 20 injected entries + 4KB UTF-8 complete rendered block; bodies excluded | "Memory Notes Catalog" block |
-| Memory index | the same `<bundle>/MEMORY.md` derivation per `workspace_memory_index[]` entry, or **nothing** for an entry with no local L2 file | path-only, no read | "Workspace Memory Index" block; an entry with no local file is rendered "unavailable on this computer" rather than with a fabricated path |
+| Source                      | Path (daemon resolves locally from ids)                                                                                                                          | Cap                                                                                                           | Use                                                                                                                                       |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent identity (L1)         | `resolveAgentDir(agent.id)` + `/system_prompt.md`                                                                                                                | none (file is small)                                                                                          | "Initial role" block in per-spawn `system-prompt.md`                                                                                      |
+| Workspace memory (L2)       | `<bundle>/MEMORY.md`, where `<bundle>` = `resolveAgentWorkspaceBundleDir(agent.id, workspace.id)` for a regular workspace and the agent L1 home for `agent_home` | `MEMORY_INJECT_CAP_BYTES` (16KB)                                                                              | "Active Workspace Memory" block                                                                                                           |
+| Workspace note catalog (L2) | `<bundle>/notes/**/*.md`                                                                                                                                         | 16KB frontmatter read cap per note + 20 injected entries + 4KB UTF-8 complete rendered block; bodies excluded | "Memory Notes Catalog" block                                                                                                              |
+| Memory index                | the same `<bundle>/MEMORY.md` derivation per `workspace_memory_index[]` entry, or **nothing** for an entry with no local L2 file                                 | path-only, no read                                                                                            | "Workspace Memory Index" block; an entry with no local file is rendered "unavailable on this computer" rather than with a fabricated path |
 
-The current workspace's own L2 needs no absolute path to be *usable* in
+The current workspace's own L2 needs no absolute path to be _usable_ in
 the prompt: the bundle root **is** the spawn cwd, so the coordinate the
 Active Workspace Memory and Notes Catalog blocks speak is `.`
 (`./MEMORY.md`, `./notes/`). That is a statement about those two blocks
@@ -749,7 +752,7 @@ authority for every host-local absolute path.
     default to fall through to (#task:1813).
   - **An id that cannot be a safe path segment**, raised by
     `assertSafeWorkspaceIdSegment` via `resolveAgentWorkspaceBundleDir`.
-  - **No authenticated control-plane binding** where the *computer identity*
+  - **No authenticated control-plane binding** where the _computer identity_
     itself is needed — `resolveAuthenticatedComputerId(null)`, which stamps
     the prompt's provenance line rather than resolving a path; a runtime must
     not spawn believing it sits on a placeholder computer.
@@ -779,7 +782,7 @@ authority for every host-local absolute path.
 
 ### 5.2 Calling-boundary rule
 
-Ownership by layer names the *destination package* for each module.
+Ownership by layer names the _destination package_ for each module.
 That's necessary but not sufficient — server backend can silently
 re-acquire prompt-composition responsibilities by importing a helper
 that reads daemon-host files, even if the helper "lives" in
@@ -802,8 +805,8 @@ that reads daemon-host files, even if the helper "lives" in
   merge. A backend caller that reaches a banned helper is an
   amendment-required signal, not a "fix it later" item.
 
-The protocol schema (§3.3) blocks the *wire format* side; this rule
-blocks the *call-graph* side.
+The protocol schema (§3.3) blocks the _wire format_ side; this rule
+blocks the _call-graph_ side.
 
 ## 6. Storage boundary
 

@@ -25,10 +25,7 @@ import { join, relative, resolve } from 'node:path';
  * fixtures fail here immediately instead of leaking silently.
  */
 
-const TEST_ROOTS = [
-  resolve(__dirname),
-  resolve(__dirname, '../../backend/tests'),
-];
+const TEST_ROOTS = [resolve(__dirname)];
 
 /** The guard file itself mentions runDaemon in prose; skip it. */
 const SELF = resolve(__dirname, 'daemon-fixture-isolation-guard.test.ts');
@@ -78,7 +75,7 @@ describe('daemon test fixtures cannot address the real ~/.silverhand', () => {
           // text itself is what we look for).
           for (const option of REQUIRED_OPTIONS) {
             const alternatives = Array.isArray(option) ? option : [option];
-            if (!alternatives.some(name => body.includes(name))) {
+            if (!alternatives.some((name) => body.includes(name))) {
               const line = source.slice(0, call).split('\n').length;
               violations.push(
                 `${relative(process.cwd(), file)}:${line} — runDaemon() without explicit ${alternatives.join(' | ')}`,

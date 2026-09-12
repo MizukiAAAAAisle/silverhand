@@ -1,5 +1,7 @@
 # Agent Run State 与 Activity Strip 设计
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 > 配套文档：`core-design.md`（§3 进程编排）、`cli-system.md`。compaction 总论已并入本文（§ compaction-as-state）。
 > 本文聚焦"agent 在某个 channel/thread 里正在做什么"这一**临时运行态**的端到端模型——driver 输出 → ConversationManager 聚合 → WS scope 分发 → 前端 cache → Activity Strip 渲染——以及 2026-05-08 task #159 / #169 的修复点。
 
@@ -35,14 +37,14 @@
 
 **层职责**：
 
-| 层 | 文件 | 职责 |
-|----|------|------|
-| Driver | `packages/host/src/drivers/{claude,codex,cursor,opencode,qoder}.ts` | 把 runtime stream 解析成统一的 `ParsedEvent`（kind: `thinking` / `text` / `tool_call` / `tool_output` / `compaction_started` / `compaction_finished` / `turn_end` / `error` / ...） |
-| Supervisor (host) | `packages/host/src/daemon/supervisor/` | **当前** run-state owner：维护 per (conv, agent) 的 `AgentRunState`，聚合 thinking/text 片段为尾窗 `activitySnippet`，跟踪 compaction，处理 turn 边界 resolve，并在 raw `agent_event` fanout 前压缩大 `tool_call.input`（下文历史图里的 `ConversationManager` 已迁到这里） |
-| Bus | `packages/backend/src/ws/scope-event-bus.ts` | 把 `agent_activity` payload 路由到 `conversation:{conversationId}` scope，replay buffer 200 条 |
-| WS Client | `apps/desktop/src/renderer/lib/ws-client.ts` | 单 socket 多 scope，断线 resume；scope 不匹配的 frame 不投递给该 hook |
-| Cache | `apps/desktop/src/renderer/features/agent-shell/model/agent-run-state-cache.ts` | per-conversation TanStack Query cache，按 (agentId) 去重，终态 tombstone TTL 5 分钟防 stale snapshot 复活 |
-| UI | `apps/desktop/src/renderer/components/chat/AgentActivityBubble.tsx` | 渲染 composer 上方的 activity strip；每个 in-flight agent 一个 chip，包含 phase snippet / compaction 状态 / elapsed / 工具总数，并可跳回最近 user message |
+| 层                | 文件                                                                            | 职责                                                                                                                                                                                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Driver            | `packages/host/src/drivers/{claude,codex,cursor,opencode,qoder}.ts`             | 把 runtime stream 解析成统一的 `ParsedEvent`（kind: `thinking` / `text` / `tool_call` / `tool_output` / `compaction_started` / `compaction_finished` / `turn_end` / `error` / ...）                                                                                        |
+| Supervisor (host) | `packages/host/src/daemon/supervisor/`                                          | **当前** run-state owner：维护 per (conv, agent) 的 `AgentRunState`，聚合 thinking/text 片段为尾窗 `activitySnippet`，跟踪 compaction，处理 turn 边界 resolve，并在 raw `agent_event` fanout 前压缩大 `tool_call.input`（下文历史图里的 `ConversationManager` 已迁到这里） |
+| Bus               | `packages/backend/src/ws/scope-event-bus.ts`                                    | 把 `agent_activity` payload 路由到 `conversation:{conversationId}` scope，replay buffer 200 条                                                                                                                                                                             |
+| WS Client         | `apps/desktop/src/renderer/lib/ws-client.ts`                                    | 单 socket 多 scope，断线 resume；scope 不匹配的 frame 不投递给该 hook                                                                                                                                                                                                      |
+| Cache             | `apps/desktop/src/renderer/features/agent-shell/model/agent-run-state-cache.ts` | per-conversation TanStack Query cache，按 (agentId) 去重，终态 tombstone TTL 5 分钟防 stale snapshot 复活                                                                                                                                                                  |
+| UI                | `apps/desktop/src/renderer/components/chat/AgentActivityBubble.tsx`             | 渲染 composer 上方的 activity strip；每个 in-flight agent 一个 chip，包含 phase snippet / compaction 状态 / elapsed / 工具总数，并可跳回最近 user message                                                                                                                  |
 
 ---
 
@@ -54,8 +56,13 @@
 AgentRunStatusSchema = z.enum(['starting', 'thinking', 'tool_running', 'idle', 'failed']);
 
 AgentRunTerminalReasonSchema = z.enum([
-  'replied', 'turn_ended', 'replaced',  // → status 'idle'
-  'stopped', 'crashed', 'timeout', 'conversation_closed',  // → status 'failed'
+  'replied',
+  'turn_ended',
+  'replaced', // → status 'idle'
+  'stopped',
+  'crashed',
+  'timeout',
+  'conversation_closed', // → status 'failed'
 ]);
 
 AgentRunStateSchema = z.object({
@@ -67,11 +74,11 @@ AgentRunStateSchema = z.object({
   updatedAt: z.number(),
   lastActivityAt: z.number(),
   terminalReason: AgentRunTerminalReasonSchema.optional(),
-  activitySnippet: z.string().optional(),          // 尾窗 200 字符
+  activitySnippet: z.string().optional(), // 尾窗 200 字符
   toolCallCounts: z.record(z.string(), z.number()).optional(),
-  compacting: z.boolean().optional(),              // ← 与 status 正交
-  compactingSince: z.number().optional(),          // 独立 elapsed
-  compactionStale: z.boolean().optional(),         // 5min watchdog
+  compacting: z.boolean().optional(), // ← 与 status 正交
+  compactingSince: z.number().optional(), // 独立 elapsed
+  compactionStale: z.boolean().optional(), // 5min watchdog
   detail: z.string().optional(),
 });
 ```
@@ -115,21 +122,21 @@ lifecycleQueue: Promise<void>;    // 串行化 start / stop / clearSession
 
 ### 4.2 状态转移
 
-| 事件 | 处理 |
-|------|------|
-| `deliverMessage`（agent idle） | inbox enqueue 或 direct write → `startRun(handle, 'thinking')` 创建新 runId |
-| `deliverMessage`（agent busy, direct mode = codex `turn/steer`） | write → `markRunThinking(handle)`：保留当前 runId，只切 status |
-| `deliverMessage`（agent busy, gated mode = claude） | push 到 `pendingDeliveries`，等下个 safe boundary `flushPending` |
-| `tool_call` | `outstandingToolUses += 1`；`recordToolCall` → status `tool_running`，`toolCallCounts[name] += 1` |
-| `tool_output` | `outstandingToolUses -= 1`；若降到 0 则 `recordToolOutput` → status 切回 `thinking`，**调用 `tryResolveTurnEndAtBoundary`** |
-| `thinking` / `text` | `recordActivitySnippet(handle, kind, text)` → 见 §5 |
-| `compaction_started` | `busy.compacting = true`；`recordCompactionStarted` → `compacting=true, compactingSince=now`；启动 5min watchdog |
-| `compaction_finished` | `busy.compacting = false`；`recordCompactionFinished` → 清 `compacting/compactingSince/compactionStale`；**调用 `tryResolveTurnEndAtBoundary`**；`flushPending` |
-| compaction watchdog 超时 | 一次性 5min timer；`recordCompactionStale` → `compactionStale=true`，同时广播一次 `compaction_stale`；不靠 heartbeat 重复制造 stale 事件 |
-| `turn_end` | `outstandingToolUses = 0`；`pendingTurnEnd = true`；`tryResolveTurnEndAtBoundary`；再 `flushPending` |
-| 进程退出 | `resolveRunByKey(key, 'replied' / 'crashed' / 'stopped' / 'timeout')` |
-| `stop()` | `resolveRunByKey(key, 'stopped')` |
-| `clearSession()` | lifecycle lock 内 hard stop live process → `conversation_agents.cli_session_id = NULL` → publish `agent_status` → 写 `session_cleared` audit；不自动 restart，pending inbox row 保留 |
+| 事件                                                             | 处理                                                                                                                                                                                 |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `deliverMessage`（agent idle）                                   | inbox enqueue 或 direct write → `startRun(handle, 'thinking')` 创建新 runId                                                                                                          |
+| `deliverMessage`（agent busy, direct mode = codex `turn/steer`） | write → `markRunThinking(handle)`：保留当前 runId，只切 status                                                                                                                       |
+| `deliverMessage`（agent busy, gated mode = claude）              | push 到 `pendingDeliveries`，等下个 safe boundary `flushPending`                                                                                                                     |
+| `tool_call`                                                      | `outstandingToolUses += 1`；`recordToolCall` → status `tool_running`，`toolCallCounts[name] += 1`                                                                                    |
+| `tool_output`                                                    | `outstandingToolUses -= 1`；若降到 0 则 `recordToolOutput` → status 切回 `thinking`，**调用 `tryResolveTurnEndAtBoundary`**                                                          |
+| `thinking` / `text`                                              | `recordActivitySnippet(handle, kind, text)` → 见 §5                                                                                                                                  |
+| `compaction_started`                                             | `busy.compacting = true`；`recordCompactionStarted` → `compacting=true, compactingSince=now`；启动 5min watchdog                                                                     |
+| `compaction_finished`                                            | `busy.compacting = false`；`recordCompactionFinished` → 清 `compacting/compactingSince/compactionStale`；**调用 `tryResolveTurnEndAtBoundary`**；`flushPending`                      |
+| compaction watchdog 超时                                         | 一次性 5min timer；`recordCompactionStale` → `compactionStale=true`，同时广播一次 `compaction_stale`；不靠 heartbeat 重复制造 stale 事件                                             |
+| `turn_end`                                                       | `outstandingToolUses = 0`；`pendingTurnEnd = true`；`tryResolveTurnEndAtBoundary`；再 `flushPending`                                                                                 |
+| 进程退出                                                         | `resolveRunByKey(key, 'replied' / 'crashed' / 'stopped' / 'timeout')`                                                                                                                |
+| `stop()`                                                         | `resolveRunByKey(key, 'stopped')`                                                                                                                                                    |
+| `clearSession()`                                                 | lifecycle lock 内 hard stop live process → `conversation_agents.cli_session_id = NULL` → publish `agent_status` → 写 `session_cleared` audit；不自动 restart，pending inbox row 保留 |
 
 `clearSession()` 清的是 CLI resume handle，不清 MEMORY/notes、不删底层 CLI
 jsonl、不清 `conversation_inboxes`。audit message 只在实际清理时写；它会广播给 UI
@@ -237,12 +244,12 @@ useConversationStream(conversationId, onEvent, scope)
 
 ### 6.3 隔离矩阵
 
-| 场景 | 是否隔离 | 机制 |
-|------|----------|------|
-| 同一 channel 多个 agent 同时跑 | ✅ | 后端 `runStates` map 按 `(conv, agentId)` 区分；前端 cache 按 `agentId` 去重，独立条目 |
-| 同一 agent 同时在 channel + 该 channel 的 thread 里跑 | ✅ | thread 是独立 `conversationId`，独立 handle、独立 cache key |
-| 同一 workspace 跨 channel | ✅ | 独立 conversationId / WS scope / cache key |
-| 同 (conv, agent) 一次 turn 内 startRun 被换 | ✅ | 旧 run 走 `replaced` 终态广播，前端 tombstone 5min 防复活 |
+| 场景                                                  | 是否隔离 | 机制                                                                                   |
+| ----------------------------------------------------- | -------- | -------------------------------------------------------------------------------------- |
+| 同一 channel 多个 agent 同时跑                        | ✅       | 后端 `runStates` map 按 `(conv, agentId)` 区分；前端 cache 按 `agentId` 去重，独立条目 |
+| 同一 agent 同时在 channel + 该 channel 的 thread 里跑 | ✅       | thread 是独立 `conversationId`，独立 handle、独立 cache key                            |
+| 同一 workspace 跨 channel                             | ✅       | 独立 conversationId / WS scope / cache key                                             |
+| 同 (conv, agent) 一次 turn 内 startRun 被换           | ✅       | 旧 run 走 `replaced` 终态广播，前端 tombstone 5min 防复活                              |
 
 ### 6.4 Mount 与 reconnect race
 
@@ -292,7 +299,6 @@ useConversationStream(conversationId, onEvent, scope)
   时该补偿有意义；A 常驻 composer 底部（永远在"现在"），点击改为就地展开/收起详情，跳转语义
   失去价值，故移除。
 
-
 ---
 
 ## 8. 已知边界 / 待跟进
@@ -331,13 +337,13 @@ suite was retired when run-state ownership moved to the host supervisor.)
 
 ### 10.1 常见症状
 
-| 症状 | 优先检查 |
-|------|----------|
-| thinking 只闪 1-2 个字符 | Codex driver 是否仍按 delta 发 `thinking`；`appendActivitySnippetBuffer` 是否按 `(key, runId, kind)` 累积；`activitySnippet` 是否为尾窗而不是单 delta |
+| 症状                                | 优先检查                                                                                                                                                                                                       |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| thinking 只闪 1-2 个字符            | Codex driver 是否仍按 delta 发 `thinking`；`appendActivitySnippetBuffer` 是否按 `(key, runId, kind)` 累积；`activitySnippet` 是否为尾窗而不是单 delta                                                          |
 | agent 已完成但 Activity Bubble 还在 | 后端是否发出 terminal `agent_activity`（`idle` / `failed`）；`turn_end` 是否落在 `compacting=true` 时且未经过 `compaction_finished` / `recordToolOutput` 重试；前端 snapshot 是否被 `refetchOnMount` reconcile |
-| 怀疑跨 channel/thread 串流 | 对比 payload `conversationId`、WS frame `scope`、TanStack Query key `agentRunStatesKey(conversationId)`；thread 与父 channel 必须是不同 conversationId |
-| 旧 runId 复活 | 查旧 run 是否先收到 `terminalReason: replaced`；前端 `terminalRunUpdatedAtByKey` tombstone 是否覆盖 snapshot 请求时间 |
-| compaction 行长期 warning | 查是否收到 `compaction_finished`；watchdog 只提示不 kill runtime，必要时由用户显式 stop/restart |
+| 怀疑跨 channel/thread 串流          | 对比 payload `conversationId`、WS frame `scope`、TanStack Query key `agentRunStatesKey(conversationId)`；thread 与父 channel 必须是不同 conversationId                                                         |
+| 旧 runId 复活                       | 查旧 run 是否先收到 `terminalReason: replaced`；前端 `terminalRunUpdatedAtByKey` tombstone 是否覆盖 snapshot 请求时间                                                                                          |
+| compaction 行长期 warning           | 查是否收到 `compaction_finished`；watchdog 只提示不 kill runtime，必要时由用户显式 stop/restart                                                                                                                |
 
 ### 10.2 日志
 
@@ -446,21 +452,22 @@ passive enqueue 修好了"看得到",没修"塞得动"。如果用户跟 A 聊�
 
 `ScheduleService` 在到点时把 wake 写到 owner agent 的 agent_home
 primary `dm_channel`,**走的是普通的 `messages.insertForConversation`
-+ `ConversationManager.deliverMessage` + `start`** —— 没有第二条 inbox
-路径,也没有"特殊 wake 总线"。这条决策见
-`docs/cli-system.md`;目的是让 schedule wake 在 run-state 维度上和任何用户消息
-没有区别,Activity Strip / activity bubble / inbox 全部自动复用。
+
+- `ConversationManager.deliverMessage` + `start`** —— 没有第二条 inbox
+  路径,也没有"特殊 wake 总线"。这条决策见
+  `docs/cli-system.md`;目的是让 schedule wake 在 run-state 维度上和任何用户消息
+  没有区别,Activity Strip / activity bubble / inbox 全部自动复用。
 
 对 run-state 的影响:
 
 - wake 消息 `from_kind = 'system'`,`metadata = { subtype:
-  'schedule_fire', schedule_id, spec_kind, actual_fire_at,
-  planned_fire_at, missed_count, next_fire_at }`。
+'schedule_fire', schedule_id, spec_kind, actual_fire_at,
+planned_fire_at, missed_count, next_fire_at }`。
 - 投递方式:`deliverMessage` 把 inbox 行写好,然后 `start()` 唤起
   agent。如果 owner agent 此时 idle,直接走 spawn-time `drainInbox`,
   正常进入 `startRun`(新 runId);如果已经在跑,则按 driver 的现有规
   则(direct = 立刻写 stdin + `markRunThinking`,gated = `pendingDeliveries`
-  + safe boundary `flushPending`)。
+  - safe boundary `flushPending`)。
 - §12 的 mention-targeted 讨论不适用 —— wake 永远只有一个 recipient
   (owner agent)。`from_kind='system'` 也不参与 mention 解析,不会
   误唤醒其他 channel 成员。

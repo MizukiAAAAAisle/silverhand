@@ -55,7 +55,7 @@ use log_capture::LogBuffer;
 
 /// The one shared seed the parity gate replays; here it is joined by the auth row.
 const SEED_SQL: &str =
-    include_str!("../../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql");
+    include_str!("../../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql");
 const EXPECTED_ENVELOPE: &str = include_str!("fixtures/workspace-cold-read-envelope.json");
 
 const TOKEN: &str = "valid-token";

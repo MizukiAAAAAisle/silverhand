@@ -1,5 +1,7 @@
 # Grok Build runtime
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 Silverhand runs the official `grok agent --no-leader stdio` as a dedicated ACP
 process. Grok Build 1.0.24 or newer is required; an unknown version is refused.
 The daemon uses its ordinary executable discovery and does not attach to an

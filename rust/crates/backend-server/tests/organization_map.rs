@@ -902,8 +902,8 @@ mod current_schema;
 /// artifact (itself the replayed baseline + active migrations) is materialized into a
 /// real SQLite database, read from `sqlite_master`. This is NOT read from the map.
 ///
-/// The snapshot↔executable-migrations direction is guarded on the TS side by
-/// `packages/backend/tests/migration-baseline.test.ts` (two-stage drift guard); this gate
+/// The snapshot↔executable-migrations direction is guarded by the Rust startup
+/// schema replay regression; this gate
 /// closes the map↔snapshot leg, so map↔snapshot↔executable is closed end to end.
 async fn replayed_tables() -> BTreeSet<String> {
     use sqlx::Row;
@@ -956,24 +956,18 @@ fn table_rows_carry_a_settled_target_and_audited_writer_evidence() {
             &context,
         );
         // impl_status reflects AUDITED KNOWN writers, not an exhaustive static proof: it
-        // must agree with the recorded evidence shape (a known Rust writer, else a known TS
-        // writer, else no known writer). Exhaustive write ownership is a residual for a
+        // must agree with the recorded evidence shape (a known Rust writer or no known writer). Exhaustive write ownership is a residual for a
         // future typed write-perimeter refactor, NOT enforced here.
         let status = as_str(t, "impl_status");
         assert!(
-            matches!(status, "rust_writer_known" | "ts_only" | "no_known_writer"),
+            matches!(status, "rust_writer_known" | "no_known_writer"),
             "{context}: impl_status `{status}` is not a legal audited-evidence value"
         );
         let has_rust = t["audited_rust_writers"]
             .as_array()
             .is_some_and(|a| !a.is_empty());
-        let has_ts = t["audited_ts_writers"]
-            .as_array()
-            .is_some_and(|a| !a.is_empty());
         let derived = if has_rust {
             "rust_writer_known"
-        } else if has_ts {
-            "ts_only"
         } else {
             "no_known_writer"
         };
@@ -983,7 +977,7 @@ fn table_rows_carry_a_settled_target_and_audited_writer_evidence() {
         );
         // Recorded writer paths must EXIST and be PRODUCTION (not a test file / not under a
         // tests/ directory). audited_rust_writers are {path, function} objects;
-        // audited_ts_writers are plain path strings.
+        // Only the current Rust writer evidence participates.
         for w in t["audited_rust_writers"].as_array().into_iter().flatten() {
             let rel = as_str(w, "path");
             assert_writer_path_is_production(rel, &context, "audited_rust_writers");
@@ -998,10 +992,6 @@ fn table_rows_carry_a_settled_target_and_audited_writer_evidence() {
             // A cheap symbol-existence set-diff against the file text — the function's
             // `fn <name>` definition must be present.
             assert_writer_function_exists(rel, function, &context);
-        }
-        for w in t["audited_ts_writers"].as_array().into_iter().flatten() {
-            let rel = w.as_str().expect("ts writer path string");
-            assert_writer_path_is_production(rel, &context, "audited_ts_writers");
         }
     }
 }

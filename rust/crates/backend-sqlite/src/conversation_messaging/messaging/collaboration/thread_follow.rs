@@ -851,7 +851,7 @@ mod tests {
     async fn candidate_cardinality_does_not_change_the_number_of_participation_statements() {
         const SCHEMA: &str = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+            "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
         ));
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("thread-follow-set-authority.sqlite");
@@ -919,7 +919,7 @@ mod tests {
 
     const FOLLOW_SCHEMA: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+        "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
     ));
 
     // ws channel `chan` (agent-a member+cap; agent-c member no-cap; agent-x nonmember),

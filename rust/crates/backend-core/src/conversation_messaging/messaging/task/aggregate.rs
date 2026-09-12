@@ -52,7 +52,7 @@
 //! travel here, their resolution does not.
 //!
 //! The authority for every arm is the `tasks` DDL CHECK set
-//! (`packages/backend/tests/migration-baseline/schema-current.sql`), cited per
+//! (`rust/test-fixtures/migration-baseline/schema-current.sql`), cited per
 //! coupling below; the tests exhaustively falsify each. There is no TS parity
 //! fixture because TS decode trusts these CHECKs (it only fails loud on a missing
 //! place coordinate) — this decoder is stricter by design, asserting what TS

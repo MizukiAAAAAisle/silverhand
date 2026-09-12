@@ -3,7 +3,7 @@ use std::path::Path;
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
 
 const CURRENT_SCHEMA: &str =
-    include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+    include_str!("../../../../../rust/test-fixtures/migration-baseline/schema-current.sql");
 
 /// Materializes the checked-in executable current-schema artifact into a new
 /// database under the operating system temp root.

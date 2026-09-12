@@ -64,17 +64,17 @@ impl HostAttachment for FixedAttachment {
 macro_rules! fixture {
     ($name:literal) => {{
         const SEED: &str = include_str!(concat!(
-            "../../../../packages/backend/tests/fixtures/availability/",
+            "../../../../rust/test-fixtures/fixtures/availability/",
             $name,
             "/seed.sql"
         ));
         const INPUT: &str = include_str!(concat!(
-            "../../../../packages/backend/tests/fixtures/availability/",
+            "../../../../rust/test-fixtures/fixtures/availability/",
             $name,
             "/input.json"
         ));
         const EXPECTED: &str = include_str!(concat!(
-            "../../../../packages/backend/tests/fixtures/availability/",
+            "../../../../rust/test-fixtures/fixtures/availability/",
             $name,
             "/expected.json"
         ));

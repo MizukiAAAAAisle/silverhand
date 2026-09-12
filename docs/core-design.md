@@ -1,5 +1,7 @@
 # Silverhand — Core Design
 
+> TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
+
 > 这是 silverhand（即本 Electron Coding Agent Hub）的**产品 + 数据模型权威文档**。
 >
 > 多轮对话形成的所有共识、设计权衡、隐含约束都写在这里。代码与本文档冲突时，**以本文档为准**，代码必须改回来。
@@ -26,18 +28,19 @@
 
 典型场景：
 
-| 场景 | 体现 |
-|------|------|
-| 角色分工 | claude 负责架构规划、codex 负责代码 review、gemini 负责文档撰写 |
-| 多 agent 比对 | 同一个问题让 claude 和 codex 都答一遍，对比观点 |
-| 接力 | claude 做完高层设计，codex 接着写实现 |
-| 守卫 | 一个 agent 干活，另一个旁观，发现问题打断 |
+| 场景          | 体现                                                            |
+| ------------- | --------------------------------------------------------------- |
+| 角色分工      | claude 负责架构规划、codex 负责代码 review、gemini 负责文档撰写 |
+| 多 agent 比对 | 同一个问题让 claude 和 codex 都答一遍，对比观点                 |
+| 接力          | claude 做完高层设计，codex 接着写实现                           |
+| 守卫          | 一个 agent 干活，另一个旁观，发现问题打断                       |
 
 ### 1.3 单机本地为主，多人协作是加成
 
 > **多机文件 ≠ 多人协作**。文件读写本质局部，跨机器要么靠 git（半同步、有冲突）、要么靠云容器（脱离本地工作流）。本应用**不试图解决跨机器文件协作**。
 
 形态定位：**local-agent + multi-human**：
+
 - Agent 跑在某台机器上（v1 = 本机）
 - 多个用户都可以加入聊天、看上下文、发消息
 - 但实际文件操作只发生在 agent 所在机器
@@ -79,27 +82,28 @@ Message
 
 ### 2.2 Host
 
-| 字段 | 含义 |
-|------|------|
-| `id` | 自生成 |
-| `kind` | `computer` \| `sandbox` |
-| `name` | 给用户看的标识，computer 默认 = `os.hostname()` |
-| `metadata` | JSON：OS、架构、CPU、sandbox URL 等 |
+| 字段       | 含义                                            |
+| ---------- | ----------------------------------------------- |
+| `id`       | 自生成                                          |
+| `kind`     | `computer` \| `sandbox`                         |
+| `name`     | 给用户看的标识，computer 默认 = `os.hostname()` |
+| `metadata` | JSON：OS、架构、CPU、sandbox URL 等             |
 
 **为什么需要**：agent 必须知道自己跑在哪。v1 只有 1 个 computer host（本机），但模型层为 v2 sandbox / 多机预留。
 
 ### 2.3 Agent
 
-| 字段 | 含义 |
-|------|------|
-| `id` | 自生成 |
-| `host_id` | 该 agent 跑在哪个 host 上 |
-| `name` | 用户起的（"claude-planner"、"codex-reviewer"）|
-| `runtime` | `claude` \| `codex` \| `cursor` \| `gemini` |
-| `model` | 可选，特定模型（如 `sonnet-4-6`）|
+| 字段                   | 含义                                                                                                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                   | 自生成                                                                                                                                                                      |
+| `host_id`              | 该 agent 跑在哪个 host 上                                                                                                                                                   |
+| `name`                 | 用户起的（"claude-planner"、"codex-reviewer"）                                                                                                                              |
+| `runtime`              | `claude` \| `codex` \| `cursor` \| `gemini`                                                                                                                                 |
+| `model`                | 可选，特定模型（如 `sonnet-4-6`）                                                                                                                                           |
 | `agent_home` / L1 path | agent 全局 home（daemon 侧确定性坐标：`<computers root>/<computer_id>/agents/<agent_id>/`，不由任何 workspace 列表示）；`system_prompt.md` 文件定义这个 agent 的"身份/角色" |
 
 **为什么需要 Agent 一等公民**：
+
 - 同一个 runtime 可以有多个 agent 实例，每个有不同身份（claude-planner vs claude-debugger）
 - Agent 是跨 channel 复用的对象（一个 claude-planner 可以加入 N 个 channel）
 - Agent 持有 memory（见 §4），memory 跨 channel 累积
@@ -108,14 +112,14 @@ Message
 
 ### 2.4 Workspace（含 DM）
 
-| 字段 | 含义 |
-|------|------|
-| `id` | 自生成 |
-| `name` | UNIQUE 字符串（DM 的 name = `@<agent.name>`）|
-| `kind` | `workspace` \| `dm`（默认 `workspace`）|
-| `description?` | 可选 |
-| `git_url?` | 纯元数据，不自动 clone（v1）|
-| 关联：workspace_members | 该 workspace 内的 agent 成员 |
+| 字段                    | 含义                                          |
+| ----------------------- | --------------------------------------------- |
+| `id`                    | 自生成                                        |
+| `name`                  | UNIQUE 字符串（DM 的 name = `@<agent.name>`） |
+| `kind`                  | `workspace` \| `dm`（默认 `workspace`）       |
+| `description?`          | 可选                                          |
+| `git_url?`              | 纯元数据，不自动 clone（v1）                  |
+| 关联：workspace_members | 该 workspace 内的 agent 成员                  |
 
 > **作废（`workspace-layout-relocation-v1.md` §6/§7，2026-08）**：原本这里还有
 > `workspace_path`（NOT NULL，未填后端生成）与 `workspace_host_id`（workspace 的 home
@@ -138,6 +142,7 @@ Message
 不是没目录。区别只在于：cwd 现在从上面那个确定性坐标**算出来**，而不是从一列存储的路径**读出来**。
 
 **DM 是特殊 workspace**：
+
 - `kind = 'dm'`
 - 必须恰好 1 个 agent 成员
 - name 自动 = `@<agent.name>`，受 UNIQUE 约束保护"一个 agent 同一时间只有一个 DM"
@@ -145,6 +150,7 @@ Message
 - UI 上 DM 单独列在 `DIRECT MESSAGES` section，跟 `WORKSPACES` 平级
 
 **为什么 DM 不另起一套表**：
+
 - 数据 + 路由 + UI 完全可以复用
 - 用户心智上"DM = 1 对 1 的频道"是对的
 - 只多一个 `kind` 字段就能区分
@@ -155,26 +161,26 @@ Message
 
 ### 2.5 Channel（多 agent 协作单元，DB 表名：conversations）
 
-| 字段 | 含义 |
-|------|------|
-| `id` | 自生成 |
-| `workspace_id` | 所属 workspace |
-| `title` | 用户起的（"修复 login bug" / "v2 架构讨论"）|
-| `status` | channel 自身的状态聚合 |
-| 关联：conversation_agents | 该 channel 启动了哪些 agent CLI 进程 |
+| 字段                      | 含义                                         |
+| ------------------------- | -------------------------------------------- |
+| `id`                      | 自生成                                       |
+| `workspace_id`            | 所属 workspace                               |
+| `title`                   | 用户起的（"修复 login bug" / "v2 架构讨论"） |
+| `status`                  | channel 自身的状态聚合                       |
+| 关联：conversation_agents | 该 channel 启动了哪些 agent CLI 进程         |
 
 **为什么 channel 上没有 agent_id**：因为一个 channel 对应**多个** agent。Channel 是一次"协作回合"，不是"1v1 对话"。
 
 **conversation_agents 表**：
 
-| 字段 | 含义 |
-|------|------|
-| `channel_id` | |
-| `agent_id` | |
-| `cli_session_id` | 底层 CLI 的 session id（resume 用）|
-| `pid` | 当前活进程 PID（idle 时 NULL）|
-| `status` | `starting` / `active` / `idle` / `crashed` |
-| `joined_at` | |
+| 字段             | 含义                                       |
+| ---------------- | ------------------------------------------ |
+| `channel_id`     |                                            |
+| `agent_id`       |                                            |
+| `cli_session_id` | 底层 CLI 的 session id（resume 用）        |
+| `pid`            | 当前活进程 PID（idle 时 NULL）             |
+| `status`         | `starting` / `active` / `idle` / `crashed` |
+| `joined_at`      |                                            |
 
 `cli_session_id` 是 **resume handle**，不是 agent 记忆本身。Stop / Restart
 默认保留它，因此下一次启动会 resume 同一个底层 CLI session；Clear session
@@ -182,6 +188,7 @@ Message
 messages / inbox delivery row 都不随之删除。
 
 **channel.members = workspace.members 的快照**：
+
 - channel 创建那一刻，复制当时的 workspace.members 进 conversation_agents
 - 之后 workspace 加 / 减成员**不影响**已有 channel（避免 mid-channel 改 spawn 集合）
 - 只影响新建 channel
@@ -190,14 +197,14 @@ messages / inbox delivery row 都不随之删除。
 
 ### 2.6 Message
 
-| 字段 | 含义 |
-|------|------|
-| `id`, `channel_id`, `seq`, `created_at` | 标准 |
-| `from_kind` | `user` \| `agent` |
-| `from_agent_id` | nullable，`from_kind='agent'` 时填 |
-| `from_user_id` | nullable，v2 多用户区分发送者；v1 implicit 单用户 |
-| `content` | 文本 |
-| `metadata` | JSON：tool_call 引用、附件、引用消息等 |
+| 字段                                    | 含义                                              |
+| --------------------------------------- | ------------------------------------------------- |
+| `id`, `channel_id`, `seq`, `created_at` | 标准                                              |
+| `from_kind`                             | `user` \| `agent`                                 |
+| `from_agent_id`                         | nullable，`from_kind='agent'` 时填                |
+| `from_user_id`                          | nullable，v2 多用户区分发送者；v1 implicit 单用户 |
+| `content`                               | 文本                                              |
+| `metadata`                              | JSON：tool_call 引用、附件、引用消息等            |
 
 **消息是 channel-scoped**：换 channel 就是另一条对话流。Workspace 不直接持消息。
 
@@ -211,11 +218,11 @@ messages / inbox delivery row 都不随之删除。
 
 #### 三档投递梯度（同一 stdin 通道，不同 payload 复杂度）
 
-| 档位 | Payload 形态 | Agent 视角 | 触发场景 |
-|------|------------|----------|---------|
-| **A. Push 完整内容** | 把整条新消息包成伪 user message 写 stdin：`{"type":"user","message":{"content":[{"type":"text","text":"New message received: <发件人><正文>...Respond as appropriate."}]}}` | 直接读到完整消息内容，立即 reply | direct mode + inbox 非空 + driver.encodeStdinMessage 成功 |
-| **B. Push 短提示** | 写一行 ASCII：`[System notification: You have N new messages waiting. Call check_messages to read them when you're ready.]` | 读到提示后**自己调 `check_messages` MCP 工具**走 HTTP 拉正文 | 上面 A 的 encode 失败 / driver 不支持 direct push / 边缘 case |
-| **C. 不 push** | 什么都不写到 stdin | 消息留 inbox，等下次 spawn 时作为 `runtime_start.startup_delivery.text` 交给 daemon，或 agent 自发 check | agent 进程不在跑 / Claude gated 模式但当前不在 safe boundary |
+| 档位                 | Payload 形态                                                                                                                                                                | Agent 视角                                                                                               | 触发场景                                                      |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| **A. Push 完整内容** | 把整条新消息包成伪 user message 写 stdin：`{"type":"user","message":{"content":[{"type":"text","text":"New message received: <发件人><正文>...Respond as appropriate."}]}}` | 直接读到完整消息内容，立即 reply                                                                         | direct mode + inbox 非空 + driver.encodeStdinMessage 成功     |
+| **B. Push 短提示**   | 写一行 ASCII：`[System notification: You have N new messages waiting. Call check_messages to read them when you're ready.]`                                                 | 读到提示后**自己调 `check_messages` MCP 工具**走 HTTP 拉正文                                             | 上面 A 的 encode 失败 / driver 不支持 direct push / 边缘 case |
+| **C. 不 push**       | 什么都不写到 stdin                                                                                                                                                          | 消息留 inbox，等下次 spawn 时作为 `runtime_start.startup_delivery.text` 交给 daemon，或 agent 自发 check | agent 进程不在跑 / Claude gated 模式但当前不在 safe boundary  |
 
 **关键理解**：A 和 B **共用 stdin 通道**，区别只是 payload 复杂度。"fallback" 不是切换到别的通道，是**降级 payload 复杂度换可靠性**——A 失败的可能原因（formatting、字符转义、长度、driver 对 busy 模式只支持简单字符串），B 一行 ASCII 几乎不会失败。完整内容 push 的好处是**省一次 HTTP round-trip**（agent 不需要再调 check_messages 拉正文），所以是默认快路。
 
@@ -375,7 +382,7 @@ slock 不信任 model 内置压缩能无损保留所有信息（合理——压�
 
 #### 不压缩 chat history（messages 表）
 
-slock 完全不动 messages 表。投递过的消息留在 db 里供 history 检索。压缩 *消息事实层* 是反模式——压缩的是 *agent context window 内的 LLM 历史*，那是 agent 自己的私事。**v1 同款：messages 表是 append-only 事实层，永不裁剪。**
+slock 完全不动 messages 表。投递过的消息留在 db 里供 history 检索。压缩 _消息事实层_ 是反模式——压缩的是 _agent context window 内的 LLM 历史_，那是 agent 自己的私事。**v1 同款：messages 表是 append-only 事实层，永不裁剪。**
 
 #### v1 实现要点
 
@@ -383,7 +390,6 @@ slock 完全不动 messages 表。投递过的消息留在 db 里供 history 检
 - ConversationManager 把这两个事件接到 gated steering 状态机的 `compacting` 标志（task #11）
 - 5 分钟 watchdog 抄过来，超时只广播状态，不强行 kill
 - DB schema 不需要为压缩加任何字段（messages append-only，trajectory 是 driver 调试日志，可后期再说）
-
 
 ### 3.6 Thread —— 消息 reply-cluster
 
@@ -397,7 +403,7 @@ Thread 是**消息的 reply-cluster**,不是独立会话:在某条消息下展�
 #### 核心规则
 
 - **归属**:reply 用 `thread_root_id` 指向 canonical root message;root 自身 `thread_root_id
-  IS NULL`。主 channel 列表只显示 main stream(`thread_root_id IS NULL`),root 消息带 reply
+IS NULL`。主 channel 列表只显示 main stream(`thread_root_id IS NULL`),root 消息带 reply
   徽标;展开才按 root 过滤加载该 cluster。
 - **一层封顶**:reply 归一到 canonical root,不允许 reply 之上再 reply 成树(写死)。cluster 不是
   导航树节点,sidebar 不展示。
@@ -414,7 +420,6 @@ Thread 是**消息的 reply-cluster**,不是独立会话:在某条消息下展�
 > `create_thread` / `close_thread`)已冻结为只读——schema 保留列与 enum、历史行可读,但不再 spawn
 > 或写入,`resolveChannelId` 只认 `channel|dm_channel`。新代码一律走上面的 reply-cluster 模型。
 
-
 ## 4. Memory / Notes —— 两层知识
 
 > **2026-06-12 — 移除 workspace Consensus（L3）**：原 L3 `CONSENSUS.md`
@@ -425,10 +430,10 @@ Thread 是**消息的 reply-cluster**,不是独立会话:在某条消息下展�
 
 ### 4.1 两层结构（核心思想：分层 + DM 为塑造层）
 
-| 层级 | 内容 | 谁拥有 | 谁可写 | 通过什么场景塑造 |
-|------|------|--------|--------|-----------------|
-| **L1: Agent Global** | agent 的全局身份 / 角色定义（`system_prompt.md`）+ DM 记忆 | agent | 该 agent（在 DM 中）+ 用户（管理界面）| **DM** |
-| **L2: Per-Workspace Per-Agent Memory** | 该 agent 在该 workspace 内的局部知识（`MEMORY.md` + `notes/`）| (workspace, agent) | 该 agent 在该 workspace 工作时 | **Workspace onboarding + 该 workspace 内的对话** |
+| 层级                                   | 内容                                                           | 谁拥有             | 谁可写                                 | 通过什么场景塑造                                 |
+| -------------------------------------- | -------------------------------------------------------------- | ------------------ | -------------------------------------- | ------------------------------------------------ |
+| **L1: Agent Global**                   | agent 的全局身份 / 角色定义（`system_prompt.md`）+ DM 记忆     | agent              | 该 agent（在 DM 中）+ 用户（管理界面） | **DM**                                           |
+| **L2: Per-Workspace Per-Agent Memory** | 该 agent 在该 workspace 内的局部知识（`MEMORY.md` + `notes/`） | (workspace, agent) | 该 agent 在该 workspace 工作时         | **Workspace onboarding + 该 workspace 内的对话** |
 
 > **关键设计（D2.g 校准，2026-05-27）**：角色定义只从 L1
 > `system_prompt.md` 读取；L2 不再承载一份 workspace-scoped
@@ -509,13 +514,14 @@ Thread 是**消息的 reply-cluster**,不是独立会话:在某条消息下展�
 Welcome to channel **<channel.name>**.
 
 Members joining this workspace:
+
 - **<agent-A.name>** (<runtime>) — currently configured as:
   > <agent-A 的 L1 system_prompt 第一段，截断 200 字符>
-  Memory: <MEMORY.md 字数 / 最近修改时间，或 "empty">
+  > Memory: <MEMORY.md 字数 / 最近修改时间，或 "empty">
 - **<agent-B.name>** (<runtime>) — ...
 
 Each agent has been seeded with their global identity. The user can now
-talk to you to refine your role for *this* workspace — e.g. "claude, in this
+talk to you to refine your role for _this_ workspace — e.g. "claude, in this
 workspace focus on architecture review only" / "codex, your job here is to
 write tests".
 
@@ -543,11 +549,11 @@ work, just start working.
 
 ### 4.4 L1 ↔ L2 同步（仅一个方向、一个时机）
 
-| 方向 | 时机 | 触发方式 |
-|------|------|---------|
-| **L1 → L2 全量** | 不存在 | —— |
-| **隐式自动同步** | 不存在 | —— |
-| **重置 / 提升** | 走对话——用户在 DM 中跟 agent 说"忘掉你在 workspace X 学的"或"把你在 workspace X 的设定记到 global"，agent 自己执行文件操作 | 不需要专门 UI |
+| 方向             | 时机                                                                                                                       | 触发方式      |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| **L1 → L2 全量** | 不存在                                                                                                                     | ——            |
+| **隐式自动同步** | 不存在                                                                                                                     | ——            |
+| **重置 / 提升**  | 走对话——用户在 DM 中跟 agent 说"忘掉你在 workspace X 学的"或"把你在 workspace X 的设定记到 global"，agent 自己执行文件操作 | 不需要专门 UI |
 
 DM 不参与同步——DM 直接操作 L1（cwd = global home）。
 
@@ -659,6 +665,7 @@ The human user is also present.
 ## Workspace & Memory
 
 Your home in this workspace: `./.silverhand/agents/<your-id>/`
+
 - `system_prompt.md` — your role definition (already loaded above)
 - `MEMORY.md` — what you've learned in this workspace. The entry point /
   index. Read at startup, update when you learn something durable.
@@ -757,31 +764,31 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 
 ### 6.1 架构演进
 
-| v1 | v2 |
-|----|----|
-| 单 host (this machine) | 多 host：computer + sandbox（云容器、e2b 等）|
-| 单用户 implicit | 多用户：users 表 + workspace_humans 关联 + message.from_user_id |
-| 无群聊邀请 | UI "邀请用户加入 workspace" |
-| 无防回声机械限制 | 如有需要：连续 N 轮无人介入 → pause |
-| Embedded backend | 可切 remote backend（同 schema，加 auth middleware）|
-| 仅本地 workspace | git_url 支持自动 clone（"加入此 workspace"按钮）|
+| v1                     | v2                                                              |
+| ---------------------- | --------------------------------------------------------------- |
+| 单 host (this machine) | 多 host：computer + sandbox（云容器、e2b 等）                   |
+| 单用户 implicit        | 多用户：users 表 + workspace_humans 关联 + message.from_user_id |
+| 无群聊邀请             | UI "邀请用户加入 workspace"                                     |
+| 无防回声机械限制       | 如有需要：连续 N 轮无人介入 → pause                             |
+| Embedded backend       | 可切 remote backend（同 schema，加 auth middleware）            |
+| 仅本地 workspace       | git_url 支持自动 clone（"加入此 workspace"按钮）                |
 
 ### 6.2 slock-ai 已有但 v1 跳过的协作功能（2026-05-01 全文研读 system_prompt 后归档）
 
 > 这些是 slock 的 system prompt 中明确教 agent 使用的功能，每一项都是一组 MCP 工具 + 数据模型 + UI。我们 v1 不实现，但记录在案以免遗忘 / 未来对齐。
 
-| 功能 | slock 怎么用 | 我们 v1 是否需要 | 排到 v2 时的代价估计 |
-|------|------------|--------------|----------------|
-| **Threads（消息嵌套讨论）** | `target=#workspace:<msgId-shortId>` 表示 thread；可在 workspace / DM 内开 thread；`thread unfollow` 退订 | **已收编进 §3.6 Thread**。v1 落地为**消息 reply-cluster**（同 channel 内按 `thread_root_id` 归类的子讨论，一层封顶）；早期设想的"独立子进程 / 子会话 / close_thread 回流"方案已废弃为只读 fossil（见 §3.6） | —— |
-| **Task board（任务板）** | 任务是带 `[task #N status=...]` 后缀的特殊消息；工具：`list_tasks`、`create_tasks`、`claim_tasks`、`unclaim_task`、`update_task_status`；状态：todo / claimed / in_review / done；slock 强制 "claim before work" | **v2**。多 agent 并行协作的核心原语，但 v1 用普通消息聊任务也能凑合 | 大：tasks 表 + 状态机 + 5 个 MCP 工具 + UI 任务板视图 + 防 race claim 逻辑 |
-| **Reminders（提醒/调度）** | 工具：`schedule_reminder`、`list_reminders`、`cancel_reminder`；支持一次性 / 定时 / 周期；daemon 负责到点投递 | **v2**。"提醒我下周一问 codex 那个问题"这种场景需要它，但 v1 用户可以自己设系统闹钟 | 中：reminders 表 + 调度器（cron-like）+ 3 个 MCP 工具 |
-| **Attachments（附件）** | 工具：`upload_file`、`view_file`；附件以 ID 形式挂在消息上；支持 mime sniffing / 图片预览 | **v2**。code review 给截图 / 贴日志文件场景需要，v1 用户用 path 引用本地文件代替 | 中：attachments 表 + 文件存储路径 + 2 个 MCP 工具 + UI 上传/预览 |
-| **Read history（消息历史检索）** | 工具：`read_history`，支持 `before/after/around` 分页；`search_messages` 全文搜索 | **v1.5 / v2**。Agent 接活时想了解"这个 workspace 之前在干嘛"会用到。v1 时 agent 可以靠 cwd 里的文件 + MEMORY.md 凑合 | 小：messages 已有 seq + ts，加查询路由 + 1 个 MCP 工具即可 |
-| **Profile / Avatar** | 工具：`profile show`、`profile update --avatar-file`；agent 有自己的头像 | **v2**。UI 美化项 | 小：agents 表加 avatar_path，UI 显示 |
-| **Discovery 工具** | `list_server`：列出 workspace + agent + human；`workspace members`：列出某 workspace/DM/thread 成员 | **v1.5**。多 workspace 多 agent 后 agent 需要"发现"其他 workspace 与同事。v1 单 workspace 起步可以跳 | 小：1-2 个 MCP 工具，纯查 |
-| **Runtime profile control（daemon 控制 agent）** | 特殊 system prompt 段 + `runtime_profile_migration_done` 工具；用于 daemon 灰度 / 升级 | **不需要**。这是 slock 内部 ops 机制，跟产品功能无关 | —— |
-| **Skills（agent 技能管理）** | 类似 npm 的 skill 安装机制 | **不需要**。各 agent CLI（claude / codex）自己已有技能/MCP 生态 | —— |
-| **特殊 message 渲染 token** | `@name` / `#channel` / `task #N` / `#channel:msgId` 在消息里自动渲染成可点击链接 | **v2**。需要时再做 markdown render 增强 | 小：renderer 端的 message 渲染插件 |
+| 功能                                             | slock 怎么用                                                                                                                                                                                                     | 我们 v1 是否需要                                                                                                                                                                                            | 排到 v2 时的代价估计                                                       |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **Threads（消息嵌套讨论）**                      | `target=#workspace:<msgId-shortId>` 表示 thread；可在 workspace / DM 内开 thread；`thread unfollow` 退订                                                                                                         | **已收编进 §3.6 Thread**。v1 落地为**消息 reply-cluster**（同 channel 内按 `thread_root_id` 归类的子讨论，一层封顶）；早期设想的"独立子进程 / 子会话 / close_thread 回流"方案已废弃为只读 fossil（见 §3.6） | ——                                                                         |
+| **Task board（任务板）**                         | 任务是带 `[task #N status=...]` 后缀的特殊消息；工具：`list_tasks`、`create_tasks`、`claim_tasks`、`unclaim_task`、`update_task_status`；状态：todo / claimed / in_review / done；slock 强制 "claim before work" | **v2**。多 agent 并行协作的核心原语，但 v1 用普通消息聊任务也能凑合                                                                                                                                         | 大：tasks 表 + 状态机 + 5 个 MCP 工具 + UI 任务板视图 + 防 race claim 逻辑 |
+| **Reminders（提醒/调度）**                       | 工具：`schedule_reminder`、`list_reminders`、`cancel_reminder`；支持一次性 / 定时 / 周期；daemon 负责到点投递                                                                                                    | **v2**。"提醒我下周一问 codex 那个问题"这种场景需要它，但 v1 用户可以自己设系统闹钟                                                                                                                         | 中：reminders 表 + 调度器（cron-like）+ 3 个 MCP 工具                      |
+| **Attachments（附件）**                          | 工具：`upload_file`、`view_file`；附件以 ID 形式挂在消息上；支持 mime sniffing / 图片预览                                                                                                                        | **v2**。code review 给截图 / 贴日志文件场景需要，v1 用户用 path 引用本地文件代替                                                                                                                            | 中：attachments 表 + 文件存储路径 + 2 个 MCP 工具 + UI 上传/预览           |
+| **Read history（消息历史检索）**                 | 工具：`read_history`，支持 `before/after/around` 分页；`search_messages` 全文搜索                                                                                                                                | **v1.5 / v2**。Agent 接活时想了解"这个 workspace 之前在干嘛"会用到。v1 时 agent 可以靠 cwd 里的文件 + MEMORY.md 凑合                                                                                        | 小：messages 已有 seq + ts，加查询路由 + 1 个 MCP 工具即可                 |
+| **Profile / Avatar**                             | 工具：`profile show`、`profile update --avatar-file`；agent 有自己的头像                                                                                                                                         | **v2**。UI 美化项                                                                                                                                                                                           | 小：agents 表加 avatar_path，UI 显示                                       |
+| **Discovery 工具**                               | `list_server`：列出 workspace + agent + human；`workspace members`：列出某 workspace/DM/thread 成员                                                                                                              | **v1.5**。多 workspace 多 agent 后 agent 需要"发现"其他 workspace 与同事。v1 单 workspace 起步可以跳                                                                                                        | 小：1-2 个 MCP 工具，纯查                                                  |
+| **Runtime profile control（daemon 控制 agent）** | 特殊 system prompt 段 + `runtime_profile_migration_done` 工具；用于 daemon 灰度 / 升级                                                                                                                           | **不需要**。这是 slock 内部 ops 机制，跟产品功能无关                                                                                                                                                        | ——                                                                         |
+| **Skills（agent 技能管理）**                     | 类似 npm 的 skill 安装机制                                                                                                                                                                                       | **不需要**。各 agent CLI（claude / codex）自己已有技能/MCP 生态                                                                                                                                             | ——                                                                         |
+| **特殊 message 渲染 token**                      | `@name` / `#channel` / `task #N` / `#channel:msgId` 在消息里自动渲染成可点击链接                                                                                                                                 | **v2**。需要时再做 markdown render 增强                                                                                                                                                                     | 小：renderer 端的 message 渲染插件                                         |
 
 ---
 
@@ -798,27 +805,27 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 
 ## 8. 已废弃 / 修正过的设计（备查）
 
-| 旧 | 新 | 改的原因 |
-|----|----|---------|
-| 1 workspace = N 1v1 channel | 1 workspace = N 多-agent channel | 多 agent 协作是产品核心，不能让 channel 退化成 1v1 |
-| Workspace.workspace_path optional | NOT NULL（后端自动生成兜底）—— **此行的"新"已被下一行再次取代，该列整体退役** | Agent CLI 必须有 cwd（该前提现在由 daemon 本机推导的 bundle 坐标满足，不再需要 DB 列） |
-| `workspace_path` / `workspace_host_id` 两列 + 创建时 materialize 目录 | 两列与对应 create 输入全部退役；L2 bundle = `<agent home>/workspaces/<workspace_id>` 确定性坐标，首次 spawn 懒 seed；session cwd 是唯一强 ensure 的运行基础 | 一列同时背 create 输入 / daemon binding cache / 用户可见展示 path 三个契约，且把 workspace 钉在一台机器上；拆开安置后 workspace 回归纯 control-plane 记录（`workspace-layout-relocation-v1.md` §6/§7，2026-08，随 plan-A epoch 2 原子一刀） |
-| Agent 绑 workspace | Agent 不绑 workspace | Agent 是身份不是任务，workspace 跟 workspace 走 |
-| Project + per-host workspace binding | 砍掉 Project 这层 | 跨机器文件协作非目标，过度设计 |
-| `--auth-token` argv 注入 | env `AGENT_HUB_AUTH_TOKEN` | 避免 `ps` 暴露 token |
-| `.agent-hub` 目录名 | `.silverhand` | 跟 app 名统一 |
-| Memory 在 workspace 级别 | Memory 分两层（L1 agent-global / L2 workspace-instance）| Agent 身份要跨 workspace 复用又要支持 workspace 内角色反转，单层 memory 做不到 |
-| L2 用 symlink 指 L1（隐式共享）| L2 只存 workspace-scoped MEMORY/notes；L1 `system_prompt.md` 是唯一角色源 | 角色身份要全局一致且由 DM 塑造；workspace 差异化知识放 L2，避免 prompt 分叉 |
-| DM 跟普通 workspace 一样有独立工作目录 | DM 的 cwd = agent 的 L1 home（直接落 L1）| DM 是塑造 agent 全局身份的专用场所，写到独立 workspace 就跟 workspace 没区别了 |
-| 应用数据放 Electron `userData` | 全部放 `~/.silverhand/`（db / config / `computers/<id>/agents/`）| 用户能直接 `cd` 进去看；跟 `~/.claude` `~/.codex` 形成对称；跨 Electron 重装保留 |
-| Workspace 创建有强制 onboarding 表单（preview + 按钮编辑 system_prompt / 清 MEMORY）| 创建后自动 post 一条 `from_kind='system'` onboarding message；global role 写 L1，workspace 知识写 L2 MEMORY/notes | 与"对话即一切"的产品理念一致；表单步骤是 UI 工程量也是用户的认知负担 |
-| Message.from_kind = `user` \| `agent` | Message.from_kind = `user` \| `agent` \| `system` | onboarding 开场白 / 后续 platform 公告需要一个非用户非 agent 的来源 |
-| Channel 运行时文件放 `<workspace>/.silverhand/channels/<channel-id>/` | 放 `<os.tmpdir()>/silverhand/<spawn-id>/` | channel 的 system-prompt + CLI shim 是每次 spawn 临时合成、可重算，写进 workspace 会污染用户目录 + 堆积旧 channel 残骸 |
-| 消息分发方案待定（stdin vs pull 二选一） | 04-30 误判为"纯 pull + piggyback"，05-01 重读 slock 源码后改正：**stdin push 为主（A 档完整内容 / B 档短提示降级）+ HTTP pull 兜底 + spawn 时 inject**。详见 §3.1 | 第一次只看了 chat-bridge 工具描述，没追到 daemon 的 deliverNotificationToAgent + gated steering 路径，错把兜底当主路径 |
-| 没有打断机制 / "需要时加 SIGINT" | 显式两层：soft（追加新指令走 §3.1 A 档 push）+ hard（Claude control_request interrupt → SIGTERM fallback） | 用户实际需要"换方向"和"立刻停"两种语义，slock 也是这套（control 协议 + 进程信号） |
-| Server-side 上下文压缩 / chat history 裁剪 | 全部不做，跟随 slock：压缩是 agent CLI 内部行为，silverhand 只 observer + push 暂停 + watchdog；messages 表 append-only 永不裁剪 | 压缩本质损失性，由 model runtime 自己决定最合适；server 介入会双重压缩 / 触发不一致 |
-| §4.7 平台 prompt 模板"几条 etiquette 提醒" | 完整操作手册（Critical rules / Startup sequence / Workspace & Memory / Compaction safety / Etiquette / Initial role），抄 slock 的覆盖度 | 单靠几句礼貌话不够：少了 startup sequence agent 不读 MEMORY、少了 compaction safety 压缩后 agent 失忆、少了 critical rule agent 把 reply 打到 stdout |
-| 子话题用 slock-style thread（消息归类）| §3.6 Thread：v1 落地为**消息 reply-cluster**（同 channel `thread_root_id` 归类，一层封顶）；早期设想的真隔离子进程 / 父子双向通信 / close_thread 回流方案已废弃为只读 fossil（见 §3.6） | slock thread 不隔离 agent 上下文（同进程订阅多 workspace），是 slock 单进程模型下的妥协；早期一度想做真隔离子进程，v1 最终收敛为同 channel 内的 reply-cluster，避免多进程/跨会话通信的复杂度 |
+| 旧                                                                                   | 新                                                                                                                                                                                      | 改的原因                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 workspace = N 1v1 channel                                                          | 1 workspace = N 多-agent channel                                                                                                                                                        | 多 agent 协作是产品核心，不能让 channel 退化成 1v1                                                                                                                                                                                          |
+| Workspace.workspace_path optional                                                    | NOT NULL（后端自动生成兜底）—— **此行的"新"已被下一行再次取代，该列整体退役**                                                                                                           | Agent CLI 必须有 cwd（该前提现在由 daemon 本机推导的 bundle 坐标满足，不再需要 DB 列）                                                                                                                                                      |
+| `workspace_path` / `workspace_host_id` 两列 + 创建时 materialize 目录                | 两列与对应 create 输入全部退役；L2 bundle = `<agent home>/workspaces/<workspace_id>` 确定性坐标，首次 spawn 懒 seed；session cwd 是唯一强 ensure 的运行基础                             | 一列同时背 create 输入 / daemon binding cache / 用户可见展示 path 三个契约，且把 workspace 钉在一台机器上；拆开安置后 workspace 回归纯 control-plane 记录（`workspace-layout-relocation-v1.md` §6/§7，2026-08，随 plan-A epoch 2 原子一刀） |
+| Agent 绑 workspace                                                                   | Agent 不绑 workspace                                                                                                                                                                    | Agent 是身份不是任务，workspace 跟 workspace 走                                                                                                                                                                                             |
+| Project + per-host workspace binding                                                 | 砍掉 Project 这层                                                                                                                                                                       | 跨机器文件协作非目标，过度设计                                                                                                                                                                                                              |
+| `--auth-token` argv 注入                                                             | env `AGENT_HUB_AUTH_TOKEN`                                                                                                                                                              | 避免 `ps` 暴露 token                                                                                                                                                                                                                        |
+| `.agent-hub` 目录名                                                                  | `.silverhand`                                                                                                                                                                           | 跟 app 名统一                                                                                                                                                                                                                               |
+| Memory 在 workspace 级别                                                             | Memory 分两层（L1 agent-global / L2 workspace-instance）                                                                                                                                | Agent 身份要跨 workspace 复用又要支持 workspace 内角色反转，单层 memory 做不到                                                                                                                                                              |
+| L2 用 symlink 指 L1（隐式共享）                                                      | L2 只存 workspace-scoped MEMORY/notes；L1 `system_prompt.md` 是唯一角色源                                                                                                               | 角色身份要全局一致且由 DM 塑造；workspace 差异化知识放 L2，避免 prompt 分叉                                                                                                                                                                 |
+| DM 跟普通 workspace 一样有独立工作目录                                               | DM 的 cwd = agent 的 L1 home（直接落 L1）                                                                                                                                               | DM 是塑造 agent 全局身份的专用场所，写到独立 workspace 就跟 workspace 没区别了                                                                                                                                                              |
+| 应用数据放 Electron `userData`                                                       | 全部放 `~/.silverhand/`（db / config / `computers/<id>/agents/`）                                                                                                                       | 用户能直接 `cd` 进去看；跟 `~/.claude` `~/.codex` 形成对称；跨 Electron 重装保留                                                                                                                                                            |
+| Workspace 创建有强制 onboarding 表单（preview + 按钮编辑 system_prompt / 清 MEMORY） | 创建后自动 post 一条 `from_kind='system'` onboarding message；global role 写 L1，workspace 知识写 L2 MEMORY/notes                                                                       | 与"对话即一切"的产品理念一致；表单步骤是 UI 工程量也是用户的认知负担                                                                                                                                                                        |
+| Message.from_kind = `user` \| `agent`                                                | Message.from_kind = `user` \| `agent` \| `system`                                                                                                                                       | onboarding 开场白 / 后续 platform 公告需要一个非用户非 agent 的来源                                                                                                                                                                         |
+| Channel 运行时文件放 `<workspace>/.silverhand/channels/<channel-id>/`                | 放 `<os.tmpdir()>/silverhand/<spawn-id>/`                                                                                                                                               | channel 的 system-prompt + CLI shim 是每次 spawn 临时合成、可重算，写进 workspace 会污染用户目录 + 堆积旧 channel 残骸                                                                                                                      |
+| 消息分发方案待定（stdin vs pull 二选一）                                             | 04-30 误判为"纯 pull + piggyback"，05-01 重读 slock 源码后改正：**stdin push 为主（A 档完整内容 / B 档短提示降级）+ HTTP pull 兜底 + spawn 时 inject**。详见 §3.1                       | 第一次只看了 chat-bridge 工具描述，没追到 daemon 的 deliverNotificationToAgent + gated steering 路径，错把兜底当主路径                                                                                                                      |
+| 没有打断机制 / "需要时加 SIGINT"                                                     | 显式两层：soft（追加新指令走 §3.1 A 档 push）+ hard（Claude control_request interrupt → SIGTERM fallback）                                                                              | 用户实际需要"换方向"和"立刻停"两种语义，slock 也是这套（control 协议 + 进程信号）                                                                                                                                                           |
+| Server-side 上下文压缩 / chat history 裁剪                                           | 全部不做，跟随 slock：压缩是 agent CLI 内部行为，silverhand 只 observer + push 暂停 + watchdog；messages 表 append-only 永不裁剪                                                        | 压缩本质损失性，由 model runtime 自己决定最合适；server 介入会双重压缩 / 触发不一致                                                                                                                                                         |
+| §4.7 平台 prompt 模板"几条 etiquette 提醒"                                           | 完整操作手册（Critical rules / Startup sequence / Workspace & Memory / Compaction safety / Etiquette / Initial role），抄 slock 的覆盖度                                                | 单靠几句礼貌话不够：少了 startup sequence agent 不读 MEMORY、少了 compaction safety 压缩后 agent 失忆、少了 critical rule agent 把 reply 打到 stdout                                                                                        |
+| 子话题用 slock-style thread（消息归类）                                              | §3.6 Thread：v1 落地为**消息 reply-cluster**（同 channel `thread_root_id` 归类，一层封顶）；早期设想的真隔离子进程 / 父子双向通信 / close_thread 回流方案已废弃为只读 fossil（见 §3.6） | slock thread 不隔离 agent 上下文（同进程订阅多 workspace），是 slock 单进程模型下的妥协；早期一度想做真隔离子进程，v1 最终收敛为同 channel 内的 reply-cluster，避免多进程/跨会话通信的复杂度                                                |
 
 ---
 
