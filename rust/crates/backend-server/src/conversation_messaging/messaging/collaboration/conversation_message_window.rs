@@ -229,6 +229,25 @@ impl std::fmt::Display for MessageWindowWireError {
 impl std::error::Error for MessageWindowWireError {}
 
 fn success(window: &BoundConversationMessageWindow) -> Result<Response, MessageWindowWireError> {
+    // A thread root is displayed with its replies but belongs to the mainline.
+    // Only compare messages in the requested stream with its auxiliary head.
+    let max_seq = window
+        .messages()
+        .iter()
+        .map(|message| message.projection())
+        .filter(|message| window.stream().root().is_none() || message.thread_root.is_some())
+        .map(|message| message.seq)
+        .max();
+    if let Some(max_seq) = max_seq.filter(|seq| *seq > window.stream_head()) {
+        tracing::warn!(
+            diagnostic = "message_window_head_behind",
+            conversation_id = window.stream().conversation().as_str(),
+            thread_root_id = window.stream().root().map(|root| root.as_str()),
+            stream_head_seq = window.stream_head().get(),
+            selected_max_seq = max_seq.get(),
+            "persisted message window exceeds auxiliary stream head"
+        );
+    }
     let messages = window
         .messages()
         .iter()

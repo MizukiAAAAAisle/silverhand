@@ -284,6 +284,12 @@ where
             .execute(&mut *tx)
             .await
             .map_err(failure)?;
+        // The head describes persisted messages, not the wake's delivery audience.
+        // Owner-only routing stays in the inbox write below.
+        let message_seq = MessageSeq::try_from(seq).map_err(failure)?;
+        bump_stream_head_on(&mut tx, conversation, None, message_seq)
+            .await
+            .map_err(failure)?;
         sqlx::query("INSERT INTO conversation_inboxes(conversation_id,agent_id,message_id,delivered_at,delivery_kind,created_at) VALUES(?,?,?,NULL,'turn',?)")
             .bind(conversation.as_str())
             .bind(owner.as_str())

@@ -108,6 +108,71 @@ async fn production_sqlite_router_consumes_the_typescript_wire_fixture() {
 }
 
 #[tokio::test]
+async fn lagging_or_missing_auxiliary_heads_do_not_hide_persisted_messages() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lagging-head.sqlite");
+    seed(&path).await;
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    db.execute("INSERT INTO messages(id,conversation_id,from_kind,content,metadata,seq,created_at) VALUES('wake','c','system','wake','{\"subtype\":\"schedule_fire\"}',6,60)")
+        .await
+        .unwrap();
+    db.execute("UPDATE conversations SET latest_message_seq=6 WHERE id='c'")
+        .await
+        .unwrap();
+    let store = MessagingStore::open(&path).await.unwrap();
+    let app = conversation_message_window::router(store.conversation_message_window());
+    for mutation in [
+        "UPDATE conversation_stream_heads SET latest_seq=0 WHERE conversation_id='c'",
+        "DELETE FROM conversation_stream_heads WHERE conversation_id='c'",
+    ] {
+        db.execute(mutation).await.unwrap();
+        for (query, expected_last) in [("", "wake"), ("?thread_root_id=root-1", "reply-2")] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/channels/c/messages{query}"))
+                        .extension(UserId::parse("local").unwrap())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200);
+            let body: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(
+                body["messages"].as_array().unwrap().last().unwrap()["id"],
+                expected_last
+            );
+            assert_eq!(
+                body["stream_head_seq"], 0,
+                "reading does not silently repair the head"
+            );
+        }
+    }
+    // Availability relaxation must not change the private-channel permission gate.
+    db.execute("UPDATE conversations SET visibility='private' WHERE id='c'")
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/channels/c/messages")
+                .extension(UserId::parse("outsider").unwrap())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 403);
+}
+
+#[tokio::test]
 async fn system_audit_actor_is_provenance_not_a_display_author() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("system-audit-window.sqlite");

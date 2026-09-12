@@ -931,7 +931,6 @@ impl ConversationMessageWindow {
             let projection = message.projection();
             if projection.conversation != *conversation
                 || !stream_contains(&stream, projection)
-                || !stream_head_covers(&stream, projection, stream_head.latest)
                 || !message_ids.insert(projection.id.as_str())
                 || projection.reactions.iter().any(|reaction| {
                     reaction.source_message != projection.id
@@ -1120,18 +1119,6 @@ fn stream_contains(
             message.thread_root.as_ref() == Some(root)
                 || (message.thread_root.is_none() && message.id.as_str() == root.as_str())
         }
-    }
-}
-
-fn stream_head_covers(
-    stream: &ResolvedMessageWindowStream,
-    message: &WindowMessageProjection,
-    head: MessageSeq,
-) -> bool {
-    match stream.root() {
-        None => message.seq <= head,
-        Some(root) if message.thread_root.is_none() && message.id.as_str() == root.as_str() => true,
-        Some(_) => message.seq <= head,
     }
 }
 
@@ -1872,7 +1859,7 @@ mod tests {
             )
             .is_ok()
         );
-        assert_eq!(
+        assert!(
             ConversationMessageWindow::sealed(
                 audience("viewer", "c", MessageWindowAudience::Participating),
                 thread_request,
@@ -1897,8 +1884,9 @@ mod tests {
                     Some(2),
                     false
                 ),
-            ),
-            Err(MessageWindowCorruption::PageCoordinate)
+            )
+            .is_ok(),
+            "an auxiliary head behind persisted replies must not hide the page"
         );
     }
 

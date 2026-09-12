@@ -3530,6 +3530,12 @@ async fn the_composed_schedule_driver_delivers_and_settles_a_due_occurrence() {
         .connect(fixture.path.to_str().unwrap())
         .await
         .unwrap();
+    // This test also exercises the strict message reader; use the current status domain.
+    sqlx::query("UPDATE conversations SET status='idle' WHERE id=?")
+        .bind(CONVERSATION_ID)
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query(
         "INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id,materialization_status,session_scope) \
          VALUES('schedule-peer','schedule-peer','qoder','h-registry-probe',1,1,'user-1','active','agent')",
@@ -3729,7 +3735,7 @@ async fn the_composed_schedule_driver_delivers_and_settles_a_due_occurrence() {
     );
     assert_eq!(
         peer_inboxes, 0,
-        "a freshness-exempt wake must not address another target participant"
+        "advancing the message head must not address another target participant"
     );
     let head_before_send: Option<i64> = sqlx::query_scalar(
         "SELECT latest_seq FROM conversation_stream_heads WHERE conversation_id=? AND thread_root_id IS NULL",
@@ -3738,10 +3744,82 @@ async fn the_composed_schedule_driver_delivers_and_settles_a_due_occurrence() {
     .fetch_optional(&pool)
     .await
     .unwrap();
-    assert_eq!(
-        head_before_send, None,
-        "schedule_fire is freshness-exempt and must not advance the target stream head"
-    );
+    let wake_seq: i64 = sqlx::query_scalar(
+        "SELECT seq FROM messages WHERE conversation_id=? \
+         AND json_extract(metadata,'$.schedule_id')=?",
+    )
+    .bind(CONVERSATION_ID)
+    .bind(&schedule_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(head_before_send, Some(wake_seq));
+    {
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_message_window::{
+            ConversationMessageWindowReadPort, ConversationMessageWindowRequest,
+            MessageWindowAnchor, MessageWindowStreamRequest,
+        };
+        use silverhand_backend_core::foundation::identity::{ConversationId, UserId};
+        use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::{
+            activity::observe::{ObservationPort, ObserveBatch, ObserveSource, StreamPosition},
+            conversation_unread::ConversationUnreadReadPort,
+        };
+        let store = MessagingStore::open(&fixture.path).await.unwrap();
+        let viewer = UserId::parse("user-1").unwrap();
+        let conversation = ConversationId::parse(CONVERSATION_ID).unwrap();
+        let request = ConversationMessageWindowRequest::new(
+            MessageWindowStreamRequest::Mainline,
+            200,
+            MessageWindowAnchor::Latest,
+        )
+        .unwrap();
+        let page = store
+            .conversation_message_window()
+            .read(&viewer, &conversation, request.clone())
+            .await
+            .unwrap()
+            .unwrap()
+            .bind(&viewer, &conversation, &request)
+            .unwrap();
+        assert_eq!(page.stream_head().get(), wake_seq);
+        assert!(
+            page.messages()
+                .iter()
+                .any(|row| row.projection().seq.get() == wake_seq)
+        );
+        let unread = store
+            .conversation_unread()
+            .read(&viewer, &conversation)
+            .await
+            .unwrap()
+            .unwrap()
+            .bind(&conversation)
+            .unwrap();
+        assert_eq!(
+            unread.mainline().count(),
+            0,
+            "a system wake is not unread conversation discourse"
+        );
+        store
+            .observation()
+            .observe(
+                viewer,
+                ObserveBatch::new(vec![ObserveSource::Stream {
+                    conversation,
+                    thread_root: None,
+                    position: StreamPosition::StreamHead,
+                }])
+                .unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let read_seq: i64 = sqlx::query_scalar(
+            "SELECT last_read_seq FROM conversation_reads WHERE user_id='user-1' AND conversation_id=? AND thread_root_id IS NULL",
+        ).bind(CONVERSATION_ID).fetch_one(&pool).await.unwrap();
+        assert_eq!(read_seq, wake_seq);
+    }
     let persisted: (String, String, i64, i64) = sqlx::query_as(
         "SELECT owner_agent_id,target_conversation_id,next_fire_at,fired_count FROM schedules WHERE id=?",
     ).bind(&schedule_id).fetch_one(&pool).await.unwrap();
