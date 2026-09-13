@@ -19,6 +19,7 @@ import {
   useRuntimeEpochPromotion,
   useViewerUser,
 } from "@/features/session/hooks";
+import { EmbeddedProfileSetupGate } from "@/features/app-shell/embedded-profile-setup-gate";
 import { RegistrationGate } from "@/features/app-shell/registration-gate";
 import { BackendUnreachableGate } from "@/features/app-shell/backend-unreachable-gate";
 import { UpdateRequiredGate } from "@/features/app-shell/update-required-gate";
@@ -82,7 +83,11 @@ export function App(): JSX.Element {
   // slack-dark is our only dark theme; studio-light / forza6 are light. sonner
   // then picks the matching default scale for the parts our token overrides in
   // global.css don't cover (e.g. any action/close button greys).
-  return <RegisteredAppShell toasterTheme={appearance.theme === "slack-dark" ? "dark" : "light"} />;
+  return (
+    <EmbeddedProfileSetupGate key={viewer.data.id} viewerId={viewer.data.id}>
+      <RegisteredAppShell toasterTheme={appearance.theme === "slack-dark" ? "dark" : "light"} />
+    </EmbeddedProfileSetupGate>
+  );
 }
 
 /**
