@@ -627,7 +627,11 @@ async function storeUserSession(token: string, user: UserDto): Promise<void> {
 function reseatCachedUserSessionFromProxy(
   request: { path: string; method?: string },
   response: BackendProxyResponse,
+  requestSessionToken: string,
 ): void {
+  // A response belongs to the session that issued it, not whichever session is
+  // current when the network finishes (logout/account switch may have happened).
+  if (!userSessionToken || !userSessionUser || userSessionToken !== requestSessionToken) return;
   const user = extractViewerUserFromProxyResponse(request, response);
   if (!user) return;
   if (userSessionUser && userSessionUser.id !== user.id) {
@@ -1521,8 +1525,9 @@ async function proxyBackendRequest(input: BackendProxyRequest): Promise<BackendP
       bodyText: JSON.stringify({ error: "unauthorized" }),
     };
   }
+  const requestSessionToken = userSessionToken;
   const headers = proxyHeaders(input.headers);
-  headers.set("Authorization", `Bearer ${userSessionToken}`);
+  headers.set("Authorization", `Bearer ${requestSessionToken}`);
   if (input.bodyText !== undefined && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -1543,12 +1548,16 @@ async function proxyBackendRequest(input: BackendProxyRequest): Promise<BackendP
       bodyText: JSON.stringify({ error: "backend_unreachable", message }),
     };
   }
-  if (res.status === 401) {
+  if (res.status === 401 && userSessionToken === requestSessionToken) {
     await clearUserSessionAfterUnauthorized("backend request");
   }
   const response = await marshalBackendResponse(res, input.responseType ?? "text");
   runtimeUpgradeMonitor.onRestResponse(response.status, response.bodyText);
-  reseatCachedUserSessionFromProxy({ path: input.path, method: input.method }, response);
+  reseatCachedUserSessionFromProxy(
+    { path: input.path, method: input.method },
+    response,
+    requestSessionToken,
+  );
   return response;
 }
 
@@ -1562,6 +1571,7 @@ async function proxyBackendUpload(input: BackendUploadRequest): Promise<BackendP
       bodyText: JSON.stringify({ error: "unauthorized" }),
     };
   }
+  const requestSessionToken = userSessionToken;
   const form = new FormData();
   for (const field of input.fields ?? []) {
     form.append(field.name, field.value);
@@ -1578,7 +1588,7 @@ async function proxyBackendUpload(input: BackendUploadRequest): Promise<BackendP
   try {
     res = await backendFetch(backendUrl(input.path), {
       method: "POST",
-      headers: { Authorization: `Bearer ${userSessionToken}` },
+      headers: { Authorization: `Bearer ${requestSessionToken}` },
       body: form,
     });
   } catch (err) {
@@ -1590,12 +1600,16 @@ async function proxyBackendUpload(input: BackendUploadRequest): Promise<BackendP
       bodyText: JSON.stringify({ error: "backend_unreachable", message }),
     };
   }
-  if (res.status === 401) {
+  if (res.status === 401 && userSessionToken === requestSessionToken) {
     await clearUserSessionAfterUnauthorized("backend upload");
   }
   const response = await marshalBackendResponse(res, "text");
   runtimeUpgradeMonitor.onRestResponse(response.status, response.bodyText);
-  reseatCachedUserSessionFromProxy({ path: input.path, method: "POST" }, response);
+  reseatCachedUserSessionFromProxy(
+    { path: input.path, method: "POST" },
+    response,
+    requestSessionToken,
+  );
   return response;
 }
 

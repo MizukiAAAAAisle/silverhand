@@ -144,3 +144,113 @@ describe("extractViewerUserFromProxyResponse", () => {
     ).toBeNull();
   });
 });
+
+// Execute the actual main-process functions without launching Electron or the
+// user's backend. Only the network/session environment is supplied by this harness.
+// AST selection avoids depending on indentation or copying the implementation.
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import ts from "typescript";
+
+function mainSessionHarness() {
+  const source = ts.createSourceFile(
+    "index.ts",
+    readFileSync(new URL("../index.ts", import.meta.url), "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const names = ["proxyBackendRequest", "reseatCachedUserSessionFromProxy", "desktopAuthState"];
+  const functions = names
+    .map((name) => {
+      const node = source.statements.find(
+        (statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === name,
+      );
+      if (!node) throw new Error(`Main function missing: ${name}`);
+      return node.getText(source);
+    })
+    .join("\n");
+  let finish: (response: Response) => void = () => {
+    throw new Error("request has not started");
+  };
+  const context = vm.createContext({
+    userSessionToken: "session-a",
+    userSessionUser: userDto({ name: "local" }),
+    extractViewerUserFromProxyResponse,
+    logger: undefined,
+    Headers,
+    assertApiProxyPath: () => {},
+    proxyHeaders: () => new Headers(),
+    backendUrl: (path: string) => path,
+    backendFetch: () =>
+      new Promise<Response>((resolve) => {
+        finish = resolve;
+      }),
+    marshalBackendResponse: async (response: Response) => ({
+      status: response.status,
+      bodyText: await response.text(),
+    }),
+    runtimeUpgradeMonitor: { onRestResponse: () => {}, reset: () => {} },
+    fetchServerInfo: async () => ({ signup_enabled: false }),
+    classifyDesktopServerApiCompatibility: () => "compatible",
+    DESKTOP_SERVER_API_EPOCH: 4,
+    MINIMUM_SERVER_API_EPOCH: 4,
+    loadPersistedUserSessionToken: () => null,
+    clearUserSessionAfterUnauthorized: async () => {
+      context.userSessionToken = null;
+      context.userSessionUser = null;
+    },
+  });
+  vm.runInContext(
+    ts.transpileModule(functions, { compilerOptions: { target: ts.ScriptTarget.ES2022 } })
+      .outputText,
+    context,
+  );
+  return {
+    start: () =>
+      context.proxyBackendRequest({ method: "PUT", path: apiPaths.embeddedProfileSetup }),
+    finish: (user: UserDto, status = 200) =>
+      finish(new Response(JSON.stringify({ required: false, user }), { status })),
+    state: () => context.desktopAuthState(),
+    switchSession: (token: string | null, user: UserDto | null) => {
+      context.userSessionToken = token;
+      context.userSessionUser = user;
+    },
+    cachedUser: () => context.userSessionUser,
+  };
+}
+
+describe("setup response through main proxy and auth:getState", () => {
+  it("returns the completed viewer on the next actual auth-state read", async () => {
+    const main = mainSessionHarness();
+    const completed = userDto({ name: "Alice", display_name: "Alice" });
+    const pending = main.start();
+    main.finish(completed);
+    await pending;
+    expect(await main.state()).toMatchObject({ status: "authenticated", user: completed });
+  });
+
+  it("ignores responses after logout or replacement of the issuing session", async () => {
+    for (const replacement of [
+      { token: null, user: null },
+      { token: "session-b", user: userDto({ id: "u-2", name: "Bob" }) },
+      { token: "session-a-new", user: userDto({ name: "NewLogin" }) },
+    ]) {
+      const main = mainSessionHarness();
+      const pending = main.start();
+      main.switchSession(replacement.token, replacement.user);
+      main.finish(userDto({ name: "LateAlice" }));
+      await pending;
+      expect(main.cachedUser()).toEqual(replacement.user);
+    }
+  });
+
+  it("does not clear a newer session when an older request returns unauthorized", async () => {
+    const main = mainSessionHarness();
+    const pending = main.start();
+    const current = userDto({ id: "u-2", name: "Bob" });
+    main.switchSession("session-b", current);
+    main.finish(userDto(), 401);
+    await pending;
+    expect(await main.state()).toMatchObject({ status: "authenticated", user: current });
+  });
+});
