@@ -22,6 +22,7 @@ pub mod agent_workspace_index_probe;
 pub mod auth;
 pub mod avatar_blob;
 pub(crate) mod daemon_profile_mcp_codec;
+pub mod embedded_profile;
 pub mod human_auth;
 pub mod password_hasher;
 pub mod peer_profile;

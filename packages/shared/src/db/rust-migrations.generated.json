@@ -6,6 +6,13 @@
       "epoch": 69,
       "firstStep": 69,
       "lastStep": 98,
+      "released": true,
+      "releasedIn": "ECS Rust deployment 2026-09-12, e5d5090e8"
+    },
+    {
+      "epoch": 70,
+      "firstStep": 99,
+      "lastStep": 99,
       "released": false
     }
   ],
@@ -15,8 +22,8 @@
     "packages/shared/src/conversation-title.ts": "74e08fa0290476e633508b05958d9be88a412c0ae468e29a9b60bebb9b43a3db",
     "packages/shared/src/db/baseline-schema.ts": "7e5b7e9a0aca9b79fa433dca341d68ef4f761c5a545069c6005a4519851130e6",
     "packages/shared/src/db/migration-contracts/task-title-v96.ts": "98b0881301cb959962489178aefca16aa4228c786f03b0b849a654d58504d583",
-    "packages/shared/src/db/migrations.ts": "657e5e1ca8cadef82163cce1d196cfe8df4c876480a08609e07547f105ed6feb",
-    "packages/shared/src/db/schema-epochs.ts": "3a4a57f4bbff4cc37116a1d1d9d4302a07ae9549918f04e3d6947d8266cdf3f4",
+    "packages/shared/src/db/migrations.ts": "94605bd2ae6b9e1d04950bef6e479bbf2d0c1f2803bab3d558800239ed1bec4c",
+    "packages/shared/src/db/schema-epochs.ts": "5f0e1b83ae53eed08c727fc1b4be1d830117ecb4494beae4ece3c1b6aef74d45",
     "packages/shared/src/display-name-charset.ts": "13ad82b9e92e562014322c569df15476a8ef5d7863f541f79207a5403d542410",
     "packages/shared/src/unicode-case-fold.ts": "b5cb75d46582dc93b640434ad78fe8f0a741e5e1aa183adbb27368ce2aceb120",
     "packages/shared/src/unicode-name-charset.ts": "bbcda81d89d738fdfe6a9ff0dd4dad633a79a84cd8f82e203753910196967879",
@@ -406,6 +413,13 @@
       "version": 98,
       "name": "retire_workspace_sort_for_sidebar",
       "up": "\n      DELETE FROM user_list_sort_mode WHERE list_key = 'workspaces';\n      DELETE FROM user_sort_entry WHERE list_key = 'workspaces';\n    ",
+      "foreignKeyEscape": false,
+      "precondition": false
+    },
+    {
+      "version": 99,
+      "name": "embedded_profile_setup",
+      "up": "ALTER TABLE users ADD COLUMN embedded_profile_pending INTEGER NOT NULL DEFAULT 0\n      CHECK (embedded_profile_pending IN (0, 1));",
       "foreignKeyEscape": false,
       "precondition": false
     }

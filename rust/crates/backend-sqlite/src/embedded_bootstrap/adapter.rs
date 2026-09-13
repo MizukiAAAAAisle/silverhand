@@ -52,8 +52,8 @@ const SELECT_SOLE_USER: &str = "\
 SELECT id, name, display_name, email, avatar_storage_key, created_at, updated_at \
  FROM users LIMIT 1";
 const INSERT_LOCAL_USER: &str = "\
-INSERT INTO users (id, name, display_name, avatar_storage_key, avatar_content_type, email, created_at, updated_at) \
-VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?) \
+INSERT INTO users (id, name, display_name, avatar_storage_key, avatar_content_type, email, created_at, updated_at, embedded_profile_pending) \
+VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, 1) \
 RETURNING id, name, display_name, email, avatar_storage_key, created_at, updated_at";
 /// Owner membership for every pre-existing workspace, expressed set-based rather
 /// than transliterating the TS per-id loop: the contract is "an owner row for every
@@ -369,6 +369,7 @@ INSERT INTO conversations \
             .foreign_keys(true);
         let mut db = SqliteConnection::connect_with(&options).await.unwrap();
         db.execute(sqlx::raw_sql(CURRENT_SCHEMA)).await.unwrap();
+        db.execute("ALTER TABLE users ADD COLUMN embedded_profile_pending INTEGER NOT NULL DEFAULT 0 CHECK (embedded_profile_pending IN (0, 1))").await.unwrap();
         db.execute(sqlx::raw_sql(SEED_TOPOLOGY)).await.unwrap();
         if !extra.is_empty() {
             db.execute(sqlx::raw_sql(extra)).await.unwrap();
@@ -382,6 +383,33 @@ INSERT INTO conversations \
             .filename(path)
             .foreign_keys(true);
         SqliteConnection::connect_with(&options).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn failed_bootstrap_does_not_leave_a_user_without_setup_state() {
+        let (_dir, path) = seed_db("CREATE TRIGGER fail_owner BEFORE UPDATE OF owner_user_id ON workspaces BEGIN SELECT RAISE(ABORT, 'isolated owner failure'); END;").await;
+        let store = SqliteEmbeddedBootstrap::open(&path).await.unwrap();
+        assert!(store.choose_or_create(500).await.is_err());
+        let mut db = reopen(&path).await;
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        sqlx::query("DROP TRIGGER fail_owner")
+            .execute(&mut db)
+            .await
+            .unwrap();
+        let BootstrapChoice::Created { user } = store.choose_or_create(600).await.unwrap() else {
+            panic!("retry creates the identity")
+        };
+        let pending: bool =
+            sqlx::query_scalar("SELECT embedded_profile_pending FROM users WHERE id = ?")
+                .bind(user.id.as_str())
+                .fetch_one(&mut db)
+                .await
+                .unwrap();
+        assert!(pending);
     }
 
     #[tokio::test]
@@ -403,6 +431,13 @@ INSERT INTO conversations \
         assert!(user.avatar.is_none());
 
         let mut db = reopen(&path).await;
+        let pending: bool =
+            sqlx::query_scalar("SELECT embedded_profile_pending FROM users WHERE id = ?")
+                .bind(user.id.as_str())
+                .fetch_one(&mut db)
+                .await
+                .unwrap();
+        assert!(pending);
         // Owner MEMBER row on the workspace, with role 'owner'.
         let role: String = sqlx::query_scalar(
             "SELECT role FROM workspace_users WHERE workspace_id = 'ws-regular' AND user_id = ?",

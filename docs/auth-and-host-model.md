@@ -774,3 +774,29 @@ The following invariants hold; implementation PRs are auditable against this lis
 18. Auth/setup error responses are uniform within the same route for CREDENTIAL facts — no enumeration of email/password/credential-row distinguishability. Disabled-signup 404 is allowed; credential-failure path is always 401 with constant-time compare. Signup's 409 `handle_taken` is the one deliberate exception and is scoped to a public, user-chosen name, never to credential state (§3.4).
 19. `installation_id` is a stable local id only, not an auth factor. Hardware machine fingerprint is at most a UI display hint, never a permission boundary.
 20. Existing host record + revoked_at set + new claim attempt → 409 fail-closed, no silent revival.
+
+### Embedded initial profile completion
+
+The automatic embedded session remains a normal authenticated human session.
+Step99 adds `users.embedded_profile_pending`, defaulting to false for existing
+identities (including historical default names) and remote signups. Only the
+transaction that creates a new embedded bootstrap identity sets it to true;
+selecting an existing identity never changes it. No local cache or name heuristic
+controls completion. The existing 2+ user bootstrap ambiguity is unchanged.
+
+Authenticated `GET /api/me/embedded-profile-setup` returns `{required,user}`.
+Embedded-only `PUT` accepts `{name,display_name}`, reusing existing handle and
+display-name validation and the global users/agents handle namespace. Under one
+write transaction it rechecks pending, commits both fields, and clears pending.
+Completed identities reject all later requests with 409 `profile_setup_completed`;
+name collisions return 409 `name_taken`. A missing or invalid human session is
+refused; remote deployments return 403 `embedded_only` even for authenticated users.
+There is no caller-selected user ID or new credential flow.
+
+The completion response carries the current viewer and the existing post-commit
+`user_changed` invalidation is emitted. Clients apply that viewer before entering
+the main screen. If a response is lost, re-read the durable status rather than
+attempting a rename. Optional avatar upload uses the existing separate endpoint;
+its failure cannot roll back successful core completion or imply setup is pending.
+The renderer may upload after completing the core profile and report avatar errors
+separately. Existing profile/remote login behavior is unchanged.

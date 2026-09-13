@@ -609,6 +609,14 @@ pub(super) async fn compose_after_audit(
     // mount at the TOP LEVEL — inside `human_products` the anonymous signup/login/logout
     // trio would be gated before a session can exist. It is handed the SAME session-read
     // authority the outer perimeter uses.
+    let embedded_profile_router =
+        silverhand_backend_server::identity_access::embedded_profile::router(
+            user_store.clone(),
+            hub.user_changed_sink(),
+            SystemSessionClock,
+            config.deployment_profile,
+            sessions.clone(),
+        );
     let human_auth_router = human_auth::router(
         HumanAuthDeps {
             handles: handle_namespace.clone(),
@@ -1474,6 +1482,7 @@ pub(super) async fn compose_after_audit(
             // bearer gate — placing it behind the outer perimeter would make login
             // unreachable before a session exists.
             .merge(human_auth_router)
+            .merge(embedded_profile_router)
             // #2223 CP4: the human-directory + avatar family also mounts at the top level.
             // `users::router` self-wraps `require_human_session` around all four of its
             // routes, so it is merged here rather than inside `human_products` (a second

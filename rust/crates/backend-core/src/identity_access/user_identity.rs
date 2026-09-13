@@ -94,7 +94,9 @@ impl EmailAddress {
 pub struct InvalidEmailAddress;
 
 /// A participant @-handle (`users.name`) — the immutable mention identifier that
-/// lives in the ONE namespace shared by agents and human users. Admission mirrors
+/// lives in the ONE namespace shared by agents and human users. A provisional
+/// embedded bootstrap handle can be finalized once during pending profile setup.
+/// Admission mirrors
 /// `z.string().min(1).max(64).regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/)`; there is no
 /// trim (the anchored regex already forbids leading whitespace). Stored verbatim.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -585,6 +587,39 @@ where
             }))
         }
     }
+}
+
+/// A bootstrap profile is the same user identity, with one persistent completion
+/// bit. This port is admitted only by the embedded human-session boundary.
+#[derive(Debug)]
+pub struct EmbeddedProfileSetup {
+    pub required: bool,
+    pub user: UserRecord,
+}
+
+#[derive(Debug)]
+pub enum CompleteEmbeddedProfileSetup {
+    Completed(UserRecord),
+    AlreadyCompleted,
+    HandleTaken,
+    NoSuchUser,
+}
+
+pub trait EmbeddedProfileSetupStore: Clone + Send + Sync + 'static {
+    fn read_setup(
+        &self,
+        user_id: &UserId,
+    ) -> impl Future<Output = Result<Option<EmbeddedProfileSetup>, PersistenceFailure>> + Send;
+
+    /// Re-check completion and name availability under the same write lock.
+    /// A completed identity never permits a retry to rename it.
+    fn complete_setup(
+        &self,
+        user_id: &UserId,
+        handle: &ParticipantHandle,
+        display_name: &DisplayName,
+        now_ms: i64,
+    ) -> impl Future<Output = Result<CompleteEmbeddedProfileSetup, PersistenceFailure>> + Send;
 }
 
 #[cfg(test)]

@@ -15,6 +15,30 @@ function userDto(overrides: Partial<UserDto> = {}): UserDto {
 }
 
 describe("extractViewerUserFromProxyResponse", () => {
+  it("refreshes bootstrap identity from setup completion and recovery reads", () => {
+    const user = userDto({ name: "Alice", display_name: "Alice" });
+    for (const method of ["GET", "PUT"]) {
+      expect(
+        extractViewerUserFromProxyResponse(
+          { method, path: apiPaths.embeddedProfileSetup },
+          { status: 200, bodyText: JSON.stringify({ required: false, user }) },
+        ),
+      ).toEqual(user);
+    }
+    for (const response of [
+      { status: 409, bodyText: JSON.stringify({ required: false, user }) },
+      { status: 200, bodyText: JSON.stringify({ user }) },
+      { status: 200, bodyText: JSON.stringify({ required: false, user: {} }) },
+    ]) {
+      expect(
+        extractViewerUserFromProxyResponse(
+          { method: "PUT", path: apiPaths.embeddedProfileSetup },
+          response,
+        ),
+      ).toBeNull();
+    }
+  });
+
   it("extracts PATCH /api/me UserDto responses, preserving display names with spaces", () => {
     const user = userDto();
 

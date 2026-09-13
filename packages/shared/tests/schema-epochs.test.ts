@@ -32,16 +32,12 @@ describe('schema epoch manifest', () => {
   });
 
   it('starts where the 1:1 history ends and leaves no step unclaimed', () => {
-    expect(SCHEMA_EPOCH_MANIFEST[0]!.firstStep).toBe(
-      ONE_TO_ONE_EPOCH_CEILING_STEP + 1,
-    );
-    for (const step of migrations.map(m => m.version)) {
+    expect(SCHEMA_EPOCH_MANIFEST[0]!.firstStep).toBe(ONE_TO_ONE_EPOCH_CEILING_STEP + 1);
+    for (const step of migrations.map((m) => m.version)) {
       expect(epochForMigrationStep(step)).not.toBeNull();
     }
     // The baseline is inside the 1:1 region, where epoch IS step.
-    expect(epochForMigrationStep(MIN_SUPPORTED_MIGRATION_STEP)).toBe(
-      MIN_SUPPORTED_MIGRATION_STEP,
-    );
+    expect(epochForMigrationStep(MIN_SUPPORTED_MIGRATION_STEP)).toBe(MIN_SUPPORTED_MIGRATION_STEP);
     expect(epochForMigrationStep(0)).toBeNull();
     expect(epochForMigrationStep(CURRENT_MIGRATION_STEP + 1)).toBeNull();
   });
@@ -59,8 +55,8 @@ describe('schema epoch manifest', () => {
     // passes happily while a range claims a step no ledger can ever contain, and
     // then `epochForMigrationStep` answers for a phantom.
     const holed = migrations
-      .filter(m => m.version !== CURRENT_MIGRATION_STEP - 1)
-      .map(m => ({ version: m.version }));
+      .filter((m) => m.version !== CURRENT_MIGRATION_STEP - 1)
+      .map((m) => ({ version: m.version }));
     expect(() => assertSchemaEpochManifest({ plan: holed })).toThrow(
       /claim step\(s\) \d+ that this build does not define/,
     );
@@ -76,6 +72,7 @@ describe('schema epoch manifest', () => {
     expect(() =>
       assertSchemaEpochManifest({
         manifest: [
+          ...SCHEMA_EPOCH_MANIFEST.slice(0, -1),
           { ...open, released: false },
           {
             epoch: open.epoch + 1,
@@ -98,6 +95,7 @@ describe('schema epoch manifest', () => {
     expect(() =>
       assertSchemaEpochManifest({
         manifest: [
+          ...SCHEMA_EPOCH_MANIFEST.slice(0, -1),
           { ...open, released: false },
           {
             epoch: open.epoch + 1,
@@ -125,27 +123,17 @@ describe('schema epoch manifest', () => {
 describe('the two floors', () => {
   it('derives the runner step floor from the support-policy epoch', () => {
     expect(() => assertSupportPolicyFloors()).not.toThrow();
-    expect(firstStepOfEpoch(MIN_SUPPORTED_SCHEMA_EPOCH)).toBe(
-      MIN_SUPPORTED_MIGRATION_STEP,
-    );
-    expect(MIN_SUPPORTED_SCHEMA_EPOCH).toBeLessThanOrEqual(
-      CURRENT_SCHEMA_EPOCH,
-    );
+    expect(firstStepOfEpoch(MIN_SUPPORTED_SCHEMA_EPOCH)).toBe(MIN_SUPPORTED_MIGRATION_STEP);
+    expect(MIN_SUPPORTED_SCHEMA_EPOCH).toBeLessThanOrEqual(CURRENT_SCHEMA_EPOCH);
   });
 
   it('never lets support policy promise a step below the baseline CREATE', () => {
-    expect(MIN_SUPPORTED_MIGRATION_STEP).toBeGreaterThanOrEqual(
-      BASELINE_MIGRATION_STEP,
-    );
+    expect(MIN_SUPPORTED_MIGRATION_STEP).toBeGreaterThanOrEqual(BASELINE_MIGRATION_STEP);
   });
 
   it('resolves epoch boundaries in both regions', () => {
-    expect(firstStepOfEpoch(ONE_TO_ONE_EPOCH_CEILING_STEP)).toBe(
-      ONE_TO_ONE_EPOCH_CEILING_STEP,
-    );
-    expect(firstStepOfEpoch(CURRENT_SCHEMA_EPOCH)).toBe(
-      SCHEMA_EPOCH_MANIFEST.at(-1)!.firstStep,
-    );
+    expect(firstStepOfEpoch(ONE_TO_ONE_EPOCH_CEILING_STEP)).toBe(ONE_TO_ONE_EPOCH_CEILING_STEP);
+    expect(firstStepOfEpoch(CURRENT_SCHEMA_EPOCH)).toBe(SCHEMA_EPOCH_MANIFEST.at(-1)!.firstStep);
     expect(firstStepOfEpoch(0)).toBeNull();
     expect(firstStepOfEpoch(CURRENT_SCHEMA_EPOCH + 1)).toBeNull();
   });
@@ -156,9 +144,7 @@ describe('the two floors', () => {
     // previous epoch, which is what the policy comparison already covers.
     const entry = SCHEMA_EPOCH_MANIFEST.at(-1)!;
     if (entry.lastStep > entry.firstStep) {
-      expect(reportedEpochForAppliedStep(entry.firstStep)).toBeLessThan(
-        entry.epoch,
-      );
+      expect(reportedEpochForAppliedStep(entry.firstStep)).toBeLessThan(entry.epoch);
     }
   });
 });
@@ -174,12 +160,8 @@ describe('reportedEpochForAppliedStep', () => {
 
   it('reports the PREVIOUS epoch until the epoch is complete', () => {
     const entry = SCHEMA_EPOCH_MANIFEST[0]!;
-    expect(reportedEpochForAppliedStep(entry.firstStep)).toBe(
-      ONE_TO_ONE_EPOCH_CEILING_STEP,
-    );
-    expect(reportedEpochForAppliedStep(entry.lastStep - 1)).toBe(
-      ONE_TO_ONE_EPOCH_CEILING_STEP,
-    );
+    expect(reportedEpochForAppliedStep(entry.firstStep)).toBe(ONE_TO_ONE_EPOCH_CEILING_STEP);
+    expect(reportedEpochForAppliedStep(entry.lastStep - 1)).toBe(ONE_TO_ONE_EPOCH_CEILING_STEP);
     expect(reportedEpochForAppliedStep(entry.lastStep)).toBe(entry.epoch);
   });
 });
@@ -208,8 +190,8 @@ describe('classifyMigrationLedger', () => {
     // exactly which step comes next.
     const entry = SCHEMA_EPOCH_MANIFEST[0]!;
     const slice = migrations
-      .filter(m => m.version >= entry.lastStep - 1)
-      .map(m => ({ version: m.version }));
+      .filter((m) => m.version >= entry.lastStep - 1)
+      .map((m) => ({ version: m.version }));
     expect(classifyMigrationLedger([entry.lastStep - 1], slice)).toEqual({
       kind: 'ok',
       progress: {
@@ -234,10 +216,10 @@ describe('classifyMigrationLedger', () => {
     // would let a partial database look shipped.
     const entry = SCHEMA_EPOCH_MANIFEST[0]!;
     const slice = migrations
-      .filter(m => m.version <= entry.lastStep - 1)
-      .map(m => ({ version: m.version }));
+      .filter((m) => m.version <= entry.lastStep - 1)
+      .map((m) => ({ version: m.version }));
     const verdict = classifyMigrationLedger(
-      slice.map(m => m.version),
+      slice.map((m) => m.version),
       slice,
     );
     expect(verdict).toEqual({
@@ -256,9 +238,7 @@ describe('classifyMigrationLedger', () => {
   });
 
   it('fails loud on an in-range step the plan does not define', () => {
-    expect(
-      classifyMigrationLedger([44, 45], [{ version: 44 }, { version: 46 }]),
-    ).toEqual({
+    expect(classifyMigrationLedger([44, 45], [{ version: 44 }, { version: 46 }])).toEqual({
       kind: 'inconsistent',
       appliedThroughStep: 45,
       missingSteps: [],
@@ -285,7 +265,7 @@ describe('classifyMigrationLedger', () => {
   });
 
   it('reads the real plan against the real ledger without complaint', () => {
-    const steps = migrations.map(m => m.version);
+    const steps = migrations.map((m) => m.version);
     expect(classifyMigrationLedger(steps, migrations)).toEqual({
       kind: 'ok',
       progress: { kind: 'complete', epoch: CURRENT_SCHEMA_EPOCH },

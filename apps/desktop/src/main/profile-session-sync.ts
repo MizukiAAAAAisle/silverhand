@@ -1,4 +1,9 @@
-import { apiPaths, UserDtoSchema, type UserDto } from "@silverhand/shared";
+import {
+  apiPaths,
+  EmbeddedProfileSetupResponseSchema,
+  UserDtoSchema,
+  type UserDto,
+} from "@silverhand/shared";
 
 export interface ProfileSessionSyncRequest {
   path: string;
@@ -17,6 +22,8 @@ export interface ProfileSessionSyncResponse {
  * authoritative viewer DTO out of any proxied response that carries one,
  * so the snapshot cannot outlive the profile it describes:
  *
+ *   - embedded setup reads and completion responses refresh the provisional
+ *     bootstrap identity before a later auth-state read can replay it;
  *   - renderer profile writes (`PATCH /api/me`, avatar upload / clear) go
  *     through the generic backend proxy, so the successful response must
  *     refresh the cache or the next auth-state refetch replays the
@@ -42,16 +49,23 @@ export function extractViewerUserFromProxyResponse(
   if (!shape) return null;
 
   const json = parseJson(response.bodyText);
+  if (shape === "embedded-setup") {
+    const setup = EmbeddedProfileSetupResponseSchema.safeParse(json);
+    return setup.success ? setup.data.user : null;
+  }
   const candidate = shape === "avatar-upload" ? objectUser(json) : json;
   const parsed = UserDtoSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;
 }
 
-type ViewerDtoResponseShape = "user-dto" | "avatar-upload";
+type ViewerDtoResponseShape = "user-dto" | "avatar-upload" | "embedded-setup";
 
 function viewerDtoResponseShape(request: ProfileSessionSyncRequest): ViewerDtoResponseShape | null {
   const method = (request.method ?? "GET").toUpperCase();
   const path = pathnameOf(request.path);
+  if ((method === "GET" || method === "PUT") && path === apiPaths.embeddedProfileSetup) {
+    return "embedded-setup";
+  }
   if (method === "GET" && path === apiPaths.me) return "user-dto";
   if (method === "PATCH" && path === apiPaths.me) return "user-dto";
   if (method === "DELETE" && path === apiPaths.meAvatar) return "user-dto";

@@ -4267,6 +4267,14 @@ export const migrations: Migration[] = [
       DELETE FROM user_sort_entry WHERE list_key = 'workspaces';
     `,
   },
+  {
+    version: 99,
+    name: 'embedded_profile_setup',
+    // Existing identities are complete. Only a new embedded bootstrap identity
+    // explicitly opts in, in the transaction that creates the user.
+    up: `ALTER TABLE users ADD COLUMN embedded_profile_pending INTEGER NOT NULL DEFAULT 0
+      CHECK (embedded_profile_pending IN (0, 1));`,
+  },
 ];
 
 /**

@@ -25,8 +25,9 @@ use silverhand_backend_core::{
         AvatarStorageRef, AvatarStorageRefRead,
     },
     identity_access::user_identity::{
-        DisplayName, RelatedUserDirectoryRead, UserDirectoryRead, UserEmailLookup, UserProfileRead,
-        UserProfileWrite, UserProfileWriteUnitOfWork, UserRecord,
+        CompleteEmbeddedProfileSetup, DisplayName, EmbeddedProfileSetup, EmbeddedProfileSetupStore,
+        ParticipantHandle, RelatedUserDirectoryRead, UserDirectoryRead, UserEmailLookup,
+        UserProfileRead, UserProfileWrite, UserProfileWriteUnitOfWork, UserRecord,
     },
 };
 use sqlx::{
@@ -41,6 +42,14 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 const SELECT_PROFILE: &str = "\
 SELECT id, name, display_name, email, avatar_storage_key, created_at, updated_at FROM users WHERE id = ?";
+const SELECT_EMBEDDED_PROFILE: &str = "
+SELECT id, name, display_name, email, avatar_storage_key, created_at, updated_at,
+       embedded_profile_pending
+FROM users WHERE id = ?";
+const COMPLETE_EMBEDDED_PROFILE: &str = "
+UPDATE users SET name = ?, display_name = ?, embedded_profile_pending = 0, updated_at = ?
+WHERE id = ?
+RETURNING id, name, display_name, email, avatar_storage_key, created_at, updated_at";
 const SELECT_ID_BY_EMAIL: &str = "SELECT id FROM users WHERE email = ? COLLATE NOCASE";
 const UPDATE_DISPLAY_NAME: &str = "\
 UPDATE users SET display_name = ?, updated_at = ? \
@@ -428,6 +437,80 @@ impl AvatarPointerWriteUnitOfWork for SqliteUserStore {
         self.clear_avatar_pointer(user_id, now_ms)
             .await
             .map_err(PersistenceFailure::from_source)
+    }
+}
+
+impl EmbeddedProfileSetupStore for SqliteUserStore {
+    async fn read_setup(
+        &self,
+        user_id: &UserId,
+    ) -> Result<Option<EmbeddedProfileSetup>, PersistenceFailure> {
+        let row = sqlx::query(SELECT_EMBEDDED_PROFILE)
+            .bind(user_id.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        row.map(|row| {
+            Ok(EmbeddedProfileSetup {
+                required: row
+                    .try_get::<bool, _>("embedded_profile_pending")
+                    .map_err(PersistenceFailure::from_source)?,
+                user: decode_user(&row).map_err(PersistenceFailure::from_source)?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn complete_setup(
+        &self,
+        user_id: &UserId,
+        handle: &ParticipantHandle,
+        display_name: &DisplayName,
+        now_ms: i64,
+    ) -> Result<CompleteEmbeddedProfileSetup, PersistenceFailure> {
+        self.complete_embedded_profile(user_id, handle, display_name, now_ms)
+            .await
+            .map_err(PersistenceFailure::from_source)
+    }
+}
+
+impl SqliteUserStore {
+    async fn complete_embedded_profile(
+        &self,
+        user_id: &UserId,
+        handle: &ParticipantHandle,
+        display_name: &DisplayName,
+        now_ms: i64,
+    ) -> Result<CompleteEmbeddedProfileSetup, ProfileWriteFailure> {
+        use silverhand_backend_core::identity_access::user_identity::CompleteEmbeddedProfileSetup as Outcome;
+        let mut tx = self.pool.begin_with(ROOT_WRITE_BEGIN).await?;
+        let current = sqlx::query("SELECT name, embedded_profile_pending FROM users WHERE id = ?")
+            .bind(user_id.as_str())
+            .fetch_optional(&mut *tx)
+            .await?;
+        let Some(current) = current else {
+            return Ok(Outcome::NoSuchUser);
+        };
+        if !current.try_get::<bool, _>("embedded_profile_pending")? {
+            return Ok(Outcome::AlreadyCompleted);
+        }
+        let current_handle: String = current.try_get("name")?;
+        if current_handle != handle.as_str()
+            && super::handle_namespace::handle_taken(&mut *tx, handle.as_str()).await?
+        {
+            return Ok(Outcome::HandleTaken);
+        }
+
+        let row = sqlx::query(COMPLETE_EMBEDDED_PROFILE)
+            .bind(handle.as_str())
+            .bind(display_name.as_str())
+            .bind(now_ms)
+            .bind(user_id.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+        let user = decode_user(&row)?;
+        tx.commit().await?;
+        Ok(Outcome::Completed(user))
     }
 }
 
