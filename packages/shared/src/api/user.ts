@@ -44,10 +44,7 @@ export const RegistrationRequiredSchema = z.object({
 export type RegistrationRequired = z.infer<typeof RegistrationRequiredSchema>;
 
 /** Discriminated union returned by `GET /api/me`. */
-export const MeResponseSchema = z.union([
-  UserDtoSchema,
-  RegistrationRequiredSchema,
-]);
+export const MeResponseSchema = z.union([UserDtoSchema, RegistrationRequiredSchema]);
 export type MeResponse = z.infer<typeof MeResponseSchema>;
 
 // `display_name` is rendered into the agent system prompt (PR-B
@@ -107,7 +104,7 @@ export const DisplayNameSchema = z
   .trim()
   .min(1)
   .max(DISPLAY_NAME_MAX_LENGTH)
-  .refine(s => !DISPLAY_NAME_FORBIDDEN_RE.test(s), {
+  .refine((s) => !DISPLAY_NAME_FORBIDDEN_RE.test(s), {
     message: DISPLAY_NAME_FORBIDDEN_MSG,
   });
 
@@ -187,7 +184,7 @@ export const UpdateUserProfileInputSchema = z
   .object({
     display_name: DisplayNameSchema.optional(),
   })
-  .refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
+  .refine((v) => Object.keys(v).length > 0, { message: 'no fields to update' });
 export type UpdateUserProfileInput = z.infer<typeof UpdateUserProfileInputSchema>;
 
 // Response from POST /api/me/avatar. The renderer doesn't need the raw
@@ -242,3 +239,27 @@ export const UserChangedEventSchema = z.object({
   user_id: z.string(),
 });
 export type UserChangedEvent = z.infer<typeof UserChangedEventSchema>;
+
+/** Embedded bootstrap-only profile setup. Read after automatic authentication;
+ * never infer completion from the provisional name or a client-side cache.
+ * GET and successful PUT return the current viewer to refresh identity carriers.
+ */
+export const EmbeddedProfileSetupResponseSchema = z.object({
+  required: z.boolean(),
+  user: UserDtoSchema,
+});
+export type EmbeddedProfileSetupResponse = z.infer<typeof EmbeddedProfileSetupResponseSchema>;
+
+/** Avatar is a separate existing upload; failure does not roll back completion.
+ * A completed setup rejects further writes (409), including retries. Re-read
+ * status after an ambiguous response before deciding whether to retry.
+ */
+export const CompleteEmbeddedProfileSetupInputSchema = z
+  .object({
+    name: ParticipantNameSchema,
+    display_name: DisplayNameSchema,
+  })
+  .strict();
+export type CompleteEmbeddedProfileSetupInput = z.infer<
+  typeof CompleteEmbeddedProfileSetupInputSchema
+>;

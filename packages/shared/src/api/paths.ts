@@ -465,6 +465,7 @@ export const apiPaths = {
   users: '/api/users',
   relatedUsers: '/api/users/related',
   me: '/api/me',
+  embeddedProfileSetup: '/api/me/embedded-profile-setup',
   meAvatar: '/api/me/avatar',
   /** Public avatar fetch for any user. Returns the blob bytes (auth
    *  via the standard principal header). The DTO's `avatar_url`
