@@ -23,7 +23,7 @@ import {
   sortableItemStyle,
   useListDragSort,
 } from "@/components/layout/list-drag-sort";
-import { SidebarSection } from "../../../components/layout/sidebar-shared";
+import { SidebarSection, SidebarEmptyRow } from "../../../components/layout/sidebar-shared";
 
 const FAVORITES_LIST_KEY = "favorites";
 const FAVORITES_GROUP = "favorites";
@@ -78,8 +78,6 @@ export function FavoritesGroup(props: {
   const ordered = orderedGroups[FAVORITES_GROUP];
   const mode = sortModeOf(viewerSort);
 
-  if (items.length === 0) return null;
-
   // Collapsed STARRED, open conversation starred: keep that one row (see
   // `SidebarSection.collapsedContent`). Not the sortable wrapper — a single row has
   // nothing to reorder — but the row itself is unchanged, menu included.
@@ -117,6 +115,7 @@ export function FavoritesGroup(props: {
         />
       }
     >
+      {ordered.length === 0 ? <SidebarEmptyRow>No starred conversations</SidebarEmptyRow> : null}
       <SortableGroup
         ids={ordered.map((i) => i.favorite_key)}
         onReorder={(o) => onReorder(FAVORITES_GROUP, o)}

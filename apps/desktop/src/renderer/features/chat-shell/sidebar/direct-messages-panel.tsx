@@ -16,6 +16,7 @@ import { channelRowBadge } from "@/features/attention/attention-mode";
 import {
   ConversationRowLayout,
   SidebarSection,
+  SidebarEmptyRow,
   UnreadBadge,
 } from "../../../components/layout/sidebar-shared";
 
@@ -63,8 +64,6 @@ export function DirectMessagesGroup(props: {
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(users);
 
-  if (rows.length === 0) return null;
-
   // Collapsed section, open line: keep that one row, so collapsing never leaves
   // the sidebar with no selection while the pane shows that conversation
   // (`SidebarSection.collapsedContent`, app-layout.md §3). The draft row is the
@@ -96,6 +95,7 @@ export function DirectMessagesGroup(props: {
         ) : null
       }
     >
+      {rows.length === 0 ? <SidebarEmptyRow>No direct messages</SidebarEmptyRow> : null}
       {rows.map((row) => (
         <li key={row.key}>
           <DirectMessageRow

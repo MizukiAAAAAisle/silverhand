@@ -4,12 +4,11 @@ import {
   type ChannelAttentionModeRowDto,
   type ConversationVisibility,
 } from "@silverhand/shared";
-import { cn } from "@/lib/cn";
 import { useSortable } from "@dnd-kit/sortable";
 import { ChannelRow } from "./channel-row";
 import { AppContextMenu } from "@/components/menus/app-context-menu";
 import { ChannelRowMenuItems } from "./channel-row-menu-items";
-import { NESTED_GLYPH_INSET } from "@/components/layout/sidebar-shared";
+import { SidebarEmptyRow } from "@/components/layout/sidebar-shared";
 import { SortModeMenu } from "@/components/layout/sort-mode-menu";
 import {
   SortableGroup,
@@ -179,11 +178,7 @@ export function WorkspaceChannels({
   }
 
   if (ordered.length === 0) {
-    return (
-      <li className={cn("flex h-7 items-center text-xs text-text-muted", NESTED_GLYPH_INSET)}>
-        No channels
-      </li>
-    );
+    return <SidebarEmptyRow>No channels</SidebarEmptyRow>;
   }
 
   const rowProps = {

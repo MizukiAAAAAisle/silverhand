@@ -81,6 +81,14 @@ export const OUTER_GLYPH_INSET = "pl-2";
  */
 export const NESTED_GLYPH_INSET = "pl-3";
 
+export function SidebarEmptyRow({ children }: { children: ReactNode }): JSX.Element {
+  return (
+    <li className={cn("flex h-7 items-center text-xs text-text-muted", NESTED_GLYPH_INSET)}>
+      {children}
+    </li>
+  );
+}
+
 export function sidebarRowStateClass(selected: boolean | undefined): string {
   return selected
     ? "navigation-row border-accent bg-bg-nav-selected text-text-nav-selected"
