@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { primaryAction } from "@/components/common/primary-action";
 import { nameFormatMessage } from "@/features/naming/use-name-availability";
 import { cn } from "@/lib/cn";
+import { AuthSplitLayout } from "@/components/brand/auth-split-layout";
 import { useLoginUser, useSignupUser } from "../session/hooks";
 
 export interface RegistrationGateProps {
@@ -112,10 +113,7 @@ export function RegistrationGate({ signupEnabled }: RegistrationGateProps): JSX.
   const handleError = handleFormatMessage ?? (error?.field === "handle" ? error.message : null);
 
   return (
-    <main
-      className="grid h-screen w-screen place-items-center bg-bg-base px-6 py-14 text-text-primary"
-      style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
-    >
+    <AuthSplitLayout>
       <form
         onSubmit={onSubmit}
         // Same dialog identity as the other boot gates — see UpdateRequiredGate
@@ -287,7 +285,7 @@ export function RegistrationGate({ signupEnabled }: RegistrationGateProps): JSX.
           {formError ? <p className="text-xs text-error">{formError}</p> : null}
         </footer>
       </form>
-    </main>
+    </AuthSplitLayout>
   );
 }
 

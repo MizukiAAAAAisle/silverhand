@@ -5,6 +5,7 @@ import { AvatarPickerButton } from "@/components/avatar-picker-button";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { primaryAction } from "@/components/common/primary-action";
+import { AuthSplitLayout } from "@/components/brand/auth-split-layout";
 import { rejectDisplayName } from "@/features/identity/display-name";
 import { nameFormatMessage } from "@/features/naming/use-name-availability";
 
@@ -69,12 +70,13 @@ export function ProfileSetupForm({
   };
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-bg-base px-6 py-14 text-text-primary">
+    <AuthSplitLayout>
       <form
         onSubmit={submit}
         data-modal-shell
         data-popover-frame="info"
-        className="flex w-full max-w-105 flex-col gap-5 bg-bg-floating p-6 shadow-modal"
+        className="flex w-full max-w-105 flex-col gap-5 rounded-md border border-border bg-bg-floating p-6 shadow-modal"
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
         <h1 className="text-lg font-semibold">Set up your profile</h1>
         <div className="flex items-center gap-3">
@@ -100,9 +102,7 @@ export function ProfileSetupForm({
             </span>
           </AvatarPickerButton>
           <div className="flex flex-col gap-1">
-            <span className="text-sm">
-              Profile photo <span className="text-xs text-text-muted">Optional</span>
-            </span>
+            <span className="text-sm">Profile photo</span>
             {avatar ? (
               <button
                 type="button"
@@ -180,6 +180,6 @@ export function ProfileSetupForm({
           </Button>
         )}
       </form>
-    </main>
+    </AuthSplitLayout>
   );
 }

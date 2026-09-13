@@ -2041,6 +2041,8 @@ function createWindow(): void {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    minWidth: 800,
+    minHeight: 600,
     show: false,
     // macOS: hide the native title bar so the renderer's <Titlebar/>
     // can draw across the full window width and the channel/workspace
