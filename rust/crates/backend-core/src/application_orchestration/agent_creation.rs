@@ -55,7 +55,7 @@ use crate::{
         collaboration::RuntimePlacementRefusal,
         environment::{EnvironmentUnavailable, SendEntropy},
         mint_agent_id, mint_conversation_id,
-        post_commit::EffectFailure,
+        post_commit::{EffectFailure, InboxEnsureOutcome},
     },
     foundation::identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
     foundation::name_canonicalization::is_ecmascript_trim_whitespace,
@@ -395,7 +395,7 @@ pub trait OnboardingInboxEnsure: Clone + Send + Sync + 'static {
         conversation: &ConversationId,
         agent: &AgentId,
         onboarding_message: &MessageId,
-    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+    ) -> impl Future<Output = Result<InboxEnsureOutcome, EffectFailure>> + Send;
 }
 
 /// The authorities the create unit of work drives. Each field is a distinct bounded

@@ -515,7 +515,12 @@ where
             .capture_attached(&target.host_id)?
             .ok_or(DaemonDeliveryError::HostNotAttached)?;
         let daemon_instance = custody.daemon_instance().clone();
-        let transport = StartTransport::new(custody, target.clone(), self.command_timeout);
+        let transport = StartTransport::new(
+            custody,
+            target.clone(),
+            self.command_timeout,
+            self.data.clone(),
+        );
         self.credentials
             .dispatch_start(
                 target.plan.scope.clone(),

@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use silverhand_backend_core::{
     conversation_messaging::runtime_delivery::{
         ClaimPendingInbox, ClaimedInboxBatch, DeliveryInstruction, DeliveryLeaseOwner,
-        InboxDeliveryId, RuntimeDeliveryFailureReason, RuntimeDispatchTarget,
-        RuntimeInboxCustodyPort,
+        InboxDeliveryId, RuntimeDeliveryFailureReason, RuntimeDispatchReadPort,
+        RuntimeDispatchTarget, RuntimeInboxCustodyPort,
     },
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::RuntimePrincipal,
@@ -31,33 +31,53 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub(crate) struct StartTransport {
+pub(crate) struct StartTransport<D> {
+    data: D,
     plane: AttachedHostDataPlane,
     target: RuntimeDispatchTarget,
     timeout: Duration,
 }
 
-impl StartTransport {
+impl<D> StartTransport<D> {
     pub(crate) fn new(
         plane: AttachedHostDataPlane,
         target: RuntimeDispatchTarget,
         timeout: Duration,
+        data: D,
     ) -> Self {
         Self {
             plane,
             target,
             timeout,
+            data,
         }
     }
 }
 
-impl RuntimeStartTransport for StartTransport {
+impl<D: RuntimeDispatchReadPort> RuntimeStartTransport for StartTransport<D> {
     type Error = StartTransportError;
 
     async fn dispatch(
         &self,
         handoff: &RuntimeStartHandoff,
     ) -> Result<(), RuntimeDispatchFailure<Self::Error>> {
+        // Recheck after credential admission, immediately before dispatch. This is
+        // the automatic start path's own admission, independent of inbox claiming.
+        let current = self
+            .data
+            .resolve_dispatch_target(
+                self.target.conversation.clone(),
+                handoff.principal().agent().clone(),
+            )
+            .await
+            .map_err(|error| {
+                RuntimeDispatchFailure::ProvenNotDispatched(StartTransportError::Persistence(error))
+            })?;
+        if current.is_none() {
+            return Err(RuntimeDispatchFailure::ProvenNotDispatched(
+                StartTransportError::TargetUnavailable,
+            ));
+        }
         let params = runtime_start::encode(&self.target, handoff).map_err(|_| {
             RuntimeDispatchFailure::ProvenNotDispatched(StartTransportError::InvalidRequest)
         })?;
@@ -101,6 +121,8 @@ impl RuntimeStartTransport for StartTransport {
 
 #[derive(Debug)]
 pub(crate) enum StartTransportError {
+    TargetUnavailable,
+    Persistence(PersistenceFailure),
     Transport,
     Refused,
     InvalidRequest,
@@ -110,6 +132,8 @@ pub(crate) enum StartTransportError {
 impl fmt::Display for StartTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::TargetUnavailable => "runtime_start target is no longer available",
+            Self::Persistence(_) => "runtime_start admission failed",
             Self::Transport => "runtime_start transport failed",
             Self::Refused => "daemon refused runtime_start",
             Self::InvalidRequest => "runtime_start request is outside its wire schema",
@@ -118,7 +142,14 @@ impl fmt::Display for StartTransportError {
     }
 }
 
-impl Error for StartTransportError {}
+impl Error for StartTransportError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Persistence(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct StopTransport {

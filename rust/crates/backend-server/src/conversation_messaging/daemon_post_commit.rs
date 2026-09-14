@@ -208,10 +208,11 @@ where
         agent: &AgentId,
         onboarding_message: &MessageId,
     ) -> Result<(), EffectFailure> {
-        self.ensure
+        let admitted = self
+            .ensure
             .ensure(conversation, agent, onboarding_message)
             .await?;
-        self.effects.wake(conversation, agent).await
+        wake_if_admitted(admitted, self.effects.wake(conversation, agent)).await
     }
 }
 
@@ -286,5 +287,42 @@ where
             .start_if_idle(conversation, recipient)
             .await
             .map_err(EffectFailure::from_source)
+    }
+}
+
+/// Keep skipped onboarding admission distinct from a successful enqueue. The wake
+/// future is deliberately not polled when archive denied automatic delivery.
+async fn wake_if_admitted(
+    outcome: InboxEnsureOutcome,
+    wake: impl std::future::Future<Output = Result<(), EffectFailure>>,
+) -> Result<(), EffectFailure> {
+    match outcome {
+        InboxEnsureOutcome::Ready => wake.await,
+        InboxEnsureOutcome::SkippedArchived => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn skipped_onboarding_never_polls_wake_but_ready_does() {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        for outcome in [
+            InboxEnsureOutcome::SkippedArchived,
+            InboxEnsureOutcome::Ready,
+        ] {
+            wake_if_admitted(outcome, async {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                calls.load(std::sync::atomic::Ordering::SeqCst),
+                usize::from(outcome == InboxEnsureOutcome::Ready)
+            );
+        }
     }
 }

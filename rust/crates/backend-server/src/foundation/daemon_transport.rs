@@ -5254,6 +5254,142 @@ mod tests {
         assert!(new_host_b.starts_with("daemon-connection-process-b-"));
     }
 
+    async fn start_archive_fixture(path: &std::path::Path) -> sqlx::SqliteConnection {
+        let mut db = current_schema::create_current_schema(path).await;
+        sqlx::query(
+            "INSERT INTO users (id, name, display_name, created_at, updated_at)
+             VALUES ('user-1', 'user-1', 'User One', 1, 1)",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id)
+             VALUES ('host-a', 'host-a', 'remote', 1, 'user-1'),
+                    ('host-b', 'host-b', 'remote', 1, 'user-1')",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (
+                id, name, runtime, host_id, created_at, updated_at,
+                display_name, created_by_user_id, session_scope
+             ) VALUES ('agent-lease', 'agent-lease', 'codex', 'host-b', 1, 1,
+                 'Lease Agent', 'user-1', 'conversation')",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces (
+                id, name, name_key, created_at, updated_at, owner_user_id
+             ) VALUES ('workspace-1', 'Workspace One', 'workspace one', 1, 1, 'user-1')",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+             VALUES ('workspace-1', 'agent-lease', 1)",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO conversations (
+                id, workspace_id, placement_kind, roster_policy, title, title_key,
+                status, created_at, updated_at
+             ) VALUES ('conversation0001', 'workspace-1', 'workspace', 'open',
+                 'Conversation One', 'conversation one', 'active', 1, 1)",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+             VALUES ('conversation0001', 'agent-lease', 1)",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        db
+    }
+
+    #[tokio::test]
+    async fn automatic_start_rechecks_archive_before_entering_production_fifo() {
+        use crate::host_runtime::daemon_runtime_transport::StartTransport;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("start-archive.sqlite");
+        let mut db = start_archive_fixture(&path).await;
+        let store = SqliteRuntimeDeliveryStore::open(&path).await.unwrap();
+        let conversation = ConversationId::parse("conversation0001").unwrap();
+        let agent = AgentId::parse("agent-lease").unwrap();
+        let target = store
+            .resolve_dispatch_target(conversation.clone(), agent)
+            .await
+            .unwrap()
+            .expect("active target is projected before archive");
+
+        let registry = DaemonRegistry::with_process_epoch("start-archive".into());
+        let host = HostId::parse("host-b").unwrap();
+        let instance = DaemonInstanceId::parse("daemon-start-archive").unwrap();
+        let (_connection, mut receive) =
+            attach_for_command_test(&registry, &host, instance.clone());
+        let plane = OwningHostDataPlane { registry };
+        let attached = plane.capture_attached(host.as_str()).unwrap().unwrap();
+        let transport =
+            StartTransport::new(attached, target.clone(), Duration::from_secs(1), store);
+        let credentials = RuntimeCredentialAuthority::production(StartCustody);
+
+        // Archive commits after projection but before start dispatch admission.
+        // No inbox batch is involved in this path.
+        sqlx::query("UPDATE conversations SET archived_at = 2 WHERE id = ?")
+            .bind(conversation.as_str())
+            .execute(&mut db)
+            .await
+            .unwrap();
+        let result = credentials
+            .dispatch_start(
+                target.plan.scope.clone(),
+                instance.clone(),
+                conversation.clone(),
+                &transport,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(crate::host_runtime::runtime_credential::RuntimeStartFailure::ProvenNotDispatched(
+                crate::host_runtime::daemon_runtime_transport::StartTransportError::TargetUnavailable
+            ))
+        ));
+        assert!(matches!(
+            receive.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+
+        // The same production transport still dispatches for an active channel.
+        sqlx::query("UPDATE conversations SET archived_at = NULL WHERE id = ?")
+            .bind(conversation.as_str())
+            .execute(&mut db)
+            .await
+            .unwrap();
+        let call = tokio::spawn(async move {
+            credentials
+                .dispatch_start(target.plan.scope, instance, conversation, &transport)
+                .await
+        });
+        let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
+            panic!("active automatic start must enter FIFO")
+        };
+        command
+            .response
+            .send(Ok(json!({"started":true,"pid":123,"started_at":100})))
+            .unwrap();
+        assert!(call.await.unwrap().is_ok());
+    }
+
     #[tokio::test]
     async fn a_restarted_process_cannot_release_an_old_hosts_real_inbox_lease() {
         let directory = tempfile::tempdir().unwrap();

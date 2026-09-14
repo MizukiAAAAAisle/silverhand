@@ -93,10 +93,9 @@ impl SqliteRuntimeDeliveryStore {
         conversation: ConversationId,
         agent: AgentId,
     ) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
-        // Trusted seat coordinate: only the existing delivery coordinator uses this
-        // path, and it already holds pending-inbox custody as its precondition, so
-        // the conversation is an established seat rather than a request candidate.
-        // One read transaction still spans the whole projection.
+        // Trusted seat coordinate from automatic delivery/start orchestration,
+        // rather than a user-selected start candidate. A single read transaction
+        // spans archive admission and the whole runtime projection.
         let mut tx = self.pool.begin().await.map_err(persistence)?;
         if !conversation_allows_delivery(&mut tx, &conversation)
             .await

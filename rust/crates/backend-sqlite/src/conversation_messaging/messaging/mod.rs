@@ -512,7 +512,7 @@ where
         conversation: &ConversationId,
         agent: &AgentId,
         onboarding_message: &MessageId,
-    ) -> Result<(), EffectFailure> {
+    ) -> Result<InboxEnsureOutcome, EffectFailure> {
         self.ensure_inner(conversation, agent, onboarding_message)
             .await
             .map_err(EffectFailure::from_source)
@@ -571,7 +571,7 @@ impl<E: SendClock> SqliteOnboardingInboxEnsure<E> {
         conversation: &ConversationId,
         agent: &AgentId,
         onboarding_message: &MessageId,
-    ) -> Result<(), OnboardingInboxEnsureError> {
+    ) -> Result<InboxEnsureOutcome, OnboardingInboxEnsureError> {
         ensure_inbox_delivery(
             &self.pool,
             &self.environment,
@@ -581,7 +581,6 @@ impl<E: SendClock> SqliteOnboardingInboxEnsure<E> {
             InboxRecipientAuthority::Onboarding,
         )
         .await
-        .map(|_| ())
     }
 }
 

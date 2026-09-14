@@ -47,7 +47,11 @@ async fn all_inbox_ports_wait_then_validate_fresh_witnesses_and_remain_idempoten
             }
             let attempt = async {
                 match kind {
-                    0 => store.onboarding_inbox_ensure().ensure(&c, &a, &m).await,
+                    0 => store
+                        .onboarding_inbox_ensure()
+                        .ensure(&c, &a, &m)
+                        .await
+                        .map(|_| ()),
                     1 => store
                         .committed_message_inbox_ensure()
                         .ensure_for_live_recipient(&c, &a, &m)
@@ -90,9 +94,9 @@ async fn all_inbox_ports_wait_then_validate_fresh_witnesses_and_remain_idempoten
             }
         }
     }
-    // Archive owns the writer first. Both automatic doors must inspect its
+    // Archive owns the writer first. All three automatic doors must inspect its
     // committed post-image, not an earlier live snapshot, and enqueue nothing.
-    for sealed in [false, true] {
+    for kind in 0..3 {
         db.execute("DELETE FROM conversation_inboxes; UPDATE conversations SET archived_at = NULL; DELETE FROM conversation_agents; INSERT INTO conversation_agents VALUES('c','a');").await.unwrap();
         let mut held = db.begin_with("BEGIN IMMEDIATE").await.unwrap();
         sqlx::query("UPDATE conversations SET archived_at = 100")
@@ -101,10 +105,10 @@ async fn all_inbox_ports_wait_then_validate_fresh_witnesses_and_remain_idempoten
             .unwrap();
         let ensure = store.committed_message_inbox_ensure();
         let attempt = async {
-            if sealed {
-                ensure.ensure_for_sealed_recipient(&c, &a, &m).await
-            } else {
-                ensure.ensure_for_live_recipient(&c, &a, &m).await
+            match kind {
+                0 => store.onboarding_inbox_ensure().ensure(&c, &a, &m).await,
+                1 => ensure.ensure_for_live_recipient(&c, &a, &m).await,
+                _ => ensure.ensure_for_sealed_recipient(&c, &a, &m).await,
             }
         };
         let release = async {
