@@ -26,6 +26,7 @@ use silverhand_backend_core::{
     foundation::identity::{AgentId, UserId},
     foundation::persistence::PersistenceFailure,
     identity_access::{
+        access::{ViewerWorkspacesChangedSink, WorkspaceRole},
         workspace_creation::{
             AcceptedMemberAgent, AgentOnboardingIntent, CreatedWorkspaceFace,
             FirstOnboardingOutcome, OnboardingChannelCommitted, WorkspaceCreationWrite,
@@ -67,29 +68,31 @@ pub trait WorkspaceCreationAftermath: Send + Sync + 'static {
 #[derive(Debug)]
 pub struct OnboardingDeliverFailed;
 
-pub struct WorkspaceCreateState<W, B, C, A> {
+pub struct WorkspaceCreateState<W, B, C, A, S> {
     pub writer: W,
     pub entropy: B,
     pub clock: C,
     pub aftermath: A,
+    pub membership_events: S,
 }
 
-struct Shared<W, B, C, A>(Arc<WorkspaceCreateState<W, B, C, A>>);
-impl<W, B, C, A> Clone for Shared<W, B, C, A> {
+struct Shared<W, B, C, A, S>(Arc<WorkspaceCreateState<W, B, C, A, S>>);
+impl<W, B, C, A, S> Clone for Shared<W, B, C, A, S> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-pub fn workspace_create_router<W, B, C, A>(state: WorkspaceCreateState<W, B, C, A>) -> Router
+pub fn workspace_create_router<W, B, C, A, S>(state: WorkspaceCreateState<W, B, C, A, S>) -> Router
 where
     W: WorkspaceCreationWrite,
     B: SendEntropy + Sync + Send + 'static,
     C: WorkspaceProvisionClock + 'static,
     A: WorkspaceCreationAftermath,
+    S: ViewerWorkspacesChangedSink,
 {
     Router::new()
-        .route(WORKSPACES_PATH, post(create::<W, B, C, A>))
+        .route(WORKSPACES_PATH, post(create::<W, B, C, A, S>))
         .with_state(Shared(Arc::new(state)))
 }
 
@@ -111,8 +114,8 @@ struct CreateBody {
     member_user_ids: Vec<String>,
 }
 
-async fn create<W, B, C, A>(
-    State(state): State<Shared<W, B, C, A>>,
+async fn create<W, B, C, A, S>(
+    State(state): State<Shared<W, B, C, A, S>>,
     principal: Option<Extension<UserId>>,
     body: Result<ValidatedJson<CreateBody>, ValidatedJsonRejection>,
 ) -> Response
@@ -121,6 +124,7 @@ where
     B: SendEntropy + Sync + Send + 'static,
     C: WorkspaceProvisionClock + 'static,
     A: WorkspaceCreationAftermath,
+    S: ViewerWorkspacesChangedSink,
 {
     let Some(Extension(viewer)) = principal else {
         return registration_required();
@@ -178,7 +182,7 @@ where
         member_user_ids: &member_user_ids,
         requested_agents: &requested_agents,
     };
-    let (face, committed_channel, member_agents, first_onboarding) = match state
+    let (face, committed_channel, member_agents, first_onboarding, member_users) = match state
         .writer
         .provision_workspace(&request, &state.entropy, &state.clock)
         .await
@@ -188,6 +192,7 @@ where
             provisioned.onboarding_channel,
             provisioned.member_agents,
             provisioned.first_onboarding,
+            provisioned.member_users,
         ),
         Ok(WorkspaceProvisionOutcome::NameTaken) => {
             return error(StatusCode::CONFLICT, "workspace name already exists");
@@ -197,6 +202,27 @@ where
         }
         Err(cause) => return internal(cause, "workspace-create durable provisioning failed"),
     };
+
+    // Membership is already durable even if subsequent agent onboarding fails.
+    // Notify only the committed audience, never the unvalidated request IDs.
+    for user in &member_users {
+        let role = if user == &viewer {
+            WorkspaceRole::Owner
+        } else {
+            WorkspaceRole::Member
+        };
+        if let Err(error) = state
+            .membership_events
+            .viewer_added_to_workspace(user, &face.id, role)
+            .await
+        {
+            tracing::warn!(
+                error = crate::foundation::safe_log_field::safe_display(&error),
+                workspace_id = face.id.as_str(),
+                "workspace-create membership announcement failed"
+            );
+        }
+    }
 
     let onboarding_channel_id = committed_channel.channel.clone();
 
@@ -539,11 +565,29 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
         (dir, pool)
     }
 
+    #[derive(Clone, Default)]
+    struct RecordedMemberships(std::sync::Arc<Mutex<Vec<(UserId, WorkspaceRole)>>>);
+
+    impl ViewerWorkspacesChangedSink for RecordedMemberships {
+        async fn viewer_added_to_workspace(
+            &self,
+            user: &UserId,
+            _: &silverhand_backend_core::foundation::identity::WorkspaceId,
+            role: WorkspaceRole,
+        ) -> Result<(), silverhand_backend_core::identity_access::access::ViewerAnnounceFailure>
+        {
+            self.0.lock().unwrap().push((user.clone(), role));
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn first_deliver_failure_truncates_the_fanout_before_the_second_agents_message() {
         let (_dir, pool) = seeded_pool().await;
         let events = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let membership_events = RecordedMemberships::default();
         let router = workspace_create_router(WorkspaceCreateState {
+            membership_events: membership_events.clone(),
             writer: SqliteWorkspaceCreation::from_pool(pool.clone()),
             entropy: HostEnvironment,
             clock: FixedClock,
@@ -570,6 +614,12 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
         // Deliver failed → 500, fan-out truncated.
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let _ = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+        assert_eq!(
+            *membership_events.0.lock().unwrap(),
+            vec![(UserId::parse("user-1").unwrap(), WorkspaceRole::Owner)],
+            "committed membership must be announced even when onboarding returns 500"
+        );
 
         // Exactly ONE deliver attempt (the first agent), and NO start (the first
         // agent's start never runs, the second agent is never reached).
@@ -632,6 +682,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
             }
         }
         let router = workspace_create_router(WorkspaceCreateState {
+            membership_events: RecordedMemberships::default(),
             writer: SqliteWorkspaceCreation::from_pool(pool.clone()),
             entropy: HostEnvironment,
             clock: FixedClock,
@@ -700,6 +751,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
         }
         let clock = MonotonicClock(std::sync::Arc::new(std::sync::atomic::AtomicI64::new(1000)));
         let router = workspace_create_router(WorkspaceCreateState {
+            membership_events: RecordedMemberships::default(),
             writer: SqliteWorkspaceCreation::from_pool(pool.clone()),
             entropy: HostEnvironment,
             clock: clock.clone(),
@@ -780,6 +832,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
             }
         }
         let router = workspace_create_router(WorkspaceCreateState {
+            membership_events: RecordedMemberships::default(),
             writer: SqliteWorkspaceCreation::from_pool(pool.clone()),
             entropy: HostEnvironment,
             clock: FixedClock,

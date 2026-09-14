@@ -5032,6 +5032,15 @@ where
 /// through the real `SqliteEventScopeAuthority`.
 #[tokio::test]
 async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honors() {
+    assert_membership_hint_reaches_viewer(false).await;
+}
+
+#[tokio::test]
+async fn workspace_creation_initial_members_receive_live_hint_and_cold_workspace() {
+    assert_membership_hint_reaches_viewer(true).await;
+}
+
+async fn assert_membership_hint_reaches_viewer(create_workspace: bool) {
     use sqlx::Executor;
 
     #[derive(Clone, Copy)]
@@ -5044,6 +5053,32 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
     impl silverhand_backend_core::identity_access::access::EnrollmentClock for AtClock {
         fn now_unix_millis(&self) -> i64 {
             self.0
+        }
+    }
+
+    impl silverhand_backend_core::identity_access::workspace_creation::WorkspaceProvisionClock
+        for AtClock
+    {
+        fn now_ms(&self) -> i64 {
+            self.0
+        }
+    }
+
+    struct NoAgents;
+    impl crate::identity_access::workspace_creation::WorkspaceCreationAftermath for NoAgents {
+        async fn deliver(
+            &self,
+            _: &silverhand_backend_core::identity_access::workspace_creation::WorkspaceOnboardingTarget,
+            _: &silverhand_backend_core::conversation_messaging::messaging::MessageId,
+        ) -> Result<(), crate::identity_access::workspace_creation::OnboardingDeliverFailed>
+        {
+            panic!("human-only creation must not deliver to agents")
+        }
+        fn start(
+            &self,
+            _: &silverhand_backend_core::identity_access::workspace_creation::WorkspaceOnboardingTarget,
+        ) {
+            panic!("human-only creation must not start agents")
         }
     }
 
@@ -5228,17 +5263,87 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
     let scope = EventScope::Viewer(user());
     assert_eq!(hub.current_seq(&scope).unwrap(), TransportSeq::ZERO);
 
-    // The CAUSE: an admin's authenticated enrollment POST, which runs the real
-    // `add_workspace_human_member` and its post-commit sink call — nothing else.
-    let (status, body) = call(
-        &enroll_app,
-        "POST",
-        "/api/workspaces/ws-foreign/members",
-        ADMIN_TOKEN,
-        axum::body::Body::from(r#"{"kind":"human","user_id":"user-1"}"#),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{body}");
+    // Both initial membership and subsequent enrollment must use the same viewer hint.
+    let workspace_id = if create_workspace {
+        use crate::identity_access::workspace_creation::{
+            WorkspaceCreateState, workspace_create_router,
+        };
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(&path)
+                    .foreign_keys(true),
+            )
+            .await
+            .unwrap();
+        use silverhand_backend_sqlite::identity_access::workspace_creation::SqliteWorkspaceCreation;
+
+        let writer = SqliteWorkspaceCreation::from_pool(pool);
+        let create_app = crate::identity_access::auth::require_human_session(
+            workspace_create_router(WorkspaceCreateState {
+                writer,
+                entropy:
+                    silverhand_backend_sqlite::conversation_messaging::messaging::HostEnvironment,
+                clock: AtClock(JOIN_MS),
+                aftermath: NoAgents,
+                membership_events: hub.workspace_membership_publisher(),
+            }),
+            authenticator(),
+            crate::identity_access::auth::PublicJsonUnauthorized,
+        );
+        let input = json!({
+            "name": "InitialMembers",
+            "member_user_ids": ["user-1", "user-1", "admin-1", "unknown-user"],
+        });
+        let (status, body) = call(
+            &create_app,
+            "POST",
+            "/api/workspaces",
+            ADMIN_TOKEN,
+            axum::body::Body::from(input.to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(
+            hub.current_seq(&EventScope::Viewer(UserId::parse("unknown-user").unwrap()))
+                .unwrap(),
+            TransportSeq::ZERO
+        );
+        let id = body["workspace"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            scope_events(&hub, EventScope::Viewer(UserId::parse("admin-1").unwrap())),
+            vec![ProductEvent::ViewerWorkspacesChanged {
+                change: ViewerWorkspaceChange::Added,
+                workspace_id: id.clone(),
+                role: Some("owner".into()),
+            }]
+        );
+        // A rejected duplicate create cannot publish a phantom membership.
+        let (status, _) = call(
+            &create_app,
+            "POST",
+            "/api/workspaces",
+            ADMIN_TOKEN,
+            axum::body::Body::from(input.to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(hub.current_seq(&scope).unwrap(), TransportSeq(1));
+
+        id
+    } else {
+        let (status, body) = call(
+            &enroll_app,
+            "POST",
+            "/api/workspaces/ws-foreign/members",
+            ADMIN_TOKEN,
+            axum::body::Body::from(r#"{"kind":"human","user_id":"user-1"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        "ws-foreign".to_owned()
+    };
 
     // EFFECT 1 — the hub's own high-water advanced by EXACTLY ONE, and the retained
     // replay is that single hint. This is checked FIRST because it is synchronous
@@ -5249,7 +5354,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
         scope_events(&hub, scope.clone()).as_slice(),
         [ProductEvent::ViewerWorkspacesChanged {
             change: ViewerWorkspaceChange::Added,
-            workspace_id: "ws-foreign".to_owned(),
+            workspace_id: workspace_id.clone(),
             role: Some("member".to_owned()),
         }]
     );
@@ -5261,7 +5366,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
         json!({
             "type": "event", "scope": "viewer:user-1", "seq": 1, "epoch": "epoch-1",
             "kind": "viewer_workspaces_changed",
-            "payload": { "change": "added", "workspace_id": "ws-foreign", "role": "member" },
+            "payload": { "change": "added", "workspace_id": workspace_id, "role": "member" },
         })
     );
 
@@ -5273,7 +5378,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
     let rows: Vec<(i64, String)> = sqlx::query_as(
         "SELECT joined_at, role FROM workspace_users WHERE workspace_id = ? AND user_id = ?",
     )
-    .bind("ws-foreign")
+    .bind(&workspace_id)
     .bind("user-1")
     .fetch_all(&mut probe)
     .await
@@ -5294,13 +5399,18 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         workspace_ids(&after),
-        ["ws-foreign", "ws-archived", "ws-regular", "ws-agent"]
+        [
+            workspace_id.as_str(),
+            "ws-archived",
+            "ws-regular",
+            "ws-agent"
+        ]
     );
     let gained: Vec<String> = workspace_ids(&after)
         .into_iter()
         .filter(|id| !before_ids.contains(id))
         .collect();
-    assert_eq!(gained, ["ws-foreign"]);
+    assert_eq!(gained, [workspace_id.clone()]);
 
     // Idempotent re-enroll: a second identical POST still answers 201 but owes no
     // announce. The membership stays a single row and the viewer stream does NOT
@@ -5309,7 +5419,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
     let (status, _) = call(
         &enroll_app,
         "POST",
-        "/api/workspaces/ws-foreign/members",
+        &format!("/api/workspaces/{workspace_id}/members"),
         ADMIN_TOKEN,
         axum::body::Body::from(r#"{"kind":"human","user_id":"user-1"}"#),
     )
@@ -5318,7 +5428,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
     let membership_rows: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM workspace_users WHERE workspace_id = ? AND user_id = ?",
     )
-    .bind("ws-foreign")
+    .bind(&workspace_id)
     .bind("user-1")
     .fetch_one(&mut probe)
     .await

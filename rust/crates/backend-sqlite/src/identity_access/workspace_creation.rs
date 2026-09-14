@@ -232,11 +232,13 @@ impl WorkspaceCreationWrite for SqliteWorkspaceCreation {
         .execute(&mut *tx)
         .await
         .map_err(WorkspaceCreationStoreError::from)?;
+
+        let mut member_users = vec![request.owner_user.clone()];
         for member in request.member_user_ids {
             if member == &request.owner_user {
                 continue;
             }
-            sqlx::query(
+            let inserted = sqlx::query(
                 "INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at, role) \
                  SELECT ?, ?, ?, 'member' WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)",
             )
@@ -247,6 +249,9 @@ impl WorkspaceCreationWrite for SqliteWorkspaceCreation {
             .execute(&mut *tx)
             .await
             .map_err(WorkspaceCreationStoreError::from)?;
+            if inserted.rows_affected() > 0 {
+                member_users.push(member.clone());
+            }
         }
 
         // (4) Per accepted agent, IN the SAME lock: membership + default capability
@@ -440,6 +445,7 @@ impl WorkspaceCreationWrite for SqliteWorkspaceCreation {
         );
         Ok(WorkspaceProvisionOutcome::Provisioned(Box::new(
             ProvisionedWorkspace {
+                member_users,
                 face,
                 onboarding_channel: OnboardingChannelCommitted {
                     channel: onboarding_channel_id,
@@ -965,7 +971,12 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     async fn unknown_member_user_ids_are_silently_filtered() {
         let (_dir, writer, pool) = open_seeded().await;
         let team = name("Team");
-        let users = [user("user-2"), user("ghost-user")];
+        let users = [
+            user("user-2"),
+            user("ghost-user"),
+            user("user-2"),
+            user("user-1"),
+        ];
         let WorkspaceProvisionOutcome::Provisioned(p) =
             provision(&writer, &req(&team, user("user-1"), &users, &[]), 10)
                 .await
@@ -981,6 +992,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
         .await
         .unwrap();
         assert_eq!(members, vec!["user-1".to_owned(), "user-2".to_owned()]);
+        assert_eq!(p.member_users, vec![user("user-1"), user("user-2")]);
     }
 
     #[tokio::test]

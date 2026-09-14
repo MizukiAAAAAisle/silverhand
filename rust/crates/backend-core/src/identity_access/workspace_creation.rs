@@ -181,6 +181,8 @@ pub struct AcceptedMemberAgent {
 /// agent, append→deliver→start (deliver failure truncates the fan-out).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProvisionedWorkspace {
+    /// Human membership post-image captured in the creation transaction, including owner.
+    pub member_users: Vec<UserId>,
     pub face: CreatedWorkspaceFace,
     pub onboarding_channel: OnboardingChannelCommitted,
     /// All accepted agents, request order + multiplicity preserved (#10). The FIRST

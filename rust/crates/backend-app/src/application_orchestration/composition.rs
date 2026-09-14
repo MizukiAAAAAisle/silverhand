@@ -1190,6 +1190,7 @@ pub(super) async fn compose_after_audit(
             // read, process entropy for id minting, and the SAME onboarding
             // deliver+start the agent-create saga uses — never a second authority.
             .merge(workspace_create_router(WorkspaceCreateState {
+                membership_events: hub.workspace_membership_publisher(),
                 writer: workspace_create_writer,
                 entropy: HostEnvironment,
                 clock: SystemCreationClock,
