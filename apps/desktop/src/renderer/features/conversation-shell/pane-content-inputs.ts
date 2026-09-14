@@ -91,7 +91,7 @@ export type PaneContentRoute = Pick<
   RouteState,
   | "workspaceId"
   | "channelId"
-  | "directDraftAgentId"
+  | "directDraftTarget"
   | "threadRootId"
   | "agentPanelId"
   | "humanPanelId"

@@ -14,11 +14,11 @@ export function buildConversationPanes(
   commands: PaneContentCommands,
 ): ConversationPanesModel {
   return {
-    primary: route.directDraftAgentId
+    primary: route.directDraftTarget
       ? {
           kind: "draft",
           props: {
-            agentId: route.directDraftAgentId,
+            target: route.directDraftTarget,
             onOpenPair: commands.handleDraftOpenedPair,
           },
         }

@@ -33,7 +33,7 @@ beforeEach(() => {
   route = {
     workspaceId: "w",
     channelId: "c",
-    directDraftAgentId: null,
+    directDraftTarget: null,
     threadRootId: null,
     agentPanelId: null,
     humanPanelId: null,
@@ -188,13 +188,13 @@ describe("single secondary priority resolver", () => {
 
 describe("branch-specific data and commands", () => {
   it("isolates draft identity and preserves conversation loading/index gates", () => {
-    route.directDraftAgentId = "agent";
+    route.directDraftTarget = { kind: "agent", id: "agent" };
     let model = buildConversationPanes(route, read, state, commands).primary;
     expect(model).toEqual({
       kind: "draft",
-      props: { agentId: "agent", onOpenPair: commands.handleDraftOpenedPair },
+      props: { target: { kind: "agent", id: "agent" }, onOpenPair: commands.handleDraftOpenedPair },
     });
-    route.directDraftAgentId = null;
+    route.directDraftTarget = null;
     read.directPairNotFound = true;
     read.directPairLoadFailed = true;
     read.parentChannelResolving = true;

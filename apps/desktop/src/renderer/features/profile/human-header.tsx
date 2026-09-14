@@ -1,3 +1,5 @@
+import { MessageSquare } from "lucide-react";
+import { ProfileHeaderAction } from "./profile-header-action";
 import type { UserDto } from "@silverhand/shared";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
@@ -10,10 +12,12 @@ export function HumanHeader({
   user,
   compact = false,
   onClose,
+  onMessage,
 }: {
   user: UserDto;
   compact?: boolean;
   onClose?: () => void;
+  onMessage?: () => void;
 }): JSX.Element {
   const avatarObjectUrl = useHumanAvatar(user.id);
   const presence = usePresenceById().get(user.id);
@@ -29,6 +33,18 @@ export function HumanHeader({
         />
       }
       displayName={user.display_name || user.name}
+      actions={
+        onMessage ? (
+          <ProfileHeaderAction
+            compact={compact}
+            label="Message"
+            title={`Message @${user.name}`}
+            onClick={onMessage}
+          >
+            <MessageSquare className="size-3.5" />
+          </ProfileHeaderAction>
+        ) : undefined
+      }
       status={
         <span
           data-status-pip

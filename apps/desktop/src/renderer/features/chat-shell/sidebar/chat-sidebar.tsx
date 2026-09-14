@@ -1,3 +1,4 @@
+import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useMemo, type ReactNode } from "react";
 import { Archive, Bookmark, Plus, Search } from "lucide-react";
 import type { AgentDto } from "@silverhand/shared";
@@ -46,12 +47,12 @@ interface ChatSidebarProps {
    *  navigations land on different routes: passing a null workspace to the
    *  workspace-keyed one would either fabricate a coordinate or silently no-op. */
   onSelectDirectPair: (conversationId: string) => void;
-  /** The agent whose pre-mint draft line is the open pane (`/chat/d/new/:agentId`),
+  /** The participant whose pre-mint draft line is the open pane (`/chat/d/new/:agentId`),
    *  if any — the sidebar shows a transient row for it. Route state,
    *  not stored state: no pair exists yet. */
-  directDraftAgentId: string | null;
+  directDraftTarget: DirectMessageTarget | null;
   /** Re-open that draft line. */
-  onSelectDirectDraft: (agentId: string) => void;
+  onSelectDirectDraft: (target: DirectMessageTarget) => void;
   /** Open a conversation inside a given workspace. STARRED is global, so the
    *  parent workspace is explicit: the handler owns the cross-workspace open
    *  (remembered layout restore included), STARRED never a second nav model. */
@@ -181,7 +182,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                     <DirectMessagesGroup
                       selectedChannelId={props.selectedChannelId}
                       onSelectDirectPair={props.onSelectDirectPair}
-                      draftAgentId={props.directDraftAgentId}
+                      draftTarget={props.directDraftTarget}
                       onSelectDirectDraft={props.onSelectDirectDraft}
                     />
                   ) : branch.kind === "workspace" ? (

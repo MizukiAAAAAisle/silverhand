@@ -11,7 +11,7 @@ import type { ChannelThreadsPanel } from "@/features/conversation-shell/componen
 import type { ConversationPaneCapabilities } from "@/features/conversations/pane-mode";
 export type DraftPaneProps = Pick<
   ComponentProps<typeof DirectPairDraftPane>,
-  "agentId" | "onOpenPair"
+  "target" | "onOpenPair"
 >;
 
 export type PrimaryPaneProps = Pick<

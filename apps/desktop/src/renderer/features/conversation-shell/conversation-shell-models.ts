@@ -1,3 +1,4 @@
+import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import type { AppSection } from "@/components/layout/nav-rail";
 import type { MembershipState } from "@/features/channels/membership";
 import type { JumpPhase } from "@/features/channels/message-jump-phase";
@@ -48,7 +49,7 @@ export interface ChatShellModel {
   appSection: AppSection;
   view: ChatView;
   selectedWorkspaceId: string | null;
-  directDraftAgentId: string | null;
+  directDraftTarget: DirectMessageTarget | null;
   workspaceSidebarPane: SidebarPane;
   workspaceSidebarVisible: boolean;
   workspaces: WorkspaceListItem[];

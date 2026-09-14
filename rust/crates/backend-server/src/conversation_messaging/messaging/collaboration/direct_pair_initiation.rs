@@ -18,7 +18,8 @@ use axum::{
 use serde_json::json;
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
-        DirectLineAuthority, SendActor, SendDestination, SendMessageOutcome, SendMessageUnitOfWork,
+        DirectLineAuthority, PrincipalIdentity, SendActor, SendDestination, SendMessageOutcome,
+        SendMessageUnitOfWork,
         collaboration::direct_pair_initiation::{
             DirectPairFirstSendError, DirectPairInitiationPort, DirectPairInitiationRefusal,
             authorize_direct_pair_initiation,
@@ -37,6 +38,8 @@ use crate::conversation_messaging::messaging::{
     references::MarkdownReferencePositions,
     send_request::{envelope_too_large, human_content_too_large},
 };
+
+pub const HUMAN_DIRECT_PAIR_INITIATION_PATH: &str = "/api/users/{id}/direct-messages";
 
 pub const DIRECT_PAIR_INITIATION_PATH: &str = "/api/agents/{id}/direct-messages";
 
@@ -66,6 +69,10 @@ where
 {
     Router::new()
         .route(DIRECT_PAIR_INITIATION_PATH, post(initiate::<I, D, U, F>))
+        .route(
+            HUMAN_DIRECT_PAIR_INITIATION_PATH,
+            post(initiate_human::<I, D, U, F>),
+        )
         .with_state(InitiationState(Arc::new(Inner {
             initiation,
             direct_lines,
@@ -86,14 +93,46 @@ where
     U: SendMessageUnitOfWork + Send + Sync,
     F: SendAftermath + Send + Sync,
 {
+    let Ok(target) = AgentId::parse(raw_target) else {
+        return error(StatusCode::BAD_REQUEST, "agent id required");
+    };
+    initiate_target(state, principal, PrincipalIdentity::Agent(target), request).await
+}
+
+async fn initiate_human<I, D, U, F>(
+    State(state): State<InitiationState<I, D, U, F>>,
+    principal: Option<Extension<UserId>>,
+    Path(raw_target): Path<String>,
+    request: Request,
+) -> Response
+where
+    I: DirectPairInitiationPort + Send + Sync,
+    D: DirectLineAuthority + Send + Sync,
+    U: SendMessageUnitOfWork + Send + Sync,
+    F: SendAftermath + Send + Sync,
+{
+    let Ok(target) = UserId::parse(raw_target) else {
+        return error(StatusCode::BAD_REQUEST, "user id required");
+    };
+    initiate_target(state, principal, PrincipalIdentity::Human(target), request).await
+}
+
+async fn initiate_target<I, D, U, F>(
+    state: InitiationState<I, D, U, F>,
+    principal: Option<Extension<UserId>>,
+    target: PrincipalIdentity,
+    request: Request,
+) -> Response
+where
+    I: DirectPairInitiationPort + Send + Sync,
+    D: DirectLineAuthority + Send + Sync,
+    U: SendMessageUnitOfWork + Send + Sync,
+    F: SendAftermath + Send + Sync,
+{
     let Some(Extension(viewer)) = principal else {
         tracing::error!("direct-pair initiation route reached without human principal");
         return internal();
     };
-    let Ok(target) = AgentId::parse(raw_target) else {
-        return error(StatusCode::BAD_REQUEST, "agent id required");
-    };
-
     let authorized =
         match authorize_direct_pair_initiation(&state.0.initiation, viewer.clone(), target).await {
             Ok(Ok(authorized)) => authorized,

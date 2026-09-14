@@ -154,6 +154,8 @@ export const apiPaths = {
    *  exists). Body is `SendMessageInput` (main-line only; `reply_to_message_id` is
    *  rejected). Returns `MessageSendAck` (201); `message.conversation_id` is the
    *  line the client then navigates to. */
+  /** Authenticated human first-send; target must exist and differ from the viewer. */
+  userDirectMessages: (id: string) => `/api/users/${id}/direct-messages`,
   agentDirectMessages: (id: string) => `/api/agents/${id}/direct-messages`,
   /** Owner-audit chats list (#task:2036 part ②): the conversations the agent is a
    *  party to that its OWNER may read in full, read-only. Enumerates the agent's

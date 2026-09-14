@@ -63,7 +63,10 @@ impl Initiation {
     fn granted() -> Self {
         Self {
             decision: DirectPairInitiationDecision::Granted(
-                DirectPairInitiationGrantFact::granted(user("user-1"), agent("agent-1")),
+                DirectPairInitiationGrantFact::granted(
+                    user("user-1"),
+                    PrincipalIdentity::Agent(agent("agent-1")),
+                ),
             ),
             authority_calls: Arc::new(AtomicUsize::new(0)),
             opens: Arc::new(AtomicUsize::new(0)),
@@ -85,7 +88,7 @@ impl DirectPairInitiationAuthority for Initiation {
     async fn decide(
         &self,
         _: &UserId,
-        _: &AgentId,
+        _: &PrincipalIdentity,
     ) -> Result<DirectPairInitiationDecision, Self::Error> {
         self.authority_calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.decision.clone())
@@ -147,7 +150,7 @@ impl DirectPairInitiationPort for Initiation {
     {
         let participants = DirectPairParticipants::between(
             PrincipalIdentity::Human(authorized.viewer().clone()),
-            PrincipalIdentity::Agent(authorized.target().clone()),
+            authorized.target().clone(),
         )
         .unwrap();
         let mut mint = Mint(participants);

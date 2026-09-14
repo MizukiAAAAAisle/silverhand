@@ -1,9 +1,10 @@
+import type { DirectMessageTarget } from "./target";
 import type { DirectPairCounterpart, DirectPairListItem } from "@silverhand/shared";
 
 /** The open pre-mint line: route state, not a stored conversation. */
 export interface DirectLineDraft {
-  agentId: string;
-  /** The agent read as a counterpart (`counterpartFromAgent`), used only when no
+  target: DirectMessageTarget;
+  /** The participant read as a counterpart, used only when no
    *  pair carries a richer one yet. */
   counterpart: DirectPairCounterpart;
 }
@@ -22,7 +23,7 @@ export type DirectLineRow =
   | (DirectLineRowBase & { kind: "pair"; conversationId: string })
   /** The line being started. Opening it stays on the draft — including when a
    *  pair already exists, which is the whole point of this arm. */
-  | (DirectLineRowBase & { kind: "draft"; agentId: string });
+  | (DirectLineRowBase & { kind: "draft"; target: DirectMessageTarget });
 
 /**
  * Whether a pair is shown in the sidebar DIRECT MESSAGES list. A `deleted`
@@ -42,7 +43,7 @@ export function directLinePairVisibleInSidebar(pair: DirectPairListItem): boolea
  * with no pair is appended, where a line just being opened belongs.
  *
  * The two selection inputs are mutually exclusive by ROUTE, not by a rule here:
- * `/chat/d/new/:agentId` puts nothing in the open-conversation id, so `draft` and
+ * A pre-mint draft route puts nothing in the open-conversation id, so `draft` and
  * a non-null `selectedConversationId` never arrive together.
  */
 export function mergeDirectLineRows({
@@ -58,13 +59,15 @@ export function mergeDirectLineRows({
   const visiblePairs = pairs.filter(directLinePairVisibleInSidebar);
   const rows: DirectLineRow[] = visiblePairs.map((pair) => {
     const isDraftsPair =
-      draft !== null && pair.counterpart.kind === "agent" && pair.counterpart.id === draft.agentId;
+      draft !== null &&
+      pair.counterpart.kind === draft.target.kind &&
+      pair.counterpart.id === draft.target.id;
     if (isDraftsPair && draft !== null) {
       draftMerged = true;
       return {
         kind: "draft",
         key: pair.conversation_id,
-        agentId: draft.agentId,
+        target: draft.target,
         counterpart: pair.counterpart,
         unread: pair.unread_count,
         // The draft pane IS the open pane whenever a draft is passed, so this is
@@ -84,8 +87,8 @@ export function mergeDirectLineRows({
   if (draft !== null && !draftMerged) {
     rows.push({
       kind: "draft",
-      key: `draft:${draft.agentId}`,
-      agentId: draft.agentId,
+      key: `draft:${draft.target.kind}:${draft.target.id}`,
+      target: draft.target,
       counterpart: draft.counterpart,
       // No messages exist yet, by construction.
       unread: 0,

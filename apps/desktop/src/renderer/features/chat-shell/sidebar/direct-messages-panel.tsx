@@ -1,14 +1,14 @@
 import { useMemo } from "react";
 import { MessageSquare } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { useAgent } from "@/features/agent-shell/hooks/hooks";
+import type { DirectMessageTarget } from "@/features/direct-pairs/target";
+import { useDraftCounterpart } from "@/features/direct-pairs/use-draft-counterpart";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { AuthorAvatarView, DeletedActorMarker } from "@/components/chat/author-avatar-view";
 import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import {
   collectCounterpartAvatarSources,
-  counterpartFromAgent,
   presentCounterpart,
 } from "@/features/direct-pairs/counterpart-presentation";
 import { mergeDirectLineRows, type DirectLineRow } from "@/features/direct-pairs/direct-line-rows";
@@ -23,27 +23,20 @@ import {
 export function DirectMessagesGroup(props: {
   /** The open conversation — the ONLY thing that highlights a row here. */
   selectedChannelId: string | null;
-  /** The agent whose pre-mint draft pane is open, if any. Nothing about it is
+  /** The participant whose pre-mint draft pane is open, if any. Nothing about it is
    *  stored: it comes from the route and leaves with it. */
-  draftAgentId?: string | null;
+  draftTarget?: DirectMessageTarget | null;
   /** Open a pair. Takes no workspace: there is none, and that is the point. */
   onSelectDirectPair: (conversationId: string) => void;
   /** Re-open the draft pane — the transient row's only action. */
-  onSelectDirectDraft?: (agentId: string) => void;
+  onSelectDirectDraft?: (target: DirectMessageTarget) => void;
 }): JSX.Element | null {
   const pairs = useDirectPairs();
-  const draftAgentId = props.draftAgentId ?? null;
-  // The draft pane already reads this agent (it is the route's subject), so this
-  // is a cache hit in practice, not a second fetch for the sidebar's sake.
-  const draftAgent = useAgent(draftAgentId).data;
-  // The open draft, as the seam takes it. Its counterpart is only the fallback for
-  // a line with no pair yet — a merged row wears the pair's.
+  const target = props.draftTarget ?? null;
+  const { counterpart } = useDraftCounterpart(target);
   const draft = useMemo(
-    () =>
-      draftAgentId !== null && draftAgent
-        ? { agentId: draftAgentId, counterpart: counterpartFromAgent(draftAgent) }
-        : null,
-    [draftAgentId, draftAgent],
+    () => (target && counterpart ? { target, counterpart } : null),
+    [target, counterpart],
   );
   // Merging, ordering and selection are ONE pure decision (`mergeDirectLineRows`),
   // so this component only paints what it is handed.
@@ -129,7 +122,7 @@ function DirectMessageRow({
   agentAvatarUrls: ReadonlyMap<string, string | null>;
   humanAvatarUrls: ReadonlyMap<string, string | null>;
   onSelectDirectPair: (conversationId: string) => void;
-  onSelectDirectDraft?: (agentId: string) => void;
+  onSelectDirectDraft?: (target: DirectMessageTarget) => void;
 }): JSX.Element {
   // The label is also the pane's title, and both must come from the same
   // presentation rule (see `presentCounterpart`) — so the draft row's face and
@@ -150,7 +143,7 @@ function DirectMessageRow({
         // A draft row stays on the draft even when a pair for the same agent
         // exists: that is what makes it one row instead of two.
         if (row.kind === "draft") {
-          onSelectDirectDraft?.(row.agentId);
+          onSelectDirectDraft?.(row.target);
           return;
         }
         onSelectDirectPair(row.conversationId);

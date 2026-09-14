@@ -8,7 +8,7 @@ const h = vi.hoisted(() => ({
     workspaceId: "w",
     channelId: "c" as string | null,
     directConversationId: null,
-    directDraftAgentId: null,
+    directDraftTarget: null,
     sideConversationId: null,
     threadRootId: null,
     threadsListOpen: false,

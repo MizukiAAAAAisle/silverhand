@@ -62,7 +62,7 @@ export function useChatRouteRecovery({
     workspaceId: selectedWorkspaceId,
     channelId: selectedChannelId,
     directConversationId,
-    directDraftAgentId,
+    directDraftTarget,
     sideConversationId,
     threadRootId,
     threadsListOpen,
@@ -83,7 +83,7 @@ export function useChatRouteRecovery({
     // Same for the pre-mint draft `/chat/d/new/:agentId` (#task:2039): a line that
     // does not exist yet has no workspace either, and the pair it mints will not
     // have one.
-    if (directDraftAgentId) {
+    if (directDraftTarget) {
       return;
     }
     if (selectedWorkspaceId) {
@@ -114,7 +114,7 @@ export function useChatRouteRecovery({
     appSection,
     view,
     directConversationId,
-    directDraftAgentId,
+    directDraftTarget,
     selectedWorkspaceId,
     directPairAuthority,
     workspaces,
@@ -209,7 +209,7 @@ export function useChatRouteRecovery({
     selectedChannelId,
     chatSectionActive: appSection === "chat",
     directConversationId,
-    directDraftAgentId,
+    directDraftTarget,
     activeChannels: memberActiveChannels,
     workspaces,
     lastSelectedWorkspaceId,

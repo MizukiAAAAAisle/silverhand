@@ -1,4 +1,4 @@
-//! Human initiation of an agent-scoped direct-message line.
+//! Human initiation of a human or agent direct-message line.
 //!
 //! This operation deliberately has three stages.  The initiation authority runs
 //! before body admission and collapses an invisible target to `NotFound`.  After
@@ -16,11 +16,12 @@
 //! ```compile_fail
 //! use silverhand_backend_core::{
 //!     foundation::identity::{AgentId, UserId},
+//!     conversation_messaging::messaging::PrincipalIdentity,
 //!     conversation_messaging::messaging::collaboration::direct_pair_initiation::AuthorizedDirectPairInitiation,
 //! };
 //! let _forged = AuthorizedDirectPairInitiation {
 //!     viewer: UserId::parse("user-1").unwrap(),
-//!     target: AgentId::parse("agent-1").unwrap(),
+//!     target: PrincipalIdentity::Agent(AgentId::parse("agent-1").unwrap()),
 //! };
 //! ```
 
@@ -32,7 +33,7 @@ use crate::{
         EnvironmentUnavailable, OpenDirectPairError, PrincipalIdentity, SameDirectPairParticipant,
         SendClock, open_direct_pair,
     },
-    foundation::identity::{AgentId, UserId},
+    foundation::identity::UserId,
 };
 
 /// The anti-enumeration ladder's closed answer.
@@ -50,11 +51,11 @@ pub enum DirectPairInitiationDecision {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectPairInitiationGrantFact {
     source_viewer: UserId,
-    source_target: AgentId,
+    source_target: PrincipalIdentity,
 }
 
 impl DirectPairInitiationGrantFact {
-    pub fn granted(source_viewer: UserId, source_target: AgentId) -> Self {
+    pub fn granted(source_viewer: UserId, source_target: PrincipalIdentity) -> Self {
         Self {
             source_viewer,
             source_target,
@@ -64,9 +65,9 @@ impl DirectPairInitiationGrantFact {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum DirectPairInitiationRefusal {
-    #[error("target agent was not found")]
+    #[error("target participant was not found")]
     NotFound,
-    #[error("viewer may not initiate a direct pair with the target agent")]
+    #[error("viewer may not initiate a direct pair with the target participant")]
     Forbidden,
 }
 
@@ -78,14 +79,14 @@ pub trait DirectPairInitiationAuthority {
     fn decide(
         &self,
         viewer: &UserId,
-        target: &AgentId,
+        target: &PrincipalIdentity,
     ) -> impl Future<Output = Result<DirectPairInitiationDecision, Self::Error>> + Send;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthorizedDirectPairInitiation {
     viewer: UserId,
-    target: AgentId,
+    target: PrincipalIdentity,
 }
 
 impl AuthorizedDirectPairInitiation {
@@ -93,7 +94,7 @@ impl AuthorizedDirectPairInitiation {
         &self.viewer
     }
 
-    pub fn target(&self) -> &AgentId {
+    pub fn target(&self) -> &PrincipalIdentity {
         &self.target
     }
 }
@@ -101,7 +102,7 @@ impl AuthorizedDirectPairInitiation {
 pub async fn authorize_direct_pair_initiation<A: DirectPairInitiationAuthority>(
     authority: &A,
     viewer: UserId,
-    target: AgentId,
+    target: PrincipalIdentity,
 ) -> Result<
     Result<AuthorizedDirectPairInitiation, DirectPairInitiationRefusal>,
     DirectPairInitiationAuthorityError<A::Error>,
@@ -141,7 +142,7 @@ pub struct ForeignDirectPairInitiationGrant;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OpenedDirectPairFirstMessage {
     viewer: UserId,
-    target: AgentId,
+    target: PrincipalIdentity,
     conversation: ConversationId,
 }
 
@@ -150,7 +151,7 @@ impl OpenedDirectPairFirstMessage {
         &self.viewer
     }
 
-    pub fn target(&self) -> &AgentId {
+    pub fn target(&self) -> &PrincipalIdentity {
         &self.target
     }
 
@@ -183,7 +184,7 @@ where
 {
     let participants = DirectPairParticipants::between(
         PrincipalIdentity::Human(authorized.viewer.clone()),
-        PrincipalIdentity::Agent(authorized.target.clone()),
+        authorized.target.clone(),
     )
     .map_err(DirectPairFirstSendError::Participants)?;
     let now = clock
@@ -263,6 +264,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::foundation::identity::AgentId;
     use std::{
         convert::Infallible,
         error::Error,
@@ -276,8 +278,8 @@ mod tests {
         UserId::parse(raw).unwrap()
     }
 
-    fn agent(raw: &str) -> AgentId {
-        AgentId::parse(raw).unwrap()
+    fn agent(raw: &str) -> PrincipalIdentity {
+        PrincipalIdentity::Agent(AgentId::parse(raw).unwrap())
     }
 
     struct Authority(DirectPairInitiationDecision);
@@ -288,7 +290,7 @@ mod tests {
         async fn decide(
             &self,
             _viewer: &UserId,
-            _target: &AgentId,
+            _target: &PrincipalIdentity,
         ) -> Result<DirectPairInitiationDecision, Self::Error> {
             Ok(self.0.clone())
         }
@@ -508,7 +510,7 @@ mod tests {
     async fn foreign_winner_and_loser_rows_neither_publish_nor_send() {
         let foreign = DirectPairParticipants::between(
             PrincipalIdentity::Human(user("user-2")),
-            PrincipalIdentity::Agent(agent("agent-2")),
+            agent("agent-2"),
         )
         .unwrap();
         for created in [true, false] {

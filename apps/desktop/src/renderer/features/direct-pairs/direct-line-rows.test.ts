@@ -32,7 +32,7 @@ function pair(conversationId: string, agentId: string): DirectPairListItem {
 /** The draft's own counterpart — read from the agent row, deliberately different
  *  from the pair's so a merged row can be shown to carry the PAIR's. */
 const draft: DirectLineDraft = {
-  agentId: AGENT,
+  target: { kind: "agent", id: AGENT },
   counterpart: {
     status: "active",
     kind: "agent",
@@ -66,8 +66,8 @@ describe("mergeDirectLineRows — one line per agent, and who owns it", () => {
     expect(rows).toHaveLength(2);
     expect(rows[1]).toEqual({
       kind: "draft",
-      key: `draft:${AGENT}`,
-      agentId: AGENT,
+      key: `draft:agent:${AGENT}`,
+      target: { kind: "agent", id: AGENT },
       counterpart: draft.counterpart,
       unread: 0,
       selected: true,
@@ -88,7 +88,9 @@ describe("mergeDirectLineRows — one line per agent, and who owns it", () => {
     // One row, it is the draft's, and it is selected — so the sidebar agrees with
     // the pane about what is open, and `kind: 'draft'` is what makes a click stay
     // on the draft instead of navigating to the pair.
-    expect(rows).toMatchObject([{ kind: "draft", agentId: AGENT, selected: true }]);
+    expect(rows).toMatchObject([
+      { kind: "draft", target: { kind: "agent", id: AGENT }, selected: true },
+    ]);
   });
 
   it("keeps the pair's position, identity and unread on the merged row", () => {
@@ -248,7 +250,7 @@ describe("directLinePairVisibleInSidebar — a gone principal leaves the sidebar
       draft,
       selectedConversationId: null,
     });
-    expect(rows).toMatchObject([{ kind: "draft", key: `draft:${AGENT}`, selected: true }]);
+    expect(rows).toMatchObject([{ kind: "draft", key: `draft:agent:${AGENT}`, selected: true }]);
   });
 });
 
@@ -288,7 +290,11 @@ describe("composed with decideDraftHandoff — the three cells the review named"
     it(`${cell}: one row, selected, and opening it stays on the draft`, () => {
       const rows = rowsAfterHandoff(over);
       expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ kind: "draft", agentId: AGENT, selected: true });
+      expect(rows[0]).toMatchObject({
+        kind: "draft",
+        target: { kind: "agent", id: AGENT },
+        selected: true,
+      });
     });
   }
 
@@ -331,5 +337,41 @@ describe("the sidebar and the shell defer to the seam (the wiring half)", () => 
     // page's `Message` entry, and a data-loss path for this row.
     expect(appSource).toContain("onSelectDirectDraft={nav.toDirectDraft}");
     expect(appSource).not.toContain("onSelectDirectDraft={handleMessageAgent}");
+  });
+});
+
+describe("human draft convergence", () => {
+  it("matches both kind and id, so an agent sharing the id is a different row", () => {
+    const human: DirectPairListItem = {
+      ...pair("human-pair", AGENT),
+      counterpart: {
+        status: "active",
+        kind: "human",
+        id: AGENT,
+        name: "human",
+        display_name: "Human",
+        avatar_url: null,
+        runtime: null,
+      },
+    };
+    const humanDraft: DirectLineDraft = {
+      target: { kind: "human", id: AGENT },
+      counterpart: human.counterpart,
+    };
+    const rows = mergeDirectLineRows({
+      pairs: [pair("agent-pair", AGENT), human],
+      draft: humanDraft,
+      selectedConversationId: null,
+    });
+    expect(rows.map((row) => [row.kind, row.key])).toEqual([
+      ["pair", "agent-pair"],
+      ["draft", "human-pair"],
+    ]);
+    const unminted = mergeDirectLineRows({
+      pairs: [pair("agent-pair", AGENT)],
+      draft: humanDraft,
+      selectedConversationId: null,
+    });
+    expect(unminted[1]?.key).toBe(`draft:human:${AGENT}`);
   });
 });

@@ -6,34 +6,29 @@ import { EmptyConversation } from "@/features/conversation-shell/components/chan
 import { ConversationHeaderIdentity } from "@/features/conversation-shell/components/channel-view/conversation-header-identity";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import { ApiError } from "@/lib/api";
-import { useAgent } from "@/features/agent-shell/hooks/hooks";
-import { counterpartFromAgent } from "./counterpart-presentation";
-import {
-  decideDraftHandoff,
-  findAgentDirectPair,
-  useDirectPairs,
-  useInitiateDirectMessage,
-} from "./hooks";
+import type { DirectMessageTarget } from "./target";
+import { useDraftCounterpart } from "./use-draft-counterpart";
+
+import { decideDraftHandoff, useDirectPairs, useInitiateDirectMessage } from "./hooks";
 
 interface DirectPairDraftPaneProps {
-  agentId: string;
+  target: DirectMessageTarget;
   onOpenPair: (conversationId: string) => void;
 }
 
-export function DirectPairDraftPane({
-  agentId,
-  onOpenPair,
-}: DirectPairDraftPaneProps): JSX.Element {
-  const agentQuery = useAgent(agentId);
-  const agent = agentQuery.data;
-  const initiate = useInitiateDirectMessage(agentId);
+export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneProps): JSX.Element {
+  const targetQuery = useDraftCounterpart(target);
+  const counterpart = targetQuery.counterpart;
+  const initiate = useInitiateDirectMessage(target);
   const [draft, setDraft] = useState("");
-  const attemptRef = useRef<{ id: string; userId: string; agentId: string }>();
+  const attemptRef = useRef<{ id: string; userId: string; target: DirectMessageTarget }>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pairs = useDirectPairs();
-  const existingPair = findAgentDirectPair(pairs, agentId);
+  const existingPair = pairs.find(
+    (pair) => pair.counterpart.kind === target.kind && pair.counterpart.id === target.id,
+  );
 
-  // The line can come into existence without this pane's help — the agent
+  // The line can come into existence without this pane's help — the participant
   // messaged the viewer first while the draft sat open, or our own first send
   // MINTED the pair and then failed to persist the message. Whether that means
   // "hand over" is one pure rule ({@link decideDraftHandoff}), not conditions
@@ -59,9 +54,10 @@ export function DirectPairDraftPane({
 
   const sendDisabled = trimmed.length === 0 || initiate.isPending;
   // Same label rule the pair's own header will use once it exists
-  // (`presentCounterpart`): the display name when the agent set one, the handle
+  // (`presentCounterpart`): the display name when the participant set one, the handle
   // otherwise — so the title does not change under the user on convergence.
-  const title = agent ? agent.display_name.trim() || agent.name : "";
+  const title =
+    counterpart?.status === "active" ? counterpart.display_name.trim() || counterpart.name : "";
 
   const submit = (): void => {
     if (sendDisabled) return;
@@ -70,9 +66,10 @@ export function DirectPairDraftPane({
     if (
       !attemptRef.current ||
       attemptRef.current.userId !== userId ||
-      attemptRef.current.agentId !== agentId
+      attemptRef.current.target.kind !== target.kind ||
+      attemptRef.current.target.id !== target.id
     ) {
-      attemptRef.current = { id: crypto.randomUUID(), userId, agentId };
+      attemptRef.current = { id: crypto.randomUUID(), userId, target };
     }
     void initiate
       .mutateAsync({ content: trimmed, client_message_id: attemptRef.current.id })
@@ -107,7 +104,7 @@ export function DirectPairDraftPane({
     submit();
   };
 
-  if (agentQuery.isLoading) {
+  if (targetQuery.isLoading) {
     return (
       <main
         className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
@@ -117,8 +114,8 @@ export function DirectPairDraftPane({
       </main>
     );
   }
-  if (!agent) {
-    // The route names an agent the viewer cannot read — the same answered
+  if (!counterpart) {
+    // The route names a participant the viewer cannot read — the same answered
     // absence the pair arm renders, in the same words.
     return (
       <main
@@ -139,7 +136,7 @@ export function DirectPairDraftPane({
         <ConversationHeaderIdentity
           identity="counterpart"
           title={title}
-          counterpart={counterpartFromAgent(agent)}
+          counterpart={counterpart}
         />
       </header>
 
@@ -196,9 +193,7 @@ export function DirectPairDraftPane({
   );
 }
 
-/** Map the door's authoritative status to a reason. The entry is only offered for
- *  agent-scoped agents, so a 403 here means the backend narrowed initiation (a
- *  named capability, not this entry's visibility) — surface it, don't hide it. */
+/** Surface the server's admission result; a visible profile is not authorization. */
 function friendlyInitiateError(error: Error, target: string): string {
   if (error instanceof ApiError) {
     if (error.kind === "backend_unreachable") {

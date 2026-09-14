@@ -8,7 +8,7 @@ use std::{error::Error, future::Future};
 
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
-        DirectPairOpenedPort, SendClock, SendEntropy,
+        DirectPairOpenedPort, PrincipalIdentity, SendClock, SendEntropy,
         collaboration::direct_pair_initiation::{
             AuthorizedDirectPairInitiation, DirectPairFirstSendError,
             DirectPairInitiationAuthority, DirectPairInitiationDecision,
@@ -16,7 +16,7 @@ use silverhand_backend_core::{
             OpenedDirectPairFirstMessage, open_and_send_direct_pair,
         },
     },
-    foundation::identity::{AgentId, UserId},
+    foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
     identity_access::agents::session_scope::AgentSessionScope,
 };
@@ -55,8 +55,30 @@ where
     async fn decide(
         &self,
         viewer: &UserId,
-        target: &AgentId,
+        target: &PrincipalIdentity,
     ) -> Result<DirectPairInitiationDecision, Self::Error> {
+        if let PrincipalIdentity::Human(target_user) = target {
+            if target_user == viewer {
+                return Ok(DirectPairInitiationDecision::Forbidden);
+            }
+            let both_exist: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?) \
+                 AND EXISTS(SELECT 1 FROM users WHERE id = ?)",
+            )
+            .bind(viewer.as_str())
+            .bind(target_user.as_str())
+            .fetch_one(&self.store.pool)
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+            return Ok(if both_exist {
+                DirectPairInitiationDecision::Granted(DirectPairInitiationGrantFact::granted(
+                    viewer.clone(),
+                    target.clone(),
+                ))
+            } else {
+                DirectPairInitiationDecision::NotFound
+            });
+        }
         let Some(candidate) = direct_pair_initiation_candidate(
             &self.store.pool,
             viewer,
@@ -70,7 +92,10 @@ where
             return Ok(DirectPairInitiationDecision::Forbidden);
         }
         Ok(DirectPairInitiationDecision::Granted(
-            DirectPairInitiationGrantFact::granted(candidate.viewer, candidate.target),
+            DirectPairInitiationGrantFact::granted(
+                candidate.viewer,
+                PrincipalIdentity::Agent(candidate.target),
+            ),
         ))
     }
 }
@@ -130,6 +155,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use silverhand_backend_core::foundation::identity::AgentId;
     use std::{
         convert::Infallible,
         error::Error,
@@ -214,8 +240,8 @@ mod tests {
         UserId::parse(raw).unwrap()
     }
 
-    fn agent(raw: &str) -> AgentId {
-        AgentId::parse(raw).unwrap()
+    fn agent(raw: &str) -> PrincipalIdentity {
+        PrincipalIdentity::Agent(AgentId::parse(raw).unwrap())
     }
 
     async fn authorize(
@@ -277,6 +303,48 @@ mod tests {
         assert_eq!(facts[0].conversation(), &first);
         assert_eq!(facts[0].participants().first().as_str(), "agent-owner");
         assert_eq!(facts[0].participants().second().as_str(), "user-1");
+    }
+
+    #[tokio::test]
+    async fn concurrent_humans_open_one_pair_and_publish_both_human_endpoints() {
+        let fixture = Fixture::new().await;
+        let adapter = fixture.adapter();
+        let forward = authorize_direct_pair_initiation(
+            &adapter,
+            user("user-1"),
+            PrincipalIdentity::Human(user("user-2")),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let reverse = authorize_direct_pair_initiation(
+            &adapter,
+            user("user-2"),
+            PrincipalIdentity::Human(user("user-1")),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let (first, second) = tokio::join!(
+            adapter.open_and_send(forward, |fact| async move {
+                Ok::<_, Infallible>(fact.conversation().clone())
+            }),
+            adapter.open_and_send(reverse, |fact| async move {
+                Ok::<_, Infallible>(fact.conversation().clone())
+            }),
+        );
+        assert_eq!(first.unwrap(), second.unwrap());
+        let events = fixture.opened.0.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].participants().first(),
+            &PrincipalIdentity::Human(user("user-1"))
+        );
+        assert_eq!(
+            events[0].participants().second(),
+            &PrincipalIdentity::Human(user("user-2"))
+        );
     }
 
     async fn corrupt_winner_then_repair(trigger_sql: &'static str, expected_field: &'static str) {

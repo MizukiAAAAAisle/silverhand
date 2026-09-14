@@ -1,3 +1,4 @@
+import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useCallback, useMemo } from "react";
 import { matchPath, useLocation, useNavigate } from "react-router-dom";
 import type { AppSection } from "@/components/layout/nav-rail";
@@ -96,7 +97,8 @@ export const routes = {
    * collide with `chatDirect` — that pattern is three segments and this is
    * four.
    */
-  chatDirectDraft: (agentId: string) => `/chat/d/new/${agentId}`,
+  chatDirectDraft: (target: DirectMessageTarget) =>
+    target.kind === "agent" ? `/chat/d/new/${target.id}` : `/chat/d/new/human/${target.id}`,
   // Activity is a top-level NavRail section (peer to chat, #task:1394). Its
   // selected state is a pure projection of the route: bare `/activity` (no
   // workspace, no channel — the full-width global list) plus one selected-item
@@ -134,6 +136,7 @@ export const routes = {
 export const routePatterns = {
   chatChannel: "/chat/w/:workspaceId/c/:channelId",
   chatDirectDraft: "/chat/d/new/:agentId",
+  chatHumanDirectDraft: "/chat/d/new/human/:userId",
   chatDirect: "/chat/d/:conversationId",
   chatWorkspace: "/chat/w/:workspaceId",
   chatArchived: "/chat/archived",
@@ -210,7 +213,7 @@ export interface RouteState {
    * the workspace auto-restore effect, which reads "chat section + no workspace"
    * as a gap to fill and would otherwise navigate the draft away.
    */
-  directDraftAgentId: string | null;
+  directDraftTarget: DirectMessageTarget | null;
   /** Generic side-pane pointer (`?side=<conversation_id>`). May be any
    *  conversation id (channel/thread/dm). PR-1 only resolves ids that
    *  exist in the current workspace's channels union; cross-workspace
@@ -318,12 +321,14 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   // disjoint by segment count (four vs three), and matching the more specific
   // one first keeps that intent visible rather than resting on a count the
   // reader has to verify. (There is no Activity draft twin — a first DM is
-  // composed from an agent page, never from the Activity list.)
+  // composed from a profile, never from the Activity list.)
   const mDirectDraft = matchPath(routePatterns.chatDirectDraft, pathname);
-  const mDirect = mDirectDraft
-    ? null
-    : (matchPath(routePatterns.chatDirect, pathname) ??
-      matchPath(routePatterns.activityDirect, pathname));
+  const mHumanDirectDraft = matchPath(routePatterns.chatHumanDirectDraft, pathname);
+  const mDirect =
+    mDirectDraft || mHumanDirectDraft
+      ? null
+      : (matchPath(routePatterns.chatDirect, pathname) ??
+        matchPath(routePatterns.activityDirect, pathname));
   // Order matters: the user route is more specific (`/members/u/:userId`,
   // three segments) than the agent route (`/members/:agentId`, two
   // segments), and matchPath returns the first match. Trying the user
@@ -338,7 +343,11 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   // A pair's conversation id lands in `channelId` like any other open
   // conversation; `directConversationId` is what says it has no workspace.
   const directConversationId = mDirect?.params.conversationId ?? null;
-  const directDraftAgentId = mDirectDraft?.params.agentId ?? null;
+  const directDraftTarget: DirectMessageTarget | null = mHumanDirectDraft?.params.userId
+    ? { kind: "human", id: mHumanDirectDraft.params.userId }
+    : mDirectDraft?.params.agentId
+      ? { kind: "agent", id: mDirectDraft.params.agentId }
+      : null;
   const channelId = mChannel?.params.channelId ?? directConversationId ?? null;
   const searchParams = new URLSearchParams(search);
   const fullscreen = searchParams.get("fullscreen") === "1";
@@ -412,7 +421,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     workspaceId: workspaceId ?? null,
     channelId: channelId ?? null,
     directConversationId,
-    directDraftAgentId,
+    directDraftTarget,
     sideConversationId,
     threadRootId,
     threadsListOpen,
@@ -428,7 +437,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
 
 export function useRouteState(): RouteState {
   const { pathname, search } = useLocation();
-  return parseRouteState(pathname, search);
+  return useMemo(() => parseRouteState(pathname, search), [pathname, search]);
 }
 
 /**
@@ -964,8 +973,8 @@ export function useNav(): {
   /** Open the PRE-MINT direct line with `agentId` (`/chat/d/new/:agentId`,
    *  #task:2039) — the standard chat surface for a line that does not exist yet.
    *  Callers that already hold a pair use {@link toDirect} instead; this one is
-   *  for the case where there is nothing to name but the agent. */
-  toDirectDraft: (agentId: string) => void;
+   *  for the case where there is nothing to name but the participant. */
+  toDirectDraft: (target: DirectMessageTarget) => void;
   toMembers: (agentId?: string) => void;
   /** Navigate the members section to a human's profile by user id.
    *  Mutually exclusive with the agent form — only one of agentId /
@@ -1137,7 +1146,10 @@ export function useNav(): {
     [go],
   );
   const toDirect = useCallback((cid: string) => go(routes.chatDirect(cid)), [go]);
-  const toDirectDraft = useCallback((agentId: string) => go(routes.chatDirectDraft(agentId)), [go]);
+  const toDirectDraft = useCallback(
+    (target: DirectMessageTarget) => go(routes.chatDirectDraft(target)),
+    [go],
+  );
   const toMembers = useCallback(
     (agentId?: string) => go(agentId ? routes.membersAgent(agentId) : routes.members()),
     [go],

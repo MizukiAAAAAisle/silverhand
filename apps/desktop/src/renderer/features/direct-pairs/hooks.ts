@@ -1,3 +1,4 @@
+import type { DirectMessageTarget } from "./target";
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
@@ -344,14 +345,19 @@ export function useDirectPairsSync(): void {
  * caller retains one client_message_id while retrying the unedited draft;
  * the server binds it to the authenticated human and admitted request.
  */
-export function useInitiateDirectMessage(agentId: string) {
+export function useInitiateDirectMessage(target: DirectMessageTarget) {
   const qc = useQueryClient();
   return useMutation<MessageSendAck, Error, { content: string; client_message_id: string }>({
     mutationFn: async ({ content, client_message_id }) =>
-      api<MessageSendAck>(apiPaths.agentDirectMessages(agentId), {
-        method: "POST",
-        body: JSON.stringify({ content, client_message_id }),
-      }),
+      api<MessageSendAck>(
+        target.kind === "agent"
+          ? apiPaths.agentDirectMessages(target.id)
+          : apiPaths.userDirectMessages(target.id),
+        {
+          method: "POST",
+          body: JSON.stringify({ content, client_message_id }),
+        },
+      ),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: directPairsKey });
     },

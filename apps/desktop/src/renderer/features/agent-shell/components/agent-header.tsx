@@ -1,13 +1,11 @@
 import { ProfileHeaderContent } from "@/features/profile/profile-header-content";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { MessageSquare, Power, Trash2 } from "lucide-react";
 import type { AgentDto, AgentRuntimeStateDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { SidePanelHeader } from "@/components/layout/side-panel-header";
-import { Button } from "@/components/ui/button";
-import { neutralAction } from "@/components/common/control-ink-border";
-import { destructiveAction, DESTRUCTIVE_TRIGGER } from "@/components/common/destructive-action";
+import { ProfileHeaderAction as HeaderAction } from "@/features/profile/profile-header-action";
 import { useAgentPresence, useStopAgent } from "../hooks/hooks";
 import { projectPresence, PRESENCE_TONE_DOT } from "../model/presence-projection";
 import { useAgentAvatarObjectUrl } from "../hooks/avatar-hooks";
@@ -128,55 +126,5 @@ export function AgentHeader({
         onDeleted={onDeleted}
       />
     </>
-  );
-}
-
-function HeaderAction({
-  compact,
-  label,
-  title,
-  onClick,
-  disabled,
-  destructive = false,
-  children,
-}: {
-  compact: boolean;
-  label: string;
-  title: string;
-  onClick: () => void;
-  disabled?: boolean;
-  destructive?: boolean;
-  children: ReactNode;
-}): JSX.Element {
-  if (compact) {
-    return (
-      <button
-        type="button"
-        aria-label={label}
-        title={title}
-        onClick={onClick}
-        disabled={disabled}
-        data-sticker
-        data-sticker-size="md"
-        data-sticker-tone="neutral"
-        className={`flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) transition-colors hover:bg-bg-hover focus-outline disabled:pointer-events-none disabled:opacity-50 ${destructive ? "text-error" : "text-text-muted hover:text-text-primary"}`}
-      >
-        {children}
-      </button>
-    );
-  }
-
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      title={title}
-      onClick={onClick}
-      disabled={disabled}
-      {...(destructive ? destructiveAction(DESTRUCTIVE_TRIGGER) : neutralAction())}
-    >
-      {children}
-      {label}
-    </Button>
   );
 }

@@ -1,3 +1,5 @@
+import { useNav } from "@/router";
+import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import { SidePanelHeader } from "@/components/layout/side-panel-header";
 import { useEffect } from "react";
 import { useUsers } from "@/features/users/hooks";
@@ -37,6 +39,8 @@ export function HumanView({
   variant = "full",
   onClose,
 }: HumanViewProps): JSX.Element {
+  const nav = useNav();
+  const pairs = useDirectPairs();
   const viewer = useViewerUser();
   const users = useUsers();
 
@@ -85,7 +89,22 @@ export function HumanView({
       className="flex h-full flex-1 flex-col overflow-hidden bg-bg-base"
       style={paneChrome}
     >
-      <HumanHeader user={dto} compact={variant === "side"} onClose={onClose} />
+      <HumanHeader
+        user={dto}
+        compact={variant === "side"}
+        onClose={onClose}
+        onMessage={
+          viewerDto && viewerDto.id !== dto.id
+            ? () => {
+                const pair = pairs.find(
+                  (pair) => pair.counterpart.kind === "human" && pair.counterpart.id === dto.id,
+                );
+                if (pair) nav.toDirect(pair.conversation_id);
+                else nav.toDirectDraft({ kind: "human", id: dto.id });
+              }
+            : undefined
+        }
+      />
       <div className="min-w-0 flex-1 overflow-y-auto">
         <div className="human-profile-content">
           <HumanProfileCard user={dto} />

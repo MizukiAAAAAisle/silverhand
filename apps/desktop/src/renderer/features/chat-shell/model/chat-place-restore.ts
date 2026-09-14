@@ -1,3 +1,4 @@
+import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 /**
  * What the bare `/chat` route should open.
  *
@@ -144,13 +145,13 @@ export function chatPlaceForRoute(route: {
   /** False on every non-chat rail, whose route state carries no chat place. */
   chatSectionActive: boolean;
   /** `/chat/d/new/:agentId` — pre-mint draft. */
-  directDraftAgentId: string | null;
+  directDraftTarget: DirectMessageTarget | null;
   /** `/chat/d/:conversationId` — an existing direct line. */
   directConversationId: string | null;
   selectedWorkspaceId: string | null;
 }): ChatPlace | null {
   if (!route.chatSectionActive) return null;
-  if (route.directDraftAgentId !== null) return null;
+  if (route.directDraftTarget !== null) return null;
   if (route.directConversationId !== null) {
     return { kind: "direct_pair", conversationId: route.directConversationId };
   }

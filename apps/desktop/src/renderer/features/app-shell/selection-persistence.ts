@@ -1,3 +1,4 @@
+import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useEffect, useRef, type MutableRefObject } from "react";
 import {
   useTouchSort,
@@ -18,7 +19,7 @@ export function useSelectionPersistenceEffects(params: {
   selectedChannelId: string | null;
   chatSectionActive: boolean;
   directConversationId: string | null;
-  directDraftAgentId: string | null;
+  directDraftTarget: DirectMessageTarget | null;
   activeChannels: ChannelListItem[];
   workspaces: WorkspaceListItem[];
   lastSelectedWorkspaceId: MutableRefObject<string | null>;
@@ -28,7 +29,7 @@ export function useSelectionPersistenceEffects(params: {
     selectedChannelId,
     chatSectionActive,
     directConversationId,
-    directDraftAgentId,
+    directDraftTarget,
     activeChannels,
     workspaces,
     lastSelectedWorkspaceId,
@@ -61,13 +62,13 @@ export function useSelectionPersistenceEffects(params: {
   useEffect(() => {
     const place = chatPlaceForRoute({
       chatSectionActive,
-      directDraftAgentId,
+      directDraftTarget,
       directConversationId,
       selectedWorkspaceId,
     });
     if (place === null) return;
     recordLastChatPlace(place);
-  }, [chatSectionActive, directDraftAgentId, directConversationId, selectedWorkspaceId]);
+  }, [chatSectionActive, directDraftTarget, directConversationId, selectedWorkspaceId]);
 
   // Stamp "recently opened" for the channel sort list whenever the viewer
   // selects a top-level channel (#task:1146). Recent = recently-OPENED by

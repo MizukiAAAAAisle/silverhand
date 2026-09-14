@@ -55,7 +55,7 @@ export function useConversationShell({
     chatView: view,
     workspaceId: selectedWorkspaceId,
     channelId: selectedChannelId,
-    directDraftAgentId,
+    directDraftTarget,
     threadRootId,
     fullscreen: routeFullscreen,
     agentPanelId,
@@ -231,7 +231,7 @@ export function useConversationShell({
         nav.toDirect(existing.conversation_id);
         return;
       }
-      nav.toDirectDraft(agentId);
+      nav.toDirectDraft({ kind: "agent", id: agentId });
     },
     [read.directPairs, nav.toDirect, nav.toDirectDraft],
   );
@@ -267,7 +267,7 @@ export function useConversationShell({
       view,
       selectedWorkspaceId,
 
-      directDraftAgentId,
+      directDraftTarget,
       workspaceSidebarPane,
       workspaceSidebarVisible,
 

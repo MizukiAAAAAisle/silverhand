@@ -2749,7 +2749,7 @@ async fn the_composition_mounts_stale_message_resolution_behind_the_runtime_peri
 /// handler's own status (never the perimeter's bodiless `401`), and never the `404`
 /// fallback. Removing any mounted route's
 /// `.merge(...)` from `prepare()` flips its entry to `404` and reddens this gate.
-/// The tables are named consts with per-table `assert_eq!(len)` (112 human / 28 runtime
+/// The tables are named consts with per-table `assert_eq!(len)` (113 human / 28 runtime
 /// / 2 WebSocket / 7 anonymous / 1 connect-info-gated) so a mis-added or mis-deleted
 /// row reddens the count directly.
 ///
@@ -2774,10 +2774,10 @@ async fn the_composition_mounts_every_declared_route() {
     let router = app.router;
     let unauthorized = r#"{"error":"unauthorized"}"#;
 
-    // The 112 human-perimeter product doors. Anonymous (no bearer) → the human
+    // The 113 human-perimeter product doors. Anonymous (no bearer) → the human
     // session perimeter's `401` envelope, never a `404`: each path IS mounted and
     // guarded. (`.layer` runs the perimeter for any matched human route.)
-    const HUMAN_PERIMETER_DOORS: [(&str, &str); 112] = [
+    const HUMAN_PERIMETER_DOORS: [(&str, &str); 113] = [
         ("POST", "/api/hosts"),
         // #2219 CP4 host-custody batch B — the three perimeter-guarded custody doors.
         // `GET /api/hosts` shares the path node with the invite POST above, so its anon
@@ -2794,6 +2794,7 @@ async fn the_composition_mounts_every_declared_route() {
         // Direct-pair initiation write door, Wave 3A checkpoint A6 (#2203). Distinct
         // method+path from the direct-pair read above; anon POST → the perimeter 401.
         ("POST", "/api/agents/agent-1/direct-messages"),
+        ("POST", "/api/users/user-2/direct-messages"),
         ("GET", "/api/workspaces"),
         ("POST", "/api/workspaces/workspace0000001/members"),
         ("GET", "/api/agents"),
@@ -3008,7 +3009,7 @@ async fn the_composition_mounts_every_declared_route() {
         ("GET", "/api/tasks/by-number"),
         ("GET", "/api/tasks/task-1"),
     ];
-    assert_eq!(HUMAN_PERIMETER_DOORS.len(), 112);
+    assert_eq!(HUMAN_PERIMETER_DOORS.len(), 113);
     for (method, path) in HUMAN_PERIMETER_DOORS {
         let (status, body) = request(&router, method, path, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -12316,3 +12317,6 @@ async fn related_users_follow_owned_workspace_memberships_over_http_and_ws() {
     shutdown_tx.send(()).unwrap();
     running.await.unwrap().unwrap();
 }
+
+#[path = "human_direct_pair_tests.rs"]
+mod human_direct_pair_tests;

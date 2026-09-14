@@ -34,7 +34,7 @@ export function ChatShell({
     appSection,
     view,
     selectedWorkspaceId,
-    directDraftAgentId,
+    directDraftTarget,
     workspaceSidebarPane,
     workspaceSidebarVisible,
     workspaces,
@@ -143,7 +143,7 @@ export function ChatShell({
                     // text or a failed first send. Routing it through
                     // `handleMessageAgent` — which prefers an existing pair —
                     // would discard both (@Cindy, #task:2039 review).
-                    directDraftAgentId={directDraftAgentId}
+                    directDraftTarget={directDraftTarget}
                     onSelectDirectDraft={nav.toDirectDraft}
                     onCreateChannel={setCreateChannelWorkspaceId}
                     onOpenWorkspaceSettings={setWorkspaceSettingsId}

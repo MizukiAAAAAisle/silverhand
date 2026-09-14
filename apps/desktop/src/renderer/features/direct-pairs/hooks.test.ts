@@ -562,7 +562,7 @@ describe("the draft pane is per-agent, and defers to the pure handoff rule", () 
   it("remounts on agent identity — a draft written to A can never be sent to B", () => {
     // @Cindy's finding 1: without the key, `/chat/d/new/A → /new/B` re-uses the
     // instance and carries `draft` plus the mutation state across agents.
-    expect(contentSource).toContain("key={model.props.agentId}");
+    expect(contentSource).toContain("key={`${model.props.target.kind}:${model.props.target.id}`}");
   });
 
   it("takes the handoff decision from the seam, not from its own conditions", () => {

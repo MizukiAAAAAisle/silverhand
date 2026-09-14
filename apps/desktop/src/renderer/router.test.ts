@@ -1,4 +1,4 @@
-import { withHumanQuery } from "./router";
+import { routes, withHumanQuery } from "./router";
 import { describe, expect, it } from "vitest";
 import {
   buildAgentPanelOpenUrl,
@@ -945,7 +945,7 @@ describe("parseRouteState — the pre-mint /chat/d/new/:agentId route", () => {
       // The draft renders in the channel pane's slot, so the section's view is
       // the channel one — with nothing selected in it.
       chatView: "channel",
-      directDraftAgentId: "a-1",
+      directDraftTarget: { kind: "agent", id: "a-1" },
       channelId: null,
       directConversationId: null,
       workspaceId: null,
@@ -964,12 +964,12 @@ describe("parseRouteState — the pre-mint /chat/d/new/:agentId route", () => {
     expect(r).toMatchObject({
       directConversationId: "c-pair",
       channelId: "c-pair",
-      directDraftAgentId: null,
+      directDraftTarget: null,
       workspaceId: null,
     });
   });
 
-  it("leaves directDraftAgentId null for every other URL", () => {
+  it("leaves directDraftTarget null for every other URL", () => {
     for (const pathname of [
       "/chat",
       "/chat/search",
@@ -979,7 +979,7 @@ describe("parseRouteState — the pre-mint /chat/d/new/:agentId route", () => {
       "/chat/w/w-1/c/c-a",
       "/chat/d/c-pair",
     ]) {
-      expect(parseRouteState(pathname, "").directDraftAgentId).toBeNull();
+      expect(parseRouteState(pathname, "").directDraftTarget).toBeNull();
     }
   });
 
@@ -1017,5 +1017,19 @@ describe("human profile overlay routing", () => {
       "human=",
     );
     expect(parseRouteState("/chat/d/dm-a", "?human=").humanPanelId).toBeNull();
+  });
+});
+
+describe("human direct-message drafts", () => {
+  it("keeps the human target separate from stored conversations", () => {
+    const path = routes.chatDirectDraft({ kind: "human", id: "u-2" });
+    expect(path).toBe("/chat/d/new/human/u-2");
+    expect(parseRouteState(path, "")).toMatchObject({
+      section: "chat",
+      directDraftTarget: { kind: "human", id: "u-2" },
+      channelId: null,
+      directConversationId: null,
+      workspaceId: null,
+    });
   });
 });

@@ -20,7 +20,7 @@ const refetching = (...ids: string[]): DirectPairAuthority => ({
 describe("chatPlaceForRoute", () => {
   const base = {
     chatSectionActive: true,
-    directDraftAgentId: null,
+    directDraftTarget: null,
     directConversationId: null,
     selectedWorkspaceId: null,
   };
@@ -44,7 +44,9 @@ describe("chatPlaceForRoute", () => {
     // A line that does not exist is not a place to come back to, and its unsent
     // text lives in the pane — persisting the route would imply the text
     // returned with it.
-    expect(chatPlaceForRoute({ ...base, directDraftAgentId: "ag-1" })).toBeNull();
+    expect(
+      chatPlaceForRoute({ ...base, directDraftTarget: { kind: "agent", id: "ag-1" } }),
+    ).toBeNull();
   });
 
   it("records nothing for bare /chat, so passing through restore keeps the memory", () => {
@@ -67,7 +69,7 @@ describe("chatPlaceForRoute", () => {
     expect(
       chatPlaceForRoute({
         ...base,
-        directDraftAgentId: "ag-1",
+        directDraftTarget: { kind: "agent", id: "ag-1" },
         selectedWorkspaceId: "ws-1",
       }),
     ).toBeNull();

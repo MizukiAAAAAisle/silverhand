@@ -262,13 +262,25 @@ describe("logical send through production mutation and WS ingestion", () => {
   });
 });
 describe("first DM send identity", () => {
+  it("sends a human first message through the human door with the same identity token", async () => {
+    const input = { content: "hello", client_message_id: "human-send" };
+    vi.mocked(api).mockResolvedValueOnce({ message: { conversation_id: "human-pair" } });
+    await useInitiateDirectMessage({ kind: "human", id: "user2" }).mutateAsync(input);
+    expect(vi.mocked(api)).toHaveBeenCalledWith("/api/users/user2/direct-messages", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  });
+
   it("passes the same token and content on an explicit retry through the first-send door", async () => {
     const send = createLogicalSend("c1", null);
     const input = { content: "same", client_message_id: send.id };
     vi.mocked(api).mockRejectedValueOnce(new Error("timeout"));
-    await expect(useInitiateDirectMessage("agent1").mutateAsync(input)).rejects.toThrow("timeout");
+    await expect(
+      useInitiateDirectMessage({ kind: "agent", id: "agent1" }).mutateAsync(input),
+    ).rejects.toThrow("timeout");
     vi.mocked(api).mockResolvedValueOnce({ message: committed(send) });
-    await useInitiateDirectMessage("agent1").mutateAsync(input);
+    await useInitiateDirectMessage({ kind: "agent", id: "agent1" }).mutateAsync(input);
     const calls = vi.mocked(api).mock.calls;
     expect(calls[0]).toEqual(calls[1]);
     expect(JSON.parse(String(calls[0]![1]!.body))).toEqual(input);

@@ -23,7 +23,7 @@
  * spelling) while the avatar variant vocabulary is `'user'` (the message-author
  * one). The translation happens HERE, once, instead of at each rendering surface.
  */
-import type { AgentDto, DirectPairCounterpart } from "@silverhand/shared";
+import type { AgentDto, UserDto, DirectPairCounterpart } from "@silverhand/shared";
 import type { AuthorAvatar, AuthorAvatarSources } from "@/components/chat/author-presentation";
 
 export interface CounterpartPresentation {
@@ -128,5 +128,17 @@ export function collectCounterpartAvatarSources(
   return {
     agents: Array.from(agents, ([id, avatar_url]) => ({ id, avatar_url })),
     users: Array.from(users, ([id, avatar_url]) => ({ id, avatar_url })),
+  };
+}
+
+export function counterpartFromHuman(user: UserDto): DirectPairCounterpart {
+  return {
+    status: "active",
+    kind: "human",
+    id: user.id,
+    name: user.name,
+    display_name: user.display_name,
+    avatar_url: user.avatar_url,
+    runtime: null,
   };
 }
