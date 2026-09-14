@@ -1,7 +1,7 @@
 import * as Popover from "@radix-ui/react-popover";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentDto } from "@silverhand/shared";
-import { MoreVertical, Plus, Settings } from "lucide-react";
+import { Folder, FolderOpen, MoreVertical, Plus, Settings } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { WorkspaceIcon } from "@/components/workspace-icon";
@@ -96,14 +96,18 @@ function WorkspaceRow({
   return (
     <SidebarSectionHeader
       label={title}
+      collapseIcon={
+        icon
+          ? undefined
+          : (open) => {
+              const Icon = open ? FolderOpen : Folder;
+              return <Icon aria-hidden className="size-3.5 shrink-0 text-text-muted" />;
+            }
+      }
       collapsible
       expanded={expanded}
       onToggle={onToggle}
-      leading={
-        icon ? (
-          <span className="flex size-5.5 shrink-0 items-center justify-center">{icon}</span>
-        ) : undefined
-      }
+      leading={icon ?? undefined}
       trailing={muted ? <MutedMarker /> : undefined}
       action={children}
     />

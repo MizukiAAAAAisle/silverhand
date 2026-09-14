@@ -123,10 +123,10 @@ export function SidebarBranchLayout({
   const drag = useSidebarBranchDrag();
 
   return (
-    <section className="group/sectionscope mb-2 flex select-none flex-col gap-1">
+    <section className="group/sectionscope mb-3.5 flex select-none flex-col gap-1">
       {header}
       {children ? (
-        <ul className={cn("space-y-1", drag?.isDragging && "hidden")}>{children}</ul>
+        <ul className={cn("space-y-0.5 pl-2", drag?.isDragging && "hidden")}>{children}</ul>
       ) : null}
     </section>
   );
@@ -177,6 +177,7 @@ export function SidebarSection({
 }
 
 interface SectionHeaderProps {
+  collapseIcon?: (expanded: boolean) => ReactNode;
   label: string;
   labelClassName?: string;
   leading?: ReactNode;
@@ -193,6 +194,7 @@ interface SectionHeaderProps {
 
 /** Collapse state belongs to the caller; this header only presents it. */
 export function SidebarSectionHeader({
+  collapseIcon,
   label,
   labelClassName,
   leading,
@@ -218,19 +220,31 @@ export function SidebarSectionHeader({
       ],
   );
 
+  // Every collapsible group leads with the SAME caret so "can expand" is one
+  // consistent affordance; the identity glyph (folder / avatar / star / message)
+  // is the second column and carries meaning only. A non-collapsible section has
+  // no caret and shows its icon alone. All three glyph kinds sit in one
+  // fixed-width centered box so a taller avatar and a line icon share one left
+  // edge (no per-caller size drift).
+  const identityGlyph = collapseIcon ? (
+    collapseIcon(expanded && !drag?.isDragging)
+  ) : icon ? (
+    <span data-sidebar-section-icon className="inline-flex items-center text-text-muted">
+      {icon}
+    </span>
+  ) : (
+    (leading ?? null)
+  );
+
+  const identityIcon = identityGlyph ? (
+    <span className="inline-flex size-4.5 shrink-0 items-center justify-center">
+      {identityGlyph}
+    </span>
+  ) : null;
+
   const headerInner = (
     <span className="flex min-w-0 items-center gap-2">
-      {collapsible ? (
-        <SidebarChevron expanded={expanded && !drag?.isDragging} />
-      ) : icon ? (
-        <span
-          data-sidebar-section-icon
-          className="inline-flex shrink-0 items-center text-text-muted"
-        >
-          {icon}
-        </span>
-      ) : null}
-      {leading}
+      {identityIcon}
       <span className={cn("truncate", labelClassName)}>{label}</span>
       {trailing}
       {typeof count === "number" ? (
@@ -243,6 +257,11 @@ export function SidebarSectionHeader({
       ) : null}
     </span>
   );
+
+  // Slack-style: no caret. Collapsible groups look identical to the plain nav
+  // rows — the identity glyph sits far-left and the whole header toggles on
+  // click. Nothing distinguishes "expandable" but the click behavior, which is
+  // the point (one uniform row shape).
 
   const actions =
     action ??
@@ -266,8 +285,10 @@ export function SidebarSectionHeader({
     <header
       data-sidebar-group-heading={collapsible ? "" : undefined}
       className={cn(
-        "text-sm leading-4 font-medium",
-        collapsible ? "tracking-wide text-text-primary" : "tracking-wider text-text-muted",
+        "leading-4",
+        collapsible
+          ? "text-[11px] font-semibold uppercase tracking-[0.08em] text-text-primary"
+          : "text-sm font-medium tracking-wider text-text-muted",
       )}
     >
       {collapsible ? (
