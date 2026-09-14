@@ -9,6 +9,7 @@
 //! driver errors. The port returns application facts and refusals, so no driver
 //! type reaches the application or the wire.
 
+use crate::conversation_messaging::runtime_delivery::conversation_allows_delivery;
 use std::{
     convert::Infallible,
     path::Path,
@@ -20,7 +21,7 @@ use std::collections::HashSet;
 
 use silverhand_backend_core::application_orchestration::agent_creation::OnboardingInboxEnsure;
 use silverhand_backend_core::conversation_messaging::messaging::post_commit::{
-    LiveMessageInboxEnsure, SealedMessageInboxEnsure,
+    InboxEnsureOutcome, LiveMessageInboxEnsure, SealedMessageInboxEnsure,
 };
 use silverhand_backend_core::conversation_messaging::messaging::{
     self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationRefusal,
@@ -527,7 +528,7 @@ where
         conversation: &ConversationId,
         agent: &AgentId,
         message: &MessageId,
-    ) -> Result<(), EffectFailure> {
+    ) -> Result<InboxEnsureOutcome, EffectFailure> {
         ensure_inbox_delivery(
             &self.pool,
             &self.environment,
@@ -550,7 +551,7 @@ where
         conversation: &ConversationId,
         agent: &AgentId,
         message: &MessageId,
-    ) -> Result<(), EffectFailure> {
+    ) -> Result<InboxEnsureOutcome, EffectFailure> {
         ensure_inbox_delivery(
             &self.pool,
             &self.environment,
@@ -580,6 +581,7 @@ impl<E: SendClock> SqliteOnboardingInboxEnsure<E> {
             InboxRecipientAuthority::Onboarding,
         )
         .await
+        .map(|_| ())
     }
 }
 
@@ -597,7 +599,7 @@ async fn ensure_inbox_delivery<E: SendClock>(
     agent: &AgentId,
     message_id: &MessageId,
     authority: InboxRecipientAuthority,
-) -> Result<(), OnboardingInboxEnsureError> {
+) -> Result<InboxEnsureOutcome, OnboardingInboxEnsureError> {
     // Stamp with the store's own clock, ahead of opening the transaction.
     let now = environment.now_unix_ms()?;
     // Reserve the writer BEFORE reading the message/recipient witnesses. Waiting
@@ -645,6 +647,11 @@ async fn ensure_inbox_delivery<E: SendClock>(
         }
     }
 
+    if !conversation_allows_delivery(&mut tx, conversation).await? {
+        tx.commit().await?;
+        return Ok(InboxEnsureOutcome::SkippedArchived);
+    }
+
     // The witnesses hold: enqueue the durable turn. The SAME idempotent writer the send
     // fan-out uses — a re-run (echo) conflicts on the unique delivery index and writes
     // nothing new.
@@ -658,7 +665,7 @@ async fn ensure_inbox_delivery<E: SendClock>(
         .await?;
 
     tx.commit().await?;
-    Ok(())
+    Ok(InboxEnsureOutcome::Ready)
 }
 
 /// Startup and driver failures, surfaced only to the composition root that opens
@@ -2716,6 +2723,12 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         delivery_kind: &'static str,
         queued_at_ms: i64,
     ) -> Result<(), SendMessageError> {
+        if !conversation_allows_delivery(&mut self.tx, conversation)
+            .await
+            .map_err(driver)?
+        {
+            return Ok(());
+        }
         sqlx::query(ENSURE_INBOX_DELIVERY)
             .bind(conversation.as_str())
             .bind(agent.as_str())

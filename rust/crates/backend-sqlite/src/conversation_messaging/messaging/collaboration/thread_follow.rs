@@ -1,5 +1,6 @@
 //! SQLite snapshot and write units for human thread following.
 
+use crate::conversation_messaging::runtime_delivery::conversation_allows_delivery;
 use std::collections::HashSet;
 
 #[cfg(test)]
@@ -662,7 +663,8 @@ where
         .map_err(ThreadFollowStoreError::from)?
         .rows_affected()
             == 1;
-        if inserted {
+        if inserted && conversation_allows_delivery(&mut tx, &conversation)
+            .await.map_err(ThreadFollowStoreError::from)? {
             // Backfill the prior thread context — the root + all replies (the thread
             // cluster: id=root OR thread_root_id=root) — into the agent's inbox as
             // `observe` deliveries. Idempotent on (conversation, agent, message), skips
@@ -967,6 +969,40 @@ INSERT INTO messages(id,conversation_id,from_kind,from_agent_id,content,seq,crea
     }
     fn rt(id: &str) -> ThreadRootId {
         ThreadRootId::parse(id).unwrap()
+    }
+
+    #[tokio::test]
+    async fn archived_thread_follow_keeps_follow_fact_without_backfill() {
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::AgentThreadFollowWrite;
+
+        let (dir, store) = follow_store().await;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new().filename(dir.path().join("agent-follow.sqlite")),
+            )
+            .await
+            .unwrap();
+        sqlx::query("UPDATE conversations SET archived_at = 100 WHERE id = 'chan'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let change = AgentThreadFollowWrite::follow(
+            &store.thread_follow(),
+            ag("agent-a"),
+            cv("chan"),
+            rt("m1"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(change.changed);
+        let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversation_inboxes")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(queued, 0);
     }
 
     #[tokio::test]

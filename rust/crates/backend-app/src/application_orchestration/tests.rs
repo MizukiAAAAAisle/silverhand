@@ -4139,6 +4139,43 @@ async fn the_composed_task_create_publishes_committed_payload_on_canonical_and_l
                 .is_some_and(|text| text.contains(&addressed[0]))),
         "the real runtime_deliver must claim the custody row for the committed task message"
     );
+    // Archive after a live delivery. Task history and UI events remain writable,
+    // but the new status event must not create inbox custody or daemon commands.
+    let commands_before = delivery_daemon.seen.lock().unwrap().len();
+    sqlx::query("UPDATE conversations SET archived_at = 100 WHERE id = ?")
+        .bind(CONVERSATION_ID)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = http_over_tcp(
+        address,
+        "POST",
+        &format!("/api/tasks/{task_id}/status"),
+        Some(&bearer),
+        r#"{"status":"done"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    let message = next_socket_json(&mut conversation).await;
+    assert_eq!(message["kind"], "message");
+    let changed = next_socket_json(&mut conversation).await;
+    assert_eq!(changed["kind"], "task_changed");
+    assert_eq!(changed["payload"]["status"], "done");
+    let status: String = sqlx::query_scalar("SELECT status FROM tasks WHERE id = ?")
+        .bind(task_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "done");
+    let inbox_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM conversation_inboxes WHERE conversation_id = ?")
+            .bind(CONVERSATION_ID)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(inbox_count, 1);
+    assert_eq!(delivery_daemon.seen.lock().unwrap().len(), commands_before);
+
     pool.close().await;
 
     conversation.close(None).await.unwrap();

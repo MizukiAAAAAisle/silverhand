@@ -44,6 +44,21 @@ use sqlx::{
 };
 use thiserror::Error;
 
+/// Shared admission rule for automatic inbox writes and pending-batch dispatch.
+/// Call on the write transaction that owns the operation, so archive serializes
+/// with admission. Existing inbox rows are never changed by this check.
+pub(crate) async fn conversation_allows_delivery(
+    connection: &mut SqliteConnection,
+    conversation: &ConversationId,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = ? AND archived_at IS NULL)",
+    )
+    .bind(conversation.as_str())
+    .fetch_one(connection)
+    .await
+}
+
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 
 #[derive(Clone)]
@@ -83,6 +98,12 @@ impl SqliteRuntimeDeliveryStore {
         // the conversation is an established seat rather than a request candidate.
         // One read transaction still spans the whole projection.
         let mut tx = self.pool.begin().await.map_err(persistence)?;
+        if !conversation_allows_delivery(&mut tx, &conversation)
+            .await
+            .map_err(persistence)?
+        {
+            return Ok(None);
+        }
         let Some(agent_row) = sqlx::query(
             "SELECT a.name, a.runtime, a.model, a.reasoning_effort, a.fast_mode,
                     a.host_id, a.session_scope, s.cli_session_id
@@ -125,6 +146,13 @@ impl SqliteRuntimeDeliveryStore {
             .begin_with(ROOT_WRITE_BEGIN)
             .await
             .map_err(persistence)?;
+        if !conversation_allows_delivery(&mut tx, &conversation)
+            .await
+            .map_err(persistence)?
+        {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(ClaimPendingInbox::Archived);
+        }
         if !agent_transition_is_clear(&mut tx, principal.agent()).await? {
             tx.commit().await.map_err(persistence)?;
             return Ok(ClaimPendingInbox::Transitioning);

@@ -9,8 +9,8 @@ use silverhand_backend_core::{
         },
         mention_cc::CommittedMentionCopy,
         post_commit::{
-            EffectFailure, IdleStart, LiveMessageInboxEnsure, MainDelivery, ReplyDelivery,
-            RuntimeDelivery, RuntimeStart, SealedMessageInboxEnsure,
+            EffectFailure, IdleStart, InboxEnsureOutcome, LiveMessageInboxEnsure, MainDelivery,
+            ReplyDelivery, RuntimeDelivery, RuntimeStart, SealedMessageInboxEnsure,
         },
     },
     conversation_messaging::runtime_delivery::{RuntimeDispatchReadPort, RuntimeInboxCustodyPort},
@@ -146,10 +146,14 @@ where
         agent: &AgentId,
         message: &MessageId,
     ) -> Result<(), EffectFailure> {
-        self.ensure
+        match self
+            .ensure
             .ensure_for_live_recipient(conversation, agent, message)
-            .await?;
-        self.effects.wake(conversation, agent).await
+            .await?
+        {
+            InboxEnsureOutcome::Ready => self.effects.wake(conversation, agent).await,
+            InboxEnsureOutcome::SkippedArchived => Ok(()),
+        }
     }
 }
 
@@ -167,10 +171,14 @@ where
         agent: &AgentId,
         message: &MessageId,
     ) -> Result<(), EffectFailure> {
-        self.ensure
+        match self
+            .ensure
             .ensure_for_sealed_recipient(conversation, agent, message)
-            .await?;
-        self.effects.wake(conversation, agent).await
+            .await?
+        {
+            InboxEnsureOutcome::Ready => self.effects.wake(conversation, agent).await,
+            InboxEnsureOutcome::SkippedArchived => Ok(()),
+        }
     }
 }
 

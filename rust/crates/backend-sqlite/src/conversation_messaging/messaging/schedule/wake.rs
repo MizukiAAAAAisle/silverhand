@@ -1,5 +1,6 @@
 //! Atomic system-message write for one claimed schedule occurrence.
 
+use crate::conversation_messaging::runtime_delivery::conversation_allows_delivery;
 use std::fmt;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -290,7 +291,11 @@ where
         bump_stream_head_on(&mut tx, conversation, None, message_seq)
             .await
             .map_err(failure)?;
-        sqlx::query("INSERT INTO conversation_inboxes(conversation_id,agent_id,message_id,delivered_at,delivery_kind,created_at) VALUES(?,?,?,NULL,'turn',?)")
+        if conversation_allows_delivery(&mut tx, conversation)
+            .await
+            .map_err(failure)?
+        {
+            sqlx::query("INSERT INTO conversation_inboxes(conversation_id,agent_id,message_id,delivered_at,delivery_kind,created_at) VALUES(?,?,?,NULL,'turn',?)")
             .bind(conversation.as_str())
             .bind(owner.as_str())
             .bind(message_id.as_str())
@@ -298,6 +303,7 @@ where
             .execute(&mut *tx)
             .await
             .map_err(failure)?;
+        }
         tx.commit().await.map_err(failure)?;
 
         Ok(CommittedScheduleWake {
@@ -409,7 +415,11 @@ where
             .execute(&mut *tx)
             .await
             .map_err(PersistenceFailure::from_source)?;
-        sqlx::query("INSERT INTO conversation_inboxes(conversation_id,agent_id,message_id,delivered_at,delivery_kind,created_at) VALUES(?,?,?,NULL,'turn',?) ON CONFLICT(conversation_id,agent_id,message_id) DO NOTHING")
+        if conversation_allows_delivery(&mut tx, &home)
+            .await
+            .map_err(PersistenceFailure::from_source)?
+        {
+            sqlx::query("INSERT INTO conversation_inboxes(conversation_id,agent_id,message_id,delivered_at,delivery_kind,created_at) VALUES(?,?,?,NULL,'turn',?) ON CONFLICT(conversation_id,agent_id,message_id) DO NOTHING")
             .bind(home.as_str())
             .bind(owner.as_str())
             .bind(message_id.as_str())
@@ -417,6 +427,7 @@ where
             .execute(&mut *tx)
             .await
             .map_err(PersistenceFailure::from_source)?;
+        }
         tx.commit().await.map_err(PersistenceFailure::from_source)?;
         Ok(Some(CommittedScheduleWake {
             conversation: home.clone(),

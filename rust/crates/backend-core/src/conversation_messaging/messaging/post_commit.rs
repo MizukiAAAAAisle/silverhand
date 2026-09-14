@@ -394,6 +394,13 @@ pub trait RuntimeDelivery {
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
+/// Result of automatic delivery admission; a skipped message remains in history.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InboxEnsureOutcome {
+    Ready,
+    SkippedArchived,
+}
+
 /// Ensures durable inbox custody for a recipient selected from effect-time live
 /// participation. Membership and task aftermath deliberately use this fresh
 /// gate so a recipient revoked after commit receives nothing.
@@ -403,7 +410,7 @@ pub trait LiveMessageInboxEnsure: Clone + Send + Sync + 'static {
         conversation: &ConversationId,
         agent: &AgentId,
         message: &MessageId,
-    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+    ) -> impl Future<Output = Result<InboxEnsureOutcome, EffectFailure>> + Send;
 }
 
 /// Ensures durable inbox custody for a recipient already sealed by the commit.
@@ -416,7 +423,7 @@ pub trait SealedMessageInboxEnsure: Clone + Send + Sync + 'static {
         conversation: &ConversationId,
         agent: &AgentId,
         message: &MessageId,
-    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+    ) -> impl Future<Output = Result<InboxEnsureOutcome, EffectFailure>> + Send;
 }
 
 /// The durable record that a person was named in a message they can see.

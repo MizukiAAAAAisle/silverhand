@@ -238,7 +238,7 @@ where
             })?;
         let batch = match batch {
             ClaimPendingInbox::Claimed(batch) => batch,
-            ClaimPendingInbox::Empty => {
+            ClaimPendingInbox::Empty | ClaimPendingInbox::Archived => {
                 return Err(RuntimeDispatchFailure::ProvenNotDispatched(
                     DeliveryTransportError::NoPending,
                 ));

@@ -136,6 +136,7 @@ pub struct ClaimedInboxBatch {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClaimPendingInbox {
+    Archived,
     Empty,
     StaleCustody,
     Transitioning,

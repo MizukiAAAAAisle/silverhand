@@ -1546,3 +1546,68 @@ async fn tool_refinement_never_rewrites_previous_generation_or_legacy_rows() {
             .unwrap();
     assert_eq!(count, 3);
 }
+
+#[tokio::test]
+async fn archive_blocks_existing_queue_without_changing_its_rows() {
+    let fixture = fixture().await;
+    let principal = claim_runtime(&fixture, "daemon-1").await;
+    let mut connection = open(&fixture.path).await;
+    let snapshot_sql = "SELECT id, delivered_at, failed_at, in_flight_owner, in_flight_at FROM conversation_inboxes ORDER BY id";
+    let before: Vec<(i64, Option<i64>, Option<i64>, Option<String>, Option<i64>)> =
+        sqlx::query_as(snapshot_sql)
+            .fetch_all(&mut connection)
+            .await
+            .unwrap();
+    assert!(!before.is_empty());
+
+    // A caller may already hold a live dispatch projection when archive commits.
+    assert!(
+        fixture
+            .delivery
+            .resolve_dispatch_target(
+                ConversationId::parse(CONVERSATION).unwrap(),
+                AgentId::parse(AGENT).unwrap(),
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    sqlx::query("UPDATE conversations SET archived_at = 100 WHERE id = ?")
+        .bind(CONVERSATION)
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    assert!(
+        fixture
+            .delivery
+            .resolve_dispatch_target(
+                ConversationId::parse(CONVERSATION).unwrap(),
+                AgentId::parse(AGENT).unwrap(),
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let outcome = fixture
+        .delivery
+        .claim_pending(
+            "host-1".into(),
+            principal,
+            ConversationId::parse(CONVERSATION).unwrap(),
+            owner("owner-1"),
+            200,
+            50,
+            &NoReferences,
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, ClaimPendingInbox::Archived);
+    let after: Vec<(i64, Option<i64>, Option<i64>, Option<String>, Option<i64>)> =
+        sqlx::query_as(snapshot_sql)
+            .fetch_all(&mut connection)
+            .await
+            .unwrap();
+    assert_eq!(after, before);
+}
