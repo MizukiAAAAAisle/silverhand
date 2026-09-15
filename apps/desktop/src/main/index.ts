@@ -2788,7 +2788,7 @@ async function shutdown(): Promise<void> {
   await embeddedBackendOwner.shutdown();
   try {
     if (backend) {
-      pushProgress("Stopping agents…");
+      pushProgress("Stopping server…");
       // Embedded owns a child process; remote has no local backend to reclaim.
       if (backend.kind === "embedded") {
         try {
@@ -2800,7 +2800,6 @@ async function shutdown(): Promise<void> {
       } else {
         await backend.close();
       }
-      pushProgress("Cleanup finished");
       backend = null;
     }
   } catch (err) {
@@ -2816,9 +2815,13 @@ async function shutdown(): Promise<void> {
       hostClient = null;
     }
     if (daemon) {
-      await daemon.kill({ gracefulMs: 5_000 }).catch(() => undefined);
+      pushProgress("Stopping agents…");
+      // Supervisor gives runtimes 5s before SIGKILL and up to 10s to
+      // settle. Do not kill their owner before that drain can complete.
+      await daemon.kill().catch(() => undefined);
       daemon = null;
     }
+    pushProgress("Cleanup finished");
   } catch (err) {
     console.error("[main] host shutdown failed:", err);
   }
@@ -2865,12 +2868,13 @@ app.on("before-quit", (event) => {
   // Hard ceiling so a wedged shutdown can't hang the app forever.
   // Embedded startup/fatal/published ownership is drained before successful exit:
   // the Rust child gets its bounded SIGTERM→SIGKILL grace, then the daemon gets
-  // 5s. The remaining margin covers detach and logging. This watchdog is an
-  // emergency failed exit, never a substitute for the normal reclaim join.
+  // 15s to drain its runtime children. The remaining margin covers detach and
+  // logging. This watchdog is an emergency failed exit, never a substitute for
+  // the normal reclaim join.
   const watchdog = setTimeout(() => {
     console.error("[main] shutdown watchdog fired; forcing exit");
     app.exit(1);
-  }, 25_000);
+  }, 35_000);
   watchdog.unref();
 
   void shutdown().finally(() => {

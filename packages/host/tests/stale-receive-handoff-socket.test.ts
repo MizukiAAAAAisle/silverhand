@@ -57,6 +57,7 @@ function stubSupervisor(onHandoff: (ok: boolean) => void): SupervisorContract {
     status: async () => ({ runtimes: [] }),
     clearSession: unreachable,
     stopAll: unreachable,
+    shutdown: async () => {},
     closeActivityLog: unreachable,
     pauseOutput: unreachable,
     resumeOutput: unreachable,

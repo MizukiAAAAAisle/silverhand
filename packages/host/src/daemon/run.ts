@@ -1003,12 +1003,21 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   }
   directOutboundClient?.start();
 
-  let stopped = false;
-  const stop = async (reason: string): Promise<void> => {
-    if (stopped) return;
-    stopped = true;
+  let stopPromise: Promise<void> | null = null;
+  const teardown = async (reason: string): Promise<void> => {
+    dispatcher.markShuttingDown();
     logDaemon(logger, { action: 'shutting_down', pid: process.pid });
     outboundSupervisor.sendEvent({ event: 'shutting_down', reason });
+    // The daemon owns these children in both Desktop modes. Drain before
+    // closing transports/logs, and fence internal as well as RPC spawns.
+    try {
+      await supervisor?.shutdown();
+    } catch (err) {
+      logger.error(
+        { err: (err as Error).message },
+        'runtime shutdown failed; continuing teardown',
+      );
+    }
     outboundSupervisor.stop(reason);
     directOutboundClient?.stop(reason);
     if (localOutboundServer) {
@@ -1032,6 +1041,10 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     releasePidFile(opts.pidFilePath);
     logger.info({ reason }, 'daemon stopped');
     await logger.close();
+  };
+  const stop = (reason: string): Promise<void> => {
+    stopPromise ??= teardown(reason);
+    return stopPromise;
   };
 
   if (opts.installSignals ?? true) {

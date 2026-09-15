@@ -384,6 +384,10 @@ export class FakeSupervisor {
 
   // ── runtime_stop_all ───────────────────────────────────────────
 
+  async shutdown(): Promise<void> {
+    this.stopAll({});
+  }
+
   stopAll(_params: RuntimeStopAllParams): RuntimeStopAllResult {
     let count = 0;
     for (const rt of this.runtimes.values()) {

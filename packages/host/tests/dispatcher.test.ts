@@ -164,6 +164,7 @@ describe('IntentDispatcher', () => {
       async clearSession() {
         throw new Error('not used');
       },
+      async shutdown() {},
       async stopAll() {
         throw new Error('not used');
       },

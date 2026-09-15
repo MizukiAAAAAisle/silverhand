@@ -588,6 +588,8 @@ async function safeReadResponseText(res: Response): Promise<string> {
 }
 
 export class Supervisor implements SupervisorContract {
+  private shutdownPromise: Promise<void> | null = null;
+  private shuttingDown = false;
   private readonly handles = new Map<string, RuntimeHandle>();
   private readonly emit: (event: EventFrame) => void;
   private readonly logger: DaemonLogger;
@@ -1413,6 +1415,7 @@ export class Supervisor implements SupervisorContract {
     params: StartUnlockedParams,
     initAttempt: number,
   ): Promise<RuntimeStartResult> {
+    if (this.shuttingDown) throw new Error('runtime_start: daemon is shutting down');
     this.assertAgentHomeOpen(params.agent_id);
     const k = runtimeScopeKey(params.options.runtime_scope);
 
@@ -1635,12 +1638,15 @@ export class Supervisor implements SupervisorContract {
       'spawning runtime child',
     );
 
+    // Preparation above awaits filesystem/config work. Shutdown may have begun
+    // before a handle existed; recheck at the synchronous spawn boundary.
+    if (this.shuttingDown) throw new Error('runtime_start: daemon is shutting down');
     const child = this.spawnFn(binary, args, {
       cwd: spawnCtx.workspacePath,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
-      // detached:false so SIGTERM on the daemon group reaches the
-      // child without an explicit groupkill. CM uses the same.
+      // Keep the child attached; daemon shutdown explicitly drains handles.
+      // A signal sent to the daemon PID alone is not a process-group signal.
     });
 
     // `spawn()` can return a ChildProcess with no pid and emit `error`
@@ -3214,6 +3220,12 @@ export class Supervisor implements SupervisorContract {
   }
 
   // ── runtime_stop_all ───────────────────────────────────────────
+
+  shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    this.shutdownPromise ??= this.stopAll({}).then(() => undefined);
+    return this.shutdownPromise;
+  }
 
   async stopAll(_params: RuntimeStopAllParams): Promise<RuntimeStopAllResult> {
     // 3c-b (Cindy tightening `ixAq6GPTn4fVSpCF`): fan out one

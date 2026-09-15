@@ -290,7 +290,7 @@ export interface DaemonHandle {
   daemonVersion: string;
   /**
    * Send SIGTERM to the daemon and wait for exit. Falls back to
-   * SIGKILL after `gracefulMs` (default 5_000ms). Disables auto-
+   * SIGKILL after `gracefulMs` (default 15_000ms). Disables auto-
    * restart so the daemon stays down. Idempotent. Cancels any
    * pending restart-backoff timer and success-reset timer so a
    * delayed respawn cannot resurrect the daemon after quit.
@@ -624,7 +624,9 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
       if (proc.exitCode !== null || proc.signalCode !== null) {
         return;
       }
-      const gracefulMs = killOpts?.gracefulMs ?? 5_000;
+      // Supervisor escalates runtime SIGTERM at 5s and waits up to 10s.
+      // Keep the daemon alive long enough to reap its own children.
+      const gracefulMs = killOpts?.gracefulMs ?? 15_000;
       await new Promise<void>(resolve => {
         killResolve = resolve;
         const fallback = setTimeout(() => {

@@ -177,6 +177,8 @@ export interface SupervisorContract {
   stopAll(
     params: RuntimeStopAllParams,
   ): RuntimeStopAllResult | Promise<RuntimeStopAllResult>;
+  /** Terminal daemon teardown: fence new spawns and drain owned runtimes. */
+  shutdown(): Promise<void>;
   closeActivityLog(
     params: RuntimeCloseActivityLogParams,
   ): RuntimeCloseActivityLogResult | Promise<RuntimeCloseActivityLogResult>;

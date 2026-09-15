@@ -1264,6 +1264,30 @@ describe('Supervisor 3a — hard stop / exit', () => {
 });
 
 describe('Supervisor 3a — stopAll / closeActivityLog', () => {
+  it('shutdown drains once, joins concurrent callers and rejects later starts', async () => {
+    const { supervisor, events } = makeSupervisor();
+    await supervisor.start(baseStartParams);
+    await waitFor(() => events.some(e => e.event === 'runtime_ready_for_drain'));
+    const first = supervisor.shutdown();
+    expect(supervisor.shutdown()).toBe(first);
+    await first;
+    expect(supervisor.status({}).runtimes.every(r => r.phase === 'exited')).toBe(true);
+    await expect(supervisor.start(baseStartParams)).rejects.toThrow('shutting down');
+  });
+
+  it('shutdown fences a start already awaiting preparation before its handle exists', async () => {
+    const spawnFn = vi.fn((bin: string, args: ReadonlyArray<string>, options: SpawnOptions) =>
+      spawn(execPath, [bin, ...args.slice(1)], options),
+    );
+    const { supervisor } = makeSupervisor({
+      spawnFn,
+      onSpawnCtx: () => { void supervisor.shutdown(); },
+    });
+    await expect(supervisor.start(baseStartParams)).rejects.toThrow('shutting down');
+    await supervisor.shutdown();
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
   it('stopAll hard-terminates every live handle and returns the count', async () => {
     const { supervisor, events } = makeSupervisor();
     await supervisor.start({ ...baseStartParams, agent_id: 'a1' });

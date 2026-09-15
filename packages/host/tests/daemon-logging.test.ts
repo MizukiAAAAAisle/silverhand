@@ -246,6 +246,7 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     status: async () => ({ runtimes: [] }),
     clearSession: async () => ({ cleared: true }),
     stopAll: async () => ({ stopped_count: 0 }),
+    shutdown: async () => {},
     closeActivityLog: async () => ({ flushed: true }),
     pauseOutput: async () => ({ paused: true }),
     resumeOutput: async () => ({ resumed: true }),
