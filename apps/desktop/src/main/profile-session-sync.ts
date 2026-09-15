@@ -1,5 +1,6 @@
 import {
   apiPaths,
+  ChangePasswordResponseSchema,
   EmbeddedProfileSetupResponseSchema,
   UserDtoSchema,
   type UserDto,
@@ -90,4 +91,21 @@ function objectUser(value: unknown): unknown {
     return null;
   }
   return (value as { user: unknown }).user;
+}
+
+/** Only the exact login that sent a successful password change may be cleared. */
+export function shouldClearPasswordSession(
+  request: ProfileSessionSyncRequest,
+  response: ProfileSessionSyncResponse,
+  requestToken: string,
+  currentToken: string | null,
+): boolean {
+  if (
+    currentToken !== requestToken ||
+    request.path !== apiPaths.mePassword ||
+    request.method?.toUpperCase() !== "POST" ||
+    response.status !== 200
+  )
+    return false;
+  return ChangePasswordResponseSchema.safeParse(parseJson(response.bodyText ?? "")).success;
 }

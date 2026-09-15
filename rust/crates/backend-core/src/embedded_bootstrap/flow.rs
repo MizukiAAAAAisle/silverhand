@@ -268,6 +268,17 @@ mod tests {
         issued: Arc<Mutex<Vec<(String, i64)>>>,
     }
     impl SessionIssue for RecordingIssue {
+        async fn issue_verified(
+            &self,
+            user_id: &UserId,
+            _expected: &str,
+            token_hash: SessionTokenHash,
+            audit: &SessionAudit,
+            now_ms: i64,
+        ) -> Result<bool, PersistenceFailure> {
+            self.issue(user_id, token_hash, audit, now_ms).await?;
+            Ok(true)
+        }
         async fn issue(
             &self,
             user_id: &UserId,

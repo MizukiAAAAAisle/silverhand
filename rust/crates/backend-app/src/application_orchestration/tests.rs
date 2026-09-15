@@ -12357,3 +12357,6 @@ async fn related_users_follow_owned_workspace_memberships_over_http_and_ws() {
 
 #[path = "human_direct_pair_tests.rs"]
 mod human_direct_pair_tests;
+
+#[path = "password_change_tests.rs"]
+mod password_change_tests;

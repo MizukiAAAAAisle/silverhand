@@ -374,6 +374,17 @@ mod tests {
     #[derive(Clone)]
     struct RecordingIssue(Arc<AtomicUsize>);
     impl SessionIssue for RecordingIssue {
+        async fn issue_verified(
+            &self,
+            user_id: &UserId,
+            _expected: &str,
+            token_hash: SessionTokenHash,
+            audit: &SessionAudit,
+            now_ms: i64,
+        ) -> Result<bool, PersistenceFailure> {
+            self.issue(user_id, token_hash, audit, now_ms).await?;
+            Ok(true)
+        }
         async fn issue(
             &self,
             _user_id: &UserId,

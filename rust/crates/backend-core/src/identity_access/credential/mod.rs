@@ -21,3 +21,6 @@ pub use password::{
     RealArgon2Measurer, RustCalibration, TARGET_HASH_MILLIS,
 };
 pub use store::{LoginCandidate, LoginCredentialLookup};
+
+mod change;
+pub use change::{PasswordChangeError, PasswordChangeStore, change_password};

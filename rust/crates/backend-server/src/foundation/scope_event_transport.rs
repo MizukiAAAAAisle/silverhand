@@ -688,6 +688,10 @@ where
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
         }
     };
+    // Keep a redacted bearer for non-touching checks during this socket lifetime.
+    let Some(bearer) = cookie_bearer(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
     let client_epoch = desktop_epoch(&headers);
     if client_epoch < state.config.minimum_client_epoch {
         return (
@@ -707,7 +711,7 @@ where
     websocket
         .max_message_size(MAX_INBOUND_BYTES)
         .max_frame_size(MAX_INBOUND_BYTES)
-        .on_upgrade(move |socket| accept_connection(socket, state, viewer))
+        .on_upgrade(move |socket| accept_connection(socket, state, viewer, bearer))
 }
 
 impl ConnectionRegistry {
@@ -716,8 +720,12 @@ impl ConnectionRegistry {
     }
 }
 
-async fn accept_connection<A, S>(socket: WebSocket, state: EventServerState<A, S>, viewer: UserId)
-where
+async fn accept_connection<A, S>(
+    socket: WebSocket,
+    state: EventServerState<A, S>,
+    viewer: UserId,
+    bearer: SessionBearer,
+) where
     A: AuthenticateHumanSession,
     S: AuthorizeEventScope,
 {
@@ -729,7 +737,7 @@ where
     let worker_state = state.clone();
     let worker = tokio::spawn(async move {
         if started.await.is_ok() {
-            connection(socket, worker_state, viewer, id, shutdown_rx).await;
+            connection(socket, worker_state, viewer, bearer, id, shutdown_rx).await;
         }
     });
     let abort = worker.abort_handle();
@@ -848,16 +856,46 @@ enum HeartbeatAction {
     Close,
 }
 
+/// Revoke existing sockets as well as future handshakes. Check before each
+/// application frame and on heartbeat; an already admitted frame may be in flight.
+async fn session_still_valid<A: AuthenticateHumanSession>(
+    socket: &mut WebSocket,
+    sessions: &A,
+    bearer: &SessionBearer,
+    viewer: &UserId,
+) -> bool {
+    match bearer.reauthenticate(sessions).await {
+        Ok(Some(user)) if &user == viewer => return true,
+        Ok(_) => {
+            let _ = close(socket, 1008, "session_expired").await;
+        }
+        Err(cause) => {
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &crate::foundation::error::describe(&cause)
+                ),
+                "event websocket session recheck failed"
+            );
+            let _ = close(socket, 1011, "session_check_failed").await;
+        }
+    }
+    false
+}
+
 async fn connection<A, S>(
     mut socket: WebSocket,
     state: EventServerState<A, S>,
     viewer: UserId,
+    bearer: SessionBearer,
     connection_id: u64,
     mut shutdown: watch::Receiver<bool>,
 ) where
     A: AuthenticateHumanSession,
     S: AuthorizeEventScope,
 {
+    if !session_still_valid(&mut socket, &state.sessions, &bearer, &viewer).await {
+        return;
+    }
     if send_server(
         &mut socket,
         &ServerFrame::Authenticated {
@@ -895,6 +933,7 @@ async fn connection<A, S>(
                 }
             }
             _ = ping.tick() => {
+                if !session_still_valid(&mut socket, &state.sessions, &bearer, &viewer).await { break; }
                 match heartbeat.on_ping_due() {
                     HeartbeatAction::Ping => {
                         if send_server(&mut socket, &ServerFrame::Ping).await.is_err() { break; }
@@ -915,6 +954,7 @@ async fn connection<A, S>(
             inbound = socket.recv() => {
                 let Some(inbound) = inbound else { break };
                 let Ok(message) = inbound else { break };
+                if !session_still_valid(&mut socket, &state.sessions, &bearer, &viewer).await { break; }
                 match message {
                     Message::Text(text) => {
                         let Ok(frame) = serde_json::from_str::<ClientFrame>(&text) else {
@@ -945,6 +985,7 @@ async fn connection<A, S>(
             }
             event = events_rx.recv() => {
                 let Some(queued) = event else { break };
+                if !session_still_valid(&mut socket, &state.sessions, &bearer, &viewer).await { break; }
                 // A canceled/replaced subscription cannot leak already queued work,
                 // including a stale lag/failure notification into its successor.
                 if !subscriptions.get(&queued.scope).is_some_and(|active| Arc::ptr_eq(&active.token, &queued.token)) {

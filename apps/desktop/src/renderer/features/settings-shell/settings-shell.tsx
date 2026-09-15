@@ -1,3 +1,4 @@
+import { ChangePasswordForm } from "./components/change-password-form";
 import { RangeInput } from "@/components/ui/range-input";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
@@ -415,6 +416,7 @@ function AccountPane(): JSX.Element {
 
       <div className="flex max-w-2xl flex-col gap-6">
         <ViewerProfileEditor user={dto} />
+        <ChangePasswordForm key={dto.id} userId={dto.id} />
 
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between gap-3">

@@ -108,8 +108,8 @@ pub const ME_PATH: &str = "/api/me";
 /// handle regex, display-name charset); these two are the raw-password bounds Zod
 /// owns and the domain deliberately does not (`sign_up`/`log_in` take an
 /// unvalidated password string).
-const SIGNUP_PASSWORD_MIN_UTF16: usize = 8;
-const LOGIN_PASSWORD_MIN_UTF16: usize = 1;
+pub(crate) const SIGNUP_PASSWORD_MIN_UTF16: usize = 8;
+pub(crate) const LOGIN_PASSWORD_MIN_UTF16: usize = 1;
 const PASSWORD_MAX_UTF16: usize = 1024;
 
 /// The safe-500 body, a bare `text/plain`, matching the crate's other routes.
@@ -605,7 +605,7 @@ impl TryFrom<MePatchRaw> for DisplayName {
 /// authority (JS `.length`). The domain deliberately takes an UNvalidated
 /// password (`sign_up`/`log_in`), so these transport bounds live at the wire,
 /// not in a value object.
-fn password_within(min: usize) -> impl Fn(&String, &()) -> garde::Result {
+pub(crate) fn password_within(min: usize) -> impl Fn(&String, &()) -> garde::Result {
     move |value, _| {
         if within_utf16(value, min, PASSWORD_MAX_UTF16) {
             Ok(())

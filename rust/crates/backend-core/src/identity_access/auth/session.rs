@@ -46,6 +46,15 @@ impl SessionBearer {
         (!normalized.is_empty()).then_some(Self(normalized))
     }
 
+    /// Recheck a long-lived authenticated transport without exposing its secret.
+    /// The owned bearer remains redacted and cannot be cloned or serialized.
+    pub async fn reauthenticate<A: AuthenticateHumanSession>(
+        &self,
+        authority: &A,
+    ) -> Result<Option<UserId>, PersistenceFailure> {
+        authority.recheck_session(Self(self.0.clone())).await
+    }
+
     /// The lookup coordinate this bearer folds to. Crate-visible so the logout
     /// flow can derive the revoke coordinate from a presented bearer through the
     /// one canonical derivation, never a second hashing rule.
@@ -133,6 +142,12 @@ impl SessionValidation {
 /// touch, user-integrity check, typed decode, and commit all succeed. Unknown,
 /// revoked, and expired sessions are the indistinguishable `None` outcome.
 pub trait SessionValidationPort: Clone + Send + Sync + 'static {
+    /// Validate a live transport without extending the login's idle lifetime.
+    fn verify(
+        &self,
+        token_hash: SessionTokenHash,
+        validation: SessionValidation,
+    ) -> impl Future<Output = Result<Option<UserId>, PersistenceFailure>> + Send;
     fn verify_and_touch(
         &self,
         token_hash: SessionTokenHash,
@@ -175,6 +190,10 @@ pub struct HumanSessionAuthenticator<S, C> {
 }
 
 pub trait AuthenticateHumanSession: Clone + Send + Sync + 'static {
+    fn recheck_session(
+        &self,
+        bearer: SessionBearer,
+    ) -> impl Future<Output = Result<Option<UserId>, PersistenceFailure>> + Send;
     fn authenticate_session(
         &self,
         bearer: SessionBearer,
@@ -212,6 +231,17 @@ where
     S: SessionValidationPort,
     C: SessionClock,
 {
+    async fn recheck_session(
+        &self,
+        bearer: SessionBearer,
+    ) -> Result<Option<UserId>, PersistenceFailure> {
+        self.sessions
+            .verify(
+                bearer.token_hash(),
+                SessionValidation::new(self.clock.now_unix_millis(), self.ttl),
+            )
+            .await
+    }
     async fn authenticate_session(
         &self,
         bearer: SessionBearer,
@@ -242,6 +272,13 @@ mod tests {
     }
 
     impl SessionValidationPort for CapturingPort {
+        async fn verify(
+            &self,
+            _token_hash: SessionTokenHash,
+            _validation: SessionValidation,
+        ) -> Result<Option<UserId>, PersistenceFailure> {
+            Ok(self.result.clone())
+        }
         async fn verify_and_touch(
             &self,
             token_hash: SessionTokenHash,

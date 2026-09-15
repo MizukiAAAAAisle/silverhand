@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { apiPaths, type UserDto } from "@silverhand/shared";
-import { extractViewerUserFromProxyResponse } from "../profile-session-sync";
+import {
+  extractViewerUserFromProxyResponse,
+  shouldClearPasswordSession,
+} from "../profile-session-sync";
 
 function userDto(overrides: Partial<UserDto> = {}): UserDto {
   return {
@@ -159,7 +162,13 @@ function mainSessionHarness() {
     ts.ScriptTarget.Latest,
     true,
   );
-  const names = ["proxyBackendRequest", "reseatCachedUserSessionFromProxy", "desktopAuthState"];
+  const names = [
+    "proxyBackendRequest",
+    "reseatCachedUserSessionFromProxy",
+    "desktopAuthState",
+    "clearUserSession",
+    "clearUserSessionAfterUnauthorized",
+  ];
   const functions = names
     .map((name) => {
       const node = source.statements.find(
@@ -172,10 +181,13 @@ function mainSessionHarness() {
   let finish: (response: Response) => void = () => {
     throw new Error("request has not started");
   };
+  let bindingPresent = true;
   const context = vm.createContext({
+    localHostClaim: { status: "claimed", hostId: "host-a" },
     userSessionToken: "session-a",
     userSessionUser: userDto({ name: "local" }),
     extractViewerUserFromProxyResponse,
+    shouldClearPasswordSession,
     logger: undefined,
     Headers,
     assertApiProxyPath: () => {},
@@ -195,9 +207,12 @@ function mainSessionHarness() {
     DESKTOP_SERVER_API_EPOCH: 4,
     MINIMUM_SERVER_API_EPOCH: 4,
     loadPersistedUserSessionToken: () => null,
-    clearUserSessionAfterUnauthorized: async () => {
-      context.userSessionToken = null;
-      context.userSessionUser = null;
+    activeAttachWatchdog: null,
+    clearPersistedUserSession: () => {},
+    syncEventWsSessionCookie: async () => {},
+    desktopAppPaths: () => ({ desktop: { computerBinding: "binding" } }),
+    removeDaemonHostConfig: () => {
+      bindingPresent = false;
     },
   });
   vm.runInContext(
@@ -206,6 +221,10 @@ function mainSessionHarness() {
     context,
   );
   return {
+    bindingPresent: () => bindingPresent,
+    captureReply: () => finish,
+    password: () => context.proxyBackendRequest({ method: "POST", path: apiPaths.mePassword }),
+    finishPassword: () => finish(new Response(JSON.stringify({ ok: true }), { status: 200 })),
     start: () =>
       context.proxyBackendRequest({ method: "PUT", path: apiPaths.embeddedProfileSetup }),
     finish: (user: UserDto, status = 200) =>
@@ -253,4 +272,81 @@ describe("setup response through main proxy and auth:getState", () => {
     await pending;
     expect(await main.state()).toMatchObject({ status: "authenticated", user: current });
   });
+});
+
+describe("password change session response", () => {
+  const request = { path: apiPaths.mePassword, method: "POST" };
+  const response = { status: 200, bodyText: '{"ok":true}' };
+  it("clears the initiating login only, never a subsequent login or logged-out state", () => {
+    expect(shouldClearPasswordSession(request, response, "old", "old")).toBe(true);
+    expect(shouldClearPasswordSession(request, response, "old", "new")).toBe(false);
+    expect(shouldClearPasswordSession(request, response, "old", null)).toBe(false);
+  });
+  it("does not clear on rejection, lost response, invalid success or unrelated routes", () => {
+    for (const candidate of [
+      { status: 403, bodyText: response.bodyText },
+      { status: 0 },
+      { status: 200, bodyText: "{}" },
+      { status: 200, bodyText: '{"ok":false}' },
+    ]) {
+      expect(shouldClearPasswordSession(request, candidate, "old", "old")).toBe(false);
+    }
+    expect(shouldClearPasswordSession({ ...request, method: "GET" }, response, "old", "old")).toBe(
+      false,
+    );
+    expect(
+      shouldClearPasswordSession({ ...request, path: apiPaths.me }, response, "old", "old"),
+    ).toBe(false);
+  });
+});
+
+it("runs password success through the actual main proxy without clearing a newer login", async () => {
+  for (const replaced of [false, true]) {
+    const main = mainSessionHarness();
+    const pending = main.password();
+    const newer = userDto({ name: "newer" });
+    if (replaced) main.switchSession("session-b", newer);
+    main.finishPassword();
+    await pending;
+    expect(main.cachedUser()).toEqual(replaced ? newer : null);
+  }
+});
+
+it("preserves host binding when revoked requests race the password response in either order", async () => {
+  for (const unauthorizedFirst of [true, false]) {
+    const main = mainSessionHarness();
+    const password = main.password();
+    const replyPassword = main.captureReply();
+    const ordinary = main.start();
+    const replyOrdinary = main.captureReply();
+
+    const success = async () => {
+      replyPassword(new Response('{"ok":true}', { status: 200 }));
+      await password;
+    };
+    const unauthorized = async () => {
+      replyOrdinary(new Response("{}", { status: 401 }));
+      await ordinary;
+    };
+    if (unauthorizedFirst) {
+      await unauthorized();
+      await success();
+    } else {
+      await success();
+      await unauthorized();
+    }
+
+    expect(main.cachedUser()).toBeNull();
+    expect(main.bindingPresent()).toBe(true);
+  }
+});
+
+it("preserves the independent binding on another revoked Desktop without a password request", async () => {
+  const main = mainSessionHarness();
+  const ordinary = main.start();
+  main.finish(userDto(), 401);
+  await ordinary;
+
+  expect(main.cachedUser()).toBeNull();
+  expect(main.bindingPresent()).toBe(true);
 });

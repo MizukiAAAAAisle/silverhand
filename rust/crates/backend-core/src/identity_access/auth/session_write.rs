@@ -88,6 +88,17 @@ fn cut_to_utf16_units(raw: &str, max_units: usize) -> String {
 /// audit breadcrumbs, stamping `created_at`/`last_used_at` at `now_ms`. Success
 /// (`()`) means the row committed — the mint's plaintext is then safe to return.
 pub trait SessionIssue: Clone + Send + Sync + 'static {
+    /// Issue only while the password used by this login is still current. This
+    /// comparison and session insertion must be atomic with password replacement.
+    fn issue_verified(
+        &self,
+        user_id: &UserId,
+        expected_phc: &str,
+        token_hash: SessionTokenHash,
+        audit: &SessionAudit,
+        now_ms: i64,
+    ) -> impl Future<Output = Result<bool, PersistenceFailure>> + Send;
+
     fn issue(
         &self,
         user_id: &UserId,

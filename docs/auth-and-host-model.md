@@ -266,6 +266,20 @@ an email-only auth row. Auth-related state lives in dedicated tables; the
   `users` row by email, joins `user_password_credentials`, validates → issues
   `user_token` (opaque session token) bound to a row in
   `auth_sessions(id, user_id, token_hash, created_at, last_used_at, revoked_at, user_agent, ip_first_seen)`.
+- Self-service password change: authenticated `GET /api/me/password` reports
+  `has_password`; profile-only embedded identities have no change-password form.
+  `POST /api/me/password {current_password, new_password}` verifies the current
+  password and uses the signup password bounds (8–1024 UTF-16 units, no trimming).
+  It atomically compares the verified credential, replaces it, and revokes all of
+  that human's sessions, including the caller. A concurrent stale login cannot
+  issue a new session against the replaced credential. Other humans and daemon
+  credentials are unaffected. Success requires signing in again.
+- Password requests are not logged or automatically retried. If the response is
+  lost, the client instructs the user to sign in again; a late success may clear
+  only its initiating login, never a later login. Existing event sockets recheck
+  persisted session validity before application frames and on the 30-second
+  heartbeat, without extending idle expiry. Revocation closes the socket before
+  its next admitted frame; an already admitted frame can still be in flight.
 - Token transport: `Authorization: Bearer <user_token>` on every HTTP call
   from desktop UI / renderer.
 - Storage on desktop: the opaque `user_token` lives in a main-owned

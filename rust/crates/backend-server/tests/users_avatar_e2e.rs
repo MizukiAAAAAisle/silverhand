@@ -296,6 +296,12 @@ struct DanglingSessionAuth {
     principal: UserId,
 }
 impl AuthenticateHumanSession for DanglingSessionAuth {
+    async fn recheck_session(
+        &self,
+        bearer: SessionBearer,
+    ) -> Result<Option<UserId>, PersistenceFailure> {
+        self.authenticate_session(bearer).await
+    }
     async fn authenticate_session(
         &self,
         _bearer: SessionBearer,

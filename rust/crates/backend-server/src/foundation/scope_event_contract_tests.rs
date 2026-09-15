@@ -1540,6 +1540,12 @@ impl AuthorizeEventScope for Allows {
 struct Sessions;
 
 impl AuthenticateHumanSession for Sessions {
+    async fn recheck_session(
+        &self,
+        bearer: SessionBearer,
+    ) -> Result<Option<UserId>, PersistenceFailure> {
+        self.authenticate_session(bearer).await
+    }
     async fn authenticate_session(
         &self,
         _bearer: SessionBearer,
@@ -1702,6 +1708,12 @@ async fn a_server_shutdown_fires_exactly_one_disconnect_for_a_live_connection() 
 struct RejectsSession;
 
 impl AuthenticateHumanSession for RejectsSession {
+    async fn recheck_session(
+        &self,
+        bearer: SessionBearer,
+    ) -> Result<Option<UserId>, PersistenceFailure> {
+        self.authenticate_session(bearer).await
+    }
     async fn authenticate_session(
         &self,
         _bearer: SessionBearer,

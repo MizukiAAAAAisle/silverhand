@@ -264,3 +264,23 @@ fn error_chain(error: &(dyn Error + 'static)) -> String {
     }
     messages.join(": ")
 }
+
+#[tokio::test]
+async fn transport_recheck_observes_revocation_without_extending_idle_expiry() {
+    use silverhand_backend_core::identity_access::auth::{SessionRevoke, SessionTokenHash};
+    let (_directory, path, store) = fixture().await;
+    insert_session(&path, "socket", "user-1", VALID_HASH, NOW - 10, None).await;
+    let auth = authenticator(store.clone());
+    let bearer = SessionBearer::parse("valid-token").unwrap();
+    assert_eq!(
+        bearer.reauthenticate(&auth).await.unwrap(),
+        Some(UserId::parse("user-1").unwrap())
+    );
+    assert_eq!(last_used_at(&path, "socket").await, NOW - 10);
+    store
+        .revoke(SessionTokenHash::of_plaintext("valid-token"), NOW)
+        .await
+        .unwrap();
+    assert_eq!(bearer.reauthenticate(&auth).await.unwrap(), None);
+    assert_eq!(last_used_at(&path, "socket").await, NOW - 10);
+}

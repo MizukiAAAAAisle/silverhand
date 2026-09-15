@@ -136,7 +136,10 @@ import {
   loadPersistedDesktopSessionToken,
   persistDesktopSessionToken,
 } from "./desktop-session-storage.js";
-import { extractViewerUserFromProxyResponse } from "./profile-session-sync.js";
+import {
+  extractViewerUserFromProxyResponse,
+  shouldClearPasswordSession,
+} from "./profile-session-sync.js";
 import {
   decideBackendBootMode,
   evaluateProfileCommitGuard,
@@ -649,7 +652,9 @@ function reseatCachedUserSessionFromProxy(
   userSessionUser = user;
 }
 
-async function clearUserSession(): Promise<void> {
+// Human-session expiry does not revoke the independent daemon binding.
+// Only an explicit user logout opts into removing the local binding file.
+async function clearUserSession(preserveHostBinding = true): Promise<void> {
   userSessionToken = null;
   userSessionUser = null;
 
@@ -661,6 +666,7 @@ async function clearUserSession(): Promise<void> {
   clearPersistedUserSession();
 
   await syncEventWsSessionCookie(null);
+  if (preserveHostBinding) return;
   try {
     removeDaemonHostConfig(desktopAppPaths().desktop.computerBinding);
   } catch (err) {
@@ -1016,7 +1022,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
 
 async function logoutUserSession(): Promise<{ ok: true }> {
   const token = userSessionToken;
-  await clearUserSession();
+  await clearUserSession(false);
   if (token) {
     await backendFetch(backendUrl(authPaths.logout), {
       method: "POST",
@@ -1552,6 +1558,9 @@ async function proxyBackendRequest(input: BackendProxyRequest): Promise<BackendP
     await clearUserSessionAfterUnauthorized("backend request");
   }
   const response = await marshalBackendResponse(res, input.responseType ?? "text");
+  if (shouldClearPasswordSession(input, response, requestSessionToken, userSessionToken)) {
+    await clearUserSession(true);
+  }
   runtimeUpgradeMonitor.onRestResponse(response.status, response.bodyText);
   reseatCachedUserSessionFromProxy(
     { path: input.path, method: input.method },

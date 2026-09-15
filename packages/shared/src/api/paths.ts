@@ -466,6 +466,7 @@ export const apiPaths = {
   // the renderer can mount the auth gate.
   users: '/api/users',
   relatedUsers: '/api/users/related',
+  mePassword: '/api/me/password',
   me: '/api/me',
   embeddedProfileSetup: '/api/me/embedded-profile-setup',
   meAvatar: '/api/me/avatar',

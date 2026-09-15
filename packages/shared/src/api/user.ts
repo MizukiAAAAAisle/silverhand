@@ -138,9 +138,12 @@ const AuthEmailSchema = z.string().trim().email().max(320);
  * `display_name` stays optional and independent: it is a mutable label, so a
  * server-side default costs nothing irreversible.
  */
+const NewPasswordSchema = z.string().min(8).max(1024);
+const CurrentPasswordSchema = z.string().min(1).max(1024);
+
 export const AuthSignupInputSchema = z.object({
   email: AuthEmailSchema,
-  password: z.string().min(8).max(1024),
+  password: NewPasswordSchema,
   name: ParticipantNameSchema,
   display_name: DisplayNameSchema.optional(),
 });
@@ -161,7 +164,7 @@ export const AUTH_HANDLE_TAKEN_CODE = 'handle_taken';
 
 export const AuthLoginInputSchema = z.object({
   email: AuthEmailSchema,
-  password: z.string().min(1).max(1024),
+  password: CurrentPasswordSchema,
 });
 export type AuthLoginInput = z.infer<typeof AuthLoginInputSchema>;
 
@@ -263,3 +266,15 @@ export const CompleteEmbeddedProfileSetupInputSchema = z
 export type CompleteEmbeddedProfileSetupInput = z.infer<
   typeof CompleteEmbeddedProfileSetupInputSchema
 >;
+
+/** Self-service password change revokes all human sessions, including the caller. */
+export const ChangePasswordInputSchema = z
+  .object({
+    current_password: CurrentPasswordSchema,
+    new_password: NewPasswordSchema,
+  })
+  .strict();
+export type ChangePasswordInput = z.infer<typeof ChangePasswordInputSchema>;
+export const ChangePasswordResponseSchema = z.object({ ok: z.literal(true) }).strict();
+export const PasswordStatusResponseSchema = z.object({ has_password: z.boolean() }).strict();
+export type PasswordStatusResponse = z.infer<typeof PasswordStatusResponseSchema>;

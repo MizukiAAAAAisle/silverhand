@@ -173,6 +173,35 @@ impl<E> SessionValidationPort for SqliteSessionStore<E>
 where
     E: EntropySource + Clone + 'static,
 {
+    async fn verify(
+        &self,
+        token_hash: SessionTokenHash,
+        validation: SessionValidation,
+    ) -> Result<Option<UserId>, PersistenceFailure> {
+        let row = sqlx::query("SELECT s.user_id, u.id AS existing_user FROM auth_sessions s LEFT JOIN users u ON u.id=s.user_id
+            WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.last_used_at + ? >= ?")
+            .bind(token_hash.as_str())
+            .bind(validation.ttl_ms())
+            .bind(validation.now_ms())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(persistence)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        if row
+            .try_get::<Option<String>, _>("existing_user")
+            .map_err(persistence)?
+            .is_none()
+        {
+            return Err(PersistenceFailure::from_source(DanglingSessionUser));
+        }
+        let raw: String = row.try_get("user_id").map_err(persistence)?;
+        Ok(Some(UserId::parse(raw).map_err(|e| {
+            PersistenceFailure::from_source(InvalidPersistedUserId(e))
+        })?))
+    }
+
     async fn verify_and_touch(
         &self,
         token_hash: SessionTokenHash,
@@ -187,6 +216,36 @@ impl<E> SessionIssue for SqliteSessionStore<E>
 where
     E: EntropySource + Clone + 'static,
 {
+    async fn issue_verified(
+        &self,
+        user_id: &UserId,
+        expected_phc: &str,
+        token_hash: SessionTokenHash,
+        audit: &SessionAudit,
+        now_ms: i64,
+    ) -> Result<bool, PersistenceFailure> {
+        let id = self.allocate_session_id()?;
+        let result = sqlx::query(
+            "INSERT INTO auth_sessions
+            (id,user_id,token_hash,created_at,last_used_at,revoked_at,user_agent,ip_first_seen)
+            SELECT ?,?,?,?, ?,NULL,?,? WHERE EXISTS
+            (SELECT 1 FROM user_password_credentials WHERE user_id = ? AND password_hash = ?)",
+        )
+        .bind(id)
+        .bind(user_id.as_str())
+        .bind(token_hash.as_str())
+        .bind(now_ms)
+        .bind(now_ms)
+        .bind(audit.user_agent())
+        .bind(audit.ip_first_seen())
+        .bind(user_id.as_str())
+        .bind(expected_phc)
+        .execute(&self.pool)
+        .await
+        .map_err(persistence)?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn issue(
         &self,
         user_id: &UserId,

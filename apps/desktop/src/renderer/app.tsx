@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { ShutdownOverlay } from "@/features/app-shell/shutdown-overlay";
 import { ChatShell } from "@/features/chat-shell/chat-shell";
 import { ActivityShell } from "@/features/activity-shell/activity-shell";
@@ -37,6 +38,11 @@ export function App(): JSX.Element {
   useRuntimeEpochPromotion();
 
   const viewer = useViewerUser();
+  const [hasSignedIn, setHasSignedIn] = useState(false);
+  const authenticated = Boolean(viewer.data && "id" in viewer.data);
+  useEffect(() => {
+    if (authenticated) setHasSignedIn(true);
+  }, [authenticated]);
 
   // Three-way render: loading → registration gate → registered shell.
   // Critical: each branch returns BEFORE any further hooks, and the
@@ -78,7 +84,9 @@ export function App(): JSX.Element {
     );
   }
   if (isRegistrationRequired(viewer.data)) {
-    return <RegistrationGate signupEnabled={viewer.data.signup_enabled} />;
+    return (
+      <RegistrationGate signupEnabled={viewer.data.signup_enabled} preferLogin={hasSignedIn} />
+    );
   }
   // slack-dark is our only dark theme; studio-light / forza6 are light. sonner
   // then picks the matching default scale for the parts our token overrides in

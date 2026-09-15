@@ -297,14 +297,14 @@ where
         .get(&candidate.user_id)
         .await?
         .ok_or(HumanAuthError::MissingUser)?;
-    let secret = issue_session(
-        ports.mint,
-        ports.sessions,
-        &candidate.user_id,
-        &command.audit,
-        now_ms,
-    )
-    .await?;
+    let (secret, token_hash) = ports.mint.mint()?.into_parts();
+    if !ports
+        .sessions
+        .issue_verified(&candidate.user_id, &phc, token_hash, &command.audit, now_ms)
+        .await?
+    {
+        return Ok(Login::AuthFailed);
+    }
     Ok(Login::Authenticated { user, secret })
 }
 
@@ -529,6 +529,17 @@ mod tests {
         issued: Arc<Mutex<Vec<(String, i64)>>>,
     }
     impl SessionIssue for RecordingIssue {
+        async fn issue_verified(
+            &self,
+            user_id: &UserId,
+            _expected: &str,
+            token_hash: SessionTokenHash,
+            audit: &SessionAudit,
+            now_ms: i64,
+        ) -> Result<bool, PersistenceFailure> {
+            self.issue(user_id, token_hash, audit, now_ms).await?;
+            Ok(true)
+        }
         async fn issue(
             &self,
             user_id: &UserId,

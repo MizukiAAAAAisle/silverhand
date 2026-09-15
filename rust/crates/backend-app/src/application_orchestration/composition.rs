@@ -617,11 +617,19 @@ pub(super) async fn compose_after_audit(
             config.deployment_profile,
             sessions.clone(),
         );
+    let password_hasher = SpawnBlockingHasher::new(Argon2idPasswordHasher::production(OsEntropy));
+    let password_change_router =
+        silverhand_backend_server::identity_access::password_change::router(
+            credential_store.clone(),
+            password_hasher.clone(),
+            SystemSessionClock,
+            sessions.clone(),
+        );
     let human_auth_router = human_auth::router(
         HumanAuthDeps {
             handles: handle_namespace.clone(),
             emails: user_store.clone(),
-            hasher: SpawnBlockingHasher::new(Argon2idPasswordHasher::production(OsEntropy)),
+            hasher: password_hasher.clone(),
             registration: human_registration,
             mint: EntropySessionTokenMint::new(OsEntropy),
             sessions: session_issue,
@@ -1483,6 +1491,7 @@ pub(super) async fn compose_after_audit(
             // bearer gate — placing it behind the outer perimeter would make login
             // unreachable before a session exists.
             .merge(human_auth_router)
+            .merge(password_change_router)
             .merge(embedded_profile_router)
             // #2223 CP4: the human-directory + avatar family also mounts at the top level.
             // `users::router` self-wraps `require_human_session` around all four of its

@@ -11,6 +11,7 @@ import { useLoginUser, useSignupUser } from "../session/hooks";
 
 export interface RegistrationGateProps {
   signupEnabled: boolean;
+  preferLogin?: boolean;
 }
 
 type AuthMode = "signup" | "login";
@@ -35,10 +36,13 @@ interface AuthError {
  * required, sits directly under the email it is prefilled from, and stops
  * following that email the moment the user edits it.
  */
-export function RegistrationGate({ signupEnabled }: RegistrationGateProps): JSX.Element {
+export function RegistrationGate({
+  signupEnabled,
+  preferLogin = false,
+}: RegistrationGateProps): JSX.Element {
   const signup = useSignupUser();
   const login = useLoginUser();
-  const [mode, setMode] = useState<AuthMode>(signupEnabled ? "signup" : "login");
+  const [mode, setMode] = useState<AuthMode>(signupEnabled && !preferLogin ? "signup" : "login");
   const [email, setEmail] = useState("");
   const [handle, setHandle] = useState("");
   const [handleEdited, setHandleEdited] = useState(false);
