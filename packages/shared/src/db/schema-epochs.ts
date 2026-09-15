@@ -110,7 +110,8 @@ export const SCHEMA_EPOCH_MANIFEST: readonly SchemaEpochEntry[] = [
     epoch: 70,
     firstStep: 99,
     lastStep: 99,
-    released: false,
+    released: true,
+    releasedIn: 'ECS Rust deployment 2026-09-15, 5504ea577',
   },
 ];
 
