@@ -18,6 +18,7 @@ SendSIGKILL=no
 
 UMask=0077
 LimitCORE=0
+LimitNOFILE=65536:262144
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=silverhand-server

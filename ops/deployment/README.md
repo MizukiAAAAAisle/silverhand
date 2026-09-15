@@ -18,6 +18,11 @@ second PID-file authority. Stop the verified old Node process before starting
 this unit. Do not enable both launch mechanisms. `Type=simple` means process
 creation, not readiness: check health, readyz and private metrics separately.
 
+The unit sets `LimitNOFILE=65536:262144` (soft:hard) to avoid inheriting
+the user manager's small default soft limit during connection bursts. Changing
+this setting and running `daemon-reload` does not alter the running process;
+it applies when the service next starts. Restart still requires authorization.
+
 An abnormal exit retries after five seconds, with at most three starts in five
 minutes. Hitting the limit requires diagnosis and an explicit reset/start after
 repair; there is no timer that silently defeats the limit. An administrative
