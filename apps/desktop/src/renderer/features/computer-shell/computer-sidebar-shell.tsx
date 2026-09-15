@@ -39,6 +39,10 @@ export function ComputerSidebarShell({
         label="COMPUTERS"
         icon={<Monitor className="size-3.5" />}
         count={sorted.length}
+        collapsible
+        defaultExpanded
+        persistId="computer-directory"
+        actionAlwaysVisible
         action={
           onAddComputer ? (
             <Button
