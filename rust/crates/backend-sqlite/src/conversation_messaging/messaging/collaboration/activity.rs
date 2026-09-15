@@ -6,6 +6,7 @@
 //! composed rather than transcribed.
 
 use std::collections::HashSet;
+use tracing::Instrument;
 
 use crate::{
     conversation_messaging::direct_pair_read::{DirectPairReadError, LivePrincipals, PairEvidence},
@@ -158,17 +159,22 @@ impl ActivityReadModel for SqliteActivityReadModel {
 }
 
 impl SqliteActivityReadModel {
+    #[tracing::instrument(target = "silverhand::diagnostics", name = "db.activity", skip_all)]
     async fn list(
         &self,
         viewer: &UserId,
         workspace: Option<&WorkspaceId>,
     ) -> Result<ActivityList, ActivityStoreError> {
-        let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
+        let mut tx =
+            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
         let ws = workspace.map(WorkspaceId::as_str);
         let directed_rows = sqlx::query(DIRECTED)
             .bind(viewer.as_str())
             .bind(ws)
             .fetch_all(&mut *tx)
+            .instrument(
+                tracing::info_span!(target: "silverhand::diagnostics", "db.activity.directed"),
+            )
             .await?;
 
         let mut directed_message_ids = HashSet::<String>::new();
@@ -207,6 +213,9 @@ impl SqliteActivityReadModel {
             .bind(CHANNEL_DEFAULT_MODE)
             .bind(excluded)
             .fetch_all(&mut *tx)
+            .instrument(
+                tracing::info_span!(target: "silverhand::diagnostics", "db.activity.positional"),
+            )
             .await?;
         for row in positional_rows {
             projected.push(RawItem::positional(&row)?);

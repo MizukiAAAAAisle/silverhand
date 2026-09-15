@@ -117,6 +117,11 @@ impl GlobalArchivedChannelDirectoryPort for SqliteChannelDirectoryRead {
 }
 
 impl SqliteChannelDirectoryRead {
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.channels.workspace_active",
+        skip_all
+    )]
     async fn workspace_active(
         &self,
         viewer: &UserId,
@@ -125,7 +130,8 @@ impl SqliteChannelDirectoryRead {
         Result<ActiveWorkspaceChannelDirectory, WorkspaceDirectoryRefusal>,
         ChannelDirectoryStoreError,
     > {
-        let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
+        let mut tx =
+            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
         let Some(workspace) = load_workspace(&mut tx, viewer, requested).await? else {
             tx.commit().await?;
             return Ok(Err(WorkspaceDirectoryRefusal::NotFound));
@@ -156,6 +162,11 @@ impl SqliteChannelDirectoryRead {
         Ok(Ok(result))
     }
 
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.channels.workspace_archived",
+        skip_all
+    )]
     async fn workspace_archived(
         &self,
         viewer: &UserId,
@@ -164,7 +175,8 @@ impl SqliteChannelDirectoryRead {
         Result<ArchivedWorkspaceChannelDirectory, WorkspaceDirectoryRefusal>,
         ChannelDirectoryStoreError,
     > {
-        let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
+        let mut tx =
+            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
         let Some(workspace) = load_workspace(&mut tx, viewer, requested).await? else {
             tx.commit().await?;
             return Ok(Err(WorkspaceDirectoryRefusal::NotFound));
@@ -188,6 +200,11 @@ impl SqliteChannelDirectoryRead {
         Ok(Ok(result))
     }
 
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.channels.global_archived",
+        skip_all
+    )]
     async fn global_archived(
         &self,
         viewer: &UserId,
@@ -197,7 +214,8 @@ impl SqliteChannelDirectoryRead {
         Result<GlobalArchivedChannelDirectory, GlobalArchivedDirectoryRefusal>,
         ChannelDirectoryStoreError,
     > {
-        let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
+        let mut tx =
+            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
         if let Some(requested) = workspace_filter {
             let Some(workspace) = load_workspace(&mut tx, viewer, requested).await? else {
                 tx.commit().await?;

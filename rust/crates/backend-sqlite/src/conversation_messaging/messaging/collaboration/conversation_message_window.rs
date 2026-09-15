@@ -114,6 +114,11 @@ impl ConversationMessageWindowReadPort for SqliteConversationMessageWindowRead {
 }
 
 impl SqliteConversationMessageWindowRead {
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.messages.read_inner",
+        skip_all
+    )]
     async fn read_inner(
         &self,
         viewer: &UserId,
@@ -123,7 +128,8 @@ impl SqliteConversationMessageWindowRead {
         Result<ConversationMessageWindow, MessageWindowRefusal>,
         ConversationMessageWindowStoreError,
     > {
-        let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
+        let mut tx =
+            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
         let admitted = match admit_in_snapshot(&mut tx, viewer, requested).await? {
             Ok(fact) => fact,
             Err(refusal) => {
@@ -393,6 +399,11 @@ async fn load_stream_head(
     .map_err(ConversationMessageWindowStoreError::Projection)
 }
 
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "db.messages.select_window",
+    skip_all
+)]
 async fn select_window(
     tx: &mut Transaction<'_, Sqlite>,
     stream: &ResolvedMessageWindowStream,

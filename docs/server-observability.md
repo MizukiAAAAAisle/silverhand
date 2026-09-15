@@ -70,7 +70,66 @@ Normal causes, error codes and diagnostic coordinates must not be hidden behind
 redaction counters. Existing log levels, retention and CLI request correlation
 are unchanged.
 
-## Named SQLite statements
+## Request diagnostics and phase spans
+
+The production JSON subscriber always enables the source-owned
+`silverhand::diagnostics` target, including under the default ERROR floor.
+Each public/internal API request receives a process-local generated HTTP request
+ID and a standard `tracing` span. Request headers, bearer tokens, raw URLs/query
+strings, SQL text/bindings and message contents are not captured. Routes use the
+same normalized templates as metrics. Errors inside the request carry
+`http_request_id`; CLI errors retain their existing `request_id` as well.
+
+One `HTTP request diagnostic` event is emitted for requests lasting at least
+1 second, 5xx responses, or incomplete/error termination. Fast successful requests
+do not emit per-request logs. The event contains:
+
+- `request`: ID, method, route, actual status when available, completion state,
+  `handler_ms` through response headers, and `body_ms` through body termination;
+- `elapsed_ms`: request lifetime through response-body termination (or span
+  lifetime when no response was produced), in milliseconds;
+- `phases`: source-named child spans, each with `count`, `total_ms`, `max_ms`.
+
+Phase timing is elapsed wall time, not CPU time. Nested phases overlap; do not
+sum them into a critical path or subtract all of them from total duration.
+The subscriber aggregates by static operation names, never by entity IDs, and
+holds no global request map or persistent state. Fast child operations still
+contribute to a slow parent's summary. Cancellation closes partial spans; their
+timings do not assert that the operation committed. An unpolled, already-empty
+body is complete, not a cancellation. Response body errors retain the actual
+Display error in a correlated error event. An unfinished handler has no invented
+HTTP status. Existing response bytes, trailers, errors and HTTP metric semantics
+are unchanged.
+
+Current phase coverage:
+
+- human-session authentication, including the SQLite verify-and-touch write,
+  user existence check and commit;
+- selected read adapters: Activity, favorites, DirectPairs, attention badges/modes,
+  channel directories, message windows and unread projections;
+- named SQL statements and selected read queries;
+- connection acquisition separately from transaction BEGIN on these transaction
+  paths (BEGIN/query duration can include SQLite lock wait);
+- the actual daemon command round trip, with the closed command kind in its key.
+
+Read-adapter spans include projection/decoding and their nested queries: they are
+not synonymous with SQL execution time. This is targeted coverage, not automatic
+whole-database tracing. Some single-statement pool executions and downstream
+helpers remain inclusive of acquisition. Missing phases must not be interpreted
+as zero database work. Child spans use `skip_all` and `Instrument`/instrumented
+async functions, not an entered thread-local guard held across `.await`.
+Spawned background jobs require explicit context propagation when they belong to
+the request; this change does not claim end-to-end tracing inside remote daemons.
+Unparented diagnostic operations lasting at least 1 second emit a separate
+`slow background operation` event.
+
+This first stage requires no collector or additional ECS service. Existing local
+logs and Prometheus remain authoritative. The standard spans can later feed
+`tracing-opentelemetry` and Tempo; no OTLP exporter, Collector, Tempo deployment or
+sampling policy is enabled by this change. Trace retention and deployment resource
+budgets must be configured when that infrastructure is introduced.
+
+## Named SQLite statement metrics
 
 Adapters wrap the actual SQLx execution future with
 `foundation::statement_metrics::statement(stable_name, operation, future)`.

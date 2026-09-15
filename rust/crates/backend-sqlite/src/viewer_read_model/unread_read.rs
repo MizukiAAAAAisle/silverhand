@@ -328,6 +328,11 @@ pub enum UnreadReadModelError {
 /// Batch form of the canonical per-conversation unread roll-up. Kept in this
 /// module so a complete direct-pair list and the live unread publisher cannot drift
 /// into two definitions of what one unread message is.
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "db.conversation_unread_counts",
+    skip_all
+)]
 pub(crate) async fn conversation_unread_counts(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
@@ -363,6 +368,11 @@ pub(crate) async fn conversation_unread_counts(
 /// clearing uses this before and after its write so its effect audience comes
 /// from the same authority as live unread publication, never from notification
 /// row coordinates.
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "db.attention_badge_counts",
+    skip_all
+)]
 pub(crate) async fn attention_badge_counts(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
@@ -420,11 +430,18 @@ impl SqliteUnreadReadModel {
     /// each viewer's counts are read from ONE snapshot — a concurrent send landing
     /// mid-computation cannot make a viewer's conversation count disagree with the
     /// workspace count that must contain it.
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.unread_audience_transaction",
+        skip_all
+    )]
     async fn unread_audience_transaction(
         &self,
         conversation: &ConversationId,
     ) -> Result<Option<UnreadAudience>, UnreadReadModelError> {
-        let mut tx = self.pool.begin_with(DEFERRED_READ_BEGIN).await?;
+        let mut tx =
+            crate::foundation::statement_metrics::begin(&self.pool, Some(DEFERRED_READ_BEGIN))
+                .await?;
 
         let Some(row) = sqlx::query(SELECT_PLACEMENT)
             .bind(conversation.as_str())

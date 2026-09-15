@@ -23,6 +23,7 @@ use silverhand_backend_core::{
 use sqlx::{Row, Sqlite, Transaction};
 use std::collections::BTreeMap;
 use thiserror::Error;
+use tracing::Instrument;
 
 use crate::conversation_messaging::messaging::MessagingStore;
 use crate::viewer_read_model::unread_read::conversation_unread_counts;
@@ -116,20 +117,21 @@ struct RawFavorite {
 }
 
 impl FavoritesReadPort for SqliteFavoritesRead {
+    #[tracing::instrument(target = "silverhand::diagnostics", name = "db.favorites", skip_all)]
     async fn list_favorites(&self, viewer: &UserId) -> Result<ListFavorites, PersistenceFailure> {
         // One snapshot: membership + ranks + modes + the unread rollup read as one
         // consistent instant, so the badge cannot drift from the projected set.
-        let mut tx = self
-            .pool
-            .begin_with("BEGIN DEFERRED")
-            .await
-            .map_err(FavoritesReadError::from)?;
+        let mut tx =
+            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+                .await
+                .map_err(FavoritesReadError::from)?;
 
         let rows = sqlx::query(SELECT_CONVERSATION_FAVORITES)
             .bind(viewer.as_str())
             .bind(viewer.as_str())
             .bind(viewer.as_str())
             .fetch_all(&mut *tx)
+            .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.favorites.conversations"))
             .await
             .map_err(FavoritesReadError::from)?;
         let mut raw = Vec::with_capacity(rows.len());
@@ -140,6 +142,9 @@ impl FavoritesReadPort for SqliteFavoritesRead {
         let rank_rows = sqlx::query(SELECT_FAVORITES_RANKS)
             .bind(viewer.as_str())
             .fetch_all(&mut *tx)
+            .instrument(
+                tracing::info_span!(target: "silverhand::diagnostics", "db.favorites.ranks"),
+            )
             .await
             .map_err(FavoritesReadError::from)?;
         let mut rank_by_key: BTreeMap<String, i64> = BTreeMap::new();
@@ -155,6 +160,9 @@ impl FavoritesReadPort for SqliteFavoritesRead {
         let mode_rows = sqlx::query(SELECT_FAVORITES_MODES)
             .bind(viewer.as_str())
             .fetch_all(&mut *tx)
+            .instrument(
+                tracing::info_span!(target: "silverhand::diagnostics", "db.favorites.modes"),
+            )
             .await
             .map_err(FavoritesReadError::from)?;
         let mut modes: BTreeMap<String, SortMode> = BTreeMap::new();

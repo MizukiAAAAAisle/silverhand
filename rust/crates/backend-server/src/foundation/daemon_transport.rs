@@ -877,6 +877,7 @@ impl CommandRefusal {
 }
 
 impl DaemonAttachment {
+    #[tracing::instrument(target = "silverhand::diagnostics", name = "daemon.command", skip_all, fields(command = command.kind().as_wire()))]
     async fn command(
         &self,
         command: EncodedDaemonCommand,

@@ -175,6 +175,11 @@ impl ConversationMessageUnreadReadPort for SqliteMessageUnreadRead {
 }
 
 impl SqliteMessageUnreadRead {
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.unread.read_workspace_inner",
+        skip_all
+    )]
     async fn read_workspace_inner(
         &self,
         viewer: &UserId,
@@ -183,7 +188,8 @@ impl SqliteMessageUnreadRead {
         Result<WorkspaceMessageUnread, WorkspaceMessageUnreadRefusal>,
         MessageUnreadStoreError,
     > {
-        let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
+        let mut tx =
+            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
         let Some(raw_workspace) =
             sqlx::query_scalar::<_, String>("SELECT id FROM workspaces WHERE id=?")
                 .bind(requested.as_str())
@@ -237,6 +243,11 @@ impl SqliteMessageUnreadRead {
         Ok(Ok(projection))
     }
 
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.unread.read_summary_inner",
+        skip_all
+    )]
     async fn read_summary_inner(
         &self,
         viewer: &UserId,
@@ -289,6 +300,11 @@ impl SqliteMessageUnreadRead {
         Ok(summary)
     }
 
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.unread.read_conversation_inner",
+        skip_all
+    )]
     async fn read_conversation_inner(
         &self,
         viewer: &UserId,
@@ -297,7 +313,8 @@ impl SqliteMessageUnreadRead {
         Result<ConversationMessageUnread, ConversationMessageUnreadRefusal>,
         MessageUnreadStoreError,
     > {
-        let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
+        let mut tx =
+            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
         let Some(row) = sqlx::query(
             "SELECT id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,\
              endpoint_a_kind,endpoint_a_id,endpoint_a_deleted_at,\

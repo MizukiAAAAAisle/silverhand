@@ -1,6 +1,7 @@
 //! Process metrics composition. Libraries emit through the metrics facade; only
 //! this executable installs a recorder and owns its private listener and upkeep.
 use crate::{AppConfig, ConfigError, StartupError};
+pub(crate) mod diagnostics;
 use axum::{
     Router,
     body::Body,
@@ -13,11 +14,13 @@ use metrics_exporter_prometheus::{
     Matcher, PrometheusBuilder, PrometheusHandle, PrometheusRecorder,
 };
 use silverhand_backend_server::application_orchestration::daemon_delivery::OUTBOUND_PROTOCOL_VERSION;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     net::SocketAddr,
     time::{Duration, Instant},
 };
 use tokio::{net::TcpListener, sync::oneshot};
+use tracing::Instrument;
 
 const HTTP_BUCKETS: &[f64] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1., 2.5, 5., 10., 30.,
@@ -174,12 +177,20 @@ impl MetricsEndpoint {
 
 struct HttpObservation {
     started: Instant,
+    headers_at: Instant,
+    span: tracing::Span,
+    completion: &'static str,
     histogram: metrics::Histogram,
 }
 
 impl Drop for HttpObservation {
     fn drop(&mut self) {
         self.histogram.record(self.started.elapsed().as_secs_f64());
+        self.span
+            .record("body_ms", self.headers_at.elapsed().as_secs_f64() * 1000.);
+        self.span
+            .record("elapsed_ms", self.started.elapsed().as_secs_f64() * 1000.);
+        self.span.record("completion", self.completion);
     }
 }
 
@@ -205,7 +216,21 @@ pub(crate) async fn observe_http(request: Request, next: Next) -> Response {
         .map(|path| normalize_route(path.as_str()))
         .unwrap_or_else(|| "unmatched".into());
 
-    let response = next.run(request).await;
+    static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
+    let request_id = format!(
+        "http-{}-{}",
+        std::process::id(),
+        NEXT_REQUEST.fetch_add(1, Ordering::Relaxed)
+    );
+    let span = tracing::info_span!(target: "silverhand::diagnostics", "http_request",
+        request_id = request_id.as_str(), method, route = route.as_str(),
+        status = tracing::field::Empty, handler_ms = tracing::field::Empty,
+        body_ms = tracing::field::Empty, elapsed_ms = tracing::field::Empty,
+        completion = tracing::field::Empty);
+    let response = next.run(request).instrument(span.clone()).await;
+    let headers_at = Instant::now();
+    span.record("status", u64::from(response.status().as_u16()));
+    span.record("handler_ms", started.elapsed().as_secs_f64() * 1000.);
 
     let status = match response.status().as_u16() / 100 {
         1 => "1xx",
@@ -215,8 +240,11 @@ pub(crate) async fn observe_http(request: Request, next: Next) -> Response {
         5 => "5xx",
         _ => "unknown",
     };
-    let observation = HttpObservation {
+    let mut observation = HttpObservation {
         started,
+        headers_at,
+        span,
+        completion: "cancelled_body",
         histogram: metrics::histogram!(
             "silverhand_http_request_duration_seconds",
             "method" => method,
@@ -226,6 +254,10 @@ pub(crate) async fn observe_http(request: Request, next: Next) -> Response {
     };
 
     let (parts, body) = response.into_parts();
+    if http_body::Body::is_end_stream(&body) {
+        // Hyper need not poll an already-empty body before dropping it.
+        observation.completion = "complete";
+    }
     // Time streaming responses through end-of-stream (or client cancellation),
     // not merely until the handler has returned headers.
     Response::from_parts(
@@ -250,10 +282,23 @@ impl http_body::Body for ObservedBody {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
         let this = self.get_mut();
+        let span = this.observation.as_ref().map(|value| value.span.clone());
+        let _entered = span.as_ref().map(tracing::Span::enter);
         let result = std::pin::Pin::new(&mut this.body).poll_frame(cx);
+        if let std::task::Poll::Ready(Some(Err(error))) = &result {
+            tracing::error!(error = %error, "HTTP response body failed");
+        }
         if matches!(&result, std::task::Poll::Ready(None | Some(Err(_))))
             || this.body.is_end_stream()
         {
+            if let Some(observation) = &mut this.observation {
+                observation.completion = if matches!(&result, std::task::Poll::Ready(Some(Err(_))))
+                {
+                    "body_error"
+                } else {
+                    "complete"
+                };
+            }
             this.observation.take();
         }
         result

@@ -1,6 +1,7 @@
 //! SQLite cold-read adapter for the authenticated viewer's complete Direct Messages list.
 
 use std::{collections::HashMap, path::Path, time::Duration};
+use tracing::Instrument;
 
 use silverhand_backend_core::{
     conversation_messaging::direct_pair_read::{
@@ -77,15 +78,21 @@ impl SqliteDirectPairReadModel {
         Ok(Self { pool })
     }
 
+    #[tracing::instrument(target = "silverhand::diagnostics", name = "db.direct_pairs", skip_all)]
     async fn list_transaction(
         &self,
         viewer: &UserId,
     ) -> Result<DirectPairList, DirectPairReadError> {
-        let mut tx = self.pool.begin_with(DEFERRED_READ_BEGIN).await?;
+        let mut tx =
+            crate::foundation::statement_metrics::begin(&self.pool, Some(DEFERRED_READ_BEGIN))
+                .await?;
         let rows = sqlx::query(SELECT_PAIRS)
             .bind(viewer.as_str())
             .bind(viewer.as_str())
             .fetch_all(&mut *tx)
+            .instrument(
+                tracing::info_span!(target: "silverhand::diagnostics", "db.direct_pairs.rows"),
+            )
             .await?;
         let mut evidence = Vec::with_capacity(rows.len());
         for row in rows {
@@ -293,6 +300,9 @@ impl LivePrincipals {
             for row in sqlx::query(SELECT_AGENTS)
                 .bind(requested)
                 .fetch_all(&mut **tx)
+                .instrument(
+                    tracing::info_span!(target: "silverhand::diagnostics", "db.principals.agents"),
+                )
                 .await?
             {
                 let id: String = row.try_get("id")?;
@@ -307,6 +317,9 @@ impl LivePrincipals {
             for row in sqlx::query(SELECT_USERS)
                 .bind(requested)
                 .fetch_all(&mut **tx)
+                .instrument(
+                    tracing::info_span!(target: "silverhand::diagnostics", "db.principals.users"),
+                )
                 .await?
             {
                 let id: String = row.try_get("id")?;

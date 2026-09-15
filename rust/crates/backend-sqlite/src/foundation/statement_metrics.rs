@@ -1,6 +1,23 @@
 //! Explicit, stable statement identities. Timing includes pool/lock wait and row
 //! fetching; neither SQL nor bindings are accepted by this observation boundary.
+use sqlx::SqlSafeStr;
 use std::{future::Future, time::Instant};
+use tracing::Instrument;
+
+/// Same SQLx transaction ownership/rollback semantics, with acquisition measured
+/// separately from BEGIN (which may wait for SQLite's writer lock).
+pub(crate) async fn begin(
+    pool: &sqlx::SqlitePool,
+    sql: Option<&'static str>,
+) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>, sqlx::Error> {
+    let connection = pool
+        .acquire()
+        .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.pool.acquire"))
+        .await?;
+    sqlx::Transaction::begin(connection, sql.map(SqlSafeStr::into_sql_str))
+        .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.transaction.begin"))
+        .await
+}
 
 pub(crate) fn outcome(error: Option<&sqlx::Error>) -> &'static str {
     match error {
@@ -18,6 +35,7 @@ pub(crate) fn outcome(error: Option<&sqlx::Error>) -> &'static str {
     }
 }
 
+#[tracing::instrument(target = "silverhand::diagnostics", name = "db.statement", skip_all, fields(query_name = name))]
 pub(crate) async fn statement<T>(
     name: &'static str,
     operation: &'static str,

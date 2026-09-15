@@ -21,6 +21,7 @@ use silverhand_backend_core::{
 };
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
+use tracing::Instrument;
 
 // Composes the same crate-private directed-claim/count fragments and default tier
 // as the badge authority. A predicate change therefore recompiles both faces.
@@ -92,12 +93,16 @@ impl From<AttentionProjectionStoreError> for PersistenceFailure {
 impl AttentionProjectionPort for SqliteAttentionProjection {
     type Error = PersistenceFailure;
 
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.attention_badges",
+        skip_all
+    )]
     async fn badges(&self, viewer: &UserId) -> Result<AttentionBadgeRollup, Self::Error> {
-        let mut tx = self
-            .pool
-            .begin_with("BEGIN DEFERRED")
-            .await
-            .map_err(AttentionProjectionStoreError::from)?;
+        let mut tx =
+            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+                .await
+                .map_err(AttentionProjectionStoreError::from)?;
         let badge_rows = attention_badge_counts(&mut tx, viewer)
             .await
             .map_err(AttentionProjectionStoreError::from)?;
@@ -105,6 +110,7 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
             .bind(viewer.as_str())
             .bind(viewer.as_str())
             .fetch_all(&mut *tx)
+            .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.attention.muted_workspaces"))
             .await
             .map_err(AttentionProjectionStoreError::from)?;
 
@@ -142,22 +148,27 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
         Ok(projected)
     }
 
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.attention_modes",
+        skip_all
+    )]
     async fn modes(
         &self,
         viewer: &UserId,
         workspace: &WorkspaceId,
     ) -> Result<Result<WorkspaceAttentionModes, AttentionModesRefusal>, Self::Error> {
-        let mut tx = self
-            .pool
-            .begin_with("BEGIN DEFERRED")
-            .await
-            .map_err(AttentionProjectionStoreError::from)?;
+        let mut tx =
+            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+                .await
+                .map_err(AttentionProjectionStoreError::from)?;
         let visible = sqlx::query_scalar::<_, i64>(
             "SELECT 1 FROM workspace_users WHERE workspace_id=? AND user_id=?",
         )
         .bind(workspace.as_str())
         .bind(viewer.as_str())
         .fetch_optional(&mut *tx)
+        .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.attention.workspace_membership"))
         .await
         .map_err(AttentionProjectionStoreError::from)?
         .is_some();
@@ -174,6 +185,7 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
         .bind(viewer.as_str())
         .bind(workspace.as_str())
         .fetch_optional(&mut *tx)
+        .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.attention.workspace_preference"))
         .await
         .map_err(AttentionProjectionStoreError::from)?;
         let muted = match raw_muted {
@@ -187,6 +199,7 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
             .bind(workspace.as_str())
             .bind(CHANNEL_DEFAULT_MODE)
             .fetch_all(&mut *tx)
+            .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.attention.channel_tiers"))
             .await
             .map_err(AttentionProjectionStoreError::from)?;
         tx.commit()
