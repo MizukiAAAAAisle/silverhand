@@ -3,7 +3,7 @@ export const DAEMON_ADMISSION = {
   hostProtocolVersion: 12,
   outboundProtocolVersion: 11,
   hostWebSocketPath: "/api/hosts/connect",
-  updateRequiredCloseReason: "UPDATE_REQUIRED",
+  updateRequiredCloseReason: "update_required",
   daemonEventKinds: {
     "ready": "ready",
     "shuttingDown": "shutting_down",

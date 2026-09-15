@@ -1,6 +1,7 @@
 // AUTO-SPLIT from the former monolithic api/dto.ts (#task:963).
 // Bounded context: host. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
+import { DAEMON_ADMISSION } from '../daemon-admission.generated.js';
 import {
   HostKindSchema,
   HostProvisioningSourceSchema,
@@ -177,7 +178,7 @@ export const HOST_WS_CLOSE_REASON_DISCONNECTED = 'host_disconnected';
  *  burning the ~1s reconnect floor forever. A malformed `ready` is NOT this — it
  *  is a corrupt dialer, which keeps the generic protocol-error close and stays
  *  retryable. */
-export const HOST_WS_CLOSE_REASON_UPDATE_REQUIRED = 'update_required';
+export const HOST_WS_CLOSE_REASON_UPDATE_REQUIRED = DAEMON_ADMISSION.updateRequiredCloseReason;
 
 export const HostConnectionChangedEventSchema = z
   .object({

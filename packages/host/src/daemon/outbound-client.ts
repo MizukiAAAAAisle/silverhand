@@ -1086,15 +1086,16 @@ function closeClass(code: number): 'normal' | 'going_away' | 'abnormal' | 'other
 }
 
 function isTerminalServerCloseReason(reason: string): boolean {
+  const normalized = reason.toLowerCase();
   return (
-    reason === HOST_WS_CLOSE_REASON_REVOKED ||
-    reason === HOST_WS_CLOSE_REASON_DISCONNECTED ||
+    normalized === HOST_WS_CLOSE_REASON_REVOKED ||
+    normalized === HOST_WS_CLOSE_REASON_DISCONNECTED ||
     // #task:1966 — the server can read our `ready` but does not speak our wire
     // version. Retrying the same binary against the same server is guaranteed to
     // fail, so this joins the reasons that stop the loop until the connection
     // config actually changes. A generic protocol error stays retryable: it can
     // come from one corrupt frame rather than from the binary being too old.
-    reason === HOST_WS_CLOSE_REASON_UPDATE_REQUIRED
+    normalized === HOST_WS_CLOSE_REASON_UPDATE_REQUIRED
   );
 }
 

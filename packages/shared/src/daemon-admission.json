@@ -2,7 +2,7 @@
   "hostProtocolVersion": 12,
   "outboundProtocolVersion": 11,
   "hostWebSocketPath": "/api/hosts/connect",
-  "updateRequiredCloseReason": "UPDATE_REQUIRED",
+  "updateRequiredCloseReason": "update_required",
   "parsedEventKinds": [
     "session_init", "thinking", "text", "tool_call", "tool_call_input",
     "tool_output", "turn_end", "compaction_started", "compaction_finished",

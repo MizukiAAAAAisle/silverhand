@@ -1877,6 +1877,9 @@ async fn host_axis_is_rejected_by_the_outbound_axis_before_attachment_or_claim()
     };
     assert_eq!(close.code, CloseCode::Protocol);
     assert_eq!(close.reason, UPDATE_REQUIRED_CLOSE_REASON);
+    // Released daemon 0.2.0 matches this literal case-sensitively. Pin the
+    // actual frame, not just two consumers of the same generated constant.
+    assert_eq!(close.reason, "update_required");
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while fixture.controller.active_connection_count() != 0 {
             tokio::task::yield_now().await;

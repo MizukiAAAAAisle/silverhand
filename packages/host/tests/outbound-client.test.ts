@@ -10,7 +10,6 @@ import {
   DAEMON_HOST_CONFIG_FILENAME,
   HOST_WS_CLOSE_REASON_DISCONNECTED,
   HOST_WS_CLOSE_REASON_REVOKED,
-  HOST_WS_CLOSE_REASON_UPDATE_REQUIRED,
 } from '@silverhand/shared';
 import {
   KNOWN_CAPABILITIES_V1,
@@ -233,7 +232,13 @@ describe('outbound daemon websocket client', () => {
   // handshakes in 24h from three stale daemons. Suppression is scoped to the
   // current connection config, so a re-point (or the daemon restart that an
   // upgrade entails) re-arms it.
-  it('suppresses reconnect after an update_required terminal close until config changes', async () => {
+  it.each([
+    'update_required',
+    'UPDATE_REQUIRED',
+    'UpDaTe_ReQuIrEd',
+    'HOST_REVOKED',
+    'HOST_DISCONNECTED',
+  ])('suppresses reconnect after %s terminal close until config changes', async reason => {
     const server = await FakeOutboundServer.start();
     cleanup.push(() => server.close());
     const { client, logger, dir } = startClient(server.url, {
@@ -244,7 +249,7 @@ describe('outbound daemon websocket client', () => {
 
     const first = await server.waitForConnectionCount(1);
     setTimeout(
-      () => first.ws.close(1002, HOST_WS_CLOSE_REASON_UPDATE_REQUIRED),
+      () => first.ws.close(1002, reason),
       5,
     );
 
@@ -255,7 +260,7 @@ describe('outbound daemon websocket client', () => {
       expect.objectContaining({
         level: 'info',
         action: 'reconnect_suppressed',
-        reason: HOST_WS_CLOSE_REASON_UPDATE_REQUIRED,
+        reason,
       }),
     );
 
