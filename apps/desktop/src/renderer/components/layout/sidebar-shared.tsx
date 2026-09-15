@@ -102,6 +102,10 @@ interface SectionProps {
   count?: number;
   onAdd?: () => void;
   action?: ReactNode;
+  /** Keep {@link action} visible at rest instead of hover-revealing it. A
+   *  collapsible section hides its action by default (a quieter header), but a
+   *  primary create affordance like New-agent must stay discoverable. */
+  actionAlwaysVisible?: boolean;
   /** When true, the header acts as a toggle and the body collapses.
    *  Defaults to false to preserve callers that expect always-open. */
   collapsible?: boolean;
@@ -139,6 +143,7 @@ export function SidebarSection({
   count,
   onAdd,
   action,
+  actionAlwaysVisible,
   collapsible = false,
   defaultExpanded = true,
   persistId,
@@ -165,6 +170,7 @@ export function SidebarSection({
           count={count}
           onAdd={onAdd}
           action={action}
+          actionAlwaysVisible={actionAlwaysVisible}
           collapsible={collapsible}
           expanded={expanded}
           onToggle={() => toggleExpanded()}
@@ -186,6 +192,7 @@ interface SectionHeaderProps {
   count?: number;
   onAdd?: () => void;
   action?: ReactNode;
+  actionAlwaysVisible?: boolean;
   collapsible?: boolean;
   /** Current expanded state (only meaningful when `collapsible`). */
   expanded?: boolean;
@@ -203,6 +210,7 @@ export function SidebarSectionHeader({
   count,
   onAdd,
   action,
+  actionAlwaysVisible = false,
   collapsible = false,
   expanded = true,
   onToggle,
@@ -210,10 +218,14 @@ export function SidebarSectionHeader({
   const drag = useSidebarBranchDrag();
 
   // Keep menu actions visible while keyboard-focused or portaled menus are open.
+  // A hover-reveal quiets the header, but `actionAlwaysVisible` opts a primary
+  // create affordance (New-agent) back into always-shown so discoverability is
+  // not traded for the quieter look.
   const actionReveal = cn(
     "flex items-center",
     collapsible &&
-      icon !== undefined && [
+      icon !== undefined &&
+      !actionAlwaysVisible && [
         "opacity-0 transition-opacity",
         "group-hover/sectionheader:opacity-100 group-focus-visible/sectionheader:opacity-100",
         "[&:has(:focus-visible)]:opacity-100 [&:has([data-state=open])]:opacity-100",

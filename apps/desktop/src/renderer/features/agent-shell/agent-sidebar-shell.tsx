@@ -28,6 +28,11 @@ import { Button } from "@/components/ui/button";
 import { CURRENT_USER_SUBTITLE } from "@/features/session/current-user";
 import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
 
+/** HUMANS caps its list here (not counting the pinned viewer row) before the
+ *  "Show all" toggle takes over. Above this the roster buries AGENTS; at or
+ *  below it the whole list is scannable at a glance. */
+const HUMANS_VISIBLE_CAP = 8;
+
 interface AgentSidebarShellProps {
   selectedAgentId?: string | null;
   onSelectAgent?: (id: string) => void;
@@ -112,12 +117,27 @@ export function AgentSidebarShell({
 
   const presenceById = usePresenceById();
 
+  // HUMANS can run to dozens (one workspace, everyone the viewer has touched)
+  // and would otherwise bury AGENTS under an unbounded list. Cap the list at
+  // HUMANS_VISIBLE_CAP and let the viewer expand — the viewer's own row lives
+  // in the first slot, so the cap never hides "you". The toggle resets nothing
+  // else; it is local view state, not a stored preference like the section's
+  // own collapse.
+  const [showAllHumans, setShowAllHumans] = useState(false);
+  const humansOverflow = otherHumans.length > HUMANS_VISIBLE_CAP;
+  const visibleOtherHumans =
+    showAllHumans || !humansOverflow ? otherHumans : otherHumans.slice(0, HUMANS_VISIBLE_CAP);
+
   return (
     <DirectorySidebar>
       <SidebarSection
         label="AGENTS"
         icon={<Users className="size-3.5" />}
         count={agents.length}
+        collapsible
+        defaultExpanded
+        persistId="agent-directory-agents"
+        actionAlwaysVisible
         action={
           <Button
             variant="ghost"
@@ -150,7 +170,14 @@ export function AgentSidebarShell({
         )}
       </SidebarSection>
 
-      <SidebarSection label="HUMANS" icon={<User className="size-3.5" />} count={humansCount}>
+      <SidebarSection
+        label="HUMANS"
+        icon={<User className="size-3.5" />}
+        count={humansCount}
+        collapsible
+        defaultExpanded
+        persistId="agent-directory-humans"
+      >
         {viewer ? (
           <SidebarRow
             key={viewer.id}
@@ -168,7 +195,7 @@ export function AgentSidebarShell({
             onClick={onSelectUser ? () => onSelectUser(viewer.id) : undefined}
           />
         ) : null}
-        {otherHumans.map((u) => {
+        {visibleOtherHumans.map((u) => {
           const avatarObjectUrl = otherAvatarUrls.get(u.id) ?? null;
           return (
             <SidebarRow
@@ -178,13 +205,24 @@ export function AgentSidebarShell({
                 <HumanRowIcon avatarObjectUrl={avatarObjectUrl} alt={u.display_name || u.name} />
               }
               title={u.display_name || u.name}
-              subtitle={`@${u.name}`}
+              subtitle={<span className="font-mono">@{u.name}</span>}
               status={presenceDotStatus(presenceById.get(u.id)?.presence)}
               selected={selectedUserId === u.id}
               onClick={onSelectUser ? () => onSelectUser(u.id) : undefined}
             />
           );
         })}
+        {humansOverflow ? (
+          <li>
+            <button
+              type="button"
+              onClick={() => setShowAllHumans((prev) => !prev)}
+              className="flex w-full items-center px-2 py-1 text-xs font-medium text-text-muted transition-colors hover:text-text-primary"
+            >
+              {showAllHumans ? "Show fewer" : `Show all ${humansCount}`}
+            </button>
+          </li>
+        ) : null}
         {!viewer && otherHumans.length === 0 ? (
           <li className="px-2 py-2 text-xs text-text-muted">No humans</li>
         ) : null}
@@ -221,8 +259,32 @@ function AgentRow({
         />
       }
       title={agent.display_name || agent.name}
-      subtitle={<span data-agent-runtime>{agent.runtime}</span>}
-      status={display === null ? null : display.tone === "online" ? "active" : "idle"}
+      // Runtime rendered as a CHIP, not bare grey text: an agent's subtitle
+      // (codex / claude) and a human's subtitle (@handle) were the same muted
+      // small text, so the two entity kinds read as one list. The chip gives
+      // the agent row a shape the human row does not have; the fill stays very
+      // faint (`--chip-bg`) so it reads as a quiet ground, not a badge.
+      subtitle={
+        <span
+          data-agent-runtime
+          className="rounded-(--chip-radius) bg-(--chip-bg) px-1 py-px text-(length:--text-badge) font-medium uppercase tracking-wide text-text-muted"
+        >
+          {agent.runtime}
+        </span>
+      }
+      // A row always carries a status dot so the column reads consistently:
+      // online (green), crashed (red), and every other state (idle / away /
+      // offline) the shared muted "idle" dot. Only an unsettled read (`null`)
+      // draws nothing.
+      status={
+        display === null
+          ? null
+          : display.tone === "online"
+            ? "active"
+            : display.tone === "failed"
+              ? "crashed"
+              : "idle"
+      }
       selected={selected}
       onClick={onSelect ? () => onSelect(agent.id) : undefined}
     />
