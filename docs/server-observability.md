@@ -51,6 +51,25 @@ Protocol offers are bounded by the existing 0..100 admission envelope; close cod
 and reasons use a fixed classification. A compatible-ready gauge means the wire
 compatibility gate passed, not that all downstream hydration has completed.
 
+## Diagnostic logging
+
+The Rust production JSON sink preserves formatted tracing messages, `%Display`
+errors and `?Debug` diagnostic context. Formatting alone must never cause an
+event's message or error to be discarded: dependency events such as axum's
+`accept error: {e}` must retain the actual OS error. This applies to both file
+and stderr output and does not require a special wrapper at each call site.
+
+Explicit content/environment and credential fields remain filtered; values whose
+formatted representation is valid JSON receive the same recursive filtering.
+Arbitrary prose and Rust Debug
+structs are retained as text, not treated as reliably parseable secret containers.
+Call sites must therefore keep credentials in secret types or explicit filtered
+fields, never interpolate tokens into error messages or dump authentication
+objects. The formatter does not promise to discover secrets embedded in text.
+Normal causes, error codes and diagnostic coordinates must not be hidden behind
+redaction counters. Existing log levels, retention and CLI request correlation
+are unchanged.
+
 ## Named SQLite statements
 
 Adapters wrap the actual SQLx execution future with

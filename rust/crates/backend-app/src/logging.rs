@@ -77,7 +77,9 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             tracing::error!(
                 env_token = "secret-marker",
-                error_chain = safe_display("test failure")
+                error_chain = safe_display("test failure"),
+                cause = %std::io::Error::from_raw_os_error(24),
+                "accept error: {}", std::io::Error::from_raw_os_error(24)
             );
         });
         drop(guard);
@@ -91,6 +93,9 @@ mod tests {
         assert!(!text.contains("secret-marker"));
         let event: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
         assert_eq!(event["fields"]["error_chain"], "test failure");
+        let cause = std::io::Error::from_raw_os_error(24).to_string();
+        assert_eq!(event["fields"]["cause"], cause);
+        assert_eq!(event["fields"]["message"], format!("accept error: {cause}"));
         assert!(event["fields"]["redactedFieldCount"].as_u64().unwrap() > 0);
     }
 }

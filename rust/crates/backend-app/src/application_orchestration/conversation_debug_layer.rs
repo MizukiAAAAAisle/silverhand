@@ -2,7 +2,8 @@
 //!
 //! Conversation debug windows extend the global filter; they never install a
 //! second writer. The formatter also applies the same recursive forbidden-field
-//! policy as the TypeScript logging authority before any event reaches stderr.
+//! policy to explicit content/credential fields. Formatting is not a reason to
+//! discard diagnostics: tracing messages, Display errors and Debug context survive.
 
 use std::{collections::BTreeMap, fmt};
 
@@ -36,10 +37,20 @@ const FORBIDDEN_FIELDS: &[&str] = &[
     "stdout",
     "stderr",
     "soft_directive",
+    "authorization",
+    "cookie",
+    "password",
+    "token",
+    "access_token",
+    "refresh_token",
+    "host_token",
+    "api_key",
+    "secret",
 ];
 
 fn forbidden(key: &str) -> bool {
-    FORBIDDEN_FIELDS.contains(&key) || key.starts_with("env_")
+    let key = key.to_ascii_lowercase();
+    FORBIDDEN_FIELDS.contains(&key.as_str()) || key.starts_with("env_")
 }
 
 fn sanitize(value: Value, redacted: &mut u64) -> Value {
@@ -113,13 +124,15 @@ impl Visit for JsonVisitor {
         self.record_value(field, Value::String(value.to_owned()));
     }
 
-    fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn fmt::Debug) {
-        // `Debug` has no structural contract. Even output that happens to parse
-        // as JSON cannot prove that its nested fields are safe, and `%Display`
-        // reaches this same visitor method. Opaque carriers therefore fail
-        // closed as a whole. Production display call sites use `safe_display`,
-        // which records a reviewed string through `record_str` instead.
-        self.redacted += 1;
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
+        // tracing routes formatted messages and %Display errors here too.
+        // Dropping this carrier loses even dependency errors such as axum's
+        // "accept error: {e}". Preserve text; structured JSON still receives
+        // field-level filtering. Callers must not dump credentials into prose
+        // or arbitrary Debug structs: those have no parseable field contract.
+        let rendered = format!("{value:?}");
+        let value = serde_json::from_str(&rendered).unwrap_or(Value::String(rendered));
+        self.record_value(field, value);
     }
 }
 
@@ -319,7 +332,6 @@ where
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashMap,
         convert::Infallible,
         io::Write,
         sync::{
@@ -453,7 +465,7 @@ mod tests {
     fn global_debug_and_window_write_one_sanitized_json_line() {
         #[derive(Debug)]
         struct DebugContext {
-            prompt: &'static str,
+            reason: &'static str,
             keep: &'static str,
         }
 
@@ -469,23 +481,21 @@ mod tests {
         ));
 
         tracing::subscriber::with_default(subscriber, || {
-            let debug_map =
-                HashMap::from([("prompt", "SECRET-MAP-PROMPT"), ("keep", "map-visible")]);
             let debug_struct = DebugContext {
-                prompt: "SECRET-STRUCT-PROMPT",
+                reason: "connection refused",
                 keep: "struct-visible",
             };
             let typed_id = ConversationId::parse("conversation-safe").unwrap();
             assert_eq!(debug_struct.keep, "struct-visible");
-            assert_eq!(debug_struct.prompt, "SECRET-STRUCT-PROMPT");
+            assert_eq!(debug_struct.reason, "connection refused");
             tracing::debug!(
                 conversation_id = "conversation-a",
                 payload = "SECRET-PAYLOAD",
                 env_TOKEN = "SECRET-ENV",
                 nested = %serde_json::json!({"prompt":"SECRET-PROMPT","keep":"visible"}),
-                debug_json = ?serde_json::json!({"prompt":"SECRET-DEBUG-JSON","keep":"debug-json-visible"}),
-                debug_map = ?debug_map,
+                debug_json = ?serde_json::json!({"reason":"connection refused","keep":"debug-json-visible"}),
                 debug_struct = ?debug_struct,
+                Authorization = %"SECRET-BEARER",
                 error_chain = safe_display(&"outer failure: inner failure"),
                 typed_id = safe_display(&typed_id.as_str()),
                 scalar = 7,
@@ -502,7 +512,11 @@ mod tests {
         assert!(serialized.contains("conversation-safe"));
         assert!(serialized.contains("\"scalar\":7"));
         assert!(serialized.contains("faithful"));
-        assert_eq!(rendered[0]["fields"]["redactedFieldCount"], 6);
+        assert_eq!(rendered[0]["fields"]["redactedFieldCount"], 4);
+        assert_eq!(rendered[0]["fields"]["nested"]["keep"], "visible");
+        assert!(serialized.contains("debug-json-visible"));
+        assert!(serialized.contains("connection refused"));
+        assert!(serialized.contains("struct-visible"));
         assert!(
             serialized.contains("redactedFieldCount"),
             "missing redaction evidence: {serialized}"
@@ -511,21 +525,42 @@ mod tests {
             "SECRET-PAYLOAD",
             "SECRET-ENV",
             "SECRET-PROMPT",
-            "SECRET-DEBUG-JSON",
-            "SECRET-MAP-PROMPT",
-            "SECRET-STRUCT-PROMPT",
-            "debug-json-visible",
-            "map-visible",
-            "struct-visible",
-            "\"nested\"",
-            "\"debug_map\"",
+            "SECRET-BEARER",
             "\"payload\"",
             "\"env_TOKEN\"",
             "\"prompt\"",
-            "\"debug_json\"",
-            "\"debug_struct\"",
         ] {
             assert!(!serialized.contains(forbidden), "leaked {forbidden}");
         }
+    }
+
+    #[test]
+    fn dependency_message_and_display_debug_errors_keep_the_actual_cause() {
+        let output = Buffer::default();
+        let subscriber = registry().with(production_json_layer(
+            EnvFilter::new("error"),
+            ProductionConversationLogDebugControl::new(),
+            Clock(Arc::new(AtomicI64::new(100))),
+            output.clone(),
+        ));
+        let error = std::io::Error::from_raw_os_error(24);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::error!(target: "axum::serve::listener", "accept error: {error}");
+            tracing::error!(error = %error, context = ?error, request_id = "rust-test-1", "request failed");
+        });
+        let events = lines(&output);
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0]["fields"]["message"],
+            format!("accept error: {error}")
+        );
+        assert_eq!(events[1]["fields"]["error"], error.to_string());
+        assert_eq!(events[1]["fields"]["context"], format!("{error:?}"));
+        assert_eq!(events[1]["fields"]["request_id"], "rust-test-1");
+        assert!(
+            events
+                .iter()
+                .all(|event| event["fields"].get("redactedFieldCount").is_none())
+        );
     }
 }
