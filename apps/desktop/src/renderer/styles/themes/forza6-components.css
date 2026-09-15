@@ -70,11 +70,6 @@
   --sticker-fg: var(--forza6-ink);
 }
 
-[data-theme="forza6"] [data-sticker-tone="task"] {
-  --sticker-bg: var(--forza6-task-gold);
-  --sticker-fg: var(--forza6-ink);
-}
-
 [data-theme="forza6"] [data-sticker-tone="host"] {
   --sticker-bg: var(--forza6-poster-teal-deep);
   --sticker-fg: var(--forza6-paper);
@@ -321,13 +316,6 @@
   font-size: 12px;
   letter-spacing: 0.06em;
   margin-left: -1px;
-}
-
-[data-theme="forza6"] [data-tasks-hero] {
-  width: 22px;
-  height: 22px;
-  padding: 3px;
-  stroke-width: 2.25;
 }
 
 [data-theme="forza6"] [data-task-meta-panel] {
