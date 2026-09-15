@@ -175,7 +175,13 @@ function SettingsRailNav({
 }): JSX.Element {
   return (
     <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
-      <SidebarSection label="SETTINGS" icon={<Settings className="size-3.5" />}>
+      <SidebarSection
+        label="SETTINGS"
+        icon={<Settings className="size-3.5" />}
+        collapsible
+        defaultExpanded
+        persistId="settings-directory"
+      >
         {SETTINGS_SECTIONS.map((id) => {
           const { label, icon } = SECTION_CHROME[id];
           const selected = id === section;
