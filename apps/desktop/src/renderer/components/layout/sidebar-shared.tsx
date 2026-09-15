@@ -102,9 +102,8 @@ interface SectionProps {
   count?: number;
   onAdd?: () => void;
   action?: ReactNode;
-  /** Keep {@link action} visible at rest instead of hover-revealing it. A
-   *  collapsible section hides its action by default (a quieter header), but a
-   *  primary create affordance like New-agent must stay discoverable. */
+  /** Keep {@link action} visible at rest instead of hover-revealing it (a
+   *  collapsible section hides its action by default). */
   actionAlwaysVisible?: boolean;
   /** When true, the header acts as a toggle and the body collapses.
    *  Defaults to false to preserve callers that expect always-open. */
@@ -218,9 +217,7 @@ export function SidebarSectionHeader({
   const drag = useSidebarBranchDrag();
 
   // Keep menu actions visible while keyboard-focused or portaled menus are open.
-  // A hover-reveal quiets the header, but `actionAlwaysVisible` opts a primary
-  // create affordance (New-agent) back into always-shown so discoverability is
-  // not traded for the quieter look.
+  // `actionAlwaysVisible` opts out of the hover-reveal entirely.
   const actionReveal = cn(
     "flex items-center",
     collapsible &&

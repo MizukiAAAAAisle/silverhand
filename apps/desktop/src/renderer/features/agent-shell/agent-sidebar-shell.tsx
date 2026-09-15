@@ -117,12 +117,9 @@ export function AgentSidebarShell({
 
   const presenceById = usePresenceById();
 
-  // HUMANS can run to dozens (one workspace, everyone the viewer has touched)
-  // and would otherwise bury AGENTS under an unbounded list. Cap the list at
-  // HUMANS_VISIBLE_CAP and let the viewer expand — the viewer's own row lives
-  // in the first slot, so the cap never hides "you". The toggle resets nothing
-  // else; it is local view state, not a stored preference like the section's
-  // own collapse.
+  // Cap HUMANS at HUMANS_VISIBLE_CAP so a long list can't bury AGENTS; the
+  // viewer's own row is pinned first, so the cap never hides "you". Local view
+  // state, not a persisted preference.
   const [showAllHumans, setShowAllHumans] = useState(false);
   const humansOverflow = otherHumans.length > HUMANS_VISIBLE_CAP;
   const visibleOtherHumans =
@@ -259,11 +256,9 @@ function AgentRow({
         />
       }
       title={agent.display_name || agent.name}
-      // Runtime rendered as a CHIP, not bare grey text: an agent's subtitle
-      // (codex / claude) and a human's subtitle (@handle) were the same muted
-      // small text, so the two entity kinds read as one list. The chip gives
-      // the agent row a shape the human row does not have; the fill stays very
-      // faint (`--chip-bg`) so it reads as a quiet ground, not a badge.
+      // Runtime as a faint chip (`--chip-bg`), not bare grey text: gives the
+      // agent row a shape the human `@handle` row lacks, so the two entity
+      // kinds don't read as one list.
       subtitle={
         <span
           data-agent-runtime
@@ -272,10 +267,8 @@ function AgentRow({
           {agent.runtime}
         </span>
       }
-      // A row always carries a status dot so the column reads consistently:
-      // online (green), crashed (red), and every other state (idle / away /
-      // offline) the shared muted "idle" dot. Only an unsettled read (`null`)
-      // draws nothing.
+      // Always a dot for a consistent column: online green, crashed red, every
+      // other state the muted "idle" dot; only an unsettled read draws nothing.
       status={
         display === null
           ? null
