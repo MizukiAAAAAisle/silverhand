@@ -53,7 +53,7 @@ import {
   type SettingsSection,
 } from "./model/settings-section";
 import { ConnectionPane } from "./components/connection-pane";
-import { paneChrome } from "@/components/layout/pane-chrome";
+import { PaneHeader, PaneShell } from "@/components/layout/pane-shell";
 import { Sidebar } from "@/components/layout/sidebar";
 
 /** 4-color swatch preview and display name for each theme. */
@@ -124,18 +124,8 @@ export function SettingsShell(): JSX.Element {
       width="var(--sidebar-width)"
       sidebar={<SettingsRailNav section={section} onSelect={setSection} />}
     >
-      <main
-        className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-base"
-        style={paneChrome}
-      >
-        <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle px-5">
-          <span className="flex shrink-0 items-center text-accent">
-            {SECTION_CHROME[section].icon}
-          </span>
-          <span className="font-serif text-sm font-semibold text-text-primary">
-            {SECTION_CHROME[section].label}
-          </span>
-        </header>
+      <PaneShell>
+        <PaneHeader icon={SECTION_CHROME[section].icon} title={SECTION_CHROME[section].label} />
 
         <div className="flex min-h-0 min-w-0 flex-1 justify-center">
           <div className="flex min-h-0 w-full min-w-0 max-w-196 flex-col">
@@ -155,7 +145,7 @@ export function SettingsShell(): JSX.Element {
             )}
           </div>
         </div>
-      </main>
+      </PaneShell>
     </Sidebar>
   );
 }

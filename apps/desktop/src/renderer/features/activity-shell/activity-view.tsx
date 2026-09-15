@@ -24,7 +24,7 @@ import { useActivity, useClearActivityItem } from "@/features/attention/hooks";
 import { activityItemSource } from "@/features/attention/observe";
 import { ListRowsSkeleton } from "../../components/layout/list-rows-skeleton";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
-import { paneChrome } from "../../components/layout/pane-chrome";
+import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 
 /**
  * Activity — the human's "queue waiting on me" (#task:1227). Read-side
@@ -422,15 +422,12 @@ export function ActivityView({
   const ambient = filtered.filter((it) => it.salience === "ambient");
 
   return (
-    <main
-      className="flex h-full flex-1 flex-col bg-bg-base"
-      style={{ ...paneChrome, overflow: "hidden" }}
-    >
-      <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle px-4">
-        <ActivityIcon className="size-3.5 text-accent" />
-        <span className="font-serif text-sm font-semibold text-text-primary">Activity</span>
-        <span className="text-xs text-text-muted">{counts.all}</span>
-      </header>
+    <PaneShell>
+      <PaneHeader
+        icon={<ActivityIcon className="size-3.5" />}
+        title="Activity"
+        count={counts.all}
+      />
 
       {/* Filter chips. Selected chips use the theme selection token, never a
           semantic hue (they must not steal the items' volume budget). (The
@@ -514,7 +511,7 @@ export function ActivityView({
           </div>
         )}
       </div>
-    </main>
+    </PaneShell>
   );
 }
 

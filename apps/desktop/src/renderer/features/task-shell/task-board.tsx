@@ -28,9 +28,8 @@ import {
 } from "@/features/task-shell/components/create-task-dialog";
 import { Button } from "@/components/ui/button";
 import { primaryAction } from "@/components/common/primary-action";
-import { paneChrome } from "@/components/layout/pane-chrome";
+import { PaneHeader, PaneShell } from "@/components/layout/pane-shell";
 
-/** Keep the board memoized independently of dialog route changes. */
 export interface TaskBoardProps {
   onOpenTask: (taskId: string) => void;
 }
@@ -50,9 +49,7 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
     },
     [resetColumnWindow],
   );
-  // Workspace + channel options + scope ids (#task:1165): DM + regular workspace
-  // channels, grouped by data source; regular workspaces for the upstream cascade
-  // axis (#task:1387).
+
   const { workspaceOptions, channelOptions } = useTaskFilterOptions();
 
   // Collapse is read HERE, not only inside the column: a collapsed column must
@@ -95,26 +92,17 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
   const submitCreate = useCreateTaskSubmit();
 
   return (
-    <main
-      className="flex h-full flex-1 flex-col bg-bg-base"
-      style={{ ...paneChrome, overflow: "hidden" }}
-    >
-      <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle pl-1.5 pr-4">
-        <TaskIcon
-          data-tasks-hero
-          data-sticker
-          data-sticker-tone="task"
-          data-sticker-size="sm"
-          className="size-4 text-text-muted"
-        />
-        <span className="font-serif text-sm font-semibold text-text-primary">
-          {selectedChannelName ? `Tasks in #${selectedChannelName}` : "All Tasks"}
-        </span>
-        <span className="text-xs text-text-muted">{boardCountLabel(totalTaskCount(counts))}</span>
-        <span className="ml-auto text-(length:--text-badge) text-text-muted">
-          {boardCountLabel(activeTaskCount(counts))} active
-        </span>
-      </header>
+    <PaneShell>
+      <PaneHeader
+        icon={<TaskIcon data-sticker-size="sm" className="size-4 text-text-muted" />}
+        title={selectedChannelName ? `Tasks in #${selectedChannelName}` : "All Tasks"}
+        count={boardCountLabel(totalTaskCount(counts))}
+        trailing={
+          <span className="ml-auto text-(length:--text-badge) text-text-muted">
+            {boardCountLabel(activeTaskCount(counts))} active
+          </span>
+        }
+      />
 
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2">
         <TaskFilterBar
@@ -136,8 +124,6 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
         </Button>
       </div>
 
-      {/* Five-column kanban — the shared board body (`TaskBoardColumns`); this
-       * section supplies the shell + the main-pane fill vocabulary. */}
       <TaskBoardColumns
         columns={columns}
         counts={counts}
@@ -157,6 +143,6 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
         target={createTarget}
         onSubmit={submitCreate}
       />
-    </main>
+    </PaneShell>
   );
 });

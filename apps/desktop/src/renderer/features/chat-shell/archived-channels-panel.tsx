@@ -26,7 +26,7 @@ import {
   type DateFilterValue,
 } from "@/components/ui/date-filter-select";
 import { ListRowsSkeleton } from "../../components/layout/list-rows-skeleton";
-import { paneChrome } from "../../components/layout/pane-chrome";
+import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 
 /** Archived-view filter selection. Lifted to App so it survives pane
  *  switches for the app session (shiki #task:1259) — NOT persisted, so a
@@ -111,18 +111,15 @@ export function ArchivedChannelsPanel({
   const hasFilters = workspaceFilter !== "all" || dateFilter !== "all";
 
   return (
-    <main
-      className="flex h-full min-w-0 flex-1 flex-col bg-bg-base"
-      style={{ ...paneChrome, overflow: "hidden" }}
-    >
-      <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle px-4">
-        <Archive className="size-3.5 text-accent" />
-        <span className="font-serif text-sm font-semibold text-text-primary">Archived</span>
-        <span className="text-xs tabular-nums text-text-muted">
-          {workspaceRows.length + channels.length}
-        </span>
-        {isFetching ? <span className="ml-auto text-xs text-text-muted">Refreshing…</span> : null}
-      </header>
+    <PaneShell>
+      <PaneHeader
+        icon={<Archive className="size-3.5" />}
+        title="Archived"
+        count={workspaceRows.length + channels.length}
+        trailing={
+          isFetching ? <span className="ml-auto text-xs text-text-muted">Refreshing…</span> : null
+        }
+      />
 
       <section className="shrink-0 border-b border-border-subtle px-4 py-3">
         <div className="flex flex-wrap items-end gap-3">
@@ -209,7 +206,7 @@ export function ArchivedChannelsPanel({
           />
         ) : null}
       </div>
-    </main>
+    </PaneShell>
   );
 }
 

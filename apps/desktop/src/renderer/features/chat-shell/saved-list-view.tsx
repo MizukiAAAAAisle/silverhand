@@ -32,7 +32,7 @@ import {
   dateFilterSince,
   type DateFilterValue,
 } from "@/components/ui/date-filter-select";
-import { paneChrome } from "../../components/layout/pane-chrome";
+import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 
 /** Saved-view filter selection. Lifted to App so it survives pane switches
  *  for the app session (shiki #task:1258 follow-up) — NOT persisted, so a
@@ -169,15 +169,12 @@ export function SavedListView({
     useAuthorAvatarObjectUrls(authors);
 
   return (
-    <main
-      className="flex h-full flex-1 flex-col bg-bg-base"
-      style={{ ...paneChrome, overflow: "hidden" }}
-    >
-      <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle px-4">
-        <Bookmark className="size-3.5 fill-current text-accent" />
-        <span className="font-serif text-sm font-semibold text-text-primary">Saved</span>
-        {data ? <span className="text-xs tabular-nums text-text-muted">{items.length}</span> : null}
-      </header>
+    <PaneShell>
+      <PaneHeader
+        icon={<Bookmark className="size-3.5 fill-current" />}
+        title="Saved"
+        count={data ? items.length : undefined}
+      />
 
       {showFilters ? (
         <section className="shrink-0 border-b border-border-subtle px-4 py-3">
@@ -251,7 +248,7 @@ export function SavedListView({
           </ul>
         )}
       </div>
-    </main>
+    </PaneShell>
   );
 }
 

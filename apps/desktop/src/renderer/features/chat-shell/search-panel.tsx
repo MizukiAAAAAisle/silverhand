@@ -37,7 +37,7 @@ import {
   type SenderFilterValue,
 } from "@/components/ui/sender-filter-select";
 import { ListRowsSkeleton } from "../../components/layout/list-rows-skeleton";
-import { paneChrome } from "../../components/layout/pane-chrome";
+import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 
 interface SearchPanelProps {
   workspaces: WorkspaceListItem[];
@@ -181,18 +181,15 @@ export function SearchPanel({
   };
 
   return (
-    <main
-      className="flex h-full min-w-0 flex-1 flex-col bg-bg-base"
-      style={{ ...paneChrome, overflow: "hidden" }}
-    >
-      <header className="flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle px-4">
-        <SearchIcon className="size-3.5 text-accent" />
-        <span className="font-serif text-sm font-semibold text-text-primary">Search</span>
-        {data ? (
-          <span className="text-xs tabular-nums text-text-muted">{results.length}</span>
-        ) : null}
-        {isFetching ? <span className="ml-auto text-xs text-text-muted">Searching…</span> : null}
-      </header>
+    <PaneShell>
+      <PaneHeader
+        icon={<SearchIcon className="size-3.5" />}
+        title="Search"
+        count={data ? results.length : undefined}
+        trailing={
+          isFetching ? <span className="ml-auto text-xs text-text-muted">Searching…</span> : null
+        }
+      />
 
       <section className="shrink-0 border-b border-border-subtle px-4 py-3">
         <div className="relative">
@@ -332,7 +329,7 @@ export function SearchPanel({
           </div>
         )}
       </div>
-    </main>
+    </PaneShell>
   );
 }
 
