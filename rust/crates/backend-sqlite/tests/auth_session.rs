@@ -11,8 +11,8 @@ use tempfile::TempDir;
 #[path = "support/current_schema_snapshot.rs"]
 mod current_schema;
 
-const NOW: i64 = 10_000;
-const TTL: i64 = 1_000;
+const NOW: i64 = 1_000_000;
+const TTL: i64 = 30 * 24 * 60 * 60 * 1_000;
 const VALID_HASH: &str = "OXoqnFv14szsOMJZa2grsb0F_m5OzqbBDPQnVf8iVAM";
 const REVOKED_HASH: &str = "oGgRJHJu_7FtXTjQVIJO4CegvaRq_JWjptU6zmpNusk";
 const EXPIRED_HASH: &str = "tSs-8iM4WM4RVthfI1zyxB7d-oyh7tySQ5i5rx2zA8s";
@@ -115,7 +115,15 @@ async fn valid_session_is_one_committed_typed_fact_and_only_its_hash_is_stored()
 async fn unknown_revoked_and_expired_sessions_share_one_refusal_and_are_not_touched() {
     let (_directory, path, store) = fixture().await;
     insert_session(&path, "revoked", "user-1", REVOKED_HASH, 9_500, Some(9_900)).await;
-    insert_session(&path, "expired", "user-1", EXPIRED_HASH, 8_999, None).await;
+    insert_session(
+        &path,
+        "expired",
+        "user-1",
+        EXPIRED_HASH,
+        NOW - TTL - 1,
+        None,
+    )
+    .await;
     let authenticator = authenticator(store);
 
     for token in ["unknown-token", "revoked-token", "expired-token"] {
@@ -129,7 +137,7 @@ async fn unknown_revoked_and_expired_sessions_share_one_refusal_and_are_not_touc
         );
     }
     assert_eq!(last_used_at(&path, "revoked").await, 9_500);
-    assert_eq!(last_used_at(&path, "expired").await, 8_999);
+    assert_eq!(last_used_at(&path, "expired").await, NOW - TTL - 1);
 }
 
 #[tokio::test]
@@ -147,7 +155,7 @@ async fn exact_sliding_ttl_boundary_is_still_eligible() {
 }
 
 #[tokio::test]
-async fn a_concurrent_revoke_finishes_before_validation_can_return_a_principal() {
+async fn due_renewal_rechecks_a_revoke_committed_while_waiting_for_writer() {
     let (_directory, path, store) = fixture().await;
     insert_session(&path, "valid", "user-1", VALID_HASH, 9_500, None).await;
     let options = SqliteConnectOptions::new()
@@ -180,7 +188,7 @@ async fn a_concurrent_revoke_finishes_before_validation_can_return_a_principal()
 }
 
 #[tokio::test]
-async fn invalid_typed_user_rolls_back_the_touch_and_preserves_the_decode_cause() {
+async fn invalid_typed_user_fails_before_renewal_and_preserves_the_decode_cause() {
     let (_directory, path, store) = fixture().await;
     let options = SqliteConnectOptions::new()
         .filename(&path)
@@ -283,4 +291,133 @@ async fn transport_recheck_observes_revocation_without_extending_idle_expiry() {
         .unwrap();
     assert_eq!(bearer.reauthenticate(&auth).await.unwrap(), None);
     assert_eq!(last_used_at(&path, "socket").await, NOW - 10);
+}
+
+#[tokio::test]
+async fn recent_authentication_passes_while_writer_holds_uncommitted_revoke() {
+    let (_directory, path, store) = fixture().await;
+    insert_session(&path, "valid", "user-1", VALID_HASH, NOW - 299_999, None).await;
+    let mut connection =
+        SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
+            .await
+            .unwrap();
+    let mut writer = connection.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    sqlx::query("UPDATE auth_sessions SET revoked_at = ? WHERE id = 'valid'")
+        .bind(NOW)
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+
+    let auth = authenticator(store);
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        auth.authenticate(SessionBearer::parse("valid-token").unwrap()),
+    )
+    .await
+    .expect("recent authentication must not wait for writer")
+    .unwrap();
+    assert!(
+        result.is_some(),
+        "uncommitted revocation is outside the read snapshot"
+    );
+    writer.commit().await.unwrap();
+
+    assert!(
+        auth.authenticate(SessionBearer::parse("valid-token").unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(last_used_at(&path, "valid").await, NOW - 299_999);
+}
+
+#[tokio::test]
+async fn concurrent_threshold_renewals_write_once_and_never_move_time_backwards() {
+    let (_directory, path, store) = fixture().await;
+    insert_session(&path, "valid", "user-1", VALID_HASH, NOW - 300_000, None).await;
+    let mut connection =
+        SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
+            .await
+            .unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE touches (n INTEGER); INSERT INTO touches VALUES(0);
+        CREATE TRIGGER count_touches AFTER UPDATE OF last_used_at ON auth_sessions
+        BEGIN UPDATE touches SET n=n+1; END;",
+    )
+    .execute(&mut connection)
+    .await
+    .unwrap();
+
+    let mut attempts = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let auth = authenticator(store.clone());
+        attempts.spawn(async move {
+            auth.authenticate(SessionBearer::parse("valid-token").unwrap())
+                .await
+        });
+    }
+    while let Some(result) = attempts.join_next().await {
+        assert!(result.unwrap().unwrap().is_some());
+    }
+    assert_eq!(last_used_at(&path, "valid").await, NOW);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT n FROM touches")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap(),
+        1
+    );
+
+    // Simulate a later request committing first, then an older clock arriving.
+    sqlx::query("UPDATE auth_sessions SET last_used_at=? WHERE id='valid'")
+        .bind(NOW + 50)
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    assert!(
+        authenticator(store)
+            .authenticate(SessionBearer::parse("valid-token").unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(last_used_at(&path, "valid").await, NOW + 50);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT n FROM touches")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn due_renewal_does_not_revive_expiry_changed_while_waiting() {
+    let (_directory, path, store) = fixture().await;
+    insert_session(&path, "valid", "user-1", VALID_HASH, NOW - 300_000, None).await;
+    let mut connection =
+        SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
+            .await
+            .unwrap();
+    let mut writer = connection.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    sqlx::query("UPDATE auth_sessions SET last_used_at=? WHERE id='valid'")
+        .bind(NOW - TTL - 1)
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+
+    let mut attempt = tokio::spawn(async move {
+        authenticator(store)
+            .authenticate(SessionBearer::parse("valid-token").unwrap())
+            .await
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), &mut attempt)
+            .await
+            .is_err()
+    );
+    writer.commit().await.unwrap();
+
+    assert!(attempt.await.unwrap().unwrap().is_none());
+    assert_eq!(last_used_at(&path, "valid").await, NOW - TTL - 1);
 }

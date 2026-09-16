@@ -266,6 +266,15 @@ an email-only auth row. Auth-related state lives in dedicated tables; the
   `users` row by email, joins `user_password_credentials`, validates → issues
   `user_token` (opaque session token) bound to a row in
   `auth_sessions(id, user_id, token_hash, created_at, last_used_at, revoked_at, user_agent, ip_first_seen)`.
+- Session activity renewal: every HTTP authentication checks persisted revocation,
+  idle expiry and user integrity. A recent session is read-only; activity is written
+  only when at least five minutes have elapsed since its last persisted use. Due
+  renewals recheck under the SQLite writer lock, so concurrent requests do not
+  repeatedly write or revive a revoked session. The 30-day sliding idle lifetime
+  therefore has up to approximately five minutes of activity/expiry precision loss.
+  No client timer or in-memory session cache participates. Read admission observes
+  committed state: an uncommitted revoke cannot cancel a previously admitted
+  request. Existing WS rechecks remain non-renewing.
 - Self-service password change: authenticated `GET /api/me/password` reports
   `has_password`; profile-only embedded identities have no change-password form.
   `POST /api/me/password {current_password, new_password}` verifies the current

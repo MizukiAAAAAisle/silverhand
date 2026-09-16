@@ -115,7 +115,7 @@ impl Default for SessionTtl {
 pub struct InvalidSessionTtl;
 
 /// One validation attempt's time inputs. Persistence must use both values in
-/// the same transaction that performs the conditional touch.
+/// eligibility check and any conditional renewal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SessionValidation {
     now_ms: i64,
@@ -136,10 +136,12 @@ impl SessionValidation {
     }
 }
 
-/// The atomic persistence face of session authentication.
+/// The persistence authority for session authentication.
 ///
-/// `Some(UserId)` is admissible only after lookup, eligibility, conditional
-/// touch, user-integrity check, typed decode, and commit all succeed. Unknown,
+/// Every admission checks eligibility and typed user integrity. Recent activity
+/// may use a read snapshot; renewal must recheck eligibility under the writer
+/// and commit before returning. A committed revoke blocks subsequent reads,
+/// not requests already admitted by an earlier snapshot. Unknown,
 /// revoked, and expired sessions are the indistinguishable `None` outcome.
 pub trait SessionValidationPort: Clone + Send + Sync + 'static {
     /// Validate a live transport without extending the login's idle lifetime.

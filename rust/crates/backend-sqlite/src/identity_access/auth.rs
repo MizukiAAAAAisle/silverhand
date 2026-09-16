@@ -1,7 +1,7 @@
 //! SQLite adapter for the session context's `auth_sessions` authority.
 //!
 //! [`SqliteSessionStore`] offers all three faces of that one authority: reading a
-//! bearer under a touch ([`SessionValidationPort`]), persisting a freshly minted
+//! bearer with throttled activity renewal ([`SessionValidationPort`]), persisting a freshly minted
 //! coordinate at signup/login ([`SessionIssue`]), and retiring one at logout
 //! ([`SessionRevoke`]). Only the plaintext bearer's SHA-256 coordinate is ever
 //! persisted — never the plaintext itself.
@@ -29,17 +29,68 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use thiserror::Error;
+use tracing::Instrument;
 
 /// The product's `randomBytes(12)`: twelve entropy bytes → sixteen base64url
 /// characters (12 is a multiple of 3, so the encoding never pads).
 const SESSION_ID_BYTES: usize = 12;
 
-const VERIFY_AND_TOUCH: &str = "UPDATE auth_sessions
-    SET last_used_at = ?
-  WHERE token_hash = ?
-    AND revoked_at IS NULL
-    AND last_used_at + ? >= ?
-  RETURNING user_id";
+const SESSION_TOUCH_INTERVAL_MS: i64 = 5 * 60 * 1_000;
+
+async fn read_valid_session<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    token_hash: &SessionTokenHash,
+    validation: SessionValidation,
+) -> Result<Option<(UserId, i64)>, PersistenceFailure> {
+    let row = crate::foundation::statement_metrics::statement(
+        "auth.verify",
+        "get",
+        sqlx::query(
+            "SELECT s.user_id, s.last_used_at, u.id AS existing_user
+            FROM auth_sessions s LEFT JOIN users u ON u.id = s.user_id
+            WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.last_used_at + ? >= ?",
+        )
+        .bind(token_hash.as_str())
+        .bind(validation.ttl_ms())
+        .bind(validation.now_ms())
+        .fetch_optional(executor),
+    )
+    .await
+    .map_err(persistence)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    if row
+        .try_get::<Option<String>, _>("existing_user")
+        .map_err(persistence)?
+        .is_none()
+    {
+        return Err(PersistenceFailure::from_source(DanglingSessionUser));
+    }
+    let raw: String = row.try_get("user_id").map_err(persistence)?;
+    let user = UserId::parse(raw)
+        .map_err(|error| PersistenceFailure::from_source(InvalidPersistedUserId(error)))?;
+    let last_used = row.try_get("last_used_at").map_err(persistence)?;
+    Ok(Some((user, last_used)))
+}
+
+async fn read_from_pool(
+    pool: &SqlitePool,
+    token_hash: &SessionTokenHash,
+    validation: SessionValidation,
+) -> Result<Option<(UserId, i64)>, PersistenceFailure> {
+    let mut connection = pool
+        .acquire()
+        .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.pool.acquire"))
+        .await
+        .map_err(persistence)?;
+    read_valid_session(&mut *connection, token_hash, validation).await
+}
+
+fn renewal_due(last_used: i64, now: i64) -> bool {
+    now.saturating_sub(last_used) >= SESSION_TOUCH_INTERVAL_MS
+}
 
 const INSERT_SESSION: &str = "\
 INSERT INTO auth_sessions \
@@ -120,52 +171,46 @@ where
         name = "db.auth.verify_and_touch",
         skip_all
     )]
-    async fn verify_and_touch_transaction(
+    async fn verify_with_renewal(
         &self,
         token_hash: SessionTokenHash,
         validation: SessionValidation,
     ) -> Result<Option<UserId>, PersistenceFailure> {
-        let mut transaction = crate::foundation::statement_metrics::begin(&self.pool, None)
-            .await
-            .map_err(persistence)?;
-        let row = crate::foundation::statement_metrics::statement(
-            "auth.verify_and_touch",
-            "get",
-            sqlx::query(VERIFY_AND_TOUCH)
-                .bind(validation.now_ms())
-                .bind(token_hash.as_str())
-                .bind(validation.ttl_ms())
-                .bind(validation.now_ms())
-                .fetch_optional(&mut *transaction),
-        )
-        .await
-        .map_err(persistence)?;
-
-        let Some(row) = row else {
-            transaction.commit().await.map_err(persistence)?;
+        // WAL readers do not queue behind an unrelated writer. This snapshot is
+        // the admission point for recent activity, including uncommitted revokes.
+        let Some((user, last_used)) = read_from_pool(&self.pool, &token_hash, validation).await?
+        else {
             return Ok(None);
         };
-
-        let raw_user_id: String = row.try_get("user_id").map_err(persistence)?;
-        let user_id = UserId::parse(raw_user_id)
-            .map_err(|error| PersistenceFailure::from_source(InvalidPersistedUserId(error)))?;
-        let user_exists: i64 = crate::foundation::statement_metrics::statement(
-            "auth.user_exists",
-            "get",
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = ?)")
-                .bind(user_id.as_str())
-                .fetch_one(&mut *transaction),
-        )
-        .await
-        .map_err(persistence)?;
-        if user_exists == 0 {
-            return Err(PersistenceFailure::from_source(DanglingSessionUser));
+        if !renewal_due(last_used, validation.now_ms()) {
+            return Ok(Some(user));
         }
 
+        // Acquire the writer before re-reading: concurrent renewals or a revoke
+        // committed while we waited must win over the first snapshot.
+        let mut transaction =
+            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN IMMEDIATE"))
+                .await
+                .map_err(persistence)?;
+        let current = read_valid_session(&mut *transaction, &token_hash, validation).await?;
+        if let Some((_, last_used)) = &current {
+            if renewal_due(*last_used, validation.now_ms()) {
+                crate::foundation::statement_metrics::statement(
+                    "auth.touch",
+                    "run",
+                    sqlx::query("UPDATE auth_sessions SET last_used_at = ? WHERE token_hash = ?")
+                        .bind(validation.now_ms())
+                        .bind(token_hash.as_str())
+                        .execute(&mut *transaction),
+                )
+                .await
+                .map_err(persistence)?;
+            }
+        }
         crate::foundation::statement_metrics::statement("auth.commit", "run", transaction.commit())
             .await
             .map_err(persistence)?;
-        Ok(Some(user_id))
+        Ok(current.map(|(user, _)| user))
     }
 }
 
@@ -178,28 +223,9 @@ where
         token_hash: SessionTokenHash,
         validation: SessionValidation,
     ) -> Result<Option<UserId>, PersistenceFailure> {
-        let row = sqlx::query("SELECT s.user_id, u.id AS existing_user FROM auth_sessions s LEFT JOIN users u ON u.id=s.user_id
-            WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.last_used_at + ? >= ?")
-            .bind(token_hash.as_str())
-            .bind(validation.ttl_ms())
-            .bind(validation.now_ms())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(persistence)?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        if row
-            .try_get::<Option<String>, _>("existing_user")
-            .map_err(persistence)?
-            .is_none()
-        {
-            return Err(PersistenceFailure::from_source(DanglingSessionUser));
-        }
-        let raw: String = row.try_get("user_id").map_err(persistence)?;
-        Ok(Some(UserId::parse(raw).map_err(|e| {
-            PersistenceFailure::from_source(InvalidPersistedUserId(e))
-        })?))
+        Ok(read_from_pool(&self.pool, &token_hash, validation)
+            .await?
+            .map(|(user, _)| user))
     }
 
     async fn verify_and_touch(
@@ -207,8 +233,7 @@ where
         token_hash: SessionTokenHash,
         validation: SessionValidation,
     ) -> Result<Option<UserId>, PersistenceFailure> {
-        self.verify_and_touch_transaction(token_hash, validation)
-            .await
+        self.verify_with_renewal(token_hash, validation).await
     }
 }
 

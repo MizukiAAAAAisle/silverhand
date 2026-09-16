@@ -255,7 +255,8 @@ async fn cookie_origin_session_and_epoch_are_all_required_in_order() {
         http_status(result.unwrap_err()),
         StatusCode::UPGRADE_REQUIRED
     );
-    assert_eq!(last_used(&path, "session-valid").await, 10_000);
+    // Authentication still precedes the epoch gate, but recent activity is read-only.
+    assert_eq!(last_used(&path, "session-valid").await, 9_500);
     controller.close().await;
     server.abort();
 }
