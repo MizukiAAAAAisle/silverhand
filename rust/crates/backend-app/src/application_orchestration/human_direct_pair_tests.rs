@@ -156,3 +156,66 @@ async fn human_first_send_is_authenticated_private_and_reuses_the_reverse_pair()
     .await;
     assert_eq!(messages.0, StatusCode::FORBIDDEN, "{}", messages.1);
 }
+
+#[tokio::test]
+async fn human_directory_discovers_unrelated_registered_users_without_pagination_or_secrets() {
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    for i in 0..25 {
+        seed_peer(
+            &fixture.path,
+            &format!("unrelated-{i}"),
+            &format!("private-token-{i}"),
+        )
+        .await;
+    }
+    let app = prepare(&remote_config(fixture.path.clone())).await.unwrap();
+    let bearer = format!("Bearer {TOKEN}");
+
+    let (status, body) = request(&app.router, "GET", "/api/users", Some(&bearer)).await;
+    assert_eq!(status, StatusCode::OK);
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let users = value["users"].as_array().unwrap();
+    assert_eq!(users.len(), 26);
+    for i in 0..25 {
+        assert!(
+            users
+                .iter()
+                .any(|user| user["id"] == format!("unrelated-{i}"))
+        );
+    }
+    for user in users {
+        let keys: std::collections::BTreeSet<_> = user
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "id",
+                "name",
+                "display_name",
+                "avatar_url",
+                "created_at",
+                "updated_at"
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+    assert!(!body.contains("private-token"));
+    assert_eq!(
+        count(&fixture.path, "SELECT COUNT(*) FROM workspace_users").await,
+        0
+    );
+    assert_eq!(
+        count(
+            &fixture.path,
+            "SELECT COUNT(*) FROM conversations WHERE placement_kind='direct_pair'"
+        )
+        .await,
+        0
+    );
+}

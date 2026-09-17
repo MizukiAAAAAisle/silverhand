@@ -1,3 +1,6 @@
+import { getCurrentUserId } from "@/features/session/current-user";
+import { includesIdentityResults, identitySearchGroups } from "@/features/search/identity-results";
+import { IdentitySearchResults } from "@/features/search/identity-search-results";
 import { useMemo, useState, type ReactNode } from "react";
 import * as Select from "@radix-ui/react-select";
 import dayjs from "dayjs";
@@ -120,8 +123,22 @@ export function SearchPanel({
     onFilterChange({ ...filter, workspace: next });
   const setSenderFilter = (next: SenderFilterValue) => onFilterChange({ ...filter, sender: next });
   const setTimeRange = (next: TimeRange) => onFilterChange({ ...filter, time: next });
-  const { data: agents = [] } = useAgents();
-  const { data: users = [] } = useUsers();
+  const agentDirectory = useAgents();
+  const agents = agentDirectory.data ?? [];
+  const humanDirectory = useUsers();
+  const users = humanDirectory.data ?? [];
+  const identityEnabled = includesIdentityResults(filter) && query.trim().length > 0;
+  const identityGroups = identityEnabled
+    ? identitySearchGroups(
+        query,
+        humanDirectory.isError ? [] : users,
+        agentDirectory.isError ? [] : agents,
+        getCurrentUserId(),
+      )
+    : [];
+  const identityCount = identityGroups.reduce((sum, group) => sum + group.items.length, 0);
+  const identityLoading = identityEnabled && (humanDirectory.isLoading || agentDirectory.isLoading);
+  const identityError = identityEnabled && (humanDirectory.isError || agentDirectory.isError);
   // Resolver feeds formatUserDisplayName so message-meta lines and the
   // sender-filter label render the actual human display name instead of
   // the raw uuid (multi-human audit 2026-06-03 #task:857 P0.10).
@@ -185,7 +202,7 @@ export function SearchPanel({
       <PaneHeader
         icon={<SearchIcon className="size-3.5" />}
         title="Search"
-        count={data ? results.length : undefined}
+        count={hasIntent ? results.length + identityCount : undefined}
         trailing={
           isFetching ? <span className="ml-auto text-xs text-text-muted">Searching…</span> : null
         }
@@ -203,7 +220,7 @@ export function SearchPanel({
                 resetFilters();
               }
             }}
-            placeholder="Search messages, channels, threads"
+            placeholder="Search people, agents, messages, channels"
             className="h-10 pl-9 pr-10"
           />
           <button
@@ -245,12 +262,49 @@ export function SearchPanel({
       </section>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        {hasIntent && !includesIdentityResults(filter) ? (
+          <p className="mb-3 text-xs text-text-muted">
+            Clear workspace, sender and time filters to search people and agents.
+          </p>
+        ) : null}
+        {identityLoading ? (
+          <p role="status" className="mb-3 text-xs text-text-muted">
+            Searching people and agents…
+          </p>
+        ) : null}
+        {identityEnabled && humanDirectory.isError ? (
+          <p role="alert" className="mb-3 text-xs text-text-muted">
+            Could not load humans.{" "}
+            <button
+              type="button"
+              className="underline focus-outline"
+              onClick={() => void humanDirectory.refetch()}
+            >
+              Retry
+            </button>
+          </p>
+        ) : null}
+        {identityEnabled && agentDirectory.isError ? (
+          <p role="alert" className="mb-3 text-xs text-text-muted">
+            Could not load agents.{" "}
+            <button
+              type="button"
+              className="underline focus-outline"
+              onClick={() => void agentDirectory.refetch()}
+            >
+              Retry
+            </button>
+          </p>
+        ) : null}
+        {identityCount > 0 ? <IdentitySearchResults groups={identityGroups} /> : null}
         {!hasIntent ? (
           <EmptyState icon={<SearchIcon className="size-5" />} text="Type to search" />
         ) : isLoading ? (
           <ListRowsSkeleton withIcon />
         ) : results.length === 0 ? (
-          <EmptyState icon={<SearchIcon className="size-5" />} text="No matches" />
+          identityCount === 0 && !identityLoading && !identityError ? (
+            <EmptyState icon={<SearchIcon className="size-5" />} text="No matches" />
+          ) : null
         ) : (
           <div className="space-y-5">
             {resultGroups.map((group) => (
