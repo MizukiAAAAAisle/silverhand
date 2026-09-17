@@ -200,6 +200,29 @@ skipped` — that warning is expected and harmless; our hook covers it.)
   is cleared (right-click → Open the first time, or `xattr -dr
 com.apple.quarantine <app>`).
 
+### macOS local-network identity
+
+Both package profiles declare `NSLocalNetworkUsageDescription`. This supplies
+the permission prompt's explanation; it does not grant network access.
+
+Before signing, `afterPack` replaces the **packaged main executable's** `LC_UUID`
+with a fresh UUID. The development Electron in `node_modules` is not modified.
+macOS can confuse apps that reuse Electron's executable UUID even when their
+bundle IDs differ; see [Apple TN3178](https://developer.apple.com/documentation/technotes/tn3178-checking-for-and-resolving-build-uuid-problems).
+The patch is restricted to the existing thin arm64 target and fails closed for
+other formats. No executable code, framework UUIDs, bundle ID or data paths change.
+Any future universal/x64 packaging support must extend this validation first.
+
+`Contents/Resources/silverhand-executable-uuid.json` records the upstream and
+packaged main-executable UUIDs. Upstream Electron main-executable dSYM/Breakpad
+symbols must be remapped using that mapping before automatic symbol lookup;
+the mapping alone does not perform symbolication. Framework symbols are unchanged.
+The UUID change invalidates the old signature, so signing must always follow it.
+The hook verifies the final signature and UUID. This does not guarantee existing
+macOS permission records are immediately repaired: test local-network access
+from the new app and its children separately. Developer ID signing remains the
+recommended distribution identity; ad-hoc signing is not a substitute.
+
 ### For wider distribution (not yet wired)
 
 - Get an Apple Developer ID Application certificate, set `mac.identity:

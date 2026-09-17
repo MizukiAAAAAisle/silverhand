@@ -32,6 +32,7 @@ const { createRequire } = require("node:module");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { prepareMacExecutableIdentity, readUuid } = require("./mac-executable-identity.cjs");
 
 function loadAsar(projectDir) {
   const projectRequire = createRequire(path.join(projectDir, "package.json"));
@@ -138,6 +139,7 @@ exports.default = async function afterPack(context) {
   }
 
   await rewriteRemoteOnlyAsar(context, appPath);
+  const identity = prepareMacExecutableIdentity(appPath);
 
   console.log(`[afterPack] ad-hoc deep-signing ${appPath}`);
   execFileSync(
@@ -174,6 +176,9 @@ exports.default = async function afterPack(context) {
     ) {
       throw new Error("packaged sidecar bytes changed after manifest sealing");
     }
+  }
+  if (readUuid(fs.readFileSync(identity.executablePath)) !== identity.uuid) {
+    throw new Error("packaged executable UUID changed during signing");
   }
   console.log("[afterPack] ad-hoc signature applied and verified");
 };

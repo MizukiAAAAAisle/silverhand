@@ -50,6 +50,8 @@ extraResources:
     to: silverhand-daemon/daemon.mjs
 
 mac:
+  extendInfo:
+    NSLocalNetworkUsageDescription: Silverhand connects to computers and servers on your local network to run and manage agents.
   category: public.app-category.developer-tools
   target:
     - target: dmg

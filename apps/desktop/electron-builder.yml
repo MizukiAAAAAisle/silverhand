@@ -77,6 +77,8 @@ extraResources:
     to: silverhand-backend/silverhand-backend.manifest.json
 
 mac:
+  extendInfo:
+    NSLocalNetworkUsageDescription: Silverhand connects to computers and servers on your local network to run and manage agents.
   category: public.app-category.developer-tools
   # arm64-only for now. Universal (arm64+x64) was attempted but the
   # x64 Electron zip download fails over our network — switch back
