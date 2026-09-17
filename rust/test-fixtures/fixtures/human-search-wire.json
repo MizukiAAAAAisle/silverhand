@@ -26,6 +26,7 @@
             "roster_policy": "open",
             "channel_id": "c",
             "closed_at": null,
+            "archived_at": null,
             "created_at": 1,
             "placement_kind": "workspace",
             "workspace": { "id": "w", "name": "cap-needle workspace", "owner_agent_id": null }

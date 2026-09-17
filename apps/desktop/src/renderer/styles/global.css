@@ -506,6 +506,17 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   }
 }
 
+/* Leading icon square is gated on this list's own width, not the host surface. */
+.search-list {
+  container-type: inline-size;
+  container-name: search-list;
+}
+@container search-list (min-width: 1000px) {
+  [data-search-item-icon] {
+    display: flex;
+  }
+}
+
 .conversation-surface {
   container-type: inline-size;
   container-name: conversation-surface;

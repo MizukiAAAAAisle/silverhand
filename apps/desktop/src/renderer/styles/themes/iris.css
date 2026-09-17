@@ -329,7 +329,8 @@
 
 /* Hooks: Panels and collections */
 
-[data-theme="iris"] [data-collection-card]:hover {
+[data-theme="iris"] [data-collection-card]:hover,
+[data-theme="iris"] [data-collection-card][data-active] {
   background-color: var(--bg-hover);
   box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.12);
   transform: translateY(-1px);

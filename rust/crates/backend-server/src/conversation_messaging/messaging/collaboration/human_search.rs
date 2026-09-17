@@ -18,6 +18,7 @@ use silverhand_backend_core::{
             BoundHumanSearchPage, HumanSearchConversationPlacement, HumanSearchMillis,
             HumanSearchOrder, HumanSearchQuery, HumanSearchReadPort, HumanSearchRefusal,
             HumanSearchResult, HumanSearchStream, HumanSearchText, HumanSearchWorkspaceRef,
+            IdentitySearchCategory, IdentitySearchGroups, IdentitySearchStatus, SearchIdentity,
         },
     },
     foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
@@ -100,6 +101,7 @@ async fn search<P: HumanSearchReadPort>(
 #[derive(Debug, Default, Deserialize)]
 struct HumanSearchQueryWire {
     q: Option<String>,
+    include_identities: Option<String>,
     stream: Option<String>,
     workspace_id: Option<String>,
     conversation_id: Option<String>,
@@ -119,6 +121,16 @@ struct QueryIssue {
 }
 
 fn admitted_query(wire: &HumanSearchQueryWire) -> Result<HumanSearchQuery, Vec<QueryIssue>> {
+    let include_identities = match wire.include_identities.as_deref() {
+        None | Some("false") => false,
+        Some("true") => true,
+        _ => {
+            return Err(vec![QueryIssue {
+                path: "include_identities",
+                message: "expected true or false",
+            }]);
+        }
+    };
     let text = HumanSearchText::parse(wire.q.as_deref().unwrap_or("")).map_err(|_| {
         vec![QueryIssue {
             path: "q",
@@ -242,6 +254,7 @@ fn admitted_query(wire: &HumanSearchQueryWire) -> Result<HumanSearchQuery, Vec<Q
         order,
         limit,
     )
+    .map(|query| query.with_identities(include_identities))
     .map_err(|_| {
         vec![QueryIssue {
             path: "",
@@ -341,13 +354,57 @@ fn success(
         .iter()
         .map(result)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(Json(json!({
+    let mut body = json!({
         "query": query_wire(page.query()),
         "results": results,
         "total": page.total().get(),
         "truncated": page.truncated(),
-    }))
-    .into_response())
+    });
+    if let Some(identities) = page.identities() {
+        body["identities"] = identities_wire(identities);
+    }
+    Ok(Json(body).into_response())
+}
+
+fn identities_wire(groups: &IdentitySearchGroups) -> Value {
+    let status = match groups.status() {
+        IdentitySearchStatus::Searched => "searched",
+        IdentitySearchStatus::Filtered => "filtered",
+        IdentitySearchStatus::EmptyQuery => "empty_query",
+    };
+    json!({
+        "status": status,
+        "humans": identity_category_wire(groups.humans()),
+        "agents": identity_category_wire(groups.agents()),
+    })
+}
+
+fn identity_category_wire(group: &IdentitySearchCategory) -> Value {
+    let results: Vec<_> = group.results().iter().map(identity_wire).collect();
+    json!({
+        "results": results,
+        "total": group.total(),
+        "truncated": group.total() > group.results().len(),
+    })
+}
+
+fn identity_wire(row: &SearchIdentity) -> Value {
+    use crate::conversation_messaging::messaging::author_wire::principal_avatar_url;
+    use silverhand_backend_core::conversation_messaging::messaging::{
+        PrincipalIdentity, PrincipalKind,
+    };
+    let (kind, principal_kind) = match row.identity {
+        PrincipalIdentity::Human(_) => ("human", PrincipalKind::Human),
+        PrincipalIdentity::Agent(_) => ("agent", PrincipalKind::Agent),
+    };
+    json!({
+        "kind": kind,
+        "id": row.identity.as_str(),
+        "name": row.name,
+        "display_name": row.display_name,
+        "avatar_url": principal_avatar_url(principal_kind, row.identity.as_str(), row.avatar),
+        "runtime": row.runtime.map(|runtime| runtime.as_str()),
+    })
 }
 
 fn result(
@@ -358,10 +415,11 @@ fn result(
             "type": "workspace",
             "workspace": workspace_wire(selected.workspace(), Some(selected)),
         })),
-        HumanSearchResult::Conversation(selected) => Ok(json!({
-            "type": "conversation",
-            "conversation": conversation_wire(selected.conversation()),
-        })),
+        HumanSearchResult::Conversation(selected) => {
+            let mut conversation = conversation_wire(selected.conversation());
+            conversation["archived_at"] = json!(selected.archived_at());
+            Ok(json!({ "type": "conversation", "conversation": conversation }))
+        }
         HumanSearchResult::Message(selected) => Ok(json!({
             "type": "message",
             "conversation": conversation_wire(selected.conversation()),
@@ -417,6 +475,9 @@ fn conversation_wire(
 
 fn query_wire(query: &HumanSearchQuery) -> Value {
     let mut value = Map::new();
+    if query.include_identities() {
+        value.insert("include_identities".to_owned(), json!(true));
+    }
     value.insert("q".to_owned(), json!(query.text().as_str()));
     value.insert("stream".to_owned(), json!(query.stream().as_str()));
     if let Some(workspace) = query.workspace() {

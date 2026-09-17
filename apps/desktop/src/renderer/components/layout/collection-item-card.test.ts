@@ -41,7 +41,7 @@ const BARE_MARKER = /data-collection-card(?![-\w])/g;
 const RETIRED_HOOK = /data-(?:list-row|thread-row|attachment-row)(?![-\w])/g;
 
 const CONSUMERS = [
-  "../../features/chat-shell/search-panel.tsx",
+  "../../features/search/search-result-item.tsx",
   "../../features/chat-shell/saved-list-view.tsx",
   "../../features/chat-shell/archived-channels-panel.tsx",
   "../../features/activity-shell/activity-view.tsx",

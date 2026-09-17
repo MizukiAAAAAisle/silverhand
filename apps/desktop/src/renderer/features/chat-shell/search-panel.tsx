@@ -1,21 +1,11 @@
-import { getCurrentUserId } from "@/features/session/current-user";
-import { includesIdentityResults, identitySearchGroups } from "@/features/search/identity-results";
 import { IdentitySearchResults } from "@/features/search/identity-search-results";
+import { SearchResultItem, type SearchItem } from "@/features/search/search-result-item";
 import { useMemo, useState, type ReactNode } from "react";
 import * as Select from "@radix-ui/react-select";
 import dayjs from "dayjs";
-import {
-  ChevronDown,
-  Clock,
-  Hash,
-  MessageSquareText,
-  Search as SearchIcon,
-  User,
-  X,
-} from "lucide-react";
+import { ChevronDown, Clock, Hash, MessageSquareMore, Search as SearchIcon, X } from "lucide-react";
 import type { AgentDto, SearchResultDto } from "@silverhand/shared";
 import { Input } from "@/components/ui/input";
-import { CollectionItemCard } from "@/components/layout/collection-item-card";
 import {
   FilterBlock,
   FilterSelectItem as SelectItem,
@@ -23,10 +13,6 @@ import {
   FILTER_SELECT_CONTENT_CLASS as SELECT_CONTENT_CLASS,
 } from "@/components/ui/filter-select";
 import { WorkspaceIcon } from "@/components/workspace-icon";
-import { ChannelIcon } from "@/components/channel-icon";
-import { AVATAR_PX } from "@/components/avatar-scale";
-import { AuthorAvatarView, AuthorName } from "@/components/chat/author-avatar-view";
-import { presentAuthor } from "@/components/chat/author-presentation";
 import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
@@ -94,18 +80,6 @@ interface ResultGroup {
 /** Workspace glyph — a serif "W" matching the icon column width. Used
  *  wherever a people-owned workspace needs a marker; mirrors the
  *  WorkspacesPanel sidebar. Sizes line up with Lucide `size-3/3.5/4`. */
-function WorkspaceGlyph({ size = 3.5 }: { size?: 3 | 3.5 | 4 }): JSX.Element {
-  const px = size * 4;
-  return (
-    <span
-      className="inline-flex shrink-0 items-center justify-center font-serif font-semibold leading-none"
-      style={{ width: `${px}px`, height: `${px}px`, fontSize: `${px}px` }}
-    >
-      W
-    </span>
-  );
-}
-
 export function SearchPanel({
   workspaces,
   initialQuery,
@@ -123,22 +97,8 @@ export function SearchPanel({
     onFilterChange({ ...filter, workspace: next });
   const setSenderFilter = (next: SenderFilterValue) => onFilterChange({ ...filter, sender: next });
   const setTimeRange = (next: TimeRange) => onFilterChange({ ...filter, time: next });
-  const agentDirectory = useAgents();
-  const agents = agentDirectory.data ?? [];
-  const humanDirectory = useUsers();
-  const users = humanDirectory.data ?? [];
-  const identityEnabled = includesIdentityResults(filter) && query.trim().length > 0;
-  const identityGroups = identityEnabled
-    ? identitySearchGroups(
-        query,
-        humanDirectory.isError ? [] : users,
-        agentDirectory.isError ? [] : agents,
-        getCurrentUserId(),
-      )
-    : [];
-  const identityCount = identityGroups.reduce((sum, group) => sum + group.items.length, 0);
-  const identityLoading = identityEnabled && (humanDirectory.isLoading || agentDirectory.isLoading);
-  const identityError = identityEnabled && (humanDirectory.isError || agentDirectory.isError);
+  const { data: agents = [] } = useAgents();
+  const { data: users = [] } = useUsers();
   // Resolver feeds formatUserDisplayName so message-meta lines and the
   // sender-filter label render the actual human display name instead of
   // the raw uuid (multi-human audit 2026-06-03 #task:857 P0.10).
@@ -152,6 +112,7 @@ export function SearchPanel({
   const filters = useMemo(
     () => ({
       q: query,
+      include_identities: true,
       workspace_id: workspaceIdFilter,
       user_id: senderQuery.userId,
       agent_id: senderQuery.agentId,
@@ -174,7 +135,11 @@ export function SearchPanel({
     workspaceFilter !== "all" ||
     senderFilter !== "all" ||
     timeRange !== "all";
-  const { data, isFetching, isLoading } = useMessageSearch(filters);
+  const { data, isFetching, isLoading, isError, refetch } = useMessageSearch(filters);
+  const identities = isError ? undefined : data?.identities;
+  const identityCount = identities
+    ? identities.humans.results.length + identities.agents.results.length
+    : 0;
   const results = data?.results ?? [];
   // The sender byline avatar's bytes come STRICTLY from each message hit's own
   // author DTO (#task:1792 B2) — never a directory join — so a match whose
@@ -212,6 +177,7 @@ export function SearchPanel({
         <div className="relative">
           <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-muted" />
           <Input
+            autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -261,52 +227,37 @@ export function SearchPanel({
         </div>
       </section>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {hasIntent && !includesIdentityResults(filter) ? (
+      <div className="search-list min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        {hasIntent && identities?.status === "filtered" ? (
           <p className="mb-3 text-xs text-text-muted">
             Clear workspace, sender and time filters to search people and agents.
           </p>
         ) : null}
-        {identityLoading ? (
-          <p role="status" className="mb-3 text-xs text-text-muted">
-            Searching people and agents…
-          </p>
-        ) : null}
-        {identityEnabled && humanDirectory.isError ? (
+        {isError ? (
           <p role="alert" className="mb-3 text-xs text-text-muted">
-            Could not load humans.{" "}
+            Search failed.{" "}
             <button
               type="button"
               className="underline focus-outline"
-              onClick={() => void humanDirectory.refetch()}
+              onClick={() => void refetch()}
             >
               Retry
             </button>
           </p>
         ) : null}
-        {identityEnabled && agentDirectory.isError ? (
-          <p role="alert" className="mb-3 text-xs text-text-muted">
-            Could not load agents.{" "}
-            <button
-              type="button"
-              className="underline focus-outline"
-              onClick={() => void agentDirectory.refetch()}
-            >
-              Retry
-            </button>
-          </p>
-        ) : null}
-        {identityCount > 0 ? <IdentitySearchResults groups={identityGroups} /> : null}
         {!hasIntent ? (
           <EmptyState icon={<SearchIcon className="size-5" />} text="Type to search" />
         ) : isLoading ? (
           <ListRowsSkeleton withIcon />
-        ) : results.length === 0 ? (
-          identityCount === 0 && !identityLoading && !identityError ? (
+        ) : results.length === 0 && identityCount === 0 ? (
+          !isError ? (
             <EmptyState icon={<SearchIcon className="size-5" />} text="No matches" />
           ) : null
         ) : (
           <div className="space-y-5">
+            {identities && identityCount > 0 ? (
+              <IdentitySearchResults identities={identities} />
+            ) : null}
             {resultGroups.map((group) => (
               <section key={group.key}>
                 <header className="mb-2 flex items-center gap-2 px-1 text-(length:--text-meta) font-medium uppercase leading-none tracking-wider text-text-muted">
@@ -543,144 +494,24 @@ function SearchResultRow({
   userAvatarUrls: Map<string, string | null>;
   onClick: () => void;
 }): JSX.Element {
-  const isMessage = result.type === "message";
-  const icon = resultIcon(result, agentsById, ownerAgentAvatarUrls);
-  const excerpt = resultExcerpt(result, query);
-
+  const item: SearchItem =
+    result.type === "workspace"
+      ? { kind: "workspace", result }
+      : result.type === "conversation"
+        ? { kind: "conversation", result }
+        : { kind: "message", result };
   return (
     <li>
-      <CollectionItemCard
-        as="button"
-        type="button"
+      <SearchResultItem
+        item={item}
+        query={query}
+        agentsById={agentsById}
+        ownerAgentAvatarUrls={ownerAgentAvatarUrls}
+        agentAvatarUrls={agentAvatarUrls}
+        userAvatarUrls={userAvatarUrls}
         onClick={onClick}
-        className="flex w-full min-w-0 items-start gap-3 px-3 py-3 text-left"
-      >
-        <span
-          data-collection-card-icon
-          className="flex size-8 shrink-0 items-center justify-center self-center rounded-md border border-border-subtle bg-bg-base text-text-muted"
-        >
-          {icon}
-        </span>
-        <span className="min-w-0 flex-1">
-          {isMessage ? (
-            <MessageResultHeader
-              result={result}
-              agentAvatarUrls={agentAvatarUrls}
-              userAvatarUrls={userAvatarUrls}
-            />
-          ) : (
-            <>
-              <span className="mb-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
-                {resultMeta(result).map((item, index) => (
-                  <span key={`${index}:${item}`} className="min-w-0 truncate">
-                    {item}
-                  </span>
-                ))}
-              </span>
-              <span className="block truncate text-sm font-medium text-text-primary">
-                {highlightText(resultTitle(result), query)}
-              </span>
-            </>
-          )}
-          {excerpt ? (
-            <span className="mt-1 block max-h-10 overflow-hidden text-sm leading-5 text-text-secondary">
-              {highlightText(excerpt, query)}
-            </span>
-          ) : null}
-        </span>
-      </CollectionItemCard>
+      />
     </li>
-  );
-}
-
-/**
- * Header for a message search result: workspace, channel, sender, time, each
- * named entity carrying its canonical icon/avatar (#task:1336). The type itself
- * is expressed by the left row icon, so no "Message" text label here. Reuses the
- * same name resolvers as the rest of the panel (no second metadata source) and
- * the shared avatar-url caches for the sender glyph.
- *
- * A `direct_pair` hit wears NO where segment (shiki #task:2060): a pair is not a
- * place, so nothing — least of all the counterpart's agent identity — stands in
- * the workspace slot; the row reads sender + time. The pair's own face stays with
- * the DM pane and the `#conv:` chip.
- *
- * No `·` separators between the segments (shiki 2026-07-27, matching the task
- * card meta row from #task:1579 and the saved-item header): each segment already
- * opens with its own identity glyph, so glyph + gap delimit the row and the
- * middots were pure ink. The timestamp is the only segment without an identity
- * glyph, so it gets a `Clock` at utility scale (14px, a notch under the 16px
- * identity glyphs).
- */
-function MessageResultHeader({
-  result,
-  agentAvatarUrls,
-  userAvatarUrls,
-}: {
-  result: Extract<SearchResultDto, { type: "message" }>;
-  agentAvatarUrls: Map<string, string | null>;
-  userAvatarUrls: Map<string, string | null>;
-}): JSX.Element {
-  // Author identity via the ONE shared seam (#task:1792): the server-
-  // authoritative `MessageAuthorDto` → `presentAuthor`, never a live `from_*_id`
-  // directory re-join. Deleted → snapshot name + neutral avatar; unresolved →
-  // "Unknown …"; a matched system message (`author === null`) reads "System"
-  // with a neutral person square (the left type icon already carries the kind).
-  const presentation = result.message.author ? presentAuthor(result.message.author) : null;
-  const senderName = presentation?.label ?? "System";
-  // The container lives inside the placement-discriminated ref, and only the
-  // `workspace` arm has one to show — workspace + channel, both readable only
-  // after that narrowing. The `direct_pair` arm renders no segment (#task:2060).
-  const place = result.conversation;
-  return (
-    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
-      {place.placement_kind === "workspace" ? (
-        <>
-          <span className="flex min-w-0 items-center gap-1">
-            {/* No agent DIRECTORY is wired into this header, so an agent space's
-                owner cannot be resolved to an avatar and the icon lands on its
-                neutral unresolved-owner square. Behavior-identical to the old
-                `kind` + hardcoded-null-agent pair (#task:2078) — the ownership
-                arc just says it in one argument instead of two. */}
-            <WorkspaceIcon ownerAgentId={place.workspace.owner_agent_id} />
-            <span className="truncate">{place.workspace.name}</span>
-          </span>
-          <span className="flex min-w-0 items-center gap-1">
-            {/* Same channel glyph the sidebar / saved / activity lists use, via
-                the shared ChannelIcon primitive. `sticker` → the
-                `data-channel-icon` hook lets each theme paint its `#` chip
-                (forza6 poster sticker) so a channel reads identically everywhere.
-                `sm` (12px) is intentional (shiki #task:1438): forza6's content-box
-                chip (+2px pad +2px border) lands at 16px — matching the 16px
-                workspace icon + sender avatar on this row (shiki #task:1336);
-                warm / slack paint no chip, so their glyph is simply 12px. Not the
-                chat-header hero (`data-conversation-hash-icon`, ~28px). */}
-            <ChannelIcon variant="sticker" density="sm" />
-            <span className="truncate">{place.title}</span>
-          </span>
-        </>
-      ) : null}
-      <span className="flex min-w-0 items-center gap-1">
-        <AuthorAvatarView
-          avatar={presentation?.avatar ?? { variant: "neutral-user" }}
-          size={AVATAR_PX.xs}
-          label={senderName}
-          agentAvatarUrls={agentAvatarUrls}
-          humanAvatarUrls={userAvatarUrls}
-        />
-        {/* Author name carries its deleted state through the shared primitive
-            (#task:1792 B3); a matched system message has no author DTO. */}
-        {presentation ? (
-          <AuthorName presentation={presentation} className="truncate" />
-        ) : (
-          <span className="truncate">{senderName}</span>
-        )}
-      </span>
-      <span className="flex shrink-0 items-center gap-1 tabular-nums">
-        <Clock aria-hidden className="size-3.5 shrink-0" />
-        {dayjs(result.message.created_at).format("YYYY-MM-DD HH:mm")}
-      </span>
-    </span>
   );
 }
 
@@ -695,125 +526,28 @@ function EmptyState({ icon, text }: { icon: ReactNode; text: string }): JSX.Elem
   );
 }
 
-/** Split the flat result list into the panel's sections. The workspace-DISCOVERY
- *  type feeds TWO of them, so the two filters must be exact complements — hence
- *  one shared `isAgentSpace` and its negation, never two independently-written
- *  conditions. Grouping asks OWNERSHIP only (#task:2078) and the agent directory
- *  is not in scope here on purpose: a row whose owning agent has not resolved is
- *  still an agent space, so it groups under Agent Spaces and degrades only in its
- *  GLYPH — an unresolved directory can never move a row into Workspaces. */
+/** Group results into Channels (workspace / channel / agent space) and Messages;
+ *  the row's leading glyph carries the sub-kind. Identity hits group separately. */
 function groupResults(results: SearchResultDto[]): ResultGroup[] {
-  const workspaces = results.filter(
-    (result) => result.type === "workspace" && !isAgentSpace(result.workspace),
-  );
-  const conversations = results.filter((result) => result.type === "conversation");
-  const agentSpaces = results.filter(
-    (result) => result.type === "workspace" && isAgentSpace(result.workspace),
+  const channels = results.filter(
+    (result) => result.type === "workspace" || result.type === "conversation",
   );
   const messages = results.filter((result) => result.type === "message");
 
   return [
     {
-      key: "workspaces",
-      label: "Workspaces",
-      icon: <WorkspaceGlyph size={3} />,
-      results: workspaces,
-    },
-    {
-      key: "conversations",
-      label: "Channels / Threads",
+      key: "channels",
+      label: "Channels",
       icon: <Hash className="size-3" />,
-      results: conversations,
-    },
-    {
-      // `key` stays `dms`: it is this group's internal identity, not its copy.
-      key: "dms",
-      label: "Agent Spaces",
-      icon: <User className="size-3" />,
-      results: agentSpaces,
+      results: channels,
     },
     {
       key: "messages",
       label: "Messages",
-      icon: <MessageSquareText className="size-3" />,
+      icon: <MessageSquareMore className="size-3" />,
       results: messages,
     },
   ].filter((group) => group.results.length > 0);
-}
-
-function resultIcon(
-  result: SearchResultDto,
-  agentsById: ReadonlyMap<string, AgentDto>,
-  ownerAgentAvatarUrls: ReadonlyMap<string, string | null>,
-): JSX.Element {
-  if (result.type === "workspace") {
-    // ONE call, no local branch: `WorkspaceIcon` is the canonical workspace
-    // identity glyph (rail / filter dropdown / here) and it already answers all
-    // three ownership states from `owner_agent_id` alone — unowned → the serif
-    // `W` poster, owned + owner resolved → that agent's avatar, owned + owner
-    // unresolved → a neutral `User`.
-    //
-    // This replaced a hand-written `<User className="size-4" />` on the
-    // agent-space arm (#task:2084). That glyph is byte-identical to the one the
-    // authority draws for "owner NOT resolved", so one shape carried two facts:
-    // "this is an agent's space" and "I could not resolve this container's
-    // owner". Identity was drawn as absence. Passing the directory through is
-    // what separates them, so the three states now have three shapes.
-    return (
-      <WorkspaceIcon
-        ownerAgentId={result.workspace.owner_agent_id}
-        agentsById={agentsById}
-        ownerAgentAvatarUrls={ownerAgentAvatarUrls}
-      />
-    );
-  }
-  if (result.type === "conversation") {
-    return <Hash className="size-4" />;
-  }
-  return <MessageSquareText className="size-4" />;
-}
-
-/** Metadata line for named-entity (workspace / conversation) result rows.
- *  Message rows render a richer icon+avatar header via `MessageResultHeader`
- *  instead, so they don't pass through here. */
-function resultMeta(result: SearchResultDto): string[] {
-  if (result.type === "workspace") {
-    return [isAgentSpace(result.workspace) ? "Agent Space" : "Workspace"];
-  }
-  if (result.type === "conversation") {
-    // Workspace name only on the `workspace` arm; a `direct_pair` conversation
-    // hit is workspace-less (#task:2053-C) and reads as an Agent Space.
-    return result.conversation.placement_kind === "workspace"
-      ? [
-          "Channel",
-          result.conversation.workspace.name,
-          dayjs(result.conversation.created_at).format("YYYY-MM-DD HH:mm"),
-        ]
-      : ["Agent Space", dayjs(result.conversation.created_at).format("YYYY-MM-DD HH:mm")];
-  }
-  return [];
-}
-
-function resultTitle(result: SearchResultDto): string {
-  if (result.type === "workspace") return result.workspace.name;
-  if (result.type === "conversation") return result.conversation.title;
-  // Message rows render through `MessageResultHeader` (which shows no title for a
-  // pair at all, #task:2060), so this arm is unreachable and exists only for
-  // type-exhaustiveness — do NOT wire it to a display path that would surface the
-  // `direct_pair` title sentinel (Paul #task:2051 F1 aside).
-  return result.conversation.title;
-}
-
-function resultExcerpt(result: SearchResultDto, query: string): string | null {
-  if (result.type === "workspace") return result.workspace.description;
-  if (result.type === "conversation") {
-    // Excerpt line for a channel/thread hit is its workspace name; a workspace-
-    // less `direct_pair` hit has none to show (#task:2053-C).
-    return result.conversation.placement_kind === "workspace"
-      ? result.conversation.workspace.name
-      : null;
-  }
-  return buildExcerpt(result.message.content, query);
 }
 
 function resultKey(result: SearchResultDto): string {
@@ -822,34 +556,6 @@ function resultKey(result: SearchResultDto): string {
     return `conversation:${result.conversation.id}`;
   }
   return `message:${result.message.id}`;
-}
-
-function buildExcerpt(content: string, query: string): string {
-  const flat = content.replace(/\s+/g, " ").trim();
-  if (!flat) return "";
-  const needle = query.trim().toLowerCase();
-  if (!needle) return flat.length > 260 ? `${flat.slice(0, 260)}…` : flat;
-  const index = flat.toLowerCase().indexOf(needle);
-  if (index < 0) return flat.length > 260 ? `${flat.slice(0, 260)}…` : flat;
-  const start = Math.max(0, index - 80);
-  const end = Math.min(flat.length, index + needle.length + 180);
-  return `${start > 0 ? "…" : ""}${flat.slice(start, end)}${end < flat.length ? "…" : ""}`;
-}
-
-export function highlightText(text: string, query: string): ReactNode {
-  const needle = query.trim();
-  if (!needle) return text;
-  const index = text.toLowerCase().indexOf(needle.toLowerCase());
-  if (index < 0) return text;
-  return (
-    <>
-      {text.slice(0, index)}
-      <mark className="rounded bg-accent-soft px-0.5 text-text-primary">
-        {text.slice(index, index + needle.length)}
-      </mark>
-      {text.slice(index + needle.length)}
-    </>
-  );
 }
 
 function workspaceIdFromFilter(value: WorkspaceFilter): string | undefined {

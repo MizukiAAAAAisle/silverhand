@@ -24,6 +24,9 @@ use crate::{
     foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
 };
 
+mod identities;
+pub use identities::*;
+
 const MAX_JAVASCRIPT_INTEGER: i64 = 9_007_199_254_740_991;
 const I64_UPPER_EXCLUSIVE_AS_F64: f64 = 9_223_372_036_854_775_808.0;
 const MAX_QUERY_UTF16: usize = 200;
@@ -136,6 +139,7 @@ pub struct HumanSearchQuery {
     to: Option<HumanSearchMillis>,
     order: HumanSearchOrder,
     limit: u16,
+    include_identities: bool,
 }
 
 impl HumanSearchQuery {
@@ -175,7 +179,17 @@ impl HumanSearchQuery {
             to,
             order,
             limit,
+            include_identities: false,
         })
+    }
+
+    pub fn with_identities(mut self, include: bool) -> Self {
+        self.include_identities = include;
+        self
+    }
+
+    pub fn include_identities(&self) -> bool {
+        self.include_identities
     }
 
     pub fn text(&self) -> &HumanSearchText {
@@ -608,6 +622,7 @@ pub struct SelectedHumanSearchConversation {
     source_viewer: UserId,
     conversation: HumanSearchConversationRef,
     updated_at: i64,
+    archived_at: Option<i64>,
 }
 
 impl SelectedHumanSearchConversation {
@@ -615,13 +630,22 @@ impl SelectedHumanSearchConversation {
         source_viewer: UserId,
         conversation: HumanSearchConversationRef,
         updated_at: i64,
+        archived_at: Option<i64>,
     ) -> Result<Self, HumanSearchCorruption> {
         exact_number(updated_at)?;
+        if let Some(value) = archived_at {
+            exact_number(value)?;
+        }
         Ok(Self {
             source_viewer,
             conversation,
             updated_at,
+            archived_at,
         })
+    }
+
+    pub fn archived_at(&self) -> Option<i64> {
+        self.archived_at
     }
 
     pub fn conversation(&self) -> &HumanSearchConversationRef {
@@ -726,6 +750,7 @@ pub struct HumanSearchPage {
     results: Vec<HumanSearchResult>,
     total: HumanSearchMessageTotal,
     truncated: bool,
+    identities: Option<IdentitySearchGroups>,
 }
 
 impl HumanSearchPage {
@@ -802,7 +827,19 @@ impl HumanSearchPage {
             results,
             total,
             truncated,
+            identities: None,
         })
+    }
+
+    pub fn with_identities(
+        mut self,
+        identities: IdentitySearchGroups,
+    ) -> Result<Self, HumanSearchCorruption> {
+        if !identities.matches(&self.source_viewer, self.query.effective()) {
+            return Err(HumanSearchCorruption::Identity);
+        }
+        self.identities = Some(identities);
+        Ok(self)
     }
 
     pub fn bind(
@@ -810,7 +847,10 @@ impl HumanSearchPage {
         requested_viewer: &UserId,
         requested_query: &HumanSearchQuery,
     ) -> Result<BoundHumanSearchPage, HumanSearchIdentityMismatch> {
-        if &self.source_viewer != requested_viewer || self.query.requested() != requested_query {
+        if &self.source_viewer != requested_viewer
+            || self.query.requested() != requested_query
+            || requested_query.include_identities() != self.identities.is_some()
+        {
             return Err(HumanSearchIdentityMismatch);
         }
         Ok(BoundHumanSearchPage(self))
@@ -821,6 +861,10 @@ impl HumanSearchPage {
 pub struct BoundHumanSearchPage(HumanSearchPage);
 
 impl BoundHumanSearchPage {
+    pub fn identities(&self) -> Option<&IdentitySearchGroups> {
+        self.0.identities.as_ref()
+    }
+
     pub fn query(&self) -> &HumanSearchQuery {
         self.0.query.effective()
     }
@@ -1385,9 +1429,13 @@ mod tests {
             9,
         )
         .unwrap();
-        let conversation_row =
-            SelectedHumanSearchConversation::projected(user("viewer"), conversation_ref("c"), 8)
-                .unwrap();
+        let conversation_row = SelectedHumanSearchConversation::projected(
+            user("viewer"),
+            conversation_ref("c"),
+            8,
+            None,
+        )
+        .unwrap();
         let messages = vec![
             selected_message("viewer", "c", "m2", 2, 7),
             selected_message("viewer", "c", "m1", 1, 6),

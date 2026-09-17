@@ -97,38 +97,8 @@ impl SqliteAgentListColdRead {
     ) -> Result<Vec<AgentDetailFacts>, AgentDetailColdReadError> {
         let mut tx = self.pool.begin_with(DEFERRED_READ_BEGIN).await?;
 
-        let rows = sqlx::query(SELECT_VISIBLE_AGENT_ROWS)
-            .bind(viewer.as_str())
-            .bind(viewer.as_str())
-            .fetch_all(&mut *tx)
-            .await?;
-
-        // The audience for EVERY candidate is read once per arm on the SAME snapshot,
-        // keyed by the agent each arm describes — a fixed statement count no matter how
-        // many candidates the viewer has. `agent_list_read::visible_agents` re-decides
-        // each row from these arms, so the narrowing above only offers a superset.
-        let mut audiences = read_candidate_audiences(&mut tx, viewer).await?;
+        let candidates = read_agent_candidates_in_tx(&mut tx, viewer).await?;
         tx.commit().await?;
-
-        let mut candidates = Vec::with_capacity(rows.len());
-        for row in &rows {
-            let decoded = decode_agent_row(row)?;
-            // Take the audience keyed to the row's OWN id, so the arms describe the row
-            // they travel with; a creator-only candidate has an EMPTY (not absent)
-            // audience — nobody but its creator can see it.
-            let audience = audiences
-                .remove(decoded.source.as_str())
-                .unwrap_or_default();
-            candidates.push(AgentDetailFacts::from_source(
-                decoded.source,
-                decoded.creator,
-                audience.direct_pair_human_endpoints,
-                audience.shared_workspace_members,
-                decoded.materialization_status,
-                decoded.projection,
-            ));
-        }
-
         Ok(candidates)
     }
 }
@@ -142,4 +112,43 @@ impl AgentListReadModel for SqliteAgentListColdRead {
             .await
             .map_err(PersistenceFailure::from_source)
     }
+}
+
+/// Reuse the directory visibility facts inside another one-snapshot read.
+pub(crate) async fn read_agent_candidates_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    viewer: &UserId,
+) -> Result<Vec<AgentDetailFacts>, AgentDetailColdReadError> {
+    let rows = sqlx::query(SELECT_VISIBLE_AGENT_ROWS)
+        .bind(viewer.as_str())
+        .bind(viewer.as_str())
+        .fetch_all(&mut **tx)
+        .await?;
+
+    // The audience for EVERY candidate is read once per arm on the SAME snapshot,
+    // keyed by the agent each arm describes — a fixed statement count no matter how
+    // many candidates the viewer has. `agent_list_read::visible_agents` re-decides
+    // each row from these arms, so the narrowing above only offers a superset.
+    let mut audiences = read_candidate_audiences(tx, viewer).await?;
+
+    let mut candidates = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let decoded = decode_agent_row(row)?;
+        // Take the audience keyed to the row's OWN id, so the arms describe the row
+        // they travel with; a creator-only candidate has an EMPTY (not absent)
+        // audience — nobody but its creator can see it.
+        let audience = audiences
+            .remove(decoded.source.as_str())
+            .unwrap_or_default();
+        candidates.push(AgentDetailFacts::from_source(
+            decoded.source,
+            decoded.creator,
+            audience.direct_pair_human_endpoints,
+            audience.shared_workspace_members,
+            decoded.materialization_status,
+            decoded.projection,
+        ));
+    }
+
+    Ok(candidates)
 }

@@ -1,6 +1,6 @@
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 import type { SearchDto } from "@silverhand/shared";
-import { apiPaths } from "@silverhand/shared";
+import { SearchWithIdentitiesDtoSchema, apiPaths } from "@silverhand/shared";
 import { api } from "@/lib/api";
 
 /**
@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
  */
 export interface SearchFilters {
   q: string;
+  include_identities?: boolean;
   workspace_id?: string;
   conversation_id?: string;
   user_id?: string;
@@ -35,6 +36,7 @@ function hasSearchIntent(filters: SearchFilters): boolean {
 
 function buildSearchParams(filters: SearchFilters): string {
   const params = new URLSearchParams();
+  if (filters.include_identities) params.set("include_identities", "true");
   const q = filters.q.trim();
   if (q) params.set("q", q);
   if (filters.workspace_id) params.set("workspace_id", filters.workspace_id);
@@ -118,7 +120,8 @@ export function useMessageSearch(filters: SearchFilters) {
     staleTime: 5_000,
     queryFn: async () => {
       const qs = buildSearchParams(filters);
-      return api<SearchDto>(`${apiPaths.search}?${qs}`);
+      const response = await api<SearchDto>(`${apiPaths.search}?${qs}`);
+      return filters.include_identities ? SearchWithIdentitiesDtoSchema.parse(response) : response;
     },
   });
 }

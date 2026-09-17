@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "./markdown";
 import { TaskRefContextProvider } from "@/features/task-shell/components/task-ref-context";
 import { useTaskByNumber } from "@/features/task-shell/hooks/use-task-by-number";
-import { highlightText } from "@/features/chat-shell/search-panel";
+import { highlightText } from "@/features/search/highlight";
 vi.mock("@/features/task-shell/hooks/use-task-by-number", async (orig) => ({
   ...(await orig<typeof import("@/features/task-shell/hooks/use-task-by-number")>()),
   useTaskByNumber: vi.fn(() => ({ data: null, isLoading: true, isError: false })),
@@ -60,7 +60,7 @@ describe("task numbers stay literal outside chat", () => {
   });
   it("search preserves literal text and query highlight without task resolution", () => {
     const source = readFileSync(
-      new URL("../../features/chat-shell/search-panel.tsx", import.meta.url),
+      new URL("../../features/search/search-result-item.tsx", import.meta.url),
       "utf8",
     );
     expect(source).toContain("{highlightText(excerpt, query)}");

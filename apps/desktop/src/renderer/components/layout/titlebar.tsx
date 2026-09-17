@@ -1,7 +1,7 @@
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import type { ReactNode } from "react";
 
 interface TitlebarProps {
-  workspaceName: string | null;
   /** epoch ms when the workspace was archived; null for active workspaces.
    *  Drives the inline `Archived` pill so the user knows why this
    *  workspace is missing from the main sidebar list. */
@@ -9,21 +9,23 @@ interface TitlebarProps {
   workspaceSidebarVisible: boolean;
   onToggleWorkspaceSidebar: () => void;
   /** Which section's chrome the titlebar frames (#task:1394). `chat` shows the
-   *  browse-sidebar toggle and offsets the workspace label by the COLLAPSIBLE
+   *  browse-sidebar toggle and offsets the archive status by the COLLAPSIBLE
    *  sidebar. `activity` has no browse sidebar — the Activity list is the left
-   *  column — so it hides the toggle and offsets the label by
+   *  column — so it hides the toggle and offsets the status by
    *  `NavRail + Activity-list` width, reading the SAME `--activity-list-width`
    *  var the list is sized from. That keeps chat-only UI state out of the Activity
-   *  layout AND — because the offset tracks the one width source — the label stays
+   *  layout AND — because the offset tracks the one width source — the status stays
    *  aligned above the ChannelView column while the user drags the Activity list
    *  wider/narrower (no second computed offset). With no channel selected the route
-   *  carries no workspace, so no label renders and the offset is inert. */
+   *  carries no workspace, so no status renders and the offset is inert. */
   chromeMode: "chat" | "activity";
+  /** Global-search pill (#task:2557), centered on the window. */
+  search?: ReactNode;
 }
 
 /**
- * Window-wide drag region with the current workspace's name.
- * Workspace info starts after the section-specific left
+ * Window-wide drag region with sidebar controls and archive status.
+ * Archive status starts after the section-specific left
  * chrome (`chromeWidth`) so it sits directly above the first content
  * column it describes: in chat that's the (collapsible) sidebar;
  * in activity it's the `NavRail + Activity list` offset, which
@@ -33,19 +35,18 @@ interface TitlebarProps {
  * macOS — see main/index.ts).
  */
 export function Titlebar({
-  workspaceName,
   workspaceArchivedAt,
   workspaceSidebarVisible,
   onToggleWorkspaceSidebar,
   chromeMode,
+  search,
 }: TitlebarProps): JSX.Element {
-  const hasWorkspace = workspaceName !== null;
   const isArchived = workspaceArchivedAt !== null;
   // Activity has no browse sidebar — the Activity list IS the left column — so
-  // its label offset is `NavRail + Activity-list` width, read from the SAME
+  // its status offset is `NavRail + Activity-list` width, read from the SAME
   // `--activity-list-width` var the list is sized from (never the collapsible
   // chat sidebar). Reading the single width source is what keeps the
-  // label aligned above ChannelView as the user drags the list (`app-layout.md
+  // status aligned above ChannelView as the user drags the list (`app-layout.md
   // §1.1`, #task:1394). Fallback to `--sidebar-width` only guards the var being
   // unset before first layout. Chat keeps the collapsible offset.
   const showSidebarToggle = chromeMode === "chat";
@@ -70,13 +71,13 @@ export function Titlebar({
     <header
       data-titlebar="app"
       className={
-        "drag-region flex h-(--titlebar-height) shrink-0 items-center " +
+        "drag-region relative flex h-(--titlebar-height) shrink-0 items-center " +
         "gap-2 border-b text-xs " +
         "bg-(--bg-app,var(--bg-primary)) " +
         "border-(--titlebar-border,var(--border-subtle))"
       }
     >
-      {/* Spacer matches the visible left chrome so the workspace info
+      {/* Spacer matches the visible left chrome so the archive status
        * lines up with the next column. The native macOS traffic-lights
        * and the sidebar toggle live inside this region. */}
       <div
@@ -117,25 +118,17 @@ export function Titlebar({
         </div>
       </div>
 
-      {hasWorkspace ? (
-        <span
-          data-workspace-name
-          className="truncate font-serif text-sm font-semibold text-text-primary"
-        >
-          {/* An Agent Space's titlebar shows only its agent's raw display name —
-           * no `@`, no `· DM` marker (shiki 2026-08-01, #task:1768). Reads like
-           * the person you're talking to; the icon + rail already convey whose
-           * space it is. The name itself is resolved upstream via
-           * `agentSpaceRecognitionName` (app.tsx), shared with the rail so the two
-           * can't drift. */}
-          {workspaceName}
-        </span>
-      ) : null}
-
       {isArchived ? (
         <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-text-muted">
           archived
         </span>
+      ) : null}
+
+      {/* Centered on the whole window (no-drag so the pill takes clicks). */}
+      {search ? (
+        <div className="no-drag pointer-events-none absolute left-1/2 top-1/2 flex w-[clamp(420px,52vw,720px)] -translate-x-1/2 -translate-y-1/2 justify-center">
+          <div className="pointer-events-auto w-full">{search}</div>
+        </div>
       ) : null}
 
       {/* Trailing spacer keeps a small breathable margin at the right

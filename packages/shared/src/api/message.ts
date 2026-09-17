@@ -1,10 +1,7 @@
 // AUTO-SPLIT from the former monolithic api/dto.ts (#task:963).
 // Bounded context: message. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
-import {
-  ConversationRosterPolicySchema,
-  FromKindSchema,
-} from '../db/schema.js';
+import { RuntimeKindSchema, ConversationRosterPolicySchema, FromKindSchema } from '../db/schema.js';
 import {
   MessageAttachmentIdsInputSchema,
   SearchOptionalStringSchema,
@@ -14,16 +11,15 @@ import { AttachmentLabelSchema, AttachmentSnapshotSchema } from './attachment.js
 import { PARTICIPANT_HANDLE_PATTERN } from './name.js';
 import { ReactionAggregateDtoSchema } from './reactions.js';
 import { LinkedTaskDtoSchema } from './task.js';
-import {
-  MessageAuthorDtoSchema,
-} from './message-author.js';
-import {
-  ThreadSummaryInvariantSchema,
-} from './thread-summary.js';
+import { MessageAuthorDtoSchema } from './message-author.js';
+import { ThreadSummaryInvariantSchema } from './thread-summary.js';
 import { MessageSeqSchema } from '../seq.js';
 import { UnresolvedReferencesSchema } from './message-reference.js';
 
-export const ClientMessageIdSchema = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i).transform((id) => id.toLowerCase());
+export const ClientMessageIdSchema = z
+  .string()
+  .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+  .transform((id) => id.toLowerCase());
 
 export const MessageDtoSchema = z.object({
   client_message_id: ClientMessageIdSchema.optional(),
@@ -82,9 +78,7 @@ export const ThreadRootReplyCountPatchSchema = z.object({
    *  value). Mirrors `replyCountsByRoot` (`from_kind != 'system'`). */
   reply_count: z.number().int().nonnegative(),
 });
-export type ThreadRootReplyCountPatch = z.infer<
-  typeof ThreadRootReplyCountPatchSchema
->;
+export type ThreadRootReplyCountPatch = z.infer<typeof ThreadRootReplyCountPatchSchema>;
 
 export const MessageProjectionsSchema = z.object({
   /** Reply-count projection for the replied-to root (P1). Present only when the
@@ -99,9 +93,7 @@ export const MessageProjectionsSchema = z.object({
    *  insert in P2 v1 — a root not on the client's page falls back to refetch
    *  (off-page insert is deferred to P2.5). The `{ entry }` wrapper reserves room
    *  for future sibling hints without a wire break. */
-  threads_list_entry: z
-    .object({ entry: ThreadSummaryInvariantSchema })
-    .optional(),
+  threads_list_entry: z.object({ entry: ThreadSummaryInvariantSchema }).optional(),
 });
 export type MessageProjections = z.infer<typeof MessageProjectionsSchema>;
 
@@ -250,9 +242,7 @@ export const ConversationMessagesDtoSchema = z.object({
   /** Optional enriched reply-badge sidecar keyed by root message id
    *  (#task:1073, P1). Present only once the backend ships it; consumers
    *  must treat it as possibly-undefined and fall back to count-only. */
-  reply_summaries_by_root: z
-    .record(z.string(), ReplyBadgeSummarySchema)
-    .optional(),
+  reply_summaries_by_root: z.record(z.string(), ReplyBadgeSummarySchema).optional(),
   /** Optional inline thread reply-PREVIEW sidecar keyed by root message id
    *  (#task:1746). Each value is that root's tail-3 most-recent non-system
    *  replies, time-ASCending — a bounded 1..3 array (schema-enforced `.min(1)
@@ -318,33 +308,31 @@ export const ThreadFollowerStateDtoSchema = z.object({
    *  thread panel. */
   follower_agent_ids: z.array(z.string()),
 });
-export type ThreadFollowerStateDto = z.infer<
-  typeof ThreadFollowerStateDtoSchema
->;
+export type ThreadFollowerStateDto = z.infer<typeof ThreadFollowerStateDtoSchema>;
 
 export const ThreadFollowMutationDtoSchema = z.object({
   thread_root_id: z.string(),
   changed: z.boolean(),
   viewer_following: z.boolean(),
 });
-export type ThreadFollowMutationDto = z.infer<
-  typeof ThreadFollowMutationDtoSchema
->;
+export type ThreadFollowMutationDto = z.infer<typeof ThreadFollowMutationDtoSchema>;
 
-export const SendMessageInputSchema = z.object({
-  client_message_id: ClientMessageIdSchema.optional(),
-  content: z.string(),
-  /** Optional attachment ids previously returned by the upload endpoint.
-   *  Server validates each id belongs to the same channel as the
-   *  destination conversation. */
-  attachment_ids: MessageAttachmentIdsInputSchema,
-  /** Reply-cluster target message id. A main-line target opens a cluster;
-   *  replying to an existing reply joins that reply's root. */
-  reply_to_message_id: z.string().min(1).optional(),
-}).refine(hasMessagePayload, {
-  message: 'message must include text or at least one attachment',
-  path: ['content'],
-});
+export const SendMessageInputSchema = z
+  .object({
+    client_message_id: ClientMessageIdSchema.optional(),
+    content: z.string(),
+    /** Optional attachment ids previously returned by the upload endpoint.
+     *  Server validates each id belongs to the same channel as the
+     *  destination conversation. */
+    attachment_ids: MessageAttachmentIdsInputSchema,
+    /** Reply-cluster target message id. A main-line target opens a cluster;
+     *  replying to an existing reply joins that reply's root. */
+    reply_to_message_id: z.string().min(1).optional(),
+  })
+  .refine(hasMessagePayload, {
+    message: 'message must include text or at least one attachment',
+    path: ['content'],
+  });
 export type SendMessageInput = z.infer<typeof SendMessageInputSchema>;
 
 /** Per-stream unread for one stream (mainline or a single reply-cluster),
@@ -385,9 +373,7 @@ export const ConversationStreamUnreadDtoSchema = z.object({
    *  never derive list rows from this flag, nor overwrite it from an empty list. */
   followed_thread_unread: z.boolean(),
 });
-export type ConversationStreamUnreadDto = z.infer<
-  typeof ConversationStreamUnreadDtoSchema
->;
+export type ConversationStreamUnreadDto = z.infer<typeof ConversationStreamUnreadDtoSchema>;
 
 export const MessageUnreadPointerDtoSchema = z.object({
   conversation_id: z.string(),
@@ -395,25 +381,19 @@ export const MessageUnreadPointerDtoSchema = z.object({
   seq: MessageSeqSchema,
   thread_root_id: z.string().nullable(),
 });
-export type MessageUnreadPointerDto = z.infer<
-  typeof MessageUnreadPointerDtoSchema
->;
+export type MessageUnreadPointerDto = z.infer<typeof MessageUnreadPointerDtoSchema>;
 
 export const MessageUnreadByConversationDtoSchema = z.object({
   by_conversation: z.record(z.string(), z.number()),
   latest_by_conversation: z.record(z.string(), MessageUnreadPointerDtoSchema),
   total: z.number(),
 });
-export type MessageUnreadByConversationDto = z.infer<
-  typeof MessageUnreadByConversationDtoSchema
->;
+export type MessageUnreadByConversationDto = z.infer<typeof MessageUnreadByConversationDtoSchema>;
 
 export const MessageUnreadSummaryDtoSchema = z.object({
   by_workspace: z.record(z.string(), z.number()),
 });
-export type MessageUnreadSummaryDto = z.infer<
-  typeof MessageUnreadSummaryDtoSchema
->;
+export type MessageUnreadSummaryDto = z.infer<typeof MessageUnreadSummaryDtoSchema>;
 
 /** The `unread_updated` MESSAGE-variant payload (viewer scope, #task:1283).
  *  Carries authoritative ABSOLUTE unread at each read-model boundary a badge
@@ -439,9 +419,7 @@ export const UnreadUpdatedMessagePayloadSchema = z.object({
   workspace_unread_count: z.number(),
   latest_unread: MessageUnreadPointerDtoSchema.nullable(),
 });
-export type UnreadUpdatedMessagePayload = z.infer<
-  typeof UnreadUpdatedMessagePayloadSchema
->;
+export type UnreadUpdatedMessagePayload = z.infer<typeof UnreadUpdatedMessagePayloadSchema>;
 
 /** The `unread_updated` BADGE-variant payload (viewer scope). Discriminated
  *  from the message variant by the ABSENCE of `conversation_id`. Beyond the
@@ -473,7 +451,7 @@ export interface UnreadUpdatedBadgePayload {
 }
 
 const SearchOptionalMillisSchema = z.preprocess(
-  value => (value === '' || value === undefined ? undefined : value),
+  (value) => (value === '' || value === undefined ? undefined : value),
   z.coerce.number().int().nonnegative().optional(),
 );
 
@@ -525,6 +503,10 @@ const SENDER_SINGLE_SELECT_ISSUE: { message: string; path: (string | number)[] }
 export const SearchQueryInputSchema = z
   .object({
     q: z.string().trim().max(200).optional().default(''),
+    // Scope selection, not version negotiation. Inline search omits this.
+    include_identities: z
+      .union([z.boolean(), z.enum(['true', 'false']).transform((v) => v === 'true')])
+      .optional(),
     stream: SearchStreamSchema.optional().default('all'),
     workspace_id: SearchOptionalStringSchema,
     conversation_id: SearchOptionalStringSchema,
@@ -540,18 +522,18 @@ export const SearchQueryInputSchema = z
   .refine(senderIsSingleSelect, SENDER_SINGLE_SELECT_ISSUE)
   // A stream only exists within a conversation; narrowing to one requires
   // naming which conversation.
-  .refine(v => v.stream === 'all' || !!v.conversation_id, {
+  .refine((v) => v.stream === 'all' || !!v.conversation_id, {
     message: 'stream filter requires conversation_id',
     path: ['stream'],
   })
   // Thread scope needs the anchoring root message id.
-  .refine(v => v.stream !== 'thread' || !!v.thread_root_id, {
+  .refine((v) => v.stream !== 'thread' || !!v.thread_root_id, {
     message: 'stream=thread requires thread_root_id',
     path: ['thread_root_id'],
   })
   // seq is per-conversation; ordering by it across conversations is
   // meaningless, so seq_asc is gated on a single-conversation scope.
-  .refine(v => v.order !== 'seq_asc' || !!v.conversation_id, {
+  .refine((v) => v.order !== 'seq_asc' || !!v.conversation_id, {
     message: 'order=seq_asc requires conversation_id',
     path: ['order'],
   });
@@ -611,20 +593,17 @@ const searchConversationRefBase = {
 // whitelist mis-projected fails to PARSE instead of arriving with its `workspace`
 // field silently absent (#task:2053-B②) — both guards, same direction, and
 // adding a placement must add an arm here or stay out of search.
-export const SearchConversationRefSchema = z.discriminatedUnion(
-  'placement_kind',
-  [
-    z.object({
-      ...searchConversationRefBase,
-      placement_kind: z.literal('workspace'),
-      workspace: SearchWorkspaceRefSchema,
-    }),
-    z.object({
-      ...searchConversationRefBase,
-      placement_kind: z.literal('direct_pair'),
-    }),
-  ],
-);
+export const SearchConversationRefSchema = z.discriminatedUnion('placement_kind', [
+  z.object({
+    ...searchConversationRefBase,
+    placement_kind: z.literal('workspace'),
+    workspace: SearchWorkspaceRefSchema,
+  }),
+  z.object({
+    ...searchConversationRefBase,
+    placement_kind: z.literal('direct_pair'),
+  }),
+]);
 export type SearchConversationRef = z.infer<typeof SearchConversationRefSchema>;
 
 export const SearchResultDtoSchema = z.discriminatedUnion('type', [
@@ -646,8 +625,9 @@ export const SearchResultDtoSchema = z.discriminatedUnion('type', [
     // placement-discriminated `conversation` ref (#task:2053-C). This arm's
     // `direct_pair` case is structurally unreached today — a pair's stored
     // title is `''` (`DIRECT_PAIR_STORED_TITLE`) and discovery requires a
-    // non-empty query — but the ref shape is uniform with the message arm.
-    conversation: SearchConversationRefSchema,
+    // non-empty query. Only direct channel hits carry archive state;
+    // the shared placement ref used by message context stays unchanged.
+    conversation: SearchConversationRefSchema.and(z.object({ archived_at: z.number().nullable() })),
   }),
   z.object({
     type: z.literal('message'),
@@ -660,9 +640,70 @@ export const SearchResultDtoSchema = z.discriminatedUnion('type', [
 ]);
 export type SearchResultDto = z.infer<typeof SearchResultDtoSchema>;
 
+/** Public identity data is complete: rendering must not join a directory cache. */
+const searchIdentityFields = {
+  id: z.string().min(1),
+  name: z.string().min(1),
+  display_name: z.string().min(1),
+  avatar_url: z.string().nullable(),
+};
+const searchHumanSchema = z.object({
+  ...searchIdentityFields,
+  kind: z.literal('human'),
+  runtime: z.null(),
+});
+const searchAgentSchema = z.object({
+  ...searchIdentityFields,
+  kind: z.literal('agent'),
+  runtime: RuntimeKindSchema,
+});
+export const SearchIdentitySchema = z.discriminatedUnion('kind', [
+  searchHumanSchema,
+  searchAgentSchema,
+]);
+export type SearchIdentity = z.infer<typeof SearchIdentitySchema>;
+
+const identityCategory = <T extends z.ZodTypeAny>(row: T) =>
+  z
+    .object({
+      results: z.array(row).max(20),
+      total: z.number().int().nonnegative(),
+      truncated: z.boolean(),
+    })
+    .superRefine((value, ctx) => {
+      if (
+        value.results.length !== Math.min(value.total, 20) ||
+        value.truncated !== value.total > 20
+      ) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'invalid identity category count' });
+      }
+    });
+/** Each kind has its own 20-row budget, unrelated to content limit/total.
+ * Counts are after ACL, active materialization and agent scope admission.
+ * Order: lowercase display_name, lowercase name, then id (Unicode code-point order).
+ * workspace/conversation/sender/time coordinates suppress identity search;
+ * empty text or a lone @ does not enumerate identities. One leading @ is removed.
+ */
+export const SearchIdentitiesSchema = z
+  .object({
+    status: z.enum(['searched', 'filtered', 'empty_query']),
+    humans: identityCategory(searchHumanSchema),
+    agents: identityCategory(searchAgentSchema),
+  })
+  .superRefine((value, ctx) => {
+    if (value.status !== 'searched' && (value.humans.total !== 0 || value.agents.total !== 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'inactive identity search must be empty',
+      });
+    }
+  });
+export type SearchIdentities = z.infer<typeof SearchIdentitiesSchema>;
+
 export const SearchDtoSchema = z.object({
   query: SearchQueryInputSchema,
   results: z.array(SearchResultDtoSchema),
+  identities: SearchIdentitiesSchema.optional(),
   // Total message matches for the query BEFORE the result cap, and whether
   // the returned list was truncated to `limit`. Drives the inline find
   // "2 / 7" (exact) vs "2 / 200+" (truncated) counter and tells the
@@ -673,6 +714,10 @@ export const SearchDtoSchema = z.object({
   truncated: z.boolean(),
 });
 export type SearchDto = z.infer<typeof SearchDtoSchema>;
+/** A request for identities must not silently turn a missing field into no matches. */
+export const SearchWithIdentitiesDtoSchema = SearchDtoSchema.extend({
+  identities: SearchIdentitiesSchema,
+});
 
 //
 // One global flat list — no per-channel grouping, no tags. Each entry
@@ -781,11 +826,11 @@ export type SavedMessageDto = z.infer<typeof SavedMessageDtoSchema>;
 export const SavedMessagesQueryInputSchema = z
   .object({
     workspace_id: z.preprocess(
-      v => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
       z.string().optional(),
     ),
     since: z.preprocess(
-      v => (v === '' || v === undefined ? undefined : v),
+      (v) => (v === '' || v === undefined ? undefined : v),
       z.coerce.number().int().nonnegative().optional(),
     ),
     ...SENDER_FILTER_FIELDS,

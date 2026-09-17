@@ -8,11 +8,9 @@ import { findAgentDirectPair } from "@/features/direct-pairs/hooks";
 import { useNotificationToasts } from "@/features/notifications/hooks";
 import { useSavedMessages } from "@/features/saved/hooks";
 import type { AdvancedSearchSeed } from "@/features/search/advanced-search-seed";
-import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
 import { useLayoutSettings } from "@/hooks/use-layout-settings";
 import { resolveChannelOpen } from "@/features/conversation-shell/model/channel-open";
 import { getChannelLayout, getCloseWatermark } from "@/features/app-shell/place-memory";
-import { agentSpaceRecognitionName } from "@/features/workspaces/workspace-name";
 import {
   buildChannelLayoutUrl,
   buildChannelPathPreservingAgent,
@@ -72,18 +70,6 @@ export function useConversationShell({
   const { data: agents = [] } = useAgents();
 
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
-
-  const titlebarWorkspaceName =
-    read.selectedWorkspace === null
-      ? null
-      : isAgentSpace(read.selectedWorkspace)
-        ? agentSpaceRecognitionName(
-            read.selectedWorkspace.name,
-            read.selectedWorkspace.owner_agent_id
-              ? agentsById.get(read.selectedWorkspace.owner_agent_id)
-              : undefined,
-          )
-        : read.selectedWorkspace.name;
 
   const {
     recentlyRemovedPrimaryRef,
@@ -350,11 +336,11 @@ export function useConversationShell({
       appSection,
       workspaceSidebarVisible,
       selectedWorkspace: read.selectedWorkspace,
-      titlebarWorkspaceName,
       openAgentConversation,
       deferredSection,
       handleJumpToMessage,
       handleMessageAgent,
+      resolveNavWorkspaceId: read.resolveNavWorkspaceId,
       secondaryDescriptor: panes.secondaryDescriptor,
       routeFullscreen,
     },

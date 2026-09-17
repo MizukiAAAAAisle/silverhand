@@ -1,42 +1,32 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { AgentDto, UserDto } from "@silverhand/shared";
+import type { SearchIdentities } from "@silverhand/shared";
 import { SearchPanel, SEARCH_FILTER_DEFAULT } from "./search-panel";
 
 const state = vi.hoisted(() => ({
-  users: [] as UserDto[],
-  agents: [] as AgentDto[],
-  humanError: false,
-  agentError: false,
-  humanLoading: false,
-  messageLoading: false,
+  identities: undefined as SearchIdentities | undefined,
+  error: false,
+  loading: false,
+  filters: {} as Record<string, unknown>,
 }));
 vi.mock("@/features/users/hooks", () => ({
-  useUsers: () => ({
-    data: state.users,
-    isLoading: state.humanLoading,
-    isError: state.humanError,
-    refetch: vi.fn(),
-  }),
+  useUsers: () => ({ data: [] }),
   useUsersById: () => new Map(),
   makeUserNameResolver: () => () => null,
 }));
-vi.mock("@/features/agent-shell/hooks/hooks", () => ({
-  useAgents: () => ({
-    data: state.agents,
-    isLoading: false,
-    isError: state.agentError,
-    refetch: vi.fn(),
-  }),
-}));
-vi.mock("@/features/session/current-user", () => ({ getCurrentUserId: () => "self" }));
+vi.mock("@/features/agent-shell/hooks/hooks", () => ({ useAgents: () => ({ data: [] }) }));
 vi.mock("@/features/search/hooks", () => ({
-  useMessageSearch: () => ({
-    data: { results: [] },
-    isLoading: state.messageLoading,
-    isFetching: state.messageLoading,
-  }),
+  useMessageSearch: (filters: Record<string, unknown>) => {
+    state.filters = filters;
+    return {
+      data: { results: [], identities: state.identities },
+      isLoading: state.loading,
+      isFetching: state.loading,
+      isError: state.error,
+      refetch: vi.fn(),
+    };
+  },
 }));
 vi.mock("@/components/chat/author-avatar-hooks", () => ({
   useAuthorAvatarObjectUrls: () => ({ agentAvatarUrls: new Map(), humanAvatarUrls: new Map() }),
@@ -50,20 +40,12 @@ vi.mock("@/components/ui/sender-filter-select", () => ({
   SenderFilterSelect: () => null,
   parseSenderFilter: () => ({}),
 }));
-const user: UserDto = {
-  id: "other",
-  name: "alice",
-  display_name: "Found human",
-  avatar_url: null,
-  created_at: 0,
-  updated_at: 0,
-};
-const render = (filter = SEARCH_FILTER_DEFAULT) =>
+const render = () =>
   renderToStaticMarkup(
     createElement(SearchPanel, {
       workspaces: [],
       initialQuery: "alice",
-      filter,
+      filter: SEARCH_FILTER_DEFAULT,
       onFilterChange: vi.fn(),
       onJumpMessage: vi.fn(),
       onOpenWorkspace: vi.fn(),
@@ -71,44 +53,49 @@ const render = (filter = SEARCH_FILTER_DEFAULT) =>
     }),
   );
 beforeEach(() => {
-  state.users = [user];
-  state.agents = [];
-  state.humanError = false;
-  state.agentError = false;
-  state.humanLoading = false;
-  state.messageLoading = false;
+  state.error = false;
+  state.loading = false;
+  state.identities = {
+    status: "searched",
+    humans: {
+      results: [
+        {
+          kind: "human",
+          id: "other",
+          name: "alice",
+          display_name: "Server Identity",
+          avatar_url: null,
+          runtime: null,
+        },
+      ],
+      total: 1,
+      truncated: false,
+    },
+    agents: { results: [], total: 0, truncated: false },
+  };
 });
-
-it("renders independent identity results even while content search is loading", () => {
-  state.messageLoading = true;
-  expect(render()).toContain("Found human");
-});
-it("does not show a global no-matches state when identities matched", () => {
-  expect(render()).toContain("Found human");
+it("requests identities and renders only the server identity without a directory join", () => {
+  expect(render()).toContain("Server Identity");
+  expect(state.filters.include_identities).toBe(true);
   expect(render()).not.toContain("No matches");
 });
-it("shows an explicit directory error and suppresses retained stale results", () => {
-  state.humanError = true;
+it("uses the server's filtered state rather than applying a second frontend filter", () => {
+  state.identities = {
+    status: "filtered",
+    humans: { results: [], total: 0, truncated: false },
+    agents: { results: [], total: 0, truncated: false },
+  };
+  expect(render()).toContain("Clear workspace, sender and time filters");
+});
+it("does not turn query failure into empty identities or show retained identity data", () => {
+  state.error = true;
   const html = render();
-  expect(html).toContain("Could not load humans.");
+  expect(html).toContain("Search failed.");
   expect(html).toContain("Retry");
-  expect(html).not.toContain("Found human");
+  expect(html).not.toContain("Server Identity");
   expect(html).not.toContain("No matches");
 });
-it("preserves successful identity groups when the other directory fails", () => {
-  state.agentError = true;
-  const html = render();
-  expect(html).toContain("Found human");
-  expect(html).toContain("Could not load agents.");
-});
-it("explains why content filters hide identity discovery", () => {
-  const html = render({ ...SEARCH_FILTER_DEFAULT, time: "today" });
-  expect(html).toContain("Clear workspace, sender and time filters");
-  expect(html).not.toContain("Found human");
-});
-it("does not mistake a pending directory for an empty one", () => {
-  state.users = [];
-  state.humanLoading = true;
-  expect(render()).toContain("Searching people and agents");
-  expect(render()).not.toContain("No matches");
+it("has a real empty state when the server has no identity or content hits", () => {
+  state.identities!.humans = { results: [], total: 0, truncated: false };
+  expect(render()).toContain("No matches");
 });

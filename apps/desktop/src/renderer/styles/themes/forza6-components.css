@@ -90,7 +90,6 @@
   background-color: var(--bg-avatar-ground);
 }
 
-[data-theme="forza6"] [data-workspace-name],
 [data-theme="forza6"] [data-conversation-title] {
   font-family: var(--font-display);
   letter-spacing: 0.1em;
@@ -331,7 +330,8 @@
     box-shadow 150ms ease;
 }
 
-[data-theme="forza6"] [data-collection-card]:hover {
+[data-theme="forza6"] [data-collection-card]:hover,
+[data-theme="forza6"] [data-collection-card][data-active] {
   border-color: var(--forza6-ink);
   background-color: var(--bg-floating) !important;
   box-shadow: var(--forza6-poster-shadow);

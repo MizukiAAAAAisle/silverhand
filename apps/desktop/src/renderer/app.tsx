@@ -12,6 +12,7 @@ import { Toaster } from "sonner";
 import { NavRail } from "@/components/layout/nav-rail";
 import { SectionLayer } from "@/components/layout/section-layer";
 import { Titlebar } from "@/components/layout/titlebar";
+import { TitlebarSearch } from "@/components/layout/titlebar-search";
 import { useAppearance } from "@/hooks/use-appearance";
 import {
   isBackendUnreachable,
@@ -140,11 +141,11 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
     appSection,
     workspaceSidebarVisible,
     selectedWorkspace,
-    titlebarWorkspaceName,
     openAgentConversation,
     deferredSection,
     handleJumpToMessage,
     handleMessageAgent,
+    resolveNavWorkspaceId,
   } = conversation.app;
   const content = renderConversationPanes(conversation.panes);
   const fullscreen = shouldSecondaryFullscreen(
@@ -162,11 +163,25 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
       }}
     >
       <Titlebar
-        workspaceName={titlebarWorkspaceName}
         workspaceArchivedAt={selectedWorkspace?.archived_at ?? null}
         workspaceSidebarVisible={workspaceSidebarVisible}
         onToggleWorkspaceSidebar={toggleWorkspaceSidebar}
         chromeMode={appSection === "activity" ? "activity" : "chat"}
+        search={
+          <TitlebarSearch
+            nav={{
+              onJumpMessage: handleJumpToMessage,
+              onOpenConversation: (workspaceId, channelId) => {
+                const navWorkspaceId = resolveNavWorkspaceId(workspaceId, channelId);
+                if (navWorkspaceId) nav.toChannel(navWorkspaceId, channelId);
+              },
+              onOpenWorkspace: nav.toWorkspace,
+              onOpenDirectPair: nav.toDirect,
+              onOpenDirectDraft: nav.toDirectDraft,
+              onOpenAdvanced: (query) => nav.toChatSearch(query ? { q: query } : undefined),
+            }}
+          />
+        }
       />
       <div
         className="flex min-w-0 flex-1 overflow-hidden"

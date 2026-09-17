@@ -1,8 +1,7 @@
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { AgentDto, DirectPairListItem, UserDto } from "@silverhand/shared";
-import { identitySearchGroups } from "./identity-results";
+import type { DirectPairListItem, UserDto, SearchIdentities } from "@silverhand/shared";
 import { IdentitySearchResults } from "./identity-search-results";
 
 const state = vi.hoisted(() => ({
@@ -32,8 +31,37 @@ const human: UserDto = {
   created_at: 0,
   updated_at: 0,
 };
-const agent = { ...human, session_scope: "agent", runtime: "codex" } as AgentDto;
-const groups = () => identitySearchGroups("alice", [human], [agent], "self");
+const groups = (): SearchIdentities => ({
+  status: "searched",
+  humans: {
+    results: [
+      {
+        kind: "human",
+        id: human.id,
+        name: human.name,
+        display_name: human.display_name,
+        avatar_url: null,
+        runtime: null,
+      },
+    ],
+    total: 1,
+    truncated: false,
+  },
+  agents: {
+    results: [
+      {
+        kind: "agent",
+        id: human.id,
+        name: human.name,
+        display_name: human.display_name,
+        avatar_url: null,
+        runtime: "codex",
+      },
+    ],
+    total: 1,
+    truncated: false,
+  },
+});
 beforeEach(() => {
   state.pairs = [];
   state.clicks = [];
@@ -41,9 +69,8 @@ beforeEach(() => {
 });
 
 it("opens typed drafts without a create/send mutation", () => {
-  const html = renderToStaticMarkup(createElement(IdentitySearchResults, { groups: groups() }));
-  expect(html).toContain("Humans");
-  expect(html).toContain("Agents");
+  const html = renderToStaticMarkup(createElement(IdentitySearchResults, { identities: groups() }));
+  expect(html).toContain("Human &amp; Agents");
   state.clicks[0]!();
   state.clicks[1]!();
   expect(state.draft.mock.calls).toEqual([
@@ -62,20 +89,21 @@ it("reuses the exact typed pair rather than a colliding ID", () => {
       read_only: false,
     },
   ];
-  renderToStaticMarkup(createElement(IdentitySearchResults, { groups: groups() }));
+  renderToStaticMarkup(createElement(IdentitySearchResults, { identities: groups() }));
   state.clicks[0]!();
   state.clicks[1]!();
   expect(state.direct).toHaveBeenCalledWith("human-pair");
   expect(state.draft).toHaveBeenCalledWith({ kind: "agent", id: "same" });
 });
 it("makes category truncation explicit", () => {
-  const result = identitySearchGroups(
-    "alice",
-    Array.from({ length: 25 }, (_, i) => ({ ...human, id: `u${i}` })),
-    [],
-    "self",
-  );
-  const html = renderToStaticMarkup(createElement(IdentitySearchResults, { groups: result }));
+  const result = groups();
+  result.humans = {
+    results: Array.from({ length: 20 }, (_, i) => ({ ...result.humans.results[0]!, id: `u${i}` })),
+    total: 25,
+    truncated: true,
+  };
+  result.agents = { results: [], total: 0, truncated: false };
+  const html = renderToStaticMarkup(createElement(IdentitySearchResults, { identities: result }));
   expect(html).toContain("Showing 20 of 25. Refine the name to find more.");
   expect(state.clicks).toHaveLength(20);
 });

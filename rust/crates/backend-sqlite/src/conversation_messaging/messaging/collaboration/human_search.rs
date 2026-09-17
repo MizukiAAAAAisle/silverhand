@@ -13,7 +13,8 @@ use silverhand_backend_core::{
                 HumanSearchConversationPlacementKind, HumanSearchConversationRef,
                 HumanSearchCorruption, HumanSearchMessageCountFact, HumanSearchOrder,
                 HumanSearchPage, HumanSearchQuery, HumanSearchReadPort, HumanSearchRefusal,
-                HumanSearchStream, HumanSearchWorkspaceRef, ResolvedHumanSearchQuery,
+                HumanSearchStream, HumanSearchWorkspaceRef, IdentitySearchGroups,
+                IdentitySearchStatus, ResolvedHumanSearchQuery, SearchIdentity,
                 SelectedHumanSearchConversation, SelectedHumanSearchMessage,
                 SelectedHumanSearchThreadAnchor, SelectedHumanSearchWorkspace,
             },
@@ -56,7 +57,7 @@ const SELECT_CONVERSATIONS: &str = concat!(
      (SELECT ?,?,?,?,?,?,?,?), candidates AS (SELECT ",
     human_participation_source!("c", "p.viewer"),
     " AS source_viewer,c.id AS conversation_id,c.placement_kind,c.roster_policy,c.title,\
-     c.workspace_id AS conversation_workspace_id,c.closed_at,c.created_at AS \
+     c.workspace_id AS conversation_workspace_id,c.closed_at,c.archived_at,c.created_at AS \
      conversation_created_at,c.updated_at,w.id AS joined_workspace_id,w.name AS workspace_name,\
      w.owner_agent_id AS workspace_owner_agent_id FROM p JOIN conversations c LEFT \
      JOIN workspaces w ON w.id=c.workspace_id WHERE c.title LIKE p.needle ESCAPE '\\' AND \
@@ -133,6 +134,8 @@ pub enum HumanSearchStoreError {
     Field { field: &'static str },
     #[error("stored human-search author projection failed")]
     Author(#[source] PersistenceFailure),
+    #[error("stored human-search identity candidates failed")]
+    IdentityCandidates(#[source] PersistenceFailure),
     #[error("stored human-search message metadata is malformed")]
     Metadata,
     #[error("stored message projection is not closed")]
@@ -176,6 +179,11 @@ impl SqliteHumanSearchRead {
             }
         };
         let effective = resolved.query.effective().clone();
+        let identities = if effective.include_identities() {
+            Some(load_identities(&mut tx, viewer, &effective).await?)
+        } else {
+            None
+        };
         let active = effective.has_search_intent() && !resolved.unavailable;
         let (workspaces, conversations, messages, count) = if active {
             let workspaces = if effective.includes_named_entities() {
@@ -210,6 +218,12 @@ impl SqliteHumanSearchRead {
             count,
         )
         .map_err(HumanSearchStoreError::Projection)?;
+        let page = match identities {
+            Some(identities) => page
+                .with_identities(identities)
+                .map_err(HumanSearchStoreError::Projection)?,
+            None => page,
+        };
         tx.commit().await?;
         Ok(Ok(page))
     }
@@ -534,6 +548,7 @@ fn decode_conversation_result(
         user_id(row, "source_viewer")?,
         decode_conversation_ref(row)?,
         row.try_get("updated_at")?,
+        row.try_get("archived_at")?,
     )
     .map_err(HumanSearchStoreError::Projection)
 }
@@ -661,4 +676,73 @@ fn optional_root(
 
 fn field(name: &'static str) -> HumanSearchStoreError {
     HumanSearchStoreError::Field { field: name }
+}
+
+async fn load_identities(
+    tx: &mut Transaction<'_, Sqlite>,
+    viewer: &UserId,
+    query: &HumanSearchQuery,
+) -> Result<IdentitySearchGroups, HumanSearchStoreError> {
+    use silverhand_backend_core::{
+        conversation_messaging::messaging::AvatarRevision,
+        identity_access::{
+            agent_list_read::{ListScope, visible_agents},
+            capability::agent_view::VisibleStages,
+        },
+    };
+    let mut candidates = Vec::new();
+    if query.identity_search_status() == IdentitySearchStatus::Searched {
+        let rows = sqlx::query(
+            "SELECT id,name,display_name,avatar_storage_key,updated_at FROM users WHERE id != ?",
+        )
+        .bind(viewer.as_str())
+        .fetch_all(&mut **tx)
+        .await?;
+        for row in rows {
+            let avatar_key: Option<String> = row.try_get("avatar_storage_key")?;
+            candidates.push(SearchIdentity {
+                identity: PrincipalIdentity::Human(user_id(&row, "id")?),
+                name: row.try_get("name")?,
+                display_name: row.try_get("display_name")?,
+                avatar: avatar_key
+                    .map(|_| row.try_get::<i64, _>("updated_at").map(AvatarRevision::at))
+                    .transpose()?,
+                runtime: None,
+            });
+        }
+
+        let facts =
+            crate::identity_access::agent_list_read::read_agent_candidates_in_tx(tx, viewer)
+                .await
+                .map_err(|error| {
+                    HumanSearchStoreError::IdentityCandidates(PersistenceFailure::from_source(
+                        error,
+                    ))
+                })?;
+        let visible = visible_agents(
+            viewer,
+            &facts,
+            &VisibleStages::active_only(),
+            ListScope::All,
+        )
+        .map_err(|_| HumanSearchStoreError::Projection(HumanSearchCorruption::Identity))?;
+        for agent in visible {
+            let projection = agent.projection();
+            if projection.session_scope != "agent" {
+                continue;
+            }
+            candidates.push(SearchIdentity {
+                identity: PrincipalIdentity::Agent(agent.source().clone()),
+                name: projection.name.clone(),
+                display_name: projection.display_name.clone(),
+                avatar: projection
+                    .avatar_storage_key
+                    .as_ref()
+                    .map(|_| AvatarRevision::at(projection.updated_at)),
+                runtime: Some(projection.runtime),
+            });
+        }
+    }
+    IdentitySearchGroups::from_visible(viewer.clone(), query.clone(), candidates)
+        .map_err(HumanSearchStoreError::Projection)
 }

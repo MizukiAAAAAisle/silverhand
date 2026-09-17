@@ -82,11 +82,14 @@ export interface ConversationAppModel {
   appSection: AppSection;
   workspaceSidebarVisible: boolean;
   selectedWorkspace: WorkspaceListItem | null;
-  titlebarWorkspaceName: string | null;
   openAgentConversation: (conversationId: string, workspaceId: string | null) => void;
   deferredSection: AppSection;
   handleJumpToMessage: (target: MessageJumpTarget) => boolean;
   handleMessageAgent: (agentId: string) => void;
+  resolveNavWorkspaceId: (
+    workspaceId: string | undefined,
+    channelId?: string | null,
+  ) => string | null;
   secondaryDescriptor: SecondaryDescriptor | null;
   routeFullscreen: boolean;
 }
