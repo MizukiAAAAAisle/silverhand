@@ -61,9 +61,18 @@ pub(crate) type DaemonOwnerFailure = Box<dyn Error + Send + Sync>;
 pub(crate) struct AuthenticatedDaemonHost {
     pub(crate) host_id: String,
     pub(crate) owner_user_id: UserId,
+    pub(crate) credential_id: String,
 }
 
 pub(crate) trait DaemonHostAuthentication: Send + Sync {
+    fn activate<'a>(
+        &'a self,
+        host: &'a str,
+        owner: &'a UserId,
+        credential: &'a str,
+        now: i64,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, DaemonOwnerFailure>> + Send + 'a>>;
+
     fn authenticate<'a>(
         &'a self,
         token: String,
@@ -1358,6 +1367,7 @@ async fn daemon_websocket(
     let AuthenticatedDaemonHost {
         host_id,
         owner_user_id,
+        credential_id,
     } = match authenticated {
         Ok(Some(authenticated)) => authenticated,
         Ok(None) => {
@@ -1403,6 +1413,7 @@ async fn daemon_websocket(
             connection(
                 socket,
                 transport,
+                authentication,
                 admission,
                 hydration,
                 host_ready,
@@ -1411,6 +1422,7 @@ async fn daemon_websocket(
                 AuthenticatedHostConnection {
                     host_id,
                     owner_user_id,
+                    credential_id,
                     connection_id,
                 },
                 commands,
@@ -1423,6 +1435,7 @@ async fn daemon_websocket(
 struct AuthenticatedHostConnection {
     host_id: String,
     owner_user_id: UserId,
+    credential_id: String,
     connection_id: String,
 }
 
@@ -1430,6 +1443,7 @@ struct AuthenticatedHostConnection {
 async fn connection(
     socket: WebSocket,
     transport: DaemonTransport,
+    authentication: Arc<dyn DaemonHostAuthentication>,
     admission: Arc<dyn DaemonProtocolAdmission>,
     hydration: Arc<dyn DaemonRuntimeHydration>,
     host_ready: Arc<dyn DaemonHostReadyEffect>,
@@ -1444,6 +1458,7 @@ async fn connection(
     let AuthenticatedHostConnection {
         host_id,
         owner_user_id,
+        credential_id,
         connection_id,
     } = authenticated;
     let mut pending: HashMap<String, PendingCommand> = HashMap::new();
@@ -1514,6 +1529,52 @@ async fn connection(
                     {
                         break;
                     }
+                    let current = match transport.registry.slot_connection_id(&host_id) {
+                        Ok(current) => current,
+                        Err(cause) => {
+                            tracing::error!(
+                                error_chain = crate::foundation::safe_log_field::safe_display(&error::describe(&cause)),
+                                "daemon generation lookup failed before activation"
+                            );
+                            break;
+                        }
+                    };
+                    if current.as_deref() != Some(&connection_id) {
+                        break;
+                    }
+
+                    let activated = tokio::select! {
+                        biased;
+                        requested = matching_connection_close(&mut close, &connection_id) => {
+                            if let Some(requested) = requested {
+                                send_connection_close(&mut socket, requested).await;
+                            }
+                            break;
+                        },
+                        result = authentication.activate(&host_id, &owner_user_id, &credential_id, signed_unix_millis(SystemTime::now())) => result,
+                    };
+                    match activated {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            let _ = socket.send(Message::Close(Some(CloseFrame {
+                                code: 1008,
+                                reason: "host_revoked".into(),
+                            }))).await;
+                            break;
+                        }
+                        Err(cause) => {
+                            tracing::error!(
+                                error_chain = crate::foundation::safe_log_field::safe_display(&error::describe(cause.as_ref())),
+                                "daemon activation failed"
+                            );
+                            let _ = socket.send(Message::Close(Some(CloseFrame {
+                                code: 1011,
+                                reason: "host_activation_failed".into(),
+                            }))).await;
+                            break;
+                        }
+                    }
+
                     match transport.registry.attach(&host_id, &connection_id, ready.clone()) {
                         Ok(true) => {
                             attached = Some(ready.daemon_instance.clone());
@@ -5750,3 +5811,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "daemon_activation_close_tests.rs"]
+mod activation_close_tests;

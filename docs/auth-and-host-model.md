@@ -554,9 +554,19 @@ user runs the command in the target env (another machine / container)
          → RETURN { host_id }   (daemon learns its host id for local namespacing)
 [remote daemon] opens outbound WS to server_url, presenting the same
                 connect_token as the WS bearer
+[server] after compatible ready + successful runtime hydration, recheck the
+         authenticated credential/owner and atomically set activated_at once
+         (user_invite only); publish attachment only after persistence succeeds
 [main] PATCH /api/hosts/:id   finalizes the setup draft (display_label)
        after first daemon attach
 ```
+
+Activation does not finalize a name. Reconnection preserves both lifecycle stamps;
+revoked/deleted hosts or invalidated credentials cannot activate. The live registry
+still checks the connection generation after the durable write, and close signals
+cancel a pending activation wait. A durable activation already committed before a
+later disconnect remains a historical first-attachment fact, not proof of current
+connectivity.
 
 Notes:
 

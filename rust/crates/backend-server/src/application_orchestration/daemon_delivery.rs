@@ -213,7 +213,10 @@ where
         }
     }
 
-    pub fn router(&self, host_ready: Arc<dyn HostReadyObserver>) -> Router {
+    pub fn router(&self, host_ready: Arc<dyn HostReadyObserver>) -> Router
+    where
+        H: silverhand_backend_core::host_runtime::lifecycle::HostActivationPort,
+    {
         self.transport.router(
             Arc::new(ProductionHostAuthentication(self.host_credentials.clone())),
             Arc::new(ProductionProtocolAdmission(self.admission.clone())),
@@ -304,8 +307,23 @@ struct ProductionHostAuthentication<H>(H);
 
 impl<H> DaemonHostAuthentication for ProductionHostAuthentication<H>
 where
-    H: HostCredentialLookup,
+    H: HostCredentialLookup + silverhand_backend_core::host_runtime::lifecycle::HostActivationPort,
 {
+    fn activate<'a>(
+        &'a self,
+        host: &'a str,
+        owner: &'a UserId,
+        credential: &'a str,
+        now: i64,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, DaemonOwnerFailure>> + Send + 'a>> {
+        Box::pin(async move {
+            self.0
+                .activate_attachment(host, owner, credential, now)
+                .await
+                .map_err(|e| Box::new(e) as DaemonOwnerFailure)
+        })
+    }
+
     fn authenticate<'a>(
         &'a self,
         token: String,
@@ -320,10 +338,13 @@ where
         Box::pin(async move {
             match verify_host_token(&self.0, token, observed_at).await {
                 Ok(VerifyHostTokenFact::Accepted {
-                    host_id, user_id, ..
+                    host_id,
+                    user_id,
+                    credential_id,
                 }) => Ok(Some(AuthenticatedDaemonHost {
                     host_id,
                     owner_user_id: user_id,
+                    credential_id,
                 })),
                 Ok(VerifyHostTokenFact::Rejected(_)) => Ok(None),
                 Err(error) => Err(Box::new(error) as DaemonOwnerFailure),

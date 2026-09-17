@@ -695,6 +695,43 @@ impl ClaimLocalComputerUnitOfWork for SqliteHostRuntimeStore {
     }
 }
 
+impl silverhand_backend_core::host_runtime::lifecycle::HostActivationPort
+    for SqliteHostRuntimeStore
+{
+    async fn activate_attachment(
+        &self,
+        host: &str,
+        owner: &UserId,
+        credential_id: &str,
+        now: i64,
+    ) -> Result<bool, PersistenceFailure> {
+        let result = crate::foundation::statement_metrics::statement(
+            "hosts.activate_attachment",
+            "run",
+            sqlx::query(
+                "UPDATE hosts SET activated_at = CASE
+                WHEN provisioning_source = 'user_invite' THEN COALESCE(activated_at, ?) ELSE activated_at END
+                WHERE id = ? AND user_id = ? AND revoked_at IS NULL
+                AND EXISTS (SELECT 1 FROM host_credentials c WHERE c.id = ? AND c.host_id = hosts.id
+                    AND c.kind = 'long_lived'
+                    AND (c.expires_at IS NULL OR c.expires_at > ?)
+                    AND ((c.revoked_at IS NULL AND c.consumed_at IS NULL)
+                        OR (c.revoked_at > ? AND c.consumed_at IS NOT NULL)))",
+            )
+            .bind(now)
+            .bind(host)
+            .bind(owner.as_str())
+            .bind(credential_id)
+            .bind(now)
+            .bind(now)
+            .execute(&self.pool),
+        )
+        .await
+        .map_err(PersistenceFailure::from_source)?;
+        Ok(result.rows_affected() == 1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use silverhand_backend_core::foundation::identity::UserId;
@@ -727,6 +764,127 @@ mod tests {
         connection.close().await.unwrap();
         let store = SqliteHostRuntimeStore::open(&path).await.unwrap();
         (directory, store)
+    }
+
+    #[tokio::test]
+    async fn attachment_activation_matches_credential_authority_and_never_finalizes() {
+        use silverhand_backend_core::host_runtime::lifecycle::HostActivationPort;
+        for mutation in [
+            "UPDATE host_credentials SET expires_at=100 WHERE host_id=?",
+            "UPDATE host_credentials SET revoked_at=100 WHERE host_id=?",
+            "UPDATE host_credentials SET consumed_at=50 WHERE host_id=?",
+            "UPDATE host_credentials SET revoked_at=200,consumed_at=50 WHERE host_id=?",
+            "UPDATE host_credentials SET revoked_at=100,consumed_at=50 WHERE host_id=?",
+            "UPDATE hosts SET revoked_at=100 WHERE id=?",
+            "DELETE FROM host_credentials WHERE host_id=?",
+        ] {
+            let (_directory, store) = fixture().await;
+            let owner = UserId::parse("user-1").unwrap();
+            let invite = CreateHostInvite::new(store.clone(), OsEntropy, SystemClock)
+                .execute(owner.clone())
+                .await
+                .unwrap();
+            let host = invite.host.id().to_owned();
+            let token = invite.connect_token.reveal_once().to_owned();
+            let VerifyHostTokenFact::Accepted { credential_id, .. } =
+                verify_host_token(&store, token.clone(), 100).await.unwrap()
+            else {
+                panic!("fresh token rejected")
+            };
+            sqlx::query(mutation)
+                .bind(&host)
+                .execute(&store.pool)
+                .await
+                .unwrap();
+
+            let eligible = matches!(
+                verify_host_token(&store, token, 100).await.unwrap(),
+                VerifyHostTokenFact::Accepted { .. }
+            );
+            assert_eq!(
+                store
+                    .activate_attachment(&host, &owner, &credential_id, 100)
+                    .await
+                    .unwrap(),
+                eligible,
+                "{mutation}"
+            );
+            let stamps: (Option<i64>, Option<i64>) =
+                sqlx::query_as("SELECT activated_at, finalized_at FROM hosts WHERE id=?")
+                    .bind(&host)
+                    .fetch_one(&store.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(stamps, (eligible.then_some(100), None));
+        }
+    }
+
+    #[tokio::test]
+    async fn activation_is_idempotent_under_concurrency_and_does_not_recreate_deleted_hosts() {
+        use silverhand_backend_core::host_runtime::lifecycle::HostActivationPort;
+        let (_directory, store) = fixture().await;
+        let owner = UserId::parse("user-1").unwrap();
+        let invite = CreateHostInvite::new(store.clone(), OsEntropy, SystemClock)
+            .execute(owner.clone())
+            .await
+            .unwrap();
+        let host = invite.host.id().to_owned();
+        let VerifyHostTokenFact::Accepted { credential_id, .. } =
+            verify_host_token(&store, invite.connect_token.reveal_once().to_owned(), 100)
+                .await
+                .unwrap()
+        else {
+            panic!("fresh token rejected")
+        };
+        assert!(
+            !store
+                .activate_attachment(&host, &UserId::parse("other").unwrap(), &credential_id, 100)
+                .await
+                .unwrap()
+        );
+
+        let (first, second) = tokio::join!(
+            store.activate_attachment(&host, &owner, &credential_id, 100),
+            store.activate_attachment(&host, &owner, &credential_id, 200)
+        );
+        assert!(first.unwrap() && second.unwrap());
+        let stamp: i64 = sqlx::query_scalar("SELECT activated_at FROM hosts WHERE id=?")
+            .bind(&host)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        assert!([100, 200].contains(&stamp));
+        assert!(
+            store
+                .activate_attachment(&host, &owner, &credential_id, 300)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT activated_at FROM hosts WHERE id=?")
+                .bind(&host)
+                .fetch_one(&store.pool)
+                .await
+                .unwrap(),
+            stamp
+        );
+
+        sqlx::query("DELETE FROM host_credentials WHERE host_id=?")
+            .bind(&host)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM hosts WHERE id=?")
+            .bind(&host)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        assert!(
+            !store
+                .activate_attachment(&host, &owner, &credential_id, 400)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

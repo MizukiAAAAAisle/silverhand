@@ -57,6 +57,20 @@ pub fn lifecycle_status(stamps: &HostLifecycleStamps) -> HostLifecycleStatus {
     HostLifecycleStatus::Pending
 }
 
+/// Commit the first valid attachment without finalizing the user's chosen name.
+/// Rechecks the authenticated credential and owner under the persistence writer.
+pub trait HostActivationPort: Clone + Send + Sync + 'static {
+    fn activate_attachment(
+        &self,
+        host: &str,
+        owner: &crate::foundation::identity::UserId,
+        credential_id: &str,
+        now: i64,
+    ) -> impl std::future::Future<
+        Output = Result<bool, crate::foundation::persistence::PersistenceFailure>,
+    > + Send;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

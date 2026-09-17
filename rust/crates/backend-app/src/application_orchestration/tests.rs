@@ -12360,3 +12360,6 @@ mod human_direct_pair_tests;
 
 #[path = "password_change_tests.rs"]
 mod password_change_tests;
+
+#[path = "host_activation_tests.rs"]
+mod host_activation_tests;
