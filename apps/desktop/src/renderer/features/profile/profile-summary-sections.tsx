@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
+import "./profile-fact-band.css";
 
 export interface ProfileSectionProps {
   title: string;
@@ -95,38 +96,38 @@ export function ProfileField({
   );
 }
 
-export interface MetadataItem {
-  label: string;
-  value: string;
-  title?: string;
-  mono?: boolean;
+/** Metadata band under a profile hero: a breakpoint-driven responsive grid keyed
+ *  off its own container width — all facts on one row when wide, wrapping to a
+ *  2-up then 1-up grid as the pane narrows, with icon / label / value columns
+ *  staying aligned across rows (see profile-fact-band.css). */
+export function ProfileFactBand({ children }: { children: ReactNode }): JSX.Element {
+  return (
+    <div data-fact-band className="text-(length:--text-meta) text-text-muted">
+      <div data-fact-band-grid>{children}</div>
+    </div>
+  );
 }
 
-export function MetadataList({ items }: { items: MetadataItem[] }): JSX.Element {
+/** One fact in a `ProfileFactBand`: a muted `icon` + text `label` (both
+ *  non-selectable, so copying the value never drags in the dimension marker)
+ *  + selectable value. `display: contents` (via [data-fact]) so the icon, label
+ *  and value land directly in the band's three grid columns. */
+export function ProfileFact({
+  icon,
+  label,
+  children,
+}: {
+  icon?: ReactNode;
+  label?: string;
+  children: ReactNode;
+}): JSX.Element {
   return (
-    <dl data-metadata-list className="divide-y divide-border-subtle/60">
-      {items.map((item) => (
-        <div
-          key={item.label}
-          className="flex items-baseline justify-between gap-3 py-1.5 first:pt-0 last:pb-0"
-          title={item.title}
-        >
-          <dt
-            data-metadata-label
-            className="text-(length:--text-meta) uppercase tracking-wider text-text-muted"
-          >
-            {item.label}
-          </dt>
-          <dd
-            className={cn(
-              "min-w-0 truncate text-xs text-text-primary tabular-nums",
-              item.mono ? "font-mono" : "",
-            )}
-          >
-            {item.value}
-          </dd>
-        </div>
-      ))}
-    </dl>
+    <span data-fact>
+      <span className="flex size-3.5 shrink-0 select-none items-center justify-center text-text-muted">
+        {icon}
+      </span>
+      <span className="shrink-0 select-none pl-1.5 pr-1.5 text-text-muted">{label}</span>
+      <span className="min-w-0 pr-6">{children}</span>
+    </span>
   );
 }

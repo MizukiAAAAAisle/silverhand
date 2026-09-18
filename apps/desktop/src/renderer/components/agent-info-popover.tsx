@@ -40,7 +40,6 @@ import { useWorkspaceMemberLists } from "@/features/workspaces/hooks";
 import { useAgentAvatarObjectUrl } from "@/features/agent-shell/hooks/avatar-hooks";
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/session/hooks";
 import { Button } from "@/components/ui/button";
-import { destructiveAction, destructiveCancel } from "@/components/common/destructive-action";
 import {
   Dialog,
   DialogContent,
@@ -571,19 +570,17 @@ function AgentManagementActions({
           <DialogFooter>
             <Button
               type="button"
-              variant="outline"
+              variant="cancel"
               onClick={() => setClearDialogOpen(false)}
               disabled={clearSession.isPending}
-              {...destructiveCancel()}
             >
               Cancel
             </Button>
             <Button
               type="button"
-              variant="danger"
+              variant="destructive"
               onClick={clear}
               disabled={clearSession.isPending}
-              {...destructiveAction()}
             >
               {clearSession.isPending ? "Clearing..." : "Clear session"}
             </Button>
@@ -604,19 +601,17 @@ function AgentManagementActions({
           <DialogFooter>
             <Button
               type="button"
-              variant="outline"
+              variant="cancel"
               onClick={() => setRemoveDialogOpen(false)}
               disabled={removeFromChannel.isPending}
-              {...destructiveCancel()}
             >
               Cancel
             </Button>
             <Button
               type="button"
-              variant="danger"
+              variant="destructive"
               onClick={remove}
               disabled={removeFromChannel.isPending}
-              {...destructiveAction()}
             >
               {removeFromChannel.isPending ? "Removing..." : "Remove"}
             </Button>
@@ -713,17 +708,15 @@ function DirectAgentRuntimeActions({
           </DialogHeader>
           <DialogFooter>
             <Button
-              variant="outline"
+              variant="cancel"
               onClick={() => setClearDialogOpen(false)}
               disabled={pending}
-              {...destructiveCancel()}
             >
               Cancel
             </Button>
             <Button
-              variant="danger"
+              variant="destructive"
               disabled={disabled}
-              {...destructiveAction()}
               onClick={() => {
                 if (disabled) return;
                 clearSession.mutate(agent.id, { onSuccess: () => setClearDialogOpen(false) });

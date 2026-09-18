@@ -15,11 +15,9 @@ import { resolveWorkspaceMuteToggle } from "@/features/attention/attention-mode"
  * owner/admin role — and neither ever touches Follow / thread delivery
  * (delivery ⊥ attention, §5.2).
  *
- * They live ONLY in context menus, not in the channel/workspace settings modal:
- * settings holds SHARED config (rename / archive — changes everyone sees),
- * whereas these are personal preferences that reshape only your own projection.
- * Putting a personal preference inside a shared-config panel would mis-signal
- * that it affects all members (shiki + Cindy + Alice, thread:iCBmcCRydgONVpLd).
+ * Shared options for context menus and the channel settings personal control.
+ * These preferences change only the current viewer's projection; the settings
+ * control uses the same viewer-only authority alongside shared channel configuration.
  *
  * The internal vocabulary (eligibility / ambient / tier / suppressor) never
  * surfaces; the user sees only the three labels below (§3 / §13.5).

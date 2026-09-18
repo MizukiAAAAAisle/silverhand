@@ -36,7 +36,6 @@ describe("tabKey / firstTabKey / isRemovable", () => {
   it("keys a panel surface by its kind, in its own namespace", () => {
     expect(tabKey(panel("attachments"))).toBe("panel:attachments");
     expect(tabKey(panel("threads"))).toBe("panel:threads");
-    expect(tabKey(panel("members"))).toBe("panel:members");
   });
 
   it("an attachment id that spells a builtin kind stays in its own namespace", () => {
@@ -52,7 +51,7 @@ describe("tabKey / firstTabKey / isRemovable", () => {
     expect(isRemovable(chat)).toBe(false);
     expect(isRemovable(tasks)).toBe(false);
     expect(isRemovable(att("a"))).toBe(true);
-    expect(isRemovable(panel("members"))).toBe(true);
+    expect(isRemovable(panel("threads"))).toBe(true);
   });
 });
 
@@ -97,11 +96,11 @@ describe("addTab — open-or-focus dedupe", () => {
     const opened = addTab([chat, tasks], panel("threads"));
     expect(opened.map(tabKey)).toEqual(["chat", "tasks", "panel:threads"]);
     expect(addTab(opened, panel("threads"))).toBe(opened);
-    expect(addTab(opened, panel("members")).map(tabKey)).toEqual([
+    expect(addTab(opened, panel("attachments")).map(tabKey)).toEqual([
       "chat",
       "tasks",
       "panel:threads",
-      "panel:members",
+      "panel:attachments",
     ]);
   });
 });
@@ -112,7 +111,7 @@ describe("removeTab — builtins non-removable, customs non-destructive", () => 
       "chat",
       "tasks",
     ]);
-    expect(removeTab([chat, tasks, panel("members")], "panel:members").map(tabKey)).toEqual([
+    expect(removeTab([chat, tasks, panel("threads")], "panel:threads").map(tabKey)).toEqual([
       "chat",
       "tasks",
     ]);
@@ -178,7 +177,8 @@ describe("parseTab / parseTabs — reject non-conforming, repair builtins", () =
   it("accepts a known panel surface and drops an unknown one", () => {
     expect(parseTab({ kind: "panel", panel: "attachments" })).toEqual(panel("attachments"));
     expect(parseTab({ kind: "panel", panel: "threads" })).toEqual(panel("threads"));
-    expect(parseTab({ kind: "panel", panel: "members" })).toEqual(panel("members"));
+    expect(parseTab({ kind: "panel", panel: "members" })).toBeNull();
+    expect(parseTabs([{ kind: "panel", panel: "members" }]).map(tabKey)).toEqual(["chat", "tasks"]);
     // A surface this build no longer ships (or never shipped) must not hydrate
     // into a tab that mounts nothing.
     expect(parseTab({ kind: "panel", panel: "retired" })).toBeNull();
@@ -211,11 +211,11 @@ describe("parseTab / parseTabs — reject non-conforming, repair builtins", () =
   it("parseTabs round-trips a persisted panel order and dedupes repeats", () => {
     expect(
       parseTabs([
-        { kind: "panel", panel: "members" },
+        { kind: "panel", panel: "threads" },
         { kind: "chat" },
-        { kind: "panel", panel: "members" },
+        { kind: "panel", panel: "threads" },
       ]).map(tabKey),
-    ).toEqual(["panel:members", "chat", "tasks"]);
+    ).toEqual(["panel:threads", "chat", "tasks"]);
   });
 
   it("parseTabs yields the default order for a corrupt/non-array value", () => {

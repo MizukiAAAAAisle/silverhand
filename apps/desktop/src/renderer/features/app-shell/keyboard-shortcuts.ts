@@ -114,6 +114,7 @@ export type ContextualCloseOutcome = "closed-panel" | "background-app";
 type CloseTarget =
   | "human"
   | "agent"
+  | "settings"
   | "files"
   | "task"
   | "side"
@@ -132,6 +133,7 @@ export interface ContextualCloseState {
   agentPanelId: string | null;
   humanPanelId?: string | null;
   filesListOpen: boolean;
+  channelSettingsId?: string | null;
   /** Task detail is showing as the OVERLAY SIDE PANE (`?task`, #task:1721), not
    *  the app-level modal. Only the pane is a ⌘W peel target — the modal (board /
    *  Tasks-tab entry) is a Radix Dialog that owns its own dismissal. Sits just below
@@ -180,6 +182,7 @@ export function resolveContextualClose(state: ContextualCloseState): ContextualC
   if (state.humanPanelId != null) {
     return { outcome: "closed-panel", target: "human" };
   }
+  if (state.channelSettingsId) return { outcome: "closed-panel", target: "settings" };
   if (state.filesListOpen) return { outcome: "closed-panel", target: "files" };
   if (state.taskPaneOpen) return { outcome: "closed-panel", target: "task" };
   if (state.sideConversationId != null) {
@@ -202,6 +205,7 @@ export interface ContextualCloseNav {
   closeAgentPanel: () => void;
   closeHumanPanel: () => void;
   closeFilesList: () => void;
+  closeChannelSettings: () => void;
   /** Clear `?task` — closes the task detail side pane (#task:1721). */
   closeTask: () => void;
   closeSide: () => void;
@@ -218,6 +222,7 @@ type ContextualCloseRoute = Pick<
   | "agentPanelId"
   | "humanPanelId"
   | "filesListOpen"
+  | "channelSettingsId"
   | "sideConversationId"
   | "threadRootId"
   | "threadsListOpen"
@@ -250,6 +255,7 @@ export function useContextualCloseResponder(
         agentPanelId: route.agentPanelId,
         humanPanelId: route.humanPanelId,
         filesListOpen: route.filesListOpen,
+        channelSettingsId: route.channelSettingsId,
         taskPaneOpen,
         sideConversationId: route.sideConversationId,
         threadRootId: route.threadRootId,
@@ -264,6 +270,9 @@ export function useContextualCloseResponder(
           break;
         case "human":
           nav.closeHumanPanel();
+          break;
+        case "settings":
+          nav.closeChannelSettings();
           break;
         case "files":
           nav.closeFilesList();

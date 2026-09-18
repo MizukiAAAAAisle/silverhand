@@ -8,7 +8,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 import { useLeaveWorkspace } from "./hooks";
 
 /**
@@ -74,14 +73,13 @@ export function LeaveWorkspaceConfirmDialog({
         ) : null}
         <DialogFooter>
           <Button
-            variant="outline"
+            variant="cancel"
             onClick={() => onOpenChange(false)}
             disabled={pending}
-            {...primaryCancel()}
           >
             Cancel
           </Button>
-          <Button onClick={onConfirm} disabled={pending} {...primaryAction()}>
+          <Button variant="primary" onClick={onConfirm} disabled={pending}>
             {pending ? "Leaving…" : "Leave workspace"}
           </Button>
         </DialogFooter>

@@ -15,7 +15,6 @@ import type {
   SecondaryViewInputs,
 } from "@/features/conversation-shell/model/secondary-pane";
 import type { RouteState } from "@/router";
-import type { ConversationVisibility } from "@silverhand/shared";
 import type { PaneAttachmentRequest } from "./conversation-shell-models";
 
 export interface PaneContentRead {
@@ -35,7 +34,6 @@ export interface PaneContentRead {
 }
 
 export interface PaneContentState {
-  archivePending: boolean;
   secondaryDescriptor: SecondaryDescriptor | null;
   channelIndexesAvailable: boolean;
   filesListMounted: boolean;
@@ -53,6 +51,7 @@ export interface PaneContentState {
 }
 
 export interface PaneContentCommands {
+  departPrimaryPane: (channelId: string) => void;
   requestJump: (target: MessageJumpTarget) => void;
 
   handleOpenAdvancedSearch: (seed: AdvancedSearchSeed) => void;
@@ -66,15 +65,6 @@ export interface PaneContentCommands {
   handleMessageAgent: (agentId: string) => void;
   handleDraftOpenedPair: (conversationId: string) => void;
   handleJumped: () => void;
-  handleArchiveChannelMutation: (channelId: string, archived: boolean) => void;
-  handleRenameChannelMutation: (channelId: string, title: string) => Promise<void>;
-  handleSetChannelVisibilityMutation: (
-    channelId: string,
-    visibility: ConversationVisibility,
-  ) => Promise<void>;
-  handleLeaveChannelMutation: (channelId: string) => Promise<void>;
-  handleArchiveSecondaryChannelMutation: (channelId: string, archived: boolean) => void;
-  handleRenameSecondaryChannelMutation: (channelId: string, title: string) => Promise<void>;
   handleOpenThreadFromChannel: (rootMessageId: string, jumpToMessageId?: string) => void;
   openSide: (id: string) => void;
   toggleThreadsList: () => void;
@@ -95,4 +85,5 @@ export type PaneContentRoute = Pick<
   | "threadRootId"
   | "agentPanelId"
   | "humanPanelId"
+  | "channelSettingsId"
 >;

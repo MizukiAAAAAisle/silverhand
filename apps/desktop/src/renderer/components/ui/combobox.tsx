@@ -120,7 +120,7 @@ export function Combobox({
                 setOpen((o) => !o);
                 inputRef.current?.focus();
               }}
-              className="flex shrink-0 items-center px-1.5 text-text-muted hover:text-text-primary"
+              className="flex shrink-0 items-center px-1.5 text-text-secondary hover:text-text-primary"
             >
               <ChevronDown className="size-3.5" />
             </button>

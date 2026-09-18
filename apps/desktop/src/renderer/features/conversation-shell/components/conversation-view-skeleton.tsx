@@ -20,7 +20,7 @@
  * header with a member-strip cluster, message rows using ChannelView's exact
  * `flex items-start gap-3 px-2 py-1.5` rhythm with `size-8` square avatars, and
  * a composer that reproduces the `border-t` footer + bordered shell. All bars
- * are neutral utility tokens (`bg-bg-hover`) — a skeleton is chrome, never a
+ * are neutral utility tokens (`bg-bg-elevated`) — a skeleton is chrome, never a
  * saturated status signal.
  */
 import { paneChrome } from "../../../components/layout/pane-chrome";
@@ -61,13 +61,13 @@ export function MessageRowsSkeleton({
     >
       {ROWS.map((row, i) => (
         <div key={i} className="flex items-start gap-3 px-2 py-1.5">
-          <div className="mt-0.5 size-8 shrink-0 rounded-none bg-bg-hover" />
+          <div className="mt-0.5 size-8 shrink-0 rounded-none bg-bg-elevated" />
           <div className="min-w-0 max-w-[85%] flex-1">
             {/* Author + time line — ChannelView uses `mb-1 text-xs` here. */}
-            <div className={`mb-2 h-2.5 rounded bg-bg-hover ${row.author}`} />
+            <div className={`mb-2 h-2.5 rounded bg-bg-elevated ${row.author}`} />
             <div className="space-y-1.5">
               {row.lines.map((w, j) => (
-                <div key={j} className={`h-3.5 rounded bg-bg-hover ${w}`} />
+                <div key={j} className={`h-3.5 rounded bg-bg-elevated ${w}`} />
               ))}
             </div>
           </div>
@@ -80,7 +80,8 @@ export function MessageRowsSkeleton({
 export function ConversationViewSkeleton(): JSX.Element {
   return (
     <main
-      className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-base"
+      data-panel="chat"
+      className="flex h-full min-w-0 flex-1 flex-col overflow-hidden"
       style={paneChrome}
       aria-hidden
       data-conversation-skeleton
@@ -90,11 +91,11 @@ export function ConversationViewSkeleton(): JSX.Element {
        * a member-strip cluster (square `size-6` chips, mirroring MemberStrip)
        * pushed right. */}
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
-        <div className="size-4 shrink-0 rounded-none bg-bg-hover" />
-        <div className="h-3.5 w-36 rounded bg-bg-hover" />
+        <div className="size-4 shrink-0 rounded-none bg-bg-elevated" />
+        <div className="h-3.5 w-36 rounded bg-bg-elevated" />
         <div className="ml-auto flex items-center gap-0.75">
           {[0, 1, 2].map((i) => (
-            <div key={i} className="size-6 shrink-0 rounded-none bg-bg-hover" />
+            <div key={i} className="size-6 shrink-0 rounded-none bg-bg-elevated" />
           ))}
         </div>
       </header>
@@ -110,11 +111,11 @@ export function ConversationViewSkeleton(): JSX.Element {
       <div className="shrink-0 border-t border-border-subtle bg-bg-primary px-3 py-3">
         <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-floating">
           <div className="min-h-15 px-3 py-2">
-            <div className="h-3.5 w-32 rounded bg-bg-hover" />
+            <div className="h-3.5 w-32 rounded bg-bg-elevated" />
           </div>
           <div className="flex items-center justify-between px-2 py-1.5">
-            <div className="size-7 rounded-md bg-bg-hover" />
-            <div className="h-7 w-16 rounded-md bg-bg-hover" />
+            <div className="size-7 rounded-md bg-bg-elevated" />
+            <div className="h-7 w-16 rounded-md bg-bg-elevated" />
           </div>
         </div>
       </div>

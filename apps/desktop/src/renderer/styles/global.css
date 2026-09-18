@@ -24,9 +24,7 @@
   --color-bg-base: var(--bg-base);
   --color-bg-primary: var(--bg-primary);
   --color-bg-elevated: var(--bg-elevated);
-  --color-bg-surface: var(--bg-surface);
   --color-bg-hover: var(--bg-hover);
-  --color-bg-active: var(--bg-active);
   --color-bg-selected: var(--bg-selected);
   --color-bg-floating: var(--bg-floating);
   --color-bg-message-context: var(--bg-message-context);
@@ -45,7 +43,6 @@
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
   --color-accent-hover: var(--accent-hover);
-  --color-accent-glow: var(--accent-glow);
 
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
@@ -86,8 +83,6 @@
   --font-mono: var(--appearance-code-font, var(--font-mono));
   --font-display: var(--font-display);
 
-  --color-accent-2: var(--accent-2);
-  --color-text-on-accent-2: var(--text-on-accent-2);
   --color-bg-structure-dark: var(--bg-structure-dark);
   --color-text-on-structure: var(--text-on-structure);
   --color-text-on-dark-pop: var(--text-on-dark-pop);
@@ -130,6 +125,23 @@
   --text-badge: 10px;
   --text-meta: 11px;
   --text-strong: 13px;
+}
+
+/* ── Theme-agnostic constants ──
+   Values every theme shared verbatim: motion curve, Markdown/system type
+   sizes, the uppercase chrome-label transform, the serif→sans alias, and the
+   two transparent chrome edges. Not palette choices, so they live once here
+   instead of being re-declared (identically) in every theme file. Kept out of
+   the theme files also keeps them off the no-:root-leak contract. */
+:root {
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --md-code-size: 14px;
+  --md-prose-size: 14px;
+  --system-message-size: 12px;
+  --chrome-label-transform: uppercase;
+  --font-serif: var(--font-sans);
+  --splitter-bg: transparent;
+  --titlebar-border: transparent;
 }
 
 :root {
@@ -183,11 +195,11 @@ body,
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--bg-hover);
+  background: var(--bg-elevated);
   border-radius: 0px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--bg-active);
+  background: color-mix(in srgb, var(--bg-elevated), var(--text-primary) 14%);
 }
 
 [data-popover-frame]::-webkit-scrollbar-thumb,
@@ -211,14 +223,21 @@ body,
 
 .sidebar-row-border {
   border-width: var(--sidebar-row-border-width, 2px);
-  border-radius: var(--row-radius);
+  border-radius: var(--nav-row-radius, var(--row-radius));
+  corner-shape: var(--nav-corner-shape, normal);
+}
+
+[data-sidebar-cta] {
+  border-radius: var(--nav-row-radius, var(--control-radius));
+  corner-shape: var(--nav-corner-shape, normal);
 }
 
 .sidebar-row-gutter {
   border-width: var(--sidebar-row-border-width, 2px);
   border-style: solid;
   border-color: transparent;
-  border-radius: var(--row-radius);
+  border-radius: var(--nav-row-radius, var(--row-radius));
+  corner-shape: var(--nav-corner-shape, normal);
 }
 
 ::selection {
@@ -446,7 +465,8 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
 }
 
 .sidebar-row-border.navigation-row.text-text-nav-selected {
-  border-color: var(--border-row-selected);
+  border-color: var(--border-selected-card, var(--border-row-selected));
+  box-shadow: var(--shadow-row-selected, none);
 }
 .sidebar-row-border.navigation-row:not(.text-text-nav-selected):hover {
   border-color: var(--border-row-hover);
@@ -454,12 +474,17 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
 
 /* Rail and sidebar navigation share selected text; their surfaces remain independent. */
 .nav-rail {
-  border-right: var(--nav-rail-border-width) solid var(--nav-rail-border-color);
+  background: var(--bg-nav-rail, transparent);
+  box-shadow: var(--nav-rail-shadow, none);
+  border-right: var(--nav-rail-border-width, 0px) solid var(--nav-rail-border-color, transparent);
 }
 .nav-rail__item {
   position: relative;
-  border: var(--nav-rail-item-border-width) solid transparent;
-  border-radius: var(--row-radius);
+  border-width: var(--nav-rail-item-border-width);
+  border-style: solid;
+  border-color: transparent;
+  border-radius: var(--nav-row-radius, var(--row-radius));
+  corner-shape: var(--nav-corner-shape, normal);
   color: var(--text-nav-rail);
 }
 .nav-rail__item:hover:not([aria-current="page"]) {
@@ -468,9 +493,10 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   color: var(--text-nav-rail-hover);
 }
 .nav-rail__item[aria-current="page"] {
-  border-color: var(--border-nav-rail-selected);
+  border-color: var(--border-selected-card, var(--border-nav-rail-selected));
   background: var(--bg-nav-selected);
   color: var(--text-nav-selected);
+  box-shadow: var(--shadow-row-selected, none);
 }
 .nav-rail__item[aria-current="page"]::before {
   content: "";
@@ -1116,8 +1142,21 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   }
 }
 
+/* Shared surface geometry; theme corner overrides still adapt to the app frame. */
+.nav-rail,
+[data-panel],
+[data-pane-clip] {
+  border-radius: var(--pane-radius, var(--card-radius, 0));
+  corner-shape: var(--pane-corner-shape, normal);
+}
+
+[data-panel] {
+  border: var(--pane-border, none);
+}
+
 [data-panel-card="row"],
-[data-panel-card="placeholder"] {
+[data-panel-card="placeholder"],
+[data-panel-card="schedule"] {
   border-radius: var(--row-radius);
 }
 [data-panel-card="profile-section"] {
@@ -1147,16 +1186,6 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
 .focus-outline-within:focus-within {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
-}
-.focus-outline-accent:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-[data-section-layer] > *:last-child {
-  border-bottom-right-radius: var(
-    --app-corner-radius,
-    var(--pane-radius, var(--card-radius, 0))
-  ) !important;
 }
 
 :root {

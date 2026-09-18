@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { paneChrome } from "@/components/layout/pane-chrome";
 import { Clock, Loader2 } from "lucide-react";
 import { ThreadIcon } from "@/components/icons/conversation-icons";
 import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
@@ -56,7 +57,12 @@ export function ChannelThreadsPanel({
   onOpenThread,
 }: ChannelThreadsPanelProps): JSX.Element {
   return (
-    <aside data-pane="threads-list" className="flex h-full min-h-0 w-full flex-col bg-bg-base">
+    <aside
+      data-panel="side"
+      data-pane="threads-list"
+      className="flex h-full min-h-0 w-full flex-col overflow-hidden"
+      style={paneChrome}
+    >
       <SidePanelHeader onClose={onClose}>
         <SidePanelHeaderTitle
           icon={<ThreadIcon className="size-3.5 shrink-0 text-text-muted" />}

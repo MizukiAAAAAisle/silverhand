@@ -8,7 +8,6 @@ import {
   PasswordStatusResponseSchema,
 } from "@silverhand/shared";
 import { api, ApiError } from "@/lib/api";
-import { primaryAction } from "@/components/common/primary-action";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 
@@ -132,8 +131,9 @@ export function ChangePasswordForm({ userId }: { userId: string }): JSX.Element 
           )}
           <Button
             type="submit"
+            variant="primary"
             size="sm"
-            {...primaryAction("self-start")}
+            className="self-start"
             disabled={pending || uncertain || !current || !next || !confirm}
           >
             {pending ? "Saving…" : "Change password"}

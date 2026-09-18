@@ -237,6 +237,6 @@ it("uses the shared themed primary action for password change without the redund
       React.createElement(ChangePasswordForm, { userId: "test-user" }),
     ),
   );
-  expect(html).toContain('data-primary-action="commit"');
+  expect(html).toContain('data-button-action="primary"');
   expect(html).not.toContain("You will be signed out on all devices");
 });

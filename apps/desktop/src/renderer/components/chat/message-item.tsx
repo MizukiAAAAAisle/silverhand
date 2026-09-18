@@ -444,6 +444,10 @@ function ActorMessageItem({
   // in the export queue.
   const framed =
     hover || highlighted || reactionPickerOpen || searchActive || (selectionMode && selected);
+  // Accent border is reserved for the emphasized subset (jumped-to / current
+  // search match / export-selected). Plain hover and the reaction picker are
+  // utility affordances and take the neutral row-hover border instead.
+  const emphasized = highlighted || searchActive || (selectionMode && selected);
 
   // "{N} Reply/Replies" — pluralized to match the ThreadPanel header
   // (which says "N replies"); the badge previously hard-coded "Reply".
@@ -774,7 +778,11 @@ function ActorMessageItem({
         (selectionMode && committed ? "cursor-pointer " : "") +
         (alignRight ? "flex-row-reverse" : "flex-row") +
         " " +
-        (framed ? "border-accent bg-bg-floating" : "border-transparent")
+        (framed
+          ? emphasized
+            ? "border-accent bg-bg-floating"
+            : "border-(--border-row-hover) bg-(--row-frame-hover-bg)"
+          : "border-transparent")
       }
     >
       {selectionMode && committed ? (

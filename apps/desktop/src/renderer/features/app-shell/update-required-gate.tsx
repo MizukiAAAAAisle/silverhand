@@ -1,6 +1,5 @@
 import { RefreshCw, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { primaryAction } from "@/components/common/primary-action";
 
 export interface UpdateRequiredGateProps {
   direction: "app" | "server";
@@ -40,7 +39,7 @@ export function UpdateRequiredGate({
         <p className="mb-4 text-(length:--text-meta) text-text-muted">
           Server API generation: {serverApiEpoch}
         </p>
-        <Button type="button" size="sm" {...primaryAction()} onClick={onRetry}>
+        <Button type="button" variant="primary" size="sm" onClick={onRetry}>
           <RefreshCw className="size-3.5" />
           Check again
         </Button>

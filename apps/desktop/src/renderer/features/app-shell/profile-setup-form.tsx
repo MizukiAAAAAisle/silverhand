@@ -4,7 +4,6 @@ import { validateAvatarFile } from "@silverhand/shared";
 import { AvatarPickerButton } from "@/components/avatar-picker-button";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
-import { primaryAction } from "@/components/common/primary-action";
 import { AuthSplitLayout } from "@/components/brand/auth-split-layout";
 import { rejectDisplayName } from "@/features/identity/display-name";
 import { nameFormatMessage } from "@/features/naming/use-name-availability";
@@ -107,7 +106,7 @@ export function ProfileSetupForm({
               <button
                 type="button"
                 disabled={pending}
-                className="self-start text-xs text-text-muted hover:text-text-primary focus-outline"
+                className="self-start text-xs text-text-secondary hover:text-text-primary focus-outline"
                 onClick={() => {
                   setAvatar(null);
                   setAvatarError(null);
@@ -170,11 +169,11 @@ export function ProfileSetupForm({
           </p>
         ) : null}
         {onRetry ? (
-          <Button type="button" onClick={onRetry} {...primaryAction("w-full")}>
+          <Button type="button" variant="primary" className="w-full" onClick={onRetry}>
             Retry
           </Button>
         ) : (
-          <Button type="submit" disabled={pending} {...primaryAction("w-full")}>
+          <Button type="submit" variant="primary" className="w-full" disabled={pending}>
             {pending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
             Continue
           </Button>

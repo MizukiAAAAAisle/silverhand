@@ -252,7 +252,7 @@ function TaskDetailContent({
             <button
               type="button"
               onClick={onRetry}
-              className="ml-auto shrink-0 rounded px-1 py-0.5 font-medium text-text-secondary underline-offset-2 hover:text-text-primary hover:underline focus-outline-accent"
+              className="ml-auto shrink-0 rounded px-1 py-0.5 font-medium text-text-secondary underline-offset-2 hover:text-text-primary hover:underline focus-outline"
             >
               Retry
             </button>

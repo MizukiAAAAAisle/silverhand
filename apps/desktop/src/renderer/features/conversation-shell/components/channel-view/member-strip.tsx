@@ -32,7 +32,7 @@ import { useNav } from "@/router";
 // ── Member strip ────────────────────────────────────────────────────────
 
 /** Maximum number of chips rendered inline; overflow collapses into a
- *  `+N` chip that opens the members modal. Header height must not jitter as
+ *  `+N` chip that opens the settings Members section. Header height must not jitter as
  *  channels grow membership, so this cap exists even though current channels
  *  rarely exceed it. */
 const MEMBER_STRIP_VISIBLE_CAP = 8;
@@ -49,7 +49,7 @@ export function MemberStrip({
    *  (#task:2123). A `= []` default here is the bug, not a convenience. */
   agentRuntime: readonly ConversationAgentRuntimeDto[] | undefined;
   agentAvatarUrls: Map<string, string | null>;
-  /** Open the channel members modal — the `+N` chip's action (#task:1687). */
+  /** Open the channel settings Members section — the `+N` chip's action (#task:1687). */
   onOpenMembers: () => void;
 }): JSX.Element | null {
   const nav = useNav();
@@ -270,7 +270,7 @@ function HumanMemberChip({
 }
 
 /**
- * `+N` overflow chip. Clicking it opens the channel members modal, which is
+ * `+N` overflow chip. Clicking it opens the channel settings Members section, which is
  * now the one place that lists the whole roster (#task:1687) — the hover
  * popover that used to preview the collapsed members is gone: it duplicated a
  * list the modal owns, and a hover-only preview could not carry the row actions

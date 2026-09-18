@@ -1,26 +1,44 @@
 import type { CSSProperties, ReactNode } from "react";
 import { cn } from "@/lib/cn";
-import { paneChrome } from "./pane-chrome";
+import { type PanelRole, paneChrome } from "./pane-chrome";
 
 /**
  * The shell for a top-level section pane (Activity, Tasks, Settings, Search,
  * Saved, Archived): the outer `<main>` surface. Owns pane identity (surface
- * paint + `bg-bg-base`), not the body layout below the header. `overflow` is
- * fixed to `hidden` here; the scrolling child owns its own.
+ * paint via `paneChrome` + `data-panel` role), not the body layout below the
+ * header. `overflow` is fixed to `hidden` here; the scrolling child owns its own.
+ *
+ * `width`: fixed-width column instead of the default fill (`flex-1`). Activity's
+ * list is a pane in its own right that sits at a resizable width beside the
+ * conversation; without it a pane fills the section.
  */
 export function PaneShell({
+  role = "detail",
+  width,
   className,
   style,
   children,
 }: {
+  role?: PanelRole;
+  width?: string;
   className?: string;
   style?: CSSProperties;
   children: ReactNode;
 }): JSX.Element {
   return (
     <main
-      className={cn("flex h-full min-w-0 flex-1 flex-col bg-bg-base", className)}
-      style={{ ...paneChrome, overflow: "hidden", ...style }}
+      data-panel={role}
+      className={cn(
+        "flex h-full min-w-0 flex-col",
+        width == null ? "flex-1" : "shrink-0",
+        className,
+      )}
+      style={{
+        ...paneChrome,
+        overflow: "hidden",
+        ...(width == null ? null : { width }),
+        ...style,
+      }}
     >
       {children}
     </main>

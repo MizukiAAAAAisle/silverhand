@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { paneChrome } from "@/components/layout/pane-chrome";
 import { ArrowDown, ArrowUpRight, Bell, BellOff, Search } from "lucide-react";
 import { ThreadIcon } from "@/components/icons/conversation-icons";
 import { authorGroupContinuations } from "@/components/chat/author-grouping";
@@ -820,8 +821,10 @@ export function ThreadPanel({
     <TaskRefContextProvider value={taskRefContext}>
       <aside
         ref={findRootRef}
+        data-panel="side"
         data-pane="thread"
-        className="relative flex h-full min-h-0 w-full flex-col bg-bg-base"
+        className="relative flex h-full min-h-0 w-full flex-col overflow-hidden"
+        style={paneChrome}
       >
         <SidePanelHeader
           onClose={onClose}
@@ -841,7 +844,7 @@ export function ThreadPanel({
                     "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                     (find.open
                       ? "bg-bg-hover text-text-primary"
-                      : "text-text-muted hover:bg-bg-hover hover:text-text-primary")
+                      : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
                   }
                 >
                   <Search className="size-3.5" />
@@ -862,7 +865,7 @@ export function ThreadPanel({
                     "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) hover:bg-bg-hover disabled:opacity-50 " +
                     (viewerFollowing
                       ? "text-text-primary hover:text-text-primary"
-                      : "text-text-muted hover:text-text-primary")
+                      : "text-text-secondary hover:text-text-primary")
                   }
                 >
                   {viewerFollowing ? (
@@ -881,7 +884,7 @@ export function ThreadPanel({
                   aria-label="View in channel"
                   title="View in channel"
                   onClick={onViewInChannel}
-                  className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                  className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                 >
                   <ArrowUpRight className="size-3.5" />
                 </button>

@@ -87,7 +87,7 @@ export function InlineFindBar({
           disabled={!hasMatches}
           aria-label="Previous match"
           title="Previous match (⇧⏎ / ↑)"
-          className="flex size-7 items-center justify-center rounded-(--control-radius) text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-30"
+          className="flex size-7 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-30"
         >
           <ChevronUp className="size-3.5" />
         </button>
@@ -101,7 +101,7 @@ export function InlineFindBar({
           disabled={!hasMatches}
           aria-label="Next match"
           title="Next match (⏎ / ↓)"
-          className="flex size-7 items-center justify-center rounded-(--control-radius) text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-30"
+          className="flex size-7 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-30"
         >
           <ChevronDown className="size-3.5" />
         </button>
@@ -131,7 +131,7 @@ export function InlineFindBar({
         onClick={close}
         aria-label="Close search"
         title="Close (Esc)"
-        className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-muted hover:bg-bg-hover hover:text-text-primary"
+        className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary"
       >
         <X className="size-3.5" />
       </button>

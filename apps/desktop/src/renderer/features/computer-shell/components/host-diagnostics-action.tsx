@@ -11,7 +11,6 @@ import {
 } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
-import { neutralAction } from "@/components/common/control-ink-border";
 import { computerCopy } from "../model/computer-copy";
 import {
   useBackendInfoSnapshot,
@@ -45,7 +44,7 @@ import {
  *
  * Renders a BARE button, not its own framed section (#task:1619): it is the
  * first row of the page's footer action group, which owns the divider and the
- * spacing. Shared geometry/hover live in `host-action-button.ts`.
+ * spacing.
  */
 export function HostDiagnosticsAction({ host }: { host: HostDto }): JSX.Element {
   // Same query keys HostDetailView already mounts — React Query returns the
@@ -79,7 +78,7 @@ export function HostDiagnosticsAction({ host }: { host: HostDto }): JSX.Element 
   };
 
   return (
-    <Button variant="outline" onClick={() => void handleCopy()} {...neutralAction("gap-2 w-full")}>
+    <Button variant="neutral" className="gap-2 w-full" onClick={() => void handleCopy()}>
       {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
       {copied ? computerCopy.copied : computerCopy.copyDiagnostics}
     </Button>

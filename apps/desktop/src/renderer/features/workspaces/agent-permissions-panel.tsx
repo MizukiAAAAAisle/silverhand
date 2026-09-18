@@ -9,7 +9,6 @@ import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { Button } from "@/components/ui/button";
-import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/cn";
 import { buildCapabilityGroups, CAPABILITY_COUNT } from "./capability-meta";
@@ -333,18 +332,17 @@ function AgentCapabilityEditor({
         <div className="sticky bottom-0 -mx-3.5 -mb-3.5 mt-1 flex items-center gap-2 border-t-(length:--control-border-width) border-border bg-bg-floating px-3.5 py-3">
           <Button
             size="sm"
+            variant="primary"
             onClick={() => void onSave()}
             disabled={!dirty || update.isPending}
-            {...primaryAction()}
           >
             {update.isPending ? "Saving…" : "Save"}
           </Button>
           <Button
-            variant="outline"
+            variant="cancel"
             size="sm"
             onClick={() => setDraft(null)}
             disabled={!dirty || update.isPending}
-            {...primaryCancel()}
           >
             Cancel
           </Button>

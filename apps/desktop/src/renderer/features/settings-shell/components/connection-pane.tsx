@@ -32,7 +32,6 @@ import {
   type DesktopServerConnectionStatus,
   type DesktopServerObservation,
 } from "../model/connection-readiness";
-import { primaryAction } from "@/components/common/primary-action";
 
 /**
  * Availability words come from the `computerCopy` single source — the
@@ -339,7 +338,8 @@ export function ConnectionPane(): JSX.Element {
             />
             <Button
               type="submit"
-              {...primaryAction("shrink-0")}
+              variant="primary"
+              className="shrink-0"
               disabled={saveDisabled}
               title={
                 classification.kind === "reject"

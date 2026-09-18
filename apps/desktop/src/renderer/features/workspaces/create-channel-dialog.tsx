@@ -11,7 +11,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 import { cn } from "@/lib/cn";
 import {
   isBackendUnreachable,
@@ -248,13 +247,12 @@ export function CreateChannelDialog({
           <DialogFooter className="mt-2">
             <Button
               type="button"
-              variant="outline"
+              variant="cancel"
               onClick={() => onOpenChange(false)}
-              {...primaryCancel()}
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={createChannel.isPending} {...primaryAction()}>
+            <Button type="submit" variant="primary" disabled={createChannel.isPending}>
               {createChannel.isPending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>
@@ -308,7 +306,7 @@ function VisibilitySelect({
                 selected
                   ? "border-(--border-row-selected) bg-(--bg-row-selected) text-text-on-selected"
                   : // Options use control hover colors independently of navigation.
-                    "border-border-subtle bg-bg-base text-text-secondary hover:border-(--border-control-hover) hover:bg-(--bg-option-hover) hover:text-text-primary",
+                    "border-border-subtle bg-bg-base text-text-secondary hover:border-(--border-control-hover) hover:bg-(--bg-hover) hover:text-text-primary",
               )}
             >
               <Icon className="size-3.5" />

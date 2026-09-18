@@ -1,4 +1,3 @@
-import { Sidebar } from "@/components/layout/sidebar";
 import { SectionLayer } from "@/components/layout/section-layer";
 import { ActivityView } from "@/features/activity-shell/activity-view";
 import { VerticalSplitter } from "@/components/layout/vertical-splitter";
@@ -36,35 +35,26 @@ export function ActivityShell({
     <>
       {deferredSection === "activity" && (
         <SectionLayer visible={appSection !== "chat"}>
-          <Sidebar
-            name="activity"
-            fill={selectedChannelId == null}
-            width="var(--activity-list-width)"
-            sidebar={
-              <ActivityView
-                workspaceRefById={workspaceRefById}
-                agentsById={agentsById}
-                onJump={handleJumpToMessageStable}
+          <ActivityView
+            width={selectedChannelId == null ? undefined : "var(--activity-list-width)"}
+            workspaceRefById={workspaceRefById}
+            agentsById={agentsById}
+            onJump={handleJumpToMessageStable}
+          />
+          {selectedChannelId != null ? (
+            <>
+              <VerticalSplitter
+                onPointerDown={activityList.startResize}
+                active={activityList.isDragging}
               />
-            }
-            splitter={
-              selectedChannelId != null ? (
-                <VerticalSplitter
-                  onPointerDown={activityList.startResize}
-                  active={activityList.isDragging}
-                />
-              ) : null
-            }
-          >
-            {selectedChannelId != null ? (
               <ConversationStage
                 content={content}
                 ready={appSection === "activity"}
                 fullscreen={fullscreen}
                 storageKey="silverhand.layout.activity-split-ratio"
               />
-            ) : null}
-          </Sidebar>
+            </>
+          ) : null}
         </SectionLayer>
       )}
     </>

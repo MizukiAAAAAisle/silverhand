@@ -16,6 +16,7 @@ import {
   withThreadQuery,
   withThreadsQuery,
   withFilesQuery,
+  withChannelSettingsQuery,
 } from "./router";
 import type { SecondaryRouteFields } from "./router";
 
@@ -616,6 +617,10 @@ describe("overlay open — clears ?side (correctness) + keeps thread/threads (re
   }> = [
     { name: "task", open: (s) => buildTaskOpenUrl("/chat/w/w-1/c/c-a", s, "t-1") },
     { name: "agent", open: (s) => buildAgentPanelOpenUrl("/chat/w/w-1/c/c-a", s, "a-1") },
+    {
+      name: "settings",
+      open: (s) => withChannelSettingsQuery("/chat/w/w-1/c/c-a", s, "c-other"),
+    },
     { name: "files", open: (s) => withFilesQuery("/chat/w/w-1/c/c-a", s, true) },
   ];
 
@@ -1031,5 +1036,32 @@ describe("human direct-message drafts", () => {
       directConversationId: null,
       workspaceId: null,
     });
+  });
+});
+
+describe("channel settings overlay", () => {
+  const path = "/chat/w/w-1/c/c-a";
+  it("keeps an explicit target when replacing a secondary channel", () => {
+    const url = withChannelSettingsQuery(path, "?side=c-b&fullscreen=1", "c-b");
+    expect(parseRouteState(path, url.split("?")[1] ?? "")).toMatchObject({
+      channelSettingsId: "c-b",
+      sideConversationId: null,
+      fullscreen: false,
+    });
+  });
+  it("closes without losing the covered thread", () => {
+    const settings = withChannelSettingsQuery(path, "?thread=root&files=1", "c-a");
+    expect(settings).not.toContain("files=");
+    expect(withChannelSettingsQuery(path, settings.split("?")[1] ?? "", null)).toBe(
+      path + "?thread=root",
+    );
+  });
+  it("opening another utility removes settings", () => {
+    expect(withFilesQuery(path, "?settings=c-a&thread=root", true)).toBe(
+      path + "?thread=root&files=1",
+    );
+  });
+  it("ordinary channel navigation carries no old settings target", () => {
+    expect(parseRouteState("/chat/w/w-1/c/c-b", "").channelSettingsId).toBeNull();
   });
 });

@@ -4,10 +4,9 @@ import type { AgentCapability } from "@silverhand/shared";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { primaryAction } from "@/components/common/primary-action";
-import { neutralAction } from "@/components/common/control-ink-border";
-import { destructiveAction, destructiveCancel } from "@/components/common/destructive-action";
+import { DeleteButton } from "@/components/ui/delete-button";
 import { cn } from "@/lib/cn";
+import { SidebarRow } from "@/components/layout/sidebar-shared";
 import { nameFormatMessage } from "@/features/naming/use-name-availability";
 import { AgentPermissionsPanel } from "./agent-permissions-panel";
 import { WorkspaceMembersPanel } from "./manage-members-popover";
@@ -81,8 +80,6 @@ export function WorkspaceSettingsDialog({
   const [permTab, setPermTab] = useState<PermissionTab>("agents");
   const [name, setName] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [confirmingLeave, setConfirmingLeave] = useState(false);
   const renameWorkspace = useRenameWorkspace();
   const deleteWorkspace = useDeleteWorkspace();
   const leaveWorkspace = useLeaveWorkspace();
@@ -118,8 +115,6 @@ export function WorkspaceSettingsDialog({
       setPermTab("agents");
       setName(workspaceName ?? "");
       setRenameError(null);
-      setConfirmingDelete(false);
-      setConfirmingLeave(false);
     }
   }, [open, workspaceId, workspaceName, initialSection, hasMembers]);
 
@@ -213,33 +208,29 @@ export function WorkspaceSettingsDialog({
             down to a ~460px-tall window — below that nothing in this app is
             usable anyway. */}
         <div className="flex h-[min(32rem,65vh)] gap-5">
-          <nav className="flex w-40 shrink-0 flex-col gap-0.5">
-            {visibleNavItems.map((item) => {
-              const active = activeSection === item.id;
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  aria-current={active ? "page" : undefined}
-                  onClick={() => setSection(item.id)}
-                  className={cn(
-                    "flex items-center gap-2 rounded-(--control-radius) px-2.5 py-1.5 text-left text-sm transition-colors",
-                    active
-                      ? "bg-(--bg-row-selected) font-medium text-text-on-selected"
-                      : "text-text-secondary hover:bg-(--bg-option-hover) hover:text-text-primary",
-                  )}
-                >
-                  <Icon className="size-3.5 shrink-0" />
-                  <span className="truncate">{item.label}</span>
-                </button>
-              );
-            })}
+          <nav className="w-40 shrink-0">
+            <ul className="flex flex-col gap-0.5">
+              {visibleNavItems.map((item) => {
+                const active = activeSection === item.id;
+                const Icon = item.icon;
+                return (
+                  <SidebarRow
+                    key={item.id}
+                    icon={<Icon className="size-3.5 shrink-0" />}
+                    title={item.label}
+                    selected={active}
+                    aria-current={active ? "page" : undefined}
+                    onClick={() => setSection(item.id)}
+                  />
+                );
+              })}
+            </ul>
           </nav>
 
           <div className="scrollbar-hide min-w-0 flex-1 overflow-y-auto pr-1">
             {activeSection === "general" ? (
               <GeneralSection
+                key={workspaceId}
                 nameSettable={nameSettable}
                 hasLifecycle={hasLifecycle}
                 isArchived={isArchived}
@@ -255,17 +246,17 @@ export function WorkspaceSettingsDialog({
                 workspaceId={workspaceId}
                 onToggleArchive={handleToggleArchive}
                 archivePending={archiveWorkspace.isPending}
-                confirmingDelete={confirmingDelete}
-                setConfirmingDelete={setConfirmingDelete}
                 onDelete={handleDelete}
                 deletePending={deleteWorkspace.isPending}
-                confirmingLeave={confirmingLeave}
-                setConfirmingLeave={setConfirmingLeave}
                 onLeave={handleLeave}
                 leavePending={leaveWorkspace.isPending}
               />
             ) : activeSection === "members" && workspaceId ? (
-              <WorkspaceMembersPanel key={workspaceId} workspaceId={workspaceId} />
+              <WorkspaceMembersPanel
+                key={workspaceId}
+                workspaceId={workspaceId}
+                onNavigate={() => onOpenChange(false)}
+              />
             ) : (
               <div className="flex flex-col gap-4">
                 {/* Permission sub-tabs: agent capabilities vs human roles.
@@ -336,13 +327,9 @@ interface GeneralSectionProps {
   workspaceId: string | null;
   onToggleArchive: () => void;
   archivePending: boolean;
-  confirmingDelete: boolean;
-  setConfirmingDelete: (v: boolean) => void;
   onDelete: () => void;
   deletePending: boolean;
   canLeave: boolean;
-  confirmingLeave: boolean;
-  setConfirmingLeave: (v: boolean) => void;
   onLeave: () => void;
   leavePending: boolean;
 }
@@ -362,13 +349,9 @@ function GeneralSection({
   workspaceId,
   onToggleArchive,
   archivePending,
-  confirmingDelete,
-  setConfirmingDelete,
   onDelete,
   deletePending,
   canLeave,
-  confirmingLeave,
-  setConfirmingLeave,
   onLeave,
   leavePending,
 }: GeneralSectionProps): JSX.Element {
@@ -406,7 +389,7 @@ function GeneralSection({
               autoFocus
               className="transition-colors hover:border-(--border-control-hover)"
             />
-            <Button type="submit" disabled={renameDisabled} {...primaryAction()}>
+            <Button type="submit" variant="primary" disabled={renameDisabled}>
               {renamePending ? "Saving…" : "Save"}
             </Button>
           </div>
@@ -452,10 +435,9 @@ function GeneralSection({
             </div>
             <Button
               type="button"
-              variant="outline"
+              variant="neutral"
               onClick={onToggleArchive}
               disabled={!workspaceId || archivePending}
-              {...neutralAction()}
             >
               {isArchived ? (
                 <>
@@ -478,54 +460,28 @@ function GeneralSection({
                 All channels, threads, and messages are removed permanently and cannot be recovered.
               </span>
             </div>
-            {confirmingDelete ? (
-              <div className="flex items-center justify-end gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setConfirmingDelete(false)}
-                  disabled={deletePending}
-                  {...destructiveCancel()}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  variant="danger"
-                  onClick={onDelete}
-                  disabled={deletePending}
-                  {...destructiveAction()}
-                >
-                  {deletePending ? "Deleting…" : "Confirm delete"}
-                </Button>
-              </div>
-            ) : (
-              <div className="flex justify-end">
-                <Button
-                  type="button"
-                  variant="danger"
-                  onClick={() => setConfirmingDelete(true)}
-                  disabled={!workspaceId}
-                  {...destructiveAction()}
-                >
-                  Delete workspace
-                </Button>
-              </div>
-            )}
+            <div className="flex justify-end">
+              <DeleteButton
+                onConfirm={onDelete}
+                disabled={!workspaceId || deletePending}
+                confirmLabel="Confirm delete workspace"
+              >
+                {deletePending ? "Deleting…" : "Delete workspace"}
+              </DeleteButton>
+            </div>
           </div>
         </>
       ) : null}
 
       {/* Leave is the member/admin counterpart of the owner's Delete — the two
-          are complementary over any role, so exactly one shows. Unlike Delete it
-          is NOT styled danger (no red border/tint): it ends only the viewer's own
-          membership and destroys no content, so a neutral panel — the same frame
-          as Archive — reads it correctly. Access is not freely restored (rejoining
+          are complementary over any role, so exactly one shows. Its panel stays
+          neutral (no red border/tint): it ends only the viewer's own membership
+          and destroys no content. Access is not freely restored (rejoining
           re-seeds no channel membership), but the caption stays terse per shiki;
           do NOT reintroduce a "re-invite restores access" line — it is false for
-          channels. The inline confirm mirrors Delete's two-button swap for
-          consistency within the section. Owner never reaches here (canLeave is
-          false for owner). */}
+          channels. Both Leave and Delete commit through the shared DeleteButton
+          (expand-to-confirm), so the confirm gesture is one language across the
+          section. Owner never reaches here (canLeave is false for owner). */}
       {hasLifecycle && canLeave ? (
         <div className="flex flex-col gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-elevated/40 p-3">
           <div className="flex flex-col gap-0.5">
@@ -534,41 +490,17 @@ function GeneralSection({
               You leave this workspace and all its channels.
             </span>
           </div>
-          {confirmingLeave ? (
-            <div className="flex items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setConfirmingLeave(false)}
-                disabled={leavePending}
-                {...neutralAction()}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={onLeave}
-                disabled={leavePending}
-                {...neutralAction()}
-              >
-                {leavePending ? "Leaving…" : "Leave"}
-              </Button>
-            </div>
-          ) : (
-            <div className="flex justify-end">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setConfirmingLeave(true)}
-                disabled={!workspaceId}
-                {...neutralAction()}
-              >
-                <LogOut className="mr-1.5 size-3.5" />
-                Leave workspace
-              </Button>
-            </div>
-          )}
+          <div className="flex justify-end">
+            <DeleteButton
+              onConfirm={onLeave}
+              variant="neutral"
+              disabled={!workspaceId || leavePending}
+              confirmLabel="Confirm leave workspace"
+            >
+              <LogOut className="size-3.5" />
+              {leavePending ? "Leaving…" : "Leave workspace"}
+            </DeleteButton>
+          </div>
         </div>
       ) : null}
     </div>

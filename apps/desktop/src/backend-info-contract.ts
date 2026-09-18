@@ -12,8 +12,7 @@
  * one. For {@link LocalHostWsAttachment} it would not be: the whole
  * point of the discriminant is that one arm forbids a read, so a copy
  * that quietly drops the discriminant compiles AND runs — it just
- * re-opens the bug class below. One declaration, three importers
- * (Cindy's `#task:1630` review of `e82f8a23`).
+ * re-opens the bug class below.
  */
 
 /**
@@ -24,10 +23,7 @@
  * all. Expressing the second case as `attached_at: null` made "cannot
  * observe" and "claimed, nothing attached yet" the same value, and
  * every consumer had to remember to re-derive the difference from
- * `mode`. Three consumers forgot, in three different ways
- * (`#task:1010` pill stuck on Connecting…, `#task:1132` a connected
- * local computer rendered offline, `#task:1628` a 1.5s poll with no
- * exit condition).
+ * `mode`.
  *
  * So the transport states it instead: `{ observable: false }` means
  * "ask a different authority" (renderer event WS for Desktop→Server,

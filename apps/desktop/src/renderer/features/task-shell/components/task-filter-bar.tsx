@@ -450,7 +450,7 @@ export function OptionRow({
    *  Cindy #task:790). */
   neutral?: boolean;
   /** Keyboard roving highlight (#task:1257). Utility signal only, so it
-   *  reuses the neutral `--bg-option-hover` fill (same as mouse hover), never
+   *  reuses the neutral `--bg-hover` fill (same as mouse hover), never
    *  the brand lime — that stays reserved for the applied-filter selection. */
   active?: boolean;
   id?: string;
@@ -471,15 +471,13 @@ export function OptionRow({
       onMouseMove={onHover}
       onClick={onSelect}
       className={cn(
-        // Hover = pale-lime preview FILL only, no border. Routes through
-        // the shared `--bg-option-hover` semantic token (forza6 → #E6F68A
-        // pale lime, warm → cool-neutral hover) — the same "selectable
-        // option hover" vocabulary the Proxy runtime cards use, so the two
-        // surfaces stay in lock-step. The transparent border is kept only
-        // to reserve layout space (no hover colour) so rows don't shift
+        // Hover = neutral preview FILL only, no border, via the shared
+        // `--bg-hover` token — never the brand lime, which stays reserved
+        // for the applied-filter selection. The transparent border is kept
+        // only to reserve layout space (no hover colour) so rows don't shift
         // (shiki #task:790).
         "flex w-full items-center gap-2 rounded-(--select-item-radius) px-2 py-1.5 text-left text-xs transition-colors",
-        "border border-transparent hover:bg-(--bg-option-hover) hover:text-text-primary",
+        "border border-transparent hover:bg-(--bg-hover) hover:text-text-primary",
         // A real (non-default) current value = the app-wide selected-row
         // vocabulary (festive lime fill + on-selected ink), NOT the magenta
         // `accent-soft` tint. The ALL/All-channels default row stays plain
@@ -489,7 +487,7 @@ export function OptionRow({
         activeSelected
           ? "bg-(--bg-row-selected) text-text-on-selected"
           : active
-            ? "bg-(--bg-option-hover) text-text-primary"
+            ? "bg-(--bg-hover) text-text-primary"
             : "text-text-secondary",
       )}
     >

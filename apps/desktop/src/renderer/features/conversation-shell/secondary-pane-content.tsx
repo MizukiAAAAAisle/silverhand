@@ -1,3 +1,4 @@
+import { ChannelSettingsPanel } from "./components/channel-settings-panel";
 import { HumanView } from "@/features/profile/human-view";
 import { ChannelView } from "@/features/conversation-shell/components/channel-view";
 import { ThreadPanel } from "@/features/conversation-shell/components/thread-panel";
@@ -17,6 +18,14 @@ export function SecondaryPaneContent({ model }: { model: SecondaryPaneModel }) {
       return <AgentView mode="side" key={`side-${model.props.agentId}`} {...model.props} />;
     case "human":
       return <HumanView variant="side" key={`human-${model.props.userId}`} {...model.props} />;
+    case "settings":
+      return (
+        <ChannelSettingsPanel
+          key={model.channelId}
+          channelId={model.channelId}
+          onDepartChannel={model.onDepartChannel}
+        />
+      );
     case "files":
       return <ChannelAttachmentsPanel {...model.props} />;
     case "task":

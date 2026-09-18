@@ -1,65 +1,25 @@
-/**
- * The channel roster, in two hosts that share no shell — a modal and a
- * conversation tab — around the one roster body, so a row can't say two
- * different things depending on where it was opened. The bulk agent cluster is
- * the modal corner's, hence modal-only; per-agent runtime controls stay in
- * `AgentInfoPopover` so one agent's runtime has a single definition.
- *
- * PERMISSION IS HIDE, NOT DISABLE: every action cell renders only when the
- * viewer may use it. The per-row authority is the backend's viewer-scoped
- * `member_removability` carrier, never a renderer re-derivation — the human arm
- * depends on the target's workspace role plus channel-exit guards the client
- * cannot see. It fail-closes to false.
- *
- * The one exception is the viewer's OWN Leave blocked by STATE (owner / last
- * member / archived): that row keeps a disabled Leave whose tooltip states the
- * reason, because the viewer will hunt for their own missing action. It does not
- * generalise to per-row permission. The trigger is `can_leave === false`, so
- * every `ChannelLeaveBlockedReason` arm flows through and no arm can yield a
- * disabled cell with nothing to say (`not_member` has no copy and no row).
- *
- * Add member contributes an ENTRY, not a second picker: whom the viewer may add
- * is `AddConversationMemberPopover`'s per-candidate answer, so this surface
- * can't offer a row the route would refuse. The entry appears only when the
- * caller passes a workspace, which follows the same channel-member floor as the
- * header `+`.
- *
- * Confirmation is INLINE under its row: a dialog inside a dialog loses "which
- * row am I confirming?" and walks into the nested-overlay traps.
+/** Member roster and management content for channel settings.
+ * Removal permission comes from the viewer-scoped server carrier; self-leave
+ * retains its blocked reason. Row confirmations are local to the mounted roster.
  */
 import { useMemo, useState } from "react";
-import { Loader2, LogOut, Plus, Power, RefreshCw, Search, UserMinus } from "lucide-react";
+import { Loader2, LogOut, UserMinus } from "lucide-react";
 import type {
   ChannelLeaveBlockedReason,
   ConversationAgentRuntimeDto,
   ConversationVisibility,
   MemberDto,
 } from "@silverhand/shared";
-import {
-  Dialog,
-  DialogContent,
-  DialogCornerButton,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
-import { SEARCH_FIELD_FRAME } from "@/components/common/control-ink-border";
-import {
-  destructiveAction,
-  destructiveCancel,
-  DESTRUCTIVE_TRIGGER,
-} from "@/components/common/destructive-action";
-import { primaryAction } from "@/components/common/primary-action";
 import { useRemoveAgentFromChannel, useRemoveHumanFromChannel } from "@/features/channels/hooks";
 import {
   canRemoveMember,
   memberDtoKey,
   useConversationMembers,
 } from "@/features/conversations/use-conversation-members";
-import { AddConversationMemberPopover } from "@/features/conversations/add-conversation-member-popover";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { useUsersById } from "@/features/users/hooks";
 import { presenceDotStatus, usePresenceById } from "@/features/presence/hooks";
@@ -76,11 +36,6 @@ import {
   projectPresence,
 } from "@/features/agent-shell/model/presence-projection";
 
-/** Above this many members the roster stops being scannable at a glance, so the
- *  search field appears. It is the same cap that collapses the header strip into
- *  `+N` — the point at which the roster outgrew one look. */
-const MEMBERS_SEARCH_MIN = 8;
-
 /** The row's exit action (Leave / Remove). Bare glyph: muted at rest, error ink
  *  on hover, no fill and no box — the row hover is the only colour surface in
  *  this list, so a second filled square inside it reads as two overlapping
@@ -88,38 +43,23 @@ const MEMBERS_SEARCH_MIN = 8;
 const ROW_ACTION =
   "inline-flex size-6 items-center justify-center text-text-muted transition-colors hover:text-error disabled:opacity-50";
 
-interface ChannelMembersDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+export interface ChannelMembersContentProps {
+  query: string;
   channelId: string;
   /** Per-conversation agent rows — the source of each agent's run state dot.
    *  Raw `query.data`: `undefined` = the read has not settled, and a row then
    *  draws no dot rather than claiming Idle. */
   agentRuntime: readonly ConversationAgentRuntimeDto[] | undefined;
   agentAvatarUrls: Map<string, string | null>;
-  /** Restart / stop EVERY agent in this channel. Absent → not rendered (the
-   *  viewer may not manage all of them, or the channel is closed / agentless). */
-  onRestartAllAgents?: () => void;
-  onStopAllAgents?: () => void;
-  /** A bulk mutation is in flight — the pair stays visible and goes disabled,
-   *  because it is the viewer's OWN click that is settling. */
-  bulkAgentPending?: boolean;
   /** Self-leave this channel. Absent → the viewer's row carries no action. */
   onLeave?: () => Promise<void>;
   canLeave?: boolean;
   leaveBlockedReason?: ChannelLeaveBlockedReason | null;
-  /** Workspace of this channel, present ONLY when the viewer meets the
-   *  add-member FLOOR (a member of a non-closed regular channel) — the same
-   *  gate the header `+` uses, so the two entries can't disagree. Absent → no
-   *  Add-member entry. It is deliberately not a `can_add_member` boolean from
-   *  the backend: WHOM the viewer may add is a per-candidate answer (own agents
-   *  vs other people's vs humans), and the picker already asks it. */
-  addMemberWorkspaceId?: string;
   /** Drives the leave consequence sentence (rejoinable or not). */
   visibility?: ConversationVisibility;
 }
 
-/** Human copy for a leave-blocked reason. Mirrors `ChannelSettingsDialog`'s
+/** Human copy for a leave-blocked reason. Mirrors `ChannelSettingsDetails`'s
  *  wording — one blocked state must not read two ways depending on which
  *  surface the viewer opened. */
 function leaveBlockedCopy(reason: ChannelLeaveBlockedReason | null | undefined): string | null {
@@ -135,161 +75,9 @@ function leaveBlockedCopy(reason: ChannelLeaveBlockedReason | null | undefined):
   }
 }
 
-/** The roster surface's own inputs — everything except the modal's chrome
- *  (`open` / `onOpenChange`) and the bulk agent cluster that rides its corner.
- *  The Add-member entry is the HOST's, seated at the top of each host, so it is
- *  not one of these inputs. */
-type ChannelMembersContentProps = Omit<
-  ChannelMembersDialogProps,
-  | "open"
-  | "onOpenChange"
-  | "onRestartAllAgents"
-  | "onStopAllAgents"
-  | "bulkAgentPending"
-  | "addMemberWorkspaceId"
-> & {
-  /** Called after a successful self-leave, so a host that is a transient shell
-   *  can dismiss itself. The modal passes `onOpenChange(false)`; the tab host
-   *  passes nothing — the roster it was showing is simply gone. */
-  onLeft?: () => void;
-};
-
-/**
- * The Add-member entry, shared by both hosts so WHOM you may add (the picker's
- * per-candidate answer) and the fail-closed floor stay defined once. The roster
- * body does not own it — each host composes it at its own top; only the
- * trigger's width and the panel's anchoring are the host's.
- */
-export function ChannelAddMemberEntry({
-  workspaceId,
-  conversationId,
-  triggerWidthClass,
-  align,
-  popoverWidthClass,
-  modal = false,
-}: {
-  workspaceId: string;
-  conversationId: string;
-  /** Extra classes for the trigger Button — the host's width budget. */
-  triggerWidthClass?: string;
-  align?: "start" | "center" | "end";
-  popoverWidthClass?: string;
-  modal?: boolean;
-}): JSX.Element {
-  return (
-    <AddConversationMemberPopover
-      workspaceId={workspaceId}
-      conversationId={conversationId}
-      align={align}
-      widthClass={popoverWidthClass}
-      modal={modal}
-      trigger={
-        <Button size="sm" {...primaryAction(triggerWidthClass)}>
-          <Plus className="size-4" aria-hidden />
-          Add member
-        </Button>
-      }
-    />
-  );
-}
-
-/**
- * The Members roster as a MODAL — the shell only: `Dialog`, the title with its
- * count, and the bulk restart/stop corner cluster. The roster itself is
- * {@link ChannelMembersContent}, which the conversation Members tab mounts under
- * its own container; the two hosts share no shell.
- */
-export function ChannelMembersDialog({
-  open,
-  onOpenChange,
-  onRestartAllAgents,
-  onStopAllAgents,
-  bulkAgentPending = false,
-  addMemberWorkspaceId,
-  ...content
-}: ChannelMembersDialogProps): JSX.Element {
-  // The count in the title is chrome, so the shell reads it itself rather than
-  // taking it back out of the roster. Same cached query — no second fetch.
-  const membersResult = useConversationMembers(content.channelId);
-  const memberCount = membersResult.status === "resolved" ? membersResult.members.length : 0;
-  const showBulk = !!onRestartAllAgents || !!onStopAllAgents;
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        // A roster is one column of short rows, so a wider shell would only buy
-        // empty space right of every name; a long name is budgeted in the row.
-        // The Add-member trigger matches this width exactly.
-        className="max-w-90"
-        cornerActions={
-          showBulk ? (
-            <>
-              {onRestartAllAgents ? (
-                <DialogCornerButton
-                  onClick={onRestartAllAgents}
-                  disabled={bulkAgentPending}
-                  aria-label="Restart Channel agents"
-                  title="Restart Channel agents"
-                  className="disabled:opacity-40"
-                >
-                  {/* One stroke weight for all three glyphs in this cluster,
-                      matching the close ✕. */}
-                  <RefreshCw className="size-4" />
-                </DialogCornerButton>
-              ) : null}
-              {onStopAllAgents ? (
-                <DialogCornerButton
-                  onClick={onStopAllAgents}
-                  disabled={bulkAgentPending}
-                  aria-label="Stop Channel agents"
-                  title="Stop Channel agents"
-                  className="disabled:opacity-40"
-                >
-                  <Power className="size-4" />
-                </DialogCornerButton>
-              ) : null}
-              {/* Bulk runtime actions and "close this surface" are two different
-                  kinds of thing — one hairline keeps them from reading as one
-                  group of three. */}
-              <span aria-hidden className="h-4 w-px shrink-0 bg-border-subtle" />
-            </>
-          ) : null
-        }
-      >
-        <DialogHeader>
-          <DialogTitle className="flex items-baseline gap-1.5">
-            Members
-            {memberCount > 0 ? (
-              <span className="text-xs font-medium text-text-muted">{memberCount}</span>
-            ) : null}
-          </DialogTitle>
-        </DialogHeader>
-        {addMemberWorkspaceId ? (
-          <ChannelAddMemberEntry
-            workspaceId={addMemberWorkspaceId}
-            conversationId={content.channelId}
-            triggerWidthClass="w-full"
-            align="center"
-            popoverWidthClass="w-[360px]"
-            // `modal` so the picker's portaled list reclaims wheel scroll from
-            // the Dialog's scroll-lock.
-            modal
-          />
-        ) : null}
-        {/* The modal caps the roster's height; the roster itself only asks to
-            fill whatever box it is given. */}
-        <div className="flex max-h-[52vh] min-h-0 flex-col">
-          <ChannelMembersContent {...content} onLeft={() => onOpenChange(false)} />
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 /**
  * The roster itself — search, the HUMANS / AGENTS groups, per-row exit action
- * with its inline confirm, and the Add-member entry. Host-agnostic: it takes no
- * title, no close, no `open`, and never asks which host mounted it.
+ * with its inline confirm. The settings panel owns successful leave navigation.
  *
  * Width-adaptive: `conversation-surface` names the query container, so the
  * groups go side by side once THIS surface is wide (see `global.css`). Extra
@@ -297,11 +85,11 @@ export function ChannelMembersDialog({
  * narrow column of short names.
  */
 export function ChannelMembersContent({
+  query,
   channelId,
   agentRuntime,
   agentAvatarUrls,
   onLeave,
-  onLeft,
   canLeave = false,
   leaveBlockedReason = null,
   visibility,
@@ -316,14 +104,9 @@ export function ChannelMembersContent({
       ? viewer.id
       : null;
 
-  const [query, setQuery] = useState("");
   /** `memberDtoKey` of the row whose confirm is expanded — at most one. */
   const [confirming, setConfirming] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
-
-  // No open-keyed reseat: this surface's state IS its mount in both hosts. The
-  // modal's `DialogContent` has no `forceMount`, so closing it unmounts the
-  // roster; removing the tab unmounts it too.
 
   const removeAgent = useRemoveAgentFromChannel(channelId);
   const removeHuman = useRemoveHumanFromChannel(channelId);
@@ -353,7 +136,7 @@ export function ChannelMembersContent({
   // carries Leave, so it must be the first thing found. The workspace roster
   // leads with AGENTS on purpose and the two are deliberately not unified —
   // there, adding an agent is the likely intent.
-  const needle = query.trim().toLowerCase();
+  const needle = query.trim().replace(/^@/, "").toLowerCase();
   const matches = (m: MemberDto): boolean =>
     !needle ||
     m.name.toLowerCase().includes(needle) ||
@@ -371,7 +154,6 @@ export function ChannelMembersContent({
     setLeaving(true);
     try {
       await onLeave();
-      onLeft?.();
     } catch {
       // The caller surfaces the failure; keep the confirm open so Cancel and a
       // retry stay reachable.
@@ -449,7 +231,7 @@ export function ChannelMembersContent({
     return (
       <li key={key} className="flex flex-col">
         <div
-          className="flex min-h-8.5 items-center gap-2.5 rounded-(--chip-radius) px-1.5 py-1 transition-colors hover:bg-(--bg-option-hover)"
+          className="flex min-h-8.5 items-center gap-2.5 rounded-(--chip-radius) px-1.5 py-1 transition-colors hover:bg-(--bg-hover)"
           data-member-row={member.kind}
         >
           <span className="relative flex shrink-0 items-center">
@@ -565,26 +347,21 @@ export function ChannelMembersContent({
                 </p>
               </div>
             ) : null}
-            {/* This confirm sits inside the row it acts on, so neither button
-                lifts on hover in any theme — the row's own hover is already
-                moving under them. Hover still answers by colour, and in forza6
-                the commit sticker's shadow still grows. */}
+            {/* This confirm sits inside the row it acts on. */}
             <div className="flex items-center justify-end gap-2">
               <Button
-                variant="outline"
+                variant="cancel"
                 size="xs"
                 disabled={leaving || removePending}
                 onClick={() => setConfirming(null)}
-                {...destructiveCancel(undefined, { motion: "still" })}
               >
                 Cancel
               </Button>
               <Button
-                variant="outline"
+                variant="destructive-outline"
                 size="xs"
                 disabled={leaving || removePending}
                 onClick={() => (isSelf ? void handleLeave() : void handleRemove(member))}
-                {...destructiveAction(DESTRUCTIVE_TRIGGER, { motion: "still" })}
               >
                 {/* Label only — the glyph would repeat the row action that
                     opened this confirm. The spinner still shows, being state
@@ -600,20 +377,8 @@ export function ChannelMembersContent({
   };
 
   return (
-    <div className="conversation-surface flex min-h-0 flex-1 flex-col gap-2">
-      {members.length > MEMBERS_SEARCH_MIN ? (
-        <label data-input="" className={SEARCH_FIELD_FRAME}>
-          <Search className="size-3.5 shrink-0 text-text-muted" aria-hidden />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by name or @handle"
-            className="w-full min-w-0 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
-          />
-        </label>
-      ) : null}
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+    <div className="conversation-surface flex flex-col gap-2">
+      <div className="flex flex-col">
         {membersResult.status === "loading" ? (
           <p className="px-1.5 py-3 text-center text-xs italic text-text-muted">Loading…</p>
         ) : orderedHumans.length === 0 && agents.length === 0 ? (

@@ -529,10 +529,29 @@ describe("place-memory", () => {
       expect(getConversationActiveTab("c")).toBe("tasks");
     });
 
+    it("drops retired Members preferences and never restores their active selection", async () => {
+      memoryStore.set(
+        FUNCTIONAL_TABS_KEY,
+        JSON.stringify([{ kind: "panel", panel: "members" }, { kind: "chat" }, { kind: "tasks" }]),
+      );
+      memoryStore.set(
+        CONVERSATION_TABS_KEY,
+        JSON.stringify({
+          c: [{ kind: "panel", panel: "members" }, { kind: "chat" }],
+        }),
+      );
+      vi.resetModules();
+      const fresh = await import("./place-memory");
+      expect(fresh.getConversationTabs("c")).toEqual([{ kind: "chat" }, { kind: "tasks" }]);
+      fresh.recordConversationActiveTab("c", "panel:members");
+      expect(fresh.getConversationActiveTab("c")).toBe("chat");
+      vi.resetModules();
+    });
+
     it("notifies other consumers of selection and clears shared state on logout", () => {
       const listener = vi.fn();
       const unsubscribe = subscribeConversationTabs(listener);
-      recordConversationTabs("a", [{ kind: "panel", panel: "members" }, ...withAttachment]);
+      recordConversationTabs("a", [{ kind: "panel", panel: "threads" }, ...withAttachment]);
       recordConversationActiveTab("a", "attachment:att-1");
       expect(listener).toHaveBeenCalledTimes(2);
       clearPlaceMemory();

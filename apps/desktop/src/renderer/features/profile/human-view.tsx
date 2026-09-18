@@ -68,7 +68,8 @@ export function HumanView({
   if (isLoading || !dto) {
     return (
       <main
-        className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-base"
+        data-panel={variant === "side" ? "side" : "detail"}
+        className="flex h-full min-w-0 flex-1 flex-col overflow-hidden"
         style={paneChrome}
       >
         {variant === "side" ? (
@@ -85,8 +86,9 @@ export function HumanView({
 
   return (
     <main
+      data-panel={variant === "side" ? "side" : "detail"}
       data-profile-host={variant === "side" ? "side" : "human"}
-      className="flex h-full flex-1 flex-col overflow-hidden bg-bg-base"
+      className="flex h-full flex-1 flex-col overflow-hidden"
       style={paneChrome}
     >
       <HumanHeader

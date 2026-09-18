@@ -2,7 +2,6 @@ import { type JSX, type ReactNode } from "react";
 import { Activity, MessagesSquare, Monitor, Settings, Users } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { TaskIcon } from "@/features/task-shell/components/task-icon";
-import { PANE_RADIUS, paneChrome } from "./pane-chrome";
 
 /**
  * Top-level app sections. Outer to the channels/sessions sidebars —
@@ -77,23 +76,8 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
   return (
     <nav
       aria-label="App sections"
-      className="nav-rail flex h-full w-(--nav-rail-width) shrink-0 flex-col items-center gap-1 bg-(--bg-nav-rail) py-2"
-      style={{
-        ...paneChrome,
-        overflow: "hidden",
-        // The rail is unconditionally the frame's first item, so its
-        // bottom-left corner IS the app window's bottom-left corner. At a
-        // 2px tile radius that corner reads as a chip inside the arc the
-        // OS clips the window on, so it follows the app corner while the
-        // other three stay tiles. Only forza6 declares
-        // `--app-corner-radius`; elsewhere this resolves back to that
-        // theme's pane radius and nothing changes (iris resolves to 0 —
-        // its rail is a flat transparent strip on the gradient paper, not
-        // a card). The frame's bottom-RIGHT owner varies by section, so it
-        // is resolved structurally in `global.css` §App frame corners
-        // instead of inline.
-        borderBottomLeftRadius: `var(--app-corner-radius, ${PANE_RADIUS})`,
-      }}
+      className="nav-rail flex h-full w-(--nav-rail-width) shrink-0 flex-col items-center gap-1 py-2"
+      style={{ overflow: "hidden" }}
     >
       <TooltipProvider>
         {ITEMS.map((item) => {

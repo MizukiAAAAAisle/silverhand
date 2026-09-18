@@ -14,7 +14,7 @@
  * lead with a `size-8` icon square, Saved/Activity carry inline meta instead.
  *
  * Deliberately data-free and cheap — one shared `animate-pulse`, neutral utility
- * bars (`bg-bg-hover`); a skeleton is chrome, never a saturated status signal.
+ * bars (`bg-bg-elevated`); a skeleton is chrome, never a saturated status signal.
  * Drops straight into a pane's already-rendered scroller (which owns the outer
  * `px-4 py-3`), so this only lays out the `space-y-2` card stack.
  */
@@ -57,16 +57,16 @@ export function ListRowsSkeleton({
           // must not pick up the per-theme hover.
           className={`${COLLECTION_CARD_CLASS} flex items-start gap-3 px-4 py-3`}
         >
-          {withIcon ? <div className="mt-0.5 size-8 shrink-0 rounded-md bg-bg-hover" /> : null}
+          {withIcon ? <div className="mt-0.5 size-8 shrink-0 rounded-md bg-bg-elevated" /> : null}
           <div className="min-w-0 flex-1">
             {/* meta line (where / sender / date) */}
-            <div className={`h-2.5 rounded bg-bg-hover ${card.meta}`} />
+            <div className={`h-2.5 rounded bg-bg-elevated ${card.meta}`} />
             {/* title line */}
-            <div className={`mt-2.5 h-3.5 rounded bg-bg-hover ${card.title}`} />
+            <div className={`mt-2.5 h-3.5 rounded bg-bg-elevated ${card.title}`} />
             {/* body / excerpt lines */}
             <div className="mt-2 space-y-1.5">
               {card.body.map((w, j) => (
-                <div key={j} className={`h-3 rounded bg-bg-hover ${w}`} />
+                <div key={j} className={`h-3 rounded bg-bg-elevated ${w}`} />
               ))}
             </div>
           </div>

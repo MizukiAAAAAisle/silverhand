@@ -206,8 +206,7 @@ three constants to epoch 2, which puts the pre-epoch generation BELOW the
 minimum on both sides:
 
 - server side: `/api/*` and the event-WS upgrade fail closed with a structured
-  426 `upgrade_required` / `client_too_old` for an absent or malformed header
-  (`packages/backend/src/auth/desktop-api-epoch.ts` + its two test suites);
+  426 `upgrade_required` / `client_too_old` for an absent or malformed header;
 - client side: the desktop refuses a server that advertises below its own
   minimum, and promotes into the full-screen upgrade gate.
 

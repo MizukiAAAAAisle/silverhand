@@ -31,11 +31,6 @@ export type PrimaryPaneProps = Pick<
   | "threadsListActive"
   | "onToggleFilesList"
   | "filesListActive"
-  | "onArchiveChannel"
-  | "onRenameChannel"
-  | "onSetChannelVisibility"
-  | "onLeaveChannel"
-  | "archivePending"
   | "conversationRefsById"
   | "onOpenConversationRef"
   | "onOpenChannelRef"
@@ -84,9 +79,6 @@ export type SidePaneProps = Pick<
   | "onCloseChild"
   | "closeLabel"
   | "isFullscreen"
-  | "onArchiveChannel"
-  | "onRenameChannel"
-  | "archivePending"
   | "conversationRefsById"
   | "onOpenConversationRef"
   | "onOpenChannelRef"
@@ -128,6 +120,11 @@ export type PrimaryPaneModel =
 
 export type SecondaryPaneModel =
   | { kind: "none" }
+  | {
+      kind: "settings";
+      channelId: string;
+      onDepartChannel: (channelId: string) => void;
+    }
   | { kind: "agent"; props: AgentPaneProps }
   | { kind: "human"; props: Pick<ComponentProps<typeof HumanView>, "userId" | "onClose"> }
   | { kind: "files"; props: FilesPaneProps }

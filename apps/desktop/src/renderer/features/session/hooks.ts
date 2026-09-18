@@ -36,30 +36,12 @@ export type SetupRequired = RegistrationRequired & {
   signup_enabled: boolean;
 };
 
-/**
- * D4.a Commit 5d-fixup (Cindy P1-2): typed renderer arm for a
- * remote backend that is unreachable at fetch time. Pinned to the
- * preload `DesktopAuthState.backend_unreachable` arm so a
- * profile-saved-then-server-down boot lands on a typed UI gate
- * instead of the IPC promise rejecting and pinning the renderer
- * on a Loading spinner. **No `signup_enabled`** — when the server
- * is unreachable we don't know its policy.
- */
 export interface BackendUnreachable {
   backend_unreachable: true;
   server_url: string;
   message: string;
 }
 
-/**
- * #task:1761 — typed renderer arm for the desktop↔server API epoch hard
- * gate. `direction` says which side is behind: `app` → this build is older
- * than the server's minimum client epoch (remedy: upgrade the app);
- * `server` → the server generation is older than this build's minimum
- * (remedy: upgrade the server). No `signup_enabled` for the same reason as
- * `BackendUnreachable`: no business state may be inferred through an
- * incompatible pair.
- */
 export interface UpdateRequired {
   update_required: true;
   direction: "app" | "server";
@@ -144,12 +126,6 @@ export function isRegistrationRequired(
   );
 }
 
-/**
- * D4.a Commit 5d-fixup (Cindy P1-2): type guard for the
- * backend-unreachable arm. Renderer gates (app.tsx) check this
- * BEFORE `isRegistrationRequired` so the connect-banner takes
- * precedence over the setup wizard.
- */
 export function isBackendUnreachable(body: ViewerState): body is BackendUnreachable {
   return (
     typeof body === "object" &&
@@ -159,7 +135,6 @@ export function isBackendUnreachable(body: ViewerState): body is BackendUnreacha
   );
 }
 
-/** #task:1761 — type guard for the epoch update-required arm. */
 export function isUpdateRequired(body: ViewerState): body is UpdateRequired {
   return (
     typeof body === "object" &&
@@ -169,18 +144,6 @@ export function isUpdateRequired(body: ViewerState): body is UpdateRequired {
   );
 }
 
-/**
- * The current viewer as a fully-hydrated {@link UserDto}, read SYNCHRONOUSLY
- * from the `['me']` cache, or `null` when the auth-state query has not resolved
- * to an authenticated user (setup / backend-unreachable / update-required, or
- * not yet fetched).
- *
- * For non-hook callers that need the viewer identity carrier WITHOUT
- * subscribing — the optimistic-send `onMutate` builds the pending row's
- * `active` author from it (see `optimisticSelfAuthor`) and must fail closed if
- * the viewer has not hydrated. `useViewerUser()` is the subscribing read; this
- * is the same `['me']` carrier those hooks populate, so the two never diverge.
- */
 export function getHydratedViewer(qc: QueryClient): UserDto | null {
   const state = qc.getQueryData<ViewerState>(meKey);
   if (!state) return null;
@@ -240,12 +203,6 @@ export function mapAuthStateToViewer(
   };
 }
 
-/**
- * React Query view of the main-process desktop auth state. The main
- * process owns token persistence and validation; the renderer only
- * receives either the resolved user dto, a setup-required marker,
- * or (D4.a Commit 5d-fixup) a backend-unreachable marker.
- */
 export function useViewerUser() {
   const query = useQuery({
     queryKey: meKey,
@@ -266,28 +223,11 @@ export function useViewerUser() {
   return query;
 }
 
-/**
- * #task:1763 — runtime epoch promotion subscription. Main pushes
- * 'epoch:update-required' only after CONFIRMING client_too_old — via a
- * verifying server-info probe for REST 426 suspects, or directly from the
- * authoritative desktop_api advertisement carried by backend:info discovery.
- * The renderer's sole job is to invalidate the auth-state query so
- * `useViewerUser` re-asks `getAuthState()` and the startup precheck (the
- * single authority) returns the `app_update_required` arm — which unmounts
- * RegisteredAppShell through the existing App gate order.
- *
- * `subscribeRuntimeEpochPromotion` is the testable seam: behavior tests
- * inject a fake subscribe, capture the callback, and assert it invalidates
- * exactly the auth-state key.
- */
 export function subscribeRuntimeEpochPromotion(
   qc: QueryClient,
   subscribe: (handler: () => void) => () => void,
 ): () => void {
   return subscribe(() => {
-    // Drop the cached auth state so the live useViewerUser observer
-    // refetches getAuthState() and the startup precheck (the single
-    // authority) returns the gate arm.
     void qc.invalidateQueries({ queryKey: meKey });
   });
 }
@@ -412,11 +352,7 @@ export function useViewerAvatarObjectUrl(): string | null {
     data && !isRegistrationRequired(data) && !isBackendUnreachable(data) && !isUpdateRequired(data)
       ? data.avatar_url
       : null;
-  // Shares the app-session avatar cache (#task:1321): the viewer's blob is
-  // fetched once and reused by SettingsPage + every chat MessageItem (via the
-  // threaded viewer URL), and it survives re-renders without re-fetching. The
-  // cache — not this hook — owns the object URL, so there is no revoke here;
-  // logout clears it via `clearAvatarBlobCache` in `clearViewerLocalState`.
+
   const [objectUrl, setObjectUrl] = useState<string | null>(() =>
     avatarUrl ? (getAvatarBlobUrl(avatarUrl) ?? null) : null,
   );

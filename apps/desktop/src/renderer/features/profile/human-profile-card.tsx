@@ -1,7 +1,8 @@
 import { ProfileMessageActivity } from "@/features/profile/profile-message-activity";
 import dayjs from "dayjs";
+import { Clock, IdCard } from "lucide-react";
 import type { UserDto } from "@silverhand/shared";
-import { MetadataList, ProfileSection } from "@/features/profile/profile-summary-sections";
+import { ProfileFact, ProfileFactBand } from "@/features/profile/profile-summary-sections";
 import { useHumanAvatar } from "./use-human-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
@@ -37,25 +38,21 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
         </div>
       </section>
 
-      <ProfileMessageActivity subject={{ kind: "user", id: user.id }} />
+      <ProfileFactBand>
+        <ProfileFact icon={<IdCard className="size-3.5" />} label="ID">
+          <span className="font-medium text-text-primary">{user.id}</span>
+        </ProfileFact>
+        <ProfileFact icon={<Clock className="size-3.5" />} label="Created">
+          <span
+            className="font-medium text-text-primary"
+            title={dayjs(user.created_at).format("YYYY-MM-DD HH:mm:ss")}
+          >
+            {dayjs(user.created_at).format("YYYY-MM-DD")}
+          </span>
+        </ProfileFact>
+      </ProfileFactBand>
 
-      <ProfileSection title="Metadata" muted>
-        <MetadataList
-          items={[
-            {
-              label: "Created",
-              value: dayjs(user.created_at).format("YYYY-MM-DD"),
-              title: dayjs(user.created_at).format("YYYY-MM-DD HH:mm:ss"),
-            },
-            {
-              label: "Updated",
-              value: dayjs(user.updated_at).format("YYYY-MM-DD HH:mm"),
-              title: dayjs(user.updated_at).format("YYYY-MM-DD HH:mm:ss"),
-            },
-            { label: "User ID", value: user.id, mono: true },
-          ]}
-        />
-      </ProfileSection>
+      <ProfileMessageActivity subject={{ kind: "user", id: user.id }} />
     </div>
   );
 }

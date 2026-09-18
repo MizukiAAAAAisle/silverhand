@@ -255,6 +255,8 @@ export interface RouteState {
    *  uses `?files` (matching `?threads=1`) rather than the product-facing
    *  word "Attachments" for symmetry; the panel title is "Attachments". */
   filesListOpen: boolean;
+  /** Settings is channel-keyed, including when opened from a secondary channel. */
+  channelSettingsId?: string | null;
   /** Open task-detail pointer (`?task=<task_id>`). When set, the app-level
    *  detail modal is open on that task (#task:1715).
    *
@@ -426,6 +428,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     threadRootId,
     threadsListOpen,
     filesListOpen,
+    channelSettingsId: searchParams.get("settings") || null,
     taskDetailId,
     fullscreen,
     agentId: mAgent?.params.agentId ?? null,
@@ -628,6 +631,7 @@ const SECONDARY_PANES = {
   // topology choice ("one overlay at a time"), flippable without correctness risk.
   agent: { mode: "overlay", survivesOverlay: false },
   human: { mode: "overlay", survivesOverlay: false },
+  settings: { mode: "overlay", survivesOverlay: false },
   files: { mode: "overlay", survivesOverlay: false },
   task: { mode: "overlay", survivesOverlay: false },
 } as const satisfies Record<string, { mode: "overlay" | "replace"; survivesOverlay: boolean }>;
@@ -867,6 +871,20 @@ export function withThreadsQuery(pathname: string, search: string, open: boolean
   return serializeQuery(pathname, params);
 }
 
+/** Settings is a transient utility pane, explicitly bound to the inspected channel. */
+export function withChannelSettingsQuery(
+  pathname: string,
+  search: string,
+  channelId: string | null,
+): string {
+  const params = new URLSearchParams(search);
+  if (channelId === null) writeSecondaryPaneClose(params, "settings");
+  else {
+    writeSecondaryPaneOpen(params, "settings", channelId);
+  }
+  return serializeQuery(pathname, params);
+}
+
 /**
  * Build a URL with `?files` written or cleared. The Attachments panel is an
  * OVERLAY (`mode: 'overlay'` in {@link SECONDARY_PANES}), not a
@@ -1022,6 +1040,8 @@ export function useNav(): {
   /** Toggle the channel Attachments panel — drives the header Paperclip
    *  icon's click-to-toggle behaviour, mirroring `toggleThreadsList`. */
   toggleFilesList: () => void;
+  openChannelSettings: (channelId: string) => void;
+  closeChannelSettings: () => void;
   /** Open a task's detail by writing `?task=<task_id>` (an OVERLAY pane).
    *  Every entrance (chat chip, global Tasks section card, per-conversation
    *  Tasks tab card) goes through this one writer, so there is a single
@@ -1084,6 +1104,17 @@ export function useNav(): {
     const open = new URLSearchParams(location.search).get("threads") === "1";
     const next = withThreadsQuery(location.pathname, location.search, !open);
     navigate(next, { replace: true });
+  }, [navigate, location.pathname, location.search]);
+  const openChannelSettings = useCallback(
+    (channelId: string) => {
+      navigate(withChannelSettingsQuery(location.pathname, location.search, channelId), {
+        replace: true,
+      });
+    },
+    [navigate, location.pathname, location.search],
+  );
+  const closeChannelSettings = useCallback(() => {
+    navigate(withChannelSettingsQuery(location.pathname, location.search, null), { replace: true });
   }, [navigate, location.pathname, location.search]);
   const openFilesList = useCallback(() => {
     const next = withFilesQuery(location.pathname, location.search, true);
@@ -1186,6 +1217,8 @@ export function useNav(): {
       openFilesList,
       closeFilesList,
       toggleFilesList,
+      openChannelSettings,
+      closeChannelSettings,
       openTask,
       closeTask,
       openAgentPanel,
@@ -1219,6 +1252,8 @@ export function useNav(): {
       openFilesList,
       closeFilesList,
       toggleFilesList,
+      openChannelSettings,
+      closeChannelSettings,
       openTask,
       closeTask,
       openAgentPanel,

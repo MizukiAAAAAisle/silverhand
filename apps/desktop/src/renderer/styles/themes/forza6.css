@@ -1,22 +1,20 @@
-/* Theme: forza6
-   Tokens follow the same module order across themes. Keep explicit initial values
-   to prevent inheritance from the default theme. */
+/* Theme: forza6 */
 
 :root,
 [data-theme="forza6"] {
   /* Theme palette */
   --forza6-code-deep: color-mix(in srgb, var(--forza6-code-island) 70%, #000);
   --forza6-code-island: #07111f;
+  --forza6-cobalt: #2b4fd6;
   --forza6-cyan: #22b7e0;
   --forza6-indigo-slab: #2d2ab8;
   --forza6-ink: #0a0a0a;
   --forza6-lime: #d4f523;
-  --forza6-lime-deep: #3f7a1b;
   --forza6-lime-pale: #e6f68a;
+  --forza6-lime-deep: #3f7a1b;
   --forza6-orange: #ff7a1a;
   --forza6-paper: #fafbf6;
   --forza6-pink: #ff2c7a;
-  --forza6-pink-deep: #b3186a;
   --forza6-poster-teal: #329e86;
   --forza6-poster-teal-deep: #23545e;
   --forza6-task-gold: #ffd440;
@@ -24,99 +22,80 @@
 
   /* Typography and motion */
   --chrome-label-tracking: 0.06em;
-  --chrome-label-transform: uppercase;
-  --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --font-chrome-label: var(--font-display);
-  --font-display:
-    "Rajdhani", "Impact", "Helvetica Neue Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-display: "Rajdhani", "Impact", "Helvetica Neue Condensed", "Arial Narrow", system-ui, sans-serif;
   --font-mono: "Space Mono", ui-monospace, monospace;
-  --font-sans:
-    "Space Grotesk", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+  --font-sans: "Space Grotesk", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
     "PingFang SC", "Hiragino Sans GB", sans-serif;
-  --font-serif: var(--font-sans);
 
   /* Application frame and panes */
-  --app-corner-radius: 10px;
   --bg-app: var(--forza6-poster-teal);
   --card-radius: 2px;
   --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
   --frame-padding: 4px;
   --pane-gap: 4px;
-  --splitter-bg: transparent;
   --splitter-hover-bg: rgba(10, 10, 10, 0.45);
-  --titlebar-border: transparent;
 
   /* Surface, text and border foundations */
-  --bg-active: #c9d1c9;
   --bg-base: #ffffff;
   --bg-elevated: #f2f2f2;
-  --bg-hover: #dae0da;
+  --bg-hover: #f4f4f4;
   --bg-primary: #eceeeb;
   --bg-selected: var(--brand-primary);
   --bg-structure-dark: var(--forza6-ink);
-  --bg-surface: #dde0dc;
   --border: rgba(15, 31, 29, 0.14);
   --border-focus: var(--forza6-ink);
   --border-subtle: rgba(15, 31, 29, 0.1);
-  --radius-lg: 10px;
-  --radius-md: 6px;
   --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
   --radius-xl: 14px;
   --text-inverse: #f7f8f6;
-  --text-muted: #566663;
+  --text-muted: #3d3d3d;
   --text-on-dark-pop: var(--forza6-yellow);
   --text-on-selected: var(--forza6-ink);
   --text-on-structure: #ffffff;
-  --text-primary: #0f1f1d;
-  --text-secondary: #3b4946;
+  --text-primary: var(--forza6-ink);
+  --text-secondary: var(--forza6-ink);
 
   /* Brand and semantic colors */
-  --accent: var(--forza6-pink-deep);
-  --accent-2: var(--forza6-cyan);
-  --accent-glow: rgba(179, 24, 106, 0.3);
-  --accent-hover: #8e0f50;
-  --accent-soft: rgba(179, 24, 106, 0.14);
+  --accent: var(--forza6-cobalt);
+  --soft-alpha: 16%;
+  --accent-hover: #164fb0;
+  --accent-soft: color-mix(in srgb, var(--accent), transparent calc(100% - var(--soft-alpha)));
   --brand-primary: var(--forza6-pink);
   --error: #c8003c;
-  --error-soft: rgba(200, 0, 60, 0.16);
+  --error-soft: color-mix(in srgb, var(--error), transparent calc(100% - var(--soft-alpha)));
   --success: var(--forza6-lime-deep);
-  --success-soft: rgba(63, 122, 27, 0.16);
+  --success-soft: color-mix(in srgb, var(--success), transparent calc(100% - var(--soft-alpha)));
   --text-on-accent: #ffffff;
-  --text-on-accent-2: var(--forza6-ink);
   --text-on-brand: var(--forza6-ink);
   --text-on-error: #ffffff;
   --text-on-success: #ffffff;
   --text-on-warning: #ffffff;
   --warning: #8a5a00;
-  --warning-soft: rgba(138, 90, 0, 0.16);
+  --warning-soft: color-mix(in srgb, var(--warning), transparent calc(100% - var(--soft-alpha)));
   --warning-surface: #fdf3c2;
 
   /* Navigation and rows */
   --bg-nav-hover: var(--forza6-lime-pale);
-  --bg-nav-rail: var(--forza6-paper);
   --bg-nav-selected: var(--forza6-lime);
   --bg-row-selected: var(--forza6-lime);
   --border-nav-rail-hover: var(--forza6-ink);
   --border-nav-rail-selected: var(--forza6-ink);
   --border-row-hover: var(--forza6-ink);
+  --row-frame-hover-bg: transparent;
   --border-row-selected: var(--forza6-ink);
-  --nav-rail-border-color: var(--forza6-ink);
-  --nav-rail-border-width: var(--panel-border-width);
   --nav-rail-indicator-color: var(--bg-structure-dark);
   --nav-rail-indicator-display: block;
   --nav-rail-item-border-width: 2px;
   --row-radius: 0;
   --sidebar-row-border-width: 2px;
-  --text-nav-rail: var(--forza6-ink);
-  --text-nav-rail-hover: var(--forza6-ink);
-  --text-nav-selected: var(--forza6-ink);
+  --text-nav-rail: var(--text-secondary);
+  --text-nav-rail-hover: var(--text-primary);
+  --text-nav-selected: var(--text-secondary);
 
   /* Controls and actions */
-  --bg-control-primary: #9cbf5c;
-  --bg-control-primary-hover: #8cac53;
-  --bg-neutral-action-hover: var(--bg-floating);
-  --bg-option-hover: var(--forza6-lime-pale);
-  --bg-primary-action-hover: var(--bg-control-primary);
   --border-control: var(--forza6-ink);
   --border-control-hover: var(--forza6-ink);
   --control-border-width: 2px;
@@ -130,7 +109,6 @@
   --select-content-radius: 0;
   --select-item-radius: 0;
   --tab-segment-radius: 0;
-  --text-on-control-primary: var(--forza6-ink);
 
   /* Range controls */
   --range-cursor: pointer;
@@ -183,11 +161,10 @@
   --chip-radius: 0;
   --message-bubble-radius: 0;
   --pill-radius: 0;
-  --system-message-size: 12px;
   --thread-preview-bg: oklab(0 0 0 / 0.03);
   --thread-preview-bg-hover: oklab(0 0 0 / 0.08);
   --thread-preview-text: oklab(0 0 0 / 0.6);
-  --unread: var(--accent);
+  --unread: #b3186a;
 
   /* Composer */
   --composer-border-color: var(--field-border-color);
@@ -203,12 +180,11 @@
   --border-inline-code: none;
   --border-island: var(--bg-island);
   --code-block-border-width: 2px;
-  --code-block-header-bg: #ffffff;
+  --code-block-header-bg: var(--bg-floating);
   --inline-code-radius: 0;
-  --md-code-size: 14px;
-  --md-prose-size: 14px;
-  /* Diagram rendering uses the light palette; source code keeps the dark island. */
-  --mermaid-diagram-bg: #ffffff;
+  /* Diagram surface follows the theme's island (all themes route through
+   *  --bg-island); source code keeps the dark island. */
+  --mermaid-diagram-bg: var(--bg-island);
   --text-inline-code: var(--forza6-ink);
   --text-island: #e8f1ef;
 
@@ -254,7 +230,7 @@
   --task-status-done-bg: var(--forza6-lime-deep);
   --task-status-done-border: none;
   --task-status-done-solid: var(--task-status-done-bg);
-  --task-status-done-text: #f7f8f6;
+  --task-status-done-text: var(--text-inverse);
   --task-status-in-progress-bg: var(--forza6-cyan);
   --task-status-in-progress-border: none;
   --task-status-in-progress-solid: var(--task-status-in-progress-bg);
@@ -267,13 +243,22 @@
   --task-status-todo-bg: #5a6b67;
   --task-status-todo-border: none;
   --task-status-todo-solid: var(--task-status-todo-bg);
-  --task-status-todo-text: #f7f8f6;
+  --task-status-todo-text: var(--text-inverse);
 
   /* Panel geometry */
   --panel-border-width: 2px;
 }
 
 [data-theme="forza6"] {
+  --bg-nav-rail: var(--forza6-paper);
+
+  /* Primary CTA is forza6-only avocado green (its accent is pink); kept out of
+   *  `:root` so other themes' CTA falls back to their own `--accent`. */
+  --bg-control-primary: #9cbf5c;
+  --bg-control-primary-hover: #8cac53;
+  --bg-primary-action-hover: var(--bg-control-primary);
+  --text-on-control-primary: var(--forza6-ink);
+
   /* Profile activity: explicit theme scope avoids exporting its color to other themes. */
   --message-activity-color: var(--bg-control-primary);
   --message-activity-radius: 3px;

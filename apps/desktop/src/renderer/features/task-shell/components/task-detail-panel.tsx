@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { paneChrome } from "@/components/layout/pane-chrome";
 import { Pencil } from "lucide-react";
 import type { TaskDetailDto } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
@@ -95,7 +96,12 @@ export function TaskDetailPanel({
     // makes it fill the SplitPane's right wrapper — without it the pane is a flex
     // row child that shrinks to its intrinsic content width (a thin strip); the
     // inner body's `flex-1` can only fill this root, not widen it (#task:1721).
-    <div className="task-pane flex h-full w-full flex-col bg-bg-floating" aria-label="Task detail">
+    <div
+      data-panel="side"
+      className="task-pane flex h-full w-full flex-col overflow-hidden bg-bg-floating"
+      style={{ ...paneChrome, background: undefined }}
+      aria-label="Task detail"
+    >
       {/* The shared side-panel header, same primitive (and same title/subtitle
           idiom) the agent / thread / attachments panes use — so the close ✕ is
           the ONE `data-sticker-close` affordance forza6 stamps as a poster
@@ -177,7 +183,7 @@ function PaneContent({
             <button
               type="button"
               onClick={onRetry}
-              className="ml-auto shrink-0 rounded px-1 py-0.5 font-medium text-text-secondary underline-offset-2 hover:text-text-primary hover:underline focus-outline-accent"
+              className="ml-auto shrink-0 rounded px-1 py-0.5 font-medium text-text-secondary underline-offset-2 hover:text-text-primary hover:underline focus-outline"
             >
               Retry
             </button>
@@ -213,20 +219,20 @@ function PaneStatePanel({
         className="min-h-0 flex-1 overflow-hidden px-4.5 py-4"
       >
         <div aria-hidden className="flex flex-col gap-4 motion-safe:animate-pulse">
-          <div className="h-5 w-3/4 rounded-(--control-radius) bg-bg-hover" />
+          <div className="h-5 w-3/4 rounded-(--control-radius) bg-bg-elevated" />
           <div className="task-pane-meta items-center">
             {Array.from({ length: 6 }, (_, index) => (
               <Fragment key={index}>
-                <div className="h-2.5 w-14 rounded-(--control-radius) bg-bg-hover" />
-                <div className="h-3 w-24 max-w-full rounded-(--control-radius) bg-bg-hover" />
+                <div className="h-2.5 w-14 rounded-(--control-radius) bg-bg-elevated" />
+                <div className="h-3 w-24 max-w-full rounded-(--control-radius) bg-bg-elevated" />
               </Fragment>
             ))}
           </div>
           <div className="flex flex-col gap-2">
-            <div className="mb-1 h-2.5 w-20 rounded-(--control-radius) bg-bg-hover" />
-            <div className="h-3 w-full rounded-(--control-radius) bg-bg-hover" />
-            <div className="h-3 w-full rounded-(--control-radius) bg-bg-hover" />
-            <div className="h-3 w-2/3 rounded-(--control-radius) bg-bg-hover" />
+            <div className="mb-1 h-2.5 w-20 rounded-(--control-radius) bg-bg-elevated" />
+            <div className="h-3 w-full rounded-(--control-radius) bg-bg-elevated" />
+            <div className="h-3 w-full rounded-(--control-radius) bg-bg-elevated" />
+            <div className="h-3 w-2/3 rounded-(--control-radius) bg-bg-elevated" />
           </div>
         </div>
       </div>

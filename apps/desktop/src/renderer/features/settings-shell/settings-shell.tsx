@@ -17,7 +17,6 @@ import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
 import { CONTROL_HOVER_LIFT } from "@/components/common/control-ink-border";
-import { destructiveAction, DESTRUCTIVE_TRIGGER } from "@/components/common/destructive-action";
 import { cn } from "@/lib/cn";
 import { useAppearance } from "@/hooks/use-appearance";
 import {
@@ -66,7 +65,6 @@ const THEME_META: Record<
     surface: string;
     text: string;
     accent: string;
-    border: string;
   }
 > = {
   "studio-light": {
@@ -75,7 +73,6 @@ const THEME_META: Record<
     surface: "#DEE3EB",
     text: "#111725",
     accent: "#2F5AD0",
-    border: "rgba(17, 23, 37, 0.12)",
   },
   forza6: {
     label: "Forza6",
@@ -83,7 +80,6 @@ const THEME_META: Record<
     surface: "#FF2C7A",
     text: "#0A0A0A",
     accent: "#D4F523",
-    border: "#FF2C7A",
   },
   "slack-dark": {
     label: "Slack Dark",
@@ -91,7 +87,6 @@ const THEME_META: Record<
     surface: "#350D36",
     text: "#E2E3E3",
     accent: "#1D9BD1",
-    border: "#350D36",
   },
   iris: {
     label: "Iris",
@@ -99,7 +94,6 @@ const THEME_META: Record<
     surface: "#C4D0DA",
     text: "#1F1A12",
     accent: "#6D28C9",
-    border: "rgba(31, 26, 18, 0.18)",
   },
 };
 
@@ -230,13 +224,11 @@ function AppearancePane({
                       type="button"
                       onClick={() => setTheme(id)}
                       className={cn(
-                        "group relative flex min-h-23 flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left focus-outline",
+                        "group relative flex min-h-23 flex-col items-start justify-between overflow-hidden rounded-[10px] p-3 text-left focus-outline",
                         CONTROL_HOVER_LIFT,
-                        active ? "border-accent" : "border-border-subtle",
                       )}
                       style={{
                         background: `linear-gradient(135deg, ${meta.bg}, ${meta.surface})`,
-                        ...(active ? null : { borderColor: meta.border }),
                       }}
                     >
                       <div className="flex gap-1">
@@ -343,7 +335,7 @@ function MessageAlignmentControl(): JSX.Element {
                 "flex min-w-0 flex-col gap-3 rounded-(--control-radius) border-(length:--control-border-width) p-3 text-xs font-medium transition-colors focus-outline",
                 selected
                   ? "border-(--border-row-selected) bg-(--bg-row-selected) text-text-on-selected"
-                  : "border-border-subtle bg-bg-base text-text-secondary hover:border-(--border-control-hover) hover:bg-(--bg-option-hover) hover:text-text-primary",
+                  : "border-border-subtle bg-bg-base text-text-secondary hover:border-(--border-control-hover) hover:bg-(--bg-hover) hover:text-text-primary",
               )}
             >
               <div aria-hidden="true" className="flex w-full flex-col gap-2">
@@ -428,10 +420,9 @@ function AccountPane(): JSX.Element {
             </div>
             <Button
               type="button"
-              variant="outline"
+              variant="destructive-outline"
               onClick={() => void onLogout()}
               disabled={logout.isPending}
-              {...destructiveAction(DESTRUCTIVE_TRIGGER)}
             >
               {logout.isPending ? (
                 <Loader2 className="size-3.5 animate-spin" />

@@ -3,7 +3,6 @@ import { KeyRound, Loader2, LogIn, UserPlus } from "lucide-react";
 import { AUTH_HANDLE_TAKEN_CODE, suggestParticipantNameFromEmail } from "@silverhand/shared";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { primaryAction } from "@/components/common/primary-action";
 import { nameFormatMessage } from "@/features/naming/use-name-availability";
 import { cn } from "@/lib/cn";
 import { AuthSplitLayout } from "@/components/brand/auth-split-layout";
@@ -262,7 +261,7 @@ export function RegistrationGate({
         </div>
 
         <footer className="mt-6 flex flex-col gap-2">
-          <Button type="submit" disabled={!canSubmit} {...primaryAction("w-full justify-center")}>
+          <Button type="submit" variant="primary" className="w-full justify-center" disabled={!canSubmit}>
             {submitting ? (
               <>
                 <Loader2 className="size-3.5 animate-spin" />

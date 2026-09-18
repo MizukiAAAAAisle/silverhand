@@ -49,7 +49,7 @@ export type Tab =
     };
 
 /** The conversation surfaces that can be opened as a tab. */
-export type PanelTabKind = "attachments" | "threads" | "members";
+export type PanelTabKind = "attachments" | "threads";
 
 /** Derived from a total map rather than a bare array, so adding a
  *  {@link PanelTabKind} without extending validation is a type error instead of
@@ -57,7 +57,6 @@ export type PanelTabKind = "attachments" | "threads" | "members";
 const PANEL_TAB_KINDS = {
   attachments: true,
   threads: true,
-  members: true,
 } as const satisfies Record<PanelTabKind, true>;
 
 function isPanelTabKind(value: unknown): value is PanelTabKind {

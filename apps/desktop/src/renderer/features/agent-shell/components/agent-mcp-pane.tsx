@@ -137,7 +137,7 @@ function ProfileMcpScope({
           Changes take effect at the agent's <strong>next spawn</strong> — this is not a hot reload.
         </NoticeLine>
       ) : (
-        <div className="flex items-start gap-2 border border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed text-text-secondary">
+        <div className="flex items-start gap-2 rounded-(--control-radius) border border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed text-text-secondary">
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-error" />
           <span>
             {runtime === "pi" ? (

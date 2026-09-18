@@ -10,7 +10,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { primaryAction } from "@/components/common/primary-action";
 import {
   useBackendInfoSnapshot,
   useCancelPendingComputerMutation,
@@ -282,8 +281,8 @@ export function NewComputerDialog({
               {/* Name is required — it's the finalize gate. */}
               <Button
                 type="submit"
+                variant="primary"
                 disabled={rename.isPending || name.trim() === ""}
-                {...primaryAction()}
               >
                 {computerCopy.finish}
               </Button>
@@ -299,7 +298,7 @@ export function NewComputerDialog({
             />
 
             <div className="mt-1 flex items-center gap-2 border border-dashed border-border px-3 py-2.5 text-sm text-text-secondary">
-              <Loader2 className="size-4 animate-spin text-accent" />
+              <Loader2 className="size-4 animate-spin text-text-secondary" />
               {computerCopy.waitingForConnection}…
             </div>
           </div>

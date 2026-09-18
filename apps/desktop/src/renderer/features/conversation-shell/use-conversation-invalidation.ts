@@ -1,14 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 
-import type { ConversationVisibility } from "@silverhand/shared";
-
-import {
-  useArchiveChannel,
-  useRenameChannel,
-  useLeaveChannel,
-  useSetChannelVisibility,
-  type ChannelListItem,
-} from "@/features/workspaces/hooks";
+import { type ChannelListItem } from "@/features/workspaces/hooks";
 
 import {
   useForeignWorkspaceChannelRemovalSync,
@@ -71,62 +63,6 @@ export function useConversationInvalidation({
     [selectedChannelId, selectedWorkspaceId, memberActiveChannels, nav.toChannel, nav.toWorkspace],
   );
 
-  const archiveChannel = useArchiveChannel(selectedWorkspaceId ?? null);
-
-  const renameChannel = useRenameChannel(selectedWorkspaceId ?? null);
-
-  const leaveChannel = useLeaveChannel(selectedWorkspaceId ?? null);
-
-  const setChannelVisibility = useSetChannelVisibility(selectedWorkspaceId ?? null);
-
-  const handleArchiveChannelMutation = useCallback(
-    (channelId: string, archived: boolean) => {
-      const movesPrimary = archived && channelId === selectedChannelId;
-      archiveChannel.mutate(
-        { channelId, archived, workspaceId: selectedWorkspaceId ?? undefined },
-        movesPrimary ? { onSuccess: () => departPrimaryPane(channelId) } : undefined,
-      );
-    },
-    [archiveChannel, selectedChannelId, selectedWorkspaceId, departPrimaryPane],
-  );
-
-  const handleRenameChannelMutation = useCallback(
-    async (channelId: string, title: string) => {
-      await renameChannel.mutateAsync({
-        channelId,
-        title,
-        workspaceId: selectedWorkspaceId ?? undefined,
-      });
-    },
-    [renameChannel, selectedWorkspaceId],
-  );
-
-  const handleSetChannelVisibilityMutation = useCallback(
-    async (channelId: string, visibility: ConversationVisibility) => {
-      await setChannelVisibility.mutateAsync({
-        channelId,
-        visibility,
-        workspaceId: selectedWorkspaceId ?? undefined,
-      });
-    },
-    [setChannelVisibility, selectedWorkspaceId],
-  );
-
-  const handleLeaveChannelMutation = useCallback(
-    async (channelId: string) => {
-      const res = await leaveChannel.mutateAsync(channelId);
-      const isPrivate =
-        res.channel.roster_policy === "open" && res.channel.visibility === "private";
-      if (!isPrivate) {
-        return;
-      }
-      // Same ladder a third-party removal uses (`departPrimaryPane`): next/prev
-      // neighbor, else clear to the workspace empty state. It no-ops when the
-      // left channel isn't the primary selection.
-      departPrimaryPane(channelId);
-    },
-    [leaveChannel, departPrimaryPane],
-  );
   useViewerChannelRemovalSync({
     workspaceId: selectedWorkspaceId,
     active: activeChannels,
@@ -148,11 +84,6 @@ export function useConversationInvalidation({
 
   return {
     recentlyRemovedPrimaryRef,
-    archiveChannel,
-    renameChannel,
-    handleArchiveChannelMutation,
-    handleRenameChannelMutation,
-    handleSetChannelVisibilityMutation,
-    handleLeaveChannelMutation,
+    departPrimaryPane,
   };
 }

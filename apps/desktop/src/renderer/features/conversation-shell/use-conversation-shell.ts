@@ -71,15 +71,7 @@ export function useConversationShell({
 
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
 
-  const {
-    recentlyRemovedPrimaryRef,
-    archiveChannel,
-    renameChannel,
-    handleArchiveChannelMutation,
-    handleRenameChannelMutation,
-    handleSetChannelVisibilityMutation,
-    handleLeaveChannelMutation,
-  } = useConversationInvalidation({
+  const { recentlyRemovedPrimaryRef, departPrimaryPane } = useConversationInvalidation({
     activeChannels: read.activeChannels,
     archivedChannels: read.archivedChannels,
     memberActiveChannels: read.memberActiveChannels,
@@ -229,22 +221,6 @@ export function useConversationShell({
     [nav.go],
   );
 
-  const handleArchiveSecondaryChannelMutation = useCallback(
-    (channelId: string, archived: boolean) => {
-      const wid = panes.secondaryViewInputs.archiveWorkspaceId ?? selectedWorkspaceId ?? undefined;
-      archiveChannel.mutate({ channelId, archived, workspaceId: wid });
-    },
-    [archiveChannel, panes.secondaryViewInputs.archiveWorkspaceId, selectedWorkspaceId],
-  );
-
-  const handleRenameSecondaryChannelMutation = useCallback(
-    async (channelId: string, title: string) => {
-      const wid = panes.secondaryViewInputs.archiveWorkspaceId ?? selectedWorkspaceId ?? undefined;
-      await renameChannel.mutateAsync({ channelId, title, workspaceId: wid });
-    },
-    [renameChannel, panes.secondaryViewInputs.archiveWorkspaceId, selectedWorkspaceId],
-  );
-
   return {
     chat: {
       route,
@@ -283,7 +259,6 @@ export function useConversationShell({
       route,
       read,
       {
-        archivePending: archiveChannel.isPending,
         secondaryDescriptor: panes.secondaryDescriptor,
         channelIndexesAvailable: panes.channelIndexesAvailable,
         filesListMounted: panes.filesListMounted,
@@ -301,6 +276,7 @@ export function useConversationShell({
       },
       {
         requestJump,
+        departPrimaryPane,
         handleOpenAdvancedSearch,
         openTaskInPane: panes.openTaskInPane,
         setTaskPaneEditing: panes.setTaskPaneEditing,
@@ -312,12 +288,6 @@ export function useConversationShell({
         handleMessageAgent,
         handleDraftOpenedPair,
         handleJumped,
-        handleArchiveChannelMutation,
-        handleRenameChannelMutation,
-        handleSetChannelVisibilityMutation,
-        handleLeaveChannelMutation,
-        handleArchiveSecondaryChannelMutation,
-        handleRenameSecondaryChannelMutation,
         handleOpenThreadFromChannel: panes.handleOpenThreadFromChannel,
         openSide: nav.openSide,
         toggleThreadsList: nav.toggleThreadsList,

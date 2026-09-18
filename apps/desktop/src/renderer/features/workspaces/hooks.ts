@@ -1154,6 +1154,7 @@ export function useRenameChannel(workspaceId: string | null) {
       }
       qc.invalidateQueries({ queryKey: ["archived-channels"] });
       qc.invalidateQueries({ queryKey: ["conversation-ref", channel.id] });
+      qc.invalidateQueries({ queryKey: channelDetailKey(channel.id) });
     },
   });
 }

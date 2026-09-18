@@ -5,35 +5,28 @@
 [data-theme="slack-dark"] {
   /* Typography and motion */
   --chrome-label-tracking: 0.05em;
-  --chrome-label-transform: uppercase;
-  --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --font-chrome-label: var(--font-sans);
   --font-display: var(--font-sans);
   --font-mono: "Hack", "JetBrains Mono", "SF Mono", ui-monospace, monospace;
   --font-sans:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Lato", "PingFang SC",
     "Hiragino Sans GB", sans-serif;
-  --font-serif: var(--font-sans);
 
   /* Application frame and panes */
-  --bg-app: #350d36;
+  --bg-app: #141619;
   --card-radius: 8px;
   --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.4);
   --frame-padding: 8px;
   --pane-gap: 8px;
-  --splitter-bg: transparent;
   --splitter-hover-bg: rgba(255, 255, 255, 0.24);
-  --titlebar-border: transparent;
 
   /* Surface, text and border foundations */
-  --bg-active: #36363b;
   --bg-base: #1a1d21;
   --bg-elevated: #232529;
-  --bg-hover: #27242c;
+  --bg-hover: rgba(255, 255, 255, 0.05);
   --bg-primary: #1a1d21;
   --bg-selected: var(--brand-primary);
   --bg-structure-dark: #0e1013;
-  --bg-surface: #2c2d30;
   --border: rgba(255, 255, 255, 0.1);
   --border-focus: var(--accent);
   --border-subtle: rgba(255, 255, 255, 0.06);
@@ -47,55 +40,46 @@
   --text-on-selected: #ffffff;
   --text-on-structure: var(--text-primary);
   --text-primary: #e2e3e3;
-  --text-secondary: #bababb;
+  --text-secondary: #cbcccd;
 
   /* Brand and semantic colors */
-  --accent: #1d9bd1;
-  --accent-2: var(--accent);
-  --accent-glow: rgba(29, 155, 209, 0.3);
-  --accent-hover: #4fb7dc;
-  --accent-soft: rgba(29, 155, 209, 0.14);
+  --accent: #4a9eff;
+  --soft-alpha: 14%;
+  --accent-hover: #7db9ff;
+  --accent-soft: color-mix(in srgb, var(--accent), transparent calc(100% - var(--soft-alpha)));
   --brand-primary: #1164a3;
   --error: #e01e5a;
-  --error-soft: rgba(224, 30, 90, 0.14);
+  --error-soft: color-mix(in srgb, var(--error), transparent calc(100% - var(--soft-alpha)));
   --success: #2ebb85;
-  --success-soft: rgba(46, 187, 133, 0.14);
+  --success-soft: color-mix(in srgb, var(--success), transparent calc(100% - var(--soft-alpha)));
   --text-on-accent: #0f1419;
-  --text-on-accent-2: var(--text-on-accent);
   --text-on-brand: #ffffff;
   --text-on-error: #ffffff;
   --text-on-success: #0f1419;
   --text-on-warning: #0f1419;
   --warning: #ecb22e;
-  --warning-soft: rgba(236, 178, 46, 0.14);
+  --warning-soft: color-mix(in srgb, var(--warning), transparent calc(100% - var(--soft-alpha)));
   --warning-surface: rgba(236, 178, 46, 0.15);
 
   /* Navigation and rows */
   --bg-nav-hover: rgba(255, 255, 255, 0.06);
-  --bg-nav-rail: #19171d;
-  --bg-nav-selected: var(--bg-selected);
+  --bg-nav-selected: rgba(255, 255, 255, 0.14);
   --bg-row-selected: var(--brand-primary);
   --border-nav-rail-hover: transparent;
   --border-nav-rail-selected: transparent;
   --border-row-hover: transparent;
+  --row-frame-hover-bg: color-mix(in srgb, var(--bg-base), var(--text-primary) 6%);
   --border-row-selected: transparent;
-  --nav-rail-border-color: transparent;
-  --nav-rail-border-width: 0px;
   --nav-rail-indicator-color: transparent;
   --nav-rail-indicator-display: none;
   --nav-rail-item-border-width: 2px;
   --row-radius: 6px;
   --sidebar-row-border-width: 2px;
-  --text-nav-rail: #b9bbbe;
-  --text-nav-rail-hover: #ffffff;
-  --text-nav-selected: var(--text-on-selected);
+  --text-nav-rail: var(--text-secondary);
+  --text-nav-rail-hover: var(--text-primary);
+  --text-nav-selected: var(--text-secondary);
 
   /* Controls and actions */
-  --bg-control-primary: #9cbf5c;
-  --bg-control-primary-hover: #a8c770;
-  --bg-neutral-action-hover: var(--bg-option-hover);
-  --bg-option-hover: var(--bg-hover);
-  --bg-primary-action-hover: var(--bg-control-primary-hover);
   --border-control: var(--border);
   --border-control-hover: var(--border);
   --control-border-width: 1px;
@@ -109,7 +93,6 @@
   --select-content-radius: 6px;
   --select-item-radius: 4px;
   --tab-segment-radius: 4px;
-  --text-on-control-primary: #0a0a0a;
 
   /* Range controls */
   --range-cursor: initial;
@@ -155,15 +138,14 @@
   --message-bubble-radius: var(--card-radius);
   --slack-dark-bg-message-framed: color-mix(in oklab, var(--accent) 10%, transparent);
   --pill-radius: 9999px;
-  --system-message-size: 12px;
   --thread-preview-bg: var(--chip-bg);
   --thread-preview-bg-hover: var(--chip-bg-hover);
   --thread-preview-text: oklab(1 0 0 / 0.5);
-  --unread: var(--accent);
+  --unread: #e0294b;
 
   /* Composer */
   --composer-border-color: initial;
-  --composer-border-width: initial;
+  --composer-border-width: 2px;
   --composer-shadow: initial;
   --composer-shadow-focus: initial;
   --composer-transition: initial;
@@ -177,8 +159,6 @@
   --code-block-border-width: 1px;
   --code-block-header-bg: var(--bg-island-deep);
   --inline-code-radius: var(--radius-sm);
-  --md-code-size: 14px;
-  --md-prose-size: 14px;
   --mermaid-diagram-bg: var(--bg-island);
   --text-inline-code: #e8912d;
   --text-island: #d1d2d3;
@@ -257,7 +237,7 @@
 }
 
 [data-theme="slack-dark"] [data-row-selected] [data-channel-icon] {
-  color: var(--text-on-selected);
+  color: inherit;
 }
 
 [data-theme="slack-dark"] [data-conversation-hash-icon] {
@@ -283,13 +263,7 @@
 }
 
 [data-theme="slack-dark"] [data-composer-shell]:focus-within {
-  border-color: var(--border-subtle);
-  box-shadow: 0 0 0 2px
-    color-mix(
-      in oklab,
-      color-mix(in oklab, var(--accent) 60%, var(--brand-primary)) 45%,
-      transparent
-    );
+  border-color: var(--accent);
 }
 
 /* Hooks: Agent creation */
@@ -307,7 +281,8 @@
 }
 
 [data-theme="slack-dark"] [data-tasks-board] [data-task-number]:hover {
-  border-color: var(--accent);
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg-floating), var(--text-primary) 3%);
   box-shadow: var(--shadow-popover);
 }
 

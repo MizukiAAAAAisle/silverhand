@@ -1,14 +1,8 @@
-import type {
-  AttachmentDto,
-  ChannelLeaveBlockedReason,
-  ConversationAgentRuntimeDto,
-  ConversationVisibility,
-} from "@silverhand/shared";
+import type { AttachmentDto } from "@silverhand/shared";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import type { PanelTabKind } from "@/features/conversation-shell/model/conversation-tabs";
 import { ChannelAttachmentsContent } from "@/features/conversation-shell/components/channel-attachments-panel";
 import { ChannelThreadsContent } from "@/features/conversation-shell/components/channel-threads-panel";
-import { ChannelAddMemberEntry, ChannelMembersContent } from "./members-dialog";
 
 /**
  * The custom-tab HOST for a conversation surface. It owns only the tab's
@@ -17,7 +11,7 @@ import { ChannelAddMemberEntry, ChannelMembersContent } from "./members-dialog";
  * context menu), no `open` lifecycle.
  *
  * It shares NO shell with the side panel / modal: the only reused units are the
- * three surfaces' content components, which read their own authorities and adapt
+ * two surfaces' content components, which read their own authorities and adapt
  * to the width of whatever container they land in. Hence no `variant` prop and
  * no way for a content component to learn which host it is under.
  */
@@ -28,13 +22,6 @@ export function ConversationPanelTab({
   onJumpToMessage,
   onOpenAttachment,
   onOpenThread,
-  agentRuntime,
-  agentAvatarUrls,
-  onLeave,
-  canLeave,
-  leaveBlockedReason,
-  addMemberWorkspaceId,
-  visibility,
 }: {
   panel: PanelTabKind;
   channelId: string;
@@ -42,13 +29,6 @@ export function ConversationPanelTab({
   onJumpToMessage: (target: MessageJumpTarget) => void;
   onOpenAttachment?: (attachment: AttachmentDto) => void;
   onOpenThread?: (rootMessageId: string) => void;
-  agentRuntime: readonly ConversationAgentRuntimeDto[] | undefined;
-  agentAvatarUrls: Map<string, string | null>;
-  onLeave?: () => Promise<void>;
-  canLeave?: boolean;
-  leaveBlockedReason?: ChannelLeaveBlockedReason | null;
-  addMemberWorkspaceId?: string;
-  visibility?: ConversationVisibility;
 }): JSX.Element | null {
   switch (panel) {
     case "attachments":
@@ -71,34 +51,6 @@ export function ConversationPanelTab({
       return (
         <div className="flex h-full min-h-0 flex-col px-3">
           <ChannelThreadsContent channelId={channelId} onOpenThread={onOpenThread} />
-        </div>
-      );
-    case "members":
-      return (
-        <div className="flex h-full min-h-0 flex-col overflow-y-auto px-3 py-3">
-          {/* Add member is a natural-width top action — no divider, no restyle:
-              same primary poster as the modal, just sized to its label instead
-              of stretched to a banner, so it reads as the roster's action above
-              the HUMANS/AGENTS columns. Gate is the header `+`'s add-member
-              floor. */}
-          {addMemberWorkspaceId ? (
-            <div className="mb-3">
-              <ChannelAddMemberEntry
-                workspaceId={addMemberWorkspaceId}
-                conversationId={channelId}
-                align="start"
-              />
-            </div>
-          ) : null}
-          <ChannelMembersContent
-            channelId={channelId}
-            agentRuntime={agentRuntime}
-            agentAvatarUrls={agentAvatarUrls}
-            onLeave={onLeave}
-            canLeave={canLeave}
-            leaveBlockedReason={leaveBlockedReason}
-            visibility={visibility}
-          />
         </div>
       );
   }

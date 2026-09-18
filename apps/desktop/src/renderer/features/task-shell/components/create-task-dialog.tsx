@@ -11,7 +11,6 @@ import {
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { CreateTaskChannelPicker } from "@/features/task-shell/components/create-task-channel-picker";
-import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 import { createTaskErrorMessage } from "@/features/task-shell/model/create-task-error";
 import { useCreateTask } from "@/features/task-shell/hooks/hooks";
 import type { ChannelOption } from "@/features/task-shell/components/task-filter-bar";
@@ -224,14 +223,13 @@ export function CreateTaskDialog({
           <DialogFooter>
             <Button
               type="button"
-              variant="outline"
+              variant="cancel"
               onClick={() => onOpenChange(false)}
               disabled={submitting}
-              {...primaryCancel()}
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={!canSubmit || submitting} {...primaryAction("gap-2")}>
+            <Button type="submit" variant="primary" className="gap-2" disabled={!canSubmit || submitting}>
               {submitting ? <Loader2 className="size-4 animate-spin" /> : null}
               Create task
             </Button>

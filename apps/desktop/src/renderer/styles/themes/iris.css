@@ -4,13 +4,10 @@
 [data-theme="iris"] {
   /* Typography and motion */
   --chrome-label-tracking: 0.07em;
-  --chrome-label-transform: uppercase;
-  --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --font-chrome-label: var(--font-sans);
   --font-display: var(--font-sans);
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  --font-serif: var(--font-sans);
 
   /* Application frame and panes */
   --app-paper: linear-gradient(to bottom, #e6e6b6, #c4d0da);
@@ -23,19 +20,15 @@
   --pane-gap: 0px;
   --pane-radius: 0;
   --pane-shadow: none;
-  --splitter-bg: transparent;
   --splitter-hover-bg: rgba(31, 26, 18, 0.16);
-  --titlebar-border: transparent;
 
   /* Surface, text and border foundations */
-  --bg-active: #efebe3;
   --bg-base: #ffffff;
   --bg-elevated: #f6f4f0;
   --bg-hover: #f5f2ec;
   --bg-primary: #ffffff;
   --bg-selected: rgba(31, 26, 18, 0.07);
   --bg-structure-dark: #2a2519;
-  --bg-surface: #f1eee8;
   --border: rgba(31, 26, 18, 0.14);
   --border-focus: rgba(31, 26, 18, 0.34);
   --border-subtle: rgba(31, 26, 18, 0.07);
@@ -44,60 +37,51 @@
   --radius-sm: 6px;
   --radius-xl: 20px;
   --text-inverse: #fdfcfa;
-  --text-muted: #756d63;
+  --text-muted: #574e42;
   --text-on-dark-pop: #c3a0f2;
   --text-on-selected: var(--text-primary);
   --text-on-structure: #fdfcfa;
-  --text-primary: #1f1a12;
-  --text-secondary: #5a5145;
+  --text-primary: #17130c;
+  --text-secondary: #241e14;
 
   /* Brand and semantic colors */
   --accent: #6d28c9;
-  --accent-2: var(--accent);
-  --accent-glow: rgba(109, 40, 201, 0.2);
+  --soft-alpha: 10%;
   --accent-hover: #5c1faf;
-  --accent-soft: rgba(109, 40, 201, 0.12);
+  --accent-soft: color-mix(in srgb, var(--accent), transparent calc(100% - var(--soft-alpha)));
   --brand-primary: #6d28c9;
   --error: #b3382c;
-  --error-soft: rgba(179, 56, 44, 0.08);
+  --error-soft: color-mix(in srgb, var(--error), transparent calc(100% - var(--soft-alpha)));
   --success: #2f7043;
-  --success-soft: rgba(47, 112, 67, 0.1);
+  --success-soft: color-mix(in srgb, var(--success), transparent calc(100% - var(--soft-alpha)));
   --text-on-accent: #ffffff;
-  --text-on-accent-2: var(--text-on-accent);
   --text-on-brand: #ffffff;
   --text-on-error: #ffffff;
   --text-on-success: #ffffff;
   --text-on-warning: #ffffff;
   --warning: #b46500;
-  --warning-soft: rgba(180, 101, 0, 0.1);
+  --warning-soft: color-mix(in srgb, var(--warning), transparent calc(100% - var(--soft-alpha)));
   --warning-surface: #fdf3e2;
 
   /* Navigation and rows */
   --bg-nav-hover: rgba(31, 26, 18, 0.06);
-  --bg-nav-rail: transparent;
   --bg-nav-selected: var(--bg-selected);
   --bg-row-selected: var(--accent-soft);
   --border-nav-rail-hover: transparent;
   --border-nav-rail-selected: transparent;
   --border-row-hover: transparent;
+  --row-frame-hover-bg: color-mix(in srgb, var(--bg-base), var(--text-primary) 6%);
   --border-row-selected: transparent;
-  --nav-rail-border-color: transparent;
-  --nav-rail-border-width: 0px;
   --nav-rail-indicator-color: transparent;
   --nav-rail-indicator-display: none;
   --nav-rail-item-border-width: 2px;
   --row-radius: 10px;
   --sidebar-row-border-width: 1px;
-  --text-nav-rail: #4e4739;
-  --text-nav-rail-hover: #1f1a12;
-  --text-nav-selected: var(--text-on-selected);
+  --text-nav-rail: var(--text-secondary);
+  --text-nav-rail-hover: var(--text-primary);
+  --text-nav-selected: var(--text-secondary);
 
   /* Controls and actions */
-  --bg-control-primary: #6d28c9;
-  --bg-control-primary-hover: #5c1faf;
-  --bg-neutral-action-hover: var(--bg-option-hover);
-  --bg-option-hover: var(--bg-hover);
-  --bg-primary-action-hover: var(--bg-control-primary-hover);
   --border-control: rgba(31, 26, 18, 0.34);
   --border-control-hover: rgba(31, 26, 18, 0.28);
   --control-border-width: 1px;
@@ -111,7 +95,6 @@
   --select-content-radius: 8px;
   --select-item-radius: 6px;
   --tab-segment-radius: 6px;
-  --text-on-control-primary: #ffffff;
 
   /* Range controls */
   --range-cursor: initial;
@@ -156,15 +139,14 @@
   --iris-bg-message-framed: color-mix(in oklab, var(--accent) 6%, transparent);
   --message-bubble-radius: var(--card-radius);
   --pill-radius: 9999px;
-  --system-message-size: 12px;
   --thread-preview-bg: var(--chip-bg);
   --thread-preview-bg-hover: var(--chip-bg-hover);
   --thread-preview-text: oklab(0 0 0 / 0.6);
-  --unread: var(--accent);
+  --unread: #d32f2f;
 
   /* Composer */
   --composer-border-color: initial;
-  --composer-border-width: initial;
+  --composer-border-width: 2px;
   --composer-shadow: initial;
   --composer-shadow-focus: initial;
   --composer-transition: initial;
@@ -178,8 +160,6 @@
   --code-block-border-width: 1px;
   --code-block-header-bg: #ffffff;
   --inline-code-radius: var(--chip-radius);
-  --md-code-size: 14px;
-  --md-prose-size: 14px;
   --mermaid-diagram-bg: var(--bg-island);
   --text-inline-code: #4a4235;
   --text-island: #1f1a12;
@@ -305,8 +285,7 @@
 }
 
 [data-theme="iris"] [data-composer-shell]:focus-within {
-  border-color: color-mix(in oklab, var(--accent) 45%, transparent);
-  box-shadow: 0 0 0 2px var(--accent-glow);
+  border-color: var(--accent);
 }
 
 /* Hooks: Tasks */
@@ -323,7 +302,8 @@
 }
 
 [data-theme="iris"] [data-tasks-board] [data-task-number]:hover {
-  border-color: var(--border-control-hover);
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg-floating), var(--text-primary) 3%);
   box-shadow: var(--shadow-popover);
 }
 

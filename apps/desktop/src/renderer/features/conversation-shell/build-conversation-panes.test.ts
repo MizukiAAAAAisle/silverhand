@@ -54,7 +54,6 @@ beforeEach(() => {
     primaryThreadComposerDirectory: { kind: "withheld" },
   };
   state = {
-    archivePending: false,
     secondaryDescriptor: null,
     channelIndexesAvailable: true,
     filesListMounted: false,
@@ -75,6 +74,7 @@ beforeEach(() => {
     threadJumpPhase: null,
   };
   commands = {
+    departPrimaryPane: vi.fn(),
     requestJump: vi.fn(() => {
       calls.push("prime");
     }),
@@ -89,12 +89,6 @@ beforeEach(() => {
     handleMessageAgent: vi.fn(),
     handleDraftOpenedPair: vi.fn(),
     handleJumped: vi.fn(),
-    handleArchiveChannelMutation: vi.fn(),
-    handleRenameChannelMutation: vi.fn(async () => {}),
-    handleSetChannelVisibilityMutation: vi.fn(async () => {}),
-    handleLeaveChannelMutation: vi.fn(async () => {}),
-    handleArchiveSecondaryChannelMutation: vi.fn(),
-    handleRenameSecondaryChannelMutation: vi.fn(async () => {}),
     handleOpenThreadFromChannel: vi.fn(),
     openSide: vi.fn(),
     toggleThreadsList: vi.fn(),
@@ -214,7 +208,7 @@ describe("branch-specific data and commands", () => {
     ready.props.onToggleThreadsList?.();
     expect(commands.toggleThreadsList).toHaveBeenCalledTimes(1);
   });
-  it("gives a foreign side its own descriptor and mutation callbacks, never primary mutations", () => {
+  it("gives a foreign side its own descriptor and workspace", () => {
     resolveSide();
     const model = secondary();
     if (model.kind !== "conversation" || model.status !== "resolved") {
@@ -222,12 +216,6 @@ describe("branch-specific data and commands", () => {
     }
     expect(model.props.conversation).toBe(descriptor);
     expect(model.props.workspaceName).toBe("other-workspace");
-    model.props.onArchiveChannel?.("foreign", true);
-    expect(commands.handleArchiveSecondaryChannelMutation).toHaveBeenCalledExactlyOnceWith(
-      "foreign",
-      true,
-    );
-    expect(commands.handleArchiveChannelMutation).not.toHaveBeenCalled();
     expect(model.props).not.toHaveProperty("nav");
   });
   it("binds files attachments to the selected conversation at model creation", () => {
@@ -350,4 +338,18 @@ describe("human profile pane", () => {
     expect(commands.closeHumanPanel).toHaveBeenCalledTimes(1);
     expect(commands.closeThread).not.toHaveBeenCalled();
   });
+});
+
+it("binds settings to the explicit channel and clears them on ordinary navigation", () => {
+  route.channelSettingsId = "foreign";
+  route.threadRootId = "root";
+  expect(secondary()).toEqual({
+    kind: "settings",
+    channelId: "foreign",
+    onDepartChannel: commands.departPrimaryPane,
+  });
+  route.channelId = "next";
+  route.channelSettingsId = null;
+  route.threadRootId = null;
+  expect(secondary()).toEqual({ kind: "none" });
 });

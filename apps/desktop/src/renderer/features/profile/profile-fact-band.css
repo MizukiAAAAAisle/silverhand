@@ -1,0 +1,37 @@
+/* Profile fact band: a breakpoint-driven responsive grid, keyed off the band's
+   OWN width (container query) so it adapts to its pane — narrow in a side panel,
+   wide in a full page — independent of the viewport. Each fact is three grid
+   cells (icon, label, value) via `display: contents`, so however many facts
+   share a row, their icon / label / value columns stay aligned. Tracks are
+   `auto` (not `1fr`) so unused column groups collapse — a 2-fact card left-packs
+   instead of stretching across a 4-fact template. */
+[data-fact-band] {
+  container-type: inline-size;
+}
+
+[data-fact-band-grid] {
+  display: grid;
+  align-items: center;
+  row-gap: 6px;
+  /* Narrow: one fact per row. */
+  grid-template-columns: auto auto auto;
+  justify-content: start;
+}
+
+/* Medium: two facts per row. */
+@container (min-width: 360px) {
+  [data-fact-band-grid] {
+    grid-template-columns: repeat(2, auto auto auto);
+  }
+}
+
+/* Wide: up to four facts on one row. */
+@container (min-width: 720px) {
+  [data-fact-band-grid] {
+    grid-template-columns: repeat(4, auto auto auto);
+  }
+}
+
+[data-fact] {
+  display: contents;
+}

@@ -8,7 +8,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { destructiveAction, destructiveCancel } from "@/components/common/destructive-action";
 import { friendlyDeleteAgentError } from "../model/delete-agent-error";
 import { useDeleteAgent } from "../hooks/hooks";
 
@@ -54,19 +53,17 @@ export function DeleteAgentDialog({
         <DialogFooter>
           <Button
             type="button"
-            variant="outline"
+            variant="cancel"
             onClick={() => onOpenChange(false)}
             disabled={del.isPending}
-            {...destructiveCancel()}
           >
             Cancel
           </Button>
           <Button
             type="button"
-            variant="danger"
+            variant="destructive"
             onClick={onConfirm}
             disabled={del.isPending}
-            {...destructiveAction()}
           >
             {del.isPending ? "Deleting…" : "Delete"}
           </Button>

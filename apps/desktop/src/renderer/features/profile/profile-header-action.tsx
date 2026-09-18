@@ -1,7 +1,5 @@
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { neutralAction } from "@/components/common/control-ink-border";
-import { destructiveAction, DESTRUCTIVE_TRIGGER } from "@/components/common/destructive-action";
 
 export function ProfileHeaderAction({
   compact,
@@ -31,7 +29,7 @@ export function ProfileHeaderAction({
         data-sticker
         data-sticker-size="md"
         data-sticker-tone="neutral"
-        className={`flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) transition-colors hover:bg-bg-hover focus-outline disabled:pointer-events-none disabled:opacity-50 ${destructive ? "text-error" : "text-text-muted hover:text-text-primary"}`}
+        className={`flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) transition-colors hover:bg-bg-hover focus-outline disabled:pointer-events-none disabled:opacity-50 ${destructive ? "text-error" : "text-text-secondary hover:text-text-primary"}`}
       >
         {children}
       </button>
@@ -40,12 +38,11 @@ export function ProfileHeaderAction({
 
   return (
     <Button
-      variant="outline"
+      variant={destructive ? "destructive-outline" : "neutral"}
       size="sm"
       title={title}
       onClick={onClick}
       disabled={disabled}
-      {...(destructive ? destructiveAction(DESTRUCTIVE_TRIGGER) : neutralAction())}
     >
       {children}
       {label}

@@ -15,10 +15,6 @@ const h = vi.hoisted(() => ({
   },
   effects: [] as Array<() => void>,
   removal: undefined as undefined | ((id: string) => void),
-  archive: vi.fn(),
-  leave: vi.fn(),
-  rename: vi.fn(),
-  visibility: vi.fn(),
   go: vi.fn(),
   toChannel: vi.fn(),
   toWorkspace: vi.fn(),
@@ -37,12 +33,6 @@ vi.mock("@/router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/router")>()),
   useRouteState: () => h.route,
   useNav: () => ({ go: h.go, toChannel: h.toChannel, toWorkspace: h.toWorkspace }),
-}));
-vi.mock("@/features/workspaces/hooks", () => ({
-  useArchiveChannel: () => ({ mutate: h.archive }),
-  useLeaveChannel: () => ({ mutateAsync: h.leave }),
-  useRenameChannel: () => ({ mutateAsync: h.rename }),
-  useSetChannelVisibility: () => ({ mutateAsync: h.visibility }),
 }));
 vi.mock("@/features/channels/use-viewer-channel-removal-sync", () => ({
   useViewerChannelRemovalSync: (p: { onVisibilityLoss: (id: string) => void }) => {
@@ -131,20 +121,16 @@ beforeEach(() => {
     channelId: "c" as string | null,
     directConversationId: null,
   });
-  h.archive.mockImplementation((_input, options) => options?.onSuccess());
-  h.leave.mockResolvedValue({ channel: { roster_policy: "open", visibility: "private" } });
 });
 
 describe("shared conversation invalidation", () => {
-  it.each(["archive", "leave", "external"])(
+  it.each(["settings-departure", "external"])(
     "uses the same empty fallback and stale guard for %s",
     async (origin) => {
       h.memory.set("w", "c");
       const owner = mountInvalidation();
-      if (origin === "archive") {
-        owner.handleArchiveChannelMutation("c", true);
-      } else if (origin === "leave") {
-        await owner.handleLeaveChannelMutation("c");
+      if (origin === "settings-departure") {
+        owner.departPrimaryPane("c");
       } else {
         h.removal?.("c");
       }
@@ -161,29 +147,16 @@ describe("shared conversation invalidation", () => {
   );
   it("selects one member neighbor without clearing unrelated memory", () => {
     const owner = mountInvalidation(["c", "next"]);
-    owner.handleArchiveChannelMutation("c", true);
+    owner.departPrimaryPane("c");
     expect(h.toChannel).toHaveBeenCalledExactlyOnceWith("w", "next");
     expect(h.persist).not.toHaveBeenCalled();
     expect(owner.recentlyRemovedPrimaryRef.current).toBeNull();
   });
-  it("does not depart on a failed archive or a public-channel leave", async () => {
-    h.archive.mockImplementation(() => undefined);
-    h.leave.mockResolvedValue({ channel: { roster_policy: "open", visibility: "public" } });
+  it("does not move the primary when a secondary channel departs", () => {
     const owner = mountInvalidation();
-    owner.handleArchiveChannelMutation("c", true);
-    await owner.handleLeaveChannelMutation("c");
-    expect(h.toWorkspace).not.toHaveBeenCalled();
-    expect(h.toChannel).not.toHaveBeenCalled();
-    expect(owner.recentlyRemovedPrimaryRef.current).toBeNull();
-  });
-
-  it("does not move the primary for restore or another channel", () => {
-    const owner = mountInvalidation();
-    owner.handleArchiveChannelMutation("c", false);
-    owner.handleArchiveChannelMutation("other", true);
+    owner.departPrimaryPane("other");
     expect(h.toChannel).not.toHaveBeenCalled();
     expect(h.toWorkspace).not.toHaveBeenCalled();
-    expect(h.archive).toHaveBeenCalledTimes(2);
   });
 });
 describe("Chat recovery boundary", () => {

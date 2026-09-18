@@ -346,7 +346,7 @@ function TaskCard({
         }}
         onDragEnd={() => setDragging(false)}
         className={cn(
-          "group relative min-w-0 cursor-grab rounded-(--card-radius) border border-border-subtle transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing",
+          "group relative min-w-0 cursor-grab rounded-(--card-radius) border border-border-subtle transition-all hover:border-(--border-row-hover) hover:bg-bg-hover active:cursor-grabbing",
           cardClassName,
           dragging && "opacity-50",
         )}
@@ -361,7 +361,7 @@ function TaskCard({
           draggable={false}
           onClick={onClick}
           aria-label="Open task detail"
-          className="absolute inset-0 z-0 rounded-(--card-radius) focus-outline-accent"
+          className="absolute inset-0 z-0 rounded-(--card-radius) focus-outline"
         />
         {/* Content layer. `pointer-events-none` so text clicks fall through to
             the jump overlay; only the status badge re-enables pointer events.

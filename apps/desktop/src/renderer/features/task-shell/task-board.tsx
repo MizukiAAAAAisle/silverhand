@@ -27,7 +27,6 @@ import {
   type CreateTaskTarget,
 } from "@/features/task-shell/components/create-task-dialog";
 import { Button } from "@/components/ui/button";
-import { primaryAction } from "@/components/common/primary-action";
 import { PaneHeader, PaneShell } from "@/components/layout/pane-shell";
 
 export interface TaskBoardProps {
@@ -116,8 +115,9 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
         />
         <Button
           type="button"
+          variant="primary"
+          className={`shrink-0 gap-1.5 ${FILTER_ROW_TRIGGER_BOX}`}
           onClick={() => setCreateOpen(true)}
-          {...primaryAction(`shrink-0 gap-1.5 ${FILTER_ROW_TRIGGER_BOX}`)}
         >
           <Plus className="size-3.5" />
           New task

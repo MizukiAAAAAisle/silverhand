@@ -2,6 +2,20 @@
 
 /* Hooks: Application frame */
 
+/* forza6 is otherwise square (poster language). The nav-rail's bottom-left and
+   each main panel's bottom-right are the only corners that meet the OS window's
+   rounded corners, so they alone round to sit concentric with the window curve
+   (≈ window radius − frame-padding). Every other corner stays square.
+   The split-pane animation shell shares the panel geometry so its background
+   cannot fill the curved corner. */
+[data-theme="forza6"] .nav-rail {
+  border-bottom-left-radius: 12px !important;
+}
+[data-theme="forza6"] [data-panel],
+[data-theme="forza6"] [data-pane-clip] {
+  border-bottom-right-radius: 12px;
+}
+
 [data-theme="forza6"] header[data-titlebar="app"] {
   --text-muted: rgba(255, 255, 255, 0.78);
   --text-primary: #ffffff;
@@ -317,7 +331,7 @@
 
 [data-theme="forza6"] [data-tasks-board] [data-task-number]:hover {
   border-color: var(--forza6-ink);
-  background-color: var(--forza6-lime-pale);
+  background-color: var(--bg-hover);
 }
 
 [data-theme="forza6"] [data-tasks-num] {
@@ -357,7 +371,6 @@
   font-weight: 700;
 }
 
-[data-theme="forza6"] [data-panel-card="row"],
 [data-theme="forza6"] [data-panel-card="schedule"] {
   border: var(--panel-border-width) solid var(--border-subtle);
   transition:
@@ -384,14 +397,9 @@
   border-style: dashed;
 }
 
-[data-theme="forza6"] [data-panel-card="row"]:hover,
 [data-theme="forza6"] [data-panel-card="schedule"]:hover {
   border-color: var(--forza6-ink);
   color: var(--forza6-ink);
-}
-
-[data-theme="forza6"] [data-panel-card="row"]:hover {
-  background-color: var(--forza6-lime-pale);
 }
 
 [data-theme="forza6"] [data-panel-card="profile-section"] {
@@ -402,6 +410,23 @@
 
 [data-theme="forza6"] [data-panel-card="profile-section"]:hover {
   border-color: var(--forza6-ink);
+}
+
+[data-theme="forza6"] [data-host-agent-card],
+[data-theme="forza6"] [data-member-row="true"] {
+  transition:
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease,
+    box-shadow 150ms ease;
+}
+
+[data-theme="forza6"] [data-host-agent-card]:hover,
+[data-theme="forza6"] [data-member-row="true"]:hover {
+  border-color: var(--forza6-ink);
+  color: var(--forza6-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--forza6-poster-shadow);
 }
 
 [data-theme="forza6"] [data-panel-pill="schedule-spec"] {
@@ -439,7 +464,6 @@
 /* Hooks: Agents and computers */
 
 [data-theme="forza6"] [data-agent-runtime],
-[data-theme="forza6"] [data-host-kind-tag],
 [data-theme="forza6"] [data-participant-kind] {
   font-family: var(--appearance-code-font, var(--font-mono));
   text-transform: uppercase;
@@ -511,13 +535,13 @@
   border-color: var(--forza6-ink);
 }
 
-[data-theme="forza6"] [data-primary-action="commit"] {
+[data-theme="forza6"] [data-button-action="primary"] {
   border: var(--control-border-width) solid var(--forza6-ink);
   border-radius: var(--control-radius);
   box-shadow: var(--forza6-poster-shadow);
 }
 
-[data-theme="forza6"] [data-primary-action="commit"]:hover:not(:disabled) {
+[data-theme="forza6"] [data-button-action="primary"]:hover:not(:disabled) {
   box-shadow: var(--forza6-poster-shadow-xl);
 }
 
@@ -526,40 +550,32 @@
   opacity: 0.4;
 }
 
-[data-theme="forza6"] [data-radix-popper-content-wrapper] {
-  --bg-hover: var(--forza6-lime-pale);
-}
-
 [data-theme="forza6"] [data-modal-shell] {
   border: var(--control-border-width) solid var(--forza6-ink);
   box-shadow: var(--forza6-poster-shadow-lg);
 }
 
-[data-theme="forza6"] [data-destructive-action="commit"] {
+[data-theme="forza6"] [data-button-action="destructive"] {
   background-color: var(--bg-floating);
   color: var(--error);
   border: var(--control-border-width) solid var(--error);
   box-shadow: var(--forza6-poster-shadow-error);
 }
 
-[data-theme="forza6"] [data-destructive-action="commit"]:hover:not(:disabled) {
+[data-theme="forza6"] [data-button-action="destructive"]:hover:not(:disabled) {
   background-color: var(--bg-floating);
   box-shadow: var(--forza6-poster-shadow-error-xl);
 }
 
-[data-theme="forza6"] [data-destructive-action="commit"]:focus-visible {
+[data-theme="forza6"] [data-button-action="destructive"]:focus-visible {
   outline: 2px solid var(--error);
   outline-offset: 2px;
 }
 
-[data-theme="forza6"] [data-destructive-action="cancel"],
-[data-theme="forza6"] [data-primary-action="cancel"],
-[data-theme="forza6"] [data-neutral-action] {
+[data-theme="forza6"] [data-button-action="neutral"] {
   box-shadow: var(--forza6-poster-shadow);
 }
 
-[data-theme="forza6"] [data-destructive-action="cancel"]:hover:not(:disabled),
-[data-theme="forza6"] [data-primary-action="cancel"]:hover:not(:disabled),
-[data-theme="forza6"] [data-neutral-action]:hover:not(:disabled) {
+[data-theme="forza6"] [data-button-action="neutral"]:hover:not(:disabled) {
   box-shadow: var(--forza6-poster-shadow-xl);
 }

@@ -1,0 +1,321 @@
+import { useChannelSettingsDetail } from "../use-channel-settings-detail";
+import { toast } from "sonner";
+import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, ChevronRight, Hash, Lock, Power, RefreshCw } from "lucide-react";
+import type { ChannelDetailResponse } from "@silverhand/shared";
+import { useNav } from "@/router";
+import { paneChrome } from "@/components/layout/pane-chrome";
+import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
+import { Button } from "@/components/ui/button";
+import {
+  useArchiveChannel,
+  useLeaveChannel,
+  useRenameChannel,
+  useSetChannelVisibility,
+} from "@/features/workspaces/hooks";
+import { useAgents } from "@/features/agent-shell/hooks/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
+import { canEditAgentProfile } from "@/features/agent-shell/model/permissions";
+import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/session/hooks";
+import {
+  useChannelAgents,
+  useChannelAgentRuntime,
+  useStartAgent,
+  useStopAgent,
+} from "@/features/channels/hooks";
+import { useConversationMembers } from "@/features/conversations/use-conversation-members";
+import { ChannelSettingsDetails } from "./channel-settings-details";
+import { ChannelMembersPreview } from "./channel-members-preview";
+import { ChannelNotificationSettings } from "./channel-notification-settings";
+import { ChannelMembersPage } from "./channel-members-page";
+
+export function ChannelSettingsPanel({
+  channelId,
+  onDepartChannel,
+}: {
+  onDepartChannel: (channelId: string) => void;
+  channelId: string;
+}): JSX.Element {
+  const nav = useNav();
+  const [membersPage, setMembersPage] = useState<"browse" | "add" | null>(null);
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const close = (): void => {
+    if (mounted.current) {
+      nav.closeChannelSettings();
+    }
+  };
+
+  const onLeft = (channel: ChannelDetailResponse["channel"]): void => {
+    if (!mounted.current) return;
+    close();
+    if (channel.roster_policy === "open" && channel.visibility === "private")
+      onDepartChannel(channelId);
+  };
+
+  const onArchived = (archived: boolean): void => {
+    if (!mounted.current) return;
+    close();
+    if (archived) onDepartChannel(channelId);
+  };
+
+  const detail = useChannelSettingsDetail(channelId);
+
+  return (
+    <aside
+      data-panel="side"
+      data-pane="channel-settings"
+      className="flex h-full min-h-0 w-full flex-col overflow-hidden"
+      style={paneChrome}
+    >
+      <SidePanelHeader onClose={nav.closeChannelSettings}>
+        {membersPage ? (
+          <button
+            type="button"
+            aria-label="Back to channel settings"
+            onClick={() => setMembersPage(null)}
+            className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover focus-outline"
+          >
+            <ArrowLeft className="size-4" />
+          </button>
+        ) : null}
+        <SidePanelHeaderTitle
+          icon={
+            detail.data?.channel.visibility === "private" ? (
+              <Lock aria-label="Private channel" className="size-4 text-text-secondary" />
+            ) : (
+              <Hash aria-label="Public channel" className="size-4 text-text-secondary" />
+            )
+          }
+          title={
+            membersPage
+              ? `${detail.data?.channel.title ?? "Channel"} - Members`
+              : (detail.data?.channel.title ?? "Channel settings")
+          }
+        />
+      </SidePanelHeader>
+      {detail.isError ? (
+        <div className="p-4 text-sm text-error">
+          Unable to load channel settings.
+          <Button
+            variant="neutral"
+            size="sm"
+            className="mt-3"
+            onClick={() => void detail.refetch()}
+          >
+            Retry
+          </Button>
+        </div>
+      ) : !detail.data ? (
+        <p className="p-4 text-sm text-text-muted">Loading</p>
+      ) : !detail.data.is_member ? (
+        <p className="p-4 text-sm text-text-muted">
+          Join this channel to manage its settings and members.
+        </p>
+      ) : (
+        <SettingsBody
+          key={channelId}
+          detail={detail.data}
+          membersPage={membersPage !== null}
+          focusMemberSearch={membersPage === "add"}
+          onOpenMembers={(focusSearch) => setMembersPage(focusSearch ? "add" : "browse")}
+          onArchived={onArchived}
+          onLeft={onLeft}
+        />
+      )}
+    </aside>
+  );
+}
+
+/** Keyed by channel. Pending forms and confirmations never migrate to another roster. */
+function SettingsBody({
+  detail,
+  membersPage,
+  focusMemberSearch,
+  onOpenMembers,
+  onArchived,
+  onLeft,
+}: {
+  detail: ChannelDetailResponse;
+  membersPage: boolean;
+  focusMemberSearch: boolean;
+  onOpenMembers: (focusSearch: boolean) => void;
+  onArchived: (archived: boolean) => void;
+  onLeft: (channel: ChannelDetailResponse["channel"]) => void;
+}): JSX.Element {
+  const { channel } = detail;
+  const channelId = channel.id;
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const rename = useRenameChannel(channel.workspace_id);
+  const archive = useArchiveChannel(channel.workspace_id);
+  const visibility = useSetChannelVisibility(channel.workspace_id);
+  const leave = useLeaveChannel(channel.workspace_id);
+  const { data: agents = [] } = useAgents();
+  const avatarUrls = useAgentAvatarObjectUrls(agents);
+  const { data: channelAgents = [] } = useChannelAgents(channelId);
+  const { data: runtime } = useChannelAgentRuntime(channelId);
+  const roster = useConversationMembers(channelId);
+  const { data: viewer } = useViewerUser();
+  const start = useStartAgent(channelId);
+  const stop = useStopAgent(channelId);
+  const closed = channel.closed_at !== null;
+  const openRoster = channel.roster_policy === "open";
+
+  const canManageAgents =
+    !closed &&
+    channelAgents.length > 0 &&
+    channelAgents.every(({ agent_id }) => {
+      const agent = agents.find((a) => a.id === agent_id);
+      const user =
+        viewer && !isBackendUnreachable(viewer) && !isUpdateRequired(viewer) ? viewer : undefined;
+      return agent !== undefined && canEditAgentProfile(user, agent);
+    });
+
+  const bulkPending = bulkBusy || start.isPending || stop.isPending;
+
+  const bulkAction = async (restart: boolean): Promise<void> => {
+    if (!canManageAgents || bulkPending) return;
+    setBulkBusy(true);
+    try {
+      for (const { agent_id } of channelAgents) {
+        if (!mounted.current) return;
+        await stop.mutateAsync({ agentId: agent_id });
+      }
+      if (restart)
+        for (const { agent_id } of channelAgents) {
+          if (!mounted.current) return;
+          await start.mutateAsync(agent_id);
+        }
+    } catch {
+      /* Mutation hooks own the error toast. */
+    } finally {
+      if (mounted.current) setBulkBusy(false);
+    }
+  };
+
+  const leaveChannel = async (): Promise<void> => {
+    try {
+      const response = await leave.mutateAsync(channelId);
+      onLeft(response.channel);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to leave channel");
+      throw error;
+    }
+  };
+  const membersLabel =
+    roster.status === "resolved" ? `Members ${roster.members.length}` : "Members";
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="flex flex-col gap-8 p-4">
+        {membersPage ? (
+          <ChannelMembersPage
+            autoFocus={focusMemberSearch}
+            channelId={channelId}
+            workspaceId={openRoster && !closed ? channel.workspace_id : null}
+            agentRuntime={runtime}
+            agentAvatarUrls={avatarUrls}
+            onLeave={openRoster ? leaveChannel : undefined}
+            canLeave={detail.can_leave}
+            leaveBlockedReason={detail.leave_blocked_reason}
+            visibility={openRoster ? channel.visibility : undefined}
+            actions={
+              canManageAgents ? (
+                <div className="flex flex-col gap-2 pt-2">
+                  <Button
+                    variant="neutral"
+                    size="md"
+                    disabled={bulkPending}
+                    onClick={() => void bulkAction(true)}
+                  >
+                    <RefreshCw className="size-3.5" /> Restart
+                  </Button>
+                  <Button
+                    variant="neutral"
+                    size="md"
+                    disabled={bulkPending}
+                    onClick={() => void bulkAction(false)}
+                  >
+                    <Power className="size-3.5" /> Stop
+                  </Button>
+                </div>
+              ) : null
+            }
+          />
+        ) : (
+          <>
+            <section className="flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={() => onOpenMembers(false)}
+                className="flex w-full items-center justify-between text-xs font-semibold uppercase tracking-wide text-text-secondary hover:text-text-primary focus-outline"
+              >
+                <span>{membersLabel}</span>
+                <ChevronRight className="size-4" />
+              </button>
+              <ChannelMembersPreview
+                members={roster.status === "resolved" ? roster.members : []}
+                avatarUrls={avatarUrls}
+                canAdd={openRoster && !closed && !!channel.workspace_id}
+                onOpen={() => onOpenMembers(false)}
+                onAdd={() => onOpenMembers(true)}
+              />
+            </section>
+            <ChannelSettingsDetails
+              notifications={
+                openRoster && channel.workspace_id ? (
+                  <ChannelNotificationSettings
+                    channelId={channelId}
+                    workspaceId={channel.workspace_id}
+                  />
+                ) : null
+              }
+              currentTitle={channel.title}
+              onRename={
+                !closed
+                  ? async (title) => {
+                      await rename.mutateAsync({ channelId, title });
+                    }
+                  : undefined
+              }
+              visibility={openRoster ? channel.visibility : undefined}
+              canUpdateVisibility={detail.can_update_visibility}
+              onSetVisibility={
+                openRoster
+                  ? async (next) => {
+                      await visibility.mutateAsync({ channelId, visibility: next });
+                    }
+                  : undefined
+              }
+              isArchived={channel.archived_at !== null}
+              onToggleArchive={async (archived) => {
+                await archive.mutateAsync({ channelId, archived });
+                onArchived(archived);
+              }}
+              archivePending={archive.isPending}
+              onLeave={openRoster ? leaveChannel : undefined}
+              canLeave={detail.can_leave}
+              leaveBlockedReason={detail.leave_blocked_reason}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

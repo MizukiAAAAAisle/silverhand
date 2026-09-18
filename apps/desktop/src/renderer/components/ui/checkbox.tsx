@@ -21,9 +21,11 @@ export const Checkbox = forwardRef<HTMLButtonElement, CheckboxProps>(
       className={cn(
         "flex size-4 shrink-0 items-center justify-center rounded-(--control-radius) border-(length:--control-border-width) transition-colors",
         checked
-          ? "border-transparent bg-(--bg-control-primary) text-(--text-on-control-primary)"
+          ? "border-transparent bg-[var(--bg-control-primary,var(--accent))] text-[color:var(--text-on-control-primary,var(--text-on-accent))]"
           : "border-border bg-bg-floating text-transparent",
-        disabled ? "opacity-50" : "cursor-pointer hover:border-(--bg-control-primary)",
+        disabled
+          ? "opacity-50"
+          : "cursor-pointer hover:border-[var(--bg-control-primary,var(--accent))]",
         className,
       )}
       {...props}

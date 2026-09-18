@@ -1,4 +1,4 @@
-import { taskChannelLabel } from "../../features/task-shell/model/task-place.js";
+import { taskChannelLabel } from "@/features/task-shell/model/task-place";
 import { useState } from "react";
 import { Clock } from "lucide-react";
 import { useTaskByNumber } from "@/features/task-shell/hooks/use-task-by-number";
@@ -10,10 +10,7 @@ import { useRelativeTime } from "./use-relative-time";
 import type { TaskSummaryDto, TaskStatus } from "@silverhand/shared";
 
 interface TaskRefProps {
-  /** Raw `<n>` from the `#task:<n>` sigil — already validated as a
-   *  positive integer by the markdown tokenizer. */
   taskNumber: number;
-  /** Preserve the authored bare number when no task resolves. */
   bare?: boolean;
 }
 
@@ -59,10 +56,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   const task = result.data ?? null;
   const onOpenTask = ctx?.onOpenTask;
   const inertLabel = `#task:${taskNumber}`;
-  // Status-picker open state lifted here (not inside TaskPopoverBody) so
-  // we can pin the hover-card open via `keepOpen` while the picker is
-  // active — the picker portals outside the hover-card DOM, so without
-  // this the pointer-leave close delay would unmount it mid-pick.
+
   const [pickerOpen, setPickerOpen] = useState(false);
   const updateStatus = useUpdateTaskStatus();
 
@@ -72,14 +66,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
 
   const label = `#${task.task_number} ${task.title}`;
   const tooltip = `Task ${label}`;
-  // The number sits in its own `data-task-ref-num` span so a theme can give
-  // digits their own display face while the title keeps prose sans. By default
-  // both inherit `--appearance-prose-font` (one sans run, no mono/sans seam —
-  // never `font-mono`: forza6's `--font-mono` is Space Mono, whose digits read
-  // poorly, @shiki `sLh6CqwNw0uAtThk`, #task:1757). forza6 alone routes the
-  // number to `--font-display` (Rajdhani) — a deliberate "number is a number,
-  // title is a title" hierarchy matching its board / popover stamp, not a seam
-  // (#task:1760).
+
   const chipContent = (
     <>
       <span className="truncate">
@@ -102,29 +89,6 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
     </span>
   );
 
-  // Borderless accent link — the shared base for every theme. Rest is flat
-  // accent text (no fill / no border); hover underlines the label span (see
-  // `.markdown-body [data-task-ref-state='resolved']:hover > span` in
-  // global.css — text-decoration targets the label span directly). A filled
-  // block reads as a slab in running prose regardless of
-  // hue; a link reads as what it is (#task:1725). Each theme just supplies its
-  // own `--accent`. focus-visible outline kept — the sole focus signal now that
-  // the chip is borderless.
-  //
-  // No `px-1.5 -mx-0.5`: unlike the inert variants (which keep a
-  // `bg-bg-elevated` fill that needs side padding), this chip has no fill, so
-  // the padding was dead box drawn around a bare link. The `-mx-0.5` only
-  // existed to pull that padded box back into the text flow; with the padding
-  // gone it would instead pull the chip 2px into its neighbours. Dropping both
-  // lets the link sit as plain inline text — the hover marker/underline rides
-  // the label span, which already hugs the words (shiki, #task:1770).
-  //
-  // The one surface that DOES fill on hover — the non-forza6
-  // system-activity-cluster (accent tile, global.css
-  // `.system-activity-cluster [data-task-ref]:hover`) — reintroduces the
-  // horizontal padding in CSS, not here: padding belongs to the filled
-  // surface, not the shared component, so a fill-less surface never pays for
-  // it. forza6's cluster is a bare marker and zeroes it back out (#task:1776).
   const interactiveChip = (
     <span
       role="button"

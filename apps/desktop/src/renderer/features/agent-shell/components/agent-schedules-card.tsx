@@ -248,7 +248,7 @@ function FilterTabs({
           className={cn(
             "shrink-0 whitespace-nowrap px-2 py-0.5 text-(length:--text-meta) transition-colors",
             opt.value === value
-              ? "bg-accent-2 text-text-on-accent-2"
+              ? "bg-accent text-text-on-accent"
               : "text-text-muted hover:text-text-primary",
           )}
         >

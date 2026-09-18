@@ -29,11 +29,9 @@
  *                   Body: one-per-row list of agent identity cards.
  *                   Each card uses plain theme tokens
  *                   (`--border-subtle` at rest, `--text-primary` on
- *                   hover) — NOT the forza6 sticker hook
- *                   (`data-panel-card='row'`) because that hook's
- *                   2px black frame + lime hover is right for nav
- *                   rows but too loud for information cards in the
- *                   detail pane (shiki dogfood `CEq57Kisu3w2d-Pl`).
+ *                   hover), NOT a louder framed-sticker treatment
+ *                   that would be too heavy for information cards in
+ *                   the detail pane (shiki dogfood `CEq57Kisu3w2d-Pl`).
  *
  * `HostSection` is a local primitive — solid `bg-bg-floating` white
  * tile with `border-radius: var(--floating-radius)` (forza6 = 0,
@@ -62,6 +60,7 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  ChevronRight,
   Cpu,
   Loader2,
   Monitor,
@@ -126,10 +125,6 @@ import {
   type DeleteComputerFailure,
 } from "../model/delete-computer-phase";
 import { computerActions } from "../model/computer-actions";
-import { destructiveAction, destructiveCancel } from "@/components/common/destructive-action";
-import { primaryAction } from "@/components/common/primary-action";
-import { neutralAction } from "@/components/common/control-ink-border";
-import { HOST_ACTION_BUTTON_DANGER } from "../model/host-action-button";
 import {
   describeAdmissionFailure,
   describeHostStatus,
@@ -217,7 +212,8 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
 
   return (
     <main
-      className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-bg-base"
+      data-panel="detail"
+      className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto"
       style={paneChrome}
     >
       <HostHero
@@ -256,7 +252,7 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
               />
             ) : null}
             {statusQuery.data.availability === "available" ? (
-              <SystemSection snapshot={statusQuery.data.snapshot} />
+              <SystemSection snapshot={statusQuery.data.snapshot} createdAt={host.created_at} />
             ) : (
               <OfflineSection status={statusQuery.data} />
             )}
@@ -264,10 +260,10 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
               <ConnectionSection host={host} availability={statusQuery.data.availability} />
             ) : null}
             {actions.refresh ? <RefreshCredentialsSection host={host} /> : null}
+            <RegisteredAgentsSection hostId={host.id} agents={statusQuery.data.agents} />
             {canEditHostLocalConfig ? (
               <ProxySection hostId={host.id} availability={statusQuery.data.availability} />
             ) : null}
-            <RegisteredAgentsSection hostId={host.id} agents={statusQuery.data.agents} />
           </>
         ) : null}
         {/* Footer action group (#task:1619, shiki 2026-07-26). `Copy
@@ -370,9 +366,10 @@ function ConnectionSection({
         <div className="flex flex-col items-start gap-2">
           <Button
             size="sm"
+            variant="primary"
+            className="gap-2"
             onClick={() => void handleGenerate()}
             disabled={rotate.isPending}
-            {...primaryAction("gap-2")}
           >
             {rotate.isPending ? (
               <Loader2 className="size-3.5 animate-spin" />
@@ -385,10 +382,10 @@ function ConnectionSection({
           {availability === "available" ? (
             <Button
               size="sm"
-              variant="outline"
+              variant="neutral"
+              className="gap-2"
               onClick={() => void handleDisconnect()}
               disabled={disconnect.isPending}
-              {...neutralAction("gap-2")}
             >
               {disconnect.isPending ? (
                 <Loader2 className="size-3.5 animate-spin" />
@@ -448,9 +445,10 @@ function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Element {
         <div className="flex items-center gap-3">
           <Button
             size="sm"
+            variant="primary"
+            className="gap-2"
             onClick={() => void handleRefresh()}
             disabled={rotate.isPending}
-            {...primaryAction("gap-2")}
           >
             {rotate.isPending ? (
               <Loader2 className="size-3.5 animate-spin" />
@@ -524,9 +522,9 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
   return (
     <>
       <Button
-        variant="outline"
+        variant="destructive-outline"
+        className="gap-2 w-full"
         onClick={openConfirm}
-        {...destructiveAction(`gap-2 ${HOST_ACTION_BUTTON_DANGER}`)}
       >
         <ShieldOff className="size-3.5" />
         {computerCopy.revokeComputer}
@@ -553,18 +551,17 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
           {failed ? <p className="text-xs text-error">{computerCopy.revokeFailed}</p> : null}
           <DialogFooter>
             <Button
-              variant="outline"
+              variant="cancel"
               onClick={() => setOpen(false)}
               disabled={revoke.isPending}
-              {...destructiveCancel()}
             >
               {computerCopy.cancel}
             </Button>
             <Button
-              variant="danger"
+              variant="destructive"
+              className="gap-2"
               onClick={() => void handleRevoke()}
               disabled={revoke.isPending}
-              {...destructiveAction("gap-2")}
               aria-label={`${computerCopy.revokeComputer}: ${label}`}
             >
               {revoke.isPending ? (
@@ -651,9 +648,9 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
   return (
     <>
       <Button
-        variant="outline"
+        variant="destructive-outline"
+        className="gap-2 w-full"
         onClick={openConfirm}
-        {...destructiveAction(`gap-2 ${HOST_ACTION_BUTTON_DANGER}`)}
       >
         <Trash2 className="size-3.5" />
         {computerCopy.deleteComputer}
@@ -677,17 +674,17 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
               </DialogHeader>
               <DialogFooter>
                 <Button
-                  variant="outline"
+                  variant="cancel"
                   onClick={() => setOpen(false)}
                   disabled={del.isPending}
-                  {...neutralAction()}
                 >
                   {computerCopy.cancel}
                 </Button>
                 <Button
+                  variant="primary"
+                  className="gap-2"
                   onClick={() => void handleDelete()}
                   disabled={del.isPending}
-                  {...primaryAction("gap-2")}
                 >
                   {del.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
                   {computerCopy.deleteRetry}
@@ -701,13 +698,14 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                 <DialogDescription>{computerCopy.deleteImpactUnavailable}</DialogDescription>
               </DialogHeader>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setOpen(false)} {...neutralAction()}>
+                <Button variant="cancel" onClick={() => setOpen(false)}>
                   {computerCopy.cancel}
                 </Button>
                 <Button
+                  variant="primary"
+                  className="gap-2"
                   onClick={() => void resources.refetch()}
                   disabled={resources.isFetching}
-                  {...primaryAction("gap-2")}
                 >
                   {resources.isFetching ? <Loader2 className="size-3.5 animate-spin" /> : null}
                   {computerCopy.deleteRetry}
@@ -732,21 +730,20 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
               ) : null}
               <DialogFooter>
                 <Button
-                  variant="outline"
+                  variant="cancel"
                   onClick={() => setOpen(false)}
                   disabled={del.isPending}
-                  {...destructiveCancel()}
                 >
                   {computerCopy.cancel}
                 </Button>
                 <Button
-                  variant="danger"
+                  variant="destructive"
+                  className="gap-2"
                   onClick={() => void handleDelete()}
                   // Armed only once the impact is on screen: the `loading` phase
                   // renders this same confirm, so this guard is what stops a
                   // confirm of an impact the user has not seen.
                   disabled={phase.kind !== "confirm" || del.isPending}
-                  {...destructiveAction("gap-2")}
                   aria-label={`${computerCopy.deleteComputer}: ${label}`}
                 >
                   {del.isPending || phase.kind === "loading" ? (
@@ -857,7 +854,7 @@ function ProxySection({
 
   if (!online) {
     return (
-      <HostSection title={computerCopy.proxyTitle}>
+      <HostSection title={computerCopy.proxyTitle} collapsible defaultOpen={false}>
         <p className="text-sm text-text-muted">{computerCopy.proxyOfflineHint}</p>
       </HostSection>
     );
@@ -913,7 +910,7 @@ function ProxySection({
   const saving = saveMutation.isPending;
 
   return (
-    <HostSection title={computerCopy.proxyTitle}>
+    <HostSection title={computerCopy.proxyTitle} collapsible defaultOpen={false}>
       {settingsLoading ? (
         <div className="flex items-center gap-2 text-sm text-text-muted">
           <Loader2 className="size-4 animate-spin" aria-hidden />
@@ -964,7 +961,7 @@ function ProxySection({
               <button
                 type="button"
                 disabled={!proxyEnabled}
-                className="text-xs font-medium text-text-muted hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                className="text-xs font-medium text-text-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
                 onClick={() => {
                   setSaved(false);
                   setError(null);
@@ -998,7 +995,7 @@ function ProxySection({
                       proxyEnabled ? "cursor-pointer" : "cursor-not-allowed",
                       checked
                         ? "border-accent bg-(--bg-row-selected,var(--bg-selected)) text-text-on-selected"
-                        : "border-border-subtle bg-bg-floating hover:bg-(--bg-option-hover)",
+                        : "border-border-subtle bg-bg-floating hover:bg-(--bg-hover)",
                     )}
                   >
                     <input
@@ -1061,7 +1058,7 @@ function ProxySection({
                 </span>
               ) : null}
             </div>
-            <Button type="submit" disabled={saving || settingsLoading} {...primaryAction("gap-2")}>
+            <Button type="submit" variant="primary" className="gap-2" disabled={saving || settingsLoading}>
               {saving ? (
                 <Loader2 className="size-3.5 animate-spin" />
               ) : (
@@ -1232,11 +1229,13 @@ function ProvenanceChip(): JSX.Element {
 
 function SystemSection({
   snapshot,
+  createdAt,
 }: {
   snapshot: Extract<HostStatusResponse, { availability: "available" }>["snapshot"];
+  createdAt: number;
 }): JSX.Element {
   return (
-    <HostSection title="System">
+    <HostSection title="Info">
       {/* shiki dogfood `6QIZeGVS8u8yJ137`: one row per field. Inline
           label + value (not stacked) so 4 short facts read as a tight
           key-value list, not a stretched form.
@@ -1264,9 +1263,21 @@ function SystemSection({
         <SystemField label="Uptime">
           <span className="text-text-primary">{formatUptime(snapshot.uptime_ms)}</span>
         </SystemField>
+        <SystemField label="Created">
+          <span className="text-text-primary">{formatCreatedAt(createdAt)}</span>
+        </SystemField>
       </dl>
     </HostSection>
   );
+}
+
+/** Host creation date as `YYYY-MM-DD`. Built from local calendar parts,
+ *  zero-padded — a lifecycle date, no time of day. */
+function formatCreatedAt(createdAt: number): string {
+  const d = new Date(createdAt);
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${month}-${day}`;
 }
 
 function SystemField({ label, children }: { label: string; children: ReactNode }): JSX.Element {
@@ -1336,7 +1347,7 @@ function OfflineSection({
   // precisely BECAUSE it will not come back unattended — printing a
   // wait-and-see promise there would be the one wrong thing to say.
   return (
-    <HostSection title="System">
+    <HostSection title="Info">
       <Banner tone={view.tone}>
         <span className="font-medium">{view.label}.</span> {view.detail}
       </Banner>
@@ -1429,6 +1440,8 @@ function RegisteredAgentsSection({
  */
 function HostSection({
   title,
+  collapsible = false,
+  defaultOpen = true,
   children,
 }: {
   /** ReactNode so the caller can compose inline trailing content
@@ -1437,16 +1450,42 @@ function HostSection({
    *  this surface — counts read better attached to the title than
    *  floating at the far edge. */
   title: ReactNode;
+  /** When set, the header becomes a disclosure toggle and the body
+   *  mounts only while open. Used by the network-proxy section, which
+   *  shiki wants collapsed by default so the page leads with identity +
+   *  agents, not a rarely-touched form. */
+  collapsible?: boolean;
+  defaultOpen?: boolean;
   children: ReactNode;
 }): JSX.Element {
+  const [open, setOpen] = useState(defaultOpen);
+  const heading = (
+    <h3 className="text-(length:--text-meta) font-semibold uppercase tracking-[0.14em] text-text-muted">
+      {title}
+    </h3>
+  );
   return (
     <section className="flex flex-col border-t border-border-subtle py-6 first:border-t-0">
-      <header className="mb-3.5">
-        <h3 className="text-(length:--text-meta) font-semibold uppercase tracking-[0.14em] text-text-muted">
-          {title}
-        </h3>
-      </header>
-      <div>{children}</div>
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="group flex w-full items-center gap-2 text-left"
+        >
+          <ChevronRight
+            className={cn(
+              "size-3.5 shrink-0 text-text-muted transition-transform",
+              open && "rotate-90",
+            )}
+            aria-hidden
+          />
+          {heading}
+        </button>
+      ) : (
+        <header className="mb-3.5">{heading}</header>
+      )}
+      {(!collapsible || open) && <div className={cn(collapsible && "mt-3.5")}>{children}</div>}
     </section>
   );
 }
@@ -1495,6 +1534,7 @@ function AgentCard({
         type="button"
         onClick={onOpen}
         aria-label={`Open ${agent.display_name} profile`}
+        data-host-agent-card
         className="flex w-full items-center gap-3 rounded-(--row-radius) border-(length:--control-border-width) border-border-subtle bg-bg-floating px-3 py-2.5 text-left transition-colors hover:border-text-primary focus-visible:border-text-primary focus-visible:outline-none"
       >
         {knownRuntime.success ? (

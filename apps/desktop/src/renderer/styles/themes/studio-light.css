@@ -3,38 +3,32 @@
    to prevent inheritance from the default theme. */
 
 [data-theme="studio-light"] {
-  /* Theme palette */
-  --studio-light-brand-bar: #2f5ad0;
-
   /* Typography and motion */
   --chrome-label-tracking: 0.07em;
-  --chrome-label-transform: uppercase;
-  --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --font-chrome-label: var(--font-sans);
   --font-display: var(--font-sans);
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  --font-serif: var(--font-sans);
 
   /* Application frame and panes */
-  --bg-app: #dee3eb;
+  --bg-app: #eff1f0;
   --card-radius: 8px;
+  --pane-radius: 1.5rem;
+  --pane-corner-shape: squircle;
+  --pane-border: 1px solid #e4e8e6;
   --card-shadow: 0 1px 3px rgba(var(--shadow-base), 0.08);
+  --pane-shadow: 0 0.125rem 0.25rem 0 #0000000d, 0 1px 2px -1px #0000000d;
   --frame-padding: 8px;
   --pane-gap: 8px;
-  --splitter-bg: transparent;
   --splitter-hover-bg: rgba(17, 23, 37, 0.28);
-  --titlebar-border: transparent;
 
   /* Surface, text and border foundations */
-  --bg-active: #dee3eb;
   --bg-base: #ffffff;
   --bg-elevated: #e6ebf3;
   --bg-hover: #e9eef6;
   --bg-primary: #edf1f7;
   --bg-selected: #ffffff;
   --bg-structure-dark: #1b2030;
-  --bg-surface: #dee3eb;
   --border: rgba(17, 23, 37, 0.11);
   --border-focus: rgba(17, 23, 37, 0.32);
   --border-subtle: rgba(17, 23, 37, 0.07);
@@ -48,55 +42,50 @@
   --text-on-selected: #ffffff;
   --text-on-structure: #f2f5f9;
   --text-primary: #111725;
-  --text-secondary: #495064;
+  --text-secondary: #171a19;
 
   /* Brand and semantic colors */
   --accent: #2f5ad0;
-  --accent-2: var(--accent);
-  --accent-glow: rgba(47, 90, 208, 0.28);
+  --soft-alpha: 9%;
   --accent-hover: #2549b4;
-  --accent-soft: rgba(47, 90, 208, 0.1);
+  --accent-soft: color-mix(in srgb, var(--accent), transparent calc(100% - var(--soft-alpha)));
   --brand-primary: #2f5ad0;
   --error: #c0362c;
-  --error-soft: rgba(192, 54, 44, 0.08);
+  --error-soft: color-mix(in srgb, var(--error), transparent calc(100% - var(--soft-alpha)));
   --success: #0a7256;
-  --success-soft: rgba(10, 114, 86, 0.09);
+  --success-soft: color-mix(in srgb, var(--success), transparent calc(100% - var(--soft-alpha)));
   --text-on-accent: #ffffff;
-  --text-on-accent-2: var(--text-on-accent);
   --text-on-brand: #ffffff;
   --text-on-error: #ffffff;
   --text-on-success: #ffffff;
   --text-on-warning: #ffffff;
   --warning: #b46500;
-  --warning-soft: rgba(180, 101, 0, 0.1);
+  --warning-soft: color-mix(in srgb, var(--warning), transparent calc(100% - var(--soft-alpha)));
   --warning-surface: #fdf0dc;
 
   /* Navigation and rows */
   --bg-nav-hover: rgba(31, 26, 18, 0.06);
-  --bg-nav-rail: #1b2030;
-  --bg-nav-selected: var(--studio-light-brand-bar);
+  --bg-nav-selected: #fff;
   --bg-row-selected: var(--brand-primary);
   --border-nav-rail-hover: transparent;
   --border-nav-rail-selected: transparent;
   --border-row-hover: transparent;
+  --row-frame-hover-bg: color-mix(in srgb, var(--bg-base), var(--text-primary) 6%);
   --border-row-selected: transparent;
-  --nav-rail-border-color: transparent;
-  --nav-rail-border-width: 0px;
+  --border-selected-card: #e4e8e6;
   --nav-rail-indicator-color: transparent;
   --nav-rail-indicator-display: none;
-  --nav-rail-item-border-width: 2px;
+  --nav-rail-item-border-width: 1px;
   --row-radius: var(--radius-sm);
+  --nav-row-radius: 1.5rem;
+  --nav-corner-shape: squircle;
+  --shadow-row-selected: var(--pane-shadow);
   --sidebar-row-border-width: 1px;
-  --text-nav-rail: #98a1b5;
-  --text-nav-rail-hover: #f7f9fc;
-  --text-nav-selected: var(--text-on-brand);
+  --text-nav-rail: var(--text-secondary);
+  --text-nav-rail-hover: var(--text-primary);
+  --text-nav-selected: var(--text-secondary);
 
   /* Controls and actions */
-  --bg-control-primary: #2f5ad0;
-  --bg-control-primary-hover: #2549b4;
-  --bg-neutral-action-hover: var(--bg-option-hover);
-  --bg-option-hover: var(--bg-hover);
-  --bg-primary-action-hover: var(--bg-control-primary-hover);
   --border-control: rgba(17, 23, 37, 0.32);
   --border-control-hover: color-mix(in oklab, var(--text-primary) 26%, transparent);
   --control-border-width: 1px;
@@ -110,7 +99,6 @@
   --select-content-radius: 6px;
   --select-item-radius: 4px;
   --tab-segment-radius: 4px;
-  --text-on-control-primary: #ffffff;
 
   /* Range controls */
   --range-cursor: initial;
@@ -155,15 +143,14 @@
   --message-bubble-radius: var(--card-radius);
   --pill-radius: 9999px;
   --studio-light-bg-message-framed: color-mix(in oklab, var(--accent) 6%, transparent);
-  --system-message-size: 12px;
   --thread-preview-bg: var(--chip-bg);
   --thread-preview-bg-hover: var(--chip-bg-hover);
   --thread-preview-text: oklab(0 0 0 / 0.6);
-  --unread: var(--accent);
+  --unread: #d32f2f;
 
   /* Composer */
   --composer-border-color: initial;
-  --composer-border-width: initial;
+  --composer-border-width: 2px;
   --composer-shadow: initial;
   --composer-shadow-focus: initial;
   --composer-transition: initial;
@@ -177,8 +164,6 @@
   --code-block-border-width: 1px;
   --code-block-header-bg: #ffffff;
   --inline-code-radius: var(--radius-sm);
-  --md-code-size: 14px;
-  --md-prose-size: 14px;
   --mermaid-diagram-bg: var(--bg-island);
   --text-inline-code: #39415a;
   --text-island: #1b2233;
@@ -245,6 +230,10 @@
 
 /* Hooks: Identity */
 
+[data-theme="studio-light"] [data-panel="sidebar"] {
+  --pane-bg: #f8faf9;
+}
+
 [data-theme="studio-light"] [data-workspace-icon] {
   background-color: var(--text-secondary);
   color: var(--text-on-structure);
@@ -282,8 +271,7 @@
 }
 
 [data-theme="studio-light"] [data-composer-shell]:focus-within {
-  border-color: color-mix(in oklab, var(--accent) 45%, transparent);
-  box-shadow: 0 0 0 2px var(--accent-glow);
+  border-color: var(--accent);
 }
 
 /* Hooks: Tasks */
@@ -295,7 +283,8 @@
 }
 
 [data-theme="studio-light"] [data-tasks-board] [data-task-number]:hover {
-  border-color: var(--border-row-hover);
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg-floating), var(--text-primary) 3%);
   box-shadow: var(--shadow-popover);
 }
 

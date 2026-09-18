@@ -170,25 +170,10 @@ export function ComposerActivityHeader({
   restrictToAgentIds,
 }: ComposerActivityHeaderProps): JSX.Element | null {
   const { data: runStates = [] } = useAgentRunStates(conversationId);
-  // Identity source (#task:1731): the bubble resolves its subjects from the
-  // GLOBAL agent directory, deliberately NOT from the Composer's
-  // workspace-member roster. The two surfaces have different semantics:
-  // the mention picker offers CANDIDATES and must stay workspace-scoped +
-  // fail-closed (#task:1720), while the bubble labels agents that are
-  // ALREADY active in this conversation (the run-state stream is the
-  // authority on who they are — only their name/avatar is looked up).
-  // Sharing the picker's roster here is what regressed DM channels: a
-  // dm_channel lives in an agent_home workspace, whose `workspace_members`
-  // is empty BY SCHEMA (agents are conversation members there), so the
-  // lookup missed and every bubble fell back to '@agent' + default avatar.
   const { data: directoryAgents = [] } = useAgents();
   const [expanded, setExpanded] = useState(false);
   const { openAgentPanel } = useNav();
-  // Click a bubble agent's avatar → open its docked side panel on Activity,
-  // regardless of the panel's last-used tab (#task:1539). The avatar carries the
-  // canonical `agentId` (never re-derived); `focusAgentSideSection` syncs the
-  // sticky section AND reactively redirects an already-open panel so all cases
-  // (closed / other agent / same agent on another tab) converge on Activity.
+
   const openAgentActivity = (agentId: string): void => {
     focusAgentSideSection(agentId, "activity");
     openAgentPanel(agentId);
@@ -258,17 +243,13 @@ export function ComposerActivityHeader({
   return (
     <div data-composer-activity="" className="border-b border-border-subtle bg-bg-floating">
       {expanded ? (
-        // Expanded: a slim GENERIC header (collapse control only — no
-        // per-agent info, so it never duplicates the first detail row) plus
-        // one row per running agent. Header icon and row avatars share the
-        // same 12px left inset as the collapsed line.
         <>
           <button
             type="button"
             onClick={() => setExpanded(false)}
             aria-expanded
             aria-label="Collapse run details"
-            className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-hover/50"
+            className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-elevated/50"
           >
             <Loader2 className="size-3 shrink-0 animate-spin text-accent" />
             <span className="font-medium text-text-secondary">
@@ -290,10 +271,6 @@ export function ComposerActivityHeader({
           </div>
         </>
       ) : (
-        // Resting line — fixed slots + one elastic, truncating middle. The row
-        // is a `div[role=button]` (expands) so it can host the avatar's own
-        // button (open-Activity) without nesting `<button>` in `<button>` —
-        // the "whole row clickable + inner interactive child" pattern.
         <div
           role="button"
           tabIndex={0}
@@ -307,13 +284,8 @@ export function ComposerActivityHeader({
           aria-expanded={false}
           aria-label={`${subjectName} is running — expand run details`}
           title={`${subjectName}: ${snippet}`}
-          className="flex h-8 w-full min-w-0 cursor-pointer items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-hover/50"
+          className="flex h-8 w-full min-w-0 cursor-pointer items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-elevated/50"
         >
-          {/* Avatar opens the agent's docked Activity panel — the app-wide
-              "click an agent avatar → open its panel" convention. stopPropagation
-              so it doesn't also expand the bubble. No hover chrome (shiki #task:1539
-              dogfood — cursor-pointer is enough); the focus-visible ring stays as the
-              borderless avatar's ONLY keyboard-focus a11y signal. */}
           <button
             type="button"
             onClick={(e) => {
@@ -337,9 +309,6 @@ export function ComposerActivityHeader({
               "size-3 shrink-0 " + (showCompaction ? "text-text-muted" : "animate-spin text-accent")
             }
           />
-          {/* The name is a second click target for the same open-Activity
-              action (shiki #task:1539) — text uses focus-visible:underline as its
-              idiomatic keyboard-focus signal, no hover chrome. */}
           <button
             type="button"
             onClick={(e) => {
@@ -435,7 +404,7 @@ function ActivityDetailRow({
           >
             {name}
           </button>
-          <Loader2 className="size-3 shrink-0 animate-spin text-text-muted" />
+          <Loader2 className="size-3 shrink-0 animate-spin text-accent" />
           {snippetKindLabel ? (
             <span className="flex shrink-0 items-center gap-1 rounded border border-border-subtle/70 px-1.5 py-px text-(length:--text-badge) leading-4 text-text-muted">
               {SnippetKindIcon ? <SnippetKindIcon className="size-3" /> : null}

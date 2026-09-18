@@ -325,6 +325,9 @@ function resolveRowLocation(
 }
 
 interface ActivityViewProps {
+  /** Fixed list width when a conversation is open beside it; fills the section
+   *  when nothing is selected. */
+  width?: string;
   /** workspace_id → identity (name + icon inputs). A global list spans every
    *  workspace, so each row shows its workspace icon and a name that
    *  disambiguates same-named channels across workspaces. */
@@ -340,6 +343,7 @@ interface ActivityViewProps {
 }
 
 export function ActivityView({
+  width,
   workspaceRefById,
   agentsById,
   onJump,
@@ -422,7 +426,7 @@ export function ActivityView({
   const ambient = filtered.filter((it) => it.salience === "ambient");
 
   return (
-    <PaneShell>
+    <PaneShell width={width}>
       <PaneHeader
         icon={<ActivityIcon className="size-3.5" />}
         title="Activity"

@@ -417,7 +417,7 @@ export function ImagePreviewModal({
               data-sticker
               data-sticker-size="md"
               data-sticker-tone="neutral"
-              className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-muted hover:bg-bg-hover hover:text-text-primary focus-outline"
+              className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary focus-outline"
             >
               <X className="size-4" />
             </Dialog.Close>

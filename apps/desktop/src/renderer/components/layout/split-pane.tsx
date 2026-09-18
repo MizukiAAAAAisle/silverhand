@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { PANE_RADIUS } from "./pane-chrome";
+import { PANE_BG } from "./pane-chrome";
 import { SplitterTrack } from "./splitter-track";
 
 interface SplitPaneProps {
@@ -304,11 +304,11 @@ export function SplitPane({
             onPointerCancel={onPointerUp}
           />
           <div
-            style={{
-              contain: "layout paint",
-              borderRadius: PANE_RADIUS,
-            }}
-            className="flex h-full min-w-0 flex-1 overflow-hidden bg-bg-base"
+            // The shell remains painted while the content mounts/unmounts.
+            // Share panel geometry so its background cannot square off the child.
+            data-pane-clip="side"
+            style={{ contain: "layout paint", background: PANE_BG }}
+            className="flex h-full min-w-0 flex-1 overflow-hidden"
           >
             {contentMounted ? right : null}
           </div>

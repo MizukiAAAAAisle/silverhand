@@ -74,7 +74,7 @@ export function SideUnresolvedPlaceholder({
       : conversationId;
   const copy = STATUS_COPY[status];
   return (
-    <main className="flex h-full min-w-0 flex-1 flex-col bg-bg-base" style={paneChrome}>
+    <main data-panel="side" className="flex h-full min-w-0 flex-1 flex-col" style={paneChrome}>
       <header className="flex h-(--titlebar-height,44px) shrink-0 items-center justify-between border-b border-border px-3">
         <div className="min-w-0 flex-1 truncate text-sm font-medium text-text-muted">
           {copy.header}
@@ -84,7 +84,7 @@ export function SideUnresolvedPlaceholder({
           onClick={onClose}
           aria-label="Close side pane"
           title="Close side pane"
-          className="ml-2 flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+          className="ml-2 flex size-7 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-bg-hover hover:text-text-primary"
         >
           <X className="size-4" strokeWidth={1.8} />
         </button>

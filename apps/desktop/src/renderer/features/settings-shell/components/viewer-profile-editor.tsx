@@ -6,7 +6,6 @@ import { AvatarPickerButton } from "@/components/avatar-picker-button";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
-import { primaryAction } from "@/components/common/primary-action";
 import { readDisplayNameDraft } from "@/features/identity/display-name";
 import { useUpdateProfile, useUploadAvatar, useViewerAvatarObjectUrl } from "../../session/hooks";
 
@@ -130,7 +129,7 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
         </div>
 
         <div className="flex flex-col gap-2">
-          <Button type="submit" size="sm" disabled={!canSave} {...primaryAction("self-start")}>
+          <Button type="submit" variant="primary" size="sm" className="self-start" disabled={!canSave}>
             {update.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
             Save Profile
           </Button>

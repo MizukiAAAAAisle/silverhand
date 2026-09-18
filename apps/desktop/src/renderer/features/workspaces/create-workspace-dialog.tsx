@@ -9,7 +9,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 import { describeApiError } from "@/lib/api-error-message";
 import { NameAvailabilityHint, useNameAvailability } from "@/features/naming/use-name-availability";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
@@ -204,16 +203,15 @@ export function CreateWorkspaceDialog({
           <DialogFooter className="mt-2">
             <Button
               type="button"
-              variant="outline"
+              variant="cancel"
               onClick={() => onOpenChange(false)}
-              {...primaryCancel()}
             >
               Cancel
             </Button>
             <Button
               type="submit"
+              variant="primary"
               disabled={createWorkspace.isPending || nameCheck.blocking}
-              {...primaryAction()}
             >
               {createWorkspace.isPending ? "Creating…" : "Create"}
             </Button>

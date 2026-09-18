@@ -14,22 +14,18 @@ import {
 import { ConversationViewSkeleton } from "@/features/conversation-shell/components/conversation-view-skeleton";
 import { AddConversationMemberPopover } from "@/features/conversations/add-conversation-member-popover";
 import { TaskRefContextProvider } from "@/features/task-shell/components/task-ref-context";
-import { ChannelSettingsDialog } from "./channel-settings-dialog";
+import { useNav, useRouteState } from "@/router";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
-import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/session/hooks";
-import { canEditAgentProfile } from "@/features/agent-shell/model/permissions";
 import {
   useChannelAgents,
   useChannelAgentRuntime,
   useChannelMessages,
   useConversationUnread,
   useMarkMessageChannelRead,
-  useStartAgent,
-  useStopAgent,
 } from "@/features/channels/hooks";
 import { useChannelMembership } from "@/features/channels/use-channel-membership";
-import { useChannelDetail, useJoinChannel } from "@/features/workspaces/hooks";
+import { useJoinChannel } from "@/features/workspaces/hooks";
 import { lastCommittedSeq } from "@/features/channels/pending-message";
 import {
   nextTailReadMark,
@@ -38,8 +34,6 @@ import {
 } from "@/features/conversation-shell/model/channel-read";
 import type { WorkspaceChannelReference } from "@/components/chat/conversation-ref";
 import { MemberStrip } from "./channel-view/member-strip";
-import { MembersButton } from "./channel-view/members-button";
-import { ChannelMembersDialog } from "./channel-view/members-dialog";
 import { MessageList } from "./channel-view/message-list";
 import { InlineFindBar } from "./inline-find-bar";
 import { useInlineFindController, useInlineFindHotkey } from "@/features/search/use-inline-find";
@@ -48,7 +42,7 @@ import {
   type AdvancedSearchSeed,
 } from "@/features/search/advanced-search-seed";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
-import type { AttachmentSnapshot, ConversationVisibility } from "@silverhand/shared";
+import type { AttachmentSnapshot } from "@silverhand/shared";
 import type { ConversationPaneDescriptor } from "@/features/conversations/pane-descriptor";
 import {
   composerDirectory,
@@ -172,23 +166,6 @@ interface ChannelViewProps {
   /** Whether the thread pane is currently fullscreen. Drives the icon
    *  toggle (Maximize2 ↔ Minimize2). */
   isFullscreen?: boolean;
-  /** Toggle archive state for top-level regular channels. Archive is
-   *  organizational only — it does not disable messaging or agents. */
-  onArchiveChannel?: (channelId: string, archived: boolean) => void;
-  archivePending?: boolean;
-  /** Persist a new channel title. Async so the rename dialog can surface
-   *  save errors inline and stay open on failure. Only wired for
-   *  top-level regular channels; absence hides the Rename entry. */
-  onRenameChannel?: (channelId: string, title: string) => Promise<void>;
-  /** Toggle a top-level regular channel's visibility (private ↔ public).
-   *  Async (its own exactly-one-field PATCH, never bundled into rename). Only
-   *  wired for regular channels; the modal fail-closes the control unless the
-   *  carrier also says the viewer administers the workspace. */
-  onSetChannelVisibility?: (channelId: string, visibility: ConversationVisibility) => Promise<void>;
-  /** Self-leave a top-level regular channel. Async. The modal disables Leave
-   *  and shows a reason when the carrier says the viewer can't (owner / last
-   *  human / archived). */
-  onLeaveChannel?: (channelId: string) => Promise<void>;
   /** Current-workspace top-level conversation id map for inline `#conv:<id>` refs. */
   conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
@@ -254,7 +231,8 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
       // "reopen" is a real retry rather than advice we can't honour.
       return (
         <main
-          className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+          data-panel="chat"
+          className="flex h-full min-w-0 flex-1 items-center justify-center text-sm text-text-muted"
           style={paneChrome}
         >
           Couldn&apos;t load this conversation — reopen it to retry.
@@ -267,7 +245,8 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
       // "Select a channel" is true here.
       return (
         <main
-          className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+          data-panel="chat"
+          className="flex h-full min-w-0 flex-1 items-center justify-center text-sm text-text-muted"
           style={paneChrome}
         >
           This conversation isn&apos;t available to you.
@@ -276,7 +255,8 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
     }
     return (
       <main
-        className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+        data-panel="chat"
+        className="flex h-full min-w-0 flex-1 items-center justify-center text-sm text-text-muted"
         style={paneChrome}
       >
         Select a channel
@@ -320,11 +300,6 @@ function ActiveChannelView({
   highlightedMessageId,
   onToggleFullscreen,
   isFullscreen,
-  onArchiveChannel,
-  archivePending = false,
-  onRenameChannel,
-  onSetChannelVisibility,
-  onLeaveChannel,
   conversationRefsById,
   onOpenConversationRef,
   onOpenChannelRef,
@@ -431,19 +406,17 @@ function ActiveChannelView({
     return active && active.kind === "attachment" ? active : null;
   }, [viewTabsShown, tabController.tabs, tabController.activeKey]);
   // The panel surfaces this pane can host, each behind the SAME gate its
-  // side-panel / modal entry uses: a jump handler for Attachments (the locate
-  // action is a row's whole point), a thread opener for Threads, a roster target
-  // for Members. ONE list feeds both the `＋` producer and the mount below, so a
+  // side-panel entry uses: a jump handler for Attachments (the locate
+  // action is a row's whole point), a thread opener for Threads. ONE list feeds both the `＋` producer and the mount below, so a
   // surface this pane can't host is never offered.
   const hostablePanels = useMemo<readonly PanelTabKind[]>(() => {
     const out: PanelTabKind[] = [];
     if (onJumpToMessage) out.push("attachments");
     if (onOpenThread) out.push("threads");
-    if (rosterTarget !== null) out.push("members");
     return out;
-  }, [onJumpToMessage, onOpenThread, rosterTarget]);
+  }, [onJumpToMessage, onOpenThread]);
   // Already-open surfaces leave the menu: the strip is showing that tab, so
-  // offering it again would be a dead entry. All three open → no `＋` at all.
+  // offering it again would be a dead entry. Both open → no `＋` at all.
   const addablePanels = useMemo(
     () =>
       hostablePanels.filter(
@@ -591,56 +564,16 @@ function ActiveChannelView({
 
   const closed = conversation.closed_at !== null;
   const isArchived = conversation.archived_at !== null;
-  // Rename / archive are channel-like organization behaviors (#task:1145):
-  // they apply to every top-level conversation, whether it is an open-roster
-  // workspace channel or a fixed-roster DM. The parent decides the actual
-  // permission by whether it passes the handler at all; rename additionally
-  // requires "not closed" (a closed channel is read-only). So the gate is exactly
-  // "does this container have a channel namespace" — a local reading name for the
-  // prop, not a second derivation of it (#task:2078).
-  const isTopLevelChannelLike = hasChannelNamespace;
-  const canToggleArchive = isTopLevelChannelLike && !!onArchiveChannel && gate.allowMutations;
-  const canRenameChannel =
-    isTopLevelChannelLike && !closed && !!onRenameChannel && gate.allowMutations;
+  const canOpenSettings = hasChannelNamespace && gate.allowMutations;
   // Visibility toggle + self-leave are workspace/open-roster only. A
   // fixed-roster conversation has neither a visibility choice nor a leave path.
-  const isRegularChannel =
-    paneMode.kind === "workspace_channel" && conversation.roster_policy === "open";
-  // The "+ add member" target workspace, resolved ONCE for the three surfaces
-  // that offer it (both header variants + the members modal). Non-null is the
-  // whole permission: an open roster, not closed, mutations allowed, and a
-  // workspace to search candidates in. The `workspace_id` conjunct is how the
-  // last of those becomes a type — adding a member is a workspace-scoped
-  // candidate search, and a fixed roster already excludes the one placement that
-  // has no workspace.
+  // The header quick-add requires an open, mutable roster and workspace candidates.
   const addMemberWorkspaceId =
     canAddMember(conversation, closed) && gate.allowMutations ? paneCaps.workspaceScope : null;
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [membersOpen, setMembersOpen] = useState(false);
-  // The visibility/leave capability carriers (`can_update_visibility`,
-  // `can_leave`, `leave_blocked_reason`) live only on the channel-detail
-  // envelope, and a member never fetches detail on the hot path. Fetch it only
-  // while a surface that consumes them is mounted — the settings modal, or
-  // EITHER host of the roster (the modal, and the Members tab, whose own row
-  // carries Leave) — for a regular channel; a member hot path fires zero extra
-  // network until one opens, and both fail-close (control hidden / Leave
-  // disabled) until it resolves.
-  const membersTabMounted = activePanelHostable && activePanelTab === "members";
-  const channelDetailEnabled =
-    (settingsOpen || membersOpen || membersTabMounted) && isRegularChannel;
-  const { data: channelDetail } = useChannelDetail(
-    channelDetailEnabled ? conversation.id : null,
-    channelDetailEnabled,
-  );
-  const detailChannel = channelDetail?.channel;
-  const channelVisibility =
-    detailChannel && detailChannel.roster_policy === "open" ? detailChannel.visibility : undefined;
-  const canUpdateVisibility = channelDetail?.can_update_visibility ?? false;
-  const canLeaveChannel = channelDetail?.can_leave ?? false;
-  const leaveBlockedReason = channelDetail?.leave_blocked_reason ?? null;
-  const { data: viewer } = useViewerUser();
-  // The channel roster is a member surface AND a placement-specific one — the
-  // roster/agent strip, the members modal and the restart/stop controls it feeds.
+  const nav = useNav();
+  const route = useRouteState();
+  const settingsActive = route.channelSettingsId === conversation.id;
+  // The header roster/agent strip reads only member-visible channels.
   // `rosterTarget` is null for a non-member and for a placement with no roster
   // (a `direct_pair`), and a null id disables the query AND the WS interest — so
   // a DM starts neither read.
@@ -649,51 +582,6 @@ function ActiveChannelView({
   // settled" from "settled, this agent has no slot row", and `= []` collapses
   // the two into a confident Idle for every member (#task:2123).
   const { data: channelAgentRuntime } = useChannelAgentRuntime(rosterTarget);
-  const startAgent = useStartAgent(conversation.id);
-  const stopAgent = useStopAgent(conversation.id);
-  const agentIds = useMemo(() => channelAgents.map((agent) => agent.agent_id), [channelAgents]);
-  const canManageAllChannelAgents = useMemo(() => {
-    if (agentIds.length === 0) return false;
-    const viewerForPermissions =
-      viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
-    const agentsById = new Map(agents.map((agent) => [agent.id, agent]));
-    for (const agentId of agentIds) {
-      const agent = agentsById.get(agentId);
-      if (!agent || !canEditAgentProfile(viewerForPermissions, agent)) return false;
-    }
-    return true;
-  }, [agentIds, agents, viewer]);
-  const agentActionDisabled =
-    closed ||
-    agentIds.length === 0 ||
-    !canManageAllChannelAgents ||
-    startAgent.isPending ||
-    stopAgent.isPending;
-  // The bulk pair (#task:1687) lives in the members modal and is shown by
-  // PERMISSION only — never by running state, which changes under the user and
-  // would make the modal's title cluster jitter. Its two persistent
-  // impossibilities (a closed channel, a channel with no agents) hide it too:
-  // there is nothing to act on, so an icon there would be a dead affordance.
-  const showBulkAgentActions = canManageAllChannelAgents && !closed && agentIds.length > 0;
-  const restartAgents = useCallback(async () => {
-    if (agentActionDisabled) return;
-    for (const agent of channelAgents) {
-      await stopAgent.mutateAsync({ agentId: agent.agent_id });
-    }
-    try {
-      for (const agentId of agentIds) {
-        await startAgent.mutateAsync(agentId);
-      }
-    } catch {
-      // useStartAgent owns the visible toast; suppress the discarded click promise.
-    }
-  }, [agentActionDisabled, agentIds, channelAgents, startAgent, stopAgent]);
-  const stopAgents = useCallback(async () => {
-    if (agentActionDisabled) return;
-    for (const agentId of agentIds) {
-      await stopAgent.mutateAsync({ agentId });
-    }
-  }, [agentActionDisabled, agentIds, stopAgent]);
   // The roster/agent strip is a member surface — hidden for a
   // non-member (channelAgents is also empty there, the fetch being gated off) —
   // and a ROSTER surface: a pair's two endpoints are not a roster, so the mode
@@ -704,7 +592,7 @@ function ActiveChannelView({
         channelId={conversation.id}
         agentRuntime={channelAgentRuntime}
         agentAvatarUrls={agentAvatarUrls}
-        onOpenMembers={() => setMembersOpen(true)}
+        onOpenMembers={() => nav.openChannelSettings(conversation.id)}
       />
     ) : null;
 
@@ -851,7 +739,8 @@ function ActiveChannelView({
       <ConversationPaneCapabilitiesProvider value={paneCaps}>
         <main
           ref={findRootRef}
-          className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-base"
+          data-panel="chat"
+          className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden"
           style={paneChrome}
         >
           <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
@@ -940,7 +829,7 @@ function ActiveChannelView({
                     "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                     (find.open
                       ? "bg-bg-hover text-text-primary"
-                      : "text-text-muted hover:bg-bg-hover hover:text-text-primary")
+                      : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
                   }
                 >
                   <Search className="size-3.5" />
@@ -960,7 +849,7 @@ function ActiveChannelView({
                     "relative flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                     (threadsListActive
                       ? "bg-bg-hover text-text-primary"
-                      : "text-text-muted hover:bg-bg-hover hover:text-text-primary")
+                      : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
                   }
                 >
                   <ThreadIcon className="size-3.5" />
@@ -989,30 +878,32 @@ function ActiveChannelView({
                     "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                     (filesListActive
                       ? "bg-bg-hover text-text-primary"
-                      : "text-text-muted hover:bg-bg-hover hover:text-text-primary")
+                      : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
                   }
                 >
                   <Paperclip className="size-3.5" />
                 </button>
               ) : null}
-              {rosterTarget !== null ? (
-                // Carries the member count (shiki 2026-07-28). The number is
-                // derived inside from the roster read model the strip already
-                // holds — no count endpoint, no second state — which is also why
-                // the read lives in the component and not here: it must not mount
-                // for a viewer this gate excludes. A pair has no roster to count.
-                <MembersButton channelId={conversation.id} onOpen={() => setMembersOpen(true)} />
-              ) : null}
-              {canRenameChannel || canToggleArchive ? (
+              {canOpenSettings ? (
                 <button
                   type="button"
                   data-sticker
                   data-sticker-size="md"
                   data-sticker-tone="neutral"
-                  onClick={() => setSettingsOpen(true)}
+                  onClick={() =>
+                    settingsActive
+                      ? nav.closeChannelSettings()
+                      : nav.openChannelSettings(conversation.id)
+                  }
+                  aria-pressed={settingsActive}
                   aria-label="Channel settings"
                   title="Channel settings"
-                  className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                  className={
+                    "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
+                    (settingsActive
+                      ? "bg-bg-hover text-text-primary"
+                      : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
+                  }
                 >
                   <Settings className="size-3.5" />
                 </button>
@@ -1026,7 +917,7 @@ function ActiveChannelView({
                   onClick={onToggleFullscreen}
                   aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
                   title={isFullscreen ? "Exit full screen" : "Full screen"}
-                  className="flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                  className="flex size-7 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                 >
                   {isFullscreen ? (
                     <Minimize2 className="size-3.5" />
@@ -1044,7 +935,7 @@ function ActiveChannelView({
                   onClick={onCloseChild}
                   aria-label={closeLabel}
                   title={closeLabel}
-                  className="flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
+                  className="flex size-7 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                 >
                   <X className="size-3.5" />
                 </button>
@@ -1104,65 +995,6 @@ function ActiveChannelView({
                 placeholder="Search this channel"
               />
             </div>
-          ) : null}
-
-          {canRenameChannel || canToggleArchive ? (
-            <ChannelSettingsDialog
-              open={settingsOpen}
-              onOpenChange={setSettingsOpen}
-              currentTitle={conversation.title}
-              onRename={
-                canRenameChannel && onRenameChannel
-                  ? (title) => onRenameChannel(conversation.id, title)
-                  : undefined
-              }
-              isArchived={isArchived}
-              onToggleArchive={
-                canToggleArchive && onArchiveChannel
-                  ? (archived) => onArchiveChannel(conversation.id, archived)
-                  : undefined
-              }
-              archivePending={archivePending}
-              visibility={channelVisibility}
-              canUpdateVisibility={canUpdateVisibility}
-              onSetVisibility={
-                isRegularChannel && onSetChannelVisibility && gate.allowMutations
-                  ? (nextVisibility) => onSetChannelVisibility(conversation.id, nextVisibility)
-                  : undefined
-              }
-              onLeave={
-                isRegularChannel && onLeaveChannel && gate.allowMutations
-                  ? () => onLeaveChannel(conversation.id)
-                  : undefined
-              }
-              canLeave={canLeaveChannel}
-              leaveBlockedReason={leaveBlockedReason}
-            />
-          ) : null}
-
-          {rosterTarget !== null ? (
-            <ChannelMembersDialog
-              open={membersOpen}
-              onOpenChange={setMembersOpen}
-              channelId={conversation.id}
-              agentRuntime={channelAgentRuntime}
-              agentAvatarUrls={agentAvatarUrls}
-              onRestartAllAgents={showBulkAgentActions ? () => void restartAgents() : undefined}
-              onStopAllAgents={showBulkAgentActions ? () => void stopAgents() : undefined}
-              bulkAgentPending={startAgent.isPending || stopAgent.isPending}
-              onLeave={
-                isRegularChannel && onLeaveChannel && gate.allowMutations
-                  ? () => onLeaveChannel(conversation.id)
-                  : undefined
-              }
-              canLeave={canLeaveChannel}
-              leaveBlockedReason={leaveBlockedReason}
-              visibility={channelVisibility}
-              // Same floor as the header `+`: a member of a non-closed regular
-              // channel may open the picker. Who is actually addable stays the
-              // picker's per-candidate answer.
-              addMemberWorkspaceId={addMemberWorkspaceId ?? undefined}
-            />
           ) : null}
 
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -1287,7 +1119,7 @@ function ActiveChannelView({
               </div>
             ) : null}
 
-            {/* Attachments / Threads / Members as a tab — same overlay discipline as
+            {/* Attachments / Threads as a tab — same overlay discipline as
             Tasks, so Chat keeps its scroll underneath. Keyed on the surface so
             switching between two panel tabs remounts the surface's own
             filter/scroll rather than carrying one list's state into another. */}
@@ -1308,17 +1140,6 @@ function ActiveChannelView({
                     // the row's own business (lightbox / open-with-OS).
                     onOpenAttachment={handleOpenAttachment}
                     onOpenThread={onOpenThread ? (rootId) => onOpenThread(rootId) : undefined}
-                    agentRuntime={channelAgentRuntime}
-                    agentAvatarUrls={agentAvatarUrls}
-                    onLeave={
-                      isRegularChannel && onLeaveChannel && gate.allowMutations
-                        ? () => onLeaveChannel(conversation.id)
-                        : undefined
-                    }
-                    canLeave={canLeaveChannel}
-                    leaveBlockedReason={leaveBlockedReason}
-                    visibility={channelVisibility}
-                    addMemberWorkspaceId={addMemberWorkspaceId ?? undefined}
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center px-6 text-xs text-text-muted">

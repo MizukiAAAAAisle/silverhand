@@ -16,39 +16,11 @@ export interface AddConversationMemberPopoverProps {
   conversationId: string;
 }
 
-/** The picker's own props: the two ids plus how it is opened. The PICKER is the
- *  reusable part — its per-candidate grading (see below) must never be
- *  re-derived by a second surface — while the trigger is the surface's own
- *  affordance. */
+/** Header popover presentation; the candidate search is also used inline in settings. */
 interface AddConversationMemberPopoverOptions extends AddConversationMemberPopoverProps {
-  /** Replaces the default `+` chip. The node is the Radix trigger itself
-   *  (`asChild`), so the consumer owns its glyph, label and box — the members
-   *  modal opens the SAME picker from a full-width "Add member" row at its
-   *  bottom (shiki 2026-07-28) rather than shipping a second candidate list. */
   trigger?: React.ReactNode;
-  /** Which trigger edge the panel aligns to. `end` suits the header chip row
-   *  (the `+` is the row's last item); `center` is what the members modal uses,
-   *  where the trigger spans the modal's content width inside symmetric padding
-   *  — a centred panel of the modal's own width then sits flush with the modal
-   *  (shiki 2026-07-28), without this file or the caller restating the dialog's
-   *  padding. */
   align?: "start" | "center" | "end";
-  /** Open as a MODAL popover. Needed when the trigger lives inside a Radix
-   *  Dialog (the members modal): the Dialog wraps its content in
-   *  `react-remove-scroll`, which blocks wheel/touch scroll everywhere OUTSIDE
-   *  its subtree — and this panel is PORTALED to the body, so its candidate
-   *  list could not be scrolled with a wheel/trackpad (#task:1785). A modal
-   *  popover puts its own content on top of the scroll-lock stack, so the list
-   *  scrolls again. The header `+` opens the panel outside any dialog, where no
-   *  lock exists, so it stays non-modal to avoid locking page scroll for a
-   *  low-key affordance. */
   modal?: boolean;
-  /** Panel width (a Tailwind width class). Defaults to the compact
-   *  `w-[260px]` that suits the header `+` chip (shiki #task:1923 — the
-   *  360px it used to share with the modal was too wide for a low-key
-   *  affordance). The members modal passes `w-[360px]` to stay flush with
-   *  its own `max-w-[360px]` — the same coupling `align="center"` relies on
-   *  (shiki 2026-08-09: the two header entries may differ in width). */
   widthClass?: string;
 }
 
@@ -59,7 +31,7 @@ interface AddConversationMemberPopoverOptions extends AddConversationMemberPopov
  * The default trigger sits flush in the chip row with no resting fill — only a
  * subtle hover background — so it reads as a low-key affordance rather
  * than competing with the avatar chips beside it. A consumer may pass its own
- * `trigger` (the members modal's bottom "Add member" row): the picker is the
+ * `trigger`: the picker is the
  * part that must not be duplicated, because a second candidate list would mean
  * a second answer to "who may I add".
  *
@@ -126,13 +98,9 @@ export function AddConversationMemberPopover({
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
-          // Width is `widthClass` (default compact `w-[260px]`; the modal
-          // passes `w-[360px]` to stay flush with its own edges — see the prop
-          // doc). The two header entries are allowed to differ: the member-strip
-          // `+` is a low-key affordance, the modal's row aligns to the modal.
           className={`${widthClass} z-(--z-dialog) rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none`}
         >
-          <PopoverBody workspaceId={workspaceId} conversationId={conversationId} />
+          <ConversationMemberSearch workspaceId={workspaceId} conversationId={conversationId} />
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -141,10 +109,17 @@ export function AddConversationMemberPopover({
 
 // Body splits out so React Query hooks only mount once Radix opens
 // the popover (Content is not rendered while closed).
-function PopoverBody({
+export function ConversationMemberSearch({
   workspaceId,
   conversationId,
-}: AddConversationMemberPopoverProps): JSX.Element {
+  mode = "inline",
+  autoFocus = true,
+  onQueryChange,
+}: AddConversationMemberPopoverProps & {
+  mode?: "inline" | "floating";
+  autoFocus?: boolean;
+  onQueryChange?: (query: string) => void;
+}): JSX.Element {
   const memberLists = useWorkspaceMemberLists(workspaceId);
   // The floor (membership of this conversation) is the caller's gate; what is
   // left here is the TARGET grading: `admin` opens the people roster and other
@@ -228,11 +203,13 @@ function PopoverBody({
 
   return (
     <MemberCandidatePicker
-      mode="inline"
+      mode={mode}
+      onQueryChange={onQueryChange}
+      placeholder={onQueryChange ? "Search members or add someone" : undefined}
       groups={groups}
       onPick={(c) => void onPick(c)}
       rowsDisabled={addMember.isPending}
-      autoFocus
+      autoFocus={autoFocus}
       ariaLabel="Add member"
       emptyHint={
         isLoading

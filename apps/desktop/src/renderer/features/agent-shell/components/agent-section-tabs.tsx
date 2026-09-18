@@ -85,7 +85,7 @@ export function AgentSectionTabs<T extends string>({
             title={item.hint}
             className={cn("agent-section-tab", selected && "agent-section-tab-selected")}
           >
-            <Icon className="size-3.5 shrink-0" strokeWidth={selected ? 2.25 : 2} />
+            <Icon className="size-3.5 shrink-0" strokeWidth={2} />
             <span>{item.label}</span>
           </button>
         );

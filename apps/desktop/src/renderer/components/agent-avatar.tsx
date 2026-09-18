@@ -58,10 +58,6 @@ const BRAND_LOGOS: Partial<Record<RuntimeKind, string>> = {
   qoder: QODER_LOGO_DATA_URI,
 };
 
-// Tints picked to match each brand's primary color when one exists.
-// `bg` is the badge fill, `fg` is the icon `currentColor`. Claude's
-// path carries its own `#d97757` fill so `fg` is a no-op there.
-// Only runtimes rendered as tinted vector marks need an entry.
 const TINTS: Partial<Record<RuntimeKind, { bg: string; fg: string }>> = {
   grok: { bg: "bg-[#09090b]", fg: "text-white" },
   pi: { bg: "bg-[#09090b]", fg: "text-white" },
@@ -124,8 +120,8 @@ export function AgentAvatar({
 
   const Icon = ICONS[runtime];
   const tint = TINTS[runtime];
-  // Pi’s official viewBox already includes the mark’s surrounding space.
   const inner = runtime === "pi" ? size : Math.round(size * 0.6);
+
   return (
     <span
       className={cn(

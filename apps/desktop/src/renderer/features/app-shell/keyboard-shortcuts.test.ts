@@ -195,3 +195,19 @@ it("closes a human inspector before its preserved thread", () => {
     }),
   ).toEqual({ outcome: "closed-panel", target: "human" });
 });
+
+it("closes channel settings before the preserved thread", () => {
+  expect(
+    resolveContextualClose({
+      agentPanelId: null,
+      humanPanelId: null,
+      channelSettingsId: "channel-a",
+      filesListOpen: false,
+      taskPaneOpen: false,
+      sideConversationId: null,
+      threadRootId: "root",
+      threadsListOpen: false,
+      activityChannelOpen: false,
+    }),
+  ).toEqual({ outcome: "closed-panel", target: "settings" });
+});

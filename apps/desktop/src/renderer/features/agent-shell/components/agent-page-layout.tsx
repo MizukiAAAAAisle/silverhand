@@ -14,8 +14,9 @@ export function AgentPageLayout({
 }): JSX.Element {
   return (
     <main
+      data-panel={host === "side" ? "side" : "detail"}
       data-profile-host={host}
-      className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-bg-base"
+      className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
       style={paneChrome}
     >
       {header}

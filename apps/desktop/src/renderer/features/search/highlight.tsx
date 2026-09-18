@@ -24,7 +24,7 @@ export function highlightText(text: string, query: string): ReactNode {
   return (
     <>
       {text.slice(0, index)}
-      <mark className="rounded bg-accent-soft px-0.5 text-text-primary">
+      <mark className="rounded bg-(--search-hit-bg-active) px-0.5 text-(--search-hit-text)">
         {text.slice(index, index + needle.length)}
       </mark>
       {text.slice(index + needle.length)}

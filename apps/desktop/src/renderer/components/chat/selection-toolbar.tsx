@@ -1,7 +1,5 @@
 import { ClipboardCopy, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { neutralAction } from "@/components/common/control-ink-border";
-import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 
 /**
  * Top bar shown while MessageList is in multi-select mode — the "share messages
@@ -10,11 +8,11 @@ import { primaryAction, primaryCancel } from "@/components/common/primary-action
  * Three right-aligned buttons, ranked by the app-wide poster-action family
  * (shiki 2026-07-26: "share message as image 的时候,顶部的工具条,以及 Image
  * preview 的几个 button 规范也统一一下"):
- * - **Save image** → `primaryAction()`, the green CTA. This bar exists to
+ * - **Save image** → `variant="primary"`, the green CTA. This bar exists to
  *   produce an image, so exactly ONE button is the commit.
- * - **Copy markdown** → `neutralAction()`, the framed neutral rank. It is a
+ * - **Copy markdown** → `variant="neutral"`, the framed neutral rank. It is a
  *   second, cheaper export path, not a second primary.
- * - **Cancel** → `primaryCancel()`, the way out of selection mode.
+ * - **Cancel** → `variant="cancel"`, the way out of selection mode.
  *
  * What this replaced: a local recipe where BOTH exports were "primary" and
  * ranked only on hover, by filling with `--brand-primary` (forza6 #FF2C7A hot
@@ -81,22 +79,17 @@ export function SelectionActionButton({
   disabled,
   onClick,
 }: SelectionActionButtonProps): JSX.Element {
-  const rankProps =
-    rank === "primary"
-      ? primaryAction("gap-1")
-      : rank === "cancel"
-        ? primaryCancel("gap-1")
-        : neutralAction("gap-1");
+  const variant = rank === "primary" ? "primary" : rank === "cancel" ? "cancel" : "neutral";
   return (
     <Button
       type="button"
       size="xs"
-      variant={rank === "primary" ? "default" : "outline"}
+      variant={variant}
+      className="gap-1"
       onClick={onClick}
       disabled={disabled}
       title={label}
       aria-label={label}
-      {...rankProps}
     >
       {icon}
       <span>{label}</span>

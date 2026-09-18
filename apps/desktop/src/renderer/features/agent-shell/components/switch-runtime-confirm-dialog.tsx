@@ -10,7 +10,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { primaryAction, primaryCancel } from "@/components/common/primary-action";
 
 /**
  * Confirmation required because switching resets session continuity for
@@ -77,14 +76,13 @@ export function SwitchRuntimeConfirmDialog({
         ) : null}
         <DialogFooter>
           <Button
-            variant="outline"
+            variant="cancel"
             onClick={() => onOpenChange(false)}
             disabled={pending}
-            {...primaryCancel()}
           >
             Cancel
           </Button>
-          <Button onClick={onConfirm} disabled={pending} {...primaryAction()}>
+          <Button variant="primary" onClick={onConfirm} disabled={pending}>
             {pending ? "Switching…" : "Switch runtime"}
           </Button>
         </DialogFooter>

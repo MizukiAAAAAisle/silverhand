@@ -122,7 +122,7 @@ type PendingAttachment = CachedPendingAttachment;
  *  frame or fill (the composer shell is the frame here, and three framed chips
  *  inside it would be a lift on top of a lift). */
 const COMPOSER_TOOL_CLASS =
-  "inline-flex size-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex size-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50";
 
 // Stable empty defaults for the workspace-scoped mention sources. While
 // `useWorkspaceMemberLists` has no data (workspaceId null or query loading)

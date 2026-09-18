@@ -63,6 +63,8 @@ export function MemberCandidatePicker({
   rowsDisabled = false,
   autoFocus = false,
   footer,
+  onQueryChange,
+  placeholder = "Search by name or @handle",
 }: {
   /** Candidate pool, already narrowed by the caller's eligibility rules. */
   groups: readonly MemberCandidateGroup[];
@@ -78,6 +80,8 @@ export function MemberCandidatePicker({
   autoFocus?: boolean;
   /** Rendered below the list, inside the picker's own column (inline errors). */
   footer?: ReactNode;
+  onQueryChange?: (query: string) => void;
+  placeholder?: string;
 }): JSX.Element {
   const inline = mode === "inline";
   const [query, setQuery] = useState("");
@@ -127,6 +131,7 @@ export function MemberCandidatePicker({
   const pick = (candidate: MemberCandidate): void => {
     onPick(candidate);
     setQuery("");
+    onQueryChange?.("");
     setActive(0);
     if (!inline) setOpen(false);
   };
@@ -193,7 +198,7 @@ export function MemberCandidatePicker({
                 onClick={() => pick(candidate)}
                 className={cn(
                   "flex w-full items-center gap-2 rounded-(--select-item-radius) px-2 py-1.5 text-left disabled:opacity-60",
-                  index === active ? "bg-(--bg-option-hover)" : "",
+                  index === active ? "bg-(--bg-hover)" : "",
                 )}
               >
                 {candidate.kind === "agent" ? (
@@ -244,9 +249,10 @@ export function MemberCandidatePicker({
           value={query}
           disabled={disabled}
           autoFocus={autoFocus}
-          placeholder="Search by name or @handle"
+          placeholder={placeholder}
           onChange={(e) => {
             setQuery(e.target.value);
+            onQueryChange?.(e.target.value);
             setActive(0);
             if (!inline) setOpen(true);
           }}

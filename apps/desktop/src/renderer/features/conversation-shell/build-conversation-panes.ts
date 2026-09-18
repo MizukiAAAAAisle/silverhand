@@ -46,11 +46,6 @@ export function buildConversationPanes(
                 ? commands.toggleFilesList
                 : undefined,
             filesListActive: state.filesListMounted,
-            onArchiveChannel: commands.handleArchiveChannelMutation,
-            onRenameChannel: commands.handleRenameChannelMutation,
-            onSetChannelVisibility: commands.handleSetChannelVisibilityMutation,
-            onLeaveChannel: commands.handleLeaveChannelMutation,
-            archivePending: state.archivePending,
             conversationRefsById: read.conversationRefsById,
             onOpenConversationRef: commands.openSide,
             onOpenChannelRef: commands.handleOpenChannelByName,
@@ -91,6 +86,14 @@ export function resolveSecondaryPane(
     return {
       kind: "human",
       props: { userId: route.humanPanelId, onClose: commands.closeHumanPanel },
+    };
+  }
+
+  if (route.channelSettingsId && route.channelId) {
+    return {
+      kind: "settings",
+      channelId: route.channelSettingsId,
+      onDepartChannel: commands.departPrimaryPane,
     };
   }
 
@@ -151,9 +154,6 @@ export function resolveSecondaryPane(
           onCloseChild: commands.closeSecondary,
           closeLabel: "Close side pane",
           isFullscreen: false,
-          onArchiveChannel: commands.handleArchiveSecondaryChannelMutation,
-          onRenameChannel: commands.handleRenameSecondaryChannelMutation,
-          archivePending: state.archivePending,
           conversationRefsById: read.conversationRefsById,
           onOpenConversationRef: commands.openSide,
           onOpenChannelRef: commands.handleOpenChannelByName,

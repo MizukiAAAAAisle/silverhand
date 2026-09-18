@@ -241,7 +241,7 @@ function SelectionQuoteButton({
       // to 0 either way. Clamped at 0 so forza6's hard corners
       // (`--floating-radius: 0`) never go negative. Keep the `2px` in sync with
       // the container's `p-0.5` if that padding changes.
-      className="inline-flex items-center gap-1 rounded-[max(0px,calc(var(--floating-radius,var(--radius-md))-2px))] px-2 py-0.5 font-medium text-text-primary transition-colors hover:bg-(--bg-option-hover) focus-outline"
+      className="inline-flex items-center gap-1 rounded-[max(0px,calc(var(--floating-radius,var(--radius-md))-2px))] px-2 py-0.5 font-medium text-text-primary transition-colors hover:bg-(--bg-hover) focus-outline"
     >
       {icon}
       <span>{label}</span>

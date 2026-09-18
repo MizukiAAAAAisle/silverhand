@@ -3,13 +3,6 @@ import type { DirectPairAuthority } from "@/features/chat-shell/model/chat-place
 import type { JumpRoute } from "./message-jump-nav";
 import { jumpBasePath, resolveJumpNav, resolveJumpRoute } from "./message-jump-nav";
 
-// Pure decision fence for the jump seam (#task:2052). Not a UI test: which of
-// three nav modes a jump takes is a BEHAVIOR branch, and the bug it guards
-// against — reading the raw pair set, so a cold/failed read (empty set) routes a
-// DM as a channel under the selected workspace — reappears the moment someone
-// "simplifies" this back to `directPairIds.has(...)`. The falsifier is a
-// workspace-less target while the pair list has not answered.
-
 const ready = (ids: string[]): DirectPairAuthority => ({
   status: "ready",
   conversationIds: new Set(ids),
@@ -24,7 +17,7 @@ const failed: DirectPairAuthority = { status: "failed" };
 describe("resolveJumpNav", () => {
   it("routes a target that carries its own workspace id straight to the workspace arm", () => {
     // A channel jump must never be gated on the pair list being ready — that
-    // would make an unrelated query a precondition for every jump (@Paul #2).
+    // would make an unrelated query a precondition for every jump.
     // Prove it with the list UNANSWERED and mid-refetch: still workspace-resolve.
     for (const pairs of [pending, failed, ready([]), refetching([])]) {
       expect(
@@ -119,7 +112,7 @@ describe("resolveJumpNav", () => {
   });
 });
 
-// The second half of the seam (#task:2102): once a jump is ACCEPTED, which pane
+// The second half of the seam: once a jump is ACCEPTED, which pane
 // it opens and whether it carries the reply cluster. Also a behavior branch, and
 // the bug it guards is asymmetry — the direct arm used to drop `threadRootId`
 // while the channel arm carried it, so a DM attachment sourced from a thread

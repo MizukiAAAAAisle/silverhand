@@ -1,4 +1,4 @@
-import { FileText, MessagesSquare, Paperclip, Plus, Users, X } from "lucide-react";
+import { FileText, MessagesSquare, Paperclip, Plus, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
   DndContext,
@@ -86,7 +86,6 @@ interface TabPresentation {
 const PANEL_PRESENTATION: Record<PanelTabKind, TabPresentation> = {
   attachments: { icon: Paperclip, label: "Attachments" },
   threads: { icon: ThreadIcon, label: "Threads" },
-  members: { icon: Users, label: "Members" },
 };
 
 /** A tab's icon + label. Exhaustive over the {@link Tab} union so a new custom
@@ -264,11 +263,9 @@ function SortableTab({
         // entry: "Threads (unread)"); the dot itself stays decorative.
         aria-label={unread ? `${label} (unread)` : undefined}
         className={cn(
-          "flex shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap pl-2.5 text-xs transition-colors",
+          "flex shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap pl-2.5 text-xs font-semibold transition-colors",
           showInlineClose ? "pr-1" : "pr-2.5",
-          active
-            ? "font-semibold text-text-primary"
-            : "font-medium text-text-secondary hover:text-text-primary",
+          active ? "text-text-primary" : "text-text-muted hover:text-text-primary",
         )}
       >
         <Icon className="size-3.5 shrink-0" aria-hidden />

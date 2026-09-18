@@ -27,7 +27,6 @@ import {
   type CreateTaskTarget,
 } from "@/features/task-shell/components/create-task-dialog";
 import { Button } from "@/components/ui/button";
-import { primaryAction } from "@/components/common/primary-action";
 
 /**
  * The conversation's Tasks tab (#task:2121) — the five-column status kanban
@@ -123,8 +122,9 @@ export function ChannelTasksTab({ container, onOpenTask }: ChannelTasksTabProps)
         />
         <Button
           type="button"
+          variant="primary"
+          className={`shrink-0 gap-1.5 ${FILTER_ROW_TRIGGER_BOX}`}
           onClick={() => setCreateOpen(true)}
-          {...primaryAction(`shrink-0 gap-1.5 ${FILTER_ROW_TRIGGER_BOX}`)}
         >
           <Plus className="size-3.5" />
           New task

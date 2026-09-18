@@ -426,7 +426,7 @@ function TreeRow({
         // covers folder + file rows so the tree reads as a single surface.
         // #task:912 review round 4.
         "flex w-full items-center gap-1.5 rounded-(--row-radius) py-1 pr-2 text-left",
-        selected ? "bg-accent-2 text-text-on-accent-2" : "text-text-primary hover:bg-bg-hover",
+        selected ? "bg-accent text-text-on-accent" : "text-text-primary hover:bg-bg-hover",
       )}
       style={{ paddingLeft: indent + 14 /* align with dir name col */ }}
       title={node.path}
@@ -442,7 +442,7 @@ function TreeRow({
  *  generic file glyph. We deliberately don't drive a wider glyph palette here;
  *  the goal is "this is a text file you can read", not full file-type theming. */
 function FileGlyph({ name, selected }: { name: string; selected: boolean }): JSX.Element {
-  const cls = cn("size-3.5 shrink-0", selected ? "text-text-on-accent-2" : "text-text-muted");
+  const cls = cn("size-3.5 shrink-0", selected ? "text-text-on-accent" : "text-text-muted");
   if (name.endsWith(".md") || name.endsWith(".markdown")) {
     return <FileText className={cls} />;
   }

@@ -42,7 +42,8 @@ export function DirectorySidebar({ children }: { children: ReactNode }): JSX.Ele
 export function DirectoryPlaceholder({ children }: { children: ReactNode }): JSX.Element {
   return (
     <main
-      className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+      data-panel="detail"
+      className="flex h-full flex-1 items-center justify-center text-sm text-text-muted"
       style={{ ...paneChrome, overflow: "hidden" }}
     >
       {children}

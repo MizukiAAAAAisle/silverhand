@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { paneChrome } from "@/components/layout/pane-chrome";
 import dayjs from "dayjs";
 import { GroupedVirtuoso } from "react-virtuoso";
 import { toast } from "sonner";
@@ -108,7 +109,12 @@ export function ChannelAttachmentsPanel({
   nowMs,
 }: ChannelAttachmentsPanelProps): JSX.Element {
   return (
-    <aside data-pane="attachments-list" className="flex h-full min-h-0 w-full flex-col bg-bg-base">
+    <aside
+      data-panel="side"
+      data-pane="attachments-list"
+      className="flex h-full min-h-0 w-full flex-col overflow-hidden"
+      style={paneChrome}
+    >
       <SidePanelHeader onClose={onClose}>
         <SidePanelHeaderTitle
           icon={<Paperclip className="size-3.5 shrink-0 text-text-muted" />}

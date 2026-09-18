@@ -107,7 +107,8 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
   if (targetQuery.isLoading) {
     return (
       <main
-        className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+        data-panel="chat"
+        className="flex h-full min-w-0 flex-1 items-center justify-center text-sm text-text-muted"
         style={paneChrome}
       >
         Loading…
@@ -119,7 +120,8 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
     // absence the pair arm renders, in the same words.
     return (
       <main
-        className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+        data-panel="chat"
+        className="flex h-full min-w-0 flex-1 items-center justify-center text-sm text-text-muted"
         style={paneChrome}
       >
         This conversation isn&apos;t available to you.
@@ -129,7 +131,8 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
 
   return (
     <main
-      className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-base"
+      data-panel="chat"
+      className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden"
       style={paneChrome}
     >
       <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">

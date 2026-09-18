@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Trash2 } from "lucide-react";
+import { UserMinus } from "lucide-react";
 import type { AgentDto, WorkspaceRole } from "@silverhand/shared";
+import { useNav } from "@/router";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
@@ -25,7 +26,16 @@ type Candidate = MemberCandidate;
 type Member = { kind: "agent"; agent: AgentDto } | { kind: "human"; user: WorkspaceHumanMember };
 
 /** Membership controls retain per-kind, per-verb governance from the workspace roster. */
-export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }): JSX.Element {
+export function WorkspaceMembersPanel({
+  workspaceId,
+  onNavigate,
+}: {
+  workspaceId: string;
+  /** Called right before navigating to a member's page — lets the host (e.g. the
+   *  settings modal) dismiss itself so the destination isn't opened behind it. */
+  onNavigate?: () => void;
+}): JSX.Element {
+  const nav = useNav();
   const { data: memberLists, isLoading: membersLoading } = useWorkspaceMemberLists(workspaceId);
   const agentMembers = memberLists?.agents ?? [];
   const humanMembers = memberLists?.humans ?? [];
@@ -130,6 +140,18 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
     }
   };
 
+  // Navigate to a member's page. Dismiss the host (settings modal) first so the
+  // destination doesn't open behind it. Bare-click only: the remove button
+  // stops propagation so its click never reaches the row.
+  const handleOpenMember = (m: Member): void => {
+    onNavigate?.();
+    if (m.kind === "agent") {
+      nav.toMembers(m.agent.id);
+    } else {
+      nav.toMembersUser(m.user.user_id);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-3">
       {/* Add-member picker — only when the viewer can add at least one kind.
@@ -169,7 +191,18 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
               return (
                 <li
                   key={`${m.kind}:${id}`}
-                  className="flex h-8 items-center gap-2 rounded-(--chip-radius) border border-border-subtle bg-bg-base px-2"
+                  data-member-row
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleOpenMember(m)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handleOpenMember(m);
+                    }
+                  }}
+                  title={`Open ${displayName}`}
+                  className="flex h-8 cursor-pointer items-center gap-2 rounded-(--chip-radius) border-(length:--control-border-width) border-border-subtle bg-bg-base px-2 text-left transition-colors hover:border-text-primary focus-visible:border-text-primary focus-visible:outline-none"
                 >
                   {m.kind === "agent" ? (
                     <AgentAvatar
@@ -199,13 +232,16 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
                   {m.kind === "agent" && canRemoveAgent(m.agent.id) ? (
                     <button
                       type="button"
-                      onClick={() => handleRemove(m.agent.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleRemove(m.agent.id);
+                      }}
                       disabled={removeMember.isPending}
                       aria-label="Remove"
                       title="Remove member"
-                      className="ml-auto flex size-6 items-center justify-center rounded-(--chip-radius) text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-60"
+                      className="ml-auto flex size-6 items-center justify-center rounded-(--chip-radius) text-text-muted hover:text-error disabled:opacity-60"
                     >
-                      <Trash2 className="size-3.5" />
+                      <UserMinus className="size-3.5" />
                     </button>
                   ) : null}
                   {/* Human remove is owner-only (DELETE …/members/users/:userId).
@@ -215,13 +251,16 @@ export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }):
                   {m.kind === "human" && canRemoveHumans && m.user.role !== "owner" ? (
                     <button
                       type="button"
-                      onClick={() => handleRemoveHuman(m.user.user_id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleRemoveHuman(m.user.user_id);
+                      }}
                       disabled={removeHumanMember.isPending}
                       aria-label="Remove"
                       title="Remove member"
-                      className="ml-auto flex size-6 items-center justify-center rounded-(--chip-radius) text-text-muted hover:bg-bg-hover hover:text-error disabled:opacity-60"
+                      className="ml-auto flex size-6 items-center justify-center rounded-(--chip-radius) text-text-muted hover:text-error disabled:opacity-60"
                     >
-                      <Trash2 className="size-3.5" />
+                      <UserMinus className="size-3.5" />
                     </button>
                   ) : null}
                 </li>

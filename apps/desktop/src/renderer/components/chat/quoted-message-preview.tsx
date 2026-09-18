@@ -113,7 +113,7 @@ export function QuotedMessagePreview({
     <div
       className={
         "w-full border-2 border-border bg-bg-floating px-4 py-2 " +
-        (onJumpToOriginal ? "cursor-pointer transition-colors hover:border-accent" : "")
+        (onJumpToOriginal ? "cursor-pointer transition-colors hover:border-(--border-row-hover)" : "")
       }
       onClick={onJumpToOriginal}
       role={onJumpToOriginal ? "button" : undefined}

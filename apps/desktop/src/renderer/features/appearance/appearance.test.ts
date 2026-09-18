@@ -201,14 +201,31 @@ describe("theme markdown token cascade contract", () => {
     // Excluded from the per-theme contract:
     //  --forza6-*  private palette (namespaced; each theme owns its own palette)
     //  --color-*   Tailwind bridge (lives in global.css @theme inline, not here)
-    //  --app-corner-radius  intentionally forza6-only. NavRail reads it as
-    //              `var(--app-corner-radius, var(--card-radius, 0))`, so other
-    //              themes resolve to their own card radius by design — not a leak.
     //  --task-num  intentionally forza6-only (#task:1914). The `#nnn` number hue
     //              (`[data-tasks-num]`) is painted ONLY in forza6-components.css
     //              `[data-theme='forza6']` rules; other themes render the number
     //              as `text-text-muted` and never read the token, so it can't leak.
-    const FORZA6_ONLY = new Set(["--app-corner-radius", "--task-num"]);
+    //  --bg-nav-rail / --nav-rail-border-color / --nav-rail-border-width
+    //              forza6-only nav-rail chrome, declared in its `[data-theme]`
+    //              block (NOT `:root`). Other themes leave the rail bg/border
+    //              unset; the `.nav-rail` rule resolves them off via CSS-level
+    //              fallbacks (transparent / 0 / none), so nothing leaks.
+    //  --bg-control-primary / -hover / --bg-primary-action-hover /
+    //  --text-on-control-primary
+    //              forza6-only CTA color (its accent is pink, but the primary
+    //              CTA is avocado green), declared in its `[data-theme]` block
+    //              (NOT `:root`). Other themes omit them and the consumers fall
+    //              back to `--accent` / `--accent-hover` / `--text-on-accent`.
+    const FORZA6_ONLY = new Set([
+      "--task-num",
+      "--bg-nav-rail",
+      "--nav-rail-border-color",
+      "--nav-rail-border-width",
+      "--bg-control-primary",
+      "--bg-control-primary-hover",
+      "--bg-primary-action-hover",
+      "--text-on-control-primary",
+    ]);
     const isPromoted = (t: string) =>
       !t.startsWith("--forza6-") && !t.startsWith("--color-") && !FORZA6_ONLY.has(t);
 

@@ -1,13 +1,18 @@
 import { useProfileHeroSize } from "@/features/profile/use-profile-hero-size";
 import { ProfileMessageActivity } from "@/features/profile/profile-message-activity";
-import { useState, type JSX } from "react";
+import { useState, type JSX, type ReactNode } from "react";
+import { Clock, IdCard, Link2, Monitor, Unlink } from "lucide-react";
 import "./agent-profile-hero.css";
 import dayjs from "dayjs";
 import type { AgentDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { cn } from "@/lib/cn";
-import { MetadataList, ProfileSection } from "@/features/profile/profile-summary-sections";
+import {
+  ProfileFact,
+  ProfileFactBand,
+  ProfileSection,
+} from "@/features/profile/profile-summary-sections";
 import { useUpdateAgent } from "../hooks/hooks";
 import { useAgentAvatarObjectUrl } from "../hooks/avatar-hooks";
 import { canEditAgentProfile } from "../model/permissions";
@@ -137,6 +142,37 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
         </div>
       </section>
 
+      <ProfileFactBand>
+        <ProfileFact icon={<IdCard className="size-3.5" />} label="ID">
+          <span className="font-medium text-text-primary">{agent.id}</span>
+        </ProfileFact>
+        <ProfileFact icon={<Monitor className="size-3.5" />} label="Computer">
+          <span className="font-medium text-text-primary">{computerName}</span>
+        </ProfileFact>
+        <ProfileFact
+          icon={
+            agent.session_scope === "agent" ? (
+              <Link2 className="size-3.5" />
+            ) : (
+              <Unlink className="size-3.5" />
+            )
+          }
+          label="Session"
+        >
+          <span className="font-medium text-text-primary">
+            {agent.session_scope === "agent" ? "Across conversations" : "Per conversation"}
+          </span>
+        </ProfileFact>
+        <ProfileFact icon={<Clock className="size-3.5" />} label="Created">
+          <span
+            className="font-medium text-text-primary"
+            title={dayjs(agent.created_at).format("YYYY-MM-DD HH:mm:ss")}
+          >
+            {dayjs(agent.created_at).format("YYYY-MM-DD")}
+          </span>
+        </ProfileFact>
+      </ProfileFactBand>
+
       <ProfileMessageActivity subject={{ kind: "agent", id: agent.id }} />
 
       <ProfileSection
@@ -155,29 +191,6 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
           agent={agent}
           editing={runtimeEditing}
           onExitEdit={() => setRuntimeEditing(false)}
-        />
-      </ProfileSection>
-
-      <ProfileSection title="Metadata" muted>
-        <MetadataList
-          items={[
-            { label: "Computer", value: computerName },
-            {
-              label: "Session model",
-              value: agent.session_scope === "agent" ? "Across conversations" : "Per conversation",
-            },
-            {
-              label: "Created",
-              value: dayjs(agent.created_at).format("YYYY-MM-DD"),
-              title: dayjs(agent.created_at).format("YYYY-MM-DD HH:mm:ss"),
-            },
-            {
-              label: "Updated",
-              value: dayjs(agent.updated_at).format("YYYY-MM-DD HH:mm"),
-              title: dayjs(agent.updated_at).format("YYYY-MM-DD HH:mm:ss"),
-            },
-            { label: "Agent ID", value: agent.id, mono: true },
-          ]}
         />
       </ProfileSection>
 

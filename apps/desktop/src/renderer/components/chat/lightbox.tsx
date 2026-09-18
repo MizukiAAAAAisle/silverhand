@@ -4,7 +4,6 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Download, X, ZoomIn, ZoomOut } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { neutralAction } from "@/components/common/control-ink-border";
 import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
 import { SelectionActionButton } from "./selection-toolbar";
 
@@ -351,7 +350,7 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
               data-sticker
               data-sticker-size="md"
               data-sticker-tone="neutral"
-              className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-muted hover:bg-bg-hover hover:text-text-primary focus-outline"
+              className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary focus-outline"
             >
               <X className="size-4" />
             </DialogPrimitive.Close>
@@ -420,12 +419,12 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
             <div className="flex items-center gap-2">
               <Button
                 type="button"
-                variant="outline"
+                variant="neutral"
                 size="icon"
+                className="size-[22px] shrink-0"
                 aria-label="Zoom out"
                 disabled={scale <= MIN_SCALE}
                 onClick={() => setZoom(scale / STEP)}
-                {...neutralAction("size-[22px] shrink-0")}
                 data-zoom-stepper
               >
                 <ZoomOut className="size-4" />
@@ -441,12 +440,12 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
               />
               <Button
                 type="button"
-                variant="outline"
+                variant="neutral"
                 size="icon"
+                className="size-[22px] shrink-0"
                 aria-label="Zoom in"
                 disabled={scale >= MAX_SCALE}
                 onClick={() => setZoom(scale * STEP)}
-                {...neutralAction("size-[22px] shrink-0")}
                 data-zoom-stepper
               >
                 <ZoomIn className="size-4" />

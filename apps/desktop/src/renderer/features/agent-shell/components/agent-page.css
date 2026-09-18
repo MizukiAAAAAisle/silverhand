@@ -28,6 +28,7 @@
   border-bottom: 2px solid transparent;
   color: var(--text-muted);
   font-size: 12px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -38,7 +39,6 @@
 .agent-section-tab-selected {
   border-bottom-color: var(--text-primary);
   color: var(--text-primary);
-  font-weight: 500;
 }
 
 .agent-header-full {
