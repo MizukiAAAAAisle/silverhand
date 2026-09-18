@@ -1,6 +1,15 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { Hash, MessageSquareMore, Search as SearchIcon, Users } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowRightToLine,
+  ArrowUp,
+  CornerDownLeft,
+  Hash,
+  MessageSquareMore,
+  Search as SearchIcon,
+  Users,
+} from "lucide-react";
 import type { AgentDto, SearchIdentity, SearchResultDto } from "@silverhand/shared";
 
 import { Button } from "@/components/ui/button";
@@ -229,12 +238,12 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
           aria-label="Search"
           className={cn(
             "no-drag flex h-6 w-full items-center gap-2 rounded-(--control-radius) px-2.5 text-left text-xs outline-none",
-            "bg-text-primary/5 text-text-muted transition-colors hover:bg-text-primary/10",
+            "bg-text-primary/10 text-text-muted transition-colors hover:bg-text-primary/[0.14]",
           )}
         >
           <SearchIcon className="size-3.5 shrink-0" />
           <span className="min-w-0 flex-1 truncate">Search everything</span>
-          <kbd className="shrink-0 rounded-(--chip-radius) bg-text-primary/10 px-1.5 py-0.5 font-sans text-(length:--text-badge) leading-none text-text-secondary">
+          <kbd className="shrink-0 rounded-(--chip-radius) bg-text-primary/[0.16] px-1.5 py-0.5 font-sans text-(length:--text-badge) leading-none text-text-secondary">
             ⌘K
           </kbd>
         </button>
@@ -250,7 +259,10 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
           }}
           className="z-(--z-popover) w-(--radix-popover-trigger-width) overflow-hidden bg-bg-floating shadow-popover outline-none"
         >
-          <div className="flex items-center gap-2 border-b-(length:--control-border-width) border-(--border-control) px-3 py-2.5">
+          <div
+            data-search-divider="b"
+            className="flex items-center gap-2 border-b border-border px-3 py-2.5"
+          >
             <SearchIcon className="size-4 shrink-0 text-text-muted" />
             <input
               ref={inputRef}
@@ -364,11 +376,17 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
             )}
           </div>
 
-          <div className="flex items-center justify-between gap-3 border-t-(length:--control-border-width) border-(--border-control) px-3 py-2 text-(length:--text-meta) text-text-muted">
+          <div
+            data-search-divider="t"
+            className="flex items-center justify-between gap-3 border-t border-border px-3 py-2 text-(length:--text-meta) text-text-muted"
+          >
             <span className="flex items-center gap-3">
-              <FooterHint keys={["↵"]} label="Open" />
-              <FooterHint keys={["↑", "↓"]} label="Navigate" />
-              <FooterHint keys={["⇥"]} label="Switch type" />
+              <FooterHint keys={[<CornerDownLeft className="size-3" />]} label="Open" />
+              <FooterHint
+                keys={[<ArrowUp className="size-3" />, <ArrowDown className="size-3" />]}
+                label="Navigate"
+              />
+              <FooterHint keys={[<ArrowRightToLine className="size-3" />]} label="Switch type" />
               <FooterHint keys={["esc"]} label="Close" />
             </span>
             <Button
@@ -409,13 +427,13 @@ function SearchEmptyState({ text }: { text: string }): JSX.Element {
   );
 }
 
-function FooterHint({ keys, label }: { keys: string[]; label: string }): JSX.Element {
+function FooterHint({ keys, label }: { keys: ReactNode[]; label: string }): JSX.Element {
   return (
     <span className="flex items-center gap-1">
-      {keys.map((key) => (
+      {keys.map((key, i) => (
         <kbd
-          key={key}
-          className="inline-flex min-w-4.5 items-center justify-center rounded-(--chip-radius) bg-text-primary/10 px-1 py-0.5 font-sans text-(length:--text-meta) leading-none text-text-secondary"
+          key={i}
+          className="inline-flex h-4 min-w-4.5 items-center justify-center rounded-(--chip-radius) bg-text-primary/10 px-1 font-sans text-(length:--text-meta) leading-none text-text-secondary"
         >
           {key}
         </kbd>

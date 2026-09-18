@@ -375,7 +375,7 @@ function WorkspaceFilterSelect({
         >
           <Select.Viewport className="p-1">
             <SelectItem value="all" icon={<SearchIcon className="size-3.5" />}>
-              All locations
+              All workspaces
             </SelectItem>
             {agentSpaces.length > 0 ? (
               <Select.Group>
@@ -517,7 +517,7 @@ function SearchResultRow({
 
 function EmptyState({ icon, text }: { icon: ReactNode; text: string }): JSX.Element {
   return (
-    <div className="flex h-full min-h-55 items-center justify-center rounded-md border border-dashed border-border text-sm text-text-muted">
+    <div className="flex h-full min-h-55 items-center justify-center rounded-(--row-radius) border border-dashed border-border text-sm text-text-muted">
       <div className="flex items-center gap-2">
         {icon}
         <span>{text}</span>
@@ -590,7 +590,7 @@ function workspaceFilterLabel(
       };
     }
   }
-  return { label: "All locations", icon: <SearchIcon className="size-3.5" /> };
+  return { label: "All workspaces", icon: <SearchIcon className="size-3.5" /> };
 }
 
 const TIME_RANGE_OPTIONS: Array<{ value: TimeRange; label: string }> = [

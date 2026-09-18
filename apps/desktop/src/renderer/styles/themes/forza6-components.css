@@ -9,6 +9,18 @@
   --bg-hover: rgba(255, 255, 255, 0.12);
 }
 
+/* Titlebar-search dividers: other themes take the neutral hairline the markup
+   ships; forza6's poster language wants the control-weight ink rule instead. */
+[data-theme="forza6"] [data-search-divider] {
+  border-color: var(--border-control);
+}
+[data-theme="forza6"] [data-search-divider="b"] {
+  border-bottom-width: var(--control-border-width);
+}
+[data-theme="forza6"] [data-search-divider="t"] {
+  border-top-width: var(--control-border-width);
+}
+
 /* Hooks: Sticker primitive */
 
 [data-theme="forza6"] [data-sticker] {

@@ -211,7 +211,14 @@ export function SenderFilterSelect({
                         alt={agent.display_name?.trim() || agent.name}
                       />
                     }
-                    suffix={agent.runtime}
+                    trailing={
+                      <span
+                        data-agent-runtime
+                        className="rounded-(--chip-radius) bg-(--chip-bg) px-1 py-px text-(length:--text-badge) font-medium uppercase tracking-wide text-text-muted"
+                      >
+                        {agent.runtime}
+                      </span>
+                    }
                   >
                     {agent.display_name?.trim() || agent.name}
                   </FilterSelectItem>

@@ -52,13 +52,17 @@ export function FilterBlock({
 export function FilterSelectItem({
   value,
   icon,
+  trailing,
   suffix,
   disabled,
   children,
 }: {
   value: string;
   icon?: JSX.Element;
-  suffix?: string;
+  /** Rendered inline right after the label. */
+  trailing?: ReactNode;
+  /** Rendered right-aligned at the row end (e.g. "Offline", "you"). */
+  suffix?: ReactNode;
   disabled?: boolean;
   children: ReactNode;
 }): JSX.Element {
@@ -68,6 +72,7 @@ export function FilterSelectItem({
       <Select.ItemText>
         <span className="truncate">{children}</span>
       </Select.ItemText>
+      {trailing ? <span className="shrink-0">{trailing}</span> : null}
       {suffix ? (
         <span className="ml-auto text-(length:--text-badge) text-text-muted">{suffix}</span>
       ) : null}

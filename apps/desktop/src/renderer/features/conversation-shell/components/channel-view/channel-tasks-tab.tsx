@@ -118,7 +118,7 @@ export function ChannelTasksTab({ container, onOpenTask }: ChannelTasksTabProps)
           baselineFilters={baselineFilters}
           workspaceOptions={workspaceOptions}
           channelOptions={channelOptions}
-          allChannelsLabel="ALL"
+          allChannelsLabel="All"
           people={people}
         />
         <Button

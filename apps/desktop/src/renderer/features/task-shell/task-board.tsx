@@ -111,7 +111,7 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
           baselineFilters={DEFAULT_TASK_FILTERS}
           workspaceOptions={workspaceOptions}
           channelOptions={channelOptions}
-          allChannelsLabel="ALL"
+          allChannelsLabel="All"
           people={people}
         />
         <Button

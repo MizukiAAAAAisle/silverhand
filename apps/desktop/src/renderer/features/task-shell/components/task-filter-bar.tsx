@@ -282,7 +282,7 @@ export function TaskFilterBar({
       <PersonFilterControl
         icon={<User className="size-3.5" />}
         label="Assignee"
-        anyLabel="ALL"
+        anyLabel="All"
         population={mapBoardAuthority(people, (f) => f.assignees)}
         allowUnassigned={people.known && people.value.hasUnassigned}
         value={filters.assignee}
@@ -292,7 +292,7 @@ export function TaskFilterBar({
       <PersonFilterControl
         icon={<PenLine className="size-3.5" />}
         label="From"
-        anyLabel="ALL"
+        anyLabel="All"
         population={mapBoardAuthority(people, (f) => f.creators)}
         value={filters.creator}
         onChange={(creator) => onChange({ ...filters, creator })}
@@ -348,7 +348,7 @@ const TRIGGER_GLYPH_PX = 14;
  * bordered filters beside it in any theme.
  */
 export const FILTER_ROW_TRIGGER_BOX =
-  "h-auto px-2 py-1 text-[length:var(--text-meta)] border-[length:var(--control-border-width)] border-transparent";
+  "h-auto px-2 py-1 text-[length:var(--text-meta)] leading-[14px] border-[length:var(--control-border-width)] border-transparent";
 
 const FilterTrigger = forwardRef<
   HTMLButtonElement,
@@ -386,10 +386,15 @@ const FilterTrigger = forwardRef<
       )}
       {...props}
     >
-      <span className={cn("shrink-0", active ? "text-text-on-selected" : "text-text-muted")}>
+      <span
+        className={cn(
+          "flex shrink-0 items-center",
+          active ? "text-text-on-selected" : "text-text-muted",
+        )}
+      >
         {icon}
       </span>
-      <span className="truncate">{children}</span>
+      <span className="truncate leading-[14px]">{children}</span>
       <ChevronDown
         className={cn("size-3 shrink-0", active ? "text-text-on-selected" : "text-text-muted")}
       />
@@ -625,7 +630,7 @@ function ChannelFilter({
           active={value !== null}
           aria-label="Channel"
         >
-          {selected?.label ?? allChannelsLabel}
+          {`Channel:${selected?.label ?? allChannelsLabel}`}
         </FilterTrigger>
       </Popover.Trigger>
       <Popover.Portal>
@@ -798,7 +803,7 @@ function BoardScopeFilter({
           active={containerValue !== null}
           aria-label="Board scope"
         >
-          {selectedWs?.label ?? "All"}
+          {`Workspace:${selectedWs?.label ?? "All"}`}
         </FilterTrigger>
       </Popover.Trigger>
       <FilterPanel
@@ -892,10 +897,9 @@ function PersonFilterControl({
   const selectedName = options.find(
     (o) => personFilterKey({ kind: "person", person: o.person }) === personFilterKey(value),
   )?.name;
-  // Value half of the trigger label. The trigger always renders
-  // `${label}:${valuePart}` (e.g. "Assignee:ALL" / "From:@cindy") so the
-  // dimension stays legible even at the default "ALL" state (shiki
-  // #task:790) — the label is no longer carried by the icon alone.
+  // Value half of the trigger label. The trigger renders `${label}:${valuePart}`
+  // (e.g. "Assignee:All" / "From:@cindy") so the dimension stays legible even at
+  // the default "All" state (shiki #task:790).
   const valuePart =
     value.kind === "any"
       ? anyLabel
