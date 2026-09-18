@@ -166,13 +166,13 @@ where
     }
 
     // ── The WHOLE synchronous durable-setup phase in ONE non-interleavable authority
-    // boundary (#41/#28/#11/#10/#31/#9): name verdict → per-agent existence+ownership
+    // boundary: name verdict → per-agent existence+ownership
     // replay (capturing each accepted agent's committed handle/runtime post-image) →
     // workspace+owner+users → per-agent membership+caps → onboarding channel+roster.
     // The writer MINTS the ids and SAMPLES the clock ITSELF, only after its name +
     // agent-owner gates pass, so a failing entropy/clock can never pre-empt a product
     // refusal. The FIRST accepted agent's onboarding message is ALSO written in that
-    // same tx under a savepoint (Cindy R5 #3/R6 #1); only the SUBSEQUENT agents' messages
+    // same tx under a savepoint; only the SUBSEQUENT agents' messages
     // are the route-interleaved append→deliver step below (deliver failure truncates the
     // fan-out). ──
     let request = WorkspaceProvisionRequest {
@@ -226,7 +226,7 @@ where
 
     let onboarding_channel_id = committed_channel.channel.clone();
 
-    // ── Cindy R5 #3/R6 #1: the FIRST accepted agent's onboarding message is decided
+    // The FIRST accepted agent's onboarding message is decided
     // inside `provision_workspace` under a savepoint. `Committed` ⇒ it is already
     // durable (atomic with setup), so its first observable concurrency point is the
     // deliver here. `Failed` ⇒ the savepoint rolled back (no message/head half-write)
@@ -266,13 +266,13 @@ where
 
     // ── Per SUBSEQUENT agent (`member_agents[1..]`), in the reference order: build the
     // ID-LESS intent (recipient handle + peers only — the route does ZERO entropy, the
-    // append writer mints the id and samples the clock itself in-lock, Cindy R6 #2),
+    // append writer mints the id and samples the clock itself in-lock),
     // append it canonically, AWAIT deliver (critical — a failure is a `500` that
     // truncates the fan-out: this agent's start and every later agent's
     // append+deliver+start never happen, only the channel + membership + the first
     // agent's message + prior agents' messages survive), then fire start (best-effort,
     // non-gating). Each recipient's handle is the CLOSED typed ParticipantHandle the
-    // writer already parsed fail-closed IN the provisioning lock (#28/#15). ──
+    // writer already parsed fail-closed IN the provisioning lock. ──
     for member in member_agents.iter().skip(1) {
         let intent = AgentOnboardingIntent {
             agent: member.agent.clone(),
@@ -329,7 +329,7 @@ fn others_as_peers(
     recipient: &AgentId,
 ) -> Vec<WorkspaceOnboardingPeer> {
     // Every member's handle is already the CLOSED typed ParticipantHandle the writer
-    // parsed fail-closed in-lock (#15) — no filter_map that could silently drop a peer.
+    // parsed fail-closed in-lock — no filter_map that could silently drop a peer.
     members
         .iter()
         .filter(|member| &member.agent != recipient)
@@ -494,7 +494,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     }
 
     /// A clock whose every `now_ms()` returns a DISTINCT, increasing instant — used to
-    /// prove the onboarding messages sample the clock PER APPEND (Cindy R3-next #4),
+    /// prove the onboarding messages sample the clock PER APPEND,
     /// not once at provisioning time. The first call is the provisioning boundary
     /// sample; subsequent calls are the per-message appends.
     #[derive(Clone)]
@@ -732,7 +732,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
 
     #[tokio::test]
     async fn each_onboarding_message_samples_its_own_append_instant_not_the_provisioning_one() {
-        // Cindy R3-next #4: the per-agent onboarding messages sample the clock at their
+        // The per-agent onboarding messages sample the clock at their
         // OWN append (TS calls messages.insertForConversation per round). With a
         // monotonic clock, the two messages must carry DISTINCT created_at — NOT both
         // equal to the workspace-provisioning instant.

@@ -11,8 +11,8 @@
 //! post-images the aftermath consumes. The seed message PAYLOAD + coordinates the
 //! aftermath delivers are these committed facts (no route-minted ids); the delivery/
 //! start AUDIENCE, however, is NOT the committed fork roster — the aftermath re-reads
-//! the LIVE conversation roster at effect time for each of the prompt and start phases
-//! (Cindy R5 #1), so a member that left/joined between commit and effect is excluded/
+//! the LIVE conversation roster at effect time for each of the prompt and start phases,
+//! so a member that left/joined between commit and effect is excluded/
 //! included. Sealed seed payload vs live audience are distinct axes.
 
 use crate::conversation_messaging::messaging::MessageId;
@@ -110,7 +110,7 @@ pub trait CreateChannelsCapability {
 }
 
 /// The clock the fork writer samples ONCE, sampled INSIDE the writer after its gates
-/// pass (Cindy #8/#9): an injectable writer input, not a bare `SystemTime::now()`, so
+/// pass: an injectable writer input, not a bare `SystemTime::now()`, so
 /// a held-writer / abnormal-clock falsifier can drive it and every stamped row shares
 /// the one instant.
 pub trait ChannelForkClock: Send + Sync {

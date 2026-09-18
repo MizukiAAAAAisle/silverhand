@@ -4,7 +4,7 @@
 //! (`commit_deletion`) re-reads the subject under a FRESH lock, and only if it is
 //! still deletable by this requester, captures the FULL teardown plan and runs the
 //! conditional DELETE (FK cascade) in the SAME transaction — so the plan reflects
-//! exactly the rows this DELETE cascaded (Cindy R5 #2), never a stale phase-1
+//! exactly the rows this DELETE cascaded, never a stale phase-1
 //! snapshot.
 //!
 //! The delete row uses the SAME `owner_agent_id IS NULL` guard the reference
@@ -118,7 +118,7 @@ impl WorkspaceDeletionWrite for SqliteWorkspaceDeletion {
         requester: &UserId,
         workspace_id: &WorkspaceId,
     ) -> Result<WorkspaceDeletionOutcome, PersistenceFailure> {
-        // Cindy R6 #4: ONE `BEGIN IMMEDIATE` tx is the sole authority. Read the subject
+        // ONE `BEGIN IMMEDIATE` tx is the sole authority. Read the subject
         // under the lock (never a stale pre-lock witness), decide the full verdict, and
         // ONLY on `Deletable` capture the FULL plan (ordered BEFORE the DELETE so the
         // cascade has not yet erased the rows) then cascade — all in this one tx. Each
@@ -268,7 +268,7 @@ async fn capture_plan(
             }
         })?);
     }
-    // EVERY conversation id in the workspace (Cindy R3-next #2), captured
+    // EVERY conversation id in the workspace, captured
     // INDEPENDENTLY of the runtime seats: the `conversation_closed` terminalization
     // must cover a conversation whose roster is already gone but whose run map still
     // has a live ConversationSlot run — which a seat-derived set (built from current
@@ -466,7 +466,7 @@ INSERT INTO attachments (id, channel_id, filename, size, content_type, storage, 
 
     #[tokio::test]
     async fn an_owner_change_before_the_lock_is_forbidden_not_a_noop() {
-        // Cindy R6 #4: an owner change is a DISTINCT product result (403 Forbidden), NOT
+        // An owner change is a DISTINCT product result (403 Forbidden), NOT
         // folded into the idempotent 204. Under the single fresh lock the subject is a
         // regular workspace the requester no longer owns → Forbidden; the row survives.
         let (_dir, adapter) = open_seeded().await;
@@ -496,7 +496,7 @@ INSERT INTO attachments (id, channel_id, filename, size, content_type, storage, 
 
     #[tokio::test]
     async fn a_kind_change_before_the_lock_is_not_deletable_kind_not_a_noop() {
-        // Cindy R6 #4: a kind change (regular → agent-home) is a DISTINCT product result
+        // A kind change (regular → agent-home) is a DISTINCT product result
         // (409 NotDeletableKind), NOT the idempotent 204.
         let (_dir, adapter) = open_seeded().await;
         // The schema CHECK ties (owner_agent_id IS NULL) == (name_key IS NOT NULL): an
@@ -522,7 +522,7 @@ INSERT INTO attachments (id, channel_id, filename, size, content_type, storage, 
 
     #[tokio::test]
     async fn a_concurrent_winner_leaves_the_loser_an_idempotent_noop() {
-        // Cindy R6 #4: two deletes race. The winner cascades (Committed); the loser
+        // Ttwo deletes race. The winner cascades (Committed); the loser
         // finds the row gone under its own lock and is IdempotentNoop (204) — never a
         // 500, never a second destructive authority.
         let (_dir, adapter) = open_seeded().await;

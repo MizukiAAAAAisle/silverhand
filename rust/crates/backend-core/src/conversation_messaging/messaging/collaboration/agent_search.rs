@@ -47,8 +47,8 @@ pub struct SearchExcerpt {
 }
 
 /// Compute the excerpt + `match_offset` for `content` against `query`, matching the
-/// (synced) reference `searchExcerptFor` under the PORTABLE full case fold (Cindy
-/// #22/#27/#49): collapse whitespace + trim; fold BOTH sides with the pinned
+/// (synced) reference `searchExcerptFor` under the PORTABLE full case fold:
+/// collapse whitespace + trim; fold BOTH sides with the pinned
 /// fold-only primitive (no NFC, isomorphic to TS `foldCase`); find the first match in
 /// FOLDED space; map the folded match-start back to the ORIGINAL text's UTF-16 offset
 /// via the per-code-point fold-span map (a full fold can expand, e.g. `ß`→`ss`, so a
@@ -75,7 +75,7 @@ pub fn search_excerpt_for(content: &str, query: &str) -> SearchExcerpt {
     };
 
     // Map the folded UTF-16 match RANGE `[start, start+needle_len)` back to the
-    // MINIMAL complete ORIGINAL scalar interval that covers it (Cindy R3-next #9): a
+    // MINIMAL complete ORIGINAL scalar interval that covers it: a
     // full fold can EXPAND (`ß`→`ss`), so a match that begins or ends part-way through
     // an expansion must map to the WHOLE original scalar it overlaps — never past its
     // start (which would land on the next scalar) nor short of its end. E.g.
@@ -104,7 +104,7 @@ pub fn search_excerpt_for(content: &str, query: &str) -> SearchExcerpt {
 /// larger, e.g. `ß`→`ss`). The match may begin/end MID-span; the covering interval
 /// starts at the BEGINNING of the span containing `folded_start` and ends at the END
 /// of the span containing the last folded unit (`folded_start+folded_len-1`), so a
-/// partial-expansion match never drifts to a neighbouring scalar (Cindy #9). An empty
+/// partial-expansion match never drifts to a neighbouring scalar. An empty
 /// folded range (defensive) maps to a zero-width interval at the containing offset.
 fn folded_range_to_original(
     folded_start: usize,
@@ -149,7 +149,7 @@ fn folded_range_to_original(
 }
 
 /// Shrink a window START inward if it lands on a low surrogate (the tail half of a
-/// pair): move to `+1` so the slice begins on a whole scalar (Cindy #27).
+/// pair): move to `+1` so the slice begins on a whole scalar.
 fn scalar_safe_start(offset: usize, units: &[u16]) -> usize {
     if offset < units.len() && is_low_surrogate(units[offset]) {
         offset + 1
@@ -160,7 +160,7 @@ fn scalar_safe_start(offset: usize, units: &[u16]) -> usize {
 
 /// Shrink a window END inward if it would split a pair — i.e. the unit just before
 /// `end` is a high surrogate (the lead half): drop it so the slice ends on a whole
-/// scalar (Cindy #27). Never exceeds the original cap.
+/// scalar. Never exceeds the original cap.
 fn scalar_safe_end(offset: usize, units: &[u16]) -> usize {
     if offset > 0 && offset <= units.len() && is_high_surrogate(units[offset - 1]) {
         offset - 1
@@ -178,7 +178,7 @@ fn is_low_surrogate(unit: u16) -> bool {
 
 /// Collapse every run of ECMAScript `\s` whitespace to one space and trim, matching
 /// `content.replace(/\s+/g, ' ').trim()`. Delegates to the ONE production text
-/// authority the read-history snippet also uses (Cindy #22), so both share the exact
+/// authority the read-history snippet also uses, so both share the exact
 /// ECMAScript `\s` set (U+FEFF in, U+0085 out) — never Rust's `char::is_whitespace()`.
 fn collapse_whitespace(content: &str) -> String {
     crate::foundation::name_canonicalization::collapse_ecmascript_whitespace(content)
@@ -222,7 +222,7 @@ pub enum SearchScopeSelector {
     Conversation(crate::foundation::identity::ConversationId),
 }
 
-/// Why an agent search refused, decided IN the authorized snapshot (Cindy #3/#54).
+/// Why an agent search refused, decided IN the authorized snapshot.
 /// The `conversation_id` arm's provenance matrix and the workspace cap gate all live
 /// here, not in a pre-snapshot route preflight.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -262,8 +262,8 @@ pub struct AgentSearchResult {
     pub hits: Vec<AgentSearchHit>,
 }
 
-/// Reads the agent's message search hits as ONE authorized connection-bound snapshot
-/// (Cindy #3/#50/#51/#54): resolve the scope against the caller's source + gate
+/// Reads the agent's message search hits as ONE authorized connection-bound snapshot:
+/// resolve the scope against the caller's source + gate
 /// cross-workspace reach + `read_messages` + participation, then continuously
 /// fold-evaluate candidates (ordered `created_at DESC, seq DESC`) until `limit` is
 /// filled or the scope is exhausted, resolving authors in the SAME transaction. The
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn excerpt_shares_the_ecmascript_whitespace_set_with_the_snippet() {
-        // Cindy #22: the SAME set as the read-history snippet — U+FEFF collapses, U+0085
+        // The SAME set as the read-history snippet — U+FEFF collapses, U+0085
         // NEL does not (Rust's char::is_whitespace() would invert both).
         let feff = search_excerpt_for("a\u{FEFF}b", "zzz");
         assert_eq!(feff.excerpt, "a b", "U+FEFF collapses (JS \\s)");
@@ -362,7 +362,7 @@ mod tests {
 
     #[test]
     fn a_match_starting_mid_expansion_covers_the_whole_original_scalar() {
-        // Cindy R3-next #9: content `ßa` folds to `ssa`; query `sa` matches at folded
+        // content `ßa` folds to `ssa`; query `sa` matches at folded
         // offset 1 — INSIDE `ß`'s expansion. The original interval must be the MINIMAL
         // complete scalar span covering the folded match: `[0,2)` = the whole `ßa`
         // (offset 0), NOT `[1,..)` = `a`. The excerpt keeps the whole `ß`.
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn search_excerpt_replays_the_ts_signed_parity_fixture() {
-        // Cindy R4 #4: the Rust search_excerpt_for reproduces the TS searchExcerptFor
+        // The Rust search_excerpt_for reproduces the TS searchExcerptFor
         // excerpt + match_offset cell-for-cell (the SAME shared corpus the TS signer
         // regenerates), so the two fold-span implementations cannot diverge on the
         // expanding / mid-expansion / astral cases.

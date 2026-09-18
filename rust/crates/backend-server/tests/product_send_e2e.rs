@@ -1029,8 +1029,7 @@ async fn the_human_door_answers_its_own_published_contract() {
 /// `200` and a flat coordinate report: the four members a runtime reads to advance its own
 /// cursor, and — when it applies — the same sender-only member the person's ACK carries. It is
 /// NOT the acknowledgement: a daemon has no schema for a message DTO or cluster projections, and
-/// would find none of `message_id`/`message_seq`/`conversation_id` if it were handed one
-/// (@Cindy, terminal review P0).
+/// would find none of `message_id`/`message_seq`/`conversation_id` if it were handed one.
 ///
 /// `thread_root_id` is present and NULL on the main line rather than omitted, because "which
 /// stream did my words join" has an answer for every send.
@@ -1176,7 +1175,7 @@ async fn a_replys_sidecar_describes_the_cluster_it_joined() {
 /// The ORDER is therefore read off the committed fact that very send produced, captured through
 /// the write unit. That is a deliberate choice about evidence: the alternative is to read
 /// `projections` off the agent's response, which would require the agent door to answer with the
-/// person's ACK — a test fixing a contract that is wrong (@Cindy, terminal review P0). An
+/// person's ACK — a test fixing a contract that is wrong. An
 /// insertion-ordered entry would put the person first and turn this cell red.
 #[tokio::test]
 async fn the_cluster_orders_its_repliers_most_recent_first() {
@@ -1268,7 +1267,7 @@ fn principal_of(author: &MessageAuthor) -> String {
 ///
 /// WHAT THIS IS NOT: evidence that one request produces both. The router runs no post-commit
 /// announcer, so nothing here observes a published frame, and the pair below is one outcome
-/// projected twice (@Cindy). That the sender-only half is UNREACHABLE from a view — rather than
+/// projected twice. That the sender-only half is UNREACHABLE from a view — rather than
 /// merely absent from this one — is a type fact, proven by the `compile_fail` gates beside
 /// `SendMessageOutcome`; a test cannot assert the absence of an accessor.
 #[tokio::test]
@@ -1376,9 +1375,9 @@ async fn an_operator_is_told_once_when_references_reached_nobody() {
             { "kind": "agent", "handle": "missing" }
         ])
     );
-    // …and the field is NOT called `unresolved`. Its value is that array's JSON text, because a
+    // and the field is NOT called `unresolved`. Its value is that array's JSON text, because a
     // `tracing` field cannot be a nested array; a string under the reference's own field name
-    // would claim a shape it does not have (residual, for @Cindy and @shiki to accept or not).
+    // would claim a shape it does not have.
     assert!(fields.get("unresolved").is_none(), "{fields}");
 
     // Every reference landed: nothing to explain, so nothing about this send on disk.

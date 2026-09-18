@@ -1,7 +1,7 @@
 //! The workspace-creation domain: the pre-write verdict and the created result.
 //!
 //! `POST /api/workspaces` linearizes its WHOLE synchronous durable-setup phase into
-//! ONE non-interleavable authority boundary (Cindy #41/#28): under a single write
+//! ONE non-interleavable authority boundary: under a single write
 //! lock the writer re-decides the name verdict, replays each requested agent's
 //! existence + ownership, and writes the workspace + owner/user members + per-agent
 //! membership/capabilities + the Onboarding channel with its founding roster — a
@@ -78,7 +78,7 @@ pub struct CommittedOnboardingMessage {
 }
 
 /// The outcome of the FIRST accepted agent's onboarding-message attempt, made inside
-/// the provisioning transaction under a SAVEPOINT (Cindy R6 #1). The contract:
+/// the provisioning transaction under a SAVEPOINT. The contract:
 /// whatever happens to the first message, the workspace/members/private-channel SETUP
 /// residue is PRESERVED (the setup tx still commits) and the message/stream-head are
 /// never half-written — a first-message fault rolls back ONLY to the savepoint, then
@@ -97,7 +97,7 @@ pub enum FirstOnboardingOutcome {
 }
 
 /// The committed onboarding-channel write: the channel id + the channel DTO facts
-/// read back from the COMMITTED row (Cindy R3-next #3), so the `201` body reflects
+/// read back from the COMMITTED row, so the `201` body reflects
 /// the stored truth (an agent-forked/onboarding channel is `private`) rather than a
 /// hard-coded literal that could drift from the insert. The per-agent messages are
 /// appended separately (interleaved with deliver).
@@ -127,7 +127,7 @@ pub enum WorkspaceInsertOutcome {
 }
 
 /// The whole synchronous durable-setup request the writer linearizes into ONE
-/// non-interleavable authority boundary (Cindy #41/#28/#31/#9): the freshly-parsed
+/// non-interleavable authority boundary: the freshly-parsed
 /// name, owner, validated user members, and the requested member-agent ids (raw,
 /// WITH TS array multiplicity preserved — #10). The workspace/channel ids and the
 /// clock are NOT carried here: the writer mints the ids and samples the clock ITSELF,
@@ -157,7 +157,7 @@ pub trait WorkspaceProvisionClock: Send + Sync {
 /// right after its existence+ownership replay (#28): the handle (addressable
 /// `@name`) and runtime the onboarding body needs come from the SAME lock that
 /// admitted the agent, never a post-commit live reread. The handle is a CLOSED typed
-/// `ParticipantHandle` parsed inside the writer lock (Cindy R3-next #15): a malformed
+/// `ParticipantHandle` parsed inside the writer lock: a malformed
 /// stored handle for ANY accepted member is a typed fault that rolls the whole
 /// provisioning tx back BEFORE any onboarding message is appended — never a partial
 /// fan-out where an early member is delivered and a later malformed member is silently
@@ -174,7 +174,7 @@ pub struct AcceptedMemberAgent {
 /// face, the onboarding channel facts, the minted ids the writer chose, the ACCEPTED
 /// member agents WITH their committed handle/runtime post-image (#28), and — when at
 /// least one agent was accepted — the FIRST agent's onboarding message ALREADY made
-/// durable INSIDE the same reserved-writer transaction as the setup (Cindy R5 #3), so
+/// durable INSIDE the same reserved-writer transaction as the setup, so
 /// there is no await point / insertable state between the workspace commit and the
 /// first onboarding message being durable, matching the TS synchronous durable
 /// prefix. The route drives deliver(first)→start(first) then, for each SUBSEQUENT
@@ -190,7 +190,7 @@ pub struct ProvisionedWorkspace {
     /// the route appends the remaining `member_agents[1..]` one at a time.
     pub member_agents: Vec<AcceptedMemberAgent>,
     /// The first accepted agent's onboarding message outcome, decided in the
-    /// provisioning transaction under a savepoint (Cindy R5 #3/R6 #1): `NoAgents`,
+    /// provisioning transaction under a savepoint: `NoAgents`,
     /// `Committed(message)`, or `Failed` (savepoint rolled back, setup residue kept).
     pub first_onboarding: FirstOnboardingOutcome,
 }
@@ -217,7 +217,7 @@ pub enum WorkspaceProvisionOutcome {
 /// transaction).
 pub trait WorkspaceCreationWrite: Send + Sync + 'static {
     /// Linearize the WHOLE synchronous durable-setup phase into ONE
-    /// non-interleavable authority boundary (Cindy #41/#28/#11/#31/#10): under a
+    /// non-interleavable authority boundary: under a
     /// single write lock, in reference order, re-decide the name verdict (taken maps
     /// to `NameTaken`, zero writes); then per requested agent replay existence and
     /// `created_by_user_id == owner` (unknown is silently dropped; a known-unowned
@@ -237,7 +237,7 @@ pub trait WorkspaceCreationWrite: Send + Sync + 'static {
     /// multiplicity (#10) for the caller's per-agent onboarding fan-out.
     ///
     /// The FIRST accepted agent's onboarding message is made durable INSIDE THIS SAME
-    /// transaction (Cindy R5 #3): after the setup inserts and before the commit, the
+    /// transaction: after the setup inserts and before the commit, the
     /// writer mints the message id, samples its own post-lock message clock, renders
     /// the onboarding body (recipient handle + the OTHER accepted members as peers),
     /// runs the canonical append primitive (reserve seq → 14-column system insert →
@@ -261,17 +261,17 @@ pub trait WorkspaceCreationWrite: Send + Sync + 'static {
         C: WorkspaceProvisionClock;
 
     /// Append ONE SUBSEQUENT agent's onboarding system message (the first agent's is
-    /// already durable inside `provision_workspace`, Cindy R5 #3) through the CANONICAL
+    /// already durable inside `provision_workspace`) through the CANONICAL
     /// onboarding primitive (reserve seq → 14-column system insert → main-line
     /// stream-head bump) in its own committed transaction, so the channel's
     /// `latest_message_seq`/head advance exactly as a normal send's. Called per
     /// subsequent agent AFTER the prior agent's deliver succeeded, so a deliver failure
     /// stops the loop before this agent's row is ever written. The writer MINTS the
     /// message id and SAMPLES the `clock` ITSELF inside this UoW after the
-    /// `BEGIN IMMEDIATE` lock is held and the stream facts are read (Cindy R4 #1/R5 #3):
+    /// `BEGIN IMMEDIATE` lock is held and the stream facts are read:
     /// that single instant stamps both the inserted row and the sealed after-image, and
     /// the id is never a route-side pre-mint that could race the stream gates — the
-    /// intent (Cindy R6 #2) carries only the RENDERING INPUTS (recipient handle + peer
+    /// intent carries only the RENDERING INPUTS (recipient handle + peer
     /// list), NO id and NO timestamp, so the route performs ZERO entropy.
     fn append_agent_onboarding_message<E, C>(
         &self,
@@ -285,7 +285,7 @@ pub trait WorkspaceCreationWrite: Send + Sync + 'static {
 }
 
 /// One per-agent onboarding intent the writer renders + appends canonically. It
-/// carries ONLY the message's RENDERING INPUTS — NEVER a message id (Cindy R6 #2): the
+/// carries ONLY the message's RENDERING INPUTS — NEVER a message id: the
 /// route does ZERO entropy, and the append writer mints the id AND samples the clock
 /// itself in-lock, so no route-side pre-mint (nor a route-side entropy fault) can race
 /// ahead of the writer's stream gates. The body is rendered from the recipient handle

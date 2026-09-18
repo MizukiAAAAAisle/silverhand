@@ -5,9 +5,9 @@
 //! read. The durable workspace facts come from the reused
 //! [`AgentWorkspaceListRead`]; the per-workspace `agent_dir` is a daemon-materialized
 //! fact stamped by an [`AgentDirProbe`]. A transport/host/malformed probe fault is a
-//! WHOLE-CALL typed failure (`Err(AgentDirFailure)`, Cindy #33), never a per-entry
+//! WHOLE-CALL typed failure (`Err(AgentDirFailure)`), never a per-entry
 //! degradation; only within a SUCCESSFUL index does an id the daemon left unresolved
-//! degrade to `agent_dir: null` per entry (#1) — exactly the reference's `adapter ??
+//! degrade to `agent_dir: null` per entry — exactly the reference's `adapter ??
 //! null` inside a resolved index.
 
 use std::sync::Arc;
@@ -31,7 +31,7 @@ use crate::host_runtime::runtime_credential::bind_runtime_actor;
 
 pub const AGENT_LIST_WORKSPACES_PATH: &str = "/internal/agents/{aid}/list-workspaces";
 
-/// A whole-call agent-dir probe failure (Cindy #33): the port TYPE carries the TS
+/// A whole-call agent-dir probe failure: the port TYPE carries the TS
 /// data-plane failure taxonomy (status/code/message) so a no-outbound / offline /
 /// malformed-response fault projects a typed whole-response error, NOT a silent
 /// all-entries-`null`. The route projects it verbatim.
@@ -44,9 +44,9 @@ pub struct AgentDirFailure {
 
 /// Stamps the daemon-materialized `agent_dir` for the agent's workspaces via the
 /// daemon `agent_workspace_index` RPC. A transport/host/malformed fault is a
-/// whole-call `Err(AgentDirFailure)` (#33); on success, an id the daemon leaves
-/// unresolved is absent from the map → per-entry `agent_dir: null` (#1). The probe is
-/// NEVER called for an empty workspace set (#35).
+/// whole-call `Err(AgentDirFailure)`; on success, an id the daemon leaves
+/// unresolved is absent from the map → per-entry `agent_dir: null`. The probe is
+/// NEVER called for an empty workspace set.
 pub trait AgentDirProbe: Send + Sync + 'static {
     fn agent_dirs(
         &self,
@@ -99,7 +99,7 @@ where
         Ok(workspaces) => workspaces,
         Err(cause) => return internal(cause, "internal list-workspaces read failed"),
     };
-    // Empty durable list is an EARLY success BEFORE any probe (Cindy #35): the
+    // Empty durable list is an EARLY success BEFORE any probe: the
     // reference returns `200 {workspaces:[]}` before agent existence / host / RPC, so
     // a ghost/no-workspace agent never becomes a 404/transport error.
     if workspaces.is_empty() {
@@ -111,8 +111,8 @@ where
     }
     let ids: Vec<WorkspaceId> = workspaces.iter().map(|w| w.id.clone()).collect();
     // The daemon `agent_workspace_index` probe. A transport/host/malformed fault is a
-    // whole-response typed failure (#33); success gives per-entry dirs (a missing id
-    // degrades to `null`, #1).
+    // whole-response typed failure; success gives per-entry dirs (a missing id
+    // degrades to `null`).
     let dirs = match state.0.dirs.agent_dirs(&owner, &ids).await {
         Ok(dirs) => dirs,
         Err(failure) => {

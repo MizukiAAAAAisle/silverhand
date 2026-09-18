@@ -949,7 +949,7 @@ where
     };
     if let Err(frame_error) = frame_result {
         // Never served; still close every composition-owned resource + clean the token,
-        // exactly like the signal arm, so nothing leaks (Cindy: frame failure joins the
+        // exactly like the signal arm, so nothing leaks (frame failure joins the
         // cleanup tail). Transports/aftermath were composed but not driven; closing them
         // is the correct teardown.
         activity_retention.close().await;

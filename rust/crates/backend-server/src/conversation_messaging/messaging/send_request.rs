@@ -1,7 +1,7 @@
 //! The shape door for a create-message request: what a body must be before any
 //! product rule looks at it, and how a refusal is reported.
 //!
-//! ITS OWN ERROR SHAPE, deliberately (@Cindy's ruling). The foundation proving
+//! ITS OWN ERROR SHAPE, deliberately. The foundation proving
 //! surface answers with a camelCase envelope carrying a wire-contract version; the
 //! product create-message routes answer with a flat snake_case body. They are two
 //! public contracts, and reusing one type for both would turn the proving surface's

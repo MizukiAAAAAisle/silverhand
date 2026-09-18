@@ -109,7 +109,7 @@ impl AgentReadHistoryRead for SqliteAgentReadHistory {
             .await
             .map_err(AgentReadHistoryStoreError::from)?;
 
-        // AUTHORIZE IN-SNAPSHOT (Cindy #6): target existence + placement coords +
+        // AUTHORIZE IN-SNAPSHOT: target existence + placement coords +
         // agent live participation + workspace `read_messages`, all on this tx BEFORE
         // any window read, so a revoke/rename/delete race cannot leak an old window.
         let coords = match authorize_read_target(&mut tx, agent, conversation).await? {
@@ -223,8 +223,8 @@ impl AgentReadHistoryRead for SqliteAgentReadHistory {
             }
         };
 
-        // Resolve authors + reactions for the projected window in ONE snapshot (Cindy
-        // #51 authors in-tx; #14/#36/#36b reactions as a SINGLE bulk aggregate with
+        // Resolve authors + reactions for the projected window in ONE snapshot
+        // authors in-tx; #14/#36/#36b reactions as a SINGLE bulk aggregate with
         // this agent as the viewer — not a per-row query, not hardwired false).
         let evidence: Vec<AuthorEvidence> = rows.iter().map(|row| row.evidence.clone()).collect();
         // resolve_authors takes a &mut SqliteConnection; the tx derefs to one.
@@ -249,7 +249,7 @@ impl AgentReadHistoryRead for SqliteAgentReadHistory {
         for (row, author) in rows.into_iter().zip(authors) {
             // Reactions: the aggregated array for this message, or `Null` when it has
             // none — TS emits `reactions: null` (NOT `[]`) for a message with no
-            // reactions (Cindy #7). A parse failure cannot occur here (the aggregate is
+            // reactions. A parse failure cannot occur here (the aggregate is
             // built in-process).
             let reactions = reactions
                 .get(&row.id)
@@ -293,7 +293,7 @@ impl AgentReadHistoryRead for SqliteAgentReadHistory {
     }
 }
 
-/// Authorize a read-history read INSIDE the snapshot (Cindy #6): resolve the target
+/// Authorize a read-history read INSIDE the snapshot: resolve the target
 /// conversation's placement coordinates (existence), the agent's live participation,
 /// and the workspace `read_messages` capability (a `direct_pair` has no capability
 /// axis). Returns the full [`MessageTargetCoordinates`] on success, or the typed
@@ -410,7 +410,7 @@ async fn authorize_read_target(
     }))
 }
 
-/// The window's reaction aggregates as ONE bulk snapshot read (Cindy #14/#36/#36b),
+/// The window's reaction aggregates as ONE bulk snapshot read,
 /// with `viewer_reacted` computed for THIS agent, keyed by message id. Each message's
 /// JSON is `[{emoji,count,viewer_reacted}]` ordered by first-reaction time then emoji
 /// (the shared `aggregate_facts_in_snapshot` already returns that order); a message
@@ -444,8 +444,8 @@ async fn reaction_aggregates_for(
         .collect())
 }
 
-/// Gate a persisted numeric through the JS-safe integer domain at store→projection
-/// (Cindy #48): a stored value JS cannot represent exactly is a read error
+/// Gate a persisted numeric through the JS-safe integer domain at store→projection:
+/// a stored value JS cannot represent exactly is a read error
 /// (`CorruptRow`), not a silently-truncated wire number.
 fn js_safe(value: i64, column: &'static str) -> Result<i64, PersistenceFailure> {
     silverhand_backend_core::foundation::wire_number::JsSafeInteger::new(value)
@@ -596,7 +596,7 @@ async fn anchor_seq(
     })
 }
 
-/// The ONE has_more edge rule shared by every read-history mode (Cindy #16/#30): probe
+/// The ONE has_more edge rule shared by every read-history mode: probe
 /// strictly outside the FINAL assembled window's min/max seq. An empty window yields
 /// `(false, false)` — matching TS, which reads `rows[0]`/`rows.at(-1)` (null on empty)
 /// after all four modes. No mode derives an edge from an anchor seq; the window itself
@@ -755,7 +755,7 @@ fn decode_rows(rows: Vec<sqlx::sqlite::SqliteRow>) -> Result<Vec<RawRow>, Persis
 /// The attachments array from the message metadata JSON, re-serialized as the wire
 /// `AttachmentSnapshot[]` (id/filename/size/content_type/label). `None` when the
 /// message has no metadata or no attachments key.
-/// Decode the message's stored metadata, FAIL-CLOSED (Cindy #14): a stored blob that
+/// Decode the message's stored metadata, FAIL-CLOSED: a stored blob that
 /// is not valid JSON is a read error (`CorruptRow`), NOT a silent `null` that
 /// disguises persistence corruption as a legitimately-empty message. `None` (no
 /// metadata) stays `None`.
@@ -774,7 +774,7 @@ fn decode_metadata(
 }
 
 /// Extract the STRICT attachment snapshot list from already-decoded metadata,
-/// mirroring TS `extractAttachmentSnapshots` (Cindy #14/#7): each item must carry a
+/// mirroring TS `extractAttachmentSnapshots`: each item must carry a
 /// string `id`, string `filename`, a `size` that is ANY JSON number (TS
 /// `z.number()` — a fractional size is kept, not dropped), and a string
 /// `content_type`; a malformed item is DROPPED. A `label` is kept ONLY if, after
@@ -819,12 +819,12 @@ fn attachment_snapshots(metadata: Option<&serde_json::Value>) -> serde_json::Val
             serde_json::Value::String(content_type.to_owned()),
         );
         // A label is kept ONLY if, after trim, it is canonical — and then the CANONICAL
-        // FORMATTED form is emitted (Cindy R4 #3), mirroring TS
+        // FORMATTED form is emitted, mirroring TS
         // `formatAttachmentLabel(parseAttachmentLabel(label.trim()))`: surrounding
         // whitespace is stripped, so `"  Image #1  "` → `"Image #1"`. NOT verbatim.
         //
-        // The trim is the ECMAScript `String.prototype.trim` whitespace set (Cindy R5
-        // #4) via `is_ecmascript_trim_whitespace`, NOT Rust's `str::trim` (Unicode
+        // The trim is the ECMAScript `String.prototype.trim` whitespace set
+        // via `is_ecmascript_trim_whitespace`, NOT Rust's `str::trim` (Unicode
         // White_Space): the two DIFFER at the boundary — U+FEFF (ZWNBSP/BOM) IS trimmed
         // by ES but is NOT Rust-White_Space (so `str::trim` would keep it, leaving a
         // non-canonical label), and U+0085 (NEL) is Rust-White_Space but is NOT in the
@@ -849,8 +849,8 @@ fn attachment_snapshots(metadata: Option<&serde_json::Value>) -> serde_json::Val
     }
 }
 
-/// The ONE shared attachment-label authority `^(Image|File) #([1-9]\d{0,3})$`
-/// (Cindy #7): a capitalized `Image`/`File`, a literal ` #`, then an ordinal with no
+/// The ONE shared attachment-label authority `^(Image|File) #([1-9]\d{0,3})$`:
+/// a capitalized `Image`/`File`, a literal ` #`, then an ordinal with no
 /// leading zero, 1..=4 digits (1..=9999). The caller trims first. Any other string is
 /// treated as absent (positional fallback).
 fn is_canonical_attachment_label(label: &str) -> bool {
@@ -1197,7 +1197,7 @@ INSERT INTO conversations (id,placement_kind,roster_policy,title,status,visibili
             )
             .await
             .unwrap();
-        // Cindy #7/R4#3: a label with surrounding whitespace is trimmed+matched and
+        // A label with surrounding whitespace is trimmed+matched and
         // emitted in CANONICAL formatted form (`Image #1`); a FRACTIONAL size (TS
         // z.number()) is kept, not dropped; a malformed item is dropped.
         let meta = r#"{"attachments":[{"id":"a1","filename":"f.png","size":1.5,"content_type":"image/png","label":"  Image #1  "},{"id":"bad","filename":123}]}"#;
@@ -1256,7 +1256,7 @@ INSERT INTO conversations (id,placement_kind,roster_policy,title,status,visibili
 
     #[test]
     fn attachment_snapshots_replay_the_ts_signed_parity_fixture() {
-        // Cindy R4 #3: the Rust extractor reproduces the TS extractAttachmentSnapshots
+        // The Rust extractor reproduces the TS extractAttachmentSnapshots
         // output cell-for-cell (canonical FORMATTED label, any-number size, malformed
         // dropped, empty -> null), per the fixture the TS signer regenerates.
         #[derive(serde::Deserialize)]
@@ -1280,7 +1280,7 @@ INSERT INTO conversations (id,placement_kind,roster_policy,title,status,visibili
 
     #[test]
     fn label_authority_matches_the_shared_regex() {
-        // Cindy #7: `^(Image|File) #([1-9]\d{0,3})$` — capitalized kind, ` #`, ordinal
+        // `^(Image|File) #([1-9]\d{0,3})$` — capitalized kind, ` #`, ordinal
         // 1..=9999 (no leading zero); lowercase / leading-zero / 5-digit rejected.
         assert!(is_canonical_attachment_label("Image #1"));
         assert!(is_canonical_attachment_label("File #9999"));

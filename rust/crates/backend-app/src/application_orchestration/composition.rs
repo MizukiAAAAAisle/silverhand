@@ -208,13 +208,13 @@ pub(super) async fn compose_after_audit(
     let message_unread_read = messaging_store.message_unread();
     let attention_projection_read = messaging_store.attention_projection();
     let lane_attention_projection = attention_projection_read.clone();
-    // #2217: the two viewer-owned message-state lanes ride the SAME `MessagingStore`
+    // The two viewer-owned message-state lanes ride the SAME `MessagingStore`
     // (each `&self` builder clones only the shared pool, no second authority), captured
     // before `write_doors` moves the store below. `saved` serves both the read and the
     // mutation port; `thread_follow` is the follow/unfollow write door.
     let saved_store = messaging_store.saved();
     let thread_follow_store = messaging_store.thread_follow();
-    // #2223 CP3: the workspace-rename fan-out's three read/author ports (channel
+    // The workspace-rename fan-out's three read/author ports (channel
     // population, per-channel system-message author, per-channel agent audience) are
     // answered by the SAME `MessagingStore` — one `&self` builder handle, captured
     // before `write_doors` moves the store below. The adapter that wraps this with the
@@ -222,14 +222,14 @@ pub(super) async fn compose_after_audit(
     let workspace_rename_messaging = messaging_store.workspace_rename_messaging();
     let lane_agent_audience = workspace_rename_messaging.clone();
     // Channel-fork aftermath re-reads the LIVE conversation roster at effect time
-    // (Cindy R5 #1) via the same `ConversationAgentsReadPort` the rename lane uses.
+    // via the same `ConversationAgentsReadPort` the rename lane uses.
     let channel_fork_agent_audience = workspace_rename_messaging.clone();
     // `/readyz`'s live write probe rides the SAME `MessagingStore` pool handle the send
     // door holds — it does NOT reopen SQLite by path. Captured before `write_doors`
     // moves the store below. The probe is the one thing readiness cannot answer from
     // cached boot state: a fully booted process can still have lost its database.
     let readiness_write_probe = messaging_store.write_probe();
-    // #2234 CP6: the create route's onboarding leg is a two-step post-commit effect
+    // The create route's onboarding leg is a two-step post-commit effect
     // (durable inbox-ensure THEN daemon wake). Its ensure half is the SAME `MessagingStore`
     // pool, in a narrow role that composes three EXISTING statements — message-in-conversation
     // read, canonical participation read, idempotent delivery insert — in one transaction, so
@@ -299,7 +299,7 @@ pub(super) async fn compose_after_audit(
         name: "schedule fire driver",
         source: Box::new(source),
     })?;
-    // Wave 3A checkpoint A6 (#2203) + #2205: every authenticated write door — the two
+    // Every authenticated write door — the two
     // ordinary sends and the human direct-pair initiation — rides the SAME
     // `MessagingStore`, in every write role it needs: channel access, send capability,
     // direct-line authority, send unit-of-work, and the get-or-create initiation source.
@@ -308,7 +308,7 @@ pub(super) async fn compose_after_audit(
     // above, which is itself that transport. So this mount cannot announce a pair-open on
     // one hub while the pair's first message publishes on another — there is no parameter
     // to say it in.
-    // #2234 CP7a: the caller-side truth the internal peer-profile read consults, captured
+    // The caller-side truth the internal peer-profile read consults, captured
     // before `write_doors` below moves `messaging_store`. It is the SAME ONE `MessagingStore`
     // the send/task-board gates hold — a clone shares its pool, and this ONE value answers all
     // three caller ports (`CallerConversationPlacement` / `CallerWorkspaceHorizon` /
@@ -316,7 +316,7 @@ pub(super) async fn compose_after_audit(
     // cross-workspace horizon, and the `read_messages` capability through the same authority,
     // never a second store minted for the internal family.
     let peer_profile_caller = messaging_store.clone();
-    // Phase A (#2341): the six viewer-sort / favorite faces ride the SAME
+    // The six viewer-sort / favorite faces ride the SAME
     // `MessagingStore` — each `&self` builder clones only the shared pool, never a
     // second authority. Captured before `write_doors` moves the store below. The
     // star router's channel-home read + the ONE transactional sort-mutation writer
@@ -327,11 +327,11 @@ pub(super) async fn compose_after_audit(
     let sort_star_writer = messaging_store.viewer_sort();
     let sort_mutation_writer = messaging_store.viewer_sort();
     let sort_favorites = messaging_store.favorites();
-    // Phase B (#2341): the workspace-delete write authority — the ONE `BEGIN
+    // The workspace-delete write authority — the ONE `BEGIN
     // IMMEDIATE` that reads the subject under the lock, decides, captures the
     // teardown plan, and cascades the row. A shared-pool clone of this store.
     let workspace_delete_writes = messaging_store.workspace_deletion();
-    // Phase B create (#2341): `POST /api/workspaces` saga handles. Durable create
+    // `POST /api/workspaces` saga handles. Durable create
     // writer + member-display read are shared-pool clones of the ONE messaging
     // store; the name gate reuses the SAME `SqliteRegularWorkspaceNamespace` the
     // name-availability probe consumes (cloned before that mount moves it); the
@@ -341,33 +341,33 @@ pub(super) async fn compose_after_audit(
     // the agent-create saga uses — never a second delivery/start authority.
     let workspace_create_writer = messaging_store.workspace_creation();
     let workspace_create_onboarding_ensure = messaging_store.onboarding_inbox_ensure();
-    // Phase C (#2341): the agent workspace-list read for `GET
+    // The agent workspace-list read for `GET
     // /internal/agents/{aid}/list-workspaces` — a shared-pool clone of the ONE store.
     let agent_list_workspaces_read = messaging_store.agent_workspace_list();
-    // Phase C (#2341): `GET /internal/agents/{aid}/list-channels` — the visible-channel
+    // `GET /internal/agents/{aid}/list-channels` — the visible-channel
     // read + the caller peer-profile authorities (placement/horizon/read_messages), all
     // shared-pool clones of the ONE messaging store.
     let agent_list_channels_read = messaging_store.agent_channel_list();
-    // Phase D (#2341): the agent thread-follow/unfollow routes — the ONE
+    // The agent thread-follow/unfollow routes — the ONE
     // `thread_follow` store serves both `RootMessageLocate` and
     // `AgentThreadFollowWrite`; the `read_messages` capability is the ONE store.
     let agent_thread_follow_locate = messaging_store.thread_follow();
     let agent_thread_follow_writer = messaging_store.thread_follow();
-    // Phase C (#2341): `POST /internal/agents/{aid}/search-messages` — the LIKE search
+    // `POST /internal/agents/{aid}/search-messages` — the LIKE search
     // read + the same peer-profile placement/horizon/read_messages authorities.
     let agent_search_read = messaging_store.agent_search();
-    // Phase C (#2341): `POST /internal/agents/{aid}/read-history` — the windowed read
+    // `POST /internal/agents/{aid}/read-history` — the windowed read
     // + its workspace resolver (both the ONE agent-read-history store), the target
     // address resolver (the ONE `target_address`), and the read_messages capability.
     let agent_read_history_read = messaging_store.agent_read_history();
     let agent_read_history_target = target_address.clone();
-    // Phase D (#2341): `POST /internal/agents/{aid}/create-channel` fork saga — the
+    //`POST /internal/agents/{aid}/create-channel` fork saga — the
     // fork writer + source placement + create_channels capability, all the ONE store;
     // the target resolver is the ONE `target_address`; the aftermath is `lane_effects`.
     let agent_create_channel_writer = messaging_store.channel_fork();
     let agent_create_channel_placement = messaging_store.clone();
     let agent_create_channel_target = target_address.clone();
-    // The create-channel awaited aftermath (#40) delivers the sealed context/prompt
+    // The create-channel awaited aftermath delivers the sealed context/prompt
     // seeds and starts member runtimes; it reuses the SAME durable inbox-ensure +
     // daemon delivery/start seams as workspace-create onboarding (fresh cheap handles).
     let agent_create_channel_message_ensure = messaging_store.committed_message_inbox_ensure();
@@ -427,7 +427,7 @@ pub(super) async fn compose_after_audit(
             )),
         ),
     };
-    // #2223 CP5: the four host residual routes whose effect authorities the convergence
+    // The four host residual routes whose effect authorities the convergence
     // now supplies — detail, revoke, connect-token rotate, and delete — mounted behind the
     // same human perimeter as their host siblings. Each reads the ONE
     // `SqliteHostRuntimeStore` as its `ComputerReadModel`; their live-control and cascade
@@ -449,7 +449,7 @@ pub(super) async fn compose_after_audit(
             SystemClock,
         ),
     );
-    // #2234 CP1: the host-management family's post-commit label-change effect. It reuses
+    // The host-management family's post-commit label-change effect. It reuses
     // the one computer-agents read authority and the one scope-event hub already in this
     // composition (both `.clone()`d — `hub` is moved into `foundation::scope_event_transport::router` below),
     // publishing the existing `agent_changed` invalidation for every agent on the renamed
@@ -474,7 +474,7 @@ pub(super) async fn compose_after_audit(
         daemon_controller.cascade_daemon_effects(),
         blob_store.clone(),
     );
-    // #2234 CP3: the ONE agent-deletion resumer, the single async worker every deletion
+    // The ONE agent-deletion resumer, the single async worker every deletion
     // entrypoint shares. Assembled here — before `DeleteComputer::new` below consumes
     // `host_agent_store` and `cascade_effects` — from three already-composed authorities:
     // the durable `deletion_started_at` lifecycle store, the daemon fence binder minted
@@ -502,7 +502,7 @@ pub(super) async fn compose_after_audit(
     let agent_delete_residue = cascade_effects.clone();
     let agent_delete_availability =
         hub.agent_availability_edge(agent_availability_cold_read.clone());
-    // #2234 CP4: the runtime-switch saga's four host-agent ports, captured before the
+    // The runtime-switch saga's four host-agent ports, captured before the
     // host-delete unit-of-work below moves `host_agent_store`. The switch snapshot read and
     // the three durable transition ports (lock write, seat read, inbox-reclaim write) are the
     // SAME ONE `SqliteHostAgentStore` the delete path holds — a clone shares its pool, so the
@@ -512,14 +512,14 @@ pub(super) async fn compose_after_audit(
     let agent_switch_transitions = host_agent_store.clone();
     let agent_switch_seats = host_agent_store.clone();
     let agent_switch_inboxes = host_agent_store.clone();
-    // #2234 CP5: the bulk-stop seat snapshot read for `POST /api/agents/{id}/stop`, captured
+    // The bulk-stop seat snapshot read for `POST /api/agents/{id}/stop`, captured
     // before the host-delete unit-of-work below moves `host_agent_store`. It is the SAME ONE
     // `SqliteHostAgentStore` — a clone shares its pool, so the stop route's seat snapshot is the
     // same durable seat authority the delete/switch paths hold, never a second store. The stop
     // route's gate read stays the separate `agent_detail_cold_read` authority (below); the two
     // reads are carried on two params, never fused into one combining read type.
     let agent_stop_seats = host_agent_store.clone();
-    // #2234 CP6: the three host-agent ports the `POST /api/agents` create saga drives —
+    // The three host-agent ports the `POST /api/agents` create saga drives —
     // materialization lookup+write, arm provisioning, and the agent-graph read — captured
     // before the host-delete unit-of-work below moves `host_agent_store`. All three are the
     // SAME ONE `SqliteHostAgentStore` the delete/switch/stop paths hold: a clone shares its
@@ -529,14 +529,14 @@ pub(super) async fn compose_after_audit(
     let agent_create_materialization = host_agent_store.clone();
     let agent_create_provisioning = host_agent_store.clone();
     let agent_create_graph = host_agent_store.clone();
-    // #2234 CP7b: the placement-read authority the internal profile-MCP data plane consults
+    // The placement-read authority the internal profile-MCP data plane consults
     // for `{agent, host, deleting}`, captured before the host-delete unit-of-work below moves
     // `host_agent_store`. It is the SAME ONE `SqliteHostAgentStore` the delete/switch/stop/create
     // paths hold — a clone shares its pool — so the MCP placement lookup is the same durable
     // authority, never a second store.
     let agent_mcp_placement = host_agent_store.clone();
     // The list-workspaces `agent_workspace_index` probe resolves the agent's host via
-    // the SAME placement authority (#2341 #1/#33); a clone shares the pool.
+    // the SAME placement authority; a clone shares the pool.
     let agent_dir_placement = host_agent_store.clone();
     // The create saga's remaining two read ports, captured before their originals are moved
     // downstream: the computer read model is the SAME ONE `SqliteHostRuntimeStore`
@@ -545,7 +545,7 @@ pub(super) async fn compose_after_audit(
     // original un-cloned).
     let agent_create_computers = host_store.clone();
     let agent_create_handles = handle_namespace.clone();
-    // #2234 CP6: the ONE owned lifecycle boundary for the create route's two post-commit
+    // The ONE owned lifecycle boundary for the create route's two post-commit
     // remote legs (onboarding wake + runtime start). A clone shares its `Arc<Mutex<..>>`
     // state, so the instance the route dispatches into and the `PreparedApp` field that
     // `close`s it at shutdown are the same owner — there is never a second tracker a leg
@@ -557,7 +557,7 @@ pub(super) async fn compose_after_audit(
     // MANDATORY host-ready observer. Binder (from `host_connections()`) and observer are
     // the same resumer over the same runtime registry — one generation truth.
     let daemon_router = daemon_runtime.router(std::sync::Arc::new(deletion_resumer.clone()));
-    // #2234 CP4: ONE production runtime control for both agent runtime write faces.
+    // ONE production runtime control for both agent runtime write faces.
     // clear-session (POST .../clear-session) and runtime-switch (PUT .../runtime) each hold a
     // clone of this SAME `ProductionRuntimeControl`, so both reach the one sealed-seat clear,
     // the one data-plane, and the one `RuntimeClearSessionWaiters` — constructed exactly once
@@ -587,7 +587,7 @@ pub(super) async fn compose_after_audit(
         }
         DeploymentProfile::RemoteOnly => local_runtime_catalog::control_plane_router(),
     };
-    // #2223 CP3: assemble the two workspace-metadata-write outbound authorities and the
+    // Assemble the two workspace-metadata-write outbound authorities and the
     // human-auth deps from real production adapters, BEFORE `hub`/`sessions` are moved
     // into the event transport below. The rename fan-out is ONE whole effect — author +
     // daemon delivery + conversation-scope publication — never a half-effect: the
@@ -643,7 +643,7 @@ pub(super) async fn compose_after_audit(
         },
         sessions.clone(),
     );
-    // #2223 CP4: the human-directory + avatar family. All four routes (`GET /api/users`,
+    // The human-directory + avatar family. All four routes (`GET /api/users`,
     // `POST`/`DELETE /api/me/avatar`, `GET /api/users/{id}/avatar`) resolve every
     // identity capability — directory read, avatar serve-ref read, profile read, and the
     // avatar pointer write unit-of-work — off the SAME `SqliteUserStore` handle, share
@@ -655,7 +655,7 @@ pub(super) async fn compose_after_audit(
     // `require_human_session` (all four routes are behind it), so it mounts at the TOP
     // LEVEL, not inside `human_products`.
     let avatar_blobs = SingleKindAvatarBlobs::new(blob_store.clone(), StorageKind::Local);
-    // #2234 CP2 — the ONE avatar-blob root the three agent-avatar faces share (GET
+    // The ONE avatar-blob root the three agent-avatar faces share (GET
     // serve, POST upload, DELETE clear), over the SAME `LocalBlobStore` the human
     // avatar family uses, under the ambient `StorageKind::Local`. Cloned (not moved) so
     // the raw `blob_store` handle survives for the #2254 agent-chat audit attachment
@@ -675,7 +675,7 @@ pub(super) async fn compose_after_audit(
         },
         sessions.clone(),
     );
-    // #2234 CP7a: the internal, runtime-credentialed self-scope family (five faces),
+    // The internal, runtime-credentialed self-scope family (five faces),
     // assembled here — before `human_products` below moves `agent_profile_write`,
     // `agent_avatar_blobs`, and `agent_detail_cold_read` into the PUBLIC avatar mount and
     // `access_store` into the workspace-access mount — then merged behind the SAME
@@ -688,13 +688,13 @@ pub(super) async fn compose_after_audit(
     // `agent_profile_read` for the profile/peer reads — cloned, never a second store. The
     // three shared internal nodes carry disjoint-method unions: `/profile` (GET read + POST
     // write, across two factories), `/avatar` (POST set + DELETE clear, one factory).
-    // #2257 convergence: all six residual adapters were acquired in `PassiveResources`
+    // convergence: all six residual adapters were acquired in `PassiveResources`
     // before either audit writer started. This phase only consumes those typed owners.
     // The embedded-bootstrap token file write itself remains deferred to the final
     // fallible provision step after `recover()` below.
     let embedded_bootstrap_mint = EntropySessionTokenMint::new(OsEntropy);
     let embedded_bootstrap_user_changed = hub.user_changed_sink();
-    // #2249/#2257: the ONE agent-profile-MCP data plane, lifted to a binding so BOTH the
+    // The ONE agent-profile-MCP data plane, lifted to a binding so BOTH the
     // internal self-scope face (below) and the PUBLIC read+probe pair (#2249, in
     // `human_products`) ride the identical `ProductionAgentProfileMcpDataPlane` over the
     // shared placement authority and the one live daemon registry — never a second data

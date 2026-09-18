@@ -40,14 +40,14 @@ use crate::host_runtime::runtime_credential::bind_runtime_actor;
 
 pub const AGENT_CREATE_CHANNEL_PATH: &str = "/internal/agents/{aid}/create-channel";
 
-/// The awaited post-commit aftermath the fork owes (Cindy #40): consuming the SEALED
+/// The awaited post-commit aftermath the fork owes: consuming the SEALED
 /// post-images, it publishes `workspace_channels_changed`, then delivers the context
 /// message to the actor, distributes the prompt to the other members, and starts all
 /// member runtimes best-effort — in that strict order, each awaited, before the route
 /// returns 200. A leg failure is observable and never rewrites the sealed 200. The
 /// seed message PAYLOAD + coordinates come from the committed fork (no route-minted
 /// ids); the prompt/start AUDIENCE is re-read from the LIVE conversation roster at
-/// each effect point (Cindy R5 #1), NOT the committed fork roster — sealed seed
+/// each effect point, NOT the committed fork roster — sealed seed
 /// payload vs live audience are distinct.
 pub trait ChannelForkAftermath: Send + Sync + 'static {
     fn channel_forked(
@@ -175,7 +175,7 @@ where
         Err(cause) => return internal(cause, "create-channel placement read failed"),
     };
 
-    // The writer owns the full authority IN its transaction (Cindy #4/#31): fresh
+    // The writer owns the full authority IN its transaction: fresh
     // capability, per-source-agent membership gate, per-workspace title, id-minting
     // AFTER the gates. The route mints nothing and does not pre-check capability.
     let request = ChannelForkRequest {
@@ -193,7 +193,7 @@ where
         .await
     {
         Ok(Ok(committed)) => {
-            // The awaited aftermath consumes the SEALED post-images (Cindy #40): the
+            // The awaited aftermath consumes the SEALED post-images: the
             // committed channel + both seed messages + member coordinates drive the
             // ordered deliver → distribute → start-all; a failure is observable and
             // does not rewrite the 200.
@@ -244,7 +244,7 @@ fn fork_refusal(refusal: ChannelForkRefusal) -> Response {
             "source conversation belongs to another workspace",
             "agent_workspace_mismatch",
         ),
-        // Exact reference dynamic message (Cindy #29): the writer-bound canonical title.
+        // Exact reference dynamic message: the writer-bound canonical title.
         ChannelForkRefusal::TitleTaken { title } => coded(
             StatusCode::CONFLICT,
             &format!("a channel titled {title} already exists in this workspace"),
@@ -267,7 +267,7 @@ fn invalid_input() -> Response {
         .into_response()
 }
 
-/// The workspace-less refusal (Cindy #45): the exact `resolveAgentQueryWorkspaceId`
+/// The workspace-less refusal: the exact `resolveAgentQueryWorkspaceId`
 /// create-channel variant carrying the source placement kind.
 fn workspace_scope_required(source_placement_kind: Option<&str>) -> Response {
     let error = match source_placement_kind {

@@ -266,7 +266,7 @@ fn fav_js_safe(value: i64, field: &'static str) -> Result<i64, FavoritesReadErro
         .map_err(|_| FavoritesReadError::MalformedIdentity { field })
 }
 
-/// Compare two strings by their UTF-16 CODE UNITS (Cindy #10), matching TS `<`/`>`
+/// Compare two strings by their UTF-16 CODE UNITS, matching TS `<`/`>`
 /// on strings — NOT Rust's default UTF-8 byte order. The two agree on ASCII and the
 /// BMP but diverge on astral scalars: e.g. U+10000 is one code point but the surrogate
 /// pair `0xD800 0xDC00` sorts BELOW U+E000 in UTF-16, while its UTF-8 bytes sort ABOVE.
@@ -418,7 +418,7 @@ mod tests {
         // JS `"\u{0085}".trim()` is NON-empty → JS KEEPS the display_name. Rust
         // `str::trim()` would wrongly judge it empty and fall back to `alice`. With the
         // shared ECMAScript authority, Rust must keep the ORIGINAL display_name `"\u{0085}"`,
-        // matching TS byte-for-byte. This is the migration discriminator Cindy flagged.
+        // matching TS byte-for-byte. This is the migration discriminator flagged.
         assert_eq!(parent_title_for("\u{0085}").await, "\u{0085}");
 
         // A U+0085-adorned real name: JS keeps the whole original (untrimmed) value.
@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn utf16_tiebreak_orders_astral_below_private_use_matching_js() {
         use std::cmp::Ordering;
-        // Cindy #10: U+10000 (astral) is `0xD800 0xDC00` in UTF-16 — BELOW U+E000
+        // U+10000 (astral) is `0xD800 0xDC00` in UTF-16 — BELOW U+E000
         // (`0xE000`). JS `<` / `>` on strings compares code units, so U+10000 < U+E000;
         // Rust's default UTF-8 byte `str::cmp` would put U+10000 (4 bytes f0 90 80 80)
         // ABOVE U+E000 (3 bytes ee 80 80). Our tiebreak matches JS.

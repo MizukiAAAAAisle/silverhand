@@ -145,7 +145,7 @@ pub fn fold_name_key(raw: &str) -> String {
     folded.nfc().collect()
 }
 
-/// Unicode 16 FULL case fold ONLY — NO normalization (Cindy #49). This is the exact
+/// Unicode 16 FULL case fold ONLY — NO normalization. This is the exact
 /// isomorph of TS `unicode-case-fold.ts::foldCase`: the same pinned `CASE_FOLD`
 /// table [`fold_name_key`] uses, but WITHOUT the trailing NFC, so it preserves the
 /// un-normalized `toLocaleLowerCase`-equivalent semantics needed by case-insensitive
@@ -271,7 +271,7 @@ pub fn is_ecmascript_trim_whitespace(character: char) -> bool {
 
 /// Collapse every run of ECMAScript `\s` whitespace to a single space and trim the
 /// ends — the ONE production authority mirroring TS `content.replace(/\s+/g, ' ')
-/// .trim()` (Cindy #22). Uses `is_ecmascript_trim_whitespace`, NOT Rust's
+/// .trim()`. Uses `is_ecmascript_trim_whitespace`, NOT Rust's
 /// `char::is_whitespace()`, so U+FEFF collapses (JS `\s` includes it) and U+0085 NEL
 /// does NOT (JS `\s` excludes it) — both the read-history snippet and the search
 /// excerpt share this exact set.
@@ -293,7 +293,7 @@ pub fn collapse_ecmascript_whitespace(content: &str) -> String {
 }
 
 /// Truncate an already-compacted string to at most `max` UTF-16 code units, mirroring
-/// TS `s.length <= max ? s : s.slice(0, max - 1) + '…'` but SCALAR-SAFE (Cindy #27): a
+/// TS `s.length <= max ? s : s.slice(0, max - 1) + '…'` but SCALAR-SAFE: a
 /// cut that would land inside a surrogate pair shrinks inward by one unit so the
 /// ellipsis never replaces half a pair with U+FFFD. `max` must be ≥ 1.
 pub fn truncate_utf16_scalar_safe(compact: &str, max: usize) -> String {

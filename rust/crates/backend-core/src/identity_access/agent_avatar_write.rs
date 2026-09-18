@@ -741,7 +741,7 @@ mod tests {
     #[tokio::test]
     async fn a_commit_whose_avatar_is_fresh_but_a_tuning_column_was_tampered_retains_the_fresh_blob()
      {
-        // Cindy's P0-1 falsifier: the committed avatar correctly points at FRESH, but a
+        // falsifier: the committed avatar correctly points at FRESH, but a
         // NON-avatar column the avatar-only admit left untouched came back changed
         // (display_name tampered). The full-column seal fails, yet the durable row DOES
         // reference the fresh blob — so it must be RETAINED, safe-500, announce=0,

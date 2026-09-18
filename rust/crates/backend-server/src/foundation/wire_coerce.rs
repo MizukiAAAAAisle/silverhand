@@ -1,6 +1,6 @@
 //! A wire-admission carrier mirroring the reference `z.preprocess(empty→absent,
 //! z.coerce.number())` used by the agent read/search numeric inputs (`before_seq`,
-//! `after_seq`, `limit`) — Cindy #12/#26/#47.
+//! `after_seq`, `limit`).
 //!
 //! The reference schema is NOT a `string|number` union: after mapping `'' | undefined`
 //! to absent, the remaining value goes through ECMAScript `Number(value)` (`z.coerce`),
@@ -222,7 +222,7 @@ mod tests {
         assert!(coerce("9007199254740993").is_invalid());
     }
 
-    /// Replay the Zod-SIGNED fixture (Cindy #26): every cell's outcome must match what
+    /// Replay the Zod-SIGNED fixture: every cell's outcome must match what
     /// the real `z.coerce.number().int().refine(isSafeInteger)` produced (regenerated
     /// by `packages/backend/tests/read-model/coerce-number-rust-parity.test.ts`), so
     /// the Rust `Number()` reimplementation cannot drift on the radix/trim/empty/

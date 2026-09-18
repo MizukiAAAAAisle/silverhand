@@ -64,7 +64,7 @@ pub struct OutOfSessionScope;
 /// CRATE-PRIVATE for the same reason. The ports around it are public because a composition has
 /// to implement them; this is the route's own canonical rule, so there is no legitimate caller
 /// outside — closing the replaceable port while leaving a public function would add a new public
-/// surface for nothing (@Cindy, review of `65827a71`).
+/// surface for nothing.
 ///
 /// It leaks nothing: reach is only asked once resolution has proven participation, so every
 /// refusal here is about a stream the caller can already enumerate.
@@ -182,7 +182,7 @@ where
 /// address is resolved — which also proves participation — then the credential's reach, then
 /// the grant.
 ///
-/// THE ORDER IS NOT A TYPE GUARANTEE (@Cindy). Nothing here stops a future edit from asking the
+/// THE ORDER IS NOT A TYPE GUARANTEE. Nothing here stops a future edit from asking the
 /// capability before reach; the three failure types differ, and the code would still compile.
 /// What holds the order are the cross counter-examples beside this function: a request that
 /// fails two gates at once is answered by whichever comes first, so swapping two lines turns a
@@ -814,8 +814,8 @@ mod tests {
     /// Both coordinates are the RESOLVED stream. An anchored slot has target == source by the
     /// time reach has passed, and an unanchored one has no ambient source at all — so passing
     /// the credential's conversation would have bound every unanchored send to a stream nobody
-    /// named, and bound a cross-stream anchored send to one it was refused from
-    /// (@Cindy, review of `601a0ce5`). The credential's conversation decides REACH and nothing
+    /// named, and bound a cross-stream anchored send to one it was refused from.
+    /// The credential's conversation decides REACH and nothing
     /// else. A human's two coordinates are the same because that door cannot address a foreign
     /// stream at all.
     #[tokio::test]

@@ -88,7 +88,7 @@ impl AgentChannelListRead for SqliteAgentChannelList {
             .await
             .map_err(AgentChannelListError::from)?;
 
-        // Resolve the target workspace + authorize, IN this snapshot (Cindy #7).
+        // Resolve the target workspace + authorize, IN this snapshot.
         let target = match resolve_target(&mut tx, agent, source, explicit_workspace).await? {
             Ok(target) => target,
             Err(refusal) => {
@@ -117,7 +117,7 @@ impl AgentChannelListRead for SqliteAgentChannelList {
 }
 
 /// Resolve the target workspace from source/explicit + gate cross-workspace reach +
-/// `read_messages`, all on the tx (Cindy #7).
+/// `read_messages`, all on the tx.
 async fn resolve_target(
     tx: &mut Transaction<'_, Sqlite>,
     agent: &AgentId,

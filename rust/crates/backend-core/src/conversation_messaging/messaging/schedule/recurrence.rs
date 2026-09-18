@@ -54,10 +54,8 @@ pub enum CronOutcome {
 /// Consumer-language evaluator: the next cron instant strictly after a given
 /// time, in a given timezone.
 ///
-/// This crate defines the port; the real implementation (and the cron/tz
-/// crate it needs) is a Cindy-owned integration seam. It is deliberately NOT
-/// a `Clock`: a `Clock` answers "what time is it now", this answers "when
-/// does this expression next fire after T". The two never merge.
+/// It is deliberately NOT a `Clock`: a `Clock` answers "what time is it now",
+/// this answers "when does this expression next fire after T". The two never merge.
 pub trait CronNextOccurrence {
     fn next_after(&self, query: CronQuery<'_>) -> CronOutcome;
 }
@@ -622,9 +620,9 @@ mod tests {
 /// reproduce the advancement, missed-count, and failure-rearm outcomes exactly.
 ///
 /// The fixture's cron cases use a stateless periodic evaluator identical on
-/// both sides (`steppingCronNext` ⇔ [`SteppingCron`]); the real cron/timezone
-/// evaluator stays a Cindy-owned seam. Fault, overflow, and non-advancing
-/// paths — which a stepping evaluator cannot produce — are covered by the
+/// both sides (`steppingCronNext` ⇔ [`SteppingCron`]).
+/// Fault, overflow, and non-advancing paths -
+/// which a stepping evaluator cannot produce — are covered by the
 /// unit tests above, justified against the same production policy.
 #[cfg(test)]
 mod ts_parity {

@@ -271,7 +271,7 @@ async fn a_human_editor_shares_the_gate_and_stamps_a_user_triple() {
 
 #[tokio::test]
 async fn a_real_change_appends_a_task_edit_event_in_the_same_transaction() {
-    // Cindy's atomicity contract: the UPDATE and its `task_edit` notice commit
+    // Atomicity contract: the UPDATE and its `task_edit` notice commit
     // together. The appended message carries the POST-change title, the actor
     // pill (the resolved editor name), and the uniform metadata.
     let (_dir, path) = open_db().await;

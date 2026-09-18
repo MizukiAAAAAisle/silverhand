@@ -457,8 +457,8 @@ pub struct AgentThreadFollowChange {
     pub changed: bool,
 }
 
-/// Why an agent follow/unfollow refused, decided IN the reserved writer transaction
-/// (Cindy #5/#8): the gates are fresh-replayed in the reference anti-oracle ORDER —
+/// Why an agent follow/unfollow refused, decided IN the reserved writer transaction:
+/// the gates are fresh-replayed in the reference anti-oracle ORDER —
 /// root existence, THEN participation, THEN `read_messages` capability — so no gate
 /// leaks information a prior one should have hidden. The route may hold a lock-outside
 /// hint for the same order, but the writer is the final authority.

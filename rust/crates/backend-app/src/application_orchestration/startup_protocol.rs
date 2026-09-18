@@ -7,7 +7,7 @@
 //! versioned, length-bounded NDJSON sequence: preparing before database preparation,
 //! prepared after successful preparation/close, then bound after app composition.
 //!
-//! Contract (ratified shiki+Cindy):
+//! Contract:
 //! - `stdout` carries ONLY these three frames; all logs go to stderr.
 //! - The frame is emitted at the bound + composition-complete point, BEFORE the serve
 //!   accept-loop can answer requests, so its `kind` is `"bound"` (not `"ready"`); the

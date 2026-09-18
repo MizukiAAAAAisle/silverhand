@@ -4,7 +4,7 @@
 //! The pure mutation DECISIONS live in their own leaves ([`super::status`],
 //! [`super::edit`]). A write UoW COMMITS such a decision, but the decision is made
 //! INSIDE the write transaction over the row read under the lock — never
-//! pre-computed and replayed. This is the concurrency contract Cindy pinned: a
+//! pre-computed and replayed. This is the concurrency contract pinned: a
 //! conditional write predicated only on the column it writes (`status`) would let
 //! a concurrent claim/unclaim move `assignee` without moving `status` and a
 //! stale-authorized status change would still apply. So the write authority

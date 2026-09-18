@@ -30,7 +30,7 @@ pub struct AgentListedChannel {
 }
 
 /// Reads the channels an agent can see in one workspace as ONE authorized
-/// connection-bound snapshot (Cindy #7): resolve the target workspace from the
+/// connection-bound snapshot: resolve the target workspace from the
 /// caller's source (or the explicit selector), gate cross-workspace reach +
 /// `read_messages`, and read the visible set (member ∪ discovery) — all on the same
 /// transaction, so a revoke/membership race cannot leak an old set. The route
@@ -54,14 +54,14 @@ pub struct ListChannelsResult {
     pub channels: Vec<AgentListedChannel>,
 }
 
-/// Why a list-channels read refused, decided IN the authorized snapshot (Cindy #7).
+/// Why a list-channels read refused, decided IN the authorized snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ListChannelsRefusal {
     /// The caller's bound source conversation no longer exists — `404 not found`.
     SourceNotFound,
     /// No workspace could be resolved (workspace-less source / AgentSlot, no explicit
     /// selector) — `400 workspace_scope_required`. Carries the source placement kind
-    /// for the reference message (Cindy #46), `None` when there is no source.
+    /// for the reference message, `None` when there is no source.
     WorkspaceScopeRequired {
         source_placement_kind: Option<super::message_target_coordinates::ConversationPlacementKind>,
     },

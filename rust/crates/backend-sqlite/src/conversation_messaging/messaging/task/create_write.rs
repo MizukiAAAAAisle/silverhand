@@ -1,7 +1,7 @@
 //! SQLite adapter for the task `create` write unit-of-work.
 //!
-//! One indivisible durable fact in ONE `BEGIN IMMEDIATE`, in the order Cindy
-//! pinned: allocate the next per-board task number → insert the task row → append
+//! One indivisible durable fact in ONE `BEGIN IMMEDIATE`, in the order pinned:
+//! allocate the next per-board task number → insert the task row → append
 //! the `task_create` system message → bind `created_event_message_id` → commit.
 //! Any step failing rolls the whole back, so there is never a task without its
 //! anchoring message, nor a message without its task.

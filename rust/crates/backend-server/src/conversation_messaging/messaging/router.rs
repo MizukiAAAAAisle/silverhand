@@ -63,7 +63,7 @@ use crate::foundation::cli_invoke_observer::CliInvokeRequestContext;
 /// code span summons its subject, or that no body addresses anyone. The route uses the one
 /// canonical rule and offers no way to replace it. The trait seam still exists in the domain,
 /// where it lets the derivation be tested against a stand-in; a deployer is not a caller of
-/// that seam (@Cindy, review of `be14df01`).
+/// that seam.
 pub struct SendState<C, T, K, D, U, F> {
     pub channel_access: C,
     pub target_address: T,
@@ -241,8 +241,8 @@ fn created(outcome: &SendMessageOutcome) -> Response {
 /// share the one sender-only projector, and there the sharing stops: a runtime reads
 /// `message_id`/`message_seq`/`conversation_id` to advance its own cursor and has no schema
 /// for a message DTO or cluster projections, so answering it with the person's ACK is a
-/// client break rather than a simplification (@Cindy, terminal review P0). The statuses
-/// differ for the same reason the bodies do — each is what its own contract published.
+/// client break rather than a simplification.
+/// The statuses differ for the same reason the bodies do — each is what its own contract published.
 fn sent(outcome: &SendMessageOutcome) -> Response {
     (StatusCode::OK, Json(agent_send_output(outcome))).into_response()
 }

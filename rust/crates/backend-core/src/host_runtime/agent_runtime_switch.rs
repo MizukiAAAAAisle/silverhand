@@ -2203,7 +2203,7 @@ mod tests {
         // The switch commits; the KNOWN live conversation (live_before) is dispatched regardless,
         // and the post-commit newly-pending read faults. The committed transition stands (Ok),
         // c-a is still restarted, and the fault is surfaced in `resume_read_faults` — never a
-        // silent 0 and never dragging the known candidate down with it (P0-2 + Cindy's gate).
+        // silent 0 and never dragging the known candidate down with it.
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
             reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
@@ -2249,8 +2249,7 @@ mod tests {
     #[tokio::test]
     async fn agent_scope_falls_back_to_focus_when_the_oldest_pending_read_faults() {
         // AgentSlot was live and a focus F was captured pre-clear; the oldest-pending read
-        // faults. The saga must still try F when participation holds, and surface the fault
-        // (P0-2 + Cindy's AgentSlot gate).
+        // faults. The saga must still try F when participation holds, and surface the fault.
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
             reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),

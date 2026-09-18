@@ -3,7 +3,7 @@
 //! Drives `SqliteTaskCreateWrite::create_task`: a create commits the task row, its
 //! `task_create` system message, and the `created_event_message_id` backfill as ONE
 //! fact; a duplicate `source_message_id` is SourceConflict; a read-only destination
-//! is ConversationReadonly. Acceptance controls (Cindy): concurrent creates on the
+//! is ConversationReadonly. Acceptance controls: concurrent creates on the
 //! same board get distinct consecutive numbers; message ↔ backfill is 1:1; a
 //! failing message/backfill leaves task AND message at zero.
 

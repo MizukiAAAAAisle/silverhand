@@ -621,12 +621,6 @@ INSERT INTO agents (id, name, display_name, runtime, avatar_storage_key, avatar_
 
     #[tokio::test]
     async fn a_stale_legal_effort_is_re_rejected_against_the_locked_runtime_and_writes_nothing() {
-        // Cindy's deterministic falsifier for the write-lock TOCTOU. agent-3 starts
-        // Codex `gpt-5.6-sol` + `high`. Edit A moves only the model to `gpt-5.6-terra`
-        // (legal under `high`); edit B raises only the effort to `ultra` — legal
-        // against the pre-A `sol` snapshot, illegal against the committed `terra`.
-        // Because B is admitted under the write lock against the CURRENT runtime, it
-        // must be re-rejected with zero UPDATE, never composing a `terra + ultra` row.
         let (_dir, adapter) = open_seeded().await;
 
         let a = admit_and_apply(

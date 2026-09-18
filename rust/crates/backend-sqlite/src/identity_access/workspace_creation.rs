@@ -5,7 +5,7 @@
 //! synchronous durable-setup phase — name verdict, per-agent existence/ownership
 //! replay, workspace + owner/user members, per-agent membership/capabilities, and the
 //! Onboarding channel + founding roster — in ONE `BEGIN IMMEDIATE` transaction so no
-//! competing writer can interleave (Cindy #41/#28); ids are minted + the clock
+//! competing writer can interleave; ids are minted + the clock
 //! sampled inside, only after the gates pass. `append_agent_onboarding_message` is a
 //! SEPARATE per-agent step the route interleaves with deliver, each committing its own
 //! message.
@@ -85,13 +85,13 @@ impl From<WorkspaceCreationStoreError> for PersistenceFailure {
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 impl WorkspaceCreationWrite for SqliteWorkspaceCreation {
     /// The whole synchronous durable-setup phase in ONE `BEGIN IMMEDIATE`
-    /// transaction (Cindy #41/#28/#11/#31/#10): name verdict → per-agent
+    /// transaction: name verdict → per-agent
     /// existence+ownership replay → workspace+owner+users insert → per-agent
     /// membership+capability seed → onboarding channel+roster. No competing writer
     /// interleaves any step, so a racing delete/ownership-change lands wholly before
     /// or wholly after this boundary. Every refusal rolls the whole tx back (zero
     /// reach). The FIRST accepted agent's onboarding MESSAGE is also written here, in
-    /// this same tx under a savepoint (Cindy R5 #3/R6 #1) — see `first_onboarding`; only
+    /// this same tx under a savepoint — see `first_onboarding`; only
     /// the SUBSEQUENT agents' messages stay a separate route-interleaved
     /// append→deliver step.
     async fn provision_workspace<E, C>(
@@ -169,7 +169,7 @@ impl WorkspaceCreationWrite for SqliteWorkspaceCreation {
                             .try_get("runtime")
                             .map_err(WorkspaceCreationStoreError::from)?;
                         // Parse the handle into a CLOSED typed ParticipantHandle IN the
-                        // lock (Cindy R3-next #15): a malformed stored handle for ANY
+                        // lock: a malformed stored handle for ANY
                         // accepted member is a typed fault that rolls the WHOLE tx back
                         // here — BEFORE any onboarding message/deliver — never a partial
                         // fan-out that drops a later malformed member silently.
@@ -331,7 +331,7 @@ impl WorkspaceCreationWrite for SqliteWorkspaceCreation {
             .map_err(WorkspaceCreationStoreError::from)?;
         }
 
-        // (5b) Cindy R5 #3/R6 #1: the FIRST accepted agent's onboarding message is made
+        // The FIRST accepted agent's onboarding message is made
         // durable INSIDE THIS SAME transaction (the TS synchronous durable prefix has no
         // await point between the workspace setup and the first accepted message being
         // durable, and no other writer can interleave — it is all under this one
@@ -411,8 +411,8 @@ impl WorkspaceCreationWrite for SqliteWorkspaceCreation {
         .ok_or(WorkspaceCreationStoreError::CommittedWorkspaceMissing)?;
         let face = decode_created_face(&row)?;
 
-        // Read the committed onboarding-channel facts back in the SAME tx (Cindy
-        // R3-next #3): the 201 body reflects the STORED visibility/title/status (an
+        // Read the committed onboarding-channel facts back in the SAME tx:
+        // the 201 body reflects the STORED visibility/title/status (an
         // onboarding conversation is `private`) rather than a hard-coded literal that
         // could drift from the insert.
         let channel_row =
@@ -488,7 +488,7 @@ impl WorkspaceCreationWrite for SqliteWorkspaceCreation {
             .begin_with(ROOT_WRITE_BEGIN)
             .await
             .map_err(WorkspaceCreationStoreError::from)?;
-        // Cindy R6 #2: the intent carries NO id — the writer mints it (and samples the
+        // The intent carries NO id — the writer mints it (and samples the
         // clock) itself in-lock, so the route does zero entropy. Render + append + seal
         // via the shared helper; a fault aborts THIS tx (no setup residue to protect on
         // the subsequent-agent path — each is its own tx).
@@ -513,7 +513,7 @@ impl WorkspaceCreationWrite for SqliteWorkspaceCreation {
 }
 
 /// Render + mint + sample + append + seal ONE onboarding message on the given writer
-/// connection (Cindy R6 #1/#2). The id is minted from `entropy` and the timestamp
+/// connection. The id is minted from `entropy` and the timestamp
 /// sampled from `clock` HERE (in-lock), never route-side; the body is rendered from the
 /// recipient handle + peers. Returns the minted `MessageId` on success. Any fault
 /// (entropy mint / append / seal) returns `Err` WITHOUT committing — the caller decides
@@ -558,7 +558,7 @@ where
     Ok(message_id)
 }
 
-/// The first-message attempt inside the provision savepoint (Cindy R6 #1): a thin
+/// The first-message attempt inside the provision savepoint: a thin
 /// wrapper over [`render_and_append_onboarding`] so the caller can roll back ONLY the
 /// savepoint on any fault while committing the setup residue.
 async fn append_first_onboarding_in_savepoint<E, C>(
@@ -729,7 +729,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     }
 
     /// Entropy whose Nth `fill` call fails (1-indexed) and all others succeed with the
-    /// real host entropy — to isolate the FIRST-MESSAGE entropy arm (Cindy R6 #1): the
+    /// real host entropy — to isolate the FIRST-MESSAGE entropy arm: the
     /// provision mints workspace-id (1st fill) + onboarding-channel-id (2nd), then the
     /// first message id (3rd), so failing on the 3rd fails ONLY the first message and
     /// exercises the savepoint rollback while the setup residue commits.
@@ -907,7 +907,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
 
     #[tokio::test]
     async fn a_malformed_second_member_handle_fails_the_whole_provision_closed() {
-        // Cindy R3-next #15: a LATER accepted member with a stored handle that is not a
+        // A LATER accepted member with a stored handle that is not a
         // valid ParticipantHandle must fail the WHOLE provisioning tx closed BEFORE any
         // durable write — never a partial state where the first member is committed and
         // the malformed one is silently dropped. (The onboarding fan-out is downstream
@@ -1089,7 +1089,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
 
     #[tokio::test]
     async fn provision_writes_the_first_agents_message_then_subsequent_appends_advance_seq() {
-        // Cindy R5 #3: `provision_workspace` writes the FIRST accepted agent's
+        // `provision_workspace` writes the FIRST accepted agent's
         // onboarding message IN its own tx (seq 1). The route then appends the
         // SUBSEQUENT agents one at a time; the canonical primitive keeps
         // latest_message_seq / head monotone so the next real send takes N+1.
@@ -1190,7 +1190,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
 
     #[tokio::test]
     async fn first_onboarding_failure_keeps_setup_residue_with_no_message_half_write() {
-        // Cindy R6 #1: the first agent's onboarding message is attempted under a
+        // The first agent's onboarding message is attempted under a
         // SAVEPOINT inside the provision tx. A first-message fault (here the entropy arm:
         // the 3rd mint — the first MESSAGE id, after the workspace + channel ids —
         // fails) must ROLL BACK ONLY the savepoint: the workspace/members/private-channel
@@ -1359,7 +1359,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
 
     #[tokio::test]
     async fn onboarding_message_clock_is_sampled_after_the_writer_lock_is_acquired() {
-        // Cindy R4 #1: the append writer samples its clock AFTER it holds the
+        // The append writer samples its clock AFTER it holds the
         // `BEGIN IMMEDIATE` lock. Prove it with a shared-atomic clock: a competitor
         // holds the write lock, we advance the clock WHILE the append is blocked
         // queueing for the lock, then release; the committed row's created_at must be

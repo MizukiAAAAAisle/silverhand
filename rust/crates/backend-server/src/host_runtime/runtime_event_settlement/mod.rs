@@ -199,7 +199,7 @@ impl<P> RuntimeEventSettlement<P> {
     }
 
     /// A cloneable handle onto the run-state projection for the workspace-delete
-    /// bulk `conversation_closed` terminalization (Cindy #44) — the SAME run map +
+    /// bulk `conversation_closed` terminalization — the SAME run map +
     /// conversation projection, never a second store.
     pub(crate) fn conversation_run_terminalizer(&self) -> ConversationRunTerminalizer {
         ConversationRunTerminalizer {
@@ -337,8 +337,8 @@ impl HostRuntimeActivity for HostRuntimeActivitySource {
 }
 
 /// A cloneable, durable-generic-free handle onto the run-state projection for the
-/// bulk `conversation_closed` terminalization the workspace-delete aftermath drives
-/// (Cindy #44). It shares the ONE in-memory run map + the ONE conversation
+/// bulk `conversation_closed` terminalization the workspace-delete aftermath drives.
+/// It shares the ONE in-memory run map + the ONE conversation
 /// projection with the runtime-event owner, so it is the SAME authority — never a
 /// second run-state store.
 #[derive(Clone)]
@@ -348,7 +348,7 @@ pub struct ConversationRunTerminalizer {
 }
 
 /// The public best-effort failure of the workspace-delete `conversation_closed`
-/// terminalization (Cindy #44): the run map lock was poisoned, or at least one
+/// terminalization: the run map lock was poisoned, or at least one
 /// per-run `agent_activity` publish failed. The aftermath observes it and logs; it
 /// never rewrites the 204 or aborts the sibling teardown legs.
 #[derive(Debug)]

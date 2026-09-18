@@ -268,8 +268,7 @@ mod tests {
 /// [`plan_settlement`], and must reproduce each case's action exactly.
 ///
 /// The fixture's cron cases use a stateless periodic evaluator identical on
-/// both sides (`steppingCronNext` ⇔ `SteppingCron`); the real cron/timezone
-/// evaluator stays a Cindy-owned seam.
+/// both sides (`steppingCronNext` ⇔ `SteppingCron`).
 #[cfg(test)]
 mod ts_parity {
     use super::super::recurrence::plan_advancement;

@@ -106,7 +106,7 @@ impl ChannelForkWrite for SqliteChannelFork {
             return refuse(tx, ChannelForkRefusal::WorkspaceNotRegular).await;
         }
 
-        // Fresh `create_channels` capability replay (Cindy #4): a precheck-then-revoke
+        // Fresh `create_channels` capability replay: a precheck-then-revoke
         // must not still create a channel.
         let cap: Option<i64> = sqlx::query_scalar(
             "SELECT CASE WHEN w.owner_agent_id = ? OR EXISTS (SELECT 1 FROM \
@@ -148,7 +148,7 @@ impl ChannelForkWrite for SqliteChannelFork {
         // Each stored id is DECODED into a typed AgentId here; a malformed row is a
         // typed CorruptRow fault (whole rollback), never silently dropped nor swapped
         // for the actor — so the committed roster and the effect audience cannot
-        // diverge (Cindy fail-closed / #34).
+        // diverge.
         let member_agent_id_rows: Vec<String> = sqlx::query_scalar(
             "SELECT agent_id FROM conversation_agents WHERE conversation_id = ?",
         )
@@ -164,7 +164,7 @@ impl ChannelForkWrite for SqliteChannelFork {
             member_agent_ids.push(parsed);
         }
 
-        // Per-source-agent workspace-membership gate (Cindy #21): each derived member
+        // Per-source-agent workspace-membership gate: each derived member
         // must EXIST and be a member of the target workspace. A conversation edge is
         // NOT workspace-membership authority; a stale source member is refused, whole
         // rollback. Checked BEFORE inserting anything.
@@ -186,7 +186,7 @@ impl ChannelForkWrite for SqliteChannelFork {
             }
         }
 
-        // Per-WORKSPACE title-collision gate (Cindy #15): a `(workspace_id, title_key)`
+        // Per-WORKSPACE title-collision gate: a `(workspace_id, title_key)`
         // scope, matching the canonical unique index — NOT a global key.
         let title_taken: i64 = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM conversations WHERE workspace_id = ? AND title_key = ? \
@@ -198,7 +198,7 @@ impl ChannelForkWrite for SqliteChannelFork {
         .await
         .map_err(ChannelForkStoreError::from)?;
         if title_taken == 1 {
-            // Title-address REFUSED event (Cindy #20), bound to the workspace + key.
+            // Title-address REFUSED event, bound to the workspace + key.
             // WARN to match the canonical `title-address-log` family (default sink is
             // warn-only); an INFO would be invisible in production.
             tracing::warn!(
@@ -217,7 +217,7 @@ impl ChannelForkWrite for SqliteChannelFork {
             .await;
         }
 
-        // All gates passed → NOW mint ids + sample the clock (Cindy #31/#9/#8): a
+        // All gates passed → NOW mint ids + sample the clock: a
         // failing entropy cannot mask a product refusal, and the clock is an injectable
         // writer input (not a bare SystemTime::now()).
         let new_channel_id = mint_conversation_id(entropy).map_err(ChannelForkStoreError::from)?;
@@ -226,12 +226,11 @@ impl ChannelForkWrite for SqliteChannelFork {
         let now_ms = clock.now_ms();
 
         // Snapshot the source title + actor identity for the context metadata + the
-        // seed body composition (Cindy #4). The source conversation exists (gated
+        // seed body composition. The source conversation exists (gated
         // above) and the actor is a verified source member + capability holder, so a
         // MISSING title / MISSING actor row is a corrupt committed state — a typed
         // CorruptRow fault (whole rollback), NEVER a silent empty-string / null-null
-        // fallback that would write a channel with a wrong-looking seed (Cindy
-        // fail-closed).
+        // fallback that would write a channel with a wrong-looking seed.
         let source_title: String =
             sqlx::query_scalar("SELECT title FROM conversations WHERE id = ?")
                 .bind(request.source_conversation.as_str())
@@ -296,7 +295,7 @@ impl ChannelForkWrite for SqliteChannelFork {
             .map_err(ChannelForkStoreError::from)?;
         }
 
-        // The context (system) seed body composes the reference text (Cindy #4):
+        // The context (system) seed body composes the reference text:
         // `Channel created from '<source.title>'. Reason: <context_summary>`.
         let context_body = format!(
             "Channel created from '{}'. Reason: {}",
@@ -326,7 +325,7 @@ impl ChannelForkWrite for SqliteChannelFork {
         )
         .await?;
         // The prompt is AGENT-authored and carries the send-time author snapshot from
-        // the fresh actor row (Cindy #34), so a later agent delete resolves `deleted`.
+        // the fresh actor row, so a later agent delete resolves `deleted`.
         let prompt_seq = append_seed_message(
             &mut tx,
             &new_channel_id,
@@ -344,7 +343,7 @@ impl ChannelForkWrite for SqliteChannelFork {
 
         tx.commit().await.map_err(ChannelForkStoreError::from)?;
 
-        // Title-address TAKEN event (Cindy #20), emitted ONLY after the commit
+        // Title-address TAKEN event, emitted ONLY after the commit
         // succeeds — a commit fault must never falsely log a taken address. WARN so it
         // lands in the default `~/.silverhand/logs` warn sink, matching the canonical
         // `title-address-log` family (an INFO would vanish under the default config).
@@ -712,7 +711,7 @@ INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('src2
 
     #[tokio::test]
     async fn the_injected_clock_stamps_the_committed_rows_not_a_wall_clock() {
-        // Cindy #8: the fork writer samples an INJECTABLE clock (not SystemTime::now),
+        // The fork writer samples an INJECTABLE clock (not SystemTime::now),
         // so a held-writer / fixed clock deterministically stamps every committed row.
         let (_d, pool) = open_seeded().await;
         let w = SqliteChannelFork::from_pool(pool.clone());
@@ -739,7 +738,7 @@ INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('src2
 
     #[tokio::test]
     async fn a_corrupt_source_roster_id_is_a_typed_fault_with_zero_writes() {
-        // Cindy fail-closed: a source roster row whose agent_id cannot decode into a
+        // A source roster row whose agent_id cannot decode into a
         // typed AgentId (here an empty id) is a typed CorruptRow persistence fault that
         // rolls the whole tx back — never silently dropped nor swapped for the actor,
         // so the committed roster and the effect audience cannot diverge.

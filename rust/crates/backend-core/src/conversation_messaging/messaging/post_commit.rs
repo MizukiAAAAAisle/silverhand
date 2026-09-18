@@ -703,8 +703,8 @@ pub struct MainEffects<'ports, P, R, V, U, D, S> {
 /// Stated as the type relation, with a local stand-in for this function's own parameter. The
 /// earlier version called the real announcer with `MainEffects<'_, (), …>`, and unit implements
 /// none of the effect traits — so the example failed on those bounds no matter which view it
-/// was given, and would have stayed green with the views made interchangeable (@Cindy's control
-/// experiment). What the gate must isolate is the ARGUMENT's type and nothing else.
+/// was given, and would have stayed green with the views made interchangeable.
+/// What the gate must isolate is the ARGUMENT's type and nothing else.
 ///
 /// ```compile_fail
 /// use silverhand_backend_core::conversation_messaging::messaging::{MainCommittedSend, MessageCreatedFact};

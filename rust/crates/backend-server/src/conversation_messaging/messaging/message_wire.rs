@@ -109,7 +109,7 @@ pub(crate) fn message_projections(reply: &ThreadReplyFact) -> Value {
 
 /// The `{message, projections?}` object both audiences carry: the send ACK (which
 /// adds `unresolved_references` on top) and the conversation-scope `message` broadcast
-/// frame (which carries this alone). This is the single projector authority Cindy's
+/// frame (which carries this alone). This is the single projector authority
 /// gate names — the ACK and the frame each invoke it independently, and
 /// `the_ack_is_the_conversation_frame_plus_a_sender_only_diagnostic` proves the two whole
 /// payloads equal from one committed send; it is not one value placed twice.

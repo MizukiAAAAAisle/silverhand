@@ -133,7 +133,6 @@ mod tests {
     fn a_quote_stays_a_quote_however_deeply_it_is_nested() {
         assert!(spans("> - <silverhand://agent/Alice>").is_empty());
         assert!(spans(">>> <silverhand://agent/Alice>").is_empty());
-        // …and the depth counter comes back down, so prose AFTER a quote still addresses.
         assert_eq!(
             spans("> quoted <silverhand://human/shiki>\n\nmine <silverhand://agent/Alice>"),
             ["<silverhand://agent/Alice>"]

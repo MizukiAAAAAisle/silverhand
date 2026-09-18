@@ -100,7 +100,7 @@ impl ChannelHomeReadPort for SqliteViewerSort {
         conversation_id: &str,
     ) -> Result<Option<ChannelHomeVerdict>, PersistenceFailure> {
         // `getChannelLike(id)`: existence is decided WITHOUT the placement filter, so a
-        // real `direct_pair` PASSES existence (Cindy #39) and returns
+        // real `direct_pair` PASSES existence and returns
         // `WorkspaceLessExisting` (→ `not found`) rather than collapsing to missing
         // (→ `channel not found`). A workspace-placed conversation with a parent
         // workspace is the star target `WorkspacePlaced`.
@@ -285,7 +285,7 @@ async fn read_post_image_tx(
         modes.insert(scope, mode);
     }
     let visible: HashSet<&str> = visible_entity_ids.iter().map(String::as_str).collect();
-    // Favorites projection (Cindy #42): the entries are NOT the `list_key='favorites'`
+    // Favorites projection: the entries are NOT the `list_key='favorites'`
     // rank rows. Each LIVE favorite gets an entry; `rank` comes from the favorites
     // list (null when never manually sorted), while `last_accessed_at`/`starred_at`
     // come from the conversation's HOME list (`channels:<ws>`), where the star lives.
@@ -1057,7 +1057,7 @@ INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, titl
     #[tokio::test]
     async fn favorites_post_image_is_entry_per_live_favorite_with_null_rank_and_preserved_home_facts()
      {
-        // Cindy #42: star conv-a on its channels list (stamps home starred_at +
+        // Star conv-a on its channels list (stamps home starred_at +
         // last_accessed), then a favorites set-mode returns the FAVORITES post-image —
         // which must carry an entry for conv-a with rank=null (never manually sorted)
         // and the HOME starred_at/last_accessed preserved, NOT the null-valued

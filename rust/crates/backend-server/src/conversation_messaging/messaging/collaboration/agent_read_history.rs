@@ -108,7 +108,7 @@ where
     if body.target.is_empty() {
         return invalid_input();
     }
-    // Numeric admission (Cindy #12/#26/#47): `before_seq`/`after_seq`/`limit` coerce
+    // Numeric admission: `before_seq`/`after_seq`/`limit` coerce
     // per `z.coerce.number()` (numeric string/null/bool/singleton-array accepted) then
     // gate JS-safe int + domain. A present-but-uncoercible value is `invalid input`.
     if body.before_seq.is_invalid() || body.after_seq.is_invalid() || body.limit.is_invalid() {
@@ -228,8 +228,7 @@ where
         {
             Ok(messages) => messages,
             // A sealed field with the wrong SHAPE (even from a malicious port impl) is
-            // a fail-closed 500 at the wire boundary — never a wrong-shaped 200 (Cindy
-            // R3-next #6).
+            // a fail-closed 500 at the wire boundary — never a wrong-shaped 200.
             Err(_) => {
                 tracing::error!(
                     "read-history projection: a message carried a malformed metadata/attachments/reactions shape"
@@ -263,7 +262,7 @@ fn anchor_dto(anchor: &ReadHistoryAnchor) -> serde_json::Value {
 }
 
 /// A sealed read-history field carried the wrong wire SHAPE. The route treats this
-/// as a fail-closed 500 (Cindy R3-next #6): even a malicious `AgentReadHistoryRead`
+/// as a fail-closed 500: even a malicious `AgentReadHistoryRead`
 /// port cannot emit a wrong-shaped `200`, because the wire projector validates the
 /// three JSON carriers' shapes at the boundary regardless of the port.
 #[derive(Debug)]
@@ -279,7 +278,7 @@ fn message_dto(
         .as_ref()
         .map(|author| sender_ref(&author_dto(author)));
     // metadata/attachments/reactions are the read authority's carriers, but their
-    // wire SHAPE is validated HERE at the boundary (Cindy #6): metadata is an object
+    // wire SHAPE is validated HERE at the boundary: metadata is an object
     // or null; attachments and reactions are an array or null (TS emits null when
     // empty). Any other shape — from a malformed production row that slipped the
     // adapter, or a malicious port — fails the whole response closed.
@@ -327,12 +326,12 @@ fn validate_object_or_null(
 }
 
 /// The attachments carrier: `null`, or an array whose EVERY item satisfies
-/// `AttachmentSnapshotSchema` (Cindy R4 #2) — `id`/`filename`/`content_type` strings,
+/// `AttachmentSnapshotSchema` — `id`/`filename`/`content_type` strings,
 /// `size` a number, and (if present) `label` the canonical `^(Image|File) #([1-9]
 /// \d{0,3})$`. A non-array, or ANY item that is not an object / is missing a required
 /// field / has a wrong type / carries a non-canonical label, fails the whole response
 /// closed — even from a malicious port. On success the DTO is REBUILT from the
-/// whitelisted keys ONLY (Cindy R6 #3, matching the Zod `.strip()` the TS schema
+/// whitelisted keys ONLY (matching the Zod `.strip()` the TS schema
 /// applies): a valid SUPERSET item carrying an extra key (e.g. `secret`) has that key
 /// dropped, so no unmodelled field leaks onto the 200.
 fn validate_attachments(
@@ -376,10 +375,10 @@ fn validate_attachments(
 }
 
 /// The reactions carrier: `null`, or an array whose EVERY item satisfies
-/// `ReactionAggregateDtoSchema` (Cindy R4 #2) — `emoji` a string, `count` a positive
+/// `ReactionAggregateDtoSchema` — `emoji` a string, `count` a positive
 /// integer, `viewer_reacted` a boolean. `[{}]`, a `count <= 0`, or a non-integer count
 /// fails the whole response closed. On success the DTO is REBUILT from the whitelisted
-/// keys ONLY (Cindy R6 #3, matching Zod `.strip()`): a valid superset item's extra key
+/// keys ONLY (matching Zod `.strip()`): a valid superset item's extra key
 /// is dropped, so no unmodelled field leaks onto the 200.
 fn validate_reactions(value: &serde_json::Value) -> Result<serde_json::Value, WireShapeViolation> {
     let items = match value {
@@ -605,7 +604,7 @@ mod tests {
 
     #[test]
     fn message_dto_serializes_the_sealed_values_verbatim_without_reparse() {
-        // Cindy #14-boundary: the DTO carries the read authority's SEALED
+        // The DTO carries the read authority's SEALED
         // metadata/attachments/reactions verbatim — no `from_str().ok().unwrap_or(Null)`
         // re-parse that could downgrade a value. A metadata OBJECT, a NON-empty
         // attachments array, and a reactions array all round-trip exactly.
@@ -644,7 +643,7 @@ mod tests {
 
     #[test]
     fn a_malicious_port_cannot_emit_a_wrong_shaped_200() {
-        // Cindy #6: even a port that hands back metadata=7 / attachments={} /
+        // Even a port that hands back metadata=7 / attachments={} /
         // reactions="x" is fail-closed at the wire projector — each wrong shape is an
         // Err, never a wrong-shaped 200.
         // metadata that is not object|null.
@@ -690,7 +689,7 @@ mod tests {
 
     #[test]
     fn a_malicious_port_cannot_emit_a_wrong_shaped_attachment_or_reaction_item() {
-        // Cindy R4 #2: per-ITEM domain validation, not just top-level array shape.
+        // Per-ITEM domain validation, not just top-level array shape.
         let bad_attachment_cases = [
             // a non-object element
             serde_json::json!([7]),
@@ -772,7 +771,7 @@ mod tests {
 
     #[test]
     fn a_valid_superset_item_has_its_extra_keys_stripped_from_the_wire() {
-        // Cindy R6 #3: the per-item validators REBUILD the DTO from the whitelisted keys
+        // The per-item validators REBUILD the DTO from the whitelisted keys
         // (matching the Zod `.strip()` the TS schema applies), so a VALID item carrying
         // an extra `secret` key does not leak it onto the 200 — the wire item carries
         // ONLY the modelled fields.

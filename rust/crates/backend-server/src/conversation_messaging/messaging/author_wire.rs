@@ -111,7 +111,7 @@ mod tests {
     /// runtime — so what these cells are for is the OTHER obligation: whether this projector
     /// emits every field the arm owes. A projector that forgot `avatar_url: null`, dropped
     /// `runtime`, or attached `runtime` to a deleted author would leave the domain's types
-    /// perfectly happy (@Cindy).
+    /// perfectly happy.
     ///
     /// Whole-document equality rather than field probes, so the key SET is closed: a field
     /// nobody asserts is a field that can appear or vanish unnoticed.

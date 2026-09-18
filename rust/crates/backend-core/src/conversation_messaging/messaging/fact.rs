@@ -167,7 +167,7 @@ impl SendMessageOutcome {
     /// Stated as the type relation itself, with a local stand-in for the announcer's parameter.
     /// Calling the real generic announcer here would prove nothing: its effect ports cannot be
     /// inferred from a `todo!()`, so the example would fail for that reason whatever the first
-    /// argument was — a gate that stays green while the isolation is broken (@Cindy).
+    /// argument was — a gate that stays green while the isolation is broken.
     ///
     /// ```compile_fail
     /// use silverhand_backend_core::conversation_messaging::messaging::{MainCommittedSend, SendMessageOutcome};
@@ -221,7 +221,7 @@ impl SendMessageOutcome {
     // THERE IS NO WAY TO TAKE ONE HALF AND DROP THE OTHER, deliberately. A consuming accessor for
     // the committed half would be a one-step path back to the old shape that silently discards the
     // total unresolved answer — the sender-only boundary this type exists to establish, handed back
-    // to whoever consumes a send result (@Cindy, review of this change). A consumer keeps the
+    // to whoever consumes a send result (review of this change). A consumer keeps the
     // outcome and borrows the half it needs.
 }
 

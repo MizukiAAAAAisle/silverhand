@@ -6,7 +6,7 @@
 //! failures that matter. Our own failures (a violated invariant, an unavailable host, a
 //! broken store) are the opposite: logged once with the whole chain, answered with a safe
 //! 500 that carries none of it. Funnelling both through one function is what makes the two
-//! drift into each other (@Cindy, review plan for R10a).
+//! drift into each other.
 //!
 //! THE STATUS, THE CODE AND THE SENTENCE LIVE HERE, not on the domain refusal. The core
 //! refusals carry a business reason for an operator to read in a source chain; a client's
@@ -14,7 +14,7 @@
 //! deliberate rather than shared: a doc tweak on a domain error must not be able to change
 //! what a client parses.
 //!
-//! WHAT IS NOT HERE: the acknowledgement of a committed send (R10b), which needs the shared
+//! WHAT IS NOT HERE: the acknowledgement of a committed send, which needs the shared
 //! author projection and the fact's terminal shape. This module answers refusals only.
 //!
 //! One reference refusal has NO arm here on purpose. `target_not_allowed_for_user` fires
@@ -112,8 +112,7 @@ pub(crate) fn refused_send(cause: &SendMessageError) -> Response {
         // arm firing means the resolver's answer and the store disagreed — our contract
         // broke, not the caller's request. The reference has no code for it, and neither
         // inventing one nor borrowing `reply_target_not_found` (which would tell a client
-        // they replied to a missing message) is a thing to publish (@Cindy, review of
-        // `87a6e94a`).
+        // they replied to a missing message) is a thing to publish.
         SendMessageError::ThreadRoot(_)
         | SendMessageError::Invariant(_)
         | SendMessageError::Environment(_)

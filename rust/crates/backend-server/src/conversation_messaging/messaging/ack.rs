@@ -11,7 +11,7 @@
 //! schema and its own client. What the two doors genuinely share is the ONE
 //! `SendMessageOutcome` they project from and the ONE sender-only projector
 //! ([`super::unresolved_wire`]) — answering both with this DTO handed a daemon a payload it
-//! cannot read (@Cindy, terminal review P0).
+//! cannot read.
 //!
 //! BOTH HALVES COME FROM THE SAME OUTCOME. The committed half is what everyone may see; the
 //! unresolved half is the sender's alone. Projecting them from one value is what stops this

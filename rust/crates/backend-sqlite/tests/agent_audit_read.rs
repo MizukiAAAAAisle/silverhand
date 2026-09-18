@@ -2,9 +2,9 @@
 //!
 //! The route-level tests (backend-server `identity_access/agent_audit/tests.rs`) pin the
 //! two-stage ladder against fake facts; these pin the two properties that only the
-//! adapter's own transaction can carry, both flagged in Cindy's NON-PASS:
+//! adapter's own transaction can carry, both flagged in NON-PASS:
 //!
-//!  * **Gate-before-read zero-reach (P0#2).** The shared `can_audit_agent_conversation`
+//!  * **Gate-before-read zero-reach.** The shared `can_audit_agent_conversation`
 //!    verdict is decided IN the Stage-B snapshot BEFORE any message/attachment row is
 //!    read, so a denied caller reaches zero data. `other` holds a message and an
 //!    attachment row that BOTH fault on decode; `a1` never joined it, so its denied
@@ -13,7 +13,7 @@
 //!    the SAME rows through `a2`, which DOES participate: the gate allows, the rows are
 //!    read, and decode faults — proving the denied reads skipped live faulting rows.
 //!
-//!  * **Stored-coordinate provenance (P0#3).** An existing conversation's bundle
+//!  * **Stored-coordinate provenance.** An existing conversation's bundle
 //!    coordinate is the DECODED `conversations.id`, and an absent conversation's is an
 //!    explicit `None` — never the request echo. A cross-conversation attachment id binds
 //!    to `None` because the row's own `channel_id` is what seals it.

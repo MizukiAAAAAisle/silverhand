@@ -1,5 +1,5 @@
 //! The production `agent_workspace_index` probe for `GET
-//! /internal/agents/{aid}/list-workspaces` — Cindy #1/#33.
+//! /internal/agents/{aid}/list-workspaces`.
 //!
 //! Reuses the ONE `OwningHostDataPlane` correlated RPC transport (no second client,
 //! no copied registry/timeout authority): resolve the agent's host, dispatch the
@@ -24,11 +24,10 @@ use crate::application_orchestration::daemon_delivery::{
 };
 use crate::identity_access::agent_list_workspaces::{AgentDirFailure, AgentDirProbe};
 
-// The daemon `agent_workspace_index` deadline, matching TS `INDEX_TIMEOUT_MS` = 30s
-// (Cindy #5) — NOT 10s.
+// The daemon `agent_workspace_index` deadline, matching TS `INDEX_TIMEOUT_MS` = 30s — NOT 10s.
 const AGENT_WORKSPACE_INDEX_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The daemon capability-refusal codes this command admits (#7). A daemon
+/// The daemon capability-refusal codes this command admits. A daemon
 /// `registry_unavailable` is a LEGITIMATE product refusal (the agent registry could
 /// not be consulted) — it must reach `map_failure` as a typed `Refused`, not be
 /// rejected by the transport as a foreign code (protocol corruption). Any OTHER code
@@ -119,7 +118,7 @@ where
     }
 }
 
-/// STRICT typed decode mirroring `AgentWorkspaceIndexResultSchema` (Cindy #5):
+/// STRICT typed decode mirroring `AgentWorkspaceIndexResultSchema`:
 /// `{ ok: true, entries: [{ workspace_id: min(1), agent_dir: min(1) }.strict()],
 /// unresolved: [string.min(1)] }.strict()`. A malformed response (missing `ok`,
 /// extra top-level key, an entry missing/empty a field or carrying extra keys, a
@@ -195,9 +194,9 @@ fn map_failure(failure: HostDataPlaneFailure) -> AgentDirFailure {
             code: "daemon_timeout",
             message: "daemon request timed out".to_owned(),
         },
-        // A LEGITIMATE daemon capability refusal (#7): `registry_unavailable` is the
+        // A LEGITIMATE daemon capability refusal: `registry_unavailable` is the
         // agent registry being unreachable — 503. Mirroring TS `mapDataPlaneError`,
-        // the daemon's OWN message is preserved (Cindy #5), not replaced with a canned
+        // the daemon's OWN message is preserved, not replaced with a canned
         // string. Any OTHER admitted-then-unrecognized capability code fails closed 502.
         HostDataPlaneFailure::Refused(CommandRefusal::Capability(refusal)) => {
             if refusal.code() == "registry_unavailable" {

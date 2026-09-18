@@ -12,7 +12,7 @@
 //!   coordinate, then the shape, then the content cap;
 //! - how MANY times a failure is reported — a future edit that logged the cause in the
 //!   middleware and again in a renderer would leave every unit test green while doubling
-//!   the noise an operator has to read (@Cindy, review of `2bb73d7c`);
+//!   the noise an operator has to read;
 //! - that each door's gate order survives being mounted. The order is decided in the
 //!   adapters, but a router that reached for the body before dispatching would break it
 //!   without touching them.
@@ -99,7 +99,7 @@ impl ChannelAccess for Channel {
 
 /// How many times a gate was ASKED. The refusal a request gets says which gate answered; only a
 /// counter says whether the later ones ran at all, and a capability check is a real read against
-/// a roster — asking it early is not a harmless detail (@Cindy, review of `65827a71`).
+/// a roster — asking it early is not a harmless detail.
 #[derive(Clone, Default)]
 struct Calls(Arc<AtomicUsize>);
 
@@ -692,7 +692,7 @@ async fn our_own_failure_is_answered_safely_and_reported_once_at_either_door() {
 /// looked equivalent and was not: `cargo fmt` reflowed the literal onto one line and kept the
 /// alignment spaces it had introduced, so every line after the first arrived with twenty
 /// leading spaces — which makes all three of them INDENTED CODE BLOCKS. The cell still passed,
-/// because one cause was quietly explaining three exclusions (@Cindy, review of `7e3402d2`).
+/// because one cause was quietly explaining three exclusions.
 const FOUR_POSITIONS: &str = concat!(
     "hi <silverhand://agent/Alice>\n",
     "\n",
@@ -923,7 +923,7 @@ async fn an_anchored_credential_reaches_only_its_own_stream() {
 /// THE ORDER OF THE FOUR AUTHORITIES, held by crosses rather than by types.
 ///
 /// Nothing in the code makes `validate → resolve → reach → capability` fail to compile in
-/// another order (@Cindy): the failure types differ, and a swapped pair still type-checks.
+/// another order: the failure types differ, and a swapped pair still type-checks.
 ///
 /// And a response alone is not enough to hold it. An implementation that asked the capability
 /// FIRST and still returned the address or reach refusal would answer every cell below
@@ -1040,7 +1040,7 @@ async fn a_request_that_fails_two_gates_is_answered_by_the_earlier_one() {
 /// What this pins is the SHAPE: there is a single `AddressRefusal::Unresolved` for both facts,
 /// and it renders byte-identically. It does NOT claim the database distinction is mechanically
 /// proven — that needs the real resolver against a real schema, and two fakes cannot stand in
-/// for it (@Cindy).
+/// for it.
 #[tokio::test]
 async fn an_unknown_stream_and_one_that_is_not_yours_are_the_same_answer() {
     let mut answers = Vec::new();

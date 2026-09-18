@@ -28,11 +28,11 @@ use silverhand_backend_core::{
 
 pub const WORKSPACE_PATH: &str = "/api/workspaces/{id}";
 
-/// The delete aftermath, SPLIT to bracket the row cascade (Cindy #13/#44/R5 #2).
+/// The delete aftermath, SPLIT to bracket the row cascade.
 /// Both legs consume the PHASE-2 plan (captured in the same tx as the cascade, so it
 /// reflects exactly the rows erased). `terminalize_and_sweep`: terminalizes each
-/// ConversationSlot run to `conversation_closed` via the run-state projection (#44),
-/// detaches the runtime hard-stops via the managed executor (never a 204 gate, #13),
+/// ConversationSlot run to `conversation_closed` via the run-state projection,
+/// detaches the runtime hard-stops via the managed executor (never a 204 gate),
 /// and AWAITS the blob sweep over the plan's captured storage keys (a mid-sweep crash
 /// leaves GC-able orphan blobs — the accepted trade-off for the #2 invariant).
 /// `announce_removed`: the `viewer_workspaces_changed { removed }` fan-out. Every
@@ -50,8 +50,8 @@ pub trait WorkspaceDeletionAftermath: Send + Sync + 'static {
 }
 
 /// The run-state projection authority the aftermath consults to bulk-terminalize the
-/// torn-down conversations to `conversation_closed` BEFORE the daemon hard-stop
-/// (Cindy #44) — the SAME authority the runtime-event owner uses, never a second
+/// torn-down conversations to `conversation_closed` BEFORE the daemon hard-stop -
+/// the SAME authority the runtime-event owner uses, never a second
 /// run-state store. Best-effort: a failure is observable and never blocks the
 /// stop/blob/viewer legs or rewrites the 204.
 pub trait ConversationRunTerminalization: Send + Sync + 'static {
@@ -70,8 +70,8 @@ pub trait ConversationRunTerminalization: Send + Sync + 'static {
 #[derive(Debug)]
 pub struct ConversationRunTerminalizeError;
 
-/// The concrete run-state terminalizer handle IS the run-state projection authority
-/// (Cindy #44): bridge it to the aftermath's narrow port here (orphan rule — both
+/// The concrete run-state terminalizer handle IS the run-state projection authority:
+/// bridge it to the aftermath's narrow port here (orphan rule — both
 /// the trait and the handle are in this crate).
 impl ConversationRunTerminalization
     for crate::host_runtime::runtime_event_settlement::ConversationRunTerminalizer
@@ -131,7 +131,7 @@ where
         // non-empty string, but keep the branch total.
         Err(_) => return error(StatusCode::BAD_REQUEST, "workspace id required"),
     };
-    // Cindy R6 #4: ONE writer call is the authority; it returns a single closed
+    // ONE writer call is the authority; it returns a single closed
     // outcome, and the route maps each DISTINCT product result to its DISTINCT status.
     // ONLY `Committed(plan)` runs the destructive aftermath + `removed` fan-out (over
     // the plan the cascade actually erased), so no destructive effect precedes the
@@ -288,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn each_non_committed_outcome_maps_to_its_distinct_status_with_zero_effect() {
-        // Cindy R6 #4: the delete taxonomy is NOT all folded to 204. IdempotentNoop →
+        // The delete taxonomy is NOT all folded to 204. IdempotentNoop →
         // 204 (concurrent winner / never existed), Forbidden → 403 (owner change),
         // NotDeletableKind → 409 (kind change) — and NONE runs the destructive aftermath
         // or the removal broadcast.

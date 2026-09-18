@@ -987,8 +987,8 @@ fn table_rows_carry_a_settled_target_and_audited_writer_evidence() {
                 !function.is_empty(),
                 "{context}: audited_rust_writers entry `{rel}` has an empty function"
             );
-            // The recorded function must actually EXIST at that path (Cindy R3-next
-            // #12): a stale entry naming a deleted function must fail, not stay green.
+            // The recorded function must actually EXIST at that path:
+            // a stale entry naming a deleted function must fail, not stay green.
             // A cheap symbol-existence set-diff against the file text — the function's
             // `fn <name>` definition must be present.
             assert_writer_function_exists(rel, function, &context);
@@ -997,7 +997,7 @@ fn table_rows_carry_a_settled_target_and_audited_writer_evidence() {
 }
 
 /// A recorded writer function must physically exist as a PRODUCTION definition at its
-/// recorded path (Cindy R3-next #12 / R4 P2): a `fn <name>` must appear on a
+/// recorded path: a `fn <name>` must appear on a
 /// non-comment line that is NOT inside a `#[cfg(test)]` module, so a stale ledger
 /// entry cannot stay green merely because the name appears in a comment or a test-only
 /// helper. Heuristic (not a full parser): strip `//` line comments; track the brace
@@ -1015,7 +1015,7 @@ fn assert_writer_function_exists(rel: &str, function: &str, context: &str) {
 
 /// Whether `function` has a PRODUCTION `fn <function>` definition in `text` — a
 /// non-comment line outside any `#[cfg(test)]` module. Extracted so the guard's
-/// comment/test-cfg exclusion is itself testable (Cindy R4 P2 counter-control).
+/// comment/test-cfg exclusion is itself testable.
 fn writer_function_is_defined_in_production(text: &str, function: &str) -> bool {
     let matches_fn = |code: &str| -> bool {
         let needle = format!("fn {function}");
@@ -1073,7 +1073,7 @@ fn writer_function_is_defined_in_production(text: &str, function: &str) -> bool 
 
 #[test]
 fn writer_existence_guard_ignores_comments_and_test_cfg_functions() {
-    // Cindy R4 P2 counter-control: a name that appears ONLY in a comment or ONLY in a
+    // counter-control: a name that appears ONLY in a comment or ONLY in a
     // `#[cfg(test)]` module must NOT satisfy the guard; a real production fn does.
     assert!(writer_function_is_defined_in_production(
         "pub fn provision_workspace() {}",

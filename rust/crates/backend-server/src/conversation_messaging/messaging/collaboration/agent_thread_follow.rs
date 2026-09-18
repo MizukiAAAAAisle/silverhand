@@ -37,8 +37,8 @@ pub const AGENT_FOLLOW_THREAD_PATH: &str = "/internal/agents/{aid}/follow-thread
 pub const AGENT_UNFOLLOW_THREAD_PATH: &str = "/internal/agents/{aid}/unfollow-thread";
 
 /// The route resolves the root's CONVERSATION (via `locate`) to call the writer; the
-/// writer fresh-replays root existence + participation + `read_messages` in-tx (Cindy
-/// #5/#8), so the route holds no capability authority.
+/// writer fresh-replays root existence + participation + `read_messages` in-tx,
+/// so the route holds no capability authority.
 pub struct AgentThreadFollowState<L, W> {
     pub locate: L,
     pub writer: W,

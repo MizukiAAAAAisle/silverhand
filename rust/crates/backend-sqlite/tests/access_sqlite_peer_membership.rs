@@ -83,7 +83,7 @@ async fn a_regular_membership_edge_is_a_member() {
     );
 }
 
-/// The discriminator Cindy asked for: the target OWNS the home workspace — its
+/// The discriminator: the target OWNS the home workspace — its
 /// caller-horizon visibility is real — but it has no `workspace_members` row
 /// there, so the peer membership port answers `false`. Owned-home presence must
 /// never launder into target co-membership.

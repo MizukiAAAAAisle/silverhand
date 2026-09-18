@@ -27,8 +27,8 @@ use super::aftermath::SendAftermath;
 /// The resolved input a route adapter hands to [`execute`]: who is writing, where
 /// from and to, and whether they asked to skip the freshness guard.
 ///
-/// NAMED FOR WHAT IT IS, not for what it would be nice to imply (@Cindy, review of
-/// `9dbcc6e8`). An earlier version called this "authorized" and its doc claimed that
+/// NAMED FOR WHAT IT IS, not for what it would be nice to imply.
+/// An earlier version called this "authorized" and its doc claimed that
 /// assembling one meant authorization had happened — a promise the type does not keep,
 /// because a struct any module can build proves nothing about what ran before it. The
 /// fields are private and there is one narrow constructor, so the value cannot be
@@ -122,7 +122,7 @@ where
 /// and which tokens those were — come from `SendMessageOutcome` itself. Routing either
 /// question through a success contract's projector would invert the dependency: a wire payload
 /// is one audience's view of this stage's result, so it may depend on the use-case and never
-/// the other way round (@Cindy, terminal review P1; @Alice, owner of the type).
+/// the other way round.
 ///
 /// THREE AUDIENCES, ONE FACT. The two success contracts share their element projector with
 /// each other; an operator is the third audience and projects the same ordered
@@ -169,8 +169,7 @@ fn report_unresolved_references(source: &ConversationId, outcome: &SendMessageOu
 /// not add. The projection here IS the structured array; what the field name admits is that
 /// its value arrives as that array's JSON TEXT. Calling it `unresolved` would have let a
 /// reader take a string for the reference's array, which is the one thing a parity claim may
-/// not do — so the difference is named here and carried as a residual for @Cindy and @shiki
-/// to accept or not, rather than papered over (terminal review P1).
+/// not do.
 fn unresolved_tokens(references: &[MessageReference]) -> String {
     let tokens: Vec<serde_json::Value> = references
         .iter()

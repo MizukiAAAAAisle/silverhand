@@ -117,7 +117,7 @@ where
         return invalid_input();
     }
     // include_system defaults true; limit `z.coerce.number().int().positive().max(100)
-    // .default(50)` (Cindy #12/#26/#47).
+    // .default(50)`.
     let include_system = body.include_system.into_option().unwrap_or(true);
     if body.limit.is_invalid() {
         return invalid_input();
@@ -159,7 +159,7 @@ where
     let state = &state.0;
 
     // The raw scope selector — the read authority resolves + authorizes it in one
-    // snapshot (Cindy #3/#54); the route resolves nothing itself.
+    // snapshot; the route resolves nothing itself.
     let source = principal.source().cloned();
     let selector = if let Some(raw) = conversation_id {
         let Ok(conversation) = ConversationId::parse(raw) else {
@@ -199,7 +199,7 @@ where
     (StatusCode::OK, Json(body)).into_response()
 }
 
-/// Map the in-snapshot search refusal to the reference wire (Cindy #3/#54).
+/// Map the in-snapshot search refusal to the reference wire.
 fn search_refusal(refusal: SearchRefusal) -> Response {
     match refusal {
         SearchRefusal::ScopeRequired => search_scope_required(),

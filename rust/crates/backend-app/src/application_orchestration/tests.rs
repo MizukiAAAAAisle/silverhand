@@ -5937,8 +5937,8 @@ async fn the_composition_host_rename_publishes_agent_changed_for_only_the_hosts_
 }
 
 /// #2234 CP2 — the thin public-agent write faces (#2225) are MOUNTED and reachable,
-/// and the shared-authority contract Cindy named is proven by real effect, not by
-/// construction alone (the A6 no-op-mount lesson §3):
+/// and the shared-authority contract named is proven by real effect, not by
+/// construction alone:
 ///
 ///  - `PATCH /api/agents/{id}` reaches the real profile-write authority (a durable
 ///    `display_name` change, read back through the shared `/api/agents/{id}` GET)
@@ -7149,7 +7149,7 @@ async fn poll_agent_deleted(router: &Router, agent_id: &str, bearer: &str) {
 /// The #2234 CP3 close: `DELETE /api/agents/{id}` is not just mounted — the ONE shared
 /// production [`AgentDeletionResumer`] the composition builds is reached from every
 /// entrypoint that must carry a durable deletion marker to its committed end. This is
-/// the composition obligation Cindy fixed for the mount (not the resumer's own
+/// the composition obligation fixed for the mount (not the resumer's own
 /// scheduling semantics, which its component tests own), reduced to three named
 /// falsifiers over a REAL daemon attaching through the mounted `HOST_WEBSOCKET_PATH`:
 ///
@@ -9492,7 +9492,7 @@ async fn the_composition_opens_a_direct_pair_and_sends_behind_the_perimeter() {
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 }
 
-/// P0-1 (Cindy): the direct-pair initiation authority is a read-then-write port, so a
+/// The direct-pair initiation authority is a read-then-write port, so a
 /// zero write count can never prove it was not CONSULTED. This proves the auth-before-
 /// authority ORDER on the real `prepare()` wiring, by a broken-authority differential:
 /// after `prepare()`, DROP the ONE table the initiation authority reads (`agents`) — the
@@ -9580,7 +9580,7 @@ async fn the_direct_pair_initiation_authority_is_consulted_only_after_the_perime
     running.await.unwrap().unwrap();
 }
 
-/// P0-2 (Cindy + Lio) — DUAL-AXIS causal proof that `prepare()` wires the REAL hub and
+/// DUAL-AXIS causal proof that `prepare()` wires the REAL hub and
 /// the REAL `MessagingAftermath` to this write door (not a no-op / second hub). Row
 /// counts and the leaf `Opened` counter cannot see the activation's composition seam;
 /// these two live event-WS axes can, and each reddens one mutation BY NAME:

@@ -8,22 +8,21 @@
 //! **It consumes the body itself rather than limiting an extractor.** An extractor
 //! only runs when the handler reaches for the body, so a handler that answers early
 //! — a missing path parameter, say — would never trip a limit at all, and an
-//! oversized chunked request would be answered by the LATER gate instead of this one
-//! (@Cindy, review of the first plan). Mapping a rejection after the fact cannot
-//! recover a rejection that never happened. So the fence reads the body up front and
-//! rebuilds the request from the bytes it collected.
+//! oversized chunked request would be answered by the LATER gate instead of this one.
+//! Mapping a rejection after the fact cannot recover a rejection that never happened.
+//! So the fence reads the body up front and rebuilds the request from the bytes it collected.
 //!
 //! **And it counts the frames itself rather than asking for the whole body.** A
 //! collect helper reports ONE error type for two unrelated events: a body that was
 //! too long, and a body that could not be read. Answering `413 content_too_large` for
 //! the second dresses a transport or infrastructure failure up as the caller's
-//! mistake, when their request may have been perfectly legal (@Cindy, review of
-//! `119729c3`). Counting data frames here keeps the two apart at the only point where
+//! mistake, when their request may have been perfectly legal.
+//! Counting data frames here keeps the two apart at the only point where
 //! the difference is still visible: an accumulated size over the cap belongs to the
 //! caller, and a frame error belongs to us and keeps its cause.
 //!
 //! A DELIBERATE DIVERGENCE from the reference implementation, recorded rather than
-//! smoothed over (R7): there, a read failure that is not the body-limit error falls
+//! smoothed over: there, a read failure that is not the body-limit error falls
 //! into the same `catch` as malformed JSON and is answered `400 invalid input`. That
 //! conflates a peer disconnect with "the caller sent something unparseable". This
 //! lane keeps the classification instead — the caller never submitted a legal

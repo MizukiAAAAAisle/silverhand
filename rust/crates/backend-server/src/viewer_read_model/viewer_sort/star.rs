@@ -111,7 +111,7 @@ where
         Ok(Some(ChannelHomeVerdict::WorkspacePlaced(home))) => home,
         // A missing id is `channel not found`; a workspace-less EXISTING conversation
         // (direct pair) passed existence but resolves no channels list → `not found`
-        // (Cindy #39 — the existence fact is not null-collapsed).
+        // (the existence fact is not null-collapsed).
         Ok(Some(ChannelHomeVerdict::WorkspaceLessExisting)) => {
             return error(StatusCode::NOT_FOUND, "not found");
         }

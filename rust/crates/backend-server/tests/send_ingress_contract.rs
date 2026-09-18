@@ -8,7 +8,7 @@
 //!
 //! WHAT ORDER MEANS HERE: passing this test says nothing about whether the reference oracle
 //! ran. The artifact names a checked-in command that runs the oracle first and this consumer
-//! only on success; running `cargo test` alone proves one side (@Cindy).
+//! only on success; running `cargo test` alone proves one side.
 //!
 //! A DIVERGENCE IS EXPLICIT OR IT IS A BUG. A case may carry `rust_expected` only with a
 //! declared, body-only deviation; this file therefore answers `rust_expected` when present and

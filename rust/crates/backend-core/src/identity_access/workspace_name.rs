@@ -197,7 +197,7 @@ mod tests {
     fn a_forbidden_scalar_between_65_and_128_is_forbidden_not_too_long() {
         // 101 code points: past the workspace 64 cap but WITHIN the 128 base
         // envelope. TS runs the full envelope first, so the forbidden scan fires
-        // before the 64 cap is ever consulted. This is the regression Cindy caught:
+        // before the 64 cap is ever consulted. This is the regression caught:
         // it must be `ForbiddenCodePoint`, never `TooLong`.
         let raw = format!("{}\u{200D}", "a".repeat(100));
         assert_eq!(

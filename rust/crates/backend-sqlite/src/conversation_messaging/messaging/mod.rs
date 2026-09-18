@@ -1761,8 +1761,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     /// for CC, and a participant needs no copy.
     ///
     /// The copy outcomes are read for `Copied` ONLY — never for a skip reason. `AlreadyMember` asks
-    /// about the SOURCE conversation, so on a cross-post it answers about the wrong roster
-    /// (@Alice, DRI of that path).
+    /// about the SOURCE conversation, so on a cross-post it answers about the wrong roster.
     ///
     /// Unknown and resolvable-but-not-a-participant are ONE answer. The sender learns that the name
     /// reached nobody, never whether it exists — so this cannot become a way to probe the roster.
@@ -1775,7 +1774,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         // AGENT handles, and the kind is half of the key. One body may carry both
         // `<silverhand://agent/Alice>` and `<silverhand://human/Alice>`; a copy made for the agent
         // says nothing about the human token, and matching on the handle alone would silently
-        // report the human one as reached (@Cindy, review of this change).
+        // report the human one as reached.
         let copied_agents: HashSet<&str> = copies
             .iter()
             .filter_map(|outcome| match outcome {

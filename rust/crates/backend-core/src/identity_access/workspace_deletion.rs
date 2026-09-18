@@ -1,7 +1,7 @@
 //! The workspace deletion domain: the delete verdict and the captured teardown plan.
 //!
 //! `DELETE /api/workspaces/{id}` is a saga, but the AUTHORITY is a SINGLE writer
-//! transaction (Cindy R6 #4): under ONE `BEGIN IMMEDIATE` lock it reads the subject,
+//! transaction: under ONE `BEGIN IMMEDIATE` lock it reads the subject,
 //! decides the full verdict, and — only if the subject is deletable by this requester
 //! — captures the FULL teardown plan and cascades the row, ALL in that one tx. It
 //! returns a single CLOSED outcome `WorkspaceDeletionOutcome`:
@@ -91,7 +91,7 @@ pub struct WorkspaceRuntimeSeat {
 
 /// The teardown plan captured in the SAME phase-2 reserved-writer transaction as
 /// the conditional row DELETE, right before the cascade erases the rows — so every
-/// coordinate reflects exactly what THIS delete cascades (Cindy R5 #2). The
+/// coordinate reflects exactly what THIS delete cascades. The
 /// aftermath consumes this committed plan and never live-re-reads an audience the
 /// cascade removed, and never acts on a stale phase-1 snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,7 +106,7 @@ pub struct WorkspaceTeardownPlan {
     /// blob store post-commit.
     pub blobs: Vec<StoredBlob>,
     /// EVERY conversation id in the workspace, captured pre-cascade IN the phase-2 tx
-    /// INDEPENDENTLY of the routed runtime seats (Cindy R3-next #2). The
+    /// INDEPENDENTLY of the routed runtime seats. The
     /// `conversation_closed` run-state terminalization must cover every workspace
     /// conversation — a conversation whose roster/agent rows are already gone can
     /// still have a live ConversationSlot run in the in-memory run map, and deriving
@@ -119,8 +119,8 @@ pub struct WorkspaceTeardownPlan {
     pub workspace: WorkspaceId,
 }
 
-/// The SINGLE closed outcome of the one-transaction workspace-delete authority
-/// (Cindy R6 #4). The writer decides under a fresh `BEGIN IMMEDIATE` lock and returns
+/// The SINGLE closed outcome of the one-transaction workspace-delete authority.
+/// The writer decides under a fresh `BEGIN IMMEDIATE` lock and returns
 /// exactly one of these — each a DISTINCT product result the route maps to a distinct
 /// status, never folded together:
 /// - `Committed(plan)` — the row was cascaded; the plan (captured pre-cascade in the
@@ -143,8 +143,8 @@ pub enum WorkspaceDeletionOutcome {
     Forbidden,
 }
 
-/// The workspace-delete write authority: ONE transaction is the sole authority (Cindy
-/// R6 #4). Under a single `BEGIN IMMEDIATE` lock it reads the subject (kind + the human
+/// The workspace-delete write authority: ONE transaction is the sole authority.
+/// Under a single `BEGIN IMMEDIATE` lock it reads the subject (kind + the human
 /// actor's role) — never a stale pre-lock witness — decides the full verdict, and only
 /// if the subject is deletable by this requester captures the FULL teardown plan and
 /// cascades the row IN THE SAME tx, so the plan reflects exactly the rows erased. It

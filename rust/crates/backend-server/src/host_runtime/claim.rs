@@ -498,7 +498,7 @@ mod tests {
         }
     }
 
-    /// The exact-arity value-shaped arrays Cindy flagged: under a bare positional derive,
+    /// The exact-arity value-shaped arrays flagged: under a bare positional derive,
     /// `["<uuid>"]` would bind `installation_id` and `["<uuid>","label"]` would bind both by
     /// declaration order, decode cleanly, and REACH the claim authority. The shared
     /// object-only floor refuses the sequence at the top level (native `422`) before any

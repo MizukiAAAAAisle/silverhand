@@ -626,7 +626,7 @@ where
             tx.rollback().await.map_err(ThreadFollowStoreError::from)?;
             return Ok(Err(AgentThreadFollowRefusal::RootNotFound));
         };
-        // Anti-oracle ORDER (Cindy #8): participation BEFORE capability.
+        // Anti-oracle ORDER: participation BEFORE capability.
         match agent_follow_gates(&mut tx, &conversation, &agent).await? {
             Ok(()) => {}
             Err(refusal) => {
@@ -720,7 +720,7 @@ where
             tx.rollback().await.map_err(ThreadFollowStoreError::from)?;
             return Ok(Err(AgentThreadFollowRefusal::RootNotFound));
         };
-        // Unfollow re-verifies the same gates in the anti-oracle order (Cindy #5/#8):
+        // Unfollow re-verifies the same gates in the anti-oracle order:
         // a lock-outside hint is never the authority.
         match agent_follow_gates(&mut tx, &conversation, &agent).await? {
             Ok(()) => {}
@@ -751,7 +751,7 @@ where
 }
 
 /// The agent follow/unfollow gates fresh-replayed in the reserved writer, in the
-/// anti-oracle ORDER (Cindy #5/#8): live participation (workspace roster edge OR
+/// anti-oracle ORDER: live participation (workspace roster edge OR
 /// direct-pair agent endpoint) FIRST, THEN `read_messages` capability on the
 /// conversation's workspace (a direct pair has no capability axis — participation is
 /// the whole gate). A non-participant is refused before it can probe capability.

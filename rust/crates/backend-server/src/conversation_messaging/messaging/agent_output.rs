@@ -6,7 +6,7 @@
 //! with two audiences, and answering both with the ACK is a real client break rather than
 //! a tidier shape: a daemon reads `message_id`/`message_seq` to advance its own cursor and
 //! would find neither, while receiving a whole message and cluster projections it has no
-//! schema for (@Cindy, terminal review P0).
+//! schema for.
 //!
 //! WHY THESE FOUR MEMBERS, all required. `conversation_id` is WHERE the address resolved
 //! to, and this response is the only place a caller that sent by name learns the

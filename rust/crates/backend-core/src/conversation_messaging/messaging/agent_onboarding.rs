@@ -130,8 +130,8 @@ impl OnboardingSystemMessage {
         self.created_at_ms
     }
 
-    /// Re-stamp the message's `created_at` with the WRITER's post-lock instant (Cindy
-    /// R4 #1). The onboarding-message clock authority lives in the append writer, not
+    /// Re-stamp the message's `created_at` with the WRITER's post-lock instant.
+    /// The onboarding-message clock authority lives in the append writer, not
     /// the route: the route builds the message shape with a placeholder timestamp, and
     /// the writer samples ONCE after it holds the `BEGIN IMMEDIATE` lock + validated
     /// the stream facts, then stamps that single instant into BOTH the inserted row and
@@ -143,7 +143,7 @@ impl OnboardingSystemMessage {
         self
     }
 
-    /// Re-bind the message's id with the WRITER's minted id (Cindy R5 #3). The
+    /// Re-bind the message's id with the WRITER's minted id. The
     /// onboarding-message id authority lives in the append writer, not the route: the
     /// route builds the message shape with a PLACEHOLDER id, and the writer mints the
     /// real id inside the same UoW that reserves the seq / inserts the row / bumps the

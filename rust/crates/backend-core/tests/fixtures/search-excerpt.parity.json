@@ -1,5 +1,5 @@
 {
-  "note": "searchExcerptFor outcomes signed by the real TS producer (search-excerpt-rust-parity.test.ts). Each cell: content + query, and the { excerpt, match_offset } the producer emits under the pinned full fold + minimal-complete-original-scalar span map. The Rust search_excerpt_for replays this, so the two fold-span implementations cannot diverge (Cindy R4 #4). Short inputs so the whole compact string is the excerpt (no window affixes).",
+  "note": "searchExcerptFor outcomes signed by the real TS producer (search-excerpt-rust-parity.test.ts). Each cell: content + query, and the { excerpt, match_offset } the producer emits under the pinned full fold + minimal-complete-original-scalar span map. The Rust search_excerpt_for replays this, so the two fold-span implementations cannot diverge. Short inputs so the whole compact string is the excerpt (no window affixes).",
   "cells": [
     { "label": "expanding-ss-vs-eszett", "content": "straße", "query": "SS", "excerpt": "straße", "match_offset": 4 },
     { "label": "match-mid-expansion-covers-whole-scalar", "content": "ßa", "query": "sa", "excerpt": "ßa", "match_offset": 0 },

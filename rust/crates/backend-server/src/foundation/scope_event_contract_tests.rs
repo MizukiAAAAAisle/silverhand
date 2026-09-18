@@ -2736,7 +2736,7 @@ async fn a_zero_marked_notification_clear_emits_no_frames() {
     assert!(frames.is_empty(), "a no-op clear emitted {frames:?}");
 }
 
-/// The concurrency falsifier (Cindy R1 P0). Two clears for the SAME viewer are
+/// The concurrency falsifier. Two clears for the SAME viewer are
 /// committed and their effects published in DELIBERATELY REVERSED order: the first
 /// clear's thin event is emitted only AFTER the second clear's, exactly the
 /// interleaving that would let an earlier commit's stale ABSOLUTE badge count win

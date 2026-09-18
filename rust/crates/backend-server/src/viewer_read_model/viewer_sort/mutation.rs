@@ -96,7 +96,7 @@ where
     let Some(list_key) = SortListKey::parse(&body.list_key) else {
         return invalid_input();
     };
-    // Verb-specific ORDER hint (Cindy #43): the reference refuses touch-favorites
+    // Verb-specific ORDER hint: the reference refuses touch-favorites
     // BEFORE `resolveListGroups`, so a malformed/failed favorites projection can't
     // turn the fixed 400 into a 500. The writer keeps the defensive `FavoritesNotTouchable`.
     if matches!(list_key, SortListKey::Favorites) {
@@ -203,7 +203,7 @@ where
     let Some(group) = SortGroup::parse(&body.group) else {
         return invalid_input();
     };
-    // Verb-specific ORDER hint (Cindy #32): the reference checks
+    // Verb-specific ORDER hint: the reference checks
     // `legalGroups(listKey).includes(group)` BEFORE `resolveListGroups`, so an illegal
     // group wins over a missing/forbidden list. The writer still re-validates the group
     // in-lock. (set-mode's TS order is the opposite — it resolves the list first — so

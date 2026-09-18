@@ -6,7 +6,7 @@
 //! LIKE pre-filter, since the pinned portable full fold is not a superset of SQLite
 //! ASCII LIKE, so candidate selection must share the SAME fold as the excerpt),
 //! in-transaction author resolution, and per-hit placement coordinates, all on one
-//! `BEGIN DEFERRED` tx (Cindy #3/#50/#51/#54).
+//! `BEGIN DEFERRED` tx.
 
 use silverhand_backend_core::{
     conversation_messaging::messaging::FromKind,
@@ -97,7 +97,7 @@ impl AgentSearchRead for SqliteAgentSearch {
         // Continuous fold evaluation until `limit` hits or scope exhausted.
         let hits = collect_hits(&mut tx, agent, &scope, query).await?;
 
-        // Resolve authors for the collected hits IN this tx (Cindy #51).
+        // Resolve authors for the collected hits IN this tx.
         let evidence: Vec<AuthorEvidence> = hits.iter().map(|h| h.evidence.clone()).collect();
         let authors = resolve_authors(&mut tx, &evidence).await?;
         // Excerpt folding and DTO allocation only consume the collected facts.
@@ -146,7 +146,7 @@ struct RawHit {
     coordinates: MessageTargetCoordinates,
 }
 
-/// Resolve + authorize the scope in-snapshot (Cindy #3/#54 provenance matrix).
+/// Resolve + authorize the scope in-snapshot.
 async fn resolve_scope(
     tx: &mut Transaction<'_, Sqlite>,
     agent: &AgentId,
@@ -160,7 +160,7 @@ async fn resolve_scope(
             match load_conversation_coords(tx, target).await? {
                 Some(coords) => {
                     // Target exists → TARGET `read_messages` capability FIRST, then
-                    // participation (Cindy #3/#54): the reference checks the target
+                    // participation: the reference checks the target
                     // workspace capability before the builder-side participation, so a
                     // known target with NO cap is `capability_denied` even for a
                     // non-participant (never `not_conversation_member`).
@@ -343,7 +343,7 @@ const CONV_NOSYS: &str = candidate_sql!("conv.id = ?2", "AND m.from_kind <> 'sys
 const WS_ALL: &str = candidate_sql!("conv.workspace_id = ?2", "");
 const WS_NOSYS: &str = candidate_sql!("conv.workspace_id = ?2", "AND m.from_kind <> 'system'");
 
-/// JS-safe integer gate at store→projection (Cindy #48): a stored numeric JS can't
+/// JS-safe integer gate at store→projection: a stored numeric JS can't
 /// represent exactly is a read error, not a truncated wire number.
 fn search_js_safe(value: i64, column: &'static str) -> Result<i64, PersistenceFailure> {
     silverhand_backend_core::foundation::wire_number::JsSafeInteger::new(value)
@@ -831,7 +831,7 @@ INSERT INTO messages (id,conversation_id,from_kind,from_agent_id,content,seq,cre
         ));
         // known target + nonparticipant + no-cap (agent-x) → CapabilityDenied, NOT
         // NotConversationMember: the corrected order checks the TARGET workspace
-        // read_messages capability BEFORE participation (Cindy #3/#54).
+        // read_messages capability BEFORE participation.
         assert!(matches!(
             read.search(
                 &agent("agent-x"),
@@ -966,7 +966,7 @@ INSERT INTO messages (id,conversation_id,from_kind,from_agent_id,content,seq,cre
 
     #[tokio::test]
     async fn workspace_stream_does_not_skip_a_tie_across_conversations_beyond_old_page_boundary() {
-        // Cindy #4: `seq` is unique only WITHIN a conversation, so a workspace scope can
+        // `seq` is unique only WITHIN a conversation, so a workspace scope can
         // hold many rows sharing the same (created_at, seq) across conversations. Seed
         // >CANDIDATE_PAGE (256) such tied NON-matching rows plus ONE match whose
         // (created_at, seq) ties the boundary row but whose id sorts AFTER it — under

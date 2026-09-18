@@ -3,7 +3,7 @@
 //! Implements [`TaskStatusWrite`] as ONE `BEGIN IMMEDIATE` transaction that
 //! re-reads the task's decision-relevant columns UNDER THE LOCK, runs the core
 //! [`agent_status_write_decision`] on those fresh facts, and only then writes. The
-//! concurrency contract (Cindy): a write predicated only on `status` would let a
+//! concurrency contract: a write predicated only on `status` would let a
 //! concurrent claim/unclaim move `assignee` without moving `status`, and a
 //! stale-authorized change would still apply. Re-reading the full decision set
 //! (`status`, both assignee columns, creator kind/id, `closed_at`) under the same

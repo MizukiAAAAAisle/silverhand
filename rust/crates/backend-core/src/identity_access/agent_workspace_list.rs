@@ -6,7 +6,7 @@
 //! outbound data plane stamps. This read owns only the durable workspace facts
 //! (id, name, owner-agent arm, archived, updated_at); the route composes the
 //! per-workspace `agent_dir` from the daemon `agent_workspace_index` probe. A
-//! transport/host/malformed probe fault is a WHOLE-CALL typed failure (Cindy #33), not
+//! transport/host/malformed probe fault is a WHOLE-CALL typed failure, not
 //! a per-entry degradation; only within a SUCCESSFUL index does an id the daemon left
 //! unresolved degrade to `agent_dir: null` per entry (#1). Mirrors the reference
 //! `buildAgentListWorkspacesDto` (`adapter ?? null` inside a resolved index).

@@ -832,7 +832,7 @@ pub(crate) struct CapabilityRefusal {
     code: Box<str>,
     /// The daemon's own `message` string. Retained (not discarded) so a consumer that
     /// mirrors TS `mapDataPlaneError` can surface the daemon's message rather than a
-    /// canned one (Cindy #5). Callers that prefer a product-authored message simply
+    /// canned one. Callers that prefer a product-authored message simply
     /// ignore it.
     message: Box<str>,
 }

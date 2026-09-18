@@ -1,6 +1,6 @@
 //! Admission: what a send request must be, decided before any principal is known.
 //!
-//! ONE use-case, two orderable stages (@Cindy's ruling). This is the first, and it
+//! ONE use-case, two orderable stages. This is the first, and it
 //! owns every rule about the request's own content: shape, the UTF-8 content cap, the
 //! attachment list's accepted forms and bounds, and the payload refine. It cannot see
 //! a principal, an authority or a unit of work, and that is enforced by its signature

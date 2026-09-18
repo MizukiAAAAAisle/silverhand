@@ -1386,7 +1386,7 @@ where
         &self,
         plan: &silverhand_backend_core::identity_access::workspace_deletion::WorkspaceTeardownPlan,
     ) {
-        // Runs ONLY after phase 2 returned `Committed` (Cindy #2): this call is the
+        // Runs ONLY after phase 2 returned `Committed`: this call is the
         // authoritative deleter, so the destructive legs cannot affect a workspace it
         // does not own. Order mirrors TS `stopWorkspaceRuntime` then blob sweep:
         // (1) #44: terminalize the torn-down conversations' ConversationSlot runs to
@@ -1400,7 +1400,7 @@ where
         //     (phase 2) already ran, so a mid-sweep crash leaves GC-able orphan blobs
         //     (a storage-GC concern) — deliberately traded for the #2 invariant that
         //     no destructive effect ever precedes the fresh committed authorization.
-        // Terminalize over EVERY captured workspace conversation (Cindy R3-next #2),
+        // Terminalize over EVERY captured workspace conversation,
         // NOT a seat-derived set: a conversation whose roster is gone but whose run
         // map still has a live ConversationSlot run must still be closed.
         let conversations: std::collections::HashSet<ConversationId> =
@@ -1561,11 +1561,11 @@ where
 /// delivery authority (`LiveConversationRuntimeDelivery` over
 /// `committed_message_inbox_ensure`), NOT the onboarding-only inbox-ensure whose shape
 /// gate would reject a non-onboarding seed and leave the recipients with no inbox
-/// custody + no daemon wake (Cindy R3-next #1). The two seeds are already-committed
+/// custody + no daemon wake. The two seeds are already-committed
 /// channel messages, so delivery is `deliver_to_live_recipient` (live participation),
 /// not a sealed custody. The delivery/start AUDIENCE is the LIVE conversation roster
 /// re-read at each effect point (prompt after the context deliver, start after the
-/// prompt — Cindy R5 #1), NOT the committed fork roster: a recipient that left/joined
+/// prompt), NOT the committed fork roster: a recipient that left/joined
 /// between commit and effect is excluded/included. Every leg after the publish is
 /// best-effort: its failure is observed and logged but never rewrites the sealed 200
 /// and never blocks a sibling leg. Unlike workspace-create (whose start is DETACHED
@@ -1649,7 +1649,7 @@ where
         }
 
         // (3) Distribute the prompt to the OTHER member agents — the audience is the
-        // LIVE roster re-read at effect time (Cindy R5 #1), NOT the committed set: TS
+        // LIVE roster re-read at effect time, NOT the committed set: TS
         // calls `listAgents(channel)` after the context deliver, so an agent that LEFT
         // between commit and now is not prompted and one that JOINED is. The committed
         // roster is only the creation fact. A read failure logs and skips this leg (the
@@ -1683,8 +1683,8 @@ where
             }
         }
 
-        // (4) Start ALL member runtimes — again the LIVE roster re-read AFTER the prompt
-        // (Cindy R5 #1): TS calls `listAgents(channel)` a second time for the start
+        // (4) Start ALL member runtimes — again the LIVE roster re-read AFTER the prompt:
+        // TS calls `listAgents(channel)` a second time for the start
         // audience, so a left agent is never started and a joined one is. Awaited
         // best-effort gate before the 200; one start's failure does not block the rest.
         match self.roster.agent_ids(channel).await {
@@ -2033,8 +2033,7 @@ mod tests {
             ],
             blobs: vec![kept.clone(), swept.clone()],
             // conv-c has NO routed seat (its roster is gone) but IS a workspace
-            // conversation — the independently-captured set must still terminalize it
-            // (Cindy R3-next #2).
+            // conversation — the independently-captured set must still terminalize it.
             conversation_ids: vec![
                 ConversationId::parse("conv-a").unwrap(),
                 ConversationId::parse("conv-b").unwrap(),
@@ -2150,7 +2149,7 @@ mod tests {
 
     // A `ConversationAgentsReadPort` whose successive `agent_ids` calls return the
     // QUEUED live-roster snapshots in order — modelling a roster that mutates
-    // between the prompt read and the start read (Cindy R5 #1). When the queue is
+    // between the prompt read and the start read. When the queue is
     // exhausted it yields an empty live roster (NOT a resurrected committed set);
     // `fail` forces Err on every read to prove the committed roster is not a fallback.
     #[derive(Clone)]
@@ -2341,7 +2340,7 @@ mod tests {
     }
 
     // ===================================================================
-    // Cindy R5 #1 latch: the prompt audience and the start audience are each
+    // The prompt audience and the start audience are each
     // the LIVE roster re-read at their own effect point, NOT the committed set.
     // A member that LEFT between commit and the prompt read is neither prompted
     // nor started; a member that JOINED is. Because the start read happens AFTER
@@ -2404,7 +2403,7 @@ mod tests {
     }
 
     // ===================================================================
-    // Cindy R5 #1 fallback ban: if the live roster read FAILS, that phase is
+    // fallback ban: if the live roster read FAILS, that phase is
     // skipped — the committed set is NOT resurrected as a fallback (which would
     // prompt/start a stale roster). A roster read error logs and drops the leg.
     // ===================================================================

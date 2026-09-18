@@ -120,7 +120,7 @@ where
 }
 
 /// Map the in-snapshot refusal to the reference wire. The workspace-scope refusal
-/// carries the source placement kind for the reference message (Cindy #46).
+/// carries the source placement kind for the reference message.
 fn list_refusal(refusal: ListChannelsRefusal) -> Response {
     match refusal {
         ListChannelsRefusal::SourceNotFound => {
@@ -173,7 +173,7 @@ fn invalid_query() -> Response {
         .into_response()
 }
 
-/// The workspace-scope refusal (Cindy #46): the message provenance-branches on the
+/// The workspace-scope refusal: the message provenance-branches on the
 /// caller. An AgentSlot / null source uses the generic phrasing; a workspace-less
 /// direct-pair source uses the `resolveAgentQueryWorkspaceId` list-channels variant
 /// carrying the placement kind. Both are `400 workspace_scope_required`.

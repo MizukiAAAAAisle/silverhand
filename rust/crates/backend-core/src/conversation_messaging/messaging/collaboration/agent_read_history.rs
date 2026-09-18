@@ -50,8 +50,8 @@ pub fn around_before_count(limit: i64) -> AroundSplit {
 
 /// The message snippet, mirroring the reference `snippetFor`: ECMAScript-whitespace
 /// collapsed + trimmed; if ≤160 UTF-16 code units, as-is; else the first 159 units +
-/// '…'. Shares the ONE production text authority with the search excerpt (Cindy
-/// #22/#27): the SAME ECMAScript `\s` set (U+FEFF collapses, U+0085 does not) and a
+/// '…'. Shares the ONE production text authority with the search excerpt:
+/// the SAME ECMAScript `\s` set (U+FEFF collapses, U+0085 does not) and a
 /// SCALAR-SAFE truncation that never splits an astral surrogate pair into U+FFFD.
 pub fn snippet_for(content: &str) -> String {
     const MAX: usize = 160;
@@ -61,8 +61,8 @@ pub fn snippet_for(content: &str) -> String {
 
 /// One projected history message. `author` is the resolved domain author (the
 /// server projects it to `MessageSenderRef`; `None` = system). `metadata`,
-/// `attachments`, and `reactions` are SEALED, already-parsed JSON values (Cindy
-/// #14-boundary): the persistence adapter decodes + validates them in the authorized
+/// `attachments`, and `reactions` are SEALED, already-parsed JSON values:
+/// the persistence adapter decodes + validates them in the authorized
 /// snapshot and fails closed on malformed JSON, so a malformed row can NEVER reach
 /// the route as a silent `200`-`null`. `metadata` is a JSON object or `Null`;
 /// `attachments`/`reactions` are JSON arrays (an empty array is `[]`, distinct from a
@@ -86,7 +86,7 @@ pub struct ReadHistoryMessage {
 /// The committed window read: the projected messages (ascending seq) plus whether
 /// more exist before/after the window edges, and the target's full placement
 /// coordinates (resolved in the SAME authorized snapshot, so the ref and the rows
-/// can never disagree — Cindy #2/#6).
+/// can never disagree).
 #[derive(Clone, Debug)]
 pub struct ReadHistoryWindow {
     pub messages: Vec<ReadHistoryMessage>,
@@ -96,7 +96,7 @@ pub struct ReadHistoryWindow {
 }
 
 /// Why a read-history read refused, decided INSIDE the authorized snapshot so a
-/// revoke/rename/delete race cannot leak an old window (Cindy #6). The target
+/// revoke/rename/delete race cannot leak an old window. The target
 /// existence + agent participation + workspace `read_messages` gates all live here,
 /// not in a pre-snapshot route preflight.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,7 +114,7 @@ pub enum ReadHistoryRefusal {
 }
 
 /// Reads one conversation's message-history window for an agent as ONE authorized
-/// connection-bound snapshot (Cindy #6/#2/#14/#36/#51): the target existence +
+/// connection-bound snapshot: the target existence +
 /// placement coordinates, the agent's live participation, the workspace
 /// `read_messages` gate (a `direct_pair` has no capability axis), the window rows,
 /// the resolved authors, and the reaction aggregates (with `viewer_reacted` for THIS
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn snippet_uses_the_ecmascript_whitespace_set_not_rust_is_whitespace() {
-        // Cindy #22: U+FEFF is JS `\s` (collapses); U+0085 NEL is NOT JS `\s` (kept
+        // U+FEFF is JS `\s` (collapses); U+0085 NEL is NOT JS `\s` (kept
         // verbatim). Rust's char::is_whitespace() would invert both.
         assert_eq!(
             snippet_for("a\u{FEFF}b"),
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn snippet_truncation_is_scalar_safe_at_the_160_unit_astral_boundary() {
-        // Cindy #27: an astral char is 2 UTF-16 units. Build content whose 160th unit
+        // an astral char is 2 UTF-16 units. Build content whose 160th unit
         // is the LOW half of a surrogate pair, so a naive `units[..159]` slice would
         // split it into U+FFFD. The scalar-safe truncation must shrink inward.
         // 158 ASCII + one astral (2 units) => the pair straddles units 159..160.

@@ -437,7 +437,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_agents_key_is_refused_in_another_agents_custody_across_read_and_delete() {
-        // Cindy's per-owner discriminator: the intra-family custody the vertical claims.
+        // Per-owner discriminator: the intra-family custody the vertical claims.
         // Mint TWO real agent blobs, A and B, each in its OWN namespace. Presenting B's
         // otherwise-legal agent key bound to owner A must be refused by BOTH A's read and
         // A's delete BEFORE the store is touched — a mere user/agent bucket check would let

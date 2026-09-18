@@ -311,7 +311,7 @@ pub struct ChannelHome {
     pub workspace: WorkspaceId,
 }
 
-/// The three-valued channel-home verdict (Cindy #39): the star target's existence
+/// The three-valued channel-home verdict: the star target's existence
 /// fact must be preserved, NOT null-collapsed. TS `getChannelLike(id)` passes for a
 /// real `direct_pair` (which then forms `channels:null` and `resolveListGroups`
 /// returns `not found`), whereas a truly missing id is `channel not found`.
