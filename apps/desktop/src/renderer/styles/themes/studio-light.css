@@ -154,7 +154,7 @@
   --chip-radius: 4px;
   --message-bubble-radius: var(--card-radius);
   --pill-radius: 9999px;
-  --studio-light-bg-message-framed: #f5f8fc;
+  --studio-light-bg-message-framed: color-mix(in oklab, var(--accent) 6%, transparent);
   --system-message-size: 12px;
   --thread-preview-bg: var(--chip-bg);
   --thread-preview-bg-hover: var(--chip-bg-hover);

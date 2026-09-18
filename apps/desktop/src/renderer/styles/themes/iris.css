@@ -153,7 +153,7 @@
   --chip-bg: rgba(31, 26, 18, 0.06);
   --chip-bg-hover: rgba(31, 26, 18, 0.11);
   --chip-radius: 6px;
-  --iris-bg-message-framed: #faf8f4;
+  --iris-bg-message-framed: color-mix(in oklab, var(--accent) 6%, transparent);
   --message-bubble-radius: var(--card-radius);
   --pill-radius: 9999px;
   --system-message-size: 12px;

@@ -153,6 +153,7 @@
   --chip-bg-hover: rgba(255, 255, 255, 0.12);
   --chip-radius: 4px;
   --message-bubble-radius: var(--card-radius);
+  --slack-dark-bg-message-framed: color-mix(in oklab, var(--accent) 10%, transparent);
   --pill-radius: 9999px;
   --system-message-size: 12px;
   --thread-preview-bg: var(--chip-bg);
@@ -278,6 +279,7 @@
 
 [data-theme="slack-dark"] [data-message-row].border-accent {
   border-color: rgba(255, 255, 255, 0.26);
+  background-color: var(--slack-dark-bg-message-framed);
 }
 
 [data-theme="slack-dark"] [data-composer-shell]:focus-within {
