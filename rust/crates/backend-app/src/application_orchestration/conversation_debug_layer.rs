@@ -648,6 +648,155 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_pool_wait_and_statement_phases_preserve_results_and_failure() {
+        // Tracing callsite interest is process-global. Other composition tests
+        // execute these same sites with no subscriber; isolate the production
+        // subscriber lifecycle rather than resetting caches during a request.
+        const CHILD: &str = "SILVERHAND_SEARCH_OBSERVATION_CHILD";
+        const TEST: &str = concat!(
+            "application_orchestration::conversation_debug_layer::tests::",
+            "search_pool_wait_and_statement_phases_preserve_results_and_failure",
+        );
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", TEST, "--nocapture"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        use axum::{Extension, body::Body, http::Request};
+        use http_body_util::BodyExt;
+        use silverhand_backend_core::foundation::identity::UserId;
+        use silverhand_backend_sqlite::conversation_messaging::messaging::collaboration::human_search::SqliteHumanSearchRead;
+        use silverhand_backend_server::conversation_messaging::messaging::collaboration::human_search::router as search_router;
+        use tower::ServiceExt;
+        use tracing::instrument::WithSubscriber;
+
+        let output = Buffer::default();
+        let subscriber = registry().with(production_json_layer(
+            EnvFilter::new("error"),
+            ProductionConversationLogDebugControl::new(),
+            Clock(Arc::new(AtomicI64::new(100))),
+            output.clone(),
+        ));
+        async {
+            for healthy in [true, false] {
+                output.0.lock().unwrap().clear();
+                let pool = sqlx::sqlite::SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                if healthy {
+                    sqlx::raw_sql(include_str!(
+                        "../../../../test-fixtures/migration-baseline/schema-current.sql"
+                    ))
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                    sqlx::raw_sql(
+                        "INSERT INTO users(id,name,display_name,created_at,updated_at) \
+                     VALUES ('viewer','viewer','Viewer',1,1),('other','needle','Needle',1,1)",
+                    )
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                }
+                let app = search_router(SqliteHumanSearchRead::from_pool(pool.clone()))
+                    .layer(Extension(UserId::parse("viewer").unwrap()))
+                    .layer(axum::middleware::from_fn(
+                        crate::foundation::observability::observe_http,
+                    ));
+                let held = pool.acquire().await.unwrap();
+                async {
+                    let response = {
+                        let request = app.oneshot(
+                            Request::get("/api/search?q=needle&include_identities=true")
+                                .body(Body::empty())
+                                .unwrap(),
+                        );
+                        tokio::pin!(request);
+                        assert!(futures_util::poll!(&mut request).is_pending());
+                        // Exercise the actual slow-success policy, not a fabricated HTTP error.
+                        tokio::time::sleep(std::time::Duration::from_millis(1050)).await;
+                        drop(held);
+                        request.await.unwrap()
+                    };
+                    assert_eq!(response.status().as_u16(), if healthy { 200 } else { 500 });
+                    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                    if healthy {
+                        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                        assert_eq!(body["identities"]["humans"]["total"], 1);
+                        assert_eq!(body["identities"]["humans"]["results"][0]["id"], "other");
+                        assert_eq!(body["results"], serde_json::json!([]));
+                    }
+                    pool.close().await;
+                    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                        while !lines(&output)
+                            .iter()
+                            .any(|event| event["fields"]["message"] == "HTTP request diagnostic")
+                        {
+                            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                        }
+                    })
+                    .await
+                    .unwrap_or_else(|_| panic!("healthy={healthy}: {:?}", lines(&output)));
+                }
+                .await;
+                let events = lines(&output);
+                let event = events
+                    .iter()
+                    .find(|event| event["fields"]["message"] == "HTTP request diagnostic")
+                    .unwrap();
+                assert_eq!(event["fields"]["request"]["route"], "/api/search");
+                let phases = &event["fields"]["phases"];
+                assert!(phases["search.pool.acquire"]["total_ms"].as_f64().unwrap() >= 1000.);
+                assert_eq!(phases["search.transaction.begin"]["count"], 1, "{event}");
+                assert_eq!(phases["search.identities"]["count"], 1);
+                assert!(
+                    phases["search.identities"]["total_ms"].as_f64().unwrap()
+                        < phases["search.pool.acquire"]["total_ms"].as_f64().unwrap()
+                );
+                if healthy {
+                    for name in [
+                        "search.resolve",
+                        "search.workspaces",
+                        "search.channels",
+                        "search.message_count",
+                        "search.messages",
+                        "search.assemble",
+                        "search.wire",
+                        "db.statement:search.message_count",
+                        "db.statement:search.messages",
+                    ] {
+                        assert_eq!(phases[name]["count"], 1, "{name}: {phases}");
+                        assert!(
+                            phases[name]["total_ms"].as_f64().unwrap()
+                                < phases["search.pool.acquire"]["total_ms"].as_f64().unwrap()
+                        );
+                    }
+                } else {
+                    assert!(phases["search.messages"].is_null());
+                    assert!(phases["search.assemble"].is_null());
+                    assert!(events.iter().any(
+                        |event| event["fields"]["message"] == "human-search projection failed"
+                    ));
+                }
+                assert!(!serde_json::to_string(&events).unwrap().contains("needle"));
+            }
+        }
+        .with_subscriber(subscriber)
+        .await;
+    }
+
+    #[tokio::test]
     async fn real_sqlite_auth_pool_wait_and_query_are_separate_in_request_summary() {
         use axum::{Router, body::Body, http::Request, routing::get};
         use http_body_util::BodyExt;

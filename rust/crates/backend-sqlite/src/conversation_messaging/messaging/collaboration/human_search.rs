@@ -1,4 +1,14 @@
 //! One-snapshot SQLite producer for the public human collaboration search.
+//!
+//! `search.*` diagnostics are elapsed business stages, not SQL-only timers:
+//! resolve includes participation checks; identities includes ACL/matching/counting;
+//! messages includes author reads and projection. Never sum nested business and
+//! statement phases as request latency. `db.statement:search.*` measures only
+//! the named query/fetch on the already-acquired transaction and uses the existing
+//! bounded statement histogram. No input or result fields are attached to spans.
+//! Skipped branches emit no SQL spans. Dropping a request closes its entered phases
+//! with elapsed time but does not fabricate a successful statement histogram sample;
+//! existing HTTP diagnostics classify cancellation. SQLx retains transaction rollback.
 
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
@@ -24,15 +34,17 @@ use silverhand_backend_core::{
     foundation::persistence::PersistenceFailure,
 };
 use sqlx::{
-    Row, Sqlite, SqlitePool, Transaction,
+    Row, SqlSafeStr, Sqlite, SqlitePool, Transaction,
     sqlite::{SqliteArguments, SqliteRow},
 };
 use thiserror::Error;
+use tracing::Instrument;
 
 use crate::conversation_messaging::messaging::{
     MessagingStore,
     author::{AuthorEvidence, resolve_authors},
 };
+use crate::foundation::statement_metrics::statement;
 
 use super::{
     conversation_message_window::{author_fact, decode_attachments},
@@ -118,9 +130,7 @@ pub struct SqliteHumanSearchRead {
 
 impl<E> MessagingStore<E> {
     pub fn human_search(&self) -> SqliteHumanSearchRead {
-        SqliteHumanSearchRead {
-            pool: self.pool.clone(),
-        }
+        SqliteHumanSearchRead::from_pool(self.pool.clone())
     }
 }
 
@@ -165,16 +175,35 @@ impl HumanSearchReadPort for SqliteHumanSearchRead {
 }
 
 impl SqliteHumanSearchRead {
+    pub fn from_pool(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+
     async fn search_inner(
         &self,
         viewer: &UserId,
         requested: HumanSearchQuery,
     ) -> Result<Result<HumanSearchPage, HumanSearchRefusal>, HumanSearchStoreError> {
-        let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
+        // Acquire separately: search business pool wait must not include authentication
+        // or be charged to BEGIN/SQL. SQLx still owns rollback on cancellation.
+        let connection = self
+            .pool
+            .acquire()
+            .instrument(
+                tracing::info_span!(target: "silverhand::diagnostics", "search.pool.acquire"),
+            )
+            .await?;
+        // Measure the await boundary without lending this phase span to SQLx's
+        // worker. Worker-held span references must not extend BEGIN timing.
+        let begin_span =
+            tracing::info_span!(target: "silverhand::diagnostics", "search.transaction.begin");
+        let begun = Transaction::begin(connection, Some("BEGIN DEFERRED".into_sql_str())).await;
+        drop(begin_span);
+        let mut tx = begun?;
         let resolved = match resolve_query(&mut tx, viewer, requested).await? {
             Ok(resolution) => resolution,
             Err(refusal) => {
-                tx.commit().await?;
+                statement("search.commit", "commit", tx.commit()).await?;
                 return Ok(Err(refusal));
             }
         };
@@ -209,26 +238,32 @@ impl SqliteHumanSearchRead {
                 HumanSearchMessageCountFact::skipped(),
             )
         };
-        let page = HumanSearchPage::sealed(
-            viewer.clone(),
-            resolved.query,
-            workspaces,
-            conversations,
-            messages,
-            count,
-        )
-        .map_err(HumanSearchStoreError::Projection)?;
-        let page = match identities {
-            Some(identities) => page
-                .with_identities(identities)
-                .map_err(HumanSearchStoreError::Projection)?,
-            None => page,
+        let page = {
+            let _assembly =
+                tracing::info_span!(target: "silverhand::diagnostics", "search.assemble").entered();
+            let page = HumanSearchPage::sealed(
+                viewer.clone(),
+                resolved.query,
+                workspaces,
+                conversations,
+                messages,
+                count,
+            )
+            .map_err(HumanSearchStoreError::Projection)?;
+            let page = match identities {
+                Some(identities) => page
+                    .with_identities(identities)
+                    .map_err(HumanSearchStoreError::Projection)?,
+                None => page,
+            };
+            page
         };
-        tx.commit().await?;
+        statement("search.commit", "commit", tx.commit()).await?;
         Ok(Ok(page))
     }
 }
 
+#[tracing::instrument(target = "silverhand::diagnostics", name = "search.resolve", skip_all)]
 async fn resolve_query(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
@@ -338,6 +373,11 @@ struct SqliteResolvedQuery {
     unavailable: bool,
 }
 
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "search.workspaces",
+    skip_all
+)]
 async fn load_workspaces(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
@@ -345,21 +385,26 @@ async fn load_workspaces(
 ) -> Result<Vec<SelectedHumanSearchWorkspace>, HumanSearchStoreError> {
     let (from_mode, from_value) = millis(query.from());
     let (to_mode, to_value) = millis(query.to());
-    let rows = sqlx::query(SELECT_WORKSPACES)
-        .bind(viewer.as_str())
-        .bind(like_needle(query.text().as_str()))
-        .bind(query.workspace().map_or("", WorkspaceId::as_str))
-        .bind(i64::from(query.workspace().is_some()))
-        .bind(from_mode)
-        .bind(from_value)
-        .bind(to_mode)
-        .bind(to_value)
-        .bind(i64::from(query.limit().min(20)))
-        .fetch_all(&mut **tx)
-        .await?;
+    let rows = statement(
+        "search.workspaces",
+        "select",
+        sqlx::query(SELECT_WORKSPACES)
+            .bind(viewer.as_str())
+            .bind(like_needle(query.text().as_str()))
+            .bind(query.workspace().map_or("", WorkspaceId::as_str))
+            .bind(i64::from(query.workspace().is_some()))
+            .bind(from_mode)
+            .bind(from_value)
+            .bind(to_mode)
+            .bind(to_value)
+            .bind(i64::from(query.limit().min(20)))
+            .fetch_all(&mut **tx),
+    )
+    .await?;
     rows.iter().map(decode_workspace_result).collect()
 }
 
+#[tracing::instrument(target = "silverhand::diagnostics", name = "search.channels", skip_all)]
 async fn load_conversations(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
@@ -367,29 +412,41 @@ async fn load_conversations(
 ) -> Result<Vec<SelectedHumanSearchConversation>, HumanSearchStoreError> {
     let (from_mode, from_value) = millis(query.from());
     let (to_mode, to_value) = millis(query.to());
-    let rows = sqlx::query(SELECT_CONVERSATIONS)
-        .bind(viewer.as_str())
-        .bind(like_needle(query.text().as_str()))
-        .bind(query.workspace().map_or("", WorkspaceId::as_str))
-        .bind(i64::from(query.workspace().is_some()))
-        .bind(from_mode)
-        .bind(from_value)
-        .bind(to_mode)
-        .bind(to_value)
-        .bind(i64::from(query.limit().min(30)))
-        .fetch_all(&mut **tx)
-        .await?;
+    let rows = statement(
+        "search.channels",
+        "select",
+        sqlx::query(SELECT_CONVERSATIONS)
+            .bind(viewer.as_str())
+            .bind(like_needle(query.text().as_str()))
+            .bind(query.workspace().map_or("", WorkspaceId::as_str))
+            .bind(i64::from(query.workspace().is_some()))
+            .bind(from_mode)
+            .bind(from_value)
+            .bind(to_mode)
+            .bind(to_value)
+            .bind(i64::from(query.limit().min(30)))
+            .fetch_all(&mut **tx),
+    )
+    .await?;
     rows.iter().map(decode_conversation_result).collect()
 }
 
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "search.message_count",
+    skip_all
+)]
 async fn count_messages(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
     query: &HumanSearchQuery,
 ) -> Result<(UserId, i64), HumanSearchStoreError> {
-    let row = bind_message_query(sqlx::query(COUNT_MESSAGES), viewer, query, false)
-        .fetch_one(&mut **tx)
-        .await?;
+    let row = statement(
+        "search.message_count",
+        "select",
+        bind_message_query(sqlx::query(COUNT_MESSAGES), viewer, query, false).fetch_one(&mut **tx),
+    )
+    .await?;
     let total: i64 = row.try_get("total")?;
     let minimum: Option<String> = row.try_get("min_source_viewer")?;
     let maximum: Option<String> = row.try_get("max_source_viewer")?;
@@ -403,6 +460,7 @@ async fn count_messages(
     Ok((source, total))
 }
 
+#[tracing::instrument(target = "silverhand::diagnostics", name = "search.messages", skip_all)]
 async fn load_messages(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
@@ -412,9 +470,12 @@ async fn load_messages(
         HumanSearchOrder::RecencyDesc => SELECT_MESSAGES_RECENCY,
         HumanSearchOrder::SequenceAsc => SELECT_MESSAGES_SEQUENCE,
     };
-    let rows = bind_message_query(sqlx::query(sql), viewer, query, true)
-        .fetch_all(&mut **tx)
-        .await?;
+    let rows = statement(
+        "search.messages",
+        "select",
+        bind_message_query(sqlx::query(sql), viewer, query, true).fetch_all(&mut **tx),
+    )
+    .await?;
     // Decode every selected row before the set-shaped live-author lookup.
     let raw = rows
         .iter()
@@ -678,6 +739,11 @@ fn field(name: &'static str) -> HumanSearchStoreError {
     HumanSearchStoreError::Field { field: name }
 }
 
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "search.identities",
+    skip_all
+)]
 async fn load_identities(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,

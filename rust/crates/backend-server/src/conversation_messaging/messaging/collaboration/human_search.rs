@@ -120,6 +120,7 @@ struct QueryIssue {
     message: &'static str,
 }
 
+#[tracing::instrument(target = "silverhand::diagnostics", name = "search.admit", skip_all)]
 fn admitted_query(wire: &HumanSearchQueryWire) -> Result<HumanSearchQuery, Vec<QueryIssue>> {
     let include_identities = match wire.include_identities.as_deref() {
         None | Some("false") => false,
@@ -346,6 +347,7 @@ fn invalid_query(issues: Vec<QueryIssue>) -> Response {
         .into_response()
 }
 
+#[tracing::instrument(target = "silverhand::diagnostics", name = "search.wire", skip_all)]
 fn success(
     page: &BoundHumanSearchPage,
 ) -> Result<Response, super::conversation_message_window::MessageWindowWireError> {
