@@ -10,6 +10,7 @@ name = "silverhand-backend"
 path = "src/main.rs"
 
 [dependencies]
+silverhand-backend-observability.workspace = true
 metrics.workspace = true
 metrics-process = "=2.4.3"
 metrics-exporter-prometheus.workspace = true

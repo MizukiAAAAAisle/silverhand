@@ -8,7 +8,7 @@ use axum::{
 use silverhand_backend_core::identity_access::auth::{AuthenticateHumanSession, SessionBearer};
 
 use crate::{foundation::bearer::strict_bearer_credential, foundation::error};
-use tracing::Instrument;
+use silverhand_backend_observability::Observe;
 
 pub trait HumanSessionRejection: Clone + Send + Sync + 'static {
     fn unauthorized_response(&self) -> Response;
@@ -67,7 +67,9 @@ where
     match state
         .authority
         .authenticate_session(bearer)
-        .instrument(tracing::info_span!(target: "silverhand::diagnostics", "auth.human_session"))
+        .observe(silverhand_backend_observability::operation_span!(
+            "auth.human_session"
+        ))
         .await
     {
         Ok(Some(user_id)) => {

@@ -178,7 +178,12 @@ impl SqliteMessageUnreadRead {
     #[tracing::instrument(
         target = "silverhand::diagnostics",
         name = "db.unread.read_workspace_inner",
-        skip_all
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
     )]
     async fn read_workspace_inner(
         &self,
@@ -188,6 +193,8 @@ impl SqliteMessageUnreadRead {
         Result<WorkspaceMessageUnread, WorkspaceMessageUnreadRefusal>,
         MessageUnreadStoreError,
     > {
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
         let mut tx =
             crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
         let Some(raw_workspace) =
@@ -241,69 +248,89 @@ impl SqliteMessageUnreadRead {
         let projection = WorkspaceMessageUnread::projected(workspace, projected)
             .map_err(|_| MessageUnreadStoreError::MalformedProjection)?;
         Ok(Ok(projection))
+
+        }.await;
+        observation.finish(&result);
+        result
     }
 
     #[tracing::instrument(
         target = "silverhand::diagnostics",
         name = "db.unread.read_summary_inner",
-        skip_all
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
     )]
     async fn read_summary_inner(
         &self,
         viewer: &UserId,
     ) -> Result<ViewerMessageUnreadSummary, MessageUnreadStoreError> {
-        // One aggregate statement already provides a complete snapshot.
-        let rows = sqlx::query(SUMMARY_COUNTS)
-            .bind(viewer.as_str())
-            .fetch_all(&self.pool)
-            .await?;
-        let mut totals = BTreeMap::<String, (UserId, WorkspaceId, i64)>::new();
-        for row in rows {
-            let source_viewer = UserId::parse(row.try_get::<String, _>("source_viewer")?)
-                .map_err(|_| MessageUnreadStoreError::MalformedIdentity)?;
-            ConversationId::parse(row.try_get::<String, _>("id")?)
-                .map_err(|_| MessageUnreadStoreError::MalformedIdentity)?;
-            let count = UnreadCount::new(row.try_get("unread_count")?)
-                .map_err(|_| MessageUnreadStoreError::MalformedUnread)?;
-            let Placement::Workspace(workspace) = decode_placement(&row)? else {
-                return Err(MessageUnreadStoreError::MalformedProjection);
-            };
-            let entry = totals.entry(workspace.as_str().to_owned()).or_insert((
-                source_viewer.clone(),
-                workspace,
-                0,
-            ));
-            if entry.0 != source_viewer {
-                return Err(MessageUnreadStoreError::MalformedProjection);
-            }
-            entry.2 = entry
-                .2
-                .checked_add(count.get())
-                .ok_or(MessageUnreadStoreError::MalformedUnread)?;
-        }
-        let projected = totals
-            .into_values()
-            .map(|(source_viewer, workspace, count)| {
-                let count = UnreadCount::new(count)
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
+            // One aggregate statement already provides a complete snapshot.
+            let rows = sqlx::query(SUMMARY_COUNTS)
+                .bind(viewer.as_str())
+                .fetch_all(&self.pool)
+                .await?;
+            let mut totals = BTreeMap::<String, (UserId, WorkspaceId, i64)>::new();
+            for row in rows {
+                let source_viewer = UserId::parse(row.try_get::<String, _>("source_viewer")?)
+                    .map_err(|_| MessageUnreadStoreError::MalformedIdentity)?;
+                ConversationId::parse(row.try_get::<String, _>("id")?)
+                    .map_err(|_| MessageUnreadStoreError::MalformedIdentity)?;
+                let count = UnreadCount::new(row.try_get("unread_count")?)
                     .map_err(|_| MessageUnreadStoreError::MalformedUnread)?;
-                let count = NonZeroUnreadCount::new(count)
-                    .map_err(|_| MessageUnreadStoreError::MalformedUnread)?;
-                Ok(WorkspaceUnreadTotal::projected(
-                    source_viewer,
+                let Placement::Workspace(workspace) = decode_placement(&row)? else {
+                    return Err(MessageUnreadStoreError::MalformedProjection);
+                };
+                let entry = totals.entry(workspace.as_str().to_owned()).or_insert((
+                    source_viewer.clone(),
                     workspace,
-                    count,
-                ))
-            })
-            .collect::<Result<Vec<_>, MessageUnreadStoreError>>()?;
-        let summary = ViewerMessageUnreadSummary::projected(viewer.clone(), projected)
-            .map_err(|_| MessageUnreadStoreError::MalformedProjection)?;
-        Ok(summary)
+                    0,
+                ));
+                if entry.0 != source_viewer {
+                    return Err(MessageUnreadStoreError::MalformedProjection);
+                }
+                entry.2 = entry
+                    .2
+                    .checked_add(count.get())
+                    .ok_or(MessageUnreadStoreError::MalformedUnread)?;
+            }
+            let projected = totals
+                .into_values()
+                .map(|(source_viewer, workspace, count)| {
+                    let count = UnreadCount::new(count)
+                        .map_err(|_| MessageUnreadStoreError::MalformedUnread)?;
+                    let count = NonZeroUnreadCount::new(count)
+                        .map_err(|_| MessageUnreadStoreError::MalformedUnread)?;
+                    Ok(WorkspaceUnreadTotal::projected(
+                        source_viewer,
+                        workspace,
+                        count,
+                    ))
+                })
+                .collect::<Result<Vec<_>, MessageUnreadStoreError>>()?;
+            let summary = ViewerMessageUnreadSummary::projected(viewer.clone(), projected)
+                .map_err(|_| MessageUnreadStoreError::MalformedProjection)?;
+            Ok(summary)
+        }
+        .await;
+        observation.finish(&result);
+        result
     }
 
     #[tracing::instrument(
         target = "silverhand::diagnostics",
         name = "db.unread.read_conversation_inner",
-        skip_all
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
     )]
     async fn read_conversation_inner(
         &self,
@@ -313,9 +340,12 @@ impl SqliteMessageUnreadRead {
         Result<ConversationMessageUnread, ConversationMessageUnreadRefusal>,
         MessageUnreadStoreError,
     > {
-        let mut tx =
-            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
-        let Some(row) = sqlx::query(
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
+            let mut tx =
+                crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+                    .await?;
+            let Some(row) = sqlx::query(
             "SELECT id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,\
              endpoint_a_kind,endpoint_a_id,endpoint_a_deleted_at,\
              endpoint_b_kind,endpoint_b_id,endpoint_b_deleted_at FROM conversations WHERE id=?",
@@ -327,21 +357,25 @@ impl SqliteMessageUnreadRead {
             tx.commit().await?;
             return Ok(Err(ConversationMessageUnreadRefusal::NotFound));
         };
-        let (stored, placement) = decode_conversation(&row, requested)?;
-        if !participates(&mut tx, viewer, requested, &placement).await? {
+            let (stored, placement) = decode_conversation(&row, requested)?;
+            if !participates(&mut tx, viewer, requested, &placement).await? {
+                tx.commit().await?;
+                return Ok(Err(ConversationMessageUnreadRefusal::Forbidden));
+            }
+            let row = sqlx::query(CONVERSATION_ROLLUP)
+                .bind(viewer.as_str())
+                .bind(stored.as_str())
+                .fetch_one(&mut *tx)
+                .await?;
             tx.commit().await?;
-            return Ok(Err(ConversationMessageUnreadRefusal::Forbidden));
+            let rollup = decode_rollup(&row, &stored)?;
+            let projection = ConversationMessageUnread::projected(stored, rollup)
+                .map_err(|_| MessageUnreadStoreError::MalformedProjection)?;
+            Ok(Ok(projection))
         }
-        let row = sqlx::query(CONVERSATION_ROLLUP)
-            .bind(viewer.as_str())
-            .bind(stored.as_str())
-            .fetch_one(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        let rollup = decode_rollup(&row, &stored)?;
-        let projection = ConversationMessageUnread::projected(stored, rollup)
-            .map_err(|_| MessageUnreadStoreError::MalformedProjection)?;
-        Ok(Ok(projection))
+        .await;
+        observation.finish(&result);
+        result
     }
 }
 

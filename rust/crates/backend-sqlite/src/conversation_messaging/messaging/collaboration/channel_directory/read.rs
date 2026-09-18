@@ -120,7 +120,12 @@ impl SqliteChannelDirectoryRead {
     #[tracing::instrument(
         target = "silverhand::diagnostics",
         name = "db.channels.workspace_active",
-        skip_all
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
     )]
     async fn workspace_active(
         &self,
@@ -130,42 +135,54 @@ impl SqliteChannelDirectoryRead {
         Result<ActiveWorkspaceChannelDirectory, WorkspaceDirectoryRefusal>,
         ChannelDirectoryStoreError,
     > {
-        let mut tx =
-            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
-        let Some(workspace) = load_workspace(&mut tx, viewer, requested).await? else {
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
+            let mut tx =
+                crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+                    .await?;
+            let Some(workspace) = load_workspace(&mut tx, viewer, requested).await? else {
+                tx.commit().await?;
+                return Ok(Err(WorkspaceDirectoryRefusal::NotFound));
+            };
+            if !viewer_is_workspace_member(&mut tx, viewer, &workspace.id).await? {
+                tx.commit().await?;
+                return Ok(Err(WorkspaceDirectoryRefusal::Forbidden));
+            }
+            let all = load_workspace_rows(&mut tx, viewer, &workspace, false).await?;
+            let rows = all
+                .into_iter()
+                .filter(|row| match &workspace.kind {
+                    DirectoryWorkspaceKind::Regular => {
+                        row.is_member() || row.visibility() == ChannelVisibility::Public
+                    }
+                    DirectoryWorkspaceKind::AgentHome(_) => row.is_member(),
+                })
+                .collect::<Vec<_>>();
+            let sort = load_sort(&mut tx, viewer, &workspace.id, &rows).await?;
+            let result = ActiveWorkspaceChannelDirectory::projected(
+                viewer.clone(),
+                workspace.id.clone(),
+                workspace.kind,
+                rows,
+                sort,
+            )?;
             tx.commit().await?;
-            return Ok(Err(WorkspaceDirectoryRefusal::NotFound));
-        };
-        if !viewer_is_workspace_member(&mut tx, viewer, &workspace.id).await? {
-            tx.commit().await?;
-            return Ok(Err(WorkspaceDirectoryRefusal::Forbidden));
+            Ok(Ok(result))
         }
-        let all = load_workspace_rows(&mut tx, viewer, &workspace, false).await?;
-        let rows = all
-            .into_iter()
-            .filter(|row| match &workspace.kind {
-                DirectoryWorkspaceKind::Regular => {
-                    row.is_member() || row.visibility() == ChannelVisibility::Public
-                }
-                DirectoryWorkspaceKind::AgentHome(_) => row.is_member(),
-            })
-            .collect::<Vec<_>>();
-        let sort = load_sort(&mut tx, viewer, &workspace.id, &rows).await?;
-        let result = ActiveWorkspaceChannelDirectory::projected(
-            viewer.clone(),
-            workspace.id.clone(),
-            workspace.kind,
-            rows,
-            sort,
-        )?;
-        tx.commit().await?;
-        Ok(Ok(result))
+        .await;
+        observation.finish(&result);
+        result
     }
 
     #[tracing::instrument(
         target = "silverhand::diagnostics",
         name = "db.channels.workspace_archived",
-        skip_all
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
     )]
     async fn workspace_archived(
         &self,
@@ -175,35 +192,47 @@ impl SqliteChannelDirectoryRead {
         Result<ArchivedWorkspaceChannelDirectory, WorkspaceDirectoryRefusal>,
         ChannelDirectoryStoreError,
     > {
-        let mut tx =
-            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
-        let Some(workspace) = load_workspace(&mut tx, viewer, requested).await? else {
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
+            let mut tx =
+                crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+                    .await?;
+            let Some(workspace) = load_workspace(&mut tx, viewer, requested).await? else {
+                tx.commit().await?;
+                return Ok(Err(WorkspaceDirectoryRefusal::NotFound));
+            };
+            if !viewer_is_workspace_member(&mut tx, viewer, &workspace.id).await? {
+                tx.commit().await?;
+                return Ok(Err(WorkspaceDirectoryRefusal::Forbidden));
+            }
+            let rows = load_workspace_rows(&mut tx, viewer, &workspace, true)
+                .await?
+                .into_iter()
+                .filter(ChannelDirectoryRow::is_member)
+                .collect();
+            let result = ArchivedWorkspaceChannelDirectory::projected(
+                viewer.clone(),
+                workspace.id.clone(),
+                workspace.kind,
+                rows,
+            )?;
             tx.commit().await?;
-            return Ok(Err(WorkspaceDirectoryRefusal::NotFound));
-        };
-        if !viewer_is_workspace_member(&mut tx, viewer, &workspace.id).await? {
-            tx.commit().await?;
-            return Ok(Err(WorkspaceDirectoryRefusal::Forbidden));
+            Ok(Ok(result))
         }
-        let rows = load_workspace_rows(&mut tx, viewer, &workspace, true)
-            .await?
-            .into_iter()
-            .filter(ChannelDirectoryRow::is_member)
-            .collect();
-        let result = ArchivedWorkspaceChannelDirectory::projected(
-            viewer.clone(),
-            workspace.id.clone(),
-            workspace.kind,
-            rows,
-        )?;
-        tx.commit().await?;
-        Ok(Ok(result))
+        .await;
+        observation.finish(&result);
+        result
     }
 
     #[tracing::instrument(
         target = "silverhand::diagnostics",
         name = "db.channels.global_archived",
-        skip_all
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
     )]
     async fn global_archived(
         &self,
@@ -214,41 +243,48 @@ impl SqliteChannelDirectoryRead {
         Result<GlobalArchivedChannelDirectory, GlobalArchivedDirectoryRefusal>,
         ChannelDirectoryStoreError,
     > {
-        let mut tx =
-            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
-        if let Some(requested) = workspace_filter {
-            let Some(workspace) = load_workspace(&mut tx, viewer, requested).await? else {
-                tx.commit().await?;
-                return Ok(Err(GlobalArchivedDirectoryRefusal::WorkspaceNotFound));
-            };
-            if !viewer_is_workspace_member(&mut tx, viewer, &workspace.id).await? {
-                tx.commit().await?;
-                return Ok(Err(GlobalArchivedDirectoryRefusal::Forbidden));
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
+            let mut tx =
+                crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+                    .await?;
+            if let Some(requested) = workspace_filter {
+                let Some(workspace) = load_workspace(&mut tx, viewer, requested).await? else {
+                    tx.commit().await?;
+                    return Ok(Err(GlobalArchivedDirectoryRefusal::WorkspaceNotFound));
+                };
+                if !viewer_is_workspace_member(&mut tx, viewer, &workspace.id).await? {
+                    tx.commit().await?;
+                    return Ok(Err(GlobalArchivedDirectoryRefusal::Forbidden));
+                }
             }
-        }
-        if since.is_some_and(ArchivedSince::is_beyond_persisted_range) {
-            let empty = GlobalArchivedChannelDirectory::projected(
+            if since.is_some_and(ArchivedSince::is_beyond_persisted_range) {
+                let empty = GlobalArchivedChannelDirectory::projected(
+                    viewer.clone(),
+                    workspace_filter.cloned(),
+                    Vec::new(),
+                )?;
+                tx.commit().await?;
+                return Ok(Ok(empty));
+            }
+            let rows = load_global_rows(
+                &mut tx,
+                viewer,
+                workspace_filter,
+                since.and_then(ArchivedSince::persisted_value),
+            )
+            .await?;
+            let result = GlobalArchivedChannelDirectory::projected(
                 viewer.clone(),
                 workspace_filter.cloned(),
-                Vec::new(),
+                rows,
             )?;
             tx.commit().await?;
-            return Ok(Ok(empty));
+            Ok(Ok(result))
         }
-        let rows = load_global_rows(
-            &mut tx,
-            viewer,
-            workspace_filter,
-            since.and_then(ArchivedSince::persisted_value),
-        )
-        .await?;
-        let result = GlobalArchivedChannelDirectory::projected(
-            viewer.clone(),
-            workspace_filter.cloned(),
-            rows,
-        )?;
-        tx.commit().await?;
-        Ok(Ok(result))
+        .await;
+        observation.finish(&result);
+        result
     }
 }
 

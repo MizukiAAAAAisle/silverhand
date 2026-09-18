@@ -886,49 +886,65 @@ impl CommandRefusal {
 }
 
 impl DaemonAttachment {
-    #[tracing::instrument(target = "silverhand::diagnostics", name = "daemon.command", skip_all, fields(command = command.kind().as_wire()))]
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "daemon.command",
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+            command = command.kind().as_wire(),
+        )
+    )]
     async fn command(
         &self,
         command: EncodedDaemonCommand,
         timeout: Duration,
     ) -> Result<Value, CommandDispatchError> {
-        let (kind, params, capability_refusal) = command.into_wire_parts();
-        let started = Instant::now();
+        let observation = silverhand_backend_observability::Operation::current();
         let result = async {
-            let deadline = Instant::now()
-                .checked_add(timeout)
-                .ok_or(CommandDispatchError::TimedOut)?;
-            let (response, receive) = oneshot::channel();
-            self.commands
-                .try_send(ConnectionControl::Command(CommandRequest {
-                    kind,
-                    params,
-                    capability_refusal,
-                    deadline,
-                    response,
-                }))
-                .map_err(|_| CommandDispatchError::ProvenNotDispatched)?;
-            match tokio::time::timeout_at(deadline, receive).await {
-                Ok(Ok(result)) => result,
-                Ok(Err(_)) => Err(CommandDispatchError::Ambiguous),
-                Err(_) => Err(CommandDispatchError::TimedOut),
+            let (kind, params, capability_refusal) = command.into_wire_parts();
+            let started = Instant::now();
+            let result = async {
+                let deadline = Instant::now()
+                    .checked_add(timeout)
+                    .ok_or(CommandDispatchError::TimedOut)?;
+                let (response, receive) = oneshot::channel();
+                self.commands
+                    .try_send(ConnectionControl::Command(CommandRequest {
+                        kind,
+                        params,
+                        capability_refusal,
+                        deadline,
+                        response,
+                    }))
+                    .map_err(|_| CommandDispatchError::ProvenNotDispatched)?;
+                match tokio::time::timeout_at(deadline, receive).await {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(_)) => Err(CommandDispatchError::Ambiguous),
+                    Err(_) => Err(CommandDispatchError::TimedOut),
+                }
             }
+            .await;
+            let outcome = match &result {
+                Ok(_) => "ok",
+                Err(CommandDispatchError::TimedOut) => "timeout",
+                Err(
+                    CommandDispatchError::ProvenNotDispatched | CommandDispatchError::Ambiguous,
+                ) => "disconnected",
+                Err(_) => "error",
+            };
+            metrics::histogram!(
+                "silverhand_daemon_command_duration_seconds",
+                "command" => kind.as_wire(),
+                "outcome" => outcome,
+            )
+            .record(started.elapsed().as_secs_f64());
+            result
         }
         .await;
-        let outcome = match &result {
-            Ok(_) => "ok",
-            Err(CommandDispatchError::TimedOut) => "timeout",
-            Err(CommandDispatchError::ProvenNotDispatched | CommandDispatchError::Ambiguous) => {
-                "disconnected"
-            }
-            Err(_) => "error",
-        };
-        metrics::histogram!(
-            "silverhand_daemon_command_duration_seconds",
-            "command" => kind.as_wire(),
-            "outcome" => outcome,
-        )
-        .record(started.elapsed().as_secs_f64());
+        observation.finish(&result);
         result
     }
 }

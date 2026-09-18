@@ -117,7 +117,12 @@ impl SqliteConversationMessageWindowRead {
     #[tracing::instrument(
         target = "silverhand::diagnostics",
         name = "db.messages.read_inner",
-        skip_all
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
     )]
     async fn read_inner(
         &self,
@@ -128,135 +133,144 @@ impl SqliteConversationMessageWindowRead {
         Result<ConversationMessageWindow, MessageWindowRefusal>,
         ConversationMessageWindowStoreError,
     > {
-        let mut tx =
-            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
-        let admitted = match admit_in_snapshot(&mut tx, viewer, requested).await? {
-            Ok(fact) => fact,
-            Err(refusal) => {
-                tx.commit().await?;
-                return Ok(Err(refusal));
-            }
-        };
-        let stream = match resolve_stream(&mut tx, requested, request.stream()).await? {
-            Some(stream) => stream,
-            None => {
-                tx.commit().await?;
-                return Ok(Err(MessageWindowRefusal::ThreadRootNotFound));
-            }
-        };
-        let head = load_stream_head(&mut tx, &stream).await?;
-        let raw_messages = match select_window(&mut tx, &stream, &request).await? {
-            Some(rows) => rows,
-            None => {
-                tx.commit().await?;
-                return Ok(Err(MessageWindowRefusal::AnchorNotFound));
-            }
-        };
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
+            let mut tx =
+                crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+                    .await?;
+            let admitted = match admit_in_snapshot(&mut tx, viewer, requested).await? {
+                Ok(fact) => fact,
+                Err(refusal) => {
+                    tx.commit().await?;
+                    return Ok(Err(refusal));
+                }
+            };
+            let stream = match resolve_stream(&mut tx, requested, request.stream()).await? {
+                Some(stream) => stream,
+                None => {
+                    tx.commit().await?;
+                    return Ok(Err(MessageWindowRefusal::ThreadRootNotFound));
+                }
+            };
+            let head = load_stream_head(&mut tx, &stream).await?;
+            let raw_messages = match select_window(&mut tx, &stream, &request).await? {
+                Some(rows) => rows,
+                None => {
+                    tx.commit().await?;
+                    return Ok(Err(MessageWindowRefusal::AnchorNotFound));
+                }
+            };
 
-        let eligible_roots = raw_messages
-            .iter()
-            .filter(|row| row.thread_root.is_none() && row.author.from_kind != FromKind::System)
-            .map(|row| ThreadRootId::parse(row.id.as_str()).map_err(|_| identity("messages.id")))
-            .collect::<Result<Vec<_>, _>>()?;
-        let raw_replies = load_reply_sidecars(&mut tx, requested, &eligible_roots).await?;
+            let eligible_roots = raw_messages
+                .iter()
+                .filter(|row| row.thread_root.is_none() && row.author.from_kind != FromKind::System)
+                .map(|row| {
+                    ThreadRootId::parse(row.id.as_str()).map_err(|_| identity("messages.id"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let raw_replies = load_reply_sidecars(&mut tx, requested, &eligible_roots).await?;
 
-        // Main rows, distinct-replier rows and preview rows share one author
-        // batch. Every raw selected row is decoded before any product projection.
-        let mut evidence = raw_messages
-            .iter()
-            .map(|row| row.author.clone())
-            .collect::<Vec<_>>();
-        evidence.extend(raw_replies.repliers.iter().map(|row| row.author.clone()));
-        evidence.extend(raw_replies.previews.iter().map(|row| row.author.clone()));
-        let resolved = resolve_authors(&mut tx, &evidence)
-            .await
-            .map_err(ConversationMessageWindowStoreError::Author)?;
-        let message_len = raw_messages.len();
-        let replier_len = raw_replies.repliers.len();
-        let (message_authors, tail) = resolved.split_at(message_len);
-        let (replier_authors, preview_authors) = tail.split_at(replier_len);
-
-        let message_ids = raw_messages
-            .iter()
-            .map(|row| row.id.clone())
-            .collect::<Vec<_>>();
-        let reaction_viewer = matches!(admitted.kind, MessageWindowAudience::Participating)
-            .then(|| Reactor::Human(admitted.viewer.clone()));
-        let reaction_facts =
-            aggregate_facts_in_snapshot(&mut tx, reaction_viewer.as_ref(), &message_ids)
+            // Main rows, distinct-replier rows and preview rows share one author
+            // batch. Every raw selected row is decoded before any product projection.
+            let mut evidence = raw_messages
+                .iter()
+                .map(|row| row.author.clone())
+                .collect::<Vec<_>>();
+            evidence.extend(raw_replies.repliers.iter().map(|row| row.author.clone()));
+            evidence.extend(raw_replies.previews.iter().map(|row| row.author.clone()));
+            let resolved = resolve_authors(&mut tx, &evidence)
                 .await
-                .map_err(|error| {
-                    ConversationMessageWindowStoreError::Reaction(PersistenceFailure::from_source(
-                        error,
-                    ))
-                })?;
-        let selected_set = message_ids.iter().collect::<HashSet<_>>();
-        let mut reactions = HashMap::<MessageId, Vec<WindowReaction>>::new();
-        for fact in reaction_facts {
-            if !selected_set.contains(&fact.message) {
+                .map_err(ConversationMessageWindowStoreError::Author)?;
+            let message_len = raw_messages.len();
+            let replier_len = raw_replies.repliers.len();
+            let (message_authors, tail) = resolved.split_at(message_len);
+            let (replier_authors, preview_authors) = tail.split_at(replier_len);
+
+            let message_ids = raw_messages
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>();
+            let reaction_viewer = matches!(admitted.kind, MessageWindowAudience::Participating)
+                .then(|| Reactor::Human(admitted.viewer.clone()));
+            let reaction_facts =
+                aggregate_facts_in_snapshot(&mut tx, reaction_viewer.as_ref(), &message_ids)
+                    .await
+                    .map_err(|error| {
+                        ConversationMessageWindowStoreError::Reaction(
+                            PersistenceFailure::from_source(error),
+                        )
+                    })?;
+            let selected_set = message_ids.iter().collect::<HashSet<_>>();
+            let mut reactions = HashMap::<MessageId, Vec<WindowReaction>>::new();
+            for fact in reaction_facts {
+                if !selected_set.contains(&fact.message) {
+                    return Err(ConversationMessageWindowStoreError::Coordinate);
+                }
+                let source = match admitted.kind {
+                    MessageWindowAudience::Participating => {
+                        WindowReactionViewer::Participating(admitted.viewer.clone())
+                    }
+                    MessageWindowAudience::PublicNonmember => WindowReactionViewer::Neutral,
+                };
+                let reaction = WindowReaction::projected(
+                    fact.message.clone(),
+                    source,
+                    fact.aggregate,
+                    fact.first_created_at,
+                )
+                .map_err(ConversationMessageWindowStoreError::Projection)?;
+                reactions.entry(fact.message).or_default().push(reaction);
+            }
+
+            let mut messages = Vec::with_capacity(raw_messages.len());
+            for (raw, author) in raw_messages
+                .into_iter()
+                .zip(message_authors.iter().cloned())
+            {
+                let row_reactions = reactions.remove(&raw.id).unwrap_or_default();
+                messages.push(raw.seal(author, row_reactions)?);
+            }
+            if !reactions.is_empty() {
                 return Err(ConversationMessageWindowStoreError::Coordinate);
             }
-            let source = match admitted.kind {
-                MessageWindowAudience::Participating => {
-                    WindowReactionViewer::Participating(admitted.viewer.clone())
-                }
-                MessageWindowAudience::PublicNonmember => WindowReactionViewer::Neutral,
-            };
-            let reaction = WindowReaction::projected(
-                fact.message.clone(),
-                source,
-                fact.aggregate,
-                fact.first_created_at,
-            )
-            .map_err(ConversationMessageWindowStoreError::Projection)?;
-            reactions.entry(fact.message).or_default().push(reaction);
-        }
 
-        let mut messages = Vec::with_capacity(raw_messages.len());
-        for (raw, author) in raw_messages
-            .into_iter()
-            .zip(message_authors.iter().cloned())
-        {
-            let row_reactions = reactions.remove(&raw.id).unwrap_or_default();
-            messages.push(raw.seal(author, row_reactions)?);
-        }
-        if !reactions.is_empty() {
-            return Err(ConversationMessageWindowStoreError::Coordinate);
-        }
-
-        let roots =
-            raw_replies.seal(requested, &eligible_roots, replier_authors, preview_authors)?;
-        let before = boundary_fact(
-            &mut tx,
-            &stream,
-            messages.first(),
-            WindowBoundaryDirection::Before,
-        )
-        .await?;
-        let after = if matches!(request.query().anchor(), MessageWindowAnchor::Latest) {
-            closed_false_boundary(&stream, messages.last(), WindowBoundaryDirection::After)?
-        } else {
-            boundary_fact(
+            let roots =
+                raw_replies.seal(requested, &eligible_roots, replier_authors, preview_authors)?;
+            let before = boundary_fact(
                 &mut tx,
                 &stream,
-                messages.last(),
-                WindowBoundaryDirection::After,
+                messages.first(),
+                WindowBoundaryDirection::Before,
             )
-            .await?
-        };
-        let audience = MessageWindowAudienceFact::admitted(
-            admitted.viewer,
-            admitted.conversation,
-            matches!(admitted.kind, MessageWindowAudience::Participating),
-            matches!(admitted.kind, MessageWindowAudience::PublicNonmember),
-        )
-        .map_err(ConversationMessageWindowStoreError::Projection)?;
-        let page = ConversationMessageWindow::sealed(
-            audience, request, stream, head, messages, roots, before, after,
-        )
-        .map_err(ConversationMessageWindowStoreError::Projection)?;
-        tx.commit().await?;
-        Ok(Ok(page))
+            .await?;
+            let after = if matches!(request.query().anchor(), MessageWindowAnchor::Latest) {
+                closed_false_boundary(&stream, messages.last(), WindowBoundaryDirection::After)?
+            } else {
+                boundary_fact(
+                    &mut tx,
+                    &stream,
+                    messages.last(),
+                    WindowBoundaryDirection::After,
+                )
+                .await?
+            };
+            let audience = MessageWindowAudienceFact::admitted(
+                admitted.viewer,
+                admitted.conversation,
+                matches!(admitted.kind, MessageWindowAudience::Participating),
+                matches!(admitted.kind, MessageWindowAudience::PublicNonmember),
+            )
+            .map_err(ConversationMessageWindowStoreError::Projection)?;
+            let page = ConversationMessageWindow::sealed(
+                audience, request, stream, head, messages, roots, before, after,
+            )
+            .map_err(ConversationMessageWindowStoreError::Projection)?;
+            tx.commit().await?;
+            Ok(Ok(page))
+        }
+        .await;
+        observation.finish(&result);
+        result
     }
 }
 
@@ -402,47 +416,60 @@ async fn load_stream_head(
 #[tracing::instrument(
     target = "silverhand::diagnostics",
     name = "db.messages.select_window",
-    skip_all
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
+    )
 )]
 async fn select_window(
     tx: &mut Transaction<'_, Sqlite>,
     stream: &ResolvedMessageWindowStream,
     request: &ConversationMessageWindowRequest,
 ) -> Result<Option<Vec<RawMessage>>, ConversationMessageWindowStoreError> {
-    let limit = usize::from(request.query().limit());
-    match request.query().anchor() {
-        MessageWindowAnchor::Latest => {
-            let mut rows = fetch_messages(tx, stream, None, None, limit, false).await?;
-            rows.reverse();
-            Ok(Some(rows))
-        }
-        MessageWindowAnchor::Before(seq) => {
-            let mut rows = fetch_messages(tx, stream, Some(*seq), None, limit, false).await?;
-            rows.reverse();
-            Ok(Some(rows))
-        }
-        MessageWindowAnchor::After(seq) => {
-            fetch_messages(tx, stream, None, Some(*seq), limit, true)
-                .await
-                .map(Some)
-        }
-        MessageWindowAnchor::Around(anchor) => {
-            let anchor_row = fetch_message_by_id(tx, stream, anchor).await?;
-            let Some(anchor_row) = anchor_row else {
-                return Ok(None);
-            };
-            let before_limit = (limit.saturating_sub(1)) / 2;
-            let mut before =
-                fetch_messages(tx, stream, Some(anchor_row.seq), None, before_limit, false).await?;
-            before.reverse();
-            let after_limit = limit.saturating_sub(before.len() + 1);
-            let after =
-                fetch_messages(tx, stream, None, Some(anchor_row.seq), after_limit, true).await?;
-            before.push(anchor_row);
-            before.extend(after);
-            Ok(Some(before))
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = async {
+        let limit = usize::from(request.query().limit());
+        match request.query().anchor() {
+            MessageWindowAnchor::Latest => {
+                let mut rows = fetch_messages(tx, stream, None, None, limit, false).await?;
+                rows.reverse();
+                Ok(Some(rows))
+            }
+            MessageWindowAnchor::Before(seq) => {
+                let mut rows = fetch_messages(tx, stream, Some(*seq), None, limit, false).await?;
+                rows.reverse();
+                Ok(Some(rows))
+            }
+            MessageWindowAnchor::After(seq) => {
+                fetch_messages(tx, stream, None, Some(*seq), limit, true)
+                    .await
+                    .map(Some)
+            }
+            MessageWindowAnchor::Around(anchor) => {
+                let anchor_row = fetch_message_by_id(tx, stream, anchor).await?;
+                let Some(anchor_row) = anchor_row else {
+                    return Ok(None);
+                };
+                let before_limit = (limit.saturating_sub(1)) / 2;
+                let mut before =
+                    fetch_messages(tx, stream, Some(anchor_row.seq), None, before_limit, false)
+                        .await?;
+                before.reverse();
+                let after_limit = limit.saturating_sub(before.len() + 1);
+                let after =
+                    fetch_messages(tx, stream, None, Some(anchor_row.seq), after_limit, true)
+                        .await?;
+                before.push(anchor_row);
+                before.extend(after);
+                Ok(Some(before))
+            }
         }
     }
+    .await;
+    observation.finish(&result);
+    result
 }
 
 async fn fetch_messages(

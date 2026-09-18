@@ -438,13 +438,39 @@ mod tests {
         assert!(!events[0].to_string().contains("private"));
     }
 
+    // A fresh process permits the same single global subscriber as production,
+    // including SQLx worker threads, without mutating another test's dispatcher.
+    fn isolated_observation_test(name: &str) -> bool {
+        const CHILD: &str = "SILVERHAND_OBSERVATION_TEST";
+        if std::env::var(CHILD).as_deref() == Ok(name) {
+            return false;
+        }
+        let test = format!("application_orchestration::conversation_debug_layer::tests::{name}");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &test, "--nocapture"])
+            .env(CHILD, name)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
+
     #[tokio::test]
     async fn http_diagnostics_correlate_concurrent_requests_without_capturing_arguments() {
+        if isolated_observation_test(
+            "http_diagnostics_correlate_concurrent_requests_without_capturing_arguments",
+        ) {
+            return;
+        }
         use axum::{Router, body::Body, http::Request, routing::get};
         use http_body_util::BodyExt;
+        use silverhand_backend_observability::Observe;
         use tower::ServiceExt;
-        use tracing::Instrument;
-        use tracing::instrument::WithSubscriber;
         let output = Buffer::default();
         let subscriber = registry().with(production_json_layer(
             EnvFilter::new("error"),
@@ -452,6 +478,7 @@ mod tests {
             Clock(Arc::new(AtomicI64::new(100))),
             output.clone(),
         ));
+        tracing::subscriber::set_global_default(subscriber).unwrap();
         let app = Router::new()
             .route("/first/{id}", get(|| async {
                 async {
@@ -459,12 +486,13 @@ mod tests {
                     let cli = tracing::error_span!("cli_request", request_id = "rust-test-1");
                     let _entered = cli.enter();
                     tracing::error!(error = %std::io::Error::from_raw_os_error(24), "test cause");
-                }.instrument(tracing::info_span!(target: "silverhand::diagnostics", "auth.test", token = "private-token")).await;
+                    Ok::<_, ()>(())
+                }.observe(tracing::info_span!(target: "silverhand::diagnostics", "auth.test", token = "private-token", elapsed_ms = tracing::field::Empty, outcome = tracing::field::Empty, operation_finished = tracing::field::Empty)).await.unwrap();
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             }))
             .route("/second", get(|| async {
-                async { tokio::task::yield_now().await; }
-                    .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.test")).await;
+                async { tokio::task::yield_now().await; Ok::<_, ()>(()) }
+                    .observe(silverhand_backend_observability::operation_span!("db.test")).await.unwrap();
                 axum::http::StatusCode::SERVICE_UNAVAILABLE
             }))
             .layer(axum::middleware::from_fn(crate::foundation::observability::observe_http));
@@ -480,7 +508,6 @@ mod tests {
             a.unwrap().into_body().collect().await.unwrap();
             b.unwrap().into_body().collect().await.unwrap();
         }
-        .with_subscriber(subscriber)
         .await;
         let events = lines(&output);
         let summaries: Vec<_> = events
@@ -521,10 +548,14 @@ mod tests {
 
     #[tokio::test]
     async fn http_diagnostics_cover_slow_body_fast_success_and_cancellation() {
+        if isolated_observation_test(
+            "http_diagnostics_cover_slow_body_fast_success_and_cancellation",
+        ) {
+            return;
+        }
         use axum::{Router, body::Body, http::Request, routing::get};
         use http_body_util::BodyExt;
         use tower::ServiceExt;
-        use tracing::instrument::WithSubscriber;
         let output = Buffer::default();
         let subscriber = registry().with(production_json_layer(
             EnvFilter::new("error"),
@@ -532,6 +563,7 @@ mod tests {
             Clock(Arc::new(AtomicI64::new(100))),
             output.clone(),
         ));
+        tracing::subscriber::set_global_default(subscriber).unwrap();
         let app = Router::new()
             .route("/fast", get(|| async { "ok" }))
             .route(
@@ -615,7 +647,6 @@ mod tests {
                 .is_err()
             );
         }
-        .with_subscriber(subscriber)
         .await;
         let all = lines(&output);
         let error = all
@@ -649,26 +680,9 @@ mod tests {
 
     #[tokio::test]
     async fn search_pool_wait_and_statement_phases_preserve_results_and_failure() {
-        // Tracing callsite interest is process-global. Other composition tests
-        // execute these same sites with no subscriber; isolate the production
-        // subscriber lifecycle rather than resetting caches during a request.
-        const CHILD: &str = "SILVERHAND_SEARCH_OBSERVATION_CHILD";
-        const TEST: &str = concat!(
-            "application_orchestration::conversation_debug_layer::tests::",
+        if isolated_observation_test(
             "search_pool_wait_and_statement_phases_preserve_results_and_failure",
-        );
-        if std::env::var_os(CHILD).is_none() {
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", TEST, "--nocapture"])
-                .env(CHILD, "1")
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
+        ) {
             return;
         }
         use axum::{Extension, body::Body, http::Request};
@@ -677,7 +691,6 @@ mod tests {
         use silverhand_backend_sqlite::conversation_messaging::messaging::collaboration::human_search::SqliteHumanSearchRead;
         use silverhand_backend_server::conversation_messaging::messaging::collaboration::human_search::router as search_router;
         use tower::ServiceExt;
-        use tracing::instrument::WithSubscriber;
 
         let output = Buffer::default();
         let subscriber = registry().with(production_json_layer(
@@ -686,6 +699,7 @@ mod tests {
             Clock(Arc::new(AtomicI64::new(100))),
             output.clone(),
         ));
+        tracing::subscriber::set_global_default(subscriber).unwrap();
         async {
             for healthy in [true, false] {
                 output.0.lock().unwrap().clear();
@@ -737,7 +751,6 @@ mod tests {
                         assert_eq!(body["identities"]["humans"]["results"][0]["id"], "other");
                         assert_eq!(body["results"], serde_json::json!([]));
                     }
-                    pool.close().await;
                     tokio::time::timeout(std::time::Duration::from_secs(2), async {
                         while !lines(&output)
                             .iter()
@@ -760,6 +773,10 @@ mod tests {
                 assert!(phases["search.pool.acquire"]["total_ms"].as_f64().unwrap() >= 1000.);
                 assert_eq!(phases["search.transaction.begin"]["count"], 1, "{event}");
                 assert_eq!(phases["search.identities"]["count"], 1);
+                assert_eq!(
+                    phases["search.identities"]["outcomes"][if healthy { "ok" } else { "error" }],
+                    1
+                );
                 assert!(
                     phases["search.identities"]["total_ms"].as_f64().unwrap()
                         < phases["search.pool.acquire"]["total_ms"].as_f64().unwrap()
@@ -790,14 +807,20 @@ mod tests {
                     ));
                 }
                 assert!(!serde_json::to_string(&events).unwrap().contains("needle"));
+                assert!(!pool.is_closed());
+                pool.close().await;
             }
         }
-        .with_subscriber(subscriber)
         .await;
     }
 
     #[tokio::test]
     async fn real_sqlite_auth_pool_wait_and_query_are_separate_in_request_summary() {
+        if isolated_observation_test(
+            "real_sqlite_auth_pool_wait_and_query_are_separate_in_request_summary",
+        ) {
+            return;
+        }
         use axum::{Router, body::Body, http::Request, routing::get};
         use http_body_util::BodyExt;
         use silverhand_backend_core::identity_access::auth::{
@@ -805,7 +828,6 @@ mod tests {
         };
         use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
         use tower::ServiceExt;
-        use tracing::instrument::WithSubscriber;
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -826,6 +848,7 @@ mod tests {
             Clock(Arc::new(AtomicI64::new(100))),
             output.clone(),
         ));
+        tracing::subscriber::set_global_default(subscriber).unwrap();
         let app = Router::new()
             .route(
                 "/auth-probe",
@@ -835,7 +858,7 @@ mod tests {
                         let user = store
                             .verify_and_touch(
                                 SessionTokenHash::of_plaintext("private-test-secret"),
-                                SessionValidation::new(200, SessionTtl::default()),
+                                SessionValidation::new(300_100, SessionTtl::default()),
                             )
                             .await
                             .unwrap()
@@ -868,13 +891,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-            assert_eq!(touched, 200);
-            // Join SQLite's worker too: it may release the final tracing span
-            // reference after delivering its query result to the async caller.
-            pool.close().await;
-            // Pool close acknowledges connection closure, not the subsequent
-            // destructor of the worker's tracing guard. Observe that terminal
-            // event with a deadline instead of racing another OS thread.
+            assert_eq!(touched, 300_100);
             tokio::time::timeout(std::time::Duration::from_secs(2), async {
                 while !lines(&output)
                     .iter()
@@ -884,9 +901,8 @@ mod tests {
                 }
             })
             .await
-            .expect("SQLite worker must release the request span");
+            .expect("request must finish while its pool is open");
         }
-        .with_subscriber(subscriber)
         .await;
         let events = lines(&output);
         let event = events
@@ -896,14 +912,320 @@ mod tests {
         let phases = &event["fields"]["phases"];
         assert!(phases["db.pool.acquire"]["total_ms"].as_f64().unwrap() >= 20.);
         assert_eq!(phases["db.transaction.begin"]["count"], 1);
-        assert_eq!(phases["db.statement:auth.verify_and_touch"]["count"], 1);
-        assert_eq!(phases["db.statement:auth.user_exists"]["count"], 1);
+        assert_eq!(phases["db.statement:auth.verify"]["count"], 2);
+        assert_eq!(phases["db.statement:auth.touch"]["count"], 1);
         assert_eq!(phases["db.statement:auth.commit"]["count"], 1);
         assert!(
             !serde_json::to_string(&events)
                 .unwrap()
                 .contains("private-test-secret")
         );
+        assert!(!pool.is_closed());
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn operation_completion_does_not_wait_for_cloned_spans() {
+        if isolated_observation_test("operation_completion_does_not_wait_for_cloned_spans") {
+            return;
+        }
+        use axum::{Router, body::Body, http::Request, routing::get};
+        use http_body_util::BodyExt;
+        use silverhand_backend_observability::Observe;
+        use tower::ServiceExt;
+
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let _metrics = metrics::set_default_local_recorder(&recorder);
+        let output = Buffer::default();
+        tracing::subscriber::set_global_default(registry().with(production_json_layer(
+            EnvFilter::new("error"),
+            ProductionConversationLogDebugControl::new(),
+            Clock(Arc::new(AtomicI64::new(100))),
+            output.clone(),
+        )))
+        .unwrap();
+        let retained = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = retained.clone();
+        let app = Router::new()
+            .route(
+                "/retained",
+                get(move || {
+                    let captured = captured.clone();
+                    async move {
+                        let unused = async { Ok::<_, ()>(()) }.observe(
+                            silverhand_backend_observability::operation_span!("db.unpolled"),
+                        );
+                        drop(unused);
+                        let result = async {
+                            captured.lock().unwrap().push(tracing::Span::current());
+                            Err::<(), _>(())
+                        }
+                        .observe(silverhand_backend_observability::operation_span!(
+                            "db.retained"
+                        ))
+                        .await;
+                        assert!(result.is_err());
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn(
+                crate::foundation::observability::observe_http,
+            ));
+
+        for expected in 1..=2 {
+            app.clone()
+                .oneshot(Request::get("/retained").body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+                .into_body()
+                .collect()
+                .await
+                .unwrap();
+            let events = lines(&output);
+            let summaries: Vec<_> = events
+                .iter()
+                .filter(|e| e["fields"]["message"] == "HTTP request diagnostic")
+                .collect();
+            assert_eq!(summaries.len(), expected);
+            assert_eq!(
+                summaries[expected - 1]["fields"]["phases"]["db.retained"]["outcomes"]["error"],
+                1
+            );
+        }
+        let before = lines(&output);
+        assert!(
+            before
+                .iter()
+                .filter(|e| e["fields"]["message"] == "HTTP request diagnostic")
+                .all(|e| e["fields"]["phases"]["db.unpolled"].is_null())
+        );
+        let metrics_before = recorder.handle().render();
+        assert!(metrics_before.lines().any(|line| {
+            line.starts_with("silverhand_http_request_duration_seconds_count{")
+                && line.ends_with(" 2")
+        }));
+        // Duplicate terminal records and final handle release must not re-emit.
+        for span in retained.lock().unwrap().drain(..) {
+            span.record("operation_finished", true);
+        }
+        assert_eq!(lines(&output), before);
+        assert_eq!(recorder.handle().render(), metrics_before);
+    }
+
+    #[tokio::test]
+    async fn sqlite_begin_cancellation_finishes_before_worker_and_allows_next_request() {
+        if isolated_observation_test(
+            "sqlite_begin_cancellation_finishes_before_worker_and_allows_next_request",
+        ) {
+            return;
+        }
+        use axum::{Router, body::Body, http::Request, routing::get};
+        use http_body_util::BodyExt;
+        use silverhand_backend_core::identity_access::auth::{
+            SessionTokenHash, SessionTtl, SessionValidation, SessionValidationPort,
+        };
+        use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
+        use tower::ServiceExt;
+        use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
+
+        // Observe the real BEGIN poll, rather than assuming a sleep means the
+        // request has passed pool acquisition and the initial read.
+        struct BeginEntered(Arc<tokio::sync::Notify>);
+        impl<S: tracing::Subscriber + for<'a> LookupSpan<'a>> Layer<S> for BeginEntered {
+            fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+                if ctx
+                    .span(id)
+                    .is_some_and(|span| span.name() == "db.transaction.begin")
+                {
+                    self.0.notify_one();
+                }
+            }
+        }
+        let output = Buffer::default();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        tracing::subscriber::set_global_default(
+            registry()
+                .with(production_json_layer(
+                    EnvFilter::new("error"),
+                    ProductionConversationLogDebugControl::new(),
+                    Clock(Arc::new(AtomicI64::new(100))),
+                    output.clone(),
+                ))
+                .with(BeginEntered(entered.clone())),
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(dir.path().join("auth.db"))
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE TABLE users(id TEXT); CREATE TABLE auth_sessions(token_hash TEXT, user_id TEXT, last_used_at INTEGER, revoked_at INTEGER); INSERT INTO users VALUES ('viewer');")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO auth_sessions VALUES (?, 'viewer', 100, NULL)")
+            .bind(SessionTokenHash::of_plaintext("private-token").as_str())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = SqliteSessionStore::from_pool(pool.clone());
+        let app = Router::new()
+            .route(
+                "/renew",
+                get(move || {
+                    let store = store.clone();
+                    async move {
+                        assert!(
+                            store
+                                .verify_and_touch(
+                                    SessionTokenHash::of_plaintext("private-token"),
+                                    SessionValidation::new(300_100, SessionTtl::default())
+                                )
+                                .await
+                                .unwrap()
+                                .is_some()
+                        );
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn(
+                crate::foundation::observability::observe_http,
+            ));
+        let writer = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        let request = tokio::spawn(
+            app.clone()
+                .oneshot(Request::get("/renew").body(Body::empty()).unwrap()),
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+            .await
+            .unwrap();
+        request.abort();
+        assert!(request.await.unwrap_err().is_cancelled());
+
+        let first = lines(&output);
+        let summaries: Vec<_> = first
+            .iter()
+            .filter(|e| e["fields"]["message"] == "HTTP request diagnostic")
+            .collect();
+        assert_eq!(summaries.len(), 1, "{first:?}");
+        assert_eq!(
+            summaries[0]["fields"]["request"]["completion"],
+            "cancelled_before_headers"
+        );
+        let phase = &summaries[0]["fields"]["phases"]["db.transaction.begin"];
+        assert_eq!(phase["outcomes"]["cancelled"], 1);
+        assert!(phase["outcomes"]["ok"].is_null());
+        assert!(!pool.is_closed());
+        // The writer and blocked worker are still alive when the diagnostic is
+        // emitted. Release normally and verify SQLx rollback/reuse, not just logs.
+        writer.rollback().await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(6),
+            app.oneshot(Request::get("/renew").body(Body::empty()).unwrap()),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .into_body()
+        .collect()
+        .await
+        .unwrap();
+        let final_events = lines(&output);
+        let summaries: Vec<_> = final_events
+            .iter()
+            .filter(|e| e["fields"]["message"] == "HTTP request diagnostic")
+            .collect();
+        assert_eq!(summaries.len(), 2, "{final_events:?}");
+        assert_eq!(
+            summaries[1]["fields"]["phases"]["db.transaction.begin"]["outcomes"]["ok"],
+            1
+        );
+        let used: i64 = sqlx::query_scalar("SELECT last_used_at FROM auth_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(used, 300_100);
+        assert!(
+            !serde_json::to_string(&final_events)
+                .unwrap()
+                .contains("private-token")
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_pool_wait_cancellation_does_not_begin_or_report_success() {
+        if isolated_observation_test(
+            "sqlite_pool_wait_cancellation_does_not_begin_or_report_success",
+        ) {
+            return;
+        }
+        use axum::{Extension, body::Body, http::Request};
+        use silverhand_backend_core::foundation::identity::UserId;
+        use silverhand_backend_sqlite::conversation_messaging::messaging::collaboration::human_search::SqliteHumanSearchRead;
+        use silverhand_backend_server::conversation_messaging::messaging::collaboration::human_search::router;
+        use tower::ServiceExt;
+
+        let output = Buffer::default();
+        tracing::subscriber::set_global_default(registry().with(production_json_layer(
+            EnvFilter::new("error"),
+            ProductionConversationLogDebugControl::new(),
+            Clock(Arc::new(AtomicI64::new(100))),
+            output.clone(),
+        )))
+        .unwrap();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let held = pool.acquire().await.unwrap();
+        let app = router(SqliteHumanSearchRead::from_pool(pool.clone()))
+            .layer(Extension(UserId::parse("viewer").unwrap()))
+            .layer(axum::middleware::from_fn(
+                crate::foundation::observability::observe_http,
+            ));
+        let mut request = Box::pin(
+            app.oneshot(
+                Request::get("/api/search?q=private-query")
+                    .body(Body::empty())
+                    .unwrap(),
+            ),
+        );
+        assert!(futures_util::poll!(&mut request).is_pending());
+        drop(request);
+        let events = lines(&output);
+        let summaries: Vec<_> = events
+            .iter()
+            .filter(|e| e["fields"]["message"] == "HTTP request diagnostic")
+            .collect();
+        assert_eq!(summaries.len(), 1, "{events:?}");
+        let phases = &summaries[0]["fields"]["phases"];
+        assert_eq!(phases["search.pool.acquire"]["outcomes"]["cancelled"], 1);
+        assert!(phases["search.pool.acquire"]["outcomes"]["ok"].is_null());
+        assert!(phases["search.transaction.begin"].is_null());
+        assert!(
+            !serde_json::to_string(&events)
+                .unwrap()
+                .contains("private-query")
+        );
+        assert!(!pool.is_closed());
+        drop(held);
+        assert_eq!(
+            sqlx::query_scalar::<_, i32>("SELECT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        pool.close().await;
+        assert_eq!(lines(&output), events);
     }
 
     #[test]

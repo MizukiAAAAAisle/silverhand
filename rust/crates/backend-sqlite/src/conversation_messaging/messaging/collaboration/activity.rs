@@ -5,8 +5,8 @@
 //! Existing unread, attention-tier, author, and direct-pair authorities are
 //! composed rather than transcribed.
 
+use silverhand_backend_observability::Observe;
 use std::collections::HashSet;
-use tracing::Instrument;
 
 use crate::{
     conversation_messaging::direct_pair_read::{DirectPairReadError, LivePrincipals, PairEvidence},
@@ -159,93 +159,109 @@ impl ActivityReadModel for SqliteActivityReadModel {
 }
 
 impl SqliteActivityReadModel {
-    #[tracing::instrument(target = "silverhand::diagnostics", name = "db.activity", skip_all)]
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.activity",
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
+    )]
     async fn list(
         &self,
         viewer: &UserId,
         workspace: Option<&WorkspaceId>,
     ) -> Result<ActivityList, ActivityStoreError> {
-        let mut tx =
-            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED")).await?;
-        let ws = workspace.map(WorkspaceId::as_str);
-        let directed_rows = sqlx::query(DIRECTED)
-            .bind(viewer.as_str())
-            .bind(ws)
-            .fetch_all(&mut *tx)
-            .instrument(
-                tracing::info_span!(target: "silverhand::diagnostics", "db.activity.directed"),
-            )
-            .await?;
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
+            let mut tx =
+                crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+                    .await?;
+            let ws = workspace.map(WorkspaceId::as_str);
+            let directed_rows = sqlx::query(DIRECTED)
+                .bind(viewer.as_str())
+                .bind(ws)
+                .fetch_all(&mut *tx)
+                .observe(silverhand_backend_observability::operation_span!(
+                    "db.activity.directed"
+                ))
+                .await?;
 
-        let mut directed_message_ids = HashSet::<String>::new();
-        let mut directed_mentions = Vec::<RawItem>::new();
-        let mut agent_failures = Vec::<RawItem>::new();
-        for row in directed_rows {
-            let kind: String = row.try_get("kind")?;
-            let raw_message: Option<String> = row.try_get("message_id")?;
-            match kind.as_str() {
-                "mention_self" => {
-                    let Some(message) = raw_message else {
-                        return Err(ActivityStoreError::MalformedIdentity(
-                            "notifications.message_id",
-                        ));
-                    };
-                    // Decode every selected row before product de-duplication.
-                    // A malformed duplicate is still a malformed persisted
-                    // candidate and must fail the whole snapshot rather than
-                    // hiding behind a valid winner.
-                    let item = RawItem::directed_mention(&row, message.clone())?;
-                    if directed_message_ids.insert(message) {
-                        directed_mentions.push(item);
+            let mut directed_message_ids = HashSet::<String>::new();
+            let mut directed_mentions = Vec::<RawItem>::new();
+            let mut agent_failures = Vec::<RawItem>::new();
+            for row in directed_rows {
+                let kind: String = row.try_get("kind")?;
+                let raw_message: Option<String> = row.try_get("message_id")?;
+                match kind.as_str() {
+                    "mention_self" => {
+                        let Some(message) = raw_message else {
+                            return Err(ActivityStoreError::MalformedIdentity(
+                                "notifications.message_id",
+                            ));
+                        };
+                        // Decode every selected row before product de-duplication.
+                        // A malformed duplicate is still a malformed persisted
+                        // candidate and must fail the whole snapshot rather than
+                        // hiding behind a valid winner.
+                        let item = RawItem::directed_mention(&row, message.clone())?;
+                        if directed_message_ids.insert(message) {
+                            directed_mentions.push(item);
+                        }
                     }
+                    "agent_start_failed" => agent_failures.push(RawItem::agent_failed(&row)?),
+                    _ => return Err(ActivityStoreError::MalformedNotificationKind),
                 }
-                "agent_start_failed" => agent_failures.push(RawItem::agent_failed(&row)?),
-                _ => return Err(ActivityStoreError::MalformedNotificationKind),
             }
+            let mut projected = directed_mentions;
+            projected.extend(agent_failures);
+
+            let excluded = serde_json::to_string(&directed_message_ids)?;
+            let positional_rows = sqlx::query(POSITIONAL)
+                .bind(viewer.as_str())
+                .bind(ws)
+                .bind(CHANNEL_DEFAULT_MODE)
+                .bind(excluded)
+                .fetch_all(&mut *tx)
+                .observe(silverhand_backend_observability::operation_span!(
+                    "db.activity.positional"
+                ))
+                .await?;
+            for row in positional_rows {
+                projected.push(RawItem::positional(&row)?);
+            }
+
+            let evidence = projected
+                .iter()
+                .map(|item| item.author.clone())
+                .collect::<Vec<_>>();
+            let authors = resolve_authors(&mut tx, &evidence)
+                .await
+                .map_err(ActivityStoreError::Author)?;
+
+            let pair_values = projected
+                .iter()
+                .filter_map(|item| match &item.placement {
+                    RawPlacement::DirectPair(pair) => Some(pair.clone()),
+                    RawPlacement::Workspace { .. } => None,
+                })
+                .collect::<Vec<_>>();
+            let principals = LivePrincipals::load(&mut tx, &pair_values)
+                .await
+                .map_err(ActivityStoreError::DirectPair)?;
+
+            let mut items = Vec::with_capacity(projected.len());
+            for (raw, author) in projected.into_iter().zip(authors) {
+                items.push(raw.finish(viewer, &principals, author)?);
+            }
+            tx.commit().await?;
+            Ok(ActivityList::projected(items))
         }
-        let mut projected = directed_mentions;
-        projected.extend(agent_failures);
-
-        let excluded = serde_json::to_string(&directed_message_ids)?;
-        let positional_rows = sqlx::query(POSITIONAL)
-            .bind(viewer.as_str())
-            .bind(ws)
-            .bind(CHANNEL_DEFAULT_MODE)
-            .bind(excluded)
-            .fetch_all(&mut *tx)
-            .instrument(
-                tracing::info_span!(target: "silverhand::diagnostics", "db.activity.positional"),
-            )
-            .await?;
-        for row in positional_rows {
-            projected.push(RawItem::positional(&row)?);
-        }
-
-        let evidence = projected
-            .iter()
-            .map(|item| item.author.clone())
-            .collect::<Vec<_>>();
-        let authors = resolve_authors(&mut tx, &evidence)
-            .await
-            .map_err(ActivityStoreError::Author)?;
-
-        let pair_values = projected
-            .iter()
-            .filter_map(|item| match &item.placement {
-                RawPlacement::DirectPair(pair) => Some(pair.clone()),
-                RawPlacement::Workspace { .. } => None,
-            })
-            .collect::<Vec<_>>();
-        let principals = LivePrincipals::load(&mut tx, &pair_values)
-            .await
-            .map_err(ActivityStoreError::DirectPair)?;
-
-        let mut items = Vec::with_capacity(projected.len());
-        for (raw, author) in projected.into_iter().zip(authors) {
-            items.push(raw.finish(viewer, &principals, author)?);
-        }
-        tx.commit().await?;
-        Ok(ActivityList::projected(items))
+        .await;
+        observation.finish(&result);
+        result
     }
 }
 

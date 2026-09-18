@@ -19,9 +19,9 @@ use silverhand_backend_core::{
     foundation::identity::{ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
 };
+use silverhand_backend_observability::Observe;
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
-use tracing::Instrument;
 
 // Composes the same crate-private directed-claim/count fragments and default tier
 // as the badge authority. A predicate change therefore recompiles both faces.
@@ -96,68 +96,86 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
     #[tracing::instrument(
         target = "silverhand::diagnostics",
         name = "db.attention_badges",
-        skip_all
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
     )]
     async fn badges(&self, viewer: &UserId) -> Result<AttentionBadgeRollup, Self::Error> {
-        let mut tx =
-            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
+            let mut tx =
+                crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+                    .await
+                    .map_err(AttentionProjectionStoreError::from)?;
+            let badge_rows = attention_badge_counts(&mut tx, viewer)
                 .await
                 .map_err(AttentionProjectionStoreError::from)?;
-        let badge_rows = attention_badge_counts(&mut tx, viewer)
-            .await
-            .map_err(AttentionProjectionStoreError::from)?;
-        let muted_rows = sqlx::query(MUTED_VISIBLE_WORKSPACES)
-            .bind(viewer.as_str())
-            .bind(viewer.as_str())
-            .fetch_all(&mut *tx)
-            .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.attention.muted_workspaces"))
-            .await
-            .map_err(AttentionProjectionStoreError::from)?;
-
-        tx.commit()
-            .await
-            .map_err(AttentionProjectionStoreError::from)?;
-        let mut by_workspace = Vec::with_capacity(badge_rows.len());
-        for (workspace, raw_count) in badge_rows {
-            let count = AttentionCount::new(raw_count)
-                .map_err(|_| AttentionProjectionStoreError::MalformedCount)?;
-            if count.get() > 0 {
-                by_workspace.push(WorkspaceAttentionCount::projected(workspace, count));
-            }
-        }
-        let mut muted_workspaces = Vec::with_capacity(muted_rows.len());
-        for row in muted_rows {
-            let raw: String = row
-                .try_get("workspace_id")
+            let muted_rows = sqlx::query(MUTED_VISIBLE_WORKSPACES)
+                .bind(viewer.as_str())
+                .bind(viewer.as_str())
+                .fetch_all(&mut *tx)
+                .observe(silverhand_backend_observability::operation_span!(
+                    "db.attention.muted_workspaces"
+                ))
+                .await
                 .map_err(AttentionProjectionStoreError::from)?;
-            let workspace = WorkspaceId::parse(raw)
-                .map_err(|_| AttentionProjectionStoreError::MalformedIdentity)?;
-            muted_workspaces.push(workspace);
-        }
-        let projected =
-            AttentionBadgeRollup::projected(by_workspace, muted_workspaces).map_err(|error| {
-                match error {
+
+            tx.commit()
+                .await
+                .map_err(AttentionProjectionStoreError::from)?;
+            let mut by_workspace = Vec::with_capacity(badge_rows.len());
+            for (workspace, raw_count) in badge_rows {
+                let count = AttentionCount::new(raw_count)
+                    .map_err(|_| AttentionProjectionStoreError::MalformedCount)?;
+                if count.get() > 0 {
+                    by_workspace.push(WorkspaceAttentionCount::projected(workspace, count));
+                }
+            }
+            let mut muted_workspaces = Vec::with_capacity(muted_rows.len());
+            for row in muted_rows {
+                let raw: String = row
+                    .try_get("workspace_id")
+                    .map_err(AttentionProjectionStoreError::from)?;
+                let workspace = WorkspaceId::parse(raw)
+                    .map_err(|_| AttentionProjectionStoreError::MalformedIdentity)?;
+                muted_workspaces.push(workspace);
+            }
+            let projected = AttentionBadgeRollup::projected(by_workspace, muted_workspaces)
+                .map_err(|error| match error {
                     AttentionBadgeProjectionError::DuplicateWorkspace => {
                         AttentionProjectionStoreError::DuplicateWorkspace
                     }
                     AttentionBadgeProjectionError::TotalOverflow => {
                         AttentionProjectionStoreError::TotalOverflow
                     }
-                }
-            })?;
-        Ok(projected)
+                })?;
+            Ok(projected)
+        }
+        .await;
+        observation.finish(&result);
+        result
     }
 
     #[tracing::instrument(
         target = "silverhand::diagnostics",
         name = "db.attention_modes",
-        skip_all
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
     )]
     async fn modes(
         &self,
         viewer: &UserId,
         workspace: &WorkspaceId,
     ) -> Result<Result<WorkspaceAttentionModes, AttentionModesRefusal>, Self::Error> {
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
         let mut tx =
             crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
                 .await
@@ -168,7 +186,7 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
         .bind(workspace.as_str())
         .bind(viewer.as_str())
         .fetch_optional(&mut *tx)
-        .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.attention.workspace_membership"))
+        .observe(silverhand_backend_observability::operation_span!("db.attention.workspace_membership"))
         .await
         .map_err(AttentionProjectionStoreError::from)?
         .is_some();
@@ -185,7 +203,7 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
         .bind(viewer.as_str())
         .bind(workspace.as_str())
         .fetch_optional(&mut *tx)
-        .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.attention.workspace_preference"))
+        .observe(silverhand_backend_observability::operation_span!("db.attention.workspace_preference"))
         .await
         .map_err(AttentionProjectionStoreError::from)?;
         let muted = match raw_muted {
@@ -199,7 +217,7 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
             .bind(workspace.as_str())
             .bind(CHANNEL_DEFAULT_MODE)
             .fetch_all(&mut *tx)
-            .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.attention.channel_tiers"))
+            .observe(silverhand_backend_observability::operation_span!("db.attention.channel_tiers"))
             .await
             .map_err(AttentionProjectionStoreError::from)?;
         tx.commit()
@@ -226,5 +244,9 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
             ));
         }
         Ok(Ok(WorkspaceAttentionModes::projected(muted, channels)))
+
+        }.await;
+        observation.finish(&result);
+        result
     }
 }

@@ -331,36 +331,47 @@ pub enum UnreadReadModelError {
 #[tracing::instrument(
     target = "silverhand::diagnostics",
     name = "db.conversation_unread_counts",
-    skip_all
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
+    )
 )]
 pub(crate) async fn conversation_unread_counts(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
     conversations: &[ConversationId],
 ) -> Result<HashMap<ConversationId, i64>, UnreadReadModelError> {
-    if conversations.is_empty() {
-        return Ok(HashMap::new());
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = async {
+        if conversations.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let requested = serde_json::to_string(
+            &conversations
+                .iter()
+                .map(ConversationId::as_str)
+                .collect::<Vec<_>>(),
+        )?;
+        let rows = sqlx::query(CONVERSATION_UNREAD_COUNTS)
+            .bind(viewer.as_str())
+            .bind(requested)
+            .fetch_all(&mut **tx)
+            .await?;
+        let mut counts = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let conversation_id: String = row.try_get("conversation_id")?;
+            let conversation = ConversationId::parse(conversation_id)
+                .map_err(|_| UnreadReadModelError::MalformedIdentity("conversations.id"))?;
+            let unread_count: i64 = row.try_get("unread_count")?;
+            counts.insert(conversation, unread_count);
+        }
+        Ok(counts)
     }
-    let requested = serde_json::to_string(
-        &conversations
-            .iter()
-            .map(ConversationId::as_str)
-            .collect::<Vec<_>>(),
-    )?;
-    let rows = sqlx::query(CONVERSATION_UNREAD_COUNTS)
-        .bind(viewer.as_str())
-        .bind(requested)
-        .fetch_all(&mut **tx)
-        .await?;
-    let mut counts = HashMap::with_capacity(rows.len());
-    for row in rows {
-        let conversation_id: String = row.try_get("conversation_id")?;
-        let conversation = ConversationId::parse(conversation_id)
-            .map_err(|_| UnreadReadModelError::MalformedIdentity("conversations.id"))?;
-        let unread_count: i64 = row.try_get("unread_count")?;
-        counts.insert(conversation, unread_count);
-    }
-    Ok(counts)
+    .await;
+    observation.finish(&result);
+    result
 }
 
 /// The canonical tiered badge projection for every workspace the viewer can
@@ -371,29 +382,41 @@ pub(crate) async fn conversation_unread_counts(
 #[tracing::instrument(
     target = "silverhand::diagnostics",
     name = "db.attention_badge_counts",
-    skip_all
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
+    )
 )]
 pub(crate) async fn attention_badge_counts(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
 ) -> Result<Vec<(WorkspaceId, i64)>, UnreadReadModelError> {
-    let rows = sqlx::query(BADGE_COUNTS_BY_WORKSPACE)
-        .bind(viewer.as_str())
-        .bind(CHANNEL_DEFAULT_MODE)
-        .fetch_all(&mut **tx)
-        .await?;
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = async {
+        let rows = sqlx::query(BADGE_COUNTS_BY_WORKSPACE)
+            .bind(viewer.as_str())
+            .bind(CHANNEL_DEFAULT_MODE)
+            .fetch_all(&mut **tx)
+            .await?;
 
-    let mut counts = Vec::with_capacity(rows.len());
-    for row in rows {
-        let raw: String = row.try_get("workspace_id")?;
-        let workspace = WorkspaceId::parse(raw)
-            .map_err(|_| UnreadReadModelError::MalformedIdentity("conversations.workspace_id"))?;
-        let count: i64 = row.try_get("c")?;
-        if count > 0 {
-            counts.push((workspace, count));
+        let mut counts = Vec::with_capacity(rows.len());
+        for row in rows {
+            let raw: String = row.try_get("workspace_id")?;
+            let workspace = WorkspaceId::parse(raw).map_err(|_| {
+                UnreadReadModelError::MalformedIdentity("conversations.workspace_id")
+            })?;
+            let count: i64 = row.try_get("c")?;
+            if count > 0 {
+                counts.push((workspace, count));
+            }
         }
+        Ok(counts)
     }
-    Ok(counts)
+    .await;
+    observation.finish(&result);
+    result
 }
 
 const PLACEMENT_WORKSPACE: &str = "workspace";
@@ -433,61 +456,73 @@ impl SqliteUnreadReadModel {
     #[tracing::instrument(
         target = "silverhand::diagnostics",
         name = "db.unread_audience_transaction",
-        skip_all
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
     )]
     async fn unread_audience_transaction(
         &self,
         conversation: &ConversationId,
     ) -> Result<Option<UnreadAudience>, UnreadReadModelError> {
-        let mut tx =
-            crate::foundation::statement_metrics::begin(&self.pool, Some(DEFERRED_READ_BEGIN))
-                .await?;
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
+            let mut tx =
+                crate::foundation::statement_metrics::begin(&self.pool, Some(DEFERRED_READ_BEGIN))
+                    .await?;
 
-        let Some(row) = sqlx::query(SELECT_PLACEMENT)
-            .bind(conversation.as_str())
-            .fetch_optional(&mut *tx)
-            .await?
-        else {
-            // The conversation is gone. Nothing to publish — the one early return the
-            // oracle guards, and the reason the port answers `Option`.
-            return Ok(None);
-        };
-        let placement: String = row.try_get("placement_kind")?;
-        let workspace_id: Option<String> = row.try_get("workspace_id")?;
+            let Some(row) = sqlx::query(SELECT_PLACEMENT)
+                .bind(conversation.as_str())
+                .fetch_optional(&mut *tx)
+                .await?
+            else {
+                // The conversation is gone. Nothing to publish — the one early return the
+                // oracle guards, and the reason the port answers `Option`.
+                return Ok(None);
+            };
+            let placement: String = row.try_get("placement_kind")?;
+            let workspace_id: Option<String> = row.try_get("workspace_id")?;
 
-        // The same participants query answers both placements; the fork is which
-        // audience shape they populate.
-        let viewers = participants(&mut tx, conversation).await?;
+            // The same participants query answers both placements; the fork is which
+            // audience shape they populate.
+            let viewers = participants(&mut tx, conversation).await?;
 
-        let audience = match placement.as_str() {
-            PLACEMENT_WORKSPACE => {
-                let workspace = workspace_id.ok_or_else(|| {
-                    UnreadReadModelError::MissingWorkspace(conversation.as_str().to_owned())
-                })?;
-                let workspace = WorkspaceId::parse(workspace).map_err(|_| {
-                    UnreadReadModelError::MalformedIdentity("conversations.workspace_id")
-                })?;
+            let audience = match placement.as_str() {
+                PLACEMENT_WORKSPACE => {
+                    let workspace = workspace_id.ok_or_else(|| {
+                        UnreadReadModelError::MissingWorkspace(conversation.as_str().to_owned())
+                    })?;
+                    let workspace = WorkspaceId::parse(workspace).map_err(|_| {
+                        UnreadReadModelError::MalformedIdentity("conversations.workspace_id")
+                    })?;
 
-                let mut computed = Vec::with_capacity(viewers.len());
-                for viewer in viewers {
-                    computed.push(viewer_unread(&mut tx, conversation, &workspace, viewer).await?);
+                    let mut computed = Vec::with_capacity(viewers.len());
+                    for viewer in viewers {
+                        computed
+                            .push(viewer_unread(&mut tx, conversation, &workspace, viewer).await?);
+                    }
+                    UnreadAudience::Workspace {
+                        workspace,
+                        viewers: computed,
+                    }
                 }
-                UnreadAudience::Workspace {
-                    workspace,
-                    viewers: computed,
+                PLACEMENT_DIRECT_PAIR => UnreadAudience::DirectPair { viewers },
+                other => {
+                    return Err(UnreadReadModelError::UnknownPlacement(
+                        conversation.as_str().to_owned(),
+                        other.to_owned(),
+                    ));
                 }
-            }
-            PLACEMENT_DIRECT_PAIR => UnreadAudience::DirectPair { viewers },
-            other => {
-                return Err(UnreadReadModelError::UnknownPlacement(
-                    conversation.as_str().to_owned(),
-                    other.to_owned(),
-                ));
-            }
-        };
+            };
 
-        tx.commit().await?;
-        Ok(Some(audience))
+            tx.commit().await?;
+            Ok(Some(audience))
+        }
+        .await;
+        observation.finish(&result);
+        result
     }
 }
 

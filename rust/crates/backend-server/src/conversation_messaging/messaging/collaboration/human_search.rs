@@ -120,148 +120,162 @@ struct QueryIssue {
     message: &'static str,
 }
 
-#[tracing::instrument(target = "silverhand::diagnostics", name = "search.admit", skip_all)]
-fn admitted_query(wire: &HumanSearchQueryWire) -> Result<HumanSearchQuery, Vec<QueryIssue>> {
-    let include_identities = match wire.include_identities.as_deref() {
-        None | Some("false") => false,
-        Some("true") => true,
-        _ => {
-            return Err(vec![QueryIssue {
-                path: "include_identities",
-                message: "expected true or false",
-            }]);
-        }
-    };
-    let text = HumanSearchText::parse(wire.q.as_deref().unwrap_or("")).map_err(|_| {
-        vec![QueryIssue {
-            path: "q",
-            message: "String must contain at most 200 character(s)",
-        }]
-    })?;
-    let stream = match wire.stream.as_deref().unwrap_or("all") {
-        "all" => HumanSearchStream::All,
-        "mainline" => HumanSearchStream::Mainline,
-        "thread" => HumanSearchStream::Thread,
-        _ => {
-            return Err(vec![QueryIssue {
-                path: "stream",
-                message: "Invalid enum value. Expected 'all' | 'mainline' | 'thread'",
-            }]);
-        }
-    };
-    let workspace = optional_string(wire.workspace_id.as_deref())
-        .map(WorkspaceId::parse)
-        .transpose()
-        .map_err(|_| invalid_string("workspace_id"))?;
-    let conversation = optional_string(wire.conversation_id.as_deref())
-        .map(ConversationId::parse)
-        .transpose()
-        .map_err(|_| invalid_string("conversation_id"))?;
-    let thread_root = optional_string(wire.thread_root_id.as_deref())
-        .map(MessageId::parse)
-        .transpose()
-        .map_err(|_| invalid_string("thread_root_id"))?;
-    let user = optional_string(wire.user_id.as_deref())
-        .map(UserId::parse)
-        .transpose()
-        .map_err(|_| invalid_string("user_id"))?;
-    let agent = optional_string(wire.agent_id.as_deref())
-        .map(AgentId::parse)
-        .transpose()
-        .map_err(|_| invalid_string("agent_id"))?;
-    if user.is_some() && agent.is_some() {
-        return Err(vec![QueryIssue {
-            path: "user_id",
-            message: "user_id and agent_id cannot both be set",
-        }]);
-    }
-    let sender = user
-        .map(PrincipalIdentity::Human)
-        .or_else(|| agent.map(PrincipalIdentity::Agent));
-    let from = optional_millis(wire.from.as_deref(), "from")?;
-    let to = optional_millis(wire.to.as_deref(), "to")?;
-    let order = match wire.order.as_deref().unwrap_or("recency_desc") {
-        "recency_desc" => HumanSearchOrder::RecencyDesc,
-        "seq_asc" => HumanSearchOrder::SequenceAsc,
-        _ => {
-            return Err(vec![QueryIssue {
-                path: "order",
-                message: "Invalid enum value. Expected 'recency_desc' | 'seq_asc'",
-            }]);
-        }
-    };
-    let limit = match wire.limit.as_deref() {
-        None => 80,
-        Some(raw) => match coerce_integer(raw) {
-            Ok(CoercedInteger::Persisted(value)) if (1..=500).contains(&value) => value as u16,
-            Ok(CoercedInteger::Persisted(value)) if value <= 0 => {
-                return Err(vec![QueryIssue {
-                    path: "limit",
-                    message: "Number must be greater than 0",
-                }]);
-            }
-            Ok(CoercedInteger::Persisted(_) | CoercedInteger::BeyondPersistedRange) => {
-                return Err(vec![QueryIssue {
-                    path: "limit",
-                    message: "Number must be less than or equal to 500",
-                }]);
-            }
-            Err(NumberIssue::Float) => {
-                return Err(vec![QueryIssue {
-                    path: "limit",
-                    message: "Expected integer, received float",
-                }]);
-            }
-            Err(NumberIssue::Nan | NumberIssue::NonFinite) => {
-                return Err(vec![QueryIssue {
-                    path: "limit",
-                    message: "Expected number, received nan",
-                }]);
-            }
-        },
-    };
-
-    let mut issues = Vec::new();
-    if !matches!(stream, HumanSearchStream::All) && conversation.is_none() {
-        issues.push(QueryIssue {
-            path: "stream",
-            message: "stream filter requires conversation_id",
-        });
-    }
-    if matches!(stream, HumanSearchStream::Thread) && thread_root.is_none() {
-        issues.push(QueryIssue {
-            path: "thread_root_id",
-            message: "stream=thread requires thread_root_id",
-        });
-    }
-    if order == HumanSearchOrder::SequenceAsc && conversation.is_none() {
-        issues.push(QueryIssue {
-            path: "order",
-            message: "order=seq_asc requires conversation_id",
-        });
-    }
-    if !issues.is_empty() {
-        return Err(issues);
-    }
-    HumanSearchQuery::admitted(
-        text,
-        stream,
-        thread_root,
-        workspace,
-        conversation,
-        sender,
-        from,
-        to,
-        order,
-        limit,
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "search.admit",
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
     )
-    .map(|query| query.with_identities(include_identities))
-    .map_err(|_| {
-        vec![QueryIssue {
-            path: "",
-            message: "invalid search query",
-        }]
-    })
+)]
+fn admitted_query(wire: &HumanSearchQueryWire) -> Result<HumanSearchQuery, Vec<QueryIssue>> {
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = (|| {
+        let include_identities = match wire.include_identities.as_deref() {
+            None | Some("false") => false,
+            Some("true") => true,
+            _ => {
+                return Err(vec![QueryIssue {
+                    path: "include_identities",
+                    message: "expected true or false",
+                }]);
+            }
+        };
+        let text = HumanSearchText::parse(wire.q.as_deref().unwrap_or("")).map_err(|_| {
+            vec![QueryIssue {
+                path: "q",
+                message: "String must contain at most 200 character(s)",
+            }]
+        })?;
+        let stream = match wire.stream.as_deref().unwrap_or("all") {
+            "all" => HumanSearchStream::All,
+            "mainline" => HumanSearchStream::Mainline,
+            "thread" => HumanSearchStream::Thread,
+            _ => {
+                return Err(vec![QueryIssue {
+                    path: "stream",
+                    message: "Invalid enum value. Expected 'all' | 'mainline' | 'thread'",
+                }]);
+            }
+        };
+        let workspace = optional_string(wire.workspace_id.as_deref())
+            .map(WorkspaceId::parse)
+            .transpose()
+            .map_err(|_| invalid_string("workspace_id"))?;
+        let conversation = optional_string(wire.conversation_id.as_deref())
+            .map(ConversationId::parse)
+            .transpose()
+            .map_err(|_| invalid_string("conversation_id"))?;
+        let thread_root = optional_string(wire.thread_root_id.as_deref())
+            .map(MessageId::parse)
+            .transpose()
+            .map_err(|_| invalid_string("thread_root_id"))?;
+        let user = optional_string(wire.user_id.as_deref())
+            .map(UserId::parse)
+            .transpose()
+            .map_err(|_| invalid_string("user_id"))?;
+        let agent = optional_string(wire.agent_id.as_deref())
+            .map(AgentId::parse)
+            .transpose()
+            .map_err(|_| invalid_string("agent_id"))?;
+        if user.is_some() && agent.is_some() {
+            return Err(vec![QueryIssue {
+                path: "user_id",
+                message: "user_id and agent_id cannot both be set",
+            }]);
+        }
+        let sender = user
+            .map(PrincipalIdentity::Human)
+            .or_else(|| agent.map(PrincipalIdentity::Agent));
+        let from = optional_millis(wire.from.as_deref(), "from")?;
+        let to = optional_millis(wire.to.as_deref(), "to")?;
+        let order = match wire.order.as_deref().unwrap_or("recency_desc") {
+            "recency_desc" => HumanSearchOrder::RecencyDesc,
+            "seq_asc" => HumanSearchOrder::SequenceAsc,
+            _ => {
+                return Err(vec![QueryIssue {
+                    path: "order",
+                    message: "Invalid enum value. Expected 'recency_desc' | 'seq_asc'",
+                }]);
+            }
+        };
+        let limit = match wire.limit.as_deref() {
+            None => 80,
+            Some(raw) => match coerce_integer(raw) {
+                Ok(CoercedInteger::Persisted(value)) if (1..=500).contains(&value) => value as u16,
+                Ok(CoercedInteger::Persisted(value)) if value <= 0 => {
+                    return Err(vec![QueryIssue {
+                        path: "limit",
+                        message: "Number must be greater than 0",
+                    }]);
+                }
+                Ok(CoercedInteger::Persisted(_) | CoercedInteger::BeyondPersistedRange) => {
+                    return Err(vec![QueryIssue {
+                        path: "limit",
+                        message: "Number must be less than or equal to 500",
+                    }]);
+                }
+                Err(NumberIssue::Float) => {
+                    return Err(vec![QueryIssue {
+                        path: "limit",
+                        message: "Expected integer, received float",
+                    }]);
+                }
+                Err(NumberIssue::Nan | NumberIssue::NonFinite) => {
+                    return Err(vec![QueryIssue {
+                        path: "limit",
+                        message: "Expected number, received nan",
+                    }]);
+                }
+            },
+        };
+
+        let mut issues = Vec::new();
+        if !matches!(stream, HumanSearchStream::All) && conversation.is_none() {
+            issues.push(QueryIssue {
+                path: "stream",
+                message: "stream filter requires conversation_id",
+            });
+        }
+        if matches!(stream, HumanSearchStream::Thread) && thread_root.is_none() {
+            issues.push(QueryIssue {
+                path: "thread_root_id",
+                message: "stream=thread requires thread_root_id",
+            });
+        }
+        if order == HumanSearchOrder::SequenceAsc && conversation.is_none() {
+            issues.push(QueryIssue {
+                path: "order",
+                message: "order=seq_asc requires conversation_id",
+            });
+        }
+        if !issues.is_empty() {
+            return Err(issues);
+        }
+        HumanSearchQuery::admitted(
+            text,
+            stream,
+            thread_root,
+            workspace,
+            conversation,
+            sender,
+            from,
+            to,
+            order,
+            limit,
+        )
+        .map(|query| query.with_identities(include_identities))
+        .map_err(|_| {
+            vec![QueryIssue {
+                path: "",
+                message: "invalid search query",
+            }]
+        })
+    })();
+    observation.finish(&result);
+    result
 }
 
 fn optional_string(raw: Option<&str>) -> Option<String> {
@@ -347,25 +361,39 @@ fn invalid_query(issues: Vec<QueryIssue>) -> Response {
         .into_response()
 }
 
-#[tracing::instrument(target = "silverhand::diagnostics", name = "search.wire", skip_all)]
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "search.wire",
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
+    )
+)]
 fn success(
     page: &BoundHumanSearchPage,
 ) -> Result<Response, super::conversation_message_window::MessageWindowWireError> {
-    let results = page
-        .results()
-        .iter()
-        .map(result)
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut body = json!({
-        "query": query_wire(page.query()),
-        "results": results,
-        "total": page.total().get(),
-        "truncated": page.truncated(),
-    });
-    if let Some(identities) = page.identities() {
-        body["identities"] = identities_wire(identities);
-    }
-    Ok(Json(body).into_response())
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = (|| {
+        let results = page
+            .results()
+            .iter()
+            .map(result)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut body = json!({
+            "query": query_wire(page.query()),
+            "results": results,
+            "total": page.total().get(),
+            "truncated": page.truncated(),
+        });
+        if let Some(identities) = page.identities() {
+            body["identities"] = identities_wire(identities);
+        }
+        Ok(Json(body).into_response())
+    })();
+    observation.finish(&result);
+    result
 }
 
 fn identities_wire(groups: &IdentitySearchGroups) -> Value {

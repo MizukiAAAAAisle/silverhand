@@ -20,10 +20,10 @@ use silverhand_backend_core::{
         },
     },
 };
+use silverhand_backend_observability::Observe;
 use sqlx::{Row, Sqlite, Transaction};
 use std::collections::BTreeMap;
 use thiserror::Error;
-use tracing::Instrument;
 
 use crate::conversation_messaging::messaging::MessagingStore;
 use crate::viewer_read_model::unread_read::conversation_unread_counts;
@@ -117,117 +117,134 @@ struct RawFavorite {
 }
 
 impl FavoritesReadPort for SqliteFavoritesRead {
-    #[tracing::instrument(target = "silverhand::diagnostics", name = "db.favorites", skip_all)]
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.favorites",
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
+    )]
     async fn list_favorites(&self, viewer: &UserId) -> Result<ListFavorites, PersistenceFailure> {
-        // One snapshot: membership + ranks + modes + the unread rollup read as one
-        // consistent instant, so the badge cannot drift from the projected set.
-        let mut tx =
-            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
+            // One snapshot: membership + ranks + modes + the unread rollup read as one
+            // consistent instant, so the badge cannot drift from the projected set.
+            let mut tx =
+                crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN DEFERRED"))
+                    .await
+                    .map_err(FavoritesReadError::from)?;
+
+            let rows = sqlx::query(SELECT_CONVERSATION_FAVORITES)
+                .bind(viewer.as_str())
+                .bind(viewer.as_str())
+                .bind(viewer.as_str())
+                .fetch_all(&mut *tx)
+                .observe(silverhand_backend_observability::operation_span!(
+                    "db.favorites.conversations"
+                ))
                 .await
                 .map_err(FavoritesReadError::from)?;
+            let mut raw = Vec::with_capacity(rows.len());
+            for row in &rows {
+                raw.push(decode_favorite(row)?);
+            }
 
-        let rows = sqlx::query(SELECT_CONVERSATION_FAVORITES)
-            .bind(viewer.as_str())
-            .bind(viewer.as_str())
-            .bind(viewer.as_str())
-            .fetch_all(&mut *tx)
-            .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.favorites.conversations"))
-            .await
-            .map_err(FavoritesReadError::from)?;
-        let mut raw = Vec::with_capacity(rows.len());
-        for row in &rows {
-            raw.push(decode_favorite(row)?);
-        }
+            let rank_rows = sqlx::query(SELECT_FAVORITES_RANKS)
+                .bind(viewer.as_str())
+                .fetch_all(&mut *tx)
+                .observe(silverhand_backend_observability::operation_span!(
+                    "db.favorites.ranks"
+                ))
+                .await
+                .map_err(FavoritesReadError::from)?;
+            let mut rank_by_key: BTreeMap<String, i64> = BTreeMap::new();
+            for row in &rank_rows {
+                let key: String = row.try_get("entity_id").map_err(FavoritesReadError::from)?;
+                let rank: i64 = fav_js_safe(
+                    row.try_get("rank").map_err(FavoritesReadError::from)?,
+                    "rank",
+                )?;
+                rank_by_key.insert(key, rank);
+            }
 
-        let rank_rows = sqlx::query(SELECT_FAVORITES_RANKS)
-            .bind(viewer.as_str())
-            .fetch_all(&mut *tx)
-            .instrument(
-                tracing::info_span!(target: "silverhand::diagnostics", "db.favorites.ranks"),
-            )
-            .await
-            .map_err(FavoritesReadError::from)?;
-        let mut rank_by_key: BTreeMap<String, i64> = BTreeMap::new();
-        for row in &rank_rows {
-            let key: String = row.try_get("entity_id").map_err(FavoritesReadError::from)?;
-            let rank: i64 = fav_js_safe(
-                row.try_get("rank").map_err(FavoritesReadError::from)?,
-                "rank",
-            )?;
-            rank_by_key.insert(key, rank);
-        }
+            let mode_rows = sqlx::query(SELECT_FAVORITES_MODES)
+                .bind(viewer.as_str())
+                .fetch_all(&mut *tx)
+                .observe(silverhand_backend_observability::operation_span!(
+                    "db.favorites.modes"
+                ))
+                .await
+                .map_err(FavoritesReadError::from)?;
+            let mut modes: BTreeMap<String, SortMode> = BTreeMap::new();
+            for row in &mode_rows {
+                let scope: String = row.try_get("scope").map_err(FavoritesReadError::from)?;
+                let mode_raw: String = row.try_get("mode").map_err(FavoritesReadError::from)?;
+                let mode =
+                    SortMode::parse(&mode_raw).ok_or(FavoritesReadError::UnknownMode(mode_raw))?;
+                modes.insert(scope, mode);
+            }
 
-        let mode_rows = sqlx::query(SELECT_FAVORITES_MODES)
-            .bind(viewer.as_str())
-            .fetch_all(&mut *tx)
-            .instrument(
-                tracing::info_span!(target: "silverhand::diagnostics", "db.favorites.modes"),
-            )
-            .await
-            .map_err(FavoritesReadError::from)?;
-        let mut modes: BTreeMap<String, SortMode> = BTreeMap::new();
-        for row in &mode_rows {
-            let scope: String = row.try_get("scope").map_err(FavoritesReadError::from)?;
-            let mode_raw: String = row.try_get("mode").map_err(FavoritesReadError::from)?;
-            let mode =
-                SortMode::parse(&mode_raw).ok_or(FavoritesReadError::UnknownMode(mode_raw))?;
-            modes.insert(scope, mode);
-        }
+            let conversation_ids: Vec<ConversationId> =
+                raw.iter().map(|row| row.entity_id.clone()).collect();
+            let unread = unread_counts(&mut tx, viewer, &conversation_ids).await?;
 
-        let conversation_ids: Vec<ConversationId> =
-            raw.iter().map(|row| row.entity_id.clone()).collect();
-        let unread = unread_counts(&mut tx, viewer, &conversation_ids).await?;
+            tx.commit().await.map_err(FavoritesReadError::from)?;
 
-        tx.commit().await.map_err(FavoritesReadError::from)?;
-
-        let mut items = Vec::with_capacity(raw.len());
-        let mut entries = Vec::with_capacity(raw.len());
-        for row in raw {
-            let key = favorite_key(row.entity_id.as_str());
-            // #10: the unread rollup's raw i64 crosses the wire as a JS number — gate
-            // it through JsSafeInteger (fail-closed) like every other outbound numeric.
-            let unread_count = fav_js_safe(
-                unread.get(&row.entity_id).copied().unwrap_or(0),
-                "unread_count",
-            )?;
-            entries.push(ViewerSortEntryProjection {
-                entity_id: key.clone(),
-                rank: rank_by_key.get(&key).copied(),
-                last_accessed_at: row.last_accessed_at,
-                starred_at: Some(row.starred_at),
+            let mut items = Vec::with_capacity(raw.len());
+            let mut entries = Vec::with_capacity(raw.len());
+            for row in raw {
+                let key = favorite_key(row.entity_id.as_str());
+                // #10: the unread rollup's raw i64 crosses the wire as a JS number — gate
+                // it through JsSafeInteger (fail-closed) like every other outbound numeric.
+                let unread_count = fav_js_safe(
+                    unread.get(&row.entity_id).copied().unwrap_or(0),
+                    "unread_count",
+                )?;
+                entries.push(ViewerSortEntryProjection {
+                    entity_id: key.clone(),
+                    rank: rank_by_key.get(&key).copied(),
+                    last_accessed_at: row.last_accessed_at,
+                    starred_at: Some(row.starred_at),
+                });
+                items.push(FavoriteRow {
+                    roster_policy: row.roster_policy,
+                    favorite_key: key,
+                    entity_id: row.entity_id,
+                    workspace_id: row.workspace_id,
+                    title: row.title,
+                    parent_title: row.parent_title,
+                    starred_at: row.starred_at,
+                    created_at: row.created_at,
+                    unread_count,
+                    visibility: row.visibility,
+                });
+            }
+            // Deterministic fallback order: most-recently-starred first, then a favorite_key
+            // tiebreak by UTF-16 CODE UNITS (#10) — matching TS `<`/`>` on strings, NOT
+            // Rust's default UTF-8 byte `String::cmp` (an opaque non-ASCII conversation id
+            // can order differently between the two, e.g. U+10000 vs U+E000). The renderer
+            // composes the authoritative order from viewer_sort.
+            items.sort_by(|a, b| {
+                b.starred_at
+                    .cmp(&a.starred_at)
+                    .then_with(|| cmp_utf16(&a.favorite_key, &b.favorite_key))
             });
-            items.push(FavoriteRow {
-                roster_policy: row.roster_policy,
-                favorite_key: key,
-                entity_id: row.entity_id,
-                workspace_id: row.workspace_id,
-                title: row.title,
-                parent_title: row.parent_title,
-                starred_at: row.starred_at,
-                created_at: row.created_at,
-                unread_count,
-                visibility: row.visibility,
-            });
-        }
-        // Deterministic fallback order: most-recently-starred first, then a favorite_key
-        // tiebreak by UTF-16 CODE UNITS (#10) — matching TS `<`/`>` on strings, NOT
-        // Rust's default UTF-8 byte `String::cmp` (an opaque non-ASCII conversation id
-        // can order differently between the two, e.g. U+10000 vs U+E000). The renderer
-        // composes the authoritative order from viewer_sort.
-        items.sort_by(|a, b| {
-            b.starred_at
-                .cmp(&a.starred_at)
-                .then_with(|| cmp_utf16(&a.favorite_key, &b.favorite_key))
-        });
 
-        Ok(ListFavorites {
-            items,
-            viewer_sort: ViewerSortStateProjection {
-                list_key: SortListKey::Favorites,
-                modes: modes.into_iter().collect(),
-                entries,
-            },
-        })
+            Ok(ListFavorites {
+                items,
+                viewer_sort: ViewerSortStateProjection {
+                    list_key: SortListKey::Favorites,
+                    modes: modes.into_iter().collect(),
+                    entries,
+                },
+            })
+        }
+        .await;
+        observation.finish(&result);
+        result
     }
 }
 

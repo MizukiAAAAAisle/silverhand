@@ -1,8 +1,9 @@
-//! Explicit, stable statement identities. Timing includes pool/lock wait and row
-//! fetching; neither SQL nor bindings are accepted by this observation boundary.
+//! Explicit, stable statement identities. Timing follows the execution future:
+//! lock wait and fetching, plus pool wait only when its executor is a pool.
+//! Neither SQL nor bindings are accepted by this observation boundary.
+use silverhand_backend_observability::Observe;
 use sqlx::SqlSafeStr;
 use std::{future::Future, time::Instant};
-use tracing::Instrument;
 
 /// Same SQLx transaction ownership/rollback semantics, with acquisition measured
 /// separately from BEGIN (which may wait for SQLite's writer lock).
@@ -12,10 +13,14 @@ pub(crate) async fn begin(
 ) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>, sqlx::Error> {
     let connection = pool
         .acquire()
-        .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.pool.acquire"))
+        .observe(silverhand_backend_observability::operation_span!(
+            "db.pool.acquire"
+        ))
         .await?;
     sqlx::Transaction::begin(connection, sql.map(SqlSafeStr::into_sql_str))
-        .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.transaction.begin"))
+        .observe(silverhand_backend_observability::operation_span!(
+            "db.transaction.begin"
+        ))
         .await
 }
 
@@ -35,23 +40,39 @@ pub(crate) fn outcome(error: Option<&sqlx::Error>) -> &'static str {
     }
 }
 
-#[tracing::instrument(target = "silverhand::diagnostics", name = "db.statement", skip_all, fields(query_name = name))]
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "db.statement",
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
+        query_name = name,
+    )
+)]
 pub(crate) async fn statement<T>(
     name: &'static str,
     operation: &'static str,
     query: impl Future<Output = Result<T, sqlx::Error>>,
 ) -> Result<T, sqlx::Error> {
-    let started = Instant::now();
-    let result = query.await;
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = async {
+        let started = Instant::now();
+        let result = query.await;
 
-    metrics::histogram!(
-        "silverhand_db_statement_duration_seconds",
-        "query_name" => name,
-        "operation" => operation,
-        "outcome" => outcome(result.as_ref().err()),
-    )
-    .record(started.elapsed().as_secs_f64());
+        metrics::histogram!(
+            "silverhand_db_statement_duration_seconds",
+            "query_name" => name,
+            "operation" => operation,
+            "outcome" => outcome(result.as_ref().err()),
+        )
+        .record(started.elapsed().as_secs_f64());
 
+        result
+    }
+    .await;
+    observation.finish(&result);
     result
 }
 

@@ -1863,6 +1863,7 @@ dependencies = [
  "sha2 0.11.0",
  "silverhand-backend-core",
  "silverhand-backend-filesystem",
+ "silverhand-backend-observability",
  "silverhand-backend-server",
  "silverhand-backend-sqlite",
  "sqlx",
@@ -1909,6 +1910,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "silverhand-backend-observability"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+]
+
+[[package]]
 name = "silverhand-backend-server"
 version = "0.1.0"
 dependencies = [
@@ -1926,6 +1934,7 @@ dependencies = [
  "sha2 0.11.0",
  "silverhand-backend-core",
  "silverhand-backend-filesystem",
+ "silverhand-backend-observability",
  "silverhand-backend-sqlite",
  "sqlx",
  "subtle",
@@ -1957,6 +1966,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "silverhand-backend-core",
+ "silverhand-backend-observability",
  "sqlx",
  "tempfile",
  "thiserror",

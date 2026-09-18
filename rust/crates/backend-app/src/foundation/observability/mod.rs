@@ -175,6 +175,21 @@ impl MetricsEndpoint {
     }
 }
 
+// Declared before the handler future, so cancellation drops the handler's
+// operation guards before committing the request summary.
+struct PendingHeaders {
+    started: Instant,
+    span: Option<tracing::Span>,
+}
+impl Drop for PendingHeaders {
+    fn drop(&mut self) {
+        if let Some(span) = &self.span {
+            span.record("elapsed_ms", self.started.elapsed().as_secs_f64() * 1000.);
+            span.record("completion", "cancelled_before_headers");
+        }
+    }
+}
+
 struct HttpObservation {
     started: Instant,
     headers_at: Instant,
@@ -227,7 +242,12 @@ pub(crate) async fn observe_http(request: Request, next: Next) -> Response {
         status = tracing::field::Empty, handler_ms = tracing::field::Empty,
         body_ms = tracing::field::Empty, elapsed_ms = tracing::field::Empty,
         completion = tracing::field::Empty);
+    let mut pending = PendingHeaders {
+        started,
+        span: Some(span.clone()),
+    };
     let response = next.run(request).instrument(span.clone()).await;
+    pending.span.take();
     let headers_at = Instant::now();
     span.record("status", u64::from(response.status().as_u16()));
     span.record("handler_ms", started.elapsed().as_secs_f64() * 1000.);
@@ -254,19 +274,18 @@ pub(crate) async fn observe_http(request: Request, next: Next) -> Response {
     };
 
     let (parts, body) = response.into_parts();
-    if http_body::Body::is_end_stream(&body) {
-        // Hyper need not poll an already-empty body before dropping it.
+    let observation = if http_body::Body::is_end_stream(&body) {
+        // Already complete: a caller retaining the response must not extend its
+        // duration, and Hyper need not poll this body at all.
         observation.completion = "complete";
-    }
+        drop(observation);
+        None
+    } else {
+        Some(observation)
+    };
     // Time streaming responses through end-of-stream (or client cancellation),
     // not merely until the handler has returned headers.
-    Response::from_parts(
-        parts,
-        Body::new(ObservedBody {
-            body,
-            observation: Some(observation),
-        }),
-    )
+    Response::from_parts(parts, Body::new(ObservedBody { body, observation }))
 }
 
 struct ObservedBody {
@@ -388,6 +407,34 @@ mod tests {
         assert!(count.ends_with(" 1"));
         assert!(!after.contains("private-id"));
         assert!(!after.contains("hidden"));
+    }
+
+    #[tokio::test]
+    async fn empty_response_finishes_before_the_response_handle_is_dropped() {
+        use tower::ServiceExt;
+        let recorder = recorder("standalone");
+        let _guard = metrics::set_default_local_recorder(&recorder);
+        let app = Router::new()
+            .route(
+                "/empty",
+                get(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+            )
+            .layer(axum::middleware::from_fn(observe_http));
+        let response = app
+            .oneshot(
+                axum::http::Request::get("/empty")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let complete = recorder.handle().render();
+        assert!(complete.lines().any(|line| {
+            line.starts_with("silverhand_http_request_duration_seconds_count{")
+                && line.ends_with(" 1")
+        }));
+        drop(response);
+        assert_eq!(recorder.handle().render(), complete);
     }
 
     #[test]

@@ -86,16 +86,18 @@ do not emit per-request logs. The event contains:
 
 - `request`: ID, method, route, actual status when available, completion state,
   `handler_ms` through response headers, and `body_ms` through body termination;
-- `elapsed_ms`: request lifetime through response-body termination (or span
-  lifetime when no response was produced), in milliseconds;
-- `phases`: source-named child spans, each with `count`, `total_ms`, `max_ms`.
+- `elapsed_ms`: request lifetime through response-body termination (or handler
+  cancellation when no response was produced), in milliseconds;
+- `phases`: source-named child spans, each with `count`, `total_ms`, `max_ms`,
+  and bounded `outcomes` counts (`ok`, `error`, `cancelled`).
 
 Phase timing is elapsed wall time, not CPU time. Nested phases overlap; do not
 sum them into a critical path or subtract all of them from total duration.
 The subscriber aggregates by static operation names, never by entity IDs, and
 holds no global request map or persistent state. Fast child operations still
-contribute to a slow parent's summary. Cancellation closes partial spans; their
-timings do not assert that the operation committed. An unpolled, already-empty
+contribute to a slow parent's summary. Cancellation records partial operation duration; it never reports success.
+`ok` means the observed Rust Result was Ok, not that a containing transaction
+committed or a nested domain result accepted the request. An unpolled, already-empty
 body is complete, not a cancellation. Response body errors retain the actual
 Display error in a correlated error event. An unfinished handler has no invented
 HTTP status. Existing response bytes, trailers, errors and HTTP metric semantics
@@ -103,8 +105,8 @@ are unchanged.
 
 Current phase coverage:
 
-- human-session authentication, including the SQLite verify-and-touch write,
-  user existence check and commit;
+- human-session authentication: separate pool acquisition and session/user read;
+  renewal BEGIN, recheck, conditional touch and commit only when renewal is due;
 - selected read adapters: Activity, favorites, DirectPairs, attention badges/modes,
   channel directories, message windows and unread projections;
 - named SQL statements and selected read queries;
@@ -129,12 +131,49 @@ logs and Prometheus remain authoritative. The standard spans can later feed
 sampling policy is enabled by this change. Trace retention and deployment resource
 budgets must be configured when that infrastructure is introduced.
 
+## Operation boundaries and tracing context
+
+`silverhand-backend-observability` supplies the shared adapter-level timer; core
+business types do not depend on it. `Observe::observe` delegates context
+propagation to standard `Instrument`. Functions with `#[instrument(skip_all)]`
+use an `Operation` guard and finish it with their Result. Span fields are bounded;
+no arguments, result values, SQL, or error contents enter the timer.
+
+Timing starts when the operation is polled/entered, ends at result or cancellation,
+and is recorded before a terminal `operation_finished` field. The application
+collector consumes that record exactly once. It does not wait for `on_close`:
+SQLx workers or other downstream code may still own span clones. Do not hold an
+entered thread-local guard across `.await`; synchronous `in_scope` is appropriate
+for assembly. Unpolled futures produce no observation.
+
+HTTP completion has its own authority: handler cancellation before headers, or
+response-body completion/error/drop afterwards. The final completion record
+emits the summary once, regardless of remaining span handles. Operations that
+finish after the HTTP boundary do not reopen its summary or extend request time.
+Statement histograms retain their existing Result-based samples: cancellation
+has a diagnostic outcome but does not fabricate a successful SQL metric sample.
+
+Production installs one global subscriber. Observability composition tests run
+in independent processes with the same global subscriber and assert diagnostics
+while SQLite pools remain open. This covers worker threads without assuming a
+scoped test subscriber propagates into them. Tests also retain span clones across
+completed requests, and cancel a real writer-blocked BEGIN before releasing the
+lock, then verify rollback/reuse with a subsequent request.
+
+The locked tracing-subscriber 0.3.23 already contains the local Registry::exit
+reference handling from [upstream PR #3331](https://github.com/tokio-rs/tracing/pull/3331).
+A scoped-subscriber test failure is not evidence of a production span leak; its
+specific cause remains unestablished. Standard asynchronous instrumentation follows
+[tracing's documentation](https://docs.rs/tracing/latest/tracing/struct.Span.html#in-asynchronous-code).
+
 ## Named SQLite statement metrics
 
 Adapters wrap the actual SQLx execution future with
 `foundation::statement_metrics::statement(stable_name, operation, future)`.
 `get`, `all` and `run` preserve the old operation vocabulary. Duration includes
-pool acquisition, SQLite lock wait and fetching, but not business-row decoding.
+SQLite lock wait and fetching, but not business-row decoding. Pool acquisition is
+included only when the passed future executes against a pool; where acquisition
+is measured separately, statement timing starts with the acquired connection.
 The wrapper returns the original result unchanged. Readiness instruments its
 own BEGIN/rollback as statements as well as the complete probe, so the contention
 alert can detect a writer lock even when user traffic is absent.

@@ -1,7 +1,7 @@
 //! SQLite cold-read adapter for the authenticated viewer's complete Direct Messages list.
 
+use silverhand_backend_observability::Observe;
 use std::{collections::HashMap, path::Path, time::Duration};
-use tracing::Instrument;
 
 use silverhand_backend_core::{
     conversation_messaging::direct_pair_read::{
@@ -78,58 +78,73 @@ impl SqliteDirectPairReadModel {
         Ok(Self { pool })
     }
 
-    #[tracing::instrument(target = "silverhand::diagnostics", name = "db.direct_pairs", skip_all)]
+    #[tracing::instrument(
+        target = "silverhand::diagnostics",
+        name = "db.direct_pairs",
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
+    )]
     async fn list_transaction(
         &self,
         viewer: &UserId,
     ) -> Result<DirectPairList, DirectPairReadError> {
-        let mut tx =
-            crate::foundation::statement_metrics::begin(&self.pool, Some(DEFERRED_READ_BEGIN))
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
+            let mut tx =
+                crate::foundation::statement_metrics::begin(&self.pool, Some(DEFERRED_READ_BEGIN))
+                    .await?;
+            let rows = sqlx::query(SELECT_PAIRS)
+                .bind(viewer.as_str())
+                .bind(viewer.as_str())
+                .fetch_all(&mut *tx)
+                .observe(silverhand_backend_observability::operation_span!(
+                    "db.direct_pairs.rows"
+                ))
                 .await?;
-        let rows = sqlx::query(SELECT_PAIRS)
-            .bind(viewer.as_str())
-            .bind(viewer.as_str())
-            .fetch_all(&mut *tx)
-            .instrument(
-                tracing::info_span!(target: "silverhand::diagnostics", "db.direct_pairs.rows"),
-            )
-            .await?;
-        let mut evidence = Vec::with_capacity(rows.len());
-        for row in rows {
-            evidence.push(PairEvidence::decode(&row)?);
-        }
+            let mut evidence = Vec::with_capacity(rows.len());
+            for row in rows {
+                evidence.push(PairEvidence::decode(&row)?);
+            }
 
-        let principals = LivePrincipals::load(&mut tx, &evidence).await?;
-        let conversations = evidence
-            .iter()
-            .map(|pair| pair.conversation.clone())
-            .collect::<Vec<_>>();
-        let mut unread = conversation_unread_counts(&mut tx, viewer, &conversations)
-            .await
-            .map_err(DirectPairReadError::Unread)?;
+            let principals = LivePrincipals::load(&mut tx, &evidence).await?;
+            let conversations = evidence
+                .iter()
+                .map(|pair| pair.conversation.clone())
+                .collect::<Vec<_>>();
+            let mut unread = conversation_unread_counts(&mut tx, viewer, &conversations)
+                .await
+                .map_err(DirectPairReadError::Unread)?;
 
-        let mut items = Vec::with_capacity(evidence.len());
-        for pair in evidence {
-            let counterpart = pair.counterpart(viewer)?;
-            let counterpart_value = principals.counterpart(&counterpart)?;
-            let read_only = pair.endpoints().iter().any(|endpoint| {
-                endpoint.deleted_at_ms.is_some() || !principals.allows_direct_messages(endpoint)
-            });
-            let unread_count = unread
-                .remove(&pair.conversation)
-                .ok_or(DirectPairReadError::MissingUnreadCount)?;
-            let unread_count = DirectPairUnreadCount::try_from(unread_count)
-                .map_err(|_| DirectPairReadError::NegativeUnreadCount)?;
-            items.push(DirectPairListItem::projected(
-                pair.conversation,
-                counterpart_value,
-                unread_count,
-                read_only,
-                pair.created_at_ms,
-            ));
+            let mut items = Vec::with_capacity(evidence.len());
+            for pair in evidence {
+                let counterpart = pair.counterpart(viewer)?;
+                let counterpart_value = principals.counterpart(&counterpart)?;
+                let read_only = pair.endpoints().iter().any(|endpoint| {
+                    endpoint.deleted_at_ms.is_some() || !principals.allows_direct_messages(endpoint)
+                });
+                let unread_count = unread
+                    .remove(&pair.conversation)
+                    .ok_or(DirectPairReadError::MissingUnreadCount)?;
+                let unread_count = DirectPairUnreadCount::try_from(unread_count)
+                    .map_err(|_| DirectPairReadError::NegativeUnreadCount)?;
+                items.push(DirectPairListItem::projected(
+                    pair.conversation,
+                    counterpart_value,
+                    unread_count,
+                    read_only,
+                    pair.created_at_ms,
+                ));
+            }
+            tx.commit().await?;
+            Ok(DirectPairList::complete(items))
         }
-        tx.commit().await?;
-        Ok(DirectPairList::complete(items))
+        .await;
+        observation.finish(&result);
+        result
     }
 }
 
@@ -300,9 +315,9 @@ impl LivePrincipals {
             for row in sqlx::query(SELECT_AGENTS)
                 .bind(requested)
                 .fetch_all(&mut **tx)
-                .instrument(
-                    tracing::info_span!(target: "silverhand::diagnostics", "db.principals.agents"),
-                )
+                .observe(silverhand_backend_observability::operation_span!(
+                    "db.principals.agents"
+                ))
                 .await?
             {
                 let id: String = row.try_get("id")?;
@@ -317,9 +332,9 @@ impl LivePrincipals {
             for row in sqlx::query(SELECT_USERS)
                 .bind(requested)
                 .fetch_all(&mut **tx)
-                .instrument(
-                    tracing::info_span!(target: "silverhand::diagnostics", "db.principals.users"),
-                )
+                .observe(silverhand_backend_observability::operation_span!(
+                    "db.principals.users"
+                ))
                 .await?
             {
                 let id: String = row.try_get("id")?;

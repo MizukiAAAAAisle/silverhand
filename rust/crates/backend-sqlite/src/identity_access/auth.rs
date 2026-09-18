@@ -24,12 +24,12 @@ use silverhand_backend_core::{
         SessionValidationPort,
     },
 };
+use silverhand_backend_observability::Observe;
 use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use thiserror::Error;
-use tracing::Instrument;
 
 /// The product's `randomBytes(12)`: twelve entropy bytes → sixteen base64url
 /// characters (12 is a multiple of 3, so the encoding never pads).
@@ -82,7 +82,9 @@ async fn read_from_pool(
 ) -> Result<Option<(UserId, i64)>, PersistenceFailure> {
     let mut connection = pool
         .acquire()
-        .instrument(tracing::info_span!(target: "silverhand::diagnostics", "db.pool.acquire"))
+        .observe(silverhand_backend_observability::operation_span!(
+            "db.pool.acquire"
+        ))
         .await
         .map_err(persistence)?;
     read_valid_session(&mut *connection, token_hash, validation).await
@@ -169,48 +171,66 @@ where
     #[tracing::instrument(
         target = "silverhand::diagnostics",
         name = "db.auth.verify_and_touch",
-        skip_all
+        skip_all,
+        fields(
+            elapsed_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            operation_finished = tracing::field::Empty,
+        )
     )]
     async fn verify_with_renewal(
         &self,
         token_hash: SessionTokenHash,
         validation: SessionValidation,
     ) -> Result<Option<UserId>, PersistenceFailure> {
-        // WAL readers do not queue behind an unrelated writer. This snapshot is
-        // the admission point for recent activity, including uncommitted revokes.
-        let Some((user, last_used)) = read_from_pool(&self.pool, &token_hash, validation).await?
-        else {
-            return Ok(None);
-        };
-        if !renewal_due(last_used, validation.now_ms()) {
-            return Ok(Some(user));
-        }
+        let observation = silverhand_backend_observability::Operation::current();
+        let result = async {
+            // WAL readers do not queue behind an unrelated writer. This snapshot is
+            // the admission point for recent activity, including uncommitted revokes.
+            let Some((user, last_used)) =
+                read_from_pool(&self.pool, &token_hash, validation).await?
+            else {
+                return Ok(None);
+            };
+            if !renewal_due(last_used, validation.now_ms()) {
+                return Ok(Some(user));
+            }
 
-        // Acquire the writer before re-reading: concurrent renewals or a revoke
-        // committed while we waited must win over the first snapshot.
-        let mut transaction =
-            crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN IMMEDIATE"))
-                .await
-                .map_err(persistence)?;
-        let current = read_valid_session(&mut *transaction, &token_hash, validation).await?;
-        if let Some((_, last_used)) = &current {
-            if renewal_due(*last_used, validation.now_ms()) {
-                crate::foundation::statement_metrics::statement(
-                    "auth.touch",
-                    "run",
-                    sqlx::query("UPDATE auth_sessions SET last_used_at = ? WHERE token_hash = ?")
+            // Acquire the writer before re-reading: concurrent renewals or a revoke
+            // committed while we waited must win over the first snapshot.
+            let mut transaction =
+                crate::foundation::statement_metrics::begin(&self.pool, Some("BEGIN IMMEDIATE"))
+                    .await
+                    .map_err(persistence)?;
+            let current = read_valid_session(&mut *transaction, &token_hash, validation).await?;
+            if let Some((_, last_used)) = &current {
+                if renewal_due(*last_used, validation.now_ms()) {
+                    crate::foundation::statement_metrics::statement(
+                        "auth.touch",
+                        "run",
+                        sqlx::query(
+                            "UPDATE auth_sessions SET last_used_at = ? WHERE token_hash = ?",
+                        )
                         .bind(validation.now_ms())
                         .bind(token_hash.as_str())
                         .execute(&mut *transaction),
-                )
-                .await
-                .map_err(persistence)?;
+                    )
+                    .await
+                    .map_err(persistence)?;
+                }
             }
-        }
-        crate::foundation::statement_metrics::statement("auth.commit", "run", transaction.commit())
+            crate::foundation::statement_metrics::statement(
+                "auth.commit",
+                "run",
+                transaction.commit(),
+            )
             .await
             .map_err(persistence)?;
-        Ok(current.map(|(user, _)| user))
+            Ok(current.map(|(user, _)| user))
+        }
+        .await;
+        observation.finish(&result);
+        result
     }
 }
 

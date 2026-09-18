@@ -33,12 +33,12 @@ use silverhand_backend_core::{
     foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
 };
+use silverhand_backend_observability::Observe;
 use sqlx::{
     Row, SqlSafeStr, Sqlite, SqlitePool, Transaction,
     sqlite::{SqliteArguments, SqliteRow},
 };
 use thiserror::Error;
-use tracing::Instrument;
 
 use crate::conversation_messaging::messaging::{
     MessagingStore,
@@ -189,17 +189,15 @@ impl SqliteHumanSearchRead {
         let connection = self
             .pool
             .acquire()
-            .instrument(
-                tracing::info_span!(target: "silverhand::diagnostics", "search.pool.acquire"),
-            )
+            .observe(silverhand_backend_observability::operation_span!(
+                "search.pool.acquire"
+            ))
             .await?;
-        // Measure the await boundary without lending this phase span to SQLx's
-        // worker. Worker-held span references must not extend BEGIN timing.
-        let begin_span =
-            tracing::info_span!(target: "silverhand::diagnostics", "search.transaction.begin");
-        let begun = Transaction::begin(connection, Some("BEGIN DEFERRED".into_sql_str())).await;
-        drop(begin_span);
-        let mut tx = begun?;
+        let mut tx = Transaction::begin(connection, Some("BEGIN DEFERRED".into_sql_str()))
+            .observe(silverhand_backend_observability::operation_span!(
+                "search.transaction.begin"
+            ))
+            .await?;
         let resolved = match resolve_query(&mut tx, viewer, requested).await? {
             Ok(resolution) => resolution,
             Err(refusal) => {
@@ -239,133 +237,153 @@ impl SqliteHumanSearchRead {
             )
         };
         let page = {
-            let _assembly =
-                tracing::info_span!(target: "silverhand::diagnostics", "search.assemble").entered();
-            let page = HumanSearchPage::sealed(
-                viewer.clone(),
-                resolved.query,
-                workspaces,
-                conversations,
-                messages,
-                count,
-            )
-            .map_err(HumanSearchStoreError::Projection)?;
-            let page = match identities {
-                Some(identities) => page
-                    .with_identities(identities)
-                    .map_err(HumanSearchStoreError::Projection)?,
-                None => page,
-            };
-            page
+            let span = silverhand_backend_observability::operation_span!("search.assemble");
+            span.in_scope(|| {
+                let observation = silverhand_backend_observability::Operation::current();
+                let result = (|| {
+                    let page = HumanSearchPage::sealed(
+                        viewer.clone(),
+                        resolved.query,
+                        workspaces,
+                        conversations,
+                        messages,
+                        count,
+                    )
+                    .map_err(HumanSearchStoreError::Projection)?;
+                    match identities {
+                        Some(identities) => page
+                            .with_identities(identities)
+                            .map_err(HumanSearchStoreError::Projection),
+                        None => Ok(page),
+                    }
+                })();
+                observation.finish(&result);
+                result
+            })?
         };
         statement("search.commit", "commit", tx.commit()).await?;
         Ok(Ok(page))
     }
 }
 
-#[tracing::instrument(target = "silverhand::diagnostics", name = "search.resolve", skip_all)]
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "search.resolve",
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
+    )
+)]
 async fn resolve_query(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
     requested: HumanSearchQuery,
 ) -> Result<Result<SqliteResolvedQuery, HumanSearchRefusal>, HumanSearchStoreError> {
-    if !matches!(requested.stream(), HumanSearchStream::Thread) {
-        return ResolvedHumanSearchQuery::direct(requested)
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = async {
+        if !matches!(requested.stream(), HumanSearchStream::Thread) {
+            return ResolvedHumanSearchQuery::direct(requested)
+                .map(|query| {
+                    Ok(SqliteResolvedQuery {
+                        query,
+                        unavailable: false,
+                    })
+                })
+                .map_err(HumanSearchStoreError::Projection);
+        }
+        let conversation =
+            requested
+                .conversation()
+                .cloned()
+                .ok_or(HumanSearchStoreError::Projection(
+                    HumanSearchCorruption::ThreadResolution,
+                ))?;
+        let Some(conversation_row) = sqlx::query(SELECT_CONVERSATION)
+            .bind(conversation.as_str())
+            .fetch_optional(&mut **tx)
+            .await?
+        else {
+            return ResolvedHumanSearchQuery::thread_unavailable(viewer.clone(), requested)
+                .map(|query| {
+                    Ok(SqliteResolvedQuery {
+                        query,
+                        unavailable: true,
+                    })
+                })
+                .map_err(HumanSearchStoreError::Projection);
+        };
+        let (stored, placement) = decode_conversation(&conversation_row, &conversation)?;
+        if participating_viewer(tx, viewer, &stored, &placement)
+            .await?
+            .is_none()
+        {
+            return ResolvedHumanSearchQuery::thread_unavailable(viewer.clone(), requested)
+                .map(|query| {
+                    Ok(SqliteResolvedQuery {
+                        query,
+                        unavailable: true,
+                    })
+                })
+                .map_err(HumanSearchStoreError::Projection);
+        }
+        let requested_anchor = requested
+            .thread_root()
+            .ok_or(HumanSearchStoreError::Projection(
+                HumanSearchCorruption::ThreadResolution,
+            ))?;
+        let Some(anchor_row) = sqlx::query(SELECT_THREAD_ANCHOR)
+            .bind(requested_anchor.as_str())
+            .fetch_optional(&mut **tx)
+            .await?
+        else {
+            return Ok(Err(HumanSearchRefusal::ThreadRootNotFound));
+        };
+        let anchor = message_id(&anchor_row, "id")?;
+        let anchor_conversation = conversation_id(&anchor_row, "conversation_id")?;
+        let stored_root = optional_root(&anchor_row, "thread_root_id")?;
+        if anchor_conversation != stored {
+            return Ok(Err(HumanSearchRefusal::ThreadRootNotFound));
+        }
+        let loaded_root = match stored_root.as_ref() {
+            None => None,
+            Some(root) => {
+                let Some(row) = sqlx::query(SELECT_THREAD_ANCHOR)
+                    .bind(root.as_str())
+                    .fetch_optional(&mut **tx)
+                    .await?
+                else {
+                    return Ok(Err(HumanSearchRefusal::ThreadRootNotFound));
+                };
+                Some((
+                    message_id(&row, "id")?,
+                    conversation_id(&row, "conversation_id")?,
+                    optional_root(&row, "thread_root_id")?,
+                ))
+            }
+        };
+        let selected = match SelectedHumanSearchThreadAnchor::from_rows(
+            anchor,
+            anchor_conversation,
+            stored_root,
+            loaded_root,
+        ) {
+            Ok(selected) => selected,
+            Err(refusal) => return Ok(Err(refusal)),
+        };
+        ResolvedHumanSearchQuery::thread_resolved(viewer.clone(), requested, selected)
             .map(|query| {
                 Ok(SqliteResolvedQuery {
                     query,
                     unavailable: false,
                 })
             })
-            .map_err(HumanSearchStoreError::Projection);
+            .map_err(HumanSearchStoreError::Projection)
     }
-    let conversation =
-        requested
-            .conversation()
-            .cloned()
-            .ok_or(HumanSearchStoreError::Projection(
-                HumanSearchCorruption::ThreadResolution,
-            ))?;
-    let Some(conversation_row) = sqlx::query(SELECT_CONVERSATION)
-        .bind(conversation.as_str())
-        .fetch_optional(&mut **tx)
-        .await?
-    else {
-        return ResolvedHumanSearchQuery::thread_unavailable(viewer.clone(), requested)
-            .map(|query| {
-                Ok(SqliteResolvedQuery {
-                    query,
-                    unavailable: true,
-                })
-            })
-            .map_err(HumanSearchStoreError::Projection);
-    };
-    let (stored, placement) = decode_conversation(&conversation_row, &conversation)?;
-    if participating_viewer(tx, viewer, &stored, &placement)
-        .await?
-        .is_none()
-    {
-        return ResolvedHumanSearchQuery::thread_unavailable(viewer.clone(), requested)
-            .map(|query| {
-                Ok(SqliteResolvedQuery {
-                    query,
-                    unavailable: true,
-                })
-            })
-            .map_err(HumanSearchStoreError::Projection);
-    }
-    let requested_anchor = requested
-        .thread_root()
-        .ok_or(HumanSearchStoreError::Projection(
-            HumanSearchCorruption::ThreadResolution,
-        ))?;
-    let Some(anchor_row) = sqlx::query(SELECT_THREAD_ANCHOR)
-        .bind(requested_anchor.as_str())
-        .fetch_optional(&mut **tx)
-        .await?
-    else {
-        return Ok(Err(HumanSearchRefusal::ThreadRootNotFound));
-    };
-    let anchor = message_id(&anchor_row, "id")?;
-    let anchor_conversation = conversation_id(&anchor_row, "conversation_id")?;
-    let stored_root = optional_root(&anchor_row, "thread_root_id")?;
-    if anchor_conversation != stored {
-        return Ok(Err(HumanSearchRefusal::ThreadRootNotFound));
-    }
-    let loaded_root = match stored_root.as_ref() {
-        None => None,
-        Some(root) => {
-            let Some(row) = sqlx::query(SELECT_THREAD_ANCHOR)
-                .bind(root.as_str())
-                .fetch_optional(&mut **tx)
-                .await?
-            else {
-                return Ok(Err(HumanSearchRefusal::ThreadRootNotFound));
-            };
-            Some((
-                message_id(&row, "id")?,
-                conversation_id(&row, "conversation_id")?,
-                optional_root(&row, "thread_root_id")?,
-            ))
-        }
-    };
-    let selected = match SelectedHumanSearchThreadAnchor::from_rows(
-        anchor,
-        anchor_conversation,
-        stored_root,
-        loaded_root,
-    ) {
-        Ok(selected) => selected,
-        Err(refusal) => return Ok(Err(refusal)),
-    };
-    ResolvedHumanSearchQuery::thread_resolved(viewer.clone(), requested, selected)
-        .map(|query| {
-            Ok(SqliteResolvedQuery {
-                query,
-                unavailable: false,
-            })
-        })
-        .map_err(HumanSearchStoreError::Projection)
+    .await;
+    observation.finish(&result);
+    result
 }
 
 struct SqliteResolvedQuery {
@@ -376,119 +394,172 @@ struct SqliteResolvedQuery {
 #[tracing::instrument(
     target = "silverhand::diagnostics",
     name = "search.workspaces",
-    skip_all
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
+    )
 )]
 async fn load_workspaces(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
     query: &HumanSearchQuery,
 ) -> Result<Vec<SelectedHumanSearchWorkspace>, HumanSearchStoreError> {
-    let (from_mode, from_value) = millis(query.from());
-    let (to_mode, to_value) = millis(query.to());
-    let rows = statement(
-        "search.workspaces",
-        "select",
-        sqlx::query(SELECT_WORKSPACES)
-            .bind(viewer.as_str())
-            .bind(like_needle(query.text().as_str()))
-            .bind(query.workspace().map_or("", WorkspaceId::as_str))
-            .bind(i64::from(query.workspace().is_some()))
-            .bind(from_mode)
-            .bind(from_value)
-            .bind(to_mode)
-            .bind(to_value)
-            .bind(i64::from(query.limit().min(20)))
-            .fetch_all(&mut **tx),
-    )
-    .await?;
-    rows.iter().map(decode_workspace_result).collect()
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = async {
+        let (from_mode, from_value) = millis(query.from());
+        let (to_mode, to_value) = millis(query.to());
+        let rows = statement(
+            "search.workspaces",
+            "select",
+            sqlx::query(SELECT_WORKSPACES)
+                .bind(viewer.as_str())
+                .bind(like_needle(query.text().as_str()))
+                .bind(query.workspace().map_or("", WorkspaceId::as_str))
+                .bind(i64::from(query.workspace().is_some()))
+                .bind(from_mode)
+                .bind(from_value)
+                .bind(to_mode)
+                .bind(to_value)
+                .bind(i64::from(query.limit().min(20)))
+                .fetch_all(&mut **tx),
+        )
+        .await?;
+        rows.iter().map(decode_workspace_result).collect()
+    }
+    .await;
+    observation.finish(&result);
+    result
 }
 
-#[tracing::instrument(target = "silverhand::diagnostics", name = "search.channels", skip_all)]
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "search.channels",
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
+    )
+)]
 async fn load_conversations(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
     query: &HumanSearchQuery,
 ) -> Result<Vec<SelectedHumanSearchConversation>, HumanSearchStoreError> {
-    let (from_mode, from_value) = millis(query.from());
-    let (to_mode, to_value) = millis(query.to());
-    let rows = statement(
-        "search.channels",
-        "select",
-        sqlx::query(SELECT_CONVERSATIONS)
-            .bind(viewer.as_str())
-            .bind(like_needle(query.text().as_str()))
-            .bind(query.workspace().map_or("", WorkspaceId::as_str))
-            .bind(i64::from(query.workspace().is_some()))
-            .bind(from_mode)
-            .bind(from_value)
-            .bind(to_mode)
-            .bind(to_value)
-            .bind(i64::from(query.limit().min(30)))
-            .fetch_all(&mut **tx),
-    )
-    .await?;
-    rows.iter().map(decode_conversation_result).collect()
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = async {
+        let (from_mode, from_value) = millis(query.from());
+        let (to_mode, to_value) = millis(query.to());
+        let rows = statement(
+            "search.channels",
+            "select",
+            sqlx::query(SELECT_CONVERSATIONS)
+                .bind(viewer.as_str())
+                .bind(like_needle(query.text().as_str()))
+                .bind(query.workspace().map_or("", WorkspaceId::as_str))
+                .bind(i64::from(query.workspace().is_some()))
+                .bind(from_mode)
+                .bind(from_value)
+                .bind(to_mode)
+                .bind(to_value)
+                .bind(i64::from(query.limit().min(30)))
+                .fetch_all(&mut **tx),
+        )
+        .await?;
+        rows.iter().map(decode_conversation_result).collect()
+    }
+    .await;
+    observation.finish(&result);
+    result
 }
 
 #[tracing::instrument(
     target = "silverhand::diagnostics",
     name = "search.message_count",
-    skip_all
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
+    )
 )]
 async fn count_messages(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
     query: &HumanSearchQuery,
 ) -> Result<(UserId, i64), HumanSearchStoreError> {
-    let row = statement(
-        "search.message_count",
-        "select",
-        bind_message_query(sqlx::query(COUNT_MESSAGES), viewer, query, false).fetch_one(&mut **tx),
-    )
-    .await?;
-    let total: i64 = row.try_get("total")?;
-    let minimum: Option<String> = row.try_get("min_source_viewer")?;
-    let maximum: Option<String> = row.try_get("max_source_viewer")?;
-    let source = match (minimum, maximum) {
-        (None, None) if total == 0 => viewer.clone(),
-        (Some(minimum), Some(maximum)) if minimum == maximum => {
-            UserId::parse(minimum).map_err(|_| field("message_count.source_viewer"))?
-        }
-        _ => return Err(field("message_count.source_viewer")),
-    };
-    Ok((source, total))
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = async {
+        let row = statement(
+            "search.message_count",
+            "select",
+            bind_message_query(sqlx::query(COUNT_MESSAGES), viewer, query, false)
+                .fetch_one(&mut **tx),
+        )
+        .await?;
+        let total: i64 = row.try_get("total")?;
+        let minimum: Option<String> = row.try_get("min_source_viewer")?;
+        let maximum: Option<String> = row.try_get("max_source_viewer")?;
+        let source = match (minimum, maximum) {
+            (None, None) if total == 0 => viewer.clone(),
+            (Some(minimum), Some(maximum)) if minimum == maximum => {
+                UserId::parse(minimum).map_err(|_| field("message_count.source_viewer"))?
+            }
+            _ => return Err(field("message_count.source_viewer")),
+        };
+        Ok((source, total))
+    }
+    .await;
+    observation.finish(&result);
+    result
 }
 
-#[tracing::instrument(target = "silverhand::diagnostics", name = "search.messages", skip_all)]
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "search.messages",
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
+    )
+)]
 async fn load_messages(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
     query: &HumanSearchQuery,
 ) -> Result<Vec<SelectedHumanSearchMessage>, HumanSearchStoreError> {
-    let sql = match query.order() {
-        HumanSearchOrder::RecencyDesc => SELECT_MESSAGES_RECENCY,
-        HumanSearchOrder::SequenceAsc => SELECT_MESSAGES_SEQUENCE,
-    };
-    let rows = statement(
-        "search.messages",
-        "select",
-        bind_message_query(sqlx::query(sql), viewer, query, true).fetch_all(&mut **tx),
-    )
-    .await?;
-    // Decode every selected row before the set-shaped live-author lookup.
-    let raw = rows
-        .iter()
-        .map(RawSearchMessage::decode)
-        .collect::<Result<Vec<_>, _>>()?;
-    let evidence = raw.iter().map(|row| row.author.clone()).collect::<Vec<_>>();
-    let authors = resolve_authors(tx, &evidence)
-        .await
-        .map_err(HumanSearchStoreError::Author)?;
-    raw.into_iter()
-        .zip(authors)
-        .map(|(row, author)| row.seal(author))
-        .collect()
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = async {
+        let sql = match query.order() {
+            HumanSearchOrder::RecencyDesc => SELECT_MESSAGES_RECENCY,
+            HumanSearchOrder::SequenceAsc => SELECT_MESSAGES_SEQUENCE,
+        };
+        let rows = statement(
+            "search.messages",
+            "select",
+            bind_message_query(sqlx::query(sql), viewer, query, true).fetch_all(&mut **tx),
+        )
+        .await?;
+        // Decode every selected row before the set-shaped live-author lookup.
+        let raw = rows
+            .iter()
+            .map(RawSearchMessage::decode)
+            .collect::<Result<Vec<_>, _>>()?;
+        let evidence = raw.iter().map(|row| row.author.clone()).collect::<Vec<_>>();
+        let authors = resolve_authors(tx, &evidence)
+            .await
+            .map_err(HumanSearchStoreError::Author)?;
+        raw.into_iter()
+            .zip(authors)
+            .map(|(row, author)| row.seal(author))
+            .collect()
+    }
+    .await;
+    observation.finish(&result);
+    result
 }
 
 fn bind_message_query<'q>(
@@ -742,73 +813,84 @@ fn field(name: &'static str) -> HumanSearchStoreError {
 #[tracing::instrument(
     target = "silverhand::diagnostics",
     name = "search.identities",
-    skip_all
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
+    )
 )]
 async fn load_identities(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
     query: &HumanSearchQuery,
 ) -> Result<IdentitySearchGroups, HumanSearchStoreError> {
-    use silverhand_backend_core::{
-        conversation_messaging::messaging::AvatarRevision,
-        identity_access::{
-            agent_list_read::{ListScope, visible_agents},
-            capability::agent_view::VisibleStages,
-        },
-    };
-    let mut candidates = Vec::new();
-    if query.identity_search_status() == IdentitySearchStatus::Searched {
-        let rows = sqlx::query(
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = async {
+        use silverhand_backend_core::{
+            conversation_messaging::messaging::AvatarRevision,
+            identity_access::{
+                agent_list_read::{ListScope, visible_agents},
+                capability::agent_view::VisibleStages,
+            },
+        };
+        let mut candidates = Vec::new();
+        if query.identity_search_status() == IdentitySearchStatus::Searched {
+            let rows = sqlx::query(
             "SELECT id,name,display_name,avatar_storage_key,updated_at FROM users WHERE id != ?",
         )
         .bind(viewer.as_str())
         .fetch_all(&mut **tx)
         .await?;
-        for row in rows {
-            let avatar_key: Option<String> = row.try_get("avatar_storage_key")?;
-            candidates.push(SearchIdentity {
-                identity: PrincipalIdentity::Human(user_id(&row, "id")?),
-                name: row.try_get("name")?,
-                display_name: row.try_get("display_name")?,
-                avatar: avatar_key
-                    .map(|_| row.try_get::<i64, _>("updated_at").map(AvatarRevision::at))
-                    .transpose()?,
-                runtime: None,
-            });
-        }
-
-        let facts =
-            crate::identity_access::agent_list_read::read_agent_candidates_in_tx(tx, viewer)
-                .await
-                .map_err(|error| {
-                    HumanSearchStoreError::IdentityCandidates(PersistenceFailure::from_source(
-                        error,
-                    ))
-                })?;
-        let visible = visible_agents(
-            viewer,
-            &facts,
-            &VisibleStages::active_only(),
-            ListScope::All,
-        )
-        .map_err(|_| HumanSearchStoreError::Projection(HumanSearchCorruption::Identity))?;
-        for agent in visible {
-            let projection = agent.projection();
-            if projection.session_scope != "agent" {
-                continue;
+            for row in rows {
+                let avatar_key: Option<String> = row.try_get("avatar_storage_key")?;
+                candidates.push(SearchIdentity {
+                    identity: PrincipalIdentity::Human(user_id(&row, "id")?),
+                    name: row.try_get("name")?,
+                    display_name: row.try_get("display_name")?,
+                    avatar: avatar_key
+                        .map(|_| row.try_get::<i64, _>("updated_at").map(AvatarRevision::at))
+                        .transpose()?,
+                    runtime: None,
+                });
             }
-            candidates.push(SearchIdentity {
-                identity: PrincipalIdentity::Agent(agent.source().clone()),
-                name: projection.name.clone(),
-                display_name: projection.display_name.clone(),
-                avatar: projection
-                    .avatar_storage_key
-                    .as_ref()
-                    .map(|_| AvatarRevision::at(projection.updated_at)),
-                runtime: Some(projection.runtime),
-            });
+
+            let facts =
+                crate::identity_access::agent_list_read::read_agent_candidates_in_tx(tx, viewer)
+                    .await
+                    .map_err(|error| {
+                        HumanSearchStoreError::IdentityCandidates(PersistenceFailure::from_source(
+                            error,
+                        ))
+                    })?;
+            let visible = visible_agents(
+                viewer,
+                &facts,
+                &VisibleStages::active_only(),
+                ListScope::All,
+            )
+            .map_err(|_| HumanSearchStoreError::Projection(HumanSearchCorruption::Identity))?;
+            for agent in visible {
+                let projection = agent.projection();
+                if projection.session_scope != "agent" {
+                    continue;
+                }
+                candidates.push(SearchIdentity {
+                    identity: PrincipalIdentity::Agent(agent.source().clone()),
+                    name: projection.name.clone(),
+                    display_name: projection.display_name.clone(),
+                    avatar: projection
+                        .avatar_storage_key
+                        .as_ref()
+                        .map(|_| AvatarRevision::at(projection.updated_at)),
+                    runtime: Some(projection.runtime),
+                });
+            }
         }
+        IdentitySearchGroups::from_visible(viewer.clone(), query.clone(), candidates)
+            .map_err(HumanSearchStoreError::Projection)
     }
-    IdentitySearchGroups::from_visible(viewer.clone(), query.clone(), candidates)
-        .map_err(HumanSearchStoreError::Projection)
+    .await;
+    observation.finish(&result);
+    result
 }
