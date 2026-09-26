@@ -1,5 +1,8 @@
 # Building & Releasing the Desktop App
 
+For hosted arm64 embedded/remote-only DMG builds, repository configuration and
+tag/manual triggers, see [Desktop GitHub Actions](desktop-github-actions.md).
+
 > TS backend 退役说明：文中的 `packages/backend` / `packages/server` 源码与测试坐标属于迁移期历史，已从当前仓库删除；现行控制面位于 `rust/crates`。迁移权威仍在 `packages/shared/src/db`，独立回归数据在 `rust/test-fixtures`，现行构建与验证见 [testing.md](testing.md)。
 
 End-to-end recipe for producing a distributable `.dmg` from the

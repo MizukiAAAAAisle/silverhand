@@ -333,7 +333,7 @@ else
   DESKTOP_ARCH="$(node -p 'process.arch')"
   BACKEND_TARGET="aarch64-apple-darwin"
   echo "[package] building embedded Rust backend sidecar (cargo build --release, host target $BACKEND_TARGET)"
-  ( cd "$ROOT_DIR/rust" && cargo build --release --bin silverhand-backend --target "$BACKEND_TARGET" )
+  ( cd "$ROOT_DIR/rust" && cargo build --locked --release --bin silverhand-backend --target "$BACKEND_TARGET" )
   SIDECAR_SRC="${CARGO_TARGET_DIR:-$ROOT_DIR/rust/target}/$BACKEND_TARGET/release/silverhand-backend"
   if [[ ! -x "$SIDECAR_SRC" ]]; then
     echo "[package] embedded Rust backend sidecar not found at $SIDECAR_SRC" >&2
@@ -390,11 +390,11 @@ fi
 
 if [[ "$DIR_ONLY" == "1" ]]; then
   echo "[package] running electron-builder --dir"
-  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --dir --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" )
+  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --publish never --mac --dir --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" )
 else
   stage_dmgbuild_bundle
   echo "[package] running electron-builder"
-  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" )
+  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --publish never --mac --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" )
 fi
 
 verify_packaged_daemon() {

@@ -1,0 +1,123 @@
+name: Desktop DMG
+
+on:
+  push:
+    tags: ['desktop-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-dmg-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: arm64 / ${{ matrix.variant }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [embedded, remote-only]
+    env:
+      # Use upstream downloads on hosted runners, not the local CN mirrors.
+      ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
+      ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      SILVERHAND_DIR: ${{ github.workspace }}/.cache/ci-silverhand
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Validate release inputs
+        env:
+          REMOTE_SERVER_URL: ${{ vars.SILVERHAND_REMOTE_SERVER_URL }}
+        run: |
+          node --test scripts/ci/desktop-dmg.test.mjs
+          node scripts/ci/desktop-dmg.mjs preflight
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4; version from packageManager
+        with:
+          run_install: false
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install embedded Rust toolchain
+        if: matrix.variant == 'embedded'
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal --target aarch64-apple-darwin
+          echo 'RUSTUP_TOOLCHAIN=1.94.0' >> "$GITHUB_ENV"
+      - name: Cache Rust compilation
+        if: matrix.variant == 'embedded'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: desktop-rust-macos15-arm64-1.94.0-${{ hashFiles('rust/Cargo.lock', '.cargo/config.toml') }}
+      - name: Build and verify app
+        env:
+          VARIANT: ${{ matrix.variant }}
+          REMOTE_SERVER_URL: ${{ vars.SILVERHAND_REMOTE_SERVER_URL }}
+        run: |
+          args=(--output-dir "release-ci-$VARIANT")
+          if [[ "$VARIANT" == remote-only ]]; then
+            args+=(--remote-only --server-url "$REMOTE_SERVER_URL")
+          fi
+          ./scripts/package.sh "${args[@]}"
+          git diff --exit-code
+      - name: Collect DMG and checksum
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: node scripts/ci/desktop-dmg.mjs collect "$VARIANT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-dmg-${{ matrix.variant }}-${{ github.sha }}
+          path: .cache/desktop-dmg/${{ matrix.variant }}/*
+          if-no-files-found: error
+          compression-level: 0
+          # The staging directory is beneath .cache; it contains only the two selected files.
+          include-hidden-files: true
+          retention-days: 7
+
+  release:
+    name: Publish both DMGs
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: desktop-dmg-*-${{ github.sha }}
+          path: artifacts
+          merge-multiple: true
+      - name: Verify and publish release
+        working-directory: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          shopt -s nullglob
+          dmgs=(*.dmg)
+          sums=(*.dmg.sha256)
+          [[ ${#dmgs[@]} -eq 2 && ${#sums[@]} -eq 2 ]]
+          for checksum in "${sums[@]}"; do sha256sum --check "$checksum"; done
+          # Keep incomplete uploads private as a draft. Never overwrite an existing release.
+          gh release create "$RELEASE_TAG" "${dmgs[@]}" "${sums[@]}" \
+            --verify-tag --draft --title "Desktop ${RELEASE_TAG#desktop-v}" \
+            --notes 'macOS Apple Silicon (arm64). Embedded and remote-only builds. Ad-hoc signed; not Apple-notarized.'
+          gh release edit "$RELEASE_TAG" --draft=false
