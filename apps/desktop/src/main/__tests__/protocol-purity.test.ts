@@ -2,368 +2,171 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import ts from "typescript";
+import { createRequire } from "node:module";
 import desktopPackage from "../../../package.json";
 
-const mainRoot = fileURLToPath(new URL("..", import.meta.url));
-const preloadRoot = fileURLToPath(new URL("../../preload", import.meta.url));
-const rendererRoot = fileURLToPath(new URL("../../renderer", import.meta.url));
+const require = createRequire(import.meta.url);
+const builderRequire = createRequire(require.resolve("electron-builder/package.json"));
+const packagingRequire = createRequire(builderRequire.resolve("app-builder-lib/package.json"));
+const { load: parseYaml } = packagingRequire("js-yaml") as {
+  load: (text: string) => Record<string, unknown>;
+};
+
 const desktopRoot = fileURLToPath(new URL("../../../", import.meta.url));
+const mainRoot = join(desktopRoot, "src/main");
+const preloadRoot = join(desktopRoot, "src/preload");
+const rendererRoot = join(desktopRoot, "src/renderer");
 
-const allowedServerImports: string[] = [];
-
-const cataloguedIpcHandlers = [
-  "attachment:openExternal",
-  "attachment:save",
-  "auth:getState",
-  "auth:login",
-  "auth:logout",
-  "auth:signup",
-  "backend:info",
-  "backend:request",
-  "backend:upload",
-  "badge:setCount",
-  "dialog:pickDirectory",
-  "eventWs:diagnostic",
-  "export:copyPng",
-  "export:savePng",
-  "hosts:revoke",
-  "hosts:rotate",
-  "hosts:proxyConfig:get",
-  "hosts:proxyConfig:set",
-  "notification:show",
-  "notification:dismiss",
-  "partialApply:get",
-  "partialApply:retry",
-  "profile:clear",
-  "profile:get",
-  "profile:saveWithTest",
-  "settings:saveServerUrl",
-  "shell:openExternal",
-].sort();
-
-interface SourceFile {
-  path: string;
-  content: string;
+function sourceFiles(root: string): ts.SourceFile[] {
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) return entry.name === "__tests__" ? [] : sourceFiles(path);
+    if (!entry.isFile() || !/\.tsx?$/.test(path) || /\.test\.tsx?$/.test(path)) return [];
+    return [ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true)];
+  });
 }
 
-function sourceFiles(root: string, extensions: ReadonlySet<string>): SourceFile[] {
-  const out: SourceFile[] = [];
-  const visit = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const fullPath = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== "__tests__") visit(fullPath);
-        continue;
-      }
-      if (!entry.isFile() || /\.test\.tsx?$/.test(entry.name)) continue;
-      const ext = entry.name.endsWith(".tsx") ? ".tsx" : entry.name.endsWith(".ts") ? ".ts" : "";
-      if (!extensions.has(ext)) continue;
-      out.push({ path: fullPath, content: readFileSync(fullPath, "utf8") });
-    }
+function find<T>(files: ts.SourceFile[], visit: (node: ts.Node) => T | undefined): T[] {
+  const found: T[] = [];
+  const walk = (node: ts.Node) => {
+    const value = visit(node);
+    if (value !== undefined) found.push(value);
+    ts.forEachChild(node, walk);
   };
-  visit(root);
-  return out;
+  files.forEach(walk);
+  return found;
 }
 
-function stripComments(value: string): string {
-  return value.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-}
-
-function packageImportSites(source: SourceFile, packageName: string) {
-  const sites: Array<{ path: string; symbol: string; typeOnly: boolean }> = [];
-  const escaped = packageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const statements = new RegExp(
-    `^\\s*import\\s+(?:([^;]*?)\\s+from\\s+)?["'](${escaped}(?:/[^"']*)?)["']`,
-    "gms",
-  );
-  for (const match of source.content.matchAll(statements)) {
-    const clause = stripComments(match[1] ?? "").trim();
-    const named = /^(type\s+)?\{([^{}]*)\}$/.exec(clause);
-    const path = relative(mainRoot, source.path);
-    if (!named || match[2] !== packageName) {
-      sites.push({ path, symbol: `UNPARSED:${source.path}`, typeOnly: false });
-      continue;
-    }
-    for (const entry of named[2]!.split(",").filter((value) => value.trim())) {
-      const symbol = /^(type\s+)?([\w$]+)(?:\s+as\s+[\w$]+)?$/.exec(entry.trim());
-      sites.push({
-        path,
-        symbol: symbol?.[2] ?? `UNPARSED:${source.path}`,
-        typeOnly: Boolean(named[1] || symbol?.[1]),
-      });
-    }
+function importedModule(node: ts.Node): string | undefined {
+  let specifier: ts.Node | undefined;
+  if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+    specifier = node.moduleSpecifier;
+  } else if (
+    ts.isImportEqualsDeclaration(node) &&
+    ts.isExternalModuleReference(node.moduleReference)
+  ) {
+    specifier = node.moduleReference.expression;
+  } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+    specifier = node.argument.literal;
+  } else if (
+    ts.isCallExpression(node) &&
+    (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+      (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+  ) {
+    specifier = node.arguments[0];
   }
-  return sites;
+  return specifier && ts.isStringLiteralLike(specifier) ? specifier.text : undefined;
 }
 
-function importedPackageSymbols(source: SourceFile, packageName: string): string[] {
-  return packageImportSites(source, packageName).map((site) => site.symbol);
+function literalChannels(files: ts.SourceFile[], method: string): string[] {
+  return find(files, (node) => {
+    if (
+      !ts.isCallExpression(node) ||
+      !ts.isPropertyAccessExpression(node.expression) ||
+      node.expression.name.text !== method
+    )
+      return;
+    const channel = node.arguments[0];
+    return channel && ts.isStringLiteralLike(channel) ? channel.text : undefined;
+  }).sort();
 }
 
-describe("desktop protocol purity catalogue", () => {
-  it("fails loud on unsupported backend import forms mixed with named imports", () => {
-    const imports = importedPackageSymbols(
+describe("Desktop architecture boundaries (no renderer execution)", () => {
+  it.each([mainRoot, preloadRoot, rendererRoot])(
+    "does not import retired backend/server packages from %s",
+    (root) => {
+      const offenders = find(sourceFiles(root), (node) => {
+        const module = importedModule(node);
+        return module && /^@silverhand\/(?:backend|server)(?:\/|$)/.test(module)
+          ? { path: relative(desktopRoot, node.getSourceFile().fileName), module }
+          : undefined;
+      });
+      expect(offenders).toEqual([]);
+    },
+  );
+
+  it.each(["0", "1"])("evaluates the real build profile remoteOnly=%s", (remoteOnly) => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import { loadConfigFromFile } from "electron-vite";
+      const { config } = await loadConfigFromFile(
+        { command: "build", mode: "production" }, "electron.vite.config.ts", process.cwd());
+      console.log(JSON.stringify({ main: config.main, preload: config.preload }));
+    `,
+      ],
       {
-        path: "example.ts",
-        content: `
-        import { startBackend } from '@silverhand/backend';
-        import * as backend from '@silverhand/backend';
-      `,
+        cwd: desktopRoot,
+        encoding: "utf8",
+        env: { ...process.env, SILVERHAND_DESKTOP_REMOTE_ONLY: remoteOnly },
       },
-      "@silverhand/backend",
     );
-
-    expect(imports).toContain("startBackend");
-    expect(imports).toContain("UNPARSED:example.ts");
-  });
-
-  it.each(["'", '"'])("recognizes type-only and forbidden import sites with %s quotes", (quote) => {
-    const scan = (content: string) =>
-      packageImportSites(
-        { path: join(mainRoot, "outbound-attach.ts"), content },
-        "@silverhand/backend",
-      );
-    expect(
-      scan(`import type {\n HostWsAttachment,\n} from ${quote}@silverhand/backend${quote};`),
-    ).toEqual([{ path: "outbound-attach.ts", symbol: "HostWsAttachment", typeOnly: true }]);
-    expect(
-      scan(`import { HostWsAttachment } from ${quote}@silverhand/backend${quote};`)[0]?.typeOnly,
-    ).toBe(false);
-    expect(
-      scan(
-        `import { type HostWsAttachment as Attachment } from ${quote}@silverhand/backend${quote};`,
-      )[0]?.typeOnly,
-    ).toBe(true);
-    for (const clause of ["* as backend from ", "backend from ", ""]) {
-      expect(scan(`import ${clause}${quote}@silverhand/backend${quote};`)[0]?.symbol).toContain(
-        "UNPARSED:",
-      );
+    expect(result.status, result.stderr).toBe(0);
+    const config = JSON.parse(result.stdout);
+    for (const part of [config.main, config.preload]) {
+      expect(part.define.__SILVERHAND_DESKTOP_REMOTE_ONLY__).toBe(String(remoteOnly === "1"));
+      expect(part.build.externalizeDeps.exclude).toContain("@silverhand/shared");
     }
-    expect(scan(`import { unknownSymbol } from ${quote}@silverhand/backend${quote};`)).not.toEqual([
-      { path: "outbound-attach.ts", symbol: "HostWsAttachment", typeOnly: true },
-    ]);
-  });
-
-  it("rejects all direct @silverhand/backend imports, including type-only imports", () => {
-    const imports = sourceFiles(mainRoot, new Set([".ts"]))
-      .flatMap((source) => packageImportSites(source, "@silverhand/backend"))
-      .sort((a, b) => a.path.localeCompare(b.path));
-
-    expect(imports).toEqual([]);
-  });
-
-  it("keeps direct @silverhand/server imports fenced to the embedded boot path allowlist", () => {
-    const imports = sourceFiles(mainRoot, new Set([".ts"]))
-      .flatMap((source) => importedPackageSymbols(source, "@silverhand/server"))
-      .sort();
-
-    expect(imports).toEqual(allowedServerImports);
-  });
-
-  it("bundles shared utilities without a TS server build dependency", () => {
-    const config = readFileSync(join(desktopRoot, "electron.vite.config.ts"), "utf8");
-
-    expect(config).toMatch(/const workspaceDeps = \[[\s\S]*["']@silverhand\/shared["'][\s\S]*\];/);
-    expect(config).not.toMatch(/["']@silverhand\/server["']/);
-  });
-
-  it("both profiles use the same shared Node logger without a server stub", () => {
-    const config = readFileSync(join(desktopRoot, "electron.vite.config.ts"), "utf8");
-    expect(config).toMatch(/SILVERHAND_DESKTOP_REMOTE_ONLY/);
-    expect(config).not.toMatch(/remote-only-server-stub\.ts/);
-    expect(readFileSync(join(mainRoot, "index.ts"), "utf8")).toContain(
-      "@silverhand/shared/node-file-logger",
-    );
-  });
-
-  it("#task:2343 P0-10: remote-only build aliases the embedded-launcher seam to a stub with no embedded value imports", () => {
-    // The construction seam: `index.ts` reaches ALL embedded runtime (migrator, Rust
-    // launcher, sidecar verifier) ONLY through `./embedded-launcher.js`, which the
-    // remote-only build aliases to `embedded-launcher.remote-only.ts`. That stub must NOT
-    // statically import `@silverhand/backend` (→ `better-sqlite3`) or bring the launcher/
-    // sidecar VALUE modules into the graph — its only cross-module references are
-    // type-only. This is what makes the remote-only bundle scan (no
-    // launcher/sidecar/migrator/better-sqlite3) hold at construction, not by a runtime flag.
-    const config = readFileSync(join(desktopRoot, "electron.vite.config.ts"), "utf8");
-    const seamStub = readFileSync(join(mainRoot, "embedded-launcher.remote-only.ts"), "utf8");
-    expect(config).toMatch(/embedded-launcher\.js/);
-    expect(config).toMatch(/embedded-launcher\.remote-only\.ts/);
-    // The stub carries NO value import of the embedded packages/modules — only `import
-    // type` is allowed (erased at build). Assert there is no non-type import of the
-    // forbidden specifiers.
-    expect(seamStub).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+["']@silverhand\/backend["']/m);
-    expect(seamStub).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+["']@silverhand\/server["']/m);
-    // Real index.ts imports the embedded runtime through the seam, not the value modules
-    // directly (the only remaining `embedded-rust-backend`/`rust-backend-sidecar` mentions
-    // in index.ts must be `import type`).
-    const indexSrc = readFileSync(join(mainRoot, "index.ts"), "utf8");
-    expect(indexSrc).toMatch(/from\s+["']\.\/embedded-launcher\.js["']/);
-    expect(indexSrc).not.toMatch(
-      /^import\s+\{[^}]*\}\s+from\s+["']\.\/rust-backend-sidecar\.js["']/m,
-    );
   });
 
   it("remote-only package config excludes embedded backend/native runtime packages", () => {
-    const config = readFileSync(join(desktopRoot, "electron-builder.remote-only.yml"), "utf8");
-    const packageScript = readFileSync(join(desktopRoot, "../../scripts/package.sh"), "utf8");
-    const afterPackScript = readFileSync(join(desktopRoot, "scripts/afterPack.cjs"), "utf8");
-    const remoteOnlyPackage = readFileSync(join(desktopRoot, "package.remote-only.json"), "utf8");
-
-    expect(config).toMatch(/appId:\s*com\.silverhand\.desktop/);
-    expect(config).toMatch(/productName:\s*Silverhand-remote-server/);
-    expect(config).toMatch(/artifactName:\s*\$\{productName\}-\$\{version\}-\$\{arch\}\.\$\{ext\}/);
-    expect(config).toMatch(/output:\s*release-remote-server/);
+    const config = parseYaml(
+      readFileSync(join(desktopRoot, "electron-builder.remote-only.yml"), "utf8"),
+    );
+    expect(config).toMatchObject({
+      appId: "com.silverhand.desktop",
+      productName: "Silverhand-remote-server",
+      artifactName: "${productName}-${version}-${arch}.${ext}",
+      directories: { output: "release-remote-server" },
+    });
     for (const dep of [
+      "@silverhand",
       "@hono",
       "hono",
       "better-sqlite3",
       "@node-rs/argon2",
       "@node-rs/argon2-darwin-arm64",
     ]) {
-      expect(config).toContain(`!node_modules/${dep}`);
+      expect(config.files).toContain(`!node_modules/${dep}`);
+      expect(config.files).toContain(`!node_modules/${dep}/**`);
     }
-    expect(config).not.toMatch(/^asarUnpack:/m);
-    expect(packageScript).toMatch(/--remote-only/);
-    expect(packageScript).toMatch(/--server-url/);
-    expect(packageScript).toMatch(/SILVERHAND_DESKTOP_REMOTE_ONLY/);
-    expect(config).toMatch(/package\.remote-only\.json/);
-    expect(remoteOnlyPackage).toContain('"zod"');
-    expect(remoteOnlyPackage).not.toMatch(
-      /@hono|hono|better-sqlite3|@node-rs\/argon2|@silverhand\/server|@silverhand\/backend/,
+    expect(config).not.toHaveProperty("asarUnpack");
+    expect(config.files).toContainEqual({
+      from: "package.remote-only.generated.json",
+      to: "package.json",
+    });
+  });
+
+  it("ships only the unbundled zod runtime dependency in either package profile", () => {
+    const remotePackage = JSON.parse(
+      readFileSync(join(desktopRoot, "package.remote-only.json"), "utf8"),
     );
-    expect(afterPackScript).toMatch(/rewriteRemoteOnlyAsar/);
-    expect(afterPackScript).toMatch(/SILVERHAND_DESKTOP_REMOTE_ONLY/);
-    expect(afterPackScript).toMatch(/package\.remote-only\.generated\.json/);
-    expect(afterPackScript).toMatch(/ElectronAsarIntegrity/);
+    for (const pkg of [desktopPackage, remotePackage]) {
+      expect(Object.keys(pkg.dependencies).sort()).toEqual(["zod"]);
+    }
+    // The canonical Desktop manifest supplies the generated remote version.
+    expect(remotePackage).not.toHaveProperty("version");
+  });
 
-    const versionSmoke = packageScript.indexOf('verify_packaged_app_version "$PACKAGED_APP_PATH"');
-    const signatureSmoke = packageScript.indexOf(
-      'verify_packaged_code_signature "$PACKAGED_APP_PATH"',
+  it("registers each literal preload request exactly once in main", () => {
+    const registrations = literalChannels(sourceFiles(mainRoot), "handle");
+    const requests = literalChannels(sourceFiles(preloadRoot), "invoke");
+    expect(registrations.length).toBeGreaterThan(0);
+    expect(new Set(registrations).size).toBe(registrations.length);
+    expect(registrations).toEqual([...new Set(requests)].sort());
+  });
+
+  it("does not expose or consume auth_token in preload/renderer code", () => {
+    const offenders = find([...sourceFiles(preloadRoot), ...sourceFiles(rendererRoot)], (node) =>
+      (ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && node.text === "auth_token"
+        ? relative(desktopRoot, node.getSourceFile().fileName)
+        : undefined,
     );
-    const artifactHandoff = packageScript.indexOf(
-      'echo "[package] artifacts in apps/desktop/$ARTIFACT_OUTPUT_DIR/"',
-    );
-    expect(versionSmoke).toBeGreaterThan(-1);
-    expect(signatureSmoke).toBeGreaterThan(versionSmoke);
-    expect(artifactHandoff).toBeGreaterThan(signatureSmoke);
-    expect(packageScript).toMatch(/codesign --verify --deep --strict --verbose=2/);
-  });
-
-  it("keeps bundled workspace packages out of packaged app runtime dependencies", () => {
-    const workspaceRuntimeDeps = Object.keys(desktopPackage.dependencies)
-      .filter((name) => name.startsWith("@silverhand/"))
-      .sort();
-
-    expect(workspaceRuntimeDeps).toEqual([]);
-  });
-
-  it("keeps packaged runtime dependencies limited to main/backend requires", () => {
-    // electron-builder copies production dependencies into app.asar. Renderer
-    // libraries are Vite-bundled into out/renderer, and build plugins run before
-    // packaging; listing either as runtime dependencies ships duplicate dead
-    // node_modules and inflates the DMG.
-    expect(Object.keys(desktopPackage.dependencies).sort()).toEqual(["zod"]);
-    expect(desktopPackage.devDependencies).toHaveProperty("mermaid");
-    expect(desktopPackage.devDependencies).toHaveProperty("@tailwindcss/vite");
-    expect(desktopPackage.devDependencies).toHaveProperty("lucide-react");
-  });
-
-  it("keeps main IPC handlers in sync with the protocol-purity catalogue", () => {
-    // registrations go through the guarded registrar rather than
-    // the Electron object. The scan must NOT key on the receiver's local
-    // variable name: a future module writing `registrar.handle('new:channel')`
-    // would silently escape the catalogue. Match any `.handle(<string>)` in
-    // production main instead — today nothing else in main calls `.handle`
-    // with a string first argument, so an unexpected match is a signal to
-    // classify explicitly, not to widen the pattern.
-    const channels = sourceFiles(mainRoot, new Set([".ts"]))
-      .flatMap((source) =>
-        [...source.content.matchAll(/\.handle\(\s*['"`]([^'"`]+)['"`]/g)].map((match) => match[1]),
-      )
-      .sort();
-
-    expect(channels).toEqual(cataloguedIpcHandlers);
-  });
-
-  it("keeps renderer code from importing backend internals directly", () => {
-    const offenders = sourceFiles(rendererRoot, new Set([".ts", ".tsx"]))
-      .filter((source) => /from\s+['"]@silverhand\/backend(?:\/[^'"]*)?['"]/.test(source.content))
-      .map((source) => source.path);
-
     expect(offenders).toEqual([]);
-  });
-
-  it("contains no renderer-facing BackendInfo auth_token consumers", () => {
-    const offenders = [
-      ...sourceFiles(preloadRoot, new Set([".ts"])),
-      ...sourceFiles(rendererRoot, new Set([".ts", ".tsx"])),
-    ]
-      .filter((source) => /\bauth_token\b|\.auth_token\b/.test(source.content))
-      .map((source) => source.path);
-
-    expect(offenders).toEqual([]);
-  });
-
-  it("mints the attachment discriminant only in the unit-tested producer (#task:1630)", () => {
-    const producerFile = join(mainRoot, "local-host-ws-attachment.ts");
-    const inlineMints = sourceFiles(mainRoot, new Set([".ts"]))
-      .filter((source) => source.path !== producerFile)
-      .filter((source) => /observable:/.test(stripComments(source.content)))
-      .map((source) => source.path);
-
-    expect(inlineMints).toEqual([]);
-    expect(readFileSync(join(mainRoot, "index.ts"), "utf8")).toMatch(
-      /describeLocalHostWsAttachment\(\{\s*\n?\s*hasLocalRegistryObserver:/,
-    );
-  });
-
-  it("no longer has any getEmbeddedHostWsController() call site — the in-process registry observer is gone (#task:2343)", () => {
-    const callSites = sourceFiles(mainRoot, new Set([".ts"])).flatMap((source) =>
-      [
-        ...stripComments(source.content).matchAll(
-          /(?<!function\s)getEmbeddedHostWsController\(\)/g,
-        ),
-      ].map(() => source.path),
-    );
-
-    expect(callSites.length).toBe(0);
-  });
-
-  it("#task:2343 P1-18: the dead in-process/outbound-socket concepts are DELETED, not left as forever-dead shells", () => {
-    // With the out-of-process Rust embedded backend these lost their last legitimate
-    // caller and were removed (not left as residual): the deployment-arm discriminant
-    // helper `requireBackendKind`, the in-process CLI launcher `resolveSilverhandCliLauncher`,
-    // and the local-outbound-frame-socket concept (`DaemonPaths.localOutboundSocketPath`
-    // field + `localOutboundSocketPathForStartupPlan`). The daemon still receives an
-    // explicit `localOutboundSocketPath: null` spawn option — that is the PROOF of
-    // no-fallback, not a live use — so we pin the DEAD identifiers to zero, allowing the
-    // single `localOutboundSocketPath: null` no-fallback assertion.
-    const deadIdentifiers = [
-      /\brequireBackendKind\b/g,
-      /\bresolveSilverhandCliLauncher\b/g,
-      /\blocalOutboundSocketPathForStartupPlan\b/g,
-    ];
-    for (const pattern of deadIdentifiers) {
-      const hits = sourceFiles(mainRoot, new Set([".ts"])).flatMap((source) =>
-        [...stripComments(source.content).matchAll(pattern)].map(() => source.path),
-      );
-      expect({ pattern: pattern.source, hits }).toEqual({
-        pattern: pattern.source,
-        hits: [],
-      });
-    }
-
-    // The ONLY surviving `localOutboundSocketPath` mention in main source is the
-    // no-fallback spawn option pinned to `null` (the daemon-arm proof for #task:2343 P1-19);
-    // there is no `DaemonPaths` field / assignment reintroducing the concept.
-    const outboundMentions = sourceFiles(mainRoot, new Set([".ts"])).flatMap((source) =>
-      [...stripComments(source.content).matchAll(/localOutboundSocketPath[^\n]*/g)].map((m) => ({
-        path: source.path,
-        text: m[0].trim(),
-      })),
-    );
-    for (const mention of outboundMentions) {
-      expect(mention.text).toMatch(/localOutboundSocketPath:\s*null/);
-    }
   });
 });

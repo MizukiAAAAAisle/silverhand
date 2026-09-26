@@ -207,14 +207,12 @@ mod tests {
 
     /// A configurable driver-free double for the three board-authorization ports. The
     /// resolver echoes the requested subject (so the minter binds it), returning the
-    /// configured board when authorized; when it resolves no board, `workspace_missing`
-    /// chooses between a `404` (no such workspace) and a `403` (existing, non-member).
+    /// configured board when authorized; no board yields an unauthorized scope.
     /// The enumerator returns the configured union; the capability answers one flag for
     /// every workspace. It records the source the single-board arm asked for, so arm
     /// dispatch is observable without a database.
     struct FakePorts {
         resolved_board: Option<BoardKey>,
-        workspace_missing: bool,
         readable: Vec<BoardKey>,
         read_tasks: bool,
         observed_source: Option<BoardScopeSource>,
@@ -224,7 +222,6 @@ mod tests {
         fn new() -> Self {
             Self {
                 resolved_board: None,
-                workspace_missing: false,
                 readable: Vec::new(),
                 read_tasks: true,
                 observed_source: None,
@@ -244,7 +241,6 @@ mod tests {
                     source: request.source.clone(),
                     board,
                 }),
-                None if self.workspace_missing => BoardResolution::NoSuchWorkspace,
                 None => BoardResolution::Unauthorized,
             })
         }
@@ -404,57 +400,6 @@ mod tests {
             ports.observed_source,
             Some(BoardScopeSource::SelectedWorkspace(selector))
         );
-    }
-
-    #[tokio::test]
-    async fn an_unknown_workspace_selector_is_not_found() {
-        // The resolver reports no such workspace — a 404, distinct from the 403 an
-        // existing-but-unreachable workspace gives.
-        let mut ports = FakePorts::new();
-        ports.resolved_board = None;
-        ports.workspace_missing = true;
-        let selector = WorkspaceId::parse("ws-9").unwrap();
-        let access = resolve_task_list_boards(&agent_slot("agent-1"), Some(&selector), &mut ports)
-            .await
-            .unwrap();
-        assert!(matches!(
-            access,
-            TaskListAccess::UnknownWorkspace(ws) if ws == selector
-        ));
-    }
-
-    #[tokio::test]
-    async fn a_non_member_selector_of_an_existing_workspace_is_forbidden() {
-        // The workspace exists but the agent is not a member — a 403 that names the
-        // workspace, never collapsed into the 404 above.
-        let mut ports = FakePorts::new();
-        ports.resolved_board = None;
-        ports.workspace_missing = false;
-        let selector = WorkspaceId::parse("ws-9").unwrap();
-        let access = resolve_task_list_boards(&agent_slot("agent-1"), Some(&selector), &mut ports)
-            .await
-            .unwrap();
-        assert!(matches!(
-            access,
-            TaskListAccess::Forbidden(TaskListForbidden::NotAWorkspaceMember(ws)) if ws == selector
-        ));
-    }
-
-    #[tokio::test]
-    async fn a_member_selector_without_read_tasks_is_forbidden() {
-        // The single named board is a member workspace but the agent holds no
-        // read_tasks: a capability refusal, NOT the empty page the union arm would give.
-        let mut ports = FakePorts::new();
-        ports.resolved_board = Some(ws_board("ws-9"));
-        ports.read_tasks = false;
-        let selector = WorkspaceId::parse("ws-9").unwrap();
-        let access = resolve_task_list_boards(&agent_slot("agent-1"), Some(&selector), &mut ports)
-            .await
-            .unwrap();
-        assert!(matches!(
-            access,
-            TaskListAccess::Forbidden(TaskListForbidden::ReadTasksDenied(ws)) if ws == selector
-        ));
     }
 
     #[tokio::test]

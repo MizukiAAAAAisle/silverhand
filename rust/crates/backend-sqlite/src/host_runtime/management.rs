@@ -238,7 +238,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_decides_and_finalizes_from_the_in_lock_record() {
+    async fn update_persists_the_label_and_finalization_stamp() {
         let (_directory, store) = fixture().await;
         let outcome = UpdateComputer::new(store.clone())
             .execute(UpdateComputerCommand {

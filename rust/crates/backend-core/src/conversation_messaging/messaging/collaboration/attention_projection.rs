@@ -199,14 +199,22 @@ mod tests {
         let w2 = WorkspaceId::parse("w2").unwrap();
         let rollup = AttentionBadgeRollup::projected(
             vec![
-                WorkspaceAttentionCount::projected(w1.clone(), AttentionCount::new(2).unwrap()),
                 WorkspaceAttentionCount::projected(w2.clone(), AttentionCount::new(3).unwrap()),
+                WorkspaceAttentionCount::projected(w1.clone(), AttentionCount::new(2).unwrap()),
             ],
-            vec![w1.clone(), w2, w1],
+            vec![w2.clone(), w1.clone(), w2.clone()],
         )
         .unwrap();
         assert_eq!(rollup.total().get(), 5);
-        assert_eq!(rollup.muted_workspaces().len(), 2);
+        assert_eq!(rollup.muted_workspaces(), [w1.clone(), w2.clone()]);
+        assert_eq!(
+            rollup
+                .by_workspace()
+                .iter()
+                .map(|row| (row.workspace().as_str(), row.count().get()))
+                .collect::<Vec<_>>(),
+            [("w1", 2), ("w2", 3)]
+        );
         assert!(AttentionCount::new(-1).is_err());
 
         let duplicate = AttentionBadgeRollup::projected(
@@ -225,6 +233,16 @@ mod tests {
         assert_eq!(
             duplicate,
             Err(AttentionBadgeProjectionError::DuplicateWorkspace)
+        );
+        assert_eq!(
+            AttentionBadgeRollup::projected(
+                vec![
+                    WorkspaceAttentionCount::projected(w1, AttentionCount::new(i64::MAX).unwrap()),
+                    WorkspaceAttentionCount::projected(w2, AttentionCount::new(1).unwrap()),
+                ],
+                vec![]
+            ),
+            Err(AttentionBadgeProjectionError::TotalOverflow)
         );
     }
 

@@ -47,22 +47,6 @@ export class SidecarVerificationError extends Error {
   }
 }
 
-/** Injection seams for unit tests (no real fs). */
-export interface SidecarDeps {
-  readManifest: (manifestPath: string) => Promise<string>;
-  hashFile: (executablePath: string) => Promise<string>;
-  /** Resolve the canonical (symlink-followed) absolute path. #task:2343 P1-8: used to
-   * reject a symlink that escapes the manifest directory. Throws if the path is missing. */
-  realpath: (path: string) => Promise<string>;
-  /** Stat the executable (NOT following the final symlink). Returns whether it is a
-   * regular file and whether the owner-executable bit is set. Throws if missing. */
-  statExecutable: (path: string) => Promise<{ isRegularFile: boolean; isExecutable: boolean }>;
-  /** The running process platform (`process.platform`, e.g. `darwin`). */
-  currentPlatform: string;
-  /** The running process arch (`process.arch`, e.g. `arm64`). */
-  currentArch: string;
-}
-
 const HEX64 = /^[0-9a-fA-F]{64}$/;
 
 /**
@@ -72,7 +56,7 @@ const HEX64 = /^[0-9a-fA-F]{64}$/;
  * or an x64 build on an arm64 mac is rejected. Returns `null` for a platform/arch pair
  * the Desktop embedded build does not support (→ typed rejection).
  */
-export function expectedRustTarget(platform: string, arch: string): string | null {
+function expectedRustTarget(platform: string, arch: string): string | null {
   const table: Record<string, Record<string, string>> = {
     darwin: {
       arm64: "aarch64-apple-darwin",
@@ -96,13 +80,10 @@ export function expectedRustTarget(platform: string, arch: string): string | nul
  * executable's SHA-256 and require it to equal the manifest value. Any discrepancy is a
  * hard, typed failure. Returns the absolute executable path to spawn.
  */
-export async function verifySidecar(
-  manifestPath: string,
-  deps: SidecarDeps,
-): Promise<VerifiedSidecar> {
+export async function verifySidecar(manifestPath: string): Promise<VerifiedSidecar> {
   let raw: string;
   try {
-    raw = await deps.readManifest(manifestPath);
+    raw = await readFile(manifestPath, "utf8");
   } catch (err) {
     throw new SidecarVerificationError(
       "manifest-missing",
@@ -114,27 +95,27 @@ export async function verifySidecar(
   // #task:2343 — verify the manifest TARGET TRIPLE against what this Desktop platform+arch
   // requires (subsumes arch). A sidecar built for a different target (an ECS/Linux build,
   // or the wrong arch) is rejected — the embedded package accepts only the desktop target.
-  const requiredTarget = expectedRustTarget(deps.currentPlatform, deps.currentArch);
+  const requiredTarget = expectedRustTarget(process.platform, process.arch);
   if (requiredTarget === null) {
     throw new SidecarVerificationError(
       "unsupported-platform",
-      `embedded Rust backend has no supported target for platform ${deps.currentPlatform} arch ${deps.currentArch}`,
+      `embedded Rust backend has no supported target for platform ${process.platform} arch ${process.arch}`,
     );
   }
   if (manifest.target !== requiredTarget) {
     throw new SidecarVerificationError(
       "target-mismatch",
       `embedded Rust backend sidecar target ${manifest.target} does not match the required desktop target ${requiredTarget} ` +
-        `(platform ${deps.currentPlatform} arch ${deps.currentArch})`,
+        `(platform ${process.platform} arch ${process.arch})`,
     );
   }
   // #task:2343 P1-8 — the manifest `arch` must not contradict the running process. The
   // target triple already subsumes arch, so `arch` is a redundant identity field; keeping
   // it means it MUST agree with `process.arch`, otherwise the manifest is self-inconsistent.
-  if (manifest.arch !== deps.currentArch) {
+  if (manifest.arch !== process.arch) {
     throw new SidecarVerificationError(
       "arch-mismatch",
-      `embedded Rust backend sidecar manifest arch ${manifest.arch} does not match process arch ${deps.currentArch}`,
+      `embedded Rust backend sidecar manifest arch ${manifest.arch} does not match process arch ${process.arch}`,
     );
   }
   // #task:2343 P1-8 — CONTAINMENT: the executable must be a RELATIVE path that resolves to
@@ -166,7 +147,7 @@ export async function verifySidecar(
   let canonicalExecutable: string;
   let canonicalDir: string;
   try {
-    canonicalExecutable = await deps.realpath(executablePath);
+    canonicalExecutable = await realpath(executablePath);
   } catch (err) {
     throw new SidecarVerificationError(
       "executable-missing",
@@ -175,7 +156,7 @@ export async function verifySidecar(
     );
   }
   try {
-    canonicalDir = await deps.realpath(manifestDir);
+    canonicalDir = await realpath(manifestDir);
   } catch (err) {
     throw new SidecarVerificationError(
       "executable-uncontained",
@@ -199,7 +180,12 @@ export async function verifySidecar(
   // non-executable blob).
   let fileStat: { isRegularFile: boolean; isExecutable: boolean };
   try {
-    fileStat = await deps.statExecutable(executablePath);
+    const st = await stat(executablePath);
+    fileStat = {
+      isRegularFile: st.isFile(),
+      isExecutable:
+        (st.mode & (fsConstants.S_IXUSR | fsConstants.S_IXGRP | fsConstants.S_IXOTH)) !== 0,
+    };
   } catch (err) {
     throw new SidecarVerificationError(
       "executable-missing",
@@ -221,7 +207,7 @@ export async function verifySidecar(
   }
   let actualSha: string;
   try {
-    actualSha = await deps.hashFile(executablePath);
+    actualSha = await hashFile(executablePath);
   } catch (err) {
     throw new SidecarVerificationError(
       "executable-missing",
@@ -279,30 +265,14 @@ function parseManifest(raw: string): SidecarManifest {
   return { executable, target, arch, sha256 };
 }
 
-/** The default production fs-backed deps: read the manifest file and stream-hash the
- * executable with SHA-256. */
-export function productionSidecarDeps(): SidecarDeps {
-  return {
-    readManifest: (manifestPath) => readFile(manifestPath, "utf8"),
-    hashFile: (executablePath) =>
-      new Promise<string>((resolvePromise, reject) => {
-        const hash = createHash("sha256");
-        const stream = createReadStream(executablePath);
-        stream.on("error", reject);
-        stream.on("data", (chunk) => hash.update(chunk));
-        stream.on("end", () => resolvePromise(hash.digest("hex")));
-      }),
-    realpath: (path) => realpath(path),
-    statExecutable: async (path) => {
-      const st = await stat(path);
-      // Owner/group/other execute bit (any) — the packaged sidecar is chmod +x.
-      const isExecutable =
-        (st.mode & (fsConstants.S_IXUSR | fsConstants.S_IXGRP | fsConstants.S_IXOTH)) !== 0;
-      return { isRegularFile: st.isFile(), isExecutable };
-    },
-    currentPlatform: process.platform,
-    currentArch: process.arch,
-  };
+function hashFile(executablePath: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(executablePath);
+    stream.on("error", reject);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolvePromise(hash.digest("hex")));
+  });
 }
 
 /** The electron environment inputs `resolveBackendSidecarManifestPath` needs. Passed in

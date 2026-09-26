@@ -1,12 +1,6 @@
-//! Rust consumer of the TS-signed workspace-onboarding body fixture.
-//!
-//! `packages/backend/tests/application/onboarding-body-rust-parity.test.ts` is the
-//! SIGNER: it regenerates `tests/fixtures/onboarding-body.parity.json` from the
-//! production `onboardingBody` and fails if the committed fixture drifts from it.
-//! This test is the CONSUMER: the Rust core renderer must reproduce each committed
-//! body byte-for-byte. Together they pin the two renderers to one wire: a wording,
-//! spacing, reference-token, or inline-code-escaping change on either side breaks a
-//! test until both agree.
+//! Durable workspace-onboarding prompt contract. These golden bodies originated
+//! in the retired TS backend; the Rust public factory now owns their production
+//! rendering. Keep wording, spacing, references and inline-code escaping exact.
 
 use std::path::PathBuf;
 

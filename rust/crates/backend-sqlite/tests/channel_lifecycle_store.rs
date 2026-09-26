@@ -1,9 +1,6 @@
 use silverhand_backend_core::{
-    conversation_messaging::messaging::collaboration::{
-        channel_directory::{ChannelVisibility, DirectoryRoster},
-        channel_lifecycle::{
-            ChannelDetailReadPort, ChannelDetailRefusal, ChannelLeaveBlockedReason,
-        },
+    conversation_messaging::messaging::collaboration::channel_lifecycle::{
+        ChannelDetailReadPort, ChannelDetailRefusal,
     },
     foundation::identity::{ConversationId, UserId},
 };
@@ -103,57 +100,10 @@ fn storage_source(
 }
 
 #[tokio::test]
-async fn membership_public_widen_and_direct_pair_keep_their_distinct_faces() {
+async fn human_endpoint_reads_agent_human_pair_without_becoming_a_member() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("channel-lifecycle.sqlite");
     seed(&path).await;
-
-    let member = detail(&path, "member", "private")
-        .await
-        .unwrap()
-        .unwrap()
-        .bind(
-            &UserId::parse("member").unwrap(),
-            &ConversationId::parse("private").unwrap(),
-        )
-        .unwrap();
-    assert!(member.is_member());
-    assert_eq!(
-        member.leave().blocked_reason(),
-        Some(ChannelLeaveBlockedReason::LastHumanMember)
-    );
-    assert!(!member.can_update_visibility());
-
-    let browser = detail(&path, "browser", "public")
-        .await
-        .unwrap()
-        .unwrap()
-        .bind(
-            &UserId::parse("browser").unwrap(),
-            &ConversationId::parse("public").unwrap(),
-        )
-        .unwrap();
-    assert!(!browser.is_member());
-    assert_eq!(
-        browser.leave().blocked_reason(),
-        Some(ChannelLeaveBlockedReason::NotMember)
-    );
-    assert!(browser.can_update_visibility());
-
-    let fixed = detail(&path, "member", "fixed")
-        .await
-        .unwrap()
-        .unwrap()
-        .bind(
-            &UserId::parse("member").unwrap(),
-            &ConversationId::parse("fixed").unwrap(),
-        )
-        .unwrap();
-    assert_eq!(fixed.row().roster(), DirectoryRoster::Fixed);
-    assert_eq!(fixed.row().visibility(), ChannelVisibility::Private);
-    assert!(fixed.is_member());
-    assert!(!fixed.leave().can_leave());
-    assert!(!fixed.can_update_visibility());
 
     let pair = detail(&path, "member", "pair")
         .await

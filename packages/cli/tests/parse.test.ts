@@ -28,10 +28,11 @@ describe('parseArgs', () => {
   });
 
   it('does not consume the next token for a declared boolean flag', () => {
-    const r = parseArgs(['--posted-to-parent', '--summary', 'done'], {
+    const r = parseArgs(['--posted-to-parent', 'extra', '--summary', 'done'], {
       booleanFlags: ['posted-to-parent'],
     });
     expect(flagBool(r, 'posted-to-parent')).toBe(true);
+    expect(r.positional).toEqual(['extra']);
     expect(flagString(r, 'summary')).toBe('done');
   });
 

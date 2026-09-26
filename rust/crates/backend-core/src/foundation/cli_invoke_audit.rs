@@ -211,7 +211,7 @@ mod tests {
             .collect();
         let issues = CliInvokeIssues::new(input);
 
-        assert_eq!(issues.as_slice().len(), CliInvokeIssues::MAX_LEN);
+        assert_eq!(issues.as_slice().len(), 16);
         assert!(
             issues
                 .as_slice()

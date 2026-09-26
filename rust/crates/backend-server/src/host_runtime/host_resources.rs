@@ -346,15 +346,20 @@ mod tests {
     /// owns, and an id that is not an id at all.
     #[tokio::test]
     async fn every_refusal_is_one_byte_identical_anti_enumeration_404() {
-        let refused = json!({ "error": "host not found", "error_code": "host_not_found" });
+        let refused = get(ReadOutcome::Absent).await;
+        assert_eq!(refused.status, StatusCode::NOT_FOUND);
+        assert_eq!(refused.calls, 1);
+        assert_eq!(
+            parsed(&refused.body),
+            json!({ "error": "host not found", "error_code": "host_not_found" })
+        );
         for outcome in [
-            ReadOutcome::Absent,
             facts("h1", Some("u-someone-else"), vec![agent_on("a1", "h1")]),
             facts("h1", None, vec![agent_on("a1", "h1")]),
         ] {
             let reply = get(outcome).await;
             assert_eq!(reply.status, StatusCode::NOT_FOUND);
-            assert_eq!(parsed(&reply.body), refused);
+            assert_eq!(reply.body, refused.body);
             assert_eq!(reply.calls, 1);
         }
 
@@ -364,7 +369,7 @@ mod tests {
         // fine and quietly make this a duplicate of the absent-row case above.
         let reply = get_for(admitting(), "", true).await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND);
-        assert_eq!(parsed(&reply.body), refused);
+        assert_eq!(reply.body, refused.body);
         assert_eq!(reply.calls, 0);
     }
 

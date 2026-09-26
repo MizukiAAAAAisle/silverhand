@@ -461,7 +461,14 @@ mod tests {
             .unwrap()
             .bind(&workspace)
             .unwrap();
-        assert_eq!(bound.rows()[0].conversation().as_str(), "a");
+        assert_eq!(
+            bound
+                .rows()
+                .iter()
+                .map(|row| row.conversation().as_str())
+                .collect::<Vec<_>>(),
+            ["a", "z"]
+        );
         assert_eq!(bound.total().unwrap(), 2);
 
         let count = NonZeroUnreadCount::new(UnreadCount::new(1).unwrap()).unwrap();

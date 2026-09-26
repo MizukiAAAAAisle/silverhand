@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn the_home_this_process_reports_is_the_os_answer_and_prefers_a_usable_home_env() {
         let reported = MachineFacts::for_this_process().home;
-        assert_eq!(reported, usable_search_root(env::home_dir()));
+        assert_eq!(reported, env::home_dir().filter(|home| home.is_absolute()));
 
         if let Some(from_env) = env::var_os("HOME").map(PathBuf::from)
             && from_env.is_absolute()

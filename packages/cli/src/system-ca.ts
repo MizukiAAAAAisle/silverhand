@@ -17,15 +17,10 @@ import { enableNodeSystemCa, type NodeSystemCaActivation } from '@silverhand/hos
  * Best-effort: activation must never block a CLI command. A failure to read or
  * set the trust store is swallowed so we degrade to the bundled bundle rather
  * than aborting; callers that need to observe the outcome read the return value.
- *
- * `activate` is injectable only so tests can assert the wiring without touching
- * the platform trust store.
  */
-export function ensureSystemCaTrusted(
-  activate: () => NodeSystemCaActivation = enableNodeSystemCa,
-): NodeSystemCaActivation | undefined {
+export function ensureSystemCaTrusted(): NodeSystemCaActivation | undefined {
   try {
-    return activate();
+    return enableNodeSystemCa();
   } catch {
     return undefined;
   }

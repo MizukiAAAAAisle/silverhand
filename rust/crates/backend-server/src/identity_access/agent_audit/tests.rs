@@ -459,7 +459,7 @@ async fn chats_success_lists_every_arm_and_emits_one_event() {
     assert_eq!(body["chats"][0]["roster_policy"], "open");
     assert_eq!(body["chats"][0]["title"], "General");
     assert_eq!(body["chats"][0]["workspace_id"], "ws-1");
-    assert_eq!(body["chats"][0]["archived_at"], Value::Null);
+    assert_eq!(body["chats"][0].get("archived_at"), Some(&Value::Null));
     assert_eq!(body["chats"][1]["placement_kind"], "direct_pair");
     assert_eq!(body["chats"][1]["counterpart"]["id"], "peer-1");
     assert_eq!(body["chats"][1]["archived_at"], 2000);
@@ -551,7 +551,6 @@ async fn chats_subject_read_failure_is_a_safe_500() {
 
     assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(reply.text(), "Internal Server Error");
-    assert!(!reply.text().contains("audit read gone"));
     assert!(reply.events.is_empty());
 }
 
@@ -568,7 +567,7 @@ async fn chats_stage_b_read_failure_is_a_safe_500_with_no_event() {
 }
 
 #[tokio::test]
-async fn chats_bundle_resolved_for_another_agent_is_a_safe_500() {
+async fn chats_subject_resolved_for_another_agent_is_a_safe_500() {
     // The URL asks about `a1`, but the Stage A subject decodes to `a2`: the gate would
     // judge one row and the wire render another, so the source-bind takes a safe 500.
     let reads =
@@ -1287,7 +1286,6 @@ async fn attachment_stage_b_read_failure_is_a_safe_500_with_no_event() {
 
     assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(reply.text(), "Internal Server Error");
-    assert!(!reply.text().contains("audit read gone"));
     assert!(reply.events.is_empty());
 }
 

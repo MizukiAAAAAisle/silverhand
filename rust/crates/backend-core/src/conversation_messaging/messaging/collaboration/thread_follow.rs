@@ -635,8 +635,13 @@ mod tests {
 
     #[test]
     fn followed_at_is_wire_exact() {
+        assert_eq!(FollowedAt::new(0).unwrap().get(), 0);
+        assert_eq!(
+            FollowedAt::new(9_007_199_254_740_991).unwrap().get(),
+            9_007_199_254_740_991
+        );
         assert!(FollowedAt::new(-1).is_err());
-        assert!(FollowedAt::new(FollowedAt::MAX_JAVASCRIPT_INTEGER + 1).is_err());
+        assert!(FollowedAt::new(9_007_199_254_740_992).is_err());
     }
 
     #[test]

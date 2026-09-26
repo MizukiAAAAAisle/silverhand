@@ -38,6 +38,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { build } from 'esbuild';
+import ts from 'typescript';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
@@ -73,54 +74,6 @@ interface ForbiddenHit {
   specifier: string;
 }
 
-/**
- * Extract every module specifier referenced by a source line. Covers
- * the import / export / require forms TypeScript / Node actually
- * accept:
- *
- *   - `import x from 'spec'`
- *   - `import * as x from 'spec'`
- *   - `import { x } from 'spec'`
- *   - `import 'spec'`                   (side-effect; previously missed)
- *   - `import type { x } from 'spec'`
- *   - `export { x } from 'spec'`        (export-from; previously missed)
- *   - `export * from 'spec'`            (re-export; previously missed)
- *   - `export type { x } from 'spec'`
- *   - `import('spec')`                  (dynamic import)
- *   - `require('spec')`                 (CJS require literal)
- *
- * Multiple patterns may match the same line (e.g. an import + a
- * dynamic-import in a comment-stripped expression); we collect every
- * specifier so the rule layer can decide.
- */
-function specifiersOf(line: string): string[] {
-  const out: string[] = [];
-  const patterns: RegExp[] = [
-    // `import ... from 'spec'` / `export ... from 'spec'` — both bare
-    // and named / type variants. The leading non-greedy chunk matches
-    // anything up to the keyword `from`.
-    /(?:^|[\s;{}()])(?:import|export)\b[^'"]*?\bfrom\s*['"]([^'"]+)['"]/g,
-    // Side-effect import: `import 'spec';` or `import "spec";` with no
-    // bindings. Anchored by whitespace / line-start to avoid eating
-    // text like `something.import('x')`.
-    /(?:^|[\s;{}()])import\s+['"]([^'"]+)['"]/g,
-    // Dynamic import expression: `import('spec')`. Picks up both
-    // top-level and nested usages.
-    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-    // CJS require literal: `require('spec')`. Tolerates type-cast
-    // wrappers because we only need the literal.
-    /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-  ];
-  for (const re of patterns) {
-    re.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(line)) !== null) {
-      out.push(m[1]!);
-    }
-  }
-  return out;
-}
-
 interface Rule {
   name: string;
   /** Receives the importing file's absolute path so relative
@@ -132,16 +85,15 @@ interface Rule {
 const RULES: Rule[] = [
   {
     name: 'forbidden package import: @silverhand/backend',
-    test: spec =>
-      spec === '@silverhand/backend' || spec.startsWith('@silverhand/backend/'),
+    test: (spec) => spec === '@silverhand/backend' || spec.startsWith('@silverhand/backend/'),
   },
   {
     name: 'forbidden package import: @silverhand/cli',
-    test: spec => spec === '@silverhand/cli' || spec.startsWith('@silverhand/cli/'),
+    test: (spec) => spec === '@silverhand/cli' || spec.startsWith('@silverhand/cli/'),
   },
   {
     name: 'forbidden package import: better-sqlite3',
-    test: spec => spec === 'better-sqlite3' || spec.startsWith('better-sqlite3/'),
+    test: (spec) => spec === 'better-sqlite3' || spec.startsWith('better-sqlite3/'),
   },
   {
     name: 'forbidden relative import: escapes into packages/backend, packages/cli, or apps/desktop',
@@ -152,7 +104,7 @@ const RULES: Rule[] = [
       // rules above.
       if (!spec.startsWith('.') && !isAbsolute(spec)) return false;
       const resolved = isAbsolute(spec) ? spec : resolve(dirname(fromFile), spec);
-      return FORBIDDEN_PACKAGE_ROOTS.some(root => {
+      return FORBIDDEN_PACKAGE_ROOTS.some((root) => {
         // Match `root` exactly OR a path that begins with `root/`.
         // Using `relative(root, resolved)` would force us to detect
         // a non-leading `..` segment; the prefix check is simpler
@@ -166,12 +118,11 @@ const RULES: Rule[] = [
 const CLI_RULES: Rule[] = [
   {
     name: 'forbidden CLI package import: @silverhand/backend',
-    test: spec =>
-      spec === '@silverhand/backend' || spec.startsWith('@silverhand/backend/'),
+    test: (spec) => spec === '@silverhand/backend' || spec.startsWith('@silverhand/backend/'),
   },
   {
     name: 'forbidden CLI package import: better-sqlite3',
-    test: spec => spec === 'better-sqlite3' || spec.startsWith('better-sqlite3/'),
+    test: (spec) => spec === 'better-sqlite3' || spec.startsWith('better-sqlite3/'),
   },
   {
     name: 'forbidden CLI relative import: escapes into packages/backend, packages/host, or apps/desktop',
@@ -183,7 +134,7 @@ const CLI_RULES: Rule[] = [
         resolve(REPO_ROOT, 'packages/host'),
         resolve(REPO_ROOT, 'apps/desktop'),
       ];
-      return forbiddenRoots.some(root => {
+      return forbiddenRoots.some((root) => {
         return resolved === root || resolved.startsWith(root + sep);
       });
     },
@@ -203,78 +154,53 @@ function* walkTsFiles(dir: string): Generator<string> {
   }
 }
 
-function stripComments(source: string): string[] {
-  // Returns one string per original line with `//` line comments and
-  // `/* ... */` block comments removed. We keep newlines so line
-  // numbers stay aligned for error reporting.
-  const out: string[] = [];
-  const lines = source.split('\n');
-  let inBlock = false;
-  for (const original of lines) {
-    let line = original;
-    if (inBlock) {
-      const close = line.indexOf('*/');
-      if (close === -1) {
-        out.push('');
-        continue;
-      }
-      line = line.slice(close + 2);
-      inBlock = false;
-    }
-    // Repeatedly strip block comments that open AND close on this
-    // line; track the last opened-but-not-closed block.
-    let openIdx = line.indexOf('/*');
-    while (openIdx !== -1) {
-      const closeIdx = line.indexOf('*/', openIdx + 2);
-      if (closeIdx === -1) {
-        line = line.slice(0, openIdx);
-        inBlock = true;
-        break;
-      }
-      line = line.slice(0, openIdx) + line.slice(closeIdx + 2);
-      openIdx = line.indexOf('/*');
-    }
-    const lineCommentIdx = line.indexOf('//');
-    if (lineCommentIdx !== -1) {
-      line = line.slice(0, lineCommentIdx);
-    }
-    out.push(line);
-  }
-  return out;
-}
-
-function scanForViolations(
-  scanRoots: string[],
-  rules: Rule[] = RULES,
-): ForbiddenHit[] {
+/** Parse real import syntax, not text inside comments or string fixtures. */
+function scanSource(source: string, file: string, rules: Rule[]): ForbiddenHit[] {
+  const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
   const hits: ForbiddenHit[] = [];
-  for (const root of scanRoots) {
-    for (const file of walkTsFiles(root)) {
-      // Skip this guard test itself — its rules literally contain
-      // the forbidden strings to exercise them.
-      if (file === __filename) continue;
-      const source = readFileSync(file, 'utf-8');
-      const lines = stripComments(source);
-      const originalLines = source.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i] ?? '';
-        for (const spec of specifiersOf(line)) {
-          for (const rule of rules) {
-            if (rule.test(spec, file)) {
-              hits.push({
-                file: relative(REPO_ROOT, file).split(sep).join('/'),
-                line: i + 1,
-                text: (originalLines[i] ?? '').trim(),
-                matchedRule: rule.name,
-                specifier: spec,
-              });
-            }
-          }
+  const lines = source.split('\n');
+  function visit(node: ts.Node): void {
+    let specifier: ts.Node | undefined;
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      specifier = node.moduleSpecifier;
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      specifier = node.moduleReference.expression;
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      specifier = node.argument.literal;
+    } else if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === 'require'))
+    ) {
+      specifier = node.arguments[0];
+    }
+    if (specifier && ts.isStringLiteralLike(specifier)) {
+      const line = ast.getLineAndCharacterOfPosition(specifier.getStart(ast)).line;
+      for (const rule of rules) {
+        if (rule.test(specifier.text, file)) {
+          hits.push({
+            file: relative(REPO_ROOT, file).split(sep).join('/'),
+            line: line + 1,
+            text: (lines[line] ?? '').trim(),
+            matchedRule: rule.name,
+            specifier: specifier.text,
+          });
         }
       }
     }
+    ts.forEachChild(node, visit);
   }
+  visit(ast);
   return hits;
+}
+
+function scanForViolations(scanRoots: string[], rules: Rule[] = RULES): ForbiddenHit[] {
+  return scanRoots.flatMap((root) =>
+    [...walkTsFiles(root)].flatMap((file) => scanSource(readFileSync(file, 'utf8'), file, rules)),
+  );
 }
 
 describe('host package dependency guard (Cindy `vqDWkLFF6pAeIE5t` + `ecQq2DydBJGZUZ35`)', () => {
@@ -284,7 +210,7 @@ describe('host package dependency guard (Cindy `vqDWkLFF6pAeIE5t` + `ecQq2DydBJG
     if (hits.length > 0) {
       const formatted = hits
         .map(
-          h =>
+          (h) =>
             `  ${h.file}:${h.line} — ${h.matchedRule}\n    specifier: ${h.specifier}\n    > ${h.text}`,
         )
         .join('\n');
@@ -305,7 +231,7 @@ describe('host package dependency guard (Cindy `vqDWkLFF6pAeIE5t` + `ecQq2DydBJG
     if (hits.length > 0) {
       const formatted = hits
         .map(
-          h =>
+          (h) =>
             `  ${h.file}:${h.line} — ${h.matchedRule}\n    specifier: ${h.specifier}\n    > ${h.text}`,
         )
         .join('\n');
@@ -318,129 +244,56 @@ describe('host package dependency guard (Cindy `vqDWkLFF6pAeIE5t` + `ecQq2DydBJG
     expect(hits).toEqual([]);
   });
 
-  it('scanner self-test: specifiersOf covers every import / export / require form', () => {
-    // Each entry is a line and the set of specifiers we expect.
-    // These prove `specifiersOf` actually picks up every form Node /
-    // TS accept; gaps here are what Cindy `ecQq2DydBJGZUZ35` flagged.
-    const cases: Array<{ line: string; expected: string[] }> = [
-      { line: "import x from 'a';", expected: ['a'] },
-      { line: "import * as x from 'a';", expected: ['a'] },
-      { line: "import { x } from 'a';", expected: ['a'] },
-      { line: "import type { x } from 'a';", expected: ['a'] },
-      { line: "import 'a';", expected: ['a'] }, // side-effect (was missed)
-      { line: '  import "a";', expected: ['a'] }, // side-effect with leading whitespace
-      { line: "export { x } from 'a';", expected: ['a'] }, // export-from (was missed)
-      { line: "export * from 'a';", expected: ['a'] }, // re-export (was missed)
-      { line: "export type { x } from 'a';", expected: ['a'] },
-      { line: "const x = import('a');", expected: ['a'] }, // dynamic import
-      { line: "const x = require('a');", expected: ['a'] }, // CJS require (was missed)
-      { line: "const x = require ( 'a' )", expected: ['a'] }, // require with spaces
-    ];
-    for (const { line, expected } of cases) {
-      const got = specifiersOf(line);
-      expect(got, `line=${JSON.stringify(line)}`).toEqual(expected);
-    }
+  it.each([
+    "import x from '@silverhand/backend';",
+    "import * as x from '@silverhand/backend';",
+    "import { x } from '@silverhand/backend';",
+    "import type { x } from '@silverhand/backend';",
+    "import '@silverhand/backend';",
+    "export { x } from '@silverhand/backend';",
+    "export * from '@silverhand/backend';",
+    "export type { x } from '@silverhand/backend';",
+    "const x = import('@silverhand/backend');",
+    "const x = require ( '@silverhand/backend' );",
+    "import x = require('@silverhand/backend');",
+    "type X = import('@silverhand/backend').X;",
+    "import {\n x,\n y,\n} from '@silverhand/backend';",
+    "export {\n x\n} from '@silverhand/backend';",
+    "const url = 'https://example.test'; import '@silverhand/backend';",
+  ])('source scanner detects forbidden import syntax: %s', (source) => {
+    const file = resolve(HOST_ROOT, 'src/daemon/whatever.ts');
+    expect(scanSource(source, file, RULES)).toEqual([
+      {
+        file: 'packages/host/src/daemon/whatever.ts',
+        line: source.slice(0, source.indexOf('@silverhand/backend')).split('\n').length,
+        text: source.split('\n').at(-1)!.trim(),
+        matchedRule: 'forbidden package import: @silverhand/backend',
+        specifier: '@silverhand/backend',
+      },
+    ]);
   });
 
-  it('scanner self-test: every forbidden form actually fires the rules', () => {
-    // Synthesize a file path deep inside host so `../../../backend`
-    // is a realistic escape. The `src/daemon` depth is exactly the
-    // case Cindy flagged as previously slipping past the old
-    // `^../../backend` regex.
-    const fromFile = resolve(HOST_ROOT, 'src/daemon/whatever.ts');
-    const samples: Array<{ line: string; mustFire: boolean; note: string }> = [
-      // Package-name forms — depth-independent.
-      {
-        line: "import { foo } from '@silverhand/backend';",
-        mustFire: true,
-        note: '@silverhand/backend bare',
-      },
-      {
-        line: "import { foo } from '@silverhand/backend/services/foo.js';",
-        mustFire: true,
-        note: '@silverhand/backend subpath',
-      },
-      { line: "import 'better-sqlite3';", mustFire: true, note: 'sqlite side-effect' },
-      {
-        line: "const db = require('better-sqlite3');",
-        mustFire: true,
-        note: 'sqlite require',
-      },
-      {
-        line: "import x from '@silverhand/cli';",
-        mustFire: true,
-        note: '@silverhand/cli bare',
-      },
-      // Relative-escape from `packages/host/src/daemon/`:
-      //   ../../../backend = packages/backend
-      {
-        line: "import x from '../../../backend/src/context.js';",
-        mustFire: true,
-        note: 'relative escape into backend (correct depth)',
-      },
-      {
-        line: "export * from '../../../backend/src/foo.js';",
-        mustFire: true,
-        note: 'export-from relative escape',
-      },
-      {
-        line: "const x = import('../../../backend/src/foo.js');",
-        mustFire: true,
-        note: 'dynamic-import relative escape',
-      },
-      {
-        line: "const x = require('../../../backend/src/foo.js');",
-        mustFire: true,
-        note: 'require relative escape',
-      },
-      // The OLD regex matched this one (depth 2); the new logic must
-      // continue to catch it via path resolution.
-      {
-        line: "import x from '../../backend/src/foo.js';",
-        mustFire: false,
-        note: 'depth-2 escape FROM src/daemon/ resolves to repo root, NOT into backend',
-      },
-    ];
-    for (const { line, mustFire, note } of samples) {
-      const specs = specifiersOf(line);
-      const fired = specs.some(spec => RULES.some(rule => rule.test(spec, fromFile)));
-      expect(fired, `${note}: ${JSON.stringify(line)}`).toBe(mustFire);
-    }
-
-    // Top-level `src/index.ts` is shallower — `../../backend/...`
-    // DOES land in packages/backend from there. Same line, different
-    // fromFile, opposite outcome. This is exactly why we resolve
-    // against the importing file's dirname instead of pattern-matching
-    // the literal string.
-    const topLevelFromFile = resolve(HOST_ROOT, 'src/index.ts');
-    {
-      const fired = specifiersOf("import x from '../../backend/src/foo.js';").some(
-        spec => RULES.some(rule => rule.test(spec, topLevelFromFile)),
-      );
-      expect(
-        fired,
-        'depth-2 escape FROM src/index.ts SHOULD fire because ../../backend lands in packages/backend',
-      ).toBe(true);
-    }
-  });
-
-  it('scanner self-test: allowed imports do NOT fire any rule', () => {
-    const fromFile = resolve(HOST_ROOT, 'src/daemon/whatever.ts');
-    const allowed = [
-      "import { z } from 'zod';",
-      "import type { RuntimeKind } from '@silverhand/shared';",
-      "import { foo } from '@silverhand/shared/driver';",
-      "import { foo } from './drivers/index.js';", // intra-host
-      "import { bar } from '../client/index.js';", // intra-host parent
-      "import { baz } from '../../src/protocol.js';", // intra-host across src
-      "import 'node:fs';", // node builtin (irrelevant to rules)
-      "const fs = require('node:fs');",
-    ];
-    for (const line of allowed) {
-      const specs = specifiersOf(line);
-      const fired = specs.some(spec => RULES.some(rule => rule.test(spec, fromFile)));
-      expect(fired, `rule should NOT fire for allowed ${JSON.stringify(line)}`).toBe(false);
-    }
+  it.each([
+    ['src/daemon/whatever.ts', "import x from '../../../backend/src/context.js';", true],
+    ['src/daemon/whatever.ts', "export * from '../../../backend/src/foo.js';", true],
+    ['src/daemon/whatever.ts', "const x = import('../../../backend/src/foo.js');", true],
+    ['src/daemon/whatever.ts', "const x = require('../../../backend/src/foo.js');", true],
+    ['src/daemon/whatever.ts', "import x from '../../backend/src/foo.js';", false],
+    ['src/index.ts', "import x from '../../backend/src/foo.js';", true],
+    ['src/index.ts', "import 'better-sqlite3';", true],
+    ['src/index.ts', "import x from '@silverhand/cli';", true],
+    ['src/index.ts', "import x from '@silverhand/backend/services/foo.js';", true],
+    ['src/index.ts', "import { z } from 'zod';", false],
+    ['src/index.ts', "import type { RuntimeKind } from '@silverhand/shared';", false],
+    ['src/index.ts', "import { foo } from '@silverhand/shared/driver';", false],
+    ['src/index.ts', "import { foo } from './drivers/index.js';", false],
+    ['src/daemon/whatever.ts', "import { bar } from '../client/index.js';", false],
+    ['tests/foo.ts', "import { baz } from '../src/protocol.js';", false],
+    ['src/index.ts', "import 'node:fs'; const fs = require('node:fs');", false],
+    ['src/index.ts', "// import '@silverhand/backend';\n/* require('better-sqlite3') */", false],
+    ['tests/foo.ts', `const fixture = "import '@silverhand/backend';";`, false],
+  ] as const)('applies architecture rules from %s: %s', (file, source, forbidden) => {
+    expect(scanSource(source, resolve(HOST_ROOT, file), RULES).length).toBe(forbidden ? 1 : 0);
   });
 
   it('daemon bundle does not pull backend-only shared DB migrations', async () => {
@@ -461,11 +314,9 @@ describe('host package dependency guard (Cindy `vqDWkLFF6pAeIE5t` + `ecQq2DydBJG
       },
     });
 
-    const inputs = Object.keys(result.metafile.inputs).map(p =>
-      p.split(sep).join('/'),
-    );
+    const inputs = Object.keys(result.metafile.inputs).map((p) => p.split(sep).join('/'));
     const forbidden = inputs.filter(
-      p =>
+      (p) =>
         p.endsWith('/packages/shared/src/db/baseline-schema.ts') ||
         p.endsWith('/packages/shared/src/db/migrations.ts') ||
         p.endsWith('../shared/src/db/baseline-schema.ts') ||
@@ -496,11 +347,9 @@ describe('host package dependency guard (Cindy `vqDWkLFF6pAeIE5t` + `ecQq2DydBJG
       },
     });
 
-    const inputs = Object.keys(result.metafile.inputs).map(p =>
-      p.split(sep).join('/'),
-    );
+    const inputs = Object.keys(result.metafile.inputs).map((p) => p.split(sep).join('/'));
     const forbidden = inputs.filter(
-      p =>
+      (p) =>
         p.includes('/packages/backend/') ||
         p.includes('/node_modules/better-sqlite3/') ||
         p.endsWith('/packages/shared/src/db/baseline-schema.ts') ||

@@ -469,9 +469,25 @@ async fn cold_aggregate_and_live_fact_share_the_authoritative_post_change_count(
         )
         .await
         .unwrap();
-    assert_eq!(cold[0].1[0].count(), events.0.lock().unwrap()[0].count());
+    assert_eq!(cold.len(), 1);
+    assert_eq!(cold[0].0.as_str(), "message-1");
+    assert_eq!(cold[0].1.len(), 1);
+    assert_eq!(cold[0].1[0].count().value(), 1);
     assert!(cold[0].1[0].viewer_reacted());
-    assert_eq!(cold[0].1[0].emoji(), events.0.lock().unwrap()[0].emoji());
+    assert_eq!(cold[0].1[0].emoji().as_str(), "✨");
+    let fact = events.0.lock().unwrap()[0].clone();
+    assert_eq!(fact.count().value(), 1);
+    assert_eq!(fact.emoji().as_str(), "✨");
+    let other = store
+        .reactions()
+        .aggregates(
+            &Reactor::Human(UserId::parse("user-2").unwrap()),
+            &[MessageId::parse("message-1").unwrap()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(other[0].1[0].count().value(), 1);
+    assert!(!other[0].1[0].viewer_reacted());
 }
 
 fn runtime_principal(source: &str) -> RuntimePrincipal {

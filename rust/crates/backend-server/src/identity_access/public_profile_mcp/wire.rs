@@ -230,10 +230,7 @@ mod tests {
     use super::*;
 
     /// Every closed fault code maps to its product HTTP status AND its stable wire
-    /// token. Exhaustive over the enum: a new variant forces a new row here, so a code
-    /// can never fall through to a wildcard or leak a raw upstream string. (Moved here
-    /// with the mapping it exercises; the internal + public route tests still assert the
-    /// same statuses/bodies end-to-end over HTTP.)
+    /// token. The route tests additionally exercise response rendering and admission.
     #[test]
     fn every_fault_code_maps_to_its_status_and_wire_token() {
         use McpDataPlaneFaultCode::*;

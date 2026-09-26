@@ -217,9 +217,8 @@ mod tests {
             format!("name={sixty_five_a}"), // over the 64 cap
         ];
         for query in cases {
-            // `Taken` would answer `taken` for any handle that reached it; proving the
-            // verdict is `invalid` proves the malformed input short-circuited before
-            // the lookup.
+            // Assert the public verdict here. The core keeper independently
+            // records calls to prove malformed input never reaches storage.
             let (status, body) = probe_request(FakeNamespace::Taken, &query, true).await;
             assert_eq!(status, StatusCode::OK, "{query:?}");
             assert_eq!(

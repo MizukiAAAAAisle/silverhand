@@ -1,140 +1,115 @@
-import { describe, expect, it } from "vitest";
-import { tmpdir } from "node:os";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  materializeAndOpenAttachment,
-  resolveAttachmentScratchTarget,
-  type AttachmentOpenIo,
-} from "./attachment-open";
+import { materializeAndOpenAttachment, type AttachmentOpenIo } from "./attachment-open";
 
-const SCRATCH = join(tmpdir(), "silverhand-attachments");
-
-describe("resolveAttachmentScratchTarget", () => {
-  it("maps a valid attachment id + safe filename to one stable per-id path", () => {
-    const r = resolveAttachmentScratchTarget("AbC-1_2xyz09", "mockup.html");
-    expect(r).toEqual({
-      ok: true,
-      target: {
-        dir: join(SCRATCH, "AbC-1_2xyz09"),
-        fullPath: join(SCRATCH, "AbC-1_2xyz09", "mockup.html"),
-      },
-    });
-  });
-
-  it("fails closed on an id with out-of-alphabet chars instead of stripping them (no collision)", () => {
-    // A lossy `replace(/[^A-Za-z0-9_-]/g,'')` would fold `a/b` onto `ab` and
-    // let one attachment overwrite another's scratch file. Whole-string match
-    // rejects it, so the only survivors resolve to distinct paths.
-    expect(resolveAttachmentScratchTarget("a/b", "x.pdf")).toEqual({
-      ok: false,
-      reason: "invalid_attachment_id",
-    });
-    expect(resolveAttachmentScratchTarget("a.b", "x.pdf").ok).toBe(false);
-    expect(resolveAttachmentScratchTarget("../evil", "x.pdf")).toEqual({
-      ok: false,
-      reason: "invalid_attachment_id",
-    });
-    const ab = resolveAttachmentScratchTarget("ab", "x.pdf");
-    expect(ab.ok).toBe(true);
-  });
-
-  it("rejects an empty id and an empty / control-only filename", () => {
-    expect(resolveAttachmentScratchTarget("", "x.pdf").ok).toBe(false);
-    expect(resolveAttachmentScratchTarget("abc", "").ok).toBe(false);
-    expect(resolveAttachmentScratchTarget("abc", "")).toEqual({
-      ok: false,
-      reason: "invalid_filename",
-    });
-  });
-
-  it("refuses an extension Launch Services would execute rather than view", () => {
-    expect(resolveAttachmentScratchTarget("abc", "run.command")).toEqual({
-      ok: false,
-      reason: "unsafe_extension",
-    });
-  });
+vi.mock("node:os", async (original) => ({
+  ...(await original<typeof import("node:os")>()),
+  tmpdir: () => {
+    if (!process.env.SILVERHAND_DIR) throw new Error("isolated SILVERHAND_DIR required");
+    return process.env.SILVERHAND_DIR;
+  },
+}));
+const parent = process.env.SILVERHAND_DIR;
+if (!parent) throw new Error("isolated SILVERHAND_DIR required");
+let root: string;
+beforeEach(() => {
+  mkdirSync(parent, { recursive: true });
+  root = mkdtempSync(join(parent, "attachment-open-"));
+  vi.stubEnv("SILVERHAND_DIR", root);
 });
-
-interface RecordingIo extends AttachmentOpenIo {
-  dirs: string[];
-  writes: Array<{ path: string; bytes: Buffer }>;
-  opened: string[];
-}
-
-function recordingIo(openErr = ""): RecordingIo {
-  const io: RecordingIo = {
-    dirs: [],
-    writes: [],
-    opened: [],
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(root, { recursive: true, force: true });
+});
+function io(): AttachmentOpenIo {
+  return {
     ensureDir: (dir) => {
-      io.dirs.push(dir);
+      mkdirSync(dir, { recursive: true });
     },
-    writeFile: (path, bytes) => {
-      io.writes.push({ path, bytes });
-    },
-    openPath: async (path) => {
-      io.opened.push(path);
-      return openErr;
-    },
+    writeFile: (path, bytes) => writeFileSync(path, bytes, { mode: 0o600 }),
+    openPath: async () => "",
   };
-  return io;
 }
 
-describe("materializeAndOpenAttachment", () => {
-  it("reuses one path across repeated opens and overwrites with the latest bytes", async () => {
-    const io = recordingIo();
-    const first = Buffer.from([1, 1, 1]);
-    const second = Buffer.from([2, 2, 2, 2]);
-
-    const r1 = await materializeAndOpenAttachment(
-      { attachmentId: "stable-id", filename: "m.html", bytes: first },
-      io,
-    );
-    const r2 = await materializeAndOpenAttachment(
-      { attachmentId: "stable-id", filename: "m.html", bytes: second },
-      io,
-    );
-
-    expect(r1).toEqual({ ok: true });
-    expect(r2).toEqual({ ok: true });
-    const path = join(SCRATCH, "stable-id", "m.html");
-    // Same file both times — no fresh random temp per open.
-    expect(io.writes.map((w) => w.path)).toEqual([path, path]);
-    expect(io.opened).toEqual([path, path]);
-    // The second write carries the updated bytes.
-    expect(io.writes[1]?.bytes).toBe(second);
+describe("external-open file boundary", () => {
+  it("overwrites one stable path before OS handoff and keeps distinct IDs apart", async () => {
+    const effects = io();
+    const seen: Array<{ path: string; bytes: number[] }> = [];
+    effects.openPath = async (path) => {
+      seen.push({ path, bytes: [...readFileSync(path)] });
+      return "";
+    };
+    for (const [id, bytes] of [
+      ["ab", [1, 2]],
+      ["ab", [3]],
+      ["a-b", [4, 5]],
+    ] as const) {
+      expect(
+        await materializeAndOpenAttachment(
+          {
+            attachmentId: id,
+            filename: "mockup.html",
+            bytes: Buffer.from(bytes),
+          },
+          effects,
+        ),
+      ).toEqual({ ok: true });
+    }
+    const scratch = join(root, "silverhand-attachments");
+    expect(seen).toEqual([
+      { path: join(scratch, "ab", "mockup.html"), bytes: [1, 2] },
+      { path: join(scratch, "ab", "mockup.html"), bytes: [3] },
+      { path: join(scratch, "a-b", "mockup.html"), bytes: [4, 5] },
+    ]);
+    expect([...readFileSync(join(scratch, "ab", "mockup.html"))]).toEqual([3]);
+    expect(readdirSync(join(scratch, "ab"))).toEqual(["mockup.html"]);
   });
 
-  it("never touches disk for an invalid id (covers the strip-collision reject)", async () => {
-    const io = recordingIo();
-    const r = await materializeAndOpenAttachment(
-      { attachmentId: "a/b", filename: "x.pdf", bytes: Buffer.from([1]) },
-      io,
-    );
-    expect(r).toEqual({ ok: false, reason: "invalid_attachment_id" });
-    expect(io.dirs).toEqual([]);
-    expect(io.writes).toEqual([]);
-    expect(io.opened).toEqual([]);
-  });
+  it.each([
+    { attachmentId: "a/b", filename: "x.pdf", reason: "invalid_attachment_id" },
+    { attachmentId: "a.b", filename: "x.pdf", reason: "invalid_attachment_id" },
+    { attachmentId: "../evil", filename: "x.pdf", reason: "invalid_attachment_id" },
+    { attachmentId: "", filename: "x.pdf", reason: "invalid_attachment_id" },
+    { attachmentId: "valid", filename: "", reason: "invalid_filename" },
+    { attachmentId: "valid", filename: "\x01\x02", reason: "invalid_filename" },
+    { attachmentId: "valid", filename: "run.command", reason: "unsafe_extension" },
+    { attachmentId: "valid", filename: "x.pdf", reason: "empty_payload" },
+  ])(
+    "denies $reason without any filesystem/OS effect ($attachmentId,$filename)",
+    async ({ attachmentId, filename, reason }) => {
+      const effects = { ensureDir: vi.fn(), writeFile: vi.fn(), openPath: vi.fn(async () => "") };
+      expect(
+        await materializeAndOpenAttachment(
+          {
+            attachmentId,
+            filename,
+            bytes: reason === "empty_payload" ? Buffer.alloc(0) : Buffer.from([1]),
+          },
+          effects,
+        ),
+      ).toEqual({ ok: false, reason });
+      expect(effects.ensureDir).not.toHaveBeenCalled();
+      expect(effects.writeFile).not.toHaveBeenCalled();
+      expect(effects.openPath).not.toHaveBeenCalled();
+    },
+  );
 
-  it("rejects empty bytes without writing or opening", async () => {
-    const io = recordingIo();
-    const r = await materializeAndOpenAttachment(
-      { attachmentId: "abc", filename: "x.pdf", bytes: Buffer.alloc(0) },
-      io,
-    );
-    expect(r).toEqual({ ok: false, reason: "empty_payload" });
-    expect(io.writes).toEqual([]);
-    expect(io.opened).toEqual([]);
-  });
-
-  it("surfaces an OS open failure after writing", async () => {
-    const io = recordingIo("LSNoHandler");
-    const r = await materializeAndOpenAttachment(
-      { attachmentId: "abc", filename: "x.pdf", bytes: Buffer.from([1]) },
-      io,
-    );
-    expect(r).toEqual({ ok: false, reason: "open_failed:LSNoHandler" });
-    expect(io.writes).toHaveLength(1);
+  it("returns OS refusal only after writing the requested bytes", async () => {
+    const effects = io();
+    effects.openPath = async (path) => {
+      expect([...readFileSync(path)]).toEqual([9]);
+      return "LSNoHandler";
+    };
+    expect(
+      await materializeAndOpenAttachment(
+        {
+          attachmentId: "valid",
+          filename: "x.pdf",
+          bytes: Buffer.from([9]),
+        },
+        effects,
+      ),
+    ).toEqual({ ok: false, reason: "open_failed:LSNoHandler" });
   });
 });

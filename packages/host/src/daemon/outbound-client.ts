@@ -82,7 +82,6 @@ export interface OutboundDaemonClientOptions {
    * websocket actually reconnects against.
    */
   onConfigLoaded?: (config: DaemonHostConfig) => void;
-  writeHostConfig?: HostConfigWriter;
   random?: () => number;
   now?: () => number;
 }
@@ -100,7 +99,6 @@ export type {
   OutboundCommandDispatcher,
   OutboundDispatcherResponse,
 } from './outbound-frame-mapping.js';
-export type HostConfigWriter = (path: string, config: DaemonHostConfig) => void;
 
 export interface ReconnectBackoffOptions {
   minDelayMs: number;
@@ -140,7 +138,6 @@ export class OutboundDaemonClient {
   private readonly heartbeat: HeartbeatOptions;
   private readonly random: () => number;
   private readonly now: () => number;
-  private readonly writeHostConfig: HostConfigWriter;
   private readonly writeBuffer: OutboundWriteBuffer;
   private configTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -169,7 +166,6 @@ export class OutboundDaemonClient {
     this.heartbeat = { ...DEFAULT_HEARTBEAT, ...(opts.heartbeat ?? {}) };
     this.random = opts.random ?? Math.random;
     this.now = opts.now ?? Date.now;
-    this.writeHostConfig = opts.writeHostConfig ?? writeHostConfigAtomic;
     this.writeBuffer = new OutboundWriteBuffer({
       ...DEFAULT_OUTBOUND_WRITE_BUFFER,
       ...(opts.buffer ?? {}),
@@ -194,10 +190,7 @@ export class OutboundDaemonClient {
     this.clearHeartbeatTimers();
     const ws = this.ws;
     this.ws = null;
-    if (
-      ws &&
-      (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
-    ) {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
       ws.close(1000, reason);
     }
   }
@@ -326,8 +319,7 @@ export class OutboundDaemonClient {
     if (!config) return;
     if (
       this.ws &&
-      (this.ws.readyState === WebSocket.OPEN ||
-        this.ws.readyState === WebSocket.CONNECTING)
+      (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
     ) {
       return;
     }
@@ -379,8 +371,8 @@ export class OutboundDaemonClient {
       this.startHeartbeat();
     });
 
-    ws.on('message', data => this.handleMessage(data));
-    ws.on('error', err => {
+    ws.on('message', (data) => this.handleMessage(data));
+    ws.on('error', (err) => {
       this.opts.logger.warn(
         {
           kind: 'outbound_ws',
@@ -470,9 +462,7 @@ export class OutboundDaemonClient {
     this.closeProtocolError('wrong_direction');
   }
 
-  private async handleCommand(
-    command: OutboundServerToDaemonCommandFrame,
-  ): Promise<void> {
+  private async handleCommand(command: OutboundServerToDaemonCommandFrame): Promise<void> {
     const dispatcher = this.opts.dispatchCommand ?? defaultCommandDispatcher;
     const startedAt = this.now();
     const successLevel = command.kind === 'host_status' ? 'debug' : 'info';
@@ -504,10 +494,7 @@ export class OutboundDaemonClient {
         // rather than guess a sentinel that close cleanup could never
         // reclaim — the catch below maps it to internal_error and the
         // dispatcher is never called under a bad owner.
-        const owner = resolveDeliveryOwner(
-          this.currentOwner ?? undefined,
-          'outbound_ws',
-        );
+        const owner = resolveDeliveryOwner(this.currentOwner ?? undefined, 'outbound_ws');
         const dispatched = await dispatcher(command, { owner });
         const mapped = toOutboundCommandResponse(command, dispatched);
         response = mapped.frame;
@@ -567,7 +554,7 @@ export class OutboundDaemonClient {
       );
       return;
     }
-    ws.send(encoded, err => {
+    ws.send(encoded, (err) => {
       this.opts.logger[err ? 'warn' : successLevel](
         {
           kind: 'outbound_ws',
@@ -608,7 +595,7 @@ export class OutboundDaemonClient {
         {
           kind: 'outbound_ws',
           action: 'rotate_token_invalid_config',
-          issues: parsed.error.errors.map(e => `${e.path.join('.')}: ${e.message}`),
+          issues: parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
         },
         'daemon outbound rotate_token rejected: generated config invalid',
       );
@@ -619,7 +606,7 @@ export class OutboundDaemonClient {
       if (!this.opts.configPath) {
         throw new Error('static connect command config cannot be rewritten');
       }
-      this.writeHostConfig(this.opts.configPath, parsed.data);
+      writeHostConfigAtomic(this.opts.configPath, parsed.data);
     } catch (err) {
       this.opts.logger.warn(
         {
@@ -759,11 +746,7 @@ export class OutboundDaemonClient {
 
   private scheduleReconnect(reason: string): void {
     if (this.stopping || !this.desiredConfig || this.reconnectTimer) return;
-    const delayMs = reconnectDelayMs(
-      this.reconnectAttempt++,
-      this.backoff,
-      this.random,
-    );
+    const delayMs = reconnectDelayMs(this.reconnectAttempt++, this.backoff, this.random);
     this.opts.logger.info(
       {
         kind: 'outbound_ws',
@@ -790,10 +773,7 @@ export class OutboundDaemonClient {
     this.clearHeartbeatTimers();
     const ws = this.ws;
     this.ws = null;
-    if (
-      ws &&
-      (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
-    ) {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
       ws.close(1000, reason);
     }
   }
@@ -885,9 +865,7 @@ export type ReadHostConfigFailureReason =
 
 export function readHostConfig(
   path: string,
-):
-  | { ok: true; config: DaemonHostConfig }
-  | { ok: false; reason: ReadHostConfigFailureReason } {
+): { ok: true; config: DaemonHostConfig } | { ok: false; reason: ReadHostConfigFailureReason } {
   // Stat first, fail-closed on non-regular files. This is the FIFO /
   // directory guard the supervisor reload path needs (Cindy
   // `#task:633` P1). statSync follows symlinks, so the target's mode
@@ -972,11 +950,8 @@ export function writeHostConfigAtomic(path: string, config: DaemonHostConfig): v
  */
 export function daemonHostConfigFingerprint(config: DaemonHostConfig): string {
   const profileVersionToken =
-    config.profile_version === undefined
-      ? '<none>'
-      : String(config.profile_version);
-  const allowInsecureRemoteToken =
-    config.allow_insecure_remote === true ? '1' : '0';
+    config.profile_version === undefined ? '<none>' : String(config.profile_version);
+  const allowInsecureRemoteToken = config.allow_insecure_remote === true ? '1' : '0';
   return (
     `${config.server_url}\0${config.host_id}\0${config.host_token}` +
     `\0allow_insecure_remote=${allowInsecureRemoteToken}` +
@@ -1063,9 +1038,7 @@ function configKey(config: DaemonHostConfig): string {
 function parseJsonFrame(data: RawData): unknown | null {
   try {
     const parsed = JSON.parse(rawDataToString(data)) as unknown;
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? parsed
-      : null;
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
   }

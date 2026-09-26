@@ -1,16 +1,21 @@
-import { readFileSync, existsSync } from 'node:fs';
+import {
+  copyFileSync,
+  readFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   classifyDesktopServerApiCompatibility,
-  DESKTOP_API_EPOCH_EXEMPT_PATHS,
   DESKTOP_SERVER_API_EPOCH,
-  isDesktopApiEpochExemptPath,
   MINIMUM_CLIENT_API_EPOCH,
   MINIMUM_SERVER_API_EPOCH,
-  parseDesktopApiEpochHeader,
   UpgradeRequiredBodySchema,
-  apiPaths,
 } from '../src/index.js';
 
 const REPO_ROOT = join(__dirname, '..', '..', '..');
@@ -80,61 +85,6 @@ describe('desktop-server-api-epoch contract root', () => {
     expect(classify(4, 4)).toBe('compatible');
   });
 
-  it('parses the dedicated admission header: absent/malformed/repeated → 0, canonical decimal → value', () => {
-    expect(parseDesktopApiEpochHeader(undefined)).toBe(0);
-    expect(parseDesktopApiEpochHeader('')).toBe(0);
-    expect(parseDesktopApiEpochHeader(' ')).toBe(0);
-    expect(parseDesktopApiEpochHeader(['1', '2'])).toBe(0);
-    expect(parseDesktopApiEpochHeader('abc')).toBe(0);
-    expect(parseDesktopApiEpochHeader('-1')).toBe(0);
-    expect(parseDesktopApiEpochHeader('1.5')).toBe(0);
-    expect(parseDesktopApiEpochHeader('9999999999')).toBe(0); // over cap
-    expect(parseDesktopApiEpochHeader('0')).toBe(0);
-    expect(parseDesktopApiEpochHeader('1')).toBe(1);
-    expect(parseDesktopApiEpochHeader(' 42 ')).toBe(42);
-    expect(parseDesktopApiEpochHeader(String(DESKTOP_SERVER_API_EPOCH))).toBe(
-      DESKTOP_SERVER_API_EPOCH,
-    );
-  });
-
-  it('minimum-vs-current invariants, and the pre-epoch generation (0) now fails closed', () => {
-    // A minimum may never exceed the current epoch (that would reject every
-    // peer, including this build). The last assertion is written against the
-    // compiled minimum rather than a literal, so it states the CURRENT rule
-    // either way: while a minimum was 0 the pre-epoch generation was admitted;
-    // now that §6 raised it, absence (normalized to 0) is refused.
-    expect(MINIMUM_CLIENT_API_EPOCH).toBeLessThanOrEqual(DESKTOP_SERVER_API_EPOCH);
-    expect(MINIMUM_SERVER_API_EPOCH).toBeLessThanOrEqual(DESKTOP_SERVER_API_EPOCH);
-    expect(
-      classifyDesktopServerApiCompatibility({
-        clientEpoch: 0,
-        minimumClientEpoch: MINIMUM_CLIENT_API_EPOCH,
-        serverEpoch: DESKTOP_SERVER_API_EPOCH,
-        minimumServerEpoch: MINIMUM_SERVER_API_EPOCH,
-      }) === 'client_too_old',
-    ).toBe(MINIMUM_CLIENT_API_EPOCH > 0);
-  });
-
-  it('exemption manifest covers exactly the discovery + non-desktop surfaces', () => {
-    expect(DESKTOP_API_EPOCH_EXEMPT_PATHS).toEqual([
-      apiPaths.health,
-      apiPaths.serverInfo,
-      apiPaths.hostConnectTokenResolve,
-      apiPaths.hostConnect,
-    ]);
-    for (const path of DESKTOP_API_EPOCH_EXEMPT_PATHS) {
-      expect(isDesktopApiEpochExemptPath(path)).toBe(true);
-    }
-    expect(isDesktopApiEpochExemptPath(apiPaths.me)).toBe(false);
-    // Structural exemptions must stay OUTSIDE the /api/* mount — if one of
-    // these ever moves under /api/, the middleware would start gating it and
-    // this pin forces the exemption decision to be made explicitly.
-    expect(apiPaths.eventWebSocket.startsWith('/api/')).toBe(true); // WS has its own gate
-    for (const outside of ['/auth/login', '/auth/signup', '/readyz']) {
-      expect(outside.startsWith('/api/')).toBe(false);
-    }
-  });
-
   it('426 body schema round-trips', () => {
     const body = {
       error: 'upgrade_required',
@@ -148,12 +98,35 @@ describe('desktop-server-api-epoch contract root', () => {
   it('runbook exists and every build entry runs the fail-loud reminder', () => {
     const runbook = 'docs/desktop-server-api-epoch.md';
     expect(existsSync(join(REPO_ROOT, runbook))).toBe(true);
-    // The shared reminder helper points at the real file and exits non-zero
-    // when it is missing (dangling doc references die silently otherwise —
-    // audit #8).
-    const reminder = readFileSync(join(REPO_ROOT, 'scripts/epoch-runbook-reminder.mjs'), 'utf8');
-    expect(reminder).toContain(runbook);
-    expect(reminder).toContain('process.exit(1)');
+    const artifactRoot = join(REPO_ROOT, '.cache', 'test-artifacts', 'epoch-reminder');
+    mkdirSync(artifactRoot, { recursive: true });
+    const root = mkdtempSync(join(artifactRoot, 'case-'));
+    try {
+      mkdirSync(join(root, 'scripts'));
+      mkdirSync(join(root, 'docs'));
+      copyFileSync(
+        join(REPO_ROOT, 'scripts/epoch-runbook-reminder.mjs'),
+        join(root, 'scripts/epoch-runbook-reminder.mjs'),
+      );
+      writeFileSync(join(root, runbook), 'Release policy fixture');
+      const run = () =>
+        spawnSync(process.execPath, ['scripts/epoch-runbook-reminder.mjs'], {
+          cwd: root,
+          encoding: 'utf8',
+          timeout: 5_000,
+        });
+      const present = run();
+      expect(present.error).toBeUndefined();
+      expect(present.status, present.stderr).toBe(0);
+      expect(present.stdout).toContain(runbook);
+      rmSync(join(root, runbook));
+      const missing = run();
+      expect(missing.error).toBeUndefined();
+      expect(missing.status).toBe(1);
+      expect(missing.stderr).toContain(runbook);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
     // The Desktop packaging entry invokes it.
     expect(readFileSync(join(REPO_ROOT, 'scripts/package.sh'), 'utf8')).toContain(
       'epoch-runbook-reminder.mjs',

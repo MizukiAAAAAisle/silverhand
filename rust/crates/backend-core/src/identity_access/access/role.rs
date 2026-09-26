@@ -79,13 +79,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tokens_round_trip_through_parse() {
-        for role in [
-            WorkspaceRole::Owner,
-            WorkspaceRole::Admin,
-            WorkspaceRole::Member,
+    fn role_codec_preserves_the_persisted_tokens() {
+        for (role, token) in [
+            (WorkspaceRole::Owner, "owner"),
+            (WorkspaceRole::Admin, "admin"),
+            (WorkspaceRole::Member, "member"),
         ] {
-            assert_eq!(WorkspaceRole::parse(role.as_str()), Some(role));
+            assert_eq!(role.as_str(), token);
+            assert_eq!(WorkspaceRole::parse(token), Some(role));
         }
         assert_eq!(WorkspaceRole::parse("editor"), None);
     }

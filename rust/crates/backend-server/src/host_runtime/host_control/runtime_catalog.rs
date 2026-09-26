@@ -358,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn a_well_formed_catalog_decodes_every_closed_token() {
+    fn a_catalog_decodes_all_availability_and_reason_tokens() {
         let (runtimes, detected_at) = CatalogWire::decode(catalog(json!([
             row(json!({})),
             row(json!({ "kind": "codex", "state": "present_unverified", "reason": "version_unavailable", "version": Value::Null })),

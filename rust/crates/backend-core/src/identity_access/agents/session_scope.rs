@@ -48,22 +48,14 @@ mod tests {
 
     #[test]
     fn only_the_two_declared_session_scopes_are_understood() {
-        assert_eq!(
-            AgentSessionScope::parse("conversation"),
-            Some(AgentSessionScope::Conversation)
-        );
-        assert_eq!(
-            AgentSessionScope::parse("agent"),
-            Some(AgentSessionScope::Agent)
-        );
+        for (scope, token) in [
+            (AgentSessionScope::Conversation, "conversation"),
+            (AgentSessionScope::Agent, "agent"),
+        ] {
+            assert_eq!(AgentSessionScope::parse(token), Some(scope));
+            assert_eq!(scope.as_str(), token);
+        }
         assert_eq!(AgentSessionScope::parse("workspace"), None);
         assert_eq!(AgentSessionScope::parse(""), None);
-    }
-
-    #[test]
-    fn the_token_round_trips_through_one_authority() {
-        for scope in [AgentSessionScope::Conversation, AgentSessionScope::Agent] {
-            assert_eq!(AgentSessionScope::parse(scope.as_str()), Some(scope));
-        }
     }
 }

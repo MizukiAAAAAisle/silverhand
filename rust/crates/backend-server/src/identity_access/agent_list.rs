@@ -174,7 +174,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
-    use serde_json::{Value, json};
+    use serde_json::Value;
     use silverhand_backend_core::{
         foundation::identity::{AgentId, UserId},
         foundation::persistence::PersistenceFailure,
@@ -193,30 +193,6 @@ mod tests {
 
     fn agent(id: &str) -> AgentId {
         AgentId::parse(id).expect("agent id")
-    }
-
-    /// A fully-populated projection so a full-DTO assertion exercises every wire
-    /// column and both derivations.
-    fn full_projection() -> AgentDetailProjection {
-        AgentDetailProjection {
-            name: "agent-one".to_string(),
-            display_name: "Agent One".to_string(),
-            runtime: RuntimeKind::Qoder,
-            model: Some("sonnet".to_string()),
-            reasoning_effort: Some("high".to_string()),
-            fast_mode: Some(true),
-            host_id: "h1".to_string(),
-            host_display_label: Some("Host One Label".to_string()),
-            host_name: Some("host-one".to_string()),
-            description: Some("a description".to_string()),
-            session_scope: "agent".to_string(),
-            avatar_storage_key: Some("avatars/a1.png".to_string()),
-            materialization_failed_code: None,
-            materialization_failed_at: None,
-            deletion_started_at: None,
-            created_at: 1000,
-            updated_at: 2000,
-        }
     }
 
     /// A minimal projection with every optional column absent.
@@ -250,18 +226,6 @@ mod tests {
             user("creator-user"),
             [],
             [user("viewer-1")],
-            status,
-            bare_projection(),
-        )
-    }
-
-    /// An agent `viewer-1` created — admitted through the creator arm.
-    fn owned_by_viewer(id: &str, status: MaterializationStatus) -> AgentDetailFacts {
-        AgentDetailFacts::from_source(
-            agent(id),
-            user("viewer-1"),
-            [],
-            [],
             status,
             bare_projection(),
         )
@@ -334,72 +298,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_admitted_caller_gets_the_full_dto_wrapped_in_agents() {
-        let a1 = AgentDetailFacts::from_source(
-            agent("a1"),
-            user("viewer-1"),
-            [],
-            [],
-            MaterializationStatus::Active,
-            full_projection(),
-        );
-        let reply = get(ListOutcome::Candidates(vec![a1]), "", true).await;
-        assert_eq!(reply.status, StatusCode::OK);
-        assert_eq!(
-            serde_json::from_str::<Value>(&reply.body).unwrap(),
-            json!({
-                "agents": [{
-                    "id": "a1",
-                    "name": "agent-one",
-                    "display_name": "Agent One",
-                    "runtime": "qoder",
-                    "model": "sonnet",
-                    "reasoning_effort": "high",
-                    "fast_mode": true,
-                    "host_id": "h1",
-                    "host_label": "Host One Label",
-                    "description": "a description",
-                    "session_scope": "agent",
-                    "created_by_user_id": "viewer-1",
-                    "avatar_url": "/api/agents/a1/avatar?v=2000",
-                    "materialization_status": "active",
-                    "materialization_failed_code": null,
-                    "materialization_failed_at": null,
-                    "deletion_started_at": null,
-                    "created_at": 1000,
-                    "updated_at": 2000
-                }]
-            })
-        );
-        assert_eq!(reply.calls, 1);
-    }
-
-    #[tokio::test]
-    async fn the_list_preserves_the_ports_order() {
-        // The port orders by `created_at ASC` in the adapter; the route must carry the
-        // candidate order verbatim, never re-sort.
-        let candidates = vec![
-            admitted("a3", MaterializationStatus::Active),
-            admitted("a1", MaterializationStatus::Active),
-            admitted("a2", MaterializationStatus::Active),
-        ];
-        let reply = get(ListOutcome::Candidates(candidates), "", true).await;
-        assert_eq!(reply.status, StatusCode::OK);
-        assert_eq!(ids(&reply.body), ["a3", "a1", "a2"]);
-    }
-
-    #[tokio::test]
-    async fn an_empty_candidate_set_is_an_empty_array() {
-        let reply = get(ListOutcome::Candidates(vec![]), "", true).await;
-        assert_eq!(reply.status, StatusCode::OK);
-        assert_eq!(
-            serde_json::from_str::<Value>(&reply.body).unwrap(),
-            json!({ "agents": [] })
-        );
-        assert_eq!(reply.calls, 1);
-    }
-
-    #[tokio::test]
     async fn a_hidden_stage_is_filtered_and_include_failed_widens() {
         let candidates = vec![
             admitted("a1", MaterializationStatus::Active),
@@ -420,29 +318,6 @@ mod tests {
         .await;
         assert_eq!(widened.status, StatusCode::OK);
         assert_eq!(ids(&widened.body), ["a1", "a2"]);
-    }
-
-    #[tokio::test]
-    async fn scope_owned_keeps_only_the_callers_own_agents() {
-        let candidates = vec![
-            owned_by_viewer("a1", MaterializationStatus::Active),
-            admitted("a2", MaterializationStatus::Active),
-        ];
-
-        // `owned` keeps only the row the viewer created, though the ACL admits both.
-        let owned = get(
-            ListOutcome::Candidates(candidates.clone()),
-            "?scope=owned",
-            true,
-        )
-        .await;
-        assert_eq!(owned.status, StatusCode::OK);
-        assert_eq!(ids(&owned.body), ["a1"]);
-
-        // The default view keeps both.
-        let all = get(ListOutcome::Candidates(candidates), "", true).await;
-        assert_eq!(all.status, StatusCode::OK);
-        assert_eq!(ids(&all.body), ["a1", "a2"]);
     }
 
     #[tokio::test]

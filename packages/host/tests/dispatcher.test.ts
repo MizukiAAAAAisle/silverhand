@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { IntentDispatcher } from '../src/daemon/dispatcher.js';
 import { RuntimeStartResolveError } from '../src/daemon/runtime-start-resolve.js';
 import { DAEMON_VERSION } from '../src/daemon/version.js';
@@ -92,7 +92,7 @@ describe('IntentDispatcher', () => {
     // FakeSupervisor internals.
     const supervisor = new FakeSupervisor({
       emit: () => {},
-      schedule: cb => cb(),
+      schedule: (cb) => cb(),
     });
     const startOne = (conv: string, agent: string): void => {
       supervisor.start({
@@ -114,9 +114,7 @@ describe('IntentDispatcher', () => {
     const r = await d.dispatch('req-host-status-2', 'host_status', {}, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if (!('result' in r)) return;
-    const ids = (r.result as { active_agent_ids: string[] }).active_agent_ids
-      .slice()
-      .sort();
+    const ids = (r.result as { active_agent_ids: string[] }).active_agent_ids.slice().sort();
     expect(ids).toEqual(['a1', 'a2']);
   });
 
@@ -152,12 +150,74 @@ describe('IntentDispatcher', () => {
       async status() {
         return {
           runtimes: [
-            { runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a-spawning' }, conversation_id: 'c1', agent_id: 'a-spawning', runtime_generation: 1, pid: 1, phase: 'spawning', run_state: null, started_at: 1 },
-            { runtime_scope: { kind: 'conversation', conversation_id: 'c2', agent_id: 'a-startup' }, conversation_id: 'c2', agent_id: 'a-startup', runtime_generation: 1, pid: 2, phase: 'startup_pending', run_state: null, started_at: 2 },
-            { runtime_scope: { kind: 'conversation', conversation_id: 'c3', agent_id: 'a-ready' }, conversation_id: 'c3', agent_id: 'a-ready', runtime_generation: 1, pid: 3, phase: 'ready', run_state: null, started_at: 3 },
-            { runtime_scope: { kind: 'conversation', conversation_id: 'c4', agent_id: 'a-draining' }, conversation_id: 'c4', agent_id: 'a-draining', runtime_generation: 1, pid: 4, phase: 'draining', run_state: null, started_at: 4 },
-            { runtime_scope: { kind: 'conversation', conversation_id: 'c5', agent_id: 'a-idle' }, conversation_id: 'c5', agent_id: 'a-idle', runtime_generation: 1, pid: 5, phase: 'idle', run_state: null, started_at: 5 },
-            { runtime_scope: { kind: 'conversation', conversation_id: 'c6', agent_id: 'a-exited' }, conversation_id: 'c6', agent_id: 'a-exited', runtime_generation: 1, pid: null, phase: 'exited', run_state: null, started_at: 6 },
+            {
+              runtime_scope: {
+                kind: 'conversation',
+                conversation_id: 'c1',
+                agent_id: 'a-spawning',
+              },
+              conversation_id: 'c1',
+              agent_id: 'a-spawning',
+              runtime_generation: 1,
+              pid: 1,
+              phase: 'spawning',
+              run_state: null,
+              started_at: 1,
+            },
+            {
+              runtime_scope: { kind: 'conversation', conversation_id: 'c2', agent_id: 'a-startup' },
+              conversation_id: 'c2',
+              agent_id: 'a-startup',
+              runtime_generation: 1,
+              pid: 2,
+              phase: 'startup_pending',
+              run_state: null,
+              started_at: 2,
+            },
+            {
+              runtime_scope: { kind: 'conversation', conversation_id: 'c3', agent_id: 'a-ready' },
+              conversation_id: 'c3',
+              agent_id: 'a-ready',
+              runtime_generation: 1,
+              pid: 3,
+              phase: 'ready',
+              run_state: null,
+              started_at: 3,
+            },
+            {
+              runtime_scope: {
+                kind: 'conversation',
+                conversation_id: 'c4',
+                agent_id: 'a-draining',
+              },
+              conversation_id: 'c4',
+              agent_id: 'a-draining',
+              runtime_generation: 1,
+              pid: 4,
+              phase: 'draining',
+              run_state: null,
+              started_at: 4,
+            },
+            {
+              runtime_scope: { kind: 'conversation', conversation_id: 'c5', agent_id: 'a-idle' },
+              conversation_id: 'c5',
+              agent_id: 'a-idle',
+              runtime_generation: 1,
+              pid: 5,
+              phase: 'idle',
+              run_state: null,
+              started_at: 5,
+            },
+            {
+              runtime_scope: { kind: 'conversation', conversation_id: 'c6', agent_id: 'a-exited' },
+              conversation_id: 'c6',
+              agent_id: 'a-exited',
+              runtime_generation: 1,
+              pid: null,
+              phase: 'exited',
+              run_state: null,
+              started_at: 6,
+            },
           ],
         };
       },
@@ -186,15 +246,8 @@ describe('IntentDispatcher', () => {
     const r = await d.dispatch('req-host-status-idle', 'host_status', {}, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
     if (!('result' in r)) return;
-    const ids = (r.result as { active_agent_ids: string[] }).active_agent_ids
-      .slice()
-      .sort();
-    expect(ids).toEqual([
-      'a-draining',
-      'a-ready',
-      'a-spawning',
-      'a-startup',
-    ]);
+    const ids = (r.result as { active_agent_ids: string[] }).active_agent_ids.slice().sort();
+    expect(ids).toEqual(['a-draining', 'a-ready', 'a-spawning', 'a-startup']);
     expect(ids).not.toContain('a-idle');
     expect(ids).not.toContain('a-exited');
   });
@@ -203,11 +256,16 @@ describe('IntentDispatcher', () => {
     const d = new IntentDispatcher({ logger });
     const expiresAt = Date.now() + 60_000;
 
-    const opened = await d.dispatch('req-debug-open', 'conversation_log_debug', {
-      conversation_id: 'c1',
-      enabled: true,
-      expires_at: expiresAt,
-    }, { owner: 'test-owner' });
+    const opened = await d.dispatch(
+      'req-debug-open',
+      'conversation_log_debug',
+      {
+        conversation_id: 'c1',
+        enabled: true,
+        expires_at: expiresAt,
+      },
+      { owner: 'test-owner' },
+    );
     expect(opened).toEqual({
       id: 'req-debug-open',
       result: { ok: true, enabled: true, expires_at: expiresAt },
@@ -217,10 +275,15 @@ describe('IntentDispatcher', () => {
       expiresAt,
     });
 
-    const closed = await d.dispatch('req-debug-close', 'conversation_log_debug', {
-      conversation_id: 'c1',
-      enabled: false,
-    }, { owner: 'test-owner' });
+    const closed = await d.dispatch(
+      'req-debug-close',
+      'conversation_log_debug',
+      {
+        conversation_id: 'c1',
+        enabled: false,
+      },
+      { owner: 'test-owner' },
+    );
     expect(closed).toEqual({
       id: 'req-debug-close',
       result: { ok: true, enabled: false, expires_at: null },
@@ -283,33 +346,15 @@ describe('IntentDispatcher', () => {
     await d.dispatch('req-y', 'echo', { wrong: 1 }, { owner: 'test-owner' });
     // intent_count should still be 0; reading via status increments it.
     const r = await d.dispatch('req-z', 'status', {}, { owner: 'test-owner' });
-    if (!('result' in r)) return;
-    expect(r.result).toMatchObject({ intent_count: 1 });
+    expect(r).toMatchObject({ id: 'req-z', result: { intent_count: 1 } });
   });
 
   it('rejects handler output that does not match the declared result schema (review fix B2)', async () => {
-    // Subclass override forces the echo handler to emit a
-    // contract-breaking shape. The base class's post-handler
-    // safeParse should catch it and return `internal_error` with a
-    // drift-flavored message — the malformed object never reaches
-    // the wire.
-    class DriftingDispatcher extends IntentDispatcher {
-      protected override async runHandler(
-        intent: Parameters<IntentDispatcher['dispatch']>[1] extends string
-          ? string
-          : never,
-        params: unknown,
-        ctx: Parameters<IntentDispatcher['dispatch']>[3],
-      ): Promise<unknown> {
-        if (intent === 'echo') return { wrong_field: 1 };
-        // Cast back to the wider union the parent expects; we
-        // narrowed only to express "any registered intent name" in
-        // a test-only subclass.
-        return super.runHandler(intent as never, params, ctx);
-      }
-    }
-    const d = new DriftingDispatcher({ logger: silentLogger() });
-    const r = await d.dispatch('req-drift', 'echo', { message: 'hi' }, { owner: 'test-owner' });
+    const supervisor = new FakeSupervisor({ emit: () => {} });
+    // A malformed collaborator response must not escape the real dispatcher.
+    vi.spyOn(supervisor, 'status').mockReturnValue({ wrong_field: 1 } as never);
+    const d = new IntentDispatcher({ logger: silentLogger(), supervisor });
+    const r = await d.dispatch('req-drift', 'runtime_status', {}, { owner: 'test-owner' });
     expect('error' in r).toBe(true);
     if ('error' in r) {
       expect(r.error.code).toBe('internal_error');
@@ -323,20 +368,25 @@ describe('IntentDispatcher — runtime_* routing', () => {
     const events: unknown[] = [];
     const queue: Array<() => void> = [];
     const supervisor = new FakeSupervisor({
-      emit: e => events.push(e),
+      emit: (e) => events.push(e),
       now: () => 1_000,
-      schedule: cb => queue.push(cb),
+      schedule: (cb) => queue.push(cb),
     });
     const d = new IntentDispatcher({
       logger: silentLogger(),
       supervisor,
     });
-    const r = await d.dispatch('req-1', 'runtime_start', {
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      options: testStartOptions(),
-    }, { owner: 'test-owner' });
+    const r = await d.dispatch(
+      'req-1',
+      'runtime_start',
+      {
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        options: testStartOptions(),
+      },
+      { owner: 'test-owner' },
+    );
     expect('result' in r).toBe(true);
     if ('result' in r) {
       expect(r.result).toMatchObject({ started: true, started_at: 1_000 });
@@ -348,34 +398,44 @@ describe('IntentDispatcher — runtime_* routing', () => {
     const queue: Array<() => void> = [];
     const supervisor = new FakeSupervisor({
       emit: () => {},
-      schedule: cb => queue.push(cb),
+      schedule: (cb) => queue.push(cb),
     });
     const d = new IntentDispatcher({
       logger: silentLogger(),
       supervisor,
     });
-    await d.dispatch('s', 'runtime_start', {
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      options: testStartOptions(),
-    }, { owner: 'test-owner' });
+    await d.dispatch(
+      's',
+      'runtime_start',
+      {
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        options: testStartOptions(),
+      },
+      { owner: 'test-owner' },
+    );
     while (queue.length) queue.shift()!(); // flush to ready
-    const r = await d.dispatch('w', 'runtime_deliver', {
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      target: { conversation_id: 'c1', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [101, 102],
-      deliveries: [101, 102].map(id => ({
-        delivery_id: id,
-        seq: id,
-        presentation: { body: 'hi', instruction: 'system' as const },
-      })),
-      kind: 'message',
-      text: 'hi',
-      spawn_options: testStartOptions(),
-    }, { owner: 'test-owner' });
+    const r = await d.dispatch(
+      'w',
+      'runtime_deliver',
+      {
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [101, 102],
+        deliveries: [101, 102].map((id) => ({
+          delivery_id: id,
+          seq: id,
+          presentation: { body: 'hi', instruction: 'system' as const },
+        })),
+        kind: 'message',
+        text: 'hi',
+        spawn_options: testStartOptions(),
+      },
+      { owner: 'test-owner' },
+    );
     expect('result' in r).toBe(true);
     if ('result' in r) {
       const result = r.result as { disposition: string };
@@ -403,11 +463,13 @@ describe('IntentDispatcher — runtime_* routing', () => {
         target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [101],
-        deliveries: [{
-          delivery_id: 101,
-          seq: 101,
-          presentation: { body: 'hi', instruction: 'system' as const },
-        }],
+        deliveries: [
+          {
+            delivery_id: 101,
+            seq: 101,
+            presentation: { body: 'hi', instruction: 'system' as const },
+          },
+        ],
         kind: 'message',
         text: 'hi',
         spawn_options: testStartOptions(),
@@ -428,18 +490,23 @@ describe('IntentDispatcher — runtime_* routing', () => {
     const queue: Array<() => void> = [];
     const supervisor = new FakeSupervisor({
       emit: () => {},
-      schedule: cb => queue.push(cb),
+      schedule: (cb) => queue.push(cb),
     });
     const d = new IntentDispatcher({
       logger: silentLogger(),
       supervisor,
     });
-    await d.dispatch('s', 'runtime_start', {
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      options: testStartOptions(),
-    }, { owner: 'test-owner' });
+    await d.dispatch(
+      's',
+      'runtime_start',
+      {
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        options: testStartOptions(),
+      },
+      { owner: 'test-owner' },
+    );
     while (queue.length) queue.shift()!();
     const r = await d.dispatch('q', 'runtime_status', {}, { owner: 'test-owner' });
     expect('result' in r).toBe(true);
@@ -452,12 +519,17 @@ describe('IntentDispatcher — runtime_* routing', () => {
 
   it('rejects runtime_* with internal_error when no supervisor wired', async () => {
     const d = new IntentDispatcher({ logger: silentLogger() });
-    const r = await d.dispatch('s', 'runtime_start', {
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      options: testStartOptions(),
-    }, { owner: 'test-owner' });
+    const r = await d.dispatch(
+      's',
+      'runtime_start',
+      {
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        options: testStartOptions(),
+      },
+      { owner: 'test-owner' },
+    );
     expect('error' in r).toBe(true);
     if ('error' in r) {
       expect(r.error.code).toBe('internal_error');
@@ -471,11 +543,16 @@ describe('IntentDispatcher — runtime_* routing', () => {
       logger: silentLogger(),
       supervisor,
     });
-    const r = await d.dispatch('x', 'runtime_inject_env', {
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      env_patch: {},
-    }, { owner: 'test-owner' });
+    const r = await d.dispatch(
+      'x',
+      'runtime_inject_env',
+      {
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        env_patch: {},
+      },
+      { owner: 'test-owner' },
+    );
     expect('error' in r).toBe(true);
     if ('error' in r) expect(r.error.code).toBe('unknown_intent');
   });
@@ -487,68 +564,93 @@ describe('IntentDispatcher — runtime_* routing', () => {
     // would have given the wrong answer).
     const events: import('../src/protocol.js').EventFrame[] = [];
     const supervisor = new FakeSupervisor({
-      emit: e => events.push(e),
+      emit: (e) => events.push(e),
     });
     const d = new IntentDispatcher({
       logger: silentLogger(),
       supervisor,
     });
-    const pauseUnknown = await d.dispatch('p1', 'runtime_output_pause', {
-      runtime_scope: {
-        kind: 'conversation',
-        conversation_id: 'no-such',
-        agent_id: 'no-such',
+    const pauseUnknown = await d.dispatch(
+      'p1',
+      'runtime_output_pause',
+      {
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'no-such',
+          agent_id: 'no-such',
+        },
       },
-    }, { owner: 'test-owner' });
+      { owner: 'test-owner' },
+    );
     expect('result' in pauseUnknown).toBe(true);
     if ('result' in pauseUnknown) {
       expect(pauseUnknown.result).toEqual({ paused: false });
     }
-    expect(events.filter(e => e.event === 'runtime_output_paused')).toHaveLength(0);
+    expect(events.filter((e) => e.event === 'runtime_output_paused')).toHaveLength(0);
 
     // Now start a runtime synchronously (no flush — fake's start
     // returns synchronously even before the scheduled ready emit,
     // and pauseOutput accepts any non-exited phase).
-    supervisor.start({ runtime_generation: 1, conversation_id: 'c1', agent_id: 'a1', options: testStartOptions() });
-    const pauseLive = await d.dispatch('p2', 'runtime_output_pause', {
-      runtime_scope: {
-        kind: 'conversation',
-        conversation_id: 'c1',
-        agent_id: 'a1',
+    supervisor.start({
+      runtime_generation: 1,
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: testStartOptions(),
+    });
+    const pauseLive = await d.dispatch(
+      'p2',
+      'runtime_output_pause',
+      {
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
       },
-    }, { owner: 'test-owner' });
+      { owner: 'test-owner' },
+    );
     expect('result' in pauseLive).toBe(true);
     if ('result' in pauseLive) expect(pauseLive.result).toEqual({ paused: true });
-    expect(events.filter(e => e.event === 'runtime_output_paused')).toHaveLength(1);
+    expect(events.filter((e) => e.event === 'runtime_output_paused')).toHaveLength(1);
 
-    const resumeLive = await d.dispatch('r2', 'runtime_output_resume', {
-      runtime_scope: {
-        kind: 'conversation',
-        conversation_id: 'c1',
-        agent_id: 'a1',
+    const resumeLive = await d.dispatch(
+      'r2',
+      'runtime_output_resume',
+      {
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
       },
-    }, { owner: 'test-owner' });
+      { owner: 'test-owner' },
+    );
     expect('result' in resumeLive).toBe(true);
     if ('result' in resumeLive) expect(resumeLive.result).toEqual({ resumed: true });
-    expect(events.filter(e => e.event === 'runtime_output_resumed')).toHaveLength(1);
+    expect(events.filter((e) => e.event === 'runtime_output_resumed')).toHaveLength(1);
   });
 
   it('status intent merges supervisor runtimes into ping-style status', async () => {
     const queue: Array<() => void> = [];
     const supervisor = new FakeSupervisor({
       emit: () => {},
-      schedule: cb => queue.push(cb),
+      schedule: (cb) => queue.push(cb),
     });
     const d = new IntentDispatcher({
       logger: silentLogger(),
       supervisor,
     });
-    await d.dispatch('s', 'runtime_start', {
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      options: testStartOptions(),
-    }, { owner: 'test-owner' });
+    await d.dispatch(
+      's',
+      'runtime_start',
+      {
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        options: testStartOptions(),
+      },
+      { owner: 'test-owner' },
+    );
     while (queue.length) queue.shift()!();
     const r = await d.dispatch('q', 'status', {}, { owner: 'test-owner' });
     expect('result' in r).toBe(true);

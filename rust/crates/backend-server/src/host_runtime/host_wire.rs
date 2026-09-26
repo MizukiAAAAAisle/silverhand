@@ -179,13 +179,6 @@ mod tests {
     }
 
     #[test]
-    fn connected_host_name_is_never_carried_by_the_base_projection() {
-        // The record has no such field to carry; the one route that shows it overlays a
-        // live attachment name over this None.
-        assert_eq!(host_wire(&record()).connected_host_name, None);
-    }
-
-    #[test]
     fn the_wire_spells_each_kind_and_source_as_the_schema_does() {
         let local_install = ComputerRecord {
             kind: HostKind::Local,

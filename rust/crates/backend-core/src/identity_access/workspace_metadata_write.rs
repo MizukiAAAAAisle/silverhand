@@ -908,126 +908,7 @@ mod tests {
         Principal::System
     }
 
-    // ---- metadata seal: the happy paths ----
-
-    #[tokio::test]
-    async fn a_rename_commits_with_the_name_change_gate_set() {
-        let writes = FakeWrites::on_metadata(WorkspaceMetadataWrite::Committed {
-            face: regular_face("workspace-1", "Design Team"),
-            prior: PriorWorkspaceAddress {
-                name: "Old".to_owned(),
-                key: "old".to_owned(),
-            },
-            committed_name_key: name("Design Team").key().to_owned(),
-        });
-        let outcome = update_workspace_metadata(
-            &writes,
-            system(),
-            &workspace_id(),
-            WorkspaceMetadataEdit::Name(name("Design Team")),
-            NOW,
-        )
-        .await
-        .unwrap();
-        let WorkspaceMetadataUpdate::Committed(committed) = outcome else {
-            panic!("expected Committed");
-        };
-        let (face, name_change) = committed.into_parts();
-        assert_eq!(face.name, "Design Team");
-        let change = name_change.expect("a real rename carries the fan-out gate");
-        // The address pair is DERIVED: old_* from the witnessed before-image, new_*
-        // from the committed face and key.
-        assert_eq!(change.old_name, "Old");
-        assert_eq!(change.old_key, "old");
-        assert_eq!(change.new_name, "Design Team");
-        assert_eq!(change.new_key, name("Design Team").key());
-    }
-
-    #[tokio::test]
-    async fn a_description_only_edit_commits_with_no_name_change_gate() {
-        let mut face = regular_face("workspace-1", "Unchanged");
-        face.description = Some("hello".to_owned());
-        let writes = FakeWrites::on_metadata(WorkspaceMetadataWrite::Committed {
-            face,
-            // A description-only edit leaves the address untouched: the before-image
-            // and the committed key both equal the current "Unchanged" address.
-            prior: prior_of("Unchanged"),
-            committed_name_key: name("Unchanged").key().to_owned(),
-        });
-        let outcome = update_workspace_metadata(
-            &writes,
-            system(),
-            &workspace_id(),
-            WorkspaceMetadataEdit::Description(Some("hello".to_owned())),
-            NOW,
-        )
-        .await
-        .unwrap();
-        let WorkspaceMetadataUpdate::Committed(committed) = outcome else {
-            panic!("expected Committed");
-        };
-        let (face, name_change) = committed.into_parts();
-        assert!(
-            name_change.is_none(),
-            "a description-only edit owes no rename fan-out"
-        );
-        assert_eq!(face.description.as_deref(), Some("hello"));
-    }
-
-    #[tokio::test]
-    async fn a_no_op_rename_to_the_same_display_name_commits_without_a_gate() {
-        // The edit supplied a name equal to the current display, so the write still
-        // committed (updated_at bumped) but the fan-out gate is None because the
-        // before-image display equals the committed display.
-        let writes = FakeWrites::on_metadata(WorkspaceMetadataWrite::Committed {
-            face: regular_face("workspace-1", "Same"),
-            prior: prior_of("Same"),
-            committed_name_key: name("Same").key().to_owned(),
-        });
-        let outcome = update_workspace_metadata(
-            &writes,
-            system(),
-            &workspace_id(),
-            WorkspaceMetadataEdit::Name(name("Same")),
-            NOW,
-        )
-        .await
-        .unwrap();
-        let WorkspaceMetadataUpdate::Committed(committed) = outcome else {
-            panic!("expected Committed");
-        };
-        let (_face, name_change) = committed.into_parts();
-        assert!(name_change.is_none());
-    }
-
-    #[tokio::test]
-    async fn the_product_refusals_pass_through_unsealed() {
-        for (raw, want) in [
-            (WorkspaceMetadataWrite::NoSuchWorkspace, "no-such"),
-            (WorkspaceMetadataWrite::Forbidden, "forbidden"),
-            (WorkspaceMetadataWrite::NameTaken, "name-taken"),
-        ] {
-            let writes = FakeWrites::on_metadata(raw);
-            let outcome = update_workspace_metadata(
-                &writes,
-                system(),
-                &workspace_id(),
-                WorkspaceMetadataEdit::Name(name("Anything")),
-                0,
-            )
-            .await
-            .unwrap();
-            let got = match outcome {
-                WorkspaceMetadataUpdate::NoSuchWorkspace => "no-such",
-                WorkspaceMetadataUpdate::Forbidden => "forbidden",
-                WorkspaceMetadataUpdate::NameTaken => "name-taken",
-                WorkspaceMetadataUpdate::Committed(_) => "committed",
-            };
-            assert_eq!(got, want);
-        }
-    }
-
-    // ---- metadata seal: the falsifiers ----
+    // Metadata validation is exercised below; public announce tests own the happy paths.
 
     async fn assert_metadata_untrustworthy(
         write: WorkspaceMetadataWrite,
@@ -1386,6 +1267,8 @@ mod tests {
         let change = name_change.expect("a real rename surfaces its address pair for the fan-out");
         assert_eq!(change.old_name, "Old");
         assert_eq!(change.new_name, "Design Team");
+        assert_eq!(change.old_key, "old");
+        assert_eq!(change.new_key, "design team");
         assert!(matches!(announce, WorkspaceMetadataAnnounce::Delivered));
         assert_eq!(sink.calls(), 1, "a real rename fires the hint exactly once");
     }
@@ -1413,7 +1296,8 @@ mod tests {
         let WorkspaceMetadataUpdateWithAnnounce::Committed(announced) = outcome else {
             panic!("expected Committed");
         };
-        let (_face, name_change, announce) = announced.into_parts();
+        let (face, name_change, announce) = announced.into_parts();
+        assert_eq!(face.description.as_deref(), Some("hello"));
         assert!(
             name_change.is_none(),
             "a description-only edit surfaces no address pair"

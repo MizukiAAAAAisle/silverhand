@@ -3,11 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import {
-  clearRuntimeDetectionCacheForTests,
-  detectRuntimeCatalog,
-  platformBinaryCandidates,
-} from '../src/runtimes.js';
+import { detectRuntimeCatalog, platformBinaryCandidates } from '../src/runtimes.js';
 
 const roots: string[] = [];
 
@@ -23,7 +19,6 @@ function makeBin(name: string, body: string): string {
 }
 
 afterEach(() => {
-  clearRuntimeDetectionCacheForTests();
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -69,8 +64,8 @@ describe('runtime detection', () => {
       includeDefaultCandidateDirs: false,
     });
 
-    expect(result.runtimes.map(r => r.kind)).toEqual(['claude', 'codex']);
-    expect(result.runtimes.every(r => r.state === 'absent')).toBe(true);
+    expect(result.runtimes.map((r) => r.kind)).toEqual(['claude', 'codex']);
+    expect(result.runtimes.every((r) => r.state === 'absent')).toBe(true);
   });
 
   it('treats version probe failure as present_unverified, not absent', async () => {

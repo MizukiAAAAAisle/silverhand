@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  parseNumericVersion,
-  versionAtLeast,
-} from '../../src/drivers/version-gate.js';
+import { versionAtLeast } from '../../src/drivers/version-gate.js';
 
 // ===========================================================================
 // CONTRACT (Do Not Weaken) — driver capability version gate, #task:1909
@@ -67,15 +64,5 @@ describe('versionAtLeast', () => {
 
   it('throws on an unparseable minimum (programming error, not input)', () => {
     expect(() => versionAtLeast('1.1.17', 'latest')).toThrow(/unparseable minimum/);
-  });
-});
-
-describe('parseNumericVersion', () => {
-  it('returns the numeric prefix components, or null', () => {
-    expect(parseNumericVersion('1.1.17')).toEqual([1, 1, 17]);
-    expect(parseNumericVersion('v2.0')).toEqual([2, 0]);
-    expect(parseNumericVersion('1.1.17-rc1')).toEqual([1, 1, 17]);
-    expect(parseNumericVersion('nope')).toBeNull();
-    expect(parseNumericVersion(null)).toBeNull();
   });
 });

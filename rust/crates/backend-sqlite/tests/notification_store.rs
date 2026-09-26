@@ -32,6 +32,22 @@ async fn seeded(path: &std::path::Path) {
     db.close().await.unwrap();
 }
 
+async fn unread_ids(port: &impl NotificationReadPort, viewer: &UserId) -> Vec<String> {
+    port.list(
+        viewer,
+        NotificationListQuery {
+            unread_only: true,
+            limit: 100,
+        },
+    )
+    .await
+    .ok()
+    .expect("unread list succeeds")
+    .into_iter()
+    .map(|notification| notification.id.as_str().to_owned())
+    .collect()
+}
+
 #[tokio::test]
 async fn viewer_read_and_atomic_clear_return_the_marked_count() {
     let d = tempfile::tempdir().unwrap();
@@ -56,7 +72,27 @@ async fn viewer_read_and_atomic_clear_return_the_marked_count() {
     );
     let summary = n.unread_summary(&viewer).await.unwrap();
     assert_eq!(summary.total, 4);
-    assert_eq!(summary.latest_by_workspace.len(), 1);
+    assert_eq!(
+        summary
+            .by_workspace
+            .iter()
+            .map(|(id, count)| (id.as_str(), *count))
+            .collect::<Vec<_>>(),
+        vec![("w1", 1), ("w2", 3)]
+    );
+    assert_eq!(
+        summary
+            .latest_by_workspace
+            .iter()
+            .map(|(id, anchor)| (
+                id.as_str(),
+                anchor.conversation.as_str(),
+                anchor.message.as_str(),
+                anchor.thread_root.as_ref().map(|id| id.as_str())
+            ))
+            .collect::<Vec<_>>(),
+        vec![("w2", "c2", "m2", None)]
+    );
     let by_id = n
         .clear(
             viewer.clone(),
@@ -65,6 +101,7 @@ async fn viewer_read_and_atomic_clear_return_the_marked_count() {
         .await
         .unwrap();
     assert_eq!(by_id.marked(), 1);
+    assert_eq!(unread_ids(&n, &viewer).await, ["n4", "n3", "n2"]);
     let by_workspace = n
         .clear(
             viewer.clone(),
@@ -75,6 +112,7 @@ async fn viewer_read_and_atomic_clear_return_the_marked_count() {
         .await
         .unwrap();
     assert_eq!(by_workspace.marked(), 1);
+    assert_eq!(unread_ids(&n, &viewer).await, ["n4", "n2"]);
     let by_conversation = n
         .clear(
             viewer.clone(),
@@ -85,6 +123,7 @@ async fn viewer_read_and_atomic_clear_return_the_marked_count() {
         .await
         .unwrap();
     assert_eq!(by_conversation.marked(), 1);
+    assert_eq!(unread_ids(&n, &viewer).await, ["n4"]);
     let committed = n
         .clear(viewer.clone(), NotificationClearSelector::All)
         .await

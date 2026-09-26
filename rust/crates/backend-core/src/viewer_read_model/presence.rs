@@ -192,7 +192,6 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::viewer_read_model::presence_grace;
 
     fn user_id(id: &str) -> UserId {
         UserId::parse(id).expect("user id")
@@ -361,22 +360,5 @@ mod tests {
             rows.iter().map(|row| &row.user_id).collect::<Vec<_>>(),
             vec![&user_id("u3"), &user_id("u1"), &user_id("u2")]
         );
-    }
-
-    /// Composed the way production must: no connection, a window still pending.
-    /// The viewer reads present, and the stamp their expiry will eventually write
-    /// stays suppressed.
-    struct GraceRegistry;
-
-    impl OnlineViewers for GraceRegistry {
-        fn is_online(&self, _user_id: &UserId) -> bool {
-            presence_grace::is_online(false, true)
-        }
-    }
-
-    #[test]
-    fn a_viewer_inside_the_grace_window_still_reads_present() {
-        let rows = read_user_presence(&sealed(vec![facts("u1", Some(1_700), 1)]), &GraceRegistry);
-        assert_eq!(rows[0].presence, UserPresence::Online);
     }
 }

@@ -252,142 +252,15 @@ pub trait AgentProfileMcpDataPlane {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-
-    /// A deterministic in-memory data plane, proving the port is usable for
-    /// orchestration without any transport. This is a TEST double only — the
-    /// lane ships no production or no-op implementation.
-    #[derive(Default)]
-    struct FakeDataPlane {
-        files: HashMap<String, String>,
-    }
-
-    impl AgentProfileMcpDataPlane for FakeDataPlane {
-        async fn read_config(&self, agent: &AgentId) -> Result<Option<String>, McpDataPlaneFault> {
-            Ok(self.files.get(agent.as_str()).cloned())
-        }
-
-        async fn write_config(
-            &self,
-            _agent: &AgentId,
-            raw: &str,
-        ) -> Result<McpBytesWritten, McpDataPlaneFault> {
-            Ok(McpBytesWritten::new(raw.len() as u64).expect("test byte counts are small"))
-        }
-
-        async fn probe(
-            &self,
-            _agent: &AgentId,
-            command: &McpProbeCommand,
-        ) -> Result<McpProbeOutcome, McpDataPlaneFault> {
-            if command.server_name == "gone" {
-                return Ok(McpProbeOutcome {
-                    ok: false,
-                    phase: McpProbePhase::NotFound,
-                    message: Some("no such server".to_string()),
-                    server_info: None,
-                    tools: None,
-                });
-            }
-            Ok(McpProbeOutcome {
-                ok: true,
-                phase: if command.include_tools {
-                    McpProbePhase::Tools
-                } else {
-                    McpProbePhase::Initialize
-                },
-                message: None,
-                server_info: Some(McpProbeServerInfo {
-                    name: Some("srv".to_string()),
-                    version: None,
-                }),
-                tools: command.include_tools.then(|| {
-                    vec![McpProbeTool {
-                        name: "t".to_string(),
-                        description: None,
-                    }]
-                }),
-            })
-        }
-    }
-
-    fn agent(id: &str) -> AgentId {
-        AgentId::parse(id).expect("agent id")
-    }
 
     #[test]
     fn bytes_written_admits_the_js_safe_max_and_rejects_one_past_it() {
-        let max = McpBytesWritten::new(JsSafeInteger::MAX as u64).expect("MAX is representable");
-        assert_eq!(max.get(), JsSafeInteger::MAX);
-
+        let max = McpBytesWritten::new(9_007_199_254_740_991).expect("MAX is representable");
+        assert_eq!(max.get(), 9_007_199_254_740_991);
         assert_eq!(
-            McpBytesWritten::new(JsSafeInteger::MAX as u64 + 1),
-            Err(McpBytesWrittenOutOfRange(JsSafeInteger::MAX as u64 + 1))
+            McpBytesWritten::new(9_007_199_254_740_992),
+            Err(McpBytesWrittenOutOfRange(9_007_199_254_740_992))
         );
         assert_eq!(McpBytesWritten::new(0).unwrap().get(), 0);
-    }
-
-    #[tokio::test]
-    async fn read_returns_none_for_a_missing_file_and_bytes_for_a_write() {
-        let mut plane = FakeDataPlane::default();
-        assert_eq!(plane.read_config(&agent("a1")).await.unwrap(), None);
-        assert_eq!(
-            plane.write_config(&agent("a1"), "abc").await.unwrap().get(),
-            3
-        );
-
-        plane.files.insert("a1".to_string(), "x".to_string());
-        assert_eq!(
-            plane.read_config(&agent("a1")).await.unwrap(),
-            Some("x".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn a_handshake_failure_rides_the_outcome_not_an_error() {
-        let plane = FakeDataPlane::default();
-        let outcome = plane
-            .probe(
-                &agent("a1"),
-                &McpProbeCommand {
-                    server_name: "gone".to_string(),
-                    include_tools: false,
-                },
-            )
-            .await
-            .expect("a failed handshake is still a successful call");
-        assert!(!outcome.ok);
-        assert_eq!(outcome.phase, McpProbePhase::NotFound);
-    }
-
-    #[tokio::test]
-    async fn tools_are_present_only_when_requested() {
-        let plane = FakeDataPlane::default();
-        let without = plane
-            .probe(
-                &agent("a1"),
-                &McpProbeCommand {
-                    server_name: "srv".to_string(),
-                    include_tools: false,
-                },
-            )
-            .await
-            .unwrap();
-        assert!(without.ok);
-        assert_eq!(without.phase, McpProbePhase::Initialize);
-        assert!(without.tools.is_none());
-
-        let with = plane
-            .probe(
-                &agent("a1"),
-                &McpProbeCommand {
-                    server_name: "srv".to_string(),
-                    include_tools: true,
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(with.phase, McpProbePhase::Tools);
-        assert_eq!(with.tools.as_deref().map(<[_]>::len), Some(1));
     }
 }

@@ -316,8 +316,9 @@ mod tests {
     impl AgentDetailReadModel for FakeReads {
         async fn read_agent_detail(
             &self,
-            _agent: &AgentId,
+            agent: &AgentId,
         ) -> Result<Option<AgentDetailFacts>, PersistenceFailure> {
+            assert_eq!(agent.as_str(), "a1");
             self.calls.fetch_add(1, SeqCst);
             match &self.detail {
                 DetailOutcome::Present(facts) => Ok(Some(facts.as_ref().clone())),
@@ -340,6 +341,7 @@ mod tests {
         exists: bool,
         may_edit: bool,
         scope: Option<AgentSessionScope>,
+        snapshots: Arc<AtomicUsize>,
     }
 
     struct FakeScope {
@@ -351,6 +353,7 @@ mod tests {
         type Scope = FakeScope;
 
         async fn begin_snapshot(&self) -> Result<Self::Scope, Self::Error> {
+            self.snapshots.fetch_add(1, SeqCst);
             Ok(FakeScope {
                 config: self.clone(),
             })
@@ -367,7 +370,8 @@ mod tests {
             unreachable!("the agent ladder performs zero conversation reads")
         }
 
-        async fn agent_exists(&mut self, _agent: &AgentId) -> Result<bool, Self::Error> {
+        async fn agent_exists(&mut self, agent: &AgentId) -> Result<bool, Self::Error> {
+            assert_eq!(agent.as_str(), "a1");
             Ok(self.config.exists)
         }
 
@@ -389,16 +393,19 @@ mod tests {
 
         async fn actor_may_edit_agent(
             &mut self,
-            _actor: &UserId,
-            _agent: &AgentId,
+            actor: &UserId,
+            agent: &AgentId,
         ) -> Result<bool, Self::Error> {
+            assert_eq!(actor.as_str(), "viewer-1");
+            assert_eq!(agent.as_str(), "a1");
             Ok(self.config.may_edit)
         }
 
         async fn agent_session_scope(
             &mut self,
-            _agent: &AgentId,
+            agent: &AgentId,
         ) -> Result<Option<AgentSessionScope>, Self::Error> {
+            assert_eq!(agent.as_str(), "a1");
             Ok(self.config.scope)
         }
 
@@ -454,8 +461,12 @@ mod tests {
 
         async fn clear_session(
             &self,
-            _target: &RuntimeSeatTarget,
+            target: &RuntimeSeatTarget,
         ) -> Result<Result<ClearSessionOutcome, ClearSessionProviderRefusal>, Self::Error> {
+            assert_eq!(target.actor().as_str(), "viewer-1");
+            assert!(
+                matches!(target.scope(), silverhand_backend_core::host_runtime::runtime_credential::RuntimeScope::AgentSlot { agent } if agent.as_str() == "a1")
+            );
             *self.clears.lock().unwrap() += 1;
             match self.mode {
                 ProviderMode::Success => Ok(Ok(ClearSessionOutcome::committed(
@@ -512,6 +523,7 @@ mod tests {
             exists,
             may_edit,
             scope,
+            snapshots: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -519,6 +531,7 @@ mod tests {
         status: StatusCode,
         body: String,
         detail_reads: usize,
+        admission_reads: usize,
         clears: usize,
     }
 
@@ -530,6 +543,7 @@ mod tests {
         with_principal: bool,
     ) -> Reply {
         let detail_calls = reads.calls.clone();
+        let admission_calls = admission.snapshots.clone();
         let clear_calls = provider.clears.clone();
         let uri = format!("/api/agents/{path_id}/clear-session");
         let mut request = Request::post(&uri);
@@ -546,6 +560,7 @@ mod tests {
             status,
             body: String::from_utf8(bytes.to_vec()).unwrap(),
             detail_reads: detail_calls.load(SeqCst),
+            admission_reads: admission_calls.load(SeqCst),
             clears: *clear_calls.lock().unwrap(),
         }
     }
@@ -569,66 +584,44 @@ mod tests {
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(reply.body, "Internal Server Error");
         assert_eq!(reply.detail_reads, 0);
+        assert_eq!(reply.admission_reads, 0);
         assert_eq!(reply.clears, 0);
     }
 
     #[tokio::test]
-    async fn an_absent_row_is_the_anti_enumeration_404_and_never_clears() {
-        let reply = clear_with(
-            FakeReads::new(DetailOutcome::Absent),
-            admission(true, true, Some(AgentSessionScope::Agent)),
-            FakeProvider::new(ProviderMode::Success),
-            "a1",
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND);
-        assert_eq!(parsed(&reply.body), json!({ "error": "agent not found" }));
-        assert_eq!(reply.clears, 0);
-    }
-
-    #[tokio::test]
-    async fn a_non_active_stage_is_the_same_404_and_never_clears() {
-        let facts = AgentDetailFacts::from_source(
-            agent("a1"),
-            user("viewer-1"),
-            [],
-            [],
-            MaterializationStatus::Failed,
-            projection("agent"),
-        );
-        let reply = clear_with(
-            FakeReads::new(present(facts)),
-            admission(true, true, Some(AgentSessionScope::Agent)),
-            FakeProvider::new(ProviderMode::Success),
-            "a1",
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND);
-        assert_eq!(reply.clears, 0);
-    }
-
-    #[tokio::test]
-    async fn a_viewer_who_cannot_see_it_is_the_same_404() {
-        let facts = AgentDetailFacts::from_source(
-            agent("a1"),
-            user("someone-else"),
-            [],
-            [],
-            MaterializationStatus::Active,
-            projection("agent"),
-        );
-        let reply = clear_with(
-            FakeReads::new(present(facts)),
-            admission(true, false, Some(AgentSessionScope::Agent)),
-            FakeProvider::new(ProviderMode::Success),
-            "a1",
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND);
-        assert_eq!(reply.clears, 0);
+    async fn absent_non_active_and_invisible_agents_are_404_before_admission() {
+        for detail in [
+            DetailOutcome::Absent,
+            present(AgentDetailFacts::from_source(
+                agent("a1"),
+                user("viewer-1"),
+                [],
+                [],
+                MaterializationStatus::Failed,
+                projection("agent"),
+            )),
+            present(AgentDetailFacts::from_source(
+                agent("a1"),
+                user("someone-else"),
+                [],
+                [],
+                MaterializationStatus::Active,
+                projection("agent"),
+            )),
+        ] {
+            let reply = clear_with(
+                FakeReads::new(detail),
+                admission(true, true, Some(AgentSessionScope::Agent)),
+                FakeProvider::new(ProviderMode::Success),
+                "a1",
+                true,
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::NOT_FOUND);
+            assert_eq!(parsed(&reply.body), json!({"error":"agent not found"}));
+            assert_eq!(reply.admission_reads, 0);
+            assert_eq!(reply.clears, 0);
+        }
     }
 
     #[tokio::test]
@@ -650,6 +643,8 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(reply.body, "Internal Server Error");
+        assert_eq!(reply.admission_reads, 0);
         assert_eq!(reply.clears, 0);
     }
 
@@ -664,6 +659,8 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(reply.body, "Internal Server Error");
+        assert_eq!(reply.admission_reads, 0);
         assert_eq!(reply.clears, 0);
     }
 

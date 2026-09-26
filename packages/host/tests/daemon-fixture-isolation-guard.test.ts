@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import ts from 'typescript';
 
 /**
  * #task:1596 round 3 (Cindy) — test-isolation wiring guard. The acceptance
@@ -20,7 +21,7 @@ import { join, relative, resolve } from 'node:path';
  * `~/.silverhand/daemon/identity.json`.
  *
  * So this guard statically requires every `runDaemon(`/`runDaemon({` call in
- * test sources (host AND backend suites) to pass an explicit durable agent
+ * host test sources, including subprocess fixtures, to pass an explicit durable agent
  * root AND an explicit identity coordinate in the same call expression. New
  * fixtures fail here immediately instead of leaking silently.
  */
@@ -34,7 +35,7 @@ function collectTsFiles(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     const path = join(dir, name);
     if (statSync(path).isDirectory()) {
-      if (name === 'node_modules' || name === 'fixtures' || name === '_fixtures') {
+      if (name === 'node_modules') {
         continue;
       }
       collectTsFiles(path, out);
@@ -45,46 +46,78 @@ function collectTsFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-describe('daemon test fixtures cannot address the real ~/.silverhand', () => {
-  it('every runDaemon( call in test sources sandboxes the durable agent tree (agentHomeRootDir | computersRootDir) AND passes daemonIdentityPath', () => {
-    // #task:1608 — `computersRootDir` sandboxes the binding-keyed slot that
-    // supplies the agents root, protecting the same bytes an explicit
-    // `agentHomeRootDir` does, so either one keeps the fixture off the real
-    // ~/.silverhand.
-    const REQUIRED_OPTIONS: Array<string | readonly string[]> = [
-      ['agentHomeRootDir', 'computersRootDir'],
-      'daemonIdentityPath',
-    ];
-    const violations: string[] = [];
-    for (const root of TEST_ROOTS) {
-      for (const file of collectTsFiles(root)) {
-        if (file === SELF) continue;
-        const source = readFileSync(file, 'utf-8');
-        let idx = 0;
-        for (;;) {
-          const call = source.indexOf('runDaemon(', idx);
-          if (call < 0) break;
-          idx = call + 'runDaemon('.length;
-          // Ignore imports / type positions / prose (no call body).
-          const body = source.slice(call, call + 2000);
-          if (!body.startsWith('runDaemon({')) continue;
-          // The explicit options must appear within this call's opening
-          // object literal (2000 chars is far beyond any current fixture's
-          // option block; a false negative here just means a smaller slice
-          // window, never a silent pass for a missing option — the option
-          // text itself is what we look for).
-          for (const option of REQUIRED_OPTIONS) {
-            const alternatives = Array.isArray(option) ? option : [option];
-            if (!alternatives.some((name) => body.includes(name))) {
-              const line = source.slice(0, call).split('\n').length;
-              violations.push(
-                `${relative(process.cwd(), file)}:${line} — runDaemon() without explicit ${alternatives.join(' | ')}`,
-              );
-            }
-          }
+function isolationViolations(source: string, filename: string): string[] {
+  const file = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true);
+  const callees = new Set(['runDaemon']);
+  const violations: string[] = [];
+  function findAliases(node: ts.Node): void {
+    if (ts.isImportSpecifier(node) && (node.propertyName ?? node.name).text === 'runDaemon') {
+      callees.add(node.name.text);
+    }
+    ts.forEachChild(node, findAliases);
+  }
+  findAliases(file);
+  function visit(node: ts.Node): void {
+    if (
+      ts.isCallExpression(node) &&
+      ((ts.isIdentifier(node.expression) && callees.has(node.expression.text)) ||
+        (ts.isPropertyAccessExpression(node.expression) &&
+          node.expression.name.text === 'runDaemon'))
+    ) {
+      const options = node.arguments[0];
+      const names = new Set<string>();
+      if (options && ts.isObjectLiteralExpression(options)) {
+        for (const property of options.properties) {
+          if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property))
+            continue;
+          if (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+            names.add(property.name.text);
+        }
+      }
+      const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+      for (const alternatives of [
+        ['agentHomeRootDir', 'computersRootDir'],
+        ['daemonIdentityPath'],
+      ]) {
+        if (!alternatives.some((name) => names.has(name))) {
+          violations.push(
+            `${filename}:${line} — runDaemon() without explicit ${alternatives.join(' | ')}`,
+          );
         }
       }
     }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  return violations;
+}
+
+describe('daemon test fixtures cannot address the real ~/.silverhand', () => {
+  it.each([
+    ['runDaemon ( { computersRootDir, daemonIdentityPath } )', 0],
+    [
+      "import { runDaemon as boot } from '../src/daemon/run.js'; boot({ agentHomeRootDir, daemonIdentityPath });",
+      0,
+    ],
+    ['// runDaemon({})', 0],
+    ['runDaemon({ /* agentHomeRootDir, daemonIdentityPath */ })', 2],
+    ['runDaemon({ nested: { agentHomeRootDir, daemonIdentityPath } })', 2],
+    ['runDaemon({}); runDaemon({ agentHomeRootDir, daemonIdentityPath });', 2],
+    ['runDaemon(options)', 2],
+    ['runDaemon({ agentHomeRootDir })', 1],
+    ['runDaemon({ daemonIdentityPath })', 1],
+  ])('checks only this call’s explicit coordinates: %s', (source, count) => {
+    expect(isolationViolations(source, 'fixture.ts')).toHaveLength(count);
+  });
+
+  it('every runDaemon( call in test sources sandboxes the durable agent tree (agentHomeRootDir | computersRootDir) AND passes daemonIdentityPath', () => {
+    const violations = TEST_ROOTS.flatMap((root) =>
+      collectTsFiles(root)
+        .filter((file) => file !== SELF)
+        .flatMap((file) =>
+          isolationViolations(readFileSync(file, 'utf-8'), relative(process.cwd(), file)),
+        ),
+    );
     expect(
       violations,
       `daemon fixtures must state the durable agent tree (agentHomeRootDir | computersRootDir) + pass daemonIdentityPath (whose omission still falls back to the real ~/.silverhand):\n${violations.join('\n')}`,

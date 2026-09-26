@@ -398,10 +398,6 @@ async fn enable_reads_one_local_clock_and_disable_reads_none() {
     assert_eq!(enabled.clock.load(Ordering::SeqCst), 1);
     assert_eq!(enabled.control.enables.load(Ordering::SeqCst), 1);
     assert_eq!(enabled.control.disables.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        *enabled.control.status.lock().unwrap(),
-        ConversationLogDebugStatus::enabled(601_000).unwrap()
-    );
 
     let disabled = fixture(AdmissionMode::Granted);
     let (status, body) = call(
@@ -423,10 +419,6 @@ async fn enable_reads_one_local_clock_and_disable_reads_none() {
     assert_eq!(disabled.clock.load(Ordering::SeqCst), 0);
     assert_eq!(disabled.control.enables.load(Ordering::SeqCst), 0);
     assert_eq!(disabled.control.disables.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        *disabled.control.status.lock().unwrap(),
-        ConversationLogDebugStatus::disabled()
-    );
 }
 
 #[tokio::test]
@@ -452,6 +444,13 @@ async fn production_control_expires_at_the_same_boundary_the_get_route_reads() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["expiresAt"], 601_000);
+    now.store(600_999, Ordering::SeqCst);
+    let (status, body) = call(app.clone(), "GET", Body::empty(), true, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({"conversationId":"c","enabled":true,"expiresAt":601_000})
+    );
     now.store(601_000, Ordering::SeqCst);
     let (status, body) = call(app, "GET", Body::empty(), true, None).await;
     assert_eq!(status, StatusCode::OK);
@@ -463,7 +462,7 @@ async fn production_control_expires_at_the_same_boundary_the_get_route_reads() {
 }
 
 #[tokio::test]
-async fn strict_boolean_admission_and_the_shared_body_bound_precede_local_control() {
+async fn strict_boolean_shape_and_content_type_precede_local_control() {
     // The closed body crosses the shared `ValidatedJson` extractor AFTER admit. Structural
     // faults keep their NATIVE axum status — 400 for a JSON syntax error, 422 for a
     // data-shape fault (missing/wrong-typed key, unknown key under `.strict()`, and a

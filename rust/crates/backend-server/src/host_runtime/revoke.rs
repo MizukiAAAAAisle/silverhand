@@ -529,7 +529,7 @@ mod tests {
 
     /// An absent row and a foreign one render the SAME `404` and never reach the write.
     #[tokio::test]
-    async fn a_missing_or_foreign_computer_is_one_byte_identical_404() {
+    async fn a_missing_or_foreign_computer_is_one_json_404() {
         let refused = json!({ "error": "host not found", "error_code": "host_not_found" });
         for read in [
             ReadOutcome::Absent,

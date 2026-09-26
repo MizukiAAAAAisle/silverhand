@@ -768,17 +768,6 @@ mod tests {
     }
 
     #[test]
-    fn query_keys_are_allowlisted_deduplicated_and_sorted_without_values() {
-        assert_eq!(
-            allowlisted_query_keys(
-                Some("status=todo&secret=value&task_number=1&status=done"),
-                TASK_QUERY_KEYS,
-            ),
-            vec!["status", "task_number"]
-        );
-    }
-
-    #[test]
     fn current_cli_routes_are_a_closed_unique_method_path_set() {
         for (index, left) in ROUTES.iter().enumerate() {
             assert!(
@@ -869,13 +858,6 @@ mod tests {
         assert!(records[0].query_keys.is_empty());
         assert_eq!(records[1].query_keys, vec!["workspace_id"]);
         assert_eq!(records[1].route.unwrap().noun, "channel");
-        // The typed fact contains only allowlisted static keys, never query values.
-        assert!(
-            records[1]
-                .query_keys
-                .iter()
-                .all(|key| !key.contains("private"))
-        );
     }
 
     #[tokio::test]
@@ -1141,7 +1123,7 @@ mod tests {
         app.clone()
             .oneshot(request(
                 "GET",
-                "/internal/agents/a1/tasks?status=todo&secret=hunter2&status=done",
+                "/internal/agents/a1/tasks?task_number=1&status=todo&secret=hunter2&status=done",
                 "",
             ))
             .await
@@ -1156,7 +1138,7 @@ mod tests {
 
         let records = sink.recorded();
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0].query_keys, vec!["status"]);
+        assert_eq!(records[0].query_keys, vec!["status", "task_number"]);
         assert_eq!(records[0].agent_id.as_str(), "a1");
         assert_eq!(records[1].agent_id.as_str(), "a1");
         assert_eq!(records[1].route, None);

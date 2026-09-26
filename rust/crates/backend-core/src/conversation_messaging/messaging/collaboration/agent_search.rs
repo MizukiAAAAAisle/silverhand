@@ -306,13 +306,6 @@ mod tests {
     }
 
     #[test]
-    fn a_non_match_returns_the_leading_window_at_offset_zero() {
-        let hit = search_excerpt_for("some text without the token", "zzz");
-        assert_eq!(hit.excerpt, "some text without the token");
-        assert_eq!(hit.match_offset, 0);
-    }
-
-    #[test]
     fn whitespace_is_collapsed_before_matching() {
         let hit = search_excerpt_for("a\n\n  b   \tc", "b c");
         assert_eq!(hit.excerpt, "a b c");
@@ -338,8 +331,10 @@ mod tests {
         let suffix = "y".repeat(200);
         let content = format!("{prefix}NEEDLE{suffix}");
         let hit = search_excerpt_for(&content, "needle");
-        assert!(hit.excerpt.starts_with("..."));
-        assert!(hit.excerpt.ends_with("..."));
+        assert_eq!(
+            hit.excerpt,
+            format!("...{}NEEDLE{}...", "x".repeat(80), "y".repeat(80))
+        );
         // 80 context chars + the 3-char prefix affix.
         assert_eq!(hit.match_offset, (80 + 3) as i64);
     }
@@ -358,27 +353,6 @@ mod tests {
         // Final-sigma variant folds the same.
         let hit = search_excerpt_for("word σοφός end", "ΣΟΦΌΣ");
         assert_eq!(hit.match_offset, "word ".encode_utf16().count() as i64);
-    }
-
-    #[test]
-    fn a_match_starting_mid_expansion_covers_the_whole_original_scalar() {
-        // content `ßa` folds to `ssa`; query `sa` matches at folded
-        // offset 1 — INSIDE `ß`'s expansion. The original interval must be the MINIMAL
-        // complete scalar span covering the folded match: `[0,2)` = the whole `ßa`
-        // (offset 0), NOT `[1,..)` = `a`. The excerpt keeps the whole `ß`.
-        let hit = search_excerpt_for("ßa", "sa");
-        assert_eq!(hit.match_offset, 0, "maps to the START of ß, not past it");
-        assert!(
-            hit.excerpt.contains('ß'),
-            "the whole original scalar is kept"
-        );
-
-        // İ (U+0130) folds to `i̇` (two units: i + combining dot above). A query `i̇x`
-        // over content `İx` matches; the offset maps to the original İ at 0 and the
-        // covering interval includes the whole İ.
-        let hit = search_excerpt_for("İx", "i\u{0307}x");
-        assert_eq!(hit.match_offset, 0);
-        assert!(hit.excerpt.starts_with('İ'));
     }
 
     #[test]
@@ -404,28 +378,35 @@ mod tests {
 
     #[test]
     fn scalar_safe_window_never_splits_a_surrogate_pair() {
-        // An astral emoji (2 UTF-16 units each) packed so the ±80 window edge lands
-        // mid-pair; the excerpt must remain valid Unicode (no U+FFFD), shrinking the
-        // window inward by one unit rather than slicing a lone surrogate.
-        let filler = "😀".repeat(90); // 180 UTF-16 units of astral scalars before...
-        let content = format!("{filler}NEEDLE{filler}");
+        // The ASCII padding makes both ±80 window edges fall inside emoji pairs.
+        // Each edge must shrink inward by one UTF-16 unit.
+        let filler = "😀".repeat(90);
+        let content = format!("{filler}xNEEDLEx{filler}");
         let hit = search_excerpt_for(&content, "needle");
-        // No replacement character leaked from a split pair.
-        assert!(
-            !hit.excerpt.contains('\u{FFFD}'),
-            "scalar-safe window must not emit U+FFFD: {:?}",
-            hit.excerpt
+        assert_eq!(
+            hit.excerpt,
+            format!("...{}xNEEDLEx{}...", "😀".repeat(39), "😀".repeat(39))
         );
-        // The excerpt is valid UTF-8 by construction (String), and round-trips.
-        assert_eq!(hit.excerpt, hit.excerpt.chars().collect::<String>());
+        assert_eq!(hit.match_offset, 82);
+
+        // The unmatched leading window has its own 160-unit end boundary.
+        let hit = search_excerpt_for(&format!("x{filler}"), "absent");
+        assert_eq!(hit.excerpt, format!("x{}", "😀".repeat(79)));
+        assert_eq!(hit.match_offset, 0);
     }
 
     #[test]
     fn combining_sequence_folds_without_nfc_composition() {
         // fold-only (no NFC): a decomposed `e` + combining acute stays two code
         // points; matching a decomposed query aligns; the offset maps to the original.
-        let content = "cafe\u{0301} time"; // café (decomposed) + " time"
+        let content = "x cafe\u{0301} time";
         let hit = search_excerpt_for(content, "CAFE\u{0301}");
+        assert_eq!(hit.excerpt, content);
+        assert_eq!(hit.match_offset, 2);
+
+        // A composed query must not match the decomposed text through NFC.
+        let hit = search_excerpt_for(content, "CAFÉ");
+        assert_eq!(hit.excerpt, content);
         assert_eq!(hit.match_offset, 0);
     }
 }

@@ -241,33 +241,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_present_self_profile_is_projected_at_200() {
-        let reader = RecordingReader::with([fact("a1", "agent-one", Some(2500))]);
-        let response = injected(reader.clone(), Some(principal("a1"))).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            body_json(response).await,
-            json!({
-                "profile": {
-                    "id": "a1",
-                    "name": "agent-one",
-                    "display_name": "agent-one",
-                    "description": "a bio",
-                    "avatar_url": "/api/agents/a1/avatar?v=2500"
-                }
-            })
-        );
-        // The subject read is the credential's agent, nothing else.
-        assert_eq!(reader.asked_for(), vec!["a1".to_string()]);
-    }
-
-    #[tokio::test]
     async fn no_avatar_is_null_not_omitted() {
         let reader = RecordingReader::with([fact("a1", "agent-one", None)]);
         let response = injected(reader, Some(principal("a1"))).await;
         assert_eq!(response.status(), StatusCode::OK);
         let profile = body_json(response).await;
-        assert_eq!(profile["profile"]["avatar_url"], Value::Null);
+        assert_eq!(profile["profile"].get("avatar_url"), Some(&Value::Null));
     }
 
     #[tokio::test]
@@ -330,6 +309,18 @@ mod tests {
         let reader = RecordingReader::with([fact("a1", "agent-one", Some(2500))]);
         let response = behind_layer(reader.clone(), "a1").await;
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            body_json(response).await,
+            json!({
+                "profile": {
+                    "id": "a1",
+                    "name": "agent-one",
+                    "display_name": "agent-one",
+                    "description": "a bio",
+                    "avatar_url": "/api/agents/a1/avatar?v=2500"
+                }
+            })
+        );
         assert!(reader.consulted(), "the pinned self is read");
         assert_eq!(reader.asked_for(), vec!["a1".to_string()]);
     }

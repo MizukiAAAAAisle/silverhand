@@ -63,10 +63,7 @@ type RegistryHandlerKey =
 
 interface RegistryIntentCase {
   label: string;
-  intent:
-    | 'agent_workspace_index'
-    | 'agent_l2_seed'
-    | 'agent_files_purge';
+  intent: 'agent_workspace_index' | 'agent_l2_seed' | 'agent_files_purge';
   requestPrefix: string;
   handlerKey: RegistryHandlerKey;
   params: Record<string, unknown>;
@@ -132,8 +129,7 @@ const registryIntentCases: RegistryIntentCase[] = [
     } satisfies AgentWorkspaceIndexResult,
     errorName: 'AgentWorkspaceIndexError',
     typedCodes: ['registry_unavailable', 'internal_error'],
-    makeTypedError: (code, message) =>
-      new AgentWorkspaceIndexError(code as never, message),
+    makeTypedError: (code, message) => new AgentWorkspaceIndexError(code as never, message),
     foreignError: () =>
       // `unsupported_template` belongs to agent_l2_seed, not here.
       new AgentWorkspaceIndexError('unsupported_template' as never, 'leaked'),
@@ -161,8 +157,7 @@ const registryIntentCases: RegistryIntentCase[] = [
       'fs_unavailable',
       'internal_error',
     ],
-    makeTypedError: (code, message) =>
-      new AgentL2SeedError(code as never, message),
+    makeTypedError: (code, message) => new AgentL2SeedError(code as never, message),
     foreignError: () =>
       // `partial_purge` belongs to agent_files_purge, not here.
       new AgentL2SeedError('partial_purge' as never, 'leaked'),
@@ -183,8 +178,7 @@ const registryIntentCases: RegistryIntentCase[] = [
     } satisfies AgentFilesPurgeResult,
     errorName: 'AgentFilesPurgeError',
     typedCodes: ['quiesce_failed', 'partial_purge', 'internal_error'],
-    makeTypedError: (code, message) =>
-      new AgentFilesPurgeError(code as never, message),
+    makeTypedError: (code, message) => new AgentFilesPurgeError(code as never, message),
     foreignError: () =>
       // `unsupported_template` belongs to agent_l2_seed, not here.
       new AgentFilesPurgeError('unsupported_template' as never, 'leaked'),
@@ -194,139 +188,126 @@ const registryIntentCases: RegistryIntentCase[] = [
   },
 ];
 
-describe.each(registryIntentCases)(
-  'IntentDispatcher.$label slot',
-  testCase => {
-    it('routes a valid intent to the handler and returns its result', async () => {
-      let observed: unknown = null;
-      const d = dispatcherWithHandler(testCase.handlerKey, params => {
-        observed = params;
-        return testCase.result;
-      });
-
-      const id = `${testCase.requestPrefix}-1`;
-      const r = await d.dispatch(
-        id,
-        testCase.intent,
-        testCase.params as never,
-      { owner: 'test-owner' });
-
-      expect(r).toEqual({ id, result: testCase.result });
-      expect(observed).toEqual(testCase.params);
+describe.each(registryIntentCases)('IntentDispatcher.$label slot', (testCase) => {
+  it('routes a valid intent to the handler and returns its result', async () => {
+    let observed: unknown = null;
+    const d = dispatcherWithHandler(testCase.handlerKey, (params) => {
+      observed = params;
+      return testCase.result;
     });
 
-    it.each(testCase.typedCodes)(
-      `preserves typed ${testCase.errorName} code: %s`,
-      async code => {
-        const d = dispatcherWithHandler(testCase.handlerKey, () => {
-          throw testCase.makeTypedError(code, `seeded ${code}`);
-        });
+    const id = `${testCase.requestPrefix}-1`;
+    const r = await d.dispatch(id, testCase.intent, testCase.params as never, {
+      owner: 'test-owner',
+    });
 
-        await expectErrorCode(
-          d.dispatch(
-            `${testCase.requestPrefix}-typed`,
-            testCase.intent,
-            testCase.params as never,
-          { owner: 'test-owner' }),
-          code,
-        );
-      },
+    expect(r).toEqual({ id, result: testCase.result });
+    expect(observed).toEqual(testCase.params);
+  });
+
+  it.each(testCase.typedCodes)(`preserves typed ${testCase.errorName} code: %s`, async (code) => {
+    const d = dispatcherWithHandler(testCase.handlerKey, () => {
+      throw testCase.makeTypedError(code, `seeded ${code}`);
+    });
+
+    await expectErrorCode(
+      d.dispatch(`${testCase.requestPrefix}-typed`, testCase.intent, testCase.params as never, {
+        owner: 'test-owner',
+      }),
+      code,
     );
+  });
 
-    it(`re-squashes a foreign typed code not in ${testCase.label} schema`, async () => {
+  it(`re-squashes a foreign typed code not in ${testCase.label} schema`, async () => {
+    const d = dispatcherWithHandler(testCase.handlerKey, () => {
+      // Typed surface is decided by per-intent schema, not by class.
+      throw testCase.foreignError();
+    });
+
+    await expectErrorCode(
+      d.dispatch(`${testCase.requestPrefix}-foreign`, testCase.intent, testCase.params as never, {
+        owner: 'test-owner',
+      }),
+      'internal_error',
+    );
+  });
+
+  if (testCase.bareError) {
+    it('squashes a bare Error throw to internal_error', async () => {
       const d = dispatcherWithHandler(testCase.handlerKey, () => {
-        // Typed surface is decided by per-intent schema, not by class.
-        throw testCase.foreignError();
+        throw new Error('boom');
       });
 
       await expectErrorCode(
-        d.dispatch(
-          `${testCase.requestPrefix}-foreign`,
-          testCase.intent,
-          testCase.params as never,
-        { owner: 'test-owner' }),
+        d.dispatch(`${testCase.requestPrefix}-bare`, testCase.intent, testCase.params as never, {
+          owner: 'test-owner',
+        }),
         'internal_error',
       );
     });
+  }
 
-    if (testCase.bareError) {
-      it('squashes a bare Error throw to internal_error', async () => {
-        const d = dispatcherWithHandler(testCase.handlerKey, () => {
-          throw new Error('boom');
-        });
+  it(`rejects malformed params via intentSchemas before invoking the handler (${testCase.malformedComment})`, async () => {
+    let called = false;
+    const d = dispatcherWithHandler(testCase.handlerKey, () => {
+      called = true;
+      throw new Error('unreachable');
+    });
 
-        await expectErrorCode(
-          d.dispatch(
-            `${testCase.requestPrefix}-bare`,
-            testCase.intent,
-            testCase.params as never,
-          { owner: 'test-owner' }),
-          'internal_error',
-        );
-      });
-    }
-
-    it(
-      `rejects malformed params via intentSchemas before invoking the handler (${testCase.malformedComment})`,
-      async () => {
-        let called = false;
-        const d = dispatcherWithHandler(testCase.handlerKey, () => {
-          called = true;
-          throw new Error('unreachable');
-        });
-
-        await expectErrorCode(
-          d.dispatch(
-            `${testCase.requestPrefix}-bad`,
-            testCase.intent,
-            testCase.malformedParams as never,
-          { owner: 'test-owner' }),
-          'invalid_params',
-        );
-        expect(called).toBe(false);
-      },
+    await expectErrorCode(
+      d.dispatch(
+        `${testCase.requestPrefix}-bad`,
+        testCase.intent,
+        testCase.malformedParams as never,
+        { owner: 'test-owner' },
+      ),
+      'invalid_params',
     );
+    expect(called).toBe(false);
+  });
 
-    it('surfaces internal_error when no handler is wired', async () => {
-      const coordinator = new AgentHomeMutationCoordinator();
-      const d = new IntentDispatcher({
-        logger: silentLogger(),
-        ...(testCase.intent === 'agent_files_purge'
-          ? {
-              agentHomeMutationCoordinator: coordinator,
-              supervisor: {
-                agentHomeMutationCoordinator: () => coordinator,
-                fenceAndQuiesceAgent: async () => ({ quiesced_count: 0 }),
-              } as never,
-            }
-          : {}),
-      });
-
-      const r = await expectErrorCode(
-        d.dispatch(
-          `${testCase.requestPrefix}-unwired`,
-          testCase.intent,
-          testCase.params as never,
-        { owner: 'test-owner' }),
-        'internal_error',
-      );
-      expect(r.error.message).toContain(testCase.intent);
+  it('surfaces internal_error when no handler is wired', async () => {
+    const coordinator = new AgentHomeMutationCoordinator();
+    const d = new IntentDispatcher({
+      logger: silentLogger(),
+      ...(testCase.intent === 'agent_files_purge'
+        ? {
+            agentHomeMutationCoordinator: coordinator,
+            supervisor: {
+              agentHomeMutationCoordinator: () => coordinator,
+              fenceAndQuiesceAgent: async () => ({ quiesced_count: 0 }),
+            } as never,
+          }
+        : {}),
     });
-  },
-);
+
+    const r = await expectErrorCode(
+      d.dispatch(`${testCase.requestPrefix}-unwired`, testCase.intent, testCase.params as never, {
+        owner: 'test-owner',
+      }),
+      'internal_error',
+    );
+    expect(r.error.message).toContain(testCase.intent);
+  });
+});
 
 describe('IntentDispatcher.agent_l2_seed extras', () => {
   it('applies the template_choice default when omitted', async () => {
     let observed: AgentL2SeedParams | null = null;
-    const d = dispatcherWithHandler('agentL2SeedHandler', params => {
+    const d = dispatcherWithHandler('agentL2SeedHandler', (params) => {
       observed = params;
       return { ok: true, seeded: true, l2_present: true } satisfies AgentL2SeedResult;
     });
 
-    await d.dispatch('req-l2s-default', 'agent_l2_seed', {
-      agent_id: 'aid_member',
-      workspace_id: 'ws_1',
-    }, { owner: 'test-owner' });
+    await d.dispatch(
+      'req-l2s-default',
+      'agent_l2_seed',
+      {
+        agent_id: 'aid_member',
+        workspace_id: 'ws_1',
+      },
+      { owner: 'test-owner' },
+    );
 
     expect((observed as AgentL2SeedParams | null)?.template_choice).toBe('default');
   });
@@ -339,11 +320,16 @@ describe('IntentDispatcher.agent_l2_seed extras', () => {
     });
 
     await expectErrorCode(
-      d.dispatch('req-l2s-badtpl', 'agent_l2_seed', {
-        agent_id: 'aid_member',
-        workspace_id: 'ws_1',
-        template_choice: 'bogus',
-      }, { owner: 'test-owner' }),
+      d.dispatch(
+        'req-l2s-badtpl',
+        'agent_l2_seed',
+        {
+          agent_id: 'aid_member',
+          workspace_id: 'ws_1',
+          template_choice: 'bogus',
+        },
+        { owner: 'test-owner' },
+      ),
       'invalid_params',
     );
     expect(called).toBe(false);
@@ -351,24 +337,31 @@ describe('IntentDispatcher.agent_l2_seed extras', () => {
 });
 
 describe('IntentDispatcher.agent_files_purge extras', () => {
-  it('rejects the retired scope/workspace_ids fields via the strict schema before the handler', async () => {
-    // relocation-v1 §7 task 4 — the intent collapsed to `{ agent_id }`; the
-    // retired `scope`/`workspace_ids` must be refused at the wire boundary
-    // (`.strict()`), never silently ignored into a full-home purge.
-    let called = false;
-    const d = dispatcherWithHandler('agentFilesPurgeHandler', () => {
-      called = true;
-      throw new Error('unreachable');
-    });
+  it.each([{ scope: 'all' }, { workspace_ids: ['ws_1'] }])(
+    'rejects retired fields %j via the strict schema before the handler',
+    async (retired) => {
+      // relocation-v1 §7 task 4 — the intent collapsed to `{ agent_id }`; the
+      // retired `scope`/`workspace_ids` must be refused at the wire boundary
+      // (`.strict()`), never silently ignored into a full-home purge.
+      let called = false;
+      const d = dispatcherWithHandler('agentFilesPurgeHandler', () => {
+        called = true;
+        throw new Error('unreachable');
+      });
 
-    await expectErrorCode(
-      d.dispatch('req-afp-retired', 'agent_files_purge', {
-        agent_id: 'aid_member',
-        scope: 'all',
-        workspace_ids: ['ws_1'],
-      }, { owner: 'test-owner' }),
-      'invalid_params',
-    );
-    expect(called).toBe(false);
-  });
+      await expectErrorCode(
+        d.dispatch(
+          'req-afp-retired',
+          'agent_files_purge',
+          {
+            agent_id: 'aid_member',
+            ...retired,
+          },
+          { owner: 'test-owner' },
+        ),
+        'invalid_params',
+      );
+      expect(called).toBe(false);
+    },
+  );
 });

@@ -672,6 +672,7 @@ mod tests {
     #[allow(clippy::large_enum_variant)]
     #[derive(Clone)]
     enum FakeWrites {
+        Unexpected,
         Row(AgentProfileRowWrite),
     }
     impl AgentProfileWriteUnitOfWork for FakeWrites {
@@ -684,8 +685,10 @@ mod tests {
         where
             D: FnOnce(&AgentRowBefore) -> Option<AdmittedAgentProfileEdit> + Send,
         {
-            let FakeWrites::Row(row) = self;
-            Ok(row.clone())
+            match self {
+                Self::Unexpected => panic!("refused request must not call the row writer"),
+                Self::Row(row) => Ok(row.clone()),
+            }
         }
     }
 
@@ -1009,8 +1012,8 @@ mod tests {
         assert_eq!(sink.calls(), 0, "a genuine no-op announces nothing");
         assert!(blobs.deleted().is_empty());
         assert_eq!(
-            body_json(response).await["profile"]["avatar_url"],
-            Value::Null
+            body_json(response).await["profile"].get("avatar_url"),
+            Some(&Value::Null)
         );
     }
 
@@ -1021,7 +1024,8 @@ mod tests {
         // No text and no avatar_action → admission's NothingToUpdate, before any write.
         let writes = AgentProfileRowWrite::NoSuchAgent; // must never be consulted
         let reader = FakeReader::with(None);
-        let (state, blobs, sink) = state(writes, reader.clone());
+        let (mut state, blobs, sink) = state(writes, reader.clone());
+        state.writes = FakeWrites::Unexpected;
         let (content_type, body) = multipart_body(&[("ignored", "x")], None);
         let response = router(state)
             .oneshot(profile_post(content_type, body))
@@ -1065,8 +1069,9 @@ mod tests {
         // and no reproject. The row writer must never be consulted.
         let writes = AgentProfileRowWrite::NoSuchAgent; // must never be reached
         let reader = FakeReader::with(None);
-        let (state, _blobs, sink) =
+        let (mut state, _blobs, sink) =
             state_with_blobs(writes, reader.clone(), FakeBlobs::failing_put());
+        state.writes = FakeWrites::Unexpected;
         let (content_type, body) = multipart_body(&[("avatar_action", "set")], Some(&png_bytes()));
         let response = router(state)
             .oneshot(profile_post(content_type, body))
@@ -1112,7 +1117,7 @@ mod tests {
         other.agent_id = AgentId::parse("someone-else").unwrap();
         let writes = AgentProfileRowWrite::Committed {
             before: other,
-            row: committed("Name", AgentAvatarRow::Absent),
+            row: committed("New", AgentAvatarRow::Absent),
         };
         let reader = FakeReader::with(Some(fact("agent-one", None)));
         let (state, _blobs, sink) = state(writes, reader.clone());
@@ -1132,7 +1137,8 @@ mod tests {
     async fn an_absent_credential_is_a_safe_500_and_never_writes() {
         let writes = AgentProfileRowWrite::NoSuchAgent;
         let reader = FakeReader::with(None);
-        let (state, _blobs, sink) = state(writes, reader.clone());
+        let (mut state, _blobs, sink) = state(writes, reader.clone());
+        state.writes = FakeWrites::Unexpected;
         let (content_type, body) = multipart_body(&[("display_name", "New")], None);
         // No credential extension: the self-pin layer was not composed in front.
         let request = HttpRequest::builder()
@@ -1172,7 +1178,8 @@ mod tests {
     async fn a_non_self_aid_is_401_before_any_write() {
         let writes = AgentProfileRowWrite::NoSuchAgent;
         let reader = FakeReader::with(None);
-        let (state, _blobs, sink) = state(writes, reader.clone());
+        let (mut state, _blobs, sink) = state(writes, reader.clone());
+        state.writes = FakeWrites::Unexpected;
         let authority = PinnedAuthority { enrolled: agent() };
         let router = crate::host_runtime::runtime_credential::require_runtime_credential(
             router(state),
@@ -1390,8 +1397,8 @@ mod tests {
             "DELETE carries no top-level avatar_url"
         );
         assert_eq!(
-            value["agent"]["avatar_url"],
-            Value::Null,
+            value["agent"].get("avatar_url"),
+            Some(&Value::Null),
             "the cleared agent's avatar_url is null"
         );
         assert_eq!(value["agent"]["id"], json!("a1"));
@@ -1412,8 +1419,8 @@ mod tests {
         assert_eq!(sink.calls(), 0, "a genuine no-op announces nothing");
         assert!(blobs.deleted().is_empty());
         assert_eq!(
-            body_json(response).await["agent"]["avatar_url"],
-            Value::Null
+            body_json(response).await["agent"].get("avatar_url"),
+            Some(&Value::Null)
         );
     }
 
@@ -1422,7 +1429,8 @@ mod tests {
         // No `file` part → the shared admission's FileFieldRequired, before any write.
         let writes = AgentProfileRowWrite::NoSuchAgent; // must never be consulted
         let reader = FakeDetailReader::with(None);
-        let (state, blobs, sink) = avatar_state(writes, reader.clone(), FakeBlobs::new());
+        let (mut state, blobs, sink) = avatar_state(writes, reader.clone(), FakeBlobs::new());
+        state.writes = FakeWrites::Unexpected;
         let (content_type, body) = multipart_body(&[("ignored", "x")], None);
         let response = avatar_router(state)
             .oneshot(avatar_post(content_type, body))
@@ -1443,8 +1451,7 @@ mod tests {
     /// zero blob put, zero row write, zero announce, zero reproject. The admission consumes
     /// every part to true EOF, so the malformed tail refuses BEFORE `run_avatar_edit` is
     /// even entered; a Set write puts its blob first and Committed announces + reprojects,
-    /// so all-zero proves the write core never ran (the twin admission-level test asserts
-    /// the same body's status in isolation).
+    /// so the refused request must not reach the row writer either.
     #[tokio::test]
     async fn post_avatar_valid_file_then_truncated_trailing_part_refuses_with_zero_effect() {
         // If the write core were ever reached, this Committed outcome would put, announce,
@@ -1454,7 +1461,8 @@ mod tests {
             row: committed("Name", present(FRESH)),
         };
         let reader = FakeDetailReader::with(Some(detail_facts(Some("avatars/a1.png"))));
-        let (state, blobs, sink) = avatar_state(writes, reader.clone(), FakeBlobs::new());
+        let (mut state, blobs, sink) = avatar_state(writes, reader.clone(), FakeBlobs::new());
+        state.writes = FakeWrites::Unexpected;
         let (content_type, body) = multipart_valid_file_then_truncated_part();
         let response = avatar_router(state)
             .oneshot(avatar_post(content_type, body))
@@ -1498,7 +1506,9 @@ mod tests {
         // no reproject. The row writer must never be consulted.
         let writes = AgentProfileRowWrite::NoSuchAgent; // must never be reached
         let reader = FakeDetailReader::with(None);
-        let (state, _blobs, sink) = avatar_state(writes, reader.clone(), FakeBlobs::failing_put());
+        let (mut state, _blobs, sink) =
+            avatar_state(writes, reader.clone(), FakeBlobs::failing_put());
+        state.writes = FakeWrites::Unexpected;
         let (content_type, body) = multipart_body(&[], Some(&png_bytes()));
         let response = avatar_router(state)
             .oneshot(avatar_post(content_type, body))
@@ -1541,7 +1551,8 @@ mod tests {
     async fn delete_avatar_absent_credential_is_a_safe_500_and_never_writes() {
         let writes = AgentProfileRowWrite::NoSuchAgent;
         let reader = FakeDetailReader::with(None);
-        let (state, _blobs, sink) = avatar_state(writes, reader.clone(), FakeBlobs::new());
+        let (mut state, _blobs, sink) = avatar_state(writes, reader.clone(), FakeBlobs::new());
+        state.writes = FakeWrites::Unexpected;
         // No credential extension: the self-pin layer was not composed in front.
         let request = HttpRequest::builder()
             .method("DELETE")
@@ -1560,7 +1571,8 @@ mod tests {
         // is the layer's single indistinguishable 401, never reaching the handler.
         let writes = AgentProfileRowWrite::NoSuchAgent;
         let reader = FakeDetailReader::with(None);
-        let (state, _blobs, sink) = avatar_state(writes, reader.clone(), FakeBlobs::new());
+        let (mut state, _blobs, sink) = avatar_state(writes, reader.clone(), FakeBlobs::new());
+        state.writes = FakeWrites::Unexpected;
         let authority = PinnedAuthority { enrolled: agent() };
         let router = crate::host_runtime::runtime_credential::require_runtime_credential(
             avatar_router(state),

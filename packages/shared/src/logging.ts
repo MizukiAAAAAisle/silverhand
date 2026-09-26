@@ -40,12 +40,6 @@ export function sanitizeLogFields(fields: Record<string, unknown>): Record<strin
   return value;
 }
 
-export function findForbiddenLogFields(entry: Record<string, unknown>): string[] {
-  const hits: string[] = [];
-  collectForbiddenLogFields(entry, hits, new WeakSet<object>());
-  return hits;
-}
-
 function sanitizeLogValue(
   value: unknown,
   seen: WeakSet<object>,
@@ -94,28 +88,6 @@ function sanitizeLogRecord(
 function isForbiddenLogField(key: string): boolean {
   if ((FORBIDDEN_LOG_FIELDS as readonly string[]).includes(key)) return true;
   return FORBIDDEN_LOG_FIELD_PREFIXES.some(prefix => key.startsWith(prefix));
-}
-
-function collectForbiddenLogFields(
-  value: unknown,
-  hits: string[],
-  seen: WeakSet<object>,
-): void {
-  if (Array.isArray(value)) {
-    if (seen.has(value)) return;
-    seen.add(value);
-    for (const item of value) collectForbiddenLogFields(item, hits, seen);
-    seen.delete(value);
-    return;
-  }
-  if (!isPlainRecord(value)) return;
-  if (seen.has(value)) return;
-  seen.add(value);
-  for (const [key, child] of Object.entries(value)) {
-    if (isForbiddenLogField(key)) hits.push(key);
-    collectForbiddenLogFields(child, hits, seen);
-  }
-  seen.delete(value);
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

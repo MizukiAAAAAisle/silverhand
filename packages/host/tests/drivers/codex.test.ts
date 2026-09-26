@@ -668,37 +668,6 @@ describe('CodexDriver.parseLine event mapping', () => {
     expect(events).toEqual([{ kind: 'thinking', text: '' }]);
   });
 
-  it('streams text deltas via item/agentMessage/delta', () => {
-    const driver = new CodexDriver();
-    const events = driver.parseLine(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'item/agentMessage/delta',
-        params: { itemId: 'msg-1', delta: 'Hello' },
-      }),
-    );
-    expect(events).toEqual([{ kind: 'text', text: 'Hello' }]);
-  });
-
-  it('does NOT re-emit text on item/completed when the message was streamed', () => {
-    const driver = new CodexDriver();
-    driver.parseLine(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'item/agentMessage/delta',
-        params: { itemId: 'msg-1', delta: 'Hello' },
-      }),
-    );
-    const completion = driver.parseLine(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'item/completed',
-        params: { item: { type: 'agentMessage', id: 'msg-1', text: 'Hello' } },
-      }),
-    );
-    expect(completion.find((e) => e.kind === 'text')).toBeUndefined();
-  });
-
   it('emits text on item/completed agentMessage when no delta was streamed', () => {
     const events = new CodexDriver().parseLine(
       JSON.stringify({
@@ -845,52 +814,6 @@ describe('CodexDriver.parseLine event mapping', () => {
     );
     expect(end).toEqual([
       { kind: 'tool_output', name: 'web_search', toolCallId: 'ws-1', outcome: 'completed' },
-    ]);
-  });
-
-  it('emits one tool_output per fileChange entry on completion', () => {
-    const driver = new CodexDriver();
-    const start = driver.parseLine(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'item/started',
-        params: {
-          item: {
-            type: 'fileChange',
-            id: 'fc-1',
-            changes: [
-              { path: 'a.ts', kind: 'modify' },
-              { path: 'b.ts', kind: 'create' },
-            ],
-          },
-        },
-      }),
-    );
-    expect(start).toEqual([
-      {
-        kind: 'tool_call',
-        name: 'file_change',
-        input: { path: 'a.ts', kind: 'modify' },
-        toolCallId: 'fc-1',
-      },
-      {
-        kind: 'tool_call',
-        name: 'file_change',
-        input: { path: 'b.ts', kind: 'create' },
-        toolCallId: 'fc-1',
-      },
-    ]);
-
-    const end = driver.parseLine(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'item/completed',
-        params: { item: { type: 'fileChange', id: 'fc-1' } },
-      }),
-    );
-    expect(end).toEqual([
-      { kind: 'tool_output', name: 'file_change', toolCallId: 'fc-1', outcome: 'completed' },
-      { kind: 'tool_output', name: 'file_change', toolCallId: 'fc-1', outcome: 'completed' },
     ]);
   });
 

@@ -120,14 +120,14 @@ export function createGuardedIpcRegistrar(deps: GuardedIpcRegistrarDeps): Guarde
 }
 
 /**
- * URL half of the contract, exported for behavior tests.
+ * URL half of the IPC sender contract.
  *
  * dev: same origin as the dev server (path/hash free to change with the
  * router). packaged: the resolved `file:` path must equal the renderer entry
  * path exactly — the HashRouter fragment and any query are stripped first,
  * so `index.html#/c/abc?x=1` is the same document as `index.html`.
  */
-export function matchesRendererEntry(frameUrl: string, entry: RendererEntry): boolean {
+function matchesRendererEntry(frameUrl: string, entry: RendererEntry): boolean {
   let url: URL;
   try {
     url = new URL(frameUrl);

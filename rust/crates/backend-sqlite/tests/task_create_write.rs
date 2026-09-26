@@ -1,11 +1,10 @@
 //! Real-SQLite gates for the task `create` write unit-of-work.
 //!
-//! Drives `SqliteTaskCreateWrite::create_task`: a create commits the task row, its
-//! `task_create` system message, and the `created_event_message_id` backfill as ONE
-//! fact; a duplicate `source_message_id` is SourceConflict; a read-only destination
-//! is ConversationReadonly. Acceptance controls: concurrent creates on the
-//! same board get distinct consecutive numbers; message ↔ backfill is 1:1; a
-//! failing message/backfill leaves task AND message at zero.
+//! Drives `SqliteTaskCreateWrite::create_tasks`: a create persists its row and
+//! `task_create` message anchor; duplicate source is SourceConflict and read-only
+//! destination is ConversationReadonly. Concurrent creates get consecutive numbers.
+//! A duplicate source inside one batch exercises rollback of its earlier task/event;
+//! this suite does not inject a message-insert or backfill failure.
 
 use silverhand_backend_core::conversation_messaging::messaging::task::{
     BoardKey, PairKey, TaskContent, TaskCreateBatch, TaskCreateOutcome, TaskCreatePlan,
@@ -107,7 +106,7 @@ async fn insert_source(path: &Path, id: &str) {
 }
 
 #[tokio::test]
-async fn a_create_commits_row_message_and_backfill_as_one_fact() {
+async fn a_create_persists_its_row_number_and_system_message_anchor() {
     let (_dir, path) = open_db().await;
     let writer = SqliteTaskCreateWrite::open(&path).await.unwrap();
 
@@ -137,12 +136,9 @@ async fn a_create_commits_row_message_and_backfill_as_one_fact() {
     let mid: String = row.try_get("mid").unwrap();
     assert_eq!(mid, witness.mutation().event_message.id.as_str());
     assert_eq!(row.try_get::<String, _>("from_kind").unwrap(), "system");
-    assert!(
-        row.try_get::<String, _>("metadata")
-            .unwrap()
-            .contains("task_create"),
-        "the anchor is the task_create system message"
-    );
+    let metadata: serde_json::Value =
+        serde_json::from_str(&row.try_get::<String, _>("metadata").unwrap()).unwrap();
+    assert_eq!(metadata["subtype"], "task_create");
 }
 
 #[tokio::test]
@@ -352,7 +348,7 @@ async fn a_duplicate_source_inside_one_batch_rolls_back_every_task_and_event() {
 }
 
 #[tokio::test]
-async fn closed_and_archived_destinations_write_nothing_under_the_lock() {
+async fn closed_and_archived_destinations_refuse_without_task_or_message() {
     for column in ["closed_at", "archived_at"] {
         let (_dir, path) = open_db().await;
         let mut c = conn(&path).await;

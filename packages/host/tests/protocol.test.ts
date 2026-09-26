@@ -41,14 +41,7 @@ const CONVERSATION_RUNTIME_SCOPE = {
 // PURPOSE: it must model what an old consumer actually accepted and must NOT
 // drift as the live catalog gains tokens (the live product schema no longer
 // exists as a closed enum — legality is per-runtime in the catalog now).
-const FROZEN_OLD_EFFORT_ENUM = z.enum([
-  'none',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-]);
+const FROZEN_OLD_EFFORT_ENUM = z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
 
 const HELLO_IDENTITY = {
   daemon_id: 'local',
@@ -67,7 +60,9 @@ describe('protocol — frame schemas', () => {
   });
 
   it('rejects requests with empty id', () => {
-    expect(RequestFrameSchema.safeParse({ id: '', intent: 'ping', params: {} }).success).toBe(false);
+    expect(RequestFrameSchema.safeParse({ id: '', intent: 'ping', params: {} }).success).toBe(
+      false,
+    );
   });
 
   it('accepts both result and error variants of response', () => {
@@ -156,7 +151,7 @@ describe('protocol — hello handshake', () => {
     // spawn — so `runtime.<kind>` must be present iff a driver exists.
     // qoder/opencode shipped drivers, so they must be advertised; gemini has none.
     const advertised = new Set(
-      KNOWN_CAPABILITIES_V1.filter(c => c.startsWith('runtime.')).map(c =>
+      KNOWN_CAPABILITIES_V1.filter((c) => c.startsWith('runtime.')).map((c) =>
         c.slice('runtime.'.length),
       ),
     );
@@ -219,7 +214,11 @@ describe('protocol — encodeFrame', () => {
 
   it('throws when the encoded line would exceed MAX_FRAME_BYTES', () => {
     expect(() =>
-      encodeFrame({ id: 'x', intent: 'echo', params: { message: 'a'.repeat(MAX_FRAME_BYTES + 1) } }),
+      encodeFrame({
+        id: 'x',
+        intent: 'echo',
+        params: { message: 'a'.repeat(MAX_FRAME_BYTES + 1) },
+      }),
     ).toThrow(/MAX_FRAME_BYTES/);
   });
 });
@@ -245,9 +244,7 @@ describe('protocol — runtime_* registry', () => {
   });
 
   it('does NOT register runtime_inject_env (removed v3)', () => {
-    expect(intentSchemas as Record<string, unknown>).not.toHaveProperty(
-      'runtime_inject_env',
-    );
+    expect(intentSchemas as Record<string, unknown>).not.toHaveProperty('runtime_inject_env');
   });
 
   it('runtime_start is pure lifecycle — no startup_delivery batch (Stage 2c)', () => {
@@ -334,8 +331,7 @@ describe('protocol — runtime_* registry', () => {
   });
 
   it('runtime_start.options allows omitting silverhand_cli for daemon-local launcher resolution', () => {
-    const { silverhand_cli: _silverhandCli, ...envPolicy } =
-      testStartOptions().env_policy;
+    const { silverhand_cli: _silverhandCli, ...envPolicy } = testStartOptions().env_policy;
     const parsed = RuntimeStartParamsSchema.safeParse({
       runtime_generation: 1,
       conversation_id: 'c1',
@@ -366,7 +362,6 @@ describe('protocol — runtime_* registry', () => {
     });
     expect(parsed.success).toBe(false);
   });
-
 });
 
 describe('protocol — runtime_start D4.e-6 semantic refs + typed errors', () => {
@@ -409,9 +404,7 @@ describe('protocol — runtime_start D4.e-6 semantic refs + typed errors', () =>
       agent_id: 'a1',
       options: {
         ...testStartOptions(),
-        workspace_memory_index: [
-          { id: 'ws1', name: 'primary', path: '/host/ws/ws1' },
-        ],
+        workspace_memory_index: [{ id: 'ws1', name: 'primary', path: '/host/ws/ws1' }],
       },
     });
     expect(parsed.success).toBe(false);
@@ -445,9 +438,7 @@ describe('protocol — runtime_start reasoning-effort open wire token (#task:148
   }
 
   it('accepts a currently-known extension token on the wire', () => {
-    expect(RuntimeStartParamsSchema.safeParse(startWithEffort('ultra')).success).toBe(
-      true,
-    );
+    expect(RuntimeStartParamsSchema.safeParse(startWithEffort('ultra')).success).toBe(true);
   });
 
   it('accepts a FUTURE token unknown to the closed product enum (no protocol bump needed)', () => {
@@ -455,9 +446,7 @@ describe('protocol — runtime_start reasoning-effort open wire token (#task:148
     // current product registry never heard of still parses — adding an effort
     // is additive, never a framing change.
     const future = 'giga';
-    expect(RuntimeStartParamsSchema.safeParse(startWithEffort(future)).success).toBe(
-      true,
-    );
+    expect(RuntimeStartParamsSchema.safeParse(startWithEffort(future)).success).toBe(true);
     // Bidirectional proof: the CLOSED effort enum an OLD daemon's wire schema
     // used REJECTS that same token — which is exactly why the
     // `runtime.codex.reasoning.v1` capability gate must protect old daemons from
@@ -466,12 +455,8 @@ describe('protocol — runtime_start reasoning-effort open wire token (#task:148
   });
 
   it('still rejects a structurally-invalid token (uppercase / spaces)', () => {
-    expect(RuntimeStartParamsSchema.safeParse(startWithEffort('ULTRA')).success).toBe(
-      false,
-    );
-    expect(RuntimeStartParamsSchema.safeParse(startWithEffort('a b')).success).toBe(
-      false,
-    );
+    expect(RuntimeStartParamsSchema.safeParse(startWithEffort('ULTRA')).success).toBe(false);
+    expect(RuntimeStartParamsSchema.safeParse(startWithEffort('a b')).success).toBe(false);
   });
 
   it('advertises the reasoning capability in the known-capability registry', () => {
@@ -505,9 +490,7 @@ describe('protocol — reasoning-effort frozen old-daemon compatibility (#task:1
     // Product legality now lives in the per-runtime catalog (no global enum):
     // `ultra` is legal for a verified Codex 5.6 model — the value the old
     // frozen enum lacks — while remaining out of the historical baseline.
-    expect(
-      reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol'),
-    ).toBe(true);
+    expect(reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol')).toBe(true);
   });
 });
 
@@ -622,65 +605,76 @@ describe('protocol — runtime_stop shape (hard-only since #task:1558)', () => {
         conversation_id: 'c1',
         agent_id: 'a1',
       },
-      runtime_generation: 1, mode: 'hard',
+      runtime_generation: 1,
+      mode: 'hard',
     });
     expect(ok.success).toBe(true);
   });
 
   it('rejects runtime commands and events that omit semantic scope', () => {
-    expect(RuntimeStopParamsSchema.safeParse({
-      runtime_generation: 1,
-      mode: 'hard',
-    }).success).toBe(false);
-    expect(EventFrameSchema.safeParse({
-      event: 'runtime_output',
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      stream: 'stdout',
-      chunk: 'legacy tuple only',
-      ts: 1,
-    }).success).toBe(false);
+    expect(
+      RuntimeStopParamsSchema.safeParse({
+        runtime_generation: 1,
+        mode: 'hard',
+      }).success,
+    ).toBe(false);
+    expect(
+      EventFrameSchema.safeParse({
+        event: 'runtime_output',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        stream: 'stdout',
+        chunk: 'legacy tuple only',
+        ts: 1,
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects destructive stop/clear commands and status rows without generation', () => {
-    expect(RuntimeStopParamsSchema.safeParse({
+    for (const [schema, fields] of [
+      [RuntimeStopParamsSchema, { runtime_scope: CONVERSATION_RUNTIME_SCOPE, mode: 'hard' }],
+      [intentSchemas.runtime_clear_session.params, { runtime_scope: CONVERSATION_RUNTIME_SCOPE }],
+    ] as const) {
+      expect(schema.safeParse({ ...fields, runtime_generation: 1 }).success).toBe(true);
+      const rejected = schema.safeParse(fields);
+      expect(rejected.success).toBe(false);
+      if (!rejected.success) {
+        expect(rejected.error.issues.map((issue) => issue.path)).toEqual([['runtime_generation']]);
+      }
+    }
+    const state = {
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
       conversation_id: 'c1',
       agent_id: 'a1',
-      mode: 'hard',
-    }).success).toBe(false);
-    expect(intentSchemas.runtime_clear_session.params.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-    }).success).toBe(false);
-    expect(intentSchemas.runtime_status.result.safeParse({
-      runtimes: [{
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        pid: 1,
-        phase: 'ready',
-        run_state: null,
-        started_at: 1,
-      }],
-    }).success).toBe(false);
+      pid: 1,
+      phase: 'ready',
+      run_state: null,
+      started_at: 1,
+    };
+    expect(
+      intentSchemas.runtime_status.result.safeParse({
+        runtimes: [{ ...state, runtime_generation: 1 }],
+      }).success,
+    ).toBe(true);
+    const rejected = intentSchemas.runtime_status.result.safeParse({ runtimes: [state] });
+    expect(rejected.success).toBe(false);
+    if (!rejected.success) {
+      expect(rejected.error.issues.map((issue) => issue.path)).toEqual([
+        ['runtimes', 0, 'runtime_generation'],
+      ]);
+    }
   });
 
   it("rejects the retired mode:'soft' arm and soft_directive field", () => {
-    expect(
-      RuntimeStopParamsSchema.safeParse({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'soft',
-        soft_directive: 'please stop',
-      }).success,
-    ).toBe(false);
-    expect(
-      RuntimeStopParamsSchema.safeParse({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        runtime_generation: 1, mode: 'hard',
-        soft_directive: 'whatever',
-      }).success,
-    ).toBe(false);
+    const valid = {
+      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
+      runtime_generation: 1,
+      mode: 'hard',
+    };
+    expect(RuntimeStopParamsSchema.safeParse(valid).success).toBe(true);
+    for (const retired of [{ mode: 'soft' }, { soft_directive: 'please stop' }]) {
+      expect(RuntimeStopParamsSchema.safeParse({ ...valid, ...retired }).success).toBe(false);
+    }
   });
 
   it('hard result shape: { mode:"hard", stopped, exit_code }', () => {
@@ -907,16 +901,18 @@ describe('protocol — runtime_init lifecycle events (Cindy `vqDWkLFF6pAeIE5t`)'
     // with "this batch of delivery_ids was not consumed". Confirm the
     // delivery-failed event schema does not silently accept cooldown
     // fields it doesn't model.
-    const r = EventFrameSchema.safeParse({
+    const valid = {
       event: 'runtime_delivery_failed',
       runtime_scope: CONVERSATION_RUNTIME_SCOPE,
+      runtime_generation: 1,
       conversation_id: 'c1',
       agent_id: 'a1',
       delivery_ids: [1],
       reason: 'init_watchdog',
-      cooldown_until: 1_700_000_000_000,
       ts: 1,
-    });
+    };
+    expect(EventFrameSchema.safeParse(valid).success).toBe(true);
+    const r = EventFrameSchema.safeParse({ ...valid, cooldown_until: 1_700_000_000_000 });
     // strict() object on the event arm should reject the unknown key.
     expect(r.success).toBe(false);
   });
@@ -1392,7 +1388,7 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
       target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1, 2, 3],
-      deliveries: [1, 2, 3].map(seq => ({
+      deliveries: [1, 2, 3].map((seq) => ({
         delivery_id: seq,
         seq,
         presentation: { body: `message ${seq}`, instruction: 'system' as const },
@@ -1420,11 +1416,13 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
       text: 'combined',
       spawn_options: spawnOptions,
     } as const;
-    const deliveries = [{
-      delivery_id: 1,
-      seq: 1,
-      presentation: { body: 'message one', instruction: 'system' as const },
-    }];
+    const deliveries = [
+      {
+        delivery_id: 1,
+        seq: 1,
+        presentation: { body: 'message one', instruction: 'system' as const },
+      },
+    ];
 
     // Arm 1 — a deliver with NO `deliveries` container is now unparseable: the
     // no-metadata sender is gone, so a missing array is a hard error, not a
@@ -1444,7 +1442,7 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
     if (!revived.success) {
       expect(
         revived.error.issues.some(
-          issue =>
+          (issue) =>
             issue.code === 'unrecognized_keys' &&
             (issue as { keys?: string[] }).keys?.includes('delivered_up_to_seq'),
         ),
@@ -1452,9 +1450,7 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
     }
 
     // Sanity: the same base WITH `deliveries` and WITHOUT the scalar parses.
-    expect(
-      RuntimeDeliverParamsSchema.safeParse({ ...base, deliveries }).success,
-    ).toBe(true);
+    expect(RuntimeDeliverParamsSchema.safeParse({ ...base, deliveries }).success).toBe(true);
   });
 
   it('params are batch-native — delivery_ids must be non-empty', () => {
@@ -1469,11 +1465,13 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
       target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [],
-      deliveries: [{
-        delivery_id: 1,
-        seq: 1,
-        presentation: { body: 'hi', instruction: 'system' as const },
-      }],
+      deliveries: [
+        {
+          delivery_id: 1,
+          seq: 1,
+          presentation: { body: 'hi', instruction: 'system' as const },
+        },
+      ],
       kind: 'message',
       text: 'hi',
       spawn_options: spawnOptions,
@@ -1492,32 +1490,44 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
       text: 'combined',
       spawn_options: spawnOptions,
     } as const;
-    expect(RuntimeDeliverParamsSchema.safeParse({
-      ...base,
-      deliveries: [{
-        delivery_id: 1,
-        seq: 1,
-        presentation: {
-          body: '[msg_id=m1 sender=system type=system target=#conv:protocolConvId01 time=2026-01-01T00:00:00+00:00]\nmessage one',
-          instruction: 'system',
-        },
-      }],
-    }).success).toBe(true);
-    expect(RuntimeDeliverParamsSchema.safeParse({
-      ...base,
-      deliveries: [{
-        delivery_id: 1,
-        seq: 1,
-      }],
-    }).success).toBe(false);
-    expect(RuntimeDeliverParamsSchema.safeParse({
-      ...base,
-      deliveries: [{
-        delivery_id: 1,
-        seq: 1,
-        text: 'retired singleton payload',
-      }],
-    }).success).toBe(false);
+    expect(
+      RuntimeDeliverParamsSchema.safeParse({
+        ...base,
+        deliveries: [
+          {
+            delivery_id: 1,
+            seq: 1,
+            presentation: {
+              body: '[msg_id=m1 sender=system type=system target=#conv:protocolConvId01 time=2026-01-01T00:00:00+00:00]\nmessage one',
+              instruction: 'system',
+            },
+          },
+        ],
+      }).success,
+    ).toBe(true);
+    expect(
+      RuntimeDeliverParamsSchema.safeParse({
+        ...base,
+        deliveries: [
+          {
+            delivery_id: 1,
+            seq: 1,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      RuntimeDeliverParamsSchema.safeParse({
+        ...base,
+        deliveries: [
+          {
+            delivery_id: 1,
+            seq: 1,
+            text: 'retired singleton payload',
+          },
+        ],
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects the three tails #task:2097 deleted — one key at a time', () => {
@@ -1553,9 +1563,11 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
       deliveries: [entry],
     });
     expect(accepted.success).toBe(true);
-    expect(
-      Object.keys(accepted.success ? accepted.data.deliveries![0]! : {}).sort(),
-    ).toEqual(['delivery_id', 'presentation', 'seq']);
+    expect(Object.keys(accepted.success ? accepted.data.deliveries![0]! : {}).sort()).toEqual([
+      'delivery_id',
+      'presentation',
+      'seq',
+    ]);
 
     const retired: Array<[string, unknown]> = [
       ['message_id', 'm1'],
@@ -1573,7 +1585,7 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
       expect(
         parsed.success
           ? []
-          : parsed.error.issues.flatMap(issue =>
+          : parsed.error.issues.flatMap((issue) =>
               issue.code === 'unrecognized_keys' ? issue.keys : [],
             ),
         `retired key ${key} must be named in the issue`,
@@ -1581,9 +1593,9 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
     }
     // `thread_root_id` is retired on the DELIVERY entry only — the send-ack /
     // resolved-target lane that reports where a message landed keeps it.
-    expect(
-      RuntimeDeliverParamsSchema.safeParse({ ...base, deliveries: [entry] }).success,
-    ).toBe(true);
+    expect(RuntimeDeliverParamsSchema.safeParse({ ...base, deliveries: [entry] }).success).toBe(
+      true,
+    );
   });
 
   it('params REJECT missing text and empty text (Option A v2 — daemon owns encode)', () => {
@@ -1591,46 +1603,31 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
     // text contract (Cindy `UMGu36zoTDVuKWXi` + `wYjG20JdGjLpwq8K`):
     // delivery_ids MUST NOT reach the daemon without non-empty message
     // text — `.min(1)` rejects both missing and empty-string.
-    const missing = RuntimeDeliverParamsSchema.safeParse({
+    const valid = {
       runtime_generation: 1,
       conversation_id: 'c1',
       target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1],
-      kind: 'message',
-      spawn_options: spawnOptions,
-    });
-    expect(missing.success).toBe(false);
-
-    const empty = RuntimeDeliverParamsSchema.safeParse({
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      target: { conversation_id: 'c1', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [1],
-      kind: 'message',
-      text: '',
-      spawn_options: spawnOptions,
-    });
-    expect(empty.success).toBe(false);
-
-    // Any non-empty string is valid; the daemon owns interpretation.
-    const ok = RuntimeDeliverParamsSchema.safeParse({
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      target: { conversation_id: 'c1', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [1],
-      deliveries: [{
-        delivery_id: 1,
-        seq: 1,
-        presentation: { body: ' ', instruction: 'system' as const },
-      }],
+      deliveries: [
+        {
+          delivery_id: 1,
+          seq: 1,
+          presentation: { body: ' ', instruction: 'system' as const },
+        },
+      ],
       kind: 'message',
       text: ' ',
       spawn_options: spawnOptions,
-    });
-    expect(ok.success).toBe(true);
+    };
+    expect(RuntimeDeliverParamsSchema.safeParse(valid).success).toBe(true);
+    for (const text of [undefined, '']) {
+      const rejected = RuntimeDeliverParamsSchema.safeParse({ ...valid, text });
+      expect(rejected.success).toBe(false);
+      if (!rejected.success) {
+        expect(rejected.error.issues.map((issue) => issue.path)).toEqual([['text']]);
+      }
+    }
   });
 
   it('result: spawning / admitted arms carry pid + started_at', () => {
@@ -1701,21 +1698,25 @@ describe('protocol — runtime_deliver contract (#task:1417 Stage 2 slice 1)', (
     // Illegal #2: cooldown_until leaking onto a non-cooldown reason. The
     // flat schema accepted this cross-reason leak; the strict per-reason
     // arms reject it.
-    expect(
-      RuntimeDeliverResultSchema.safeParse({
-        disposition: 'refused',
-        reason: 'startup_pending',
-        cooldown_until: 1_700_000_300_000,
-      }).success,
-    ).toBe(false);
+    for (const reason of ['startup_pending', 'draining']) {
+      expect(
+        RuntimeDeliverResultSchema.safeParse({
+          disposition: 'refused',
+          reason,
+          cooldown_until: 1_700_000_300_000,
+        }).success,
+      ).toBe(false);
+    }
   });
 
-  it('result: rejects `deferred` disposition (Stage 3, not defined in Stage 2)', () => {
-    expect(
-      RuntimeDeliverResultSchema.safeParse({
-        disposition: 'deferred',
-      }).success,
-    ).toBe(false);
+  it('result: deferred carries the live process coordinate, not an empty acknowledgement', () => {
+    const valid = { disposition: 'deferred', pid: 123, started_at: 1_700_000_000_000 };
+    expect(RuntimeDeliverResultSchema.safeParse(valid).success).toBe(true);
+    for (const missing of ['pid', 'started_at']) {
+      expect(RuntimeDeliverResultSchema.safeParse({ ...valid, [missing]: undefined }).success).toBe(
+        false,
+      );
+    }
   });
 });
 
@@ -1789,45 +1790,57 @@ describe('protocol — runtime_compaction_stale event (Cindy `-pdNvRYOWip5e9yA` 
 
 describe('runtime custody generation (current protocol generation)', () => {
   it('rejects start and deliver commands that omit runtime_generation', () => {
-    expect(RuntimeStartParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      options: testStartOptions(),
-    }).success).toBe(false);
-    expect(RuntimeDeliverParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      delivery_ids: [1],
-      kind: 'message',
-      text: 'hello',
-      spawn_options: testStartOptions(),
-    }).success).toBe(false);
+    expect(
+      RuntimeStartParamsSchema.safeParse({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        options: testStartOptions(),
+      }).success,
+    ).toBe(false);
+    expect(
+      RuntimeDeliverParamsSchema.safeParse({
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [1],
+        deliveries: [
+          { delivery_id: 1, seq: 1, presentation: { body: 'hello', instruction: 'system' } },
+        ],
+        kind: 'message',
+        text: 'hello',
+        spawn_options: testStartOptions(),
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects projection and parsed events that omit runtime_generation', () => {
-    expect(EventFrameSchema.safeParse({
-      event: 'runtime_state',
-      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      state: {
-        runId: 'r1',
-        agentId: 'a1',
-        conversationId: 'c1',
-        status: 'idle',
-        startedAt: 1,
-        updatedAt: 1,
-        lastActivityAt: 1,
-      },
-      ts: 1,
-    }).success).toBe(false);
-    expect(EventFrameSchema.safeParse({
-      event: 'runtime_parsed_event',
-      runtime_scope: CONVERSATION_RUNTIME_SCOPE,
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      parsed: { kind: 'session_init', sessionId: 's1' },
-      ts: 1,
-    }).success).toBe(false);
+    expect(
+      EventFrameSchema.safeParse({
+        event: 'runtime_state',
+        runtime_scope: CONVERSATION_RUNTIME_SCOPE,
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        state: {
+          runId: 'r1',
+          agentId: 'a1',
+          conversationId: 'c1',
+          status: 'idle',
+          startedAt: 1,
+          updatedAt: 1,
+          lastActivityAt: 1,
+        },
+        ts: 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      EventFrameSchema.safeParse({
+        event: 'runtime_parsed_event',
+        runtime_scope: CONVERSATION_RUNTIME_SCOPE,
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        parsed: { kind: 'session_init', sessionId: 's1' },
+        ts: 1,
+      }).success,
+    ).toBe(false);
   });
 });

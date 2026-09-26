@@ -482,24 +482,6 @@ mod tests {
         owned
     }
 
-    #[tokio::test]
-    async fn a_user_managed_computer_is_refused_before_anything_happens() {
-        let row = record(HostKind::Remote, ProvisioningSource::UserInvite, None);
-        let world = World::holding(row.clone());
-
-        let error = world
-            .revoker()
-            .execute(owned(&row))
-            .await
-            .expect_err("a user-managed computer has no revoke");
-
-        assert!(matches!(error, RevokeComputerError::Refused(_)));
-        let log = world.log();
-        assert!(log.writes.is_empty());
-        assert!(log.announcements.is_empty());
-        assert!(log.disconnects.is_empty());
-    }
-
     /// Falsifier for the refusal-before-clock order: a user-managed computer earns a
     /// deterministic `409`, and a broken clock must not upgrade it to a `500`. Reading the
     /// clock first — `admit(owned, now_ms(clock)?)` — would turn this refusal into a fault.
@@ -560,21 +542,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_row_written_is_the_one_the_verdict_named_stamped_once() {
-        let row = app_managed(None);
-        let world = World::holding(row.clone());
-
-        let ended = world
-            .revoker()
-            .execute(owned(&row))
-            .await
-            .expect("custody ends");
-
-        assert_eq!(world.log().writes, vec![("h1".to_owned(), NOW)]);
-        assert_eq!(ended.computer.revoked_at, Some(NOW));
-    }
-
-    #[tokio::test]
     async fn ending_custody_announces_the_agents_that_just_went_offline() {
         let row = app_managed(None);
         let world = World::holding(row.clone());
@@ -586,6 +553,8 @@ mod tests {
             .expect("custody ends");
 
         let log = world.log();
+        assert_eq!(log.writes, vec![("h1".to_owned(), NOW)]);
+        assert_eq!(ended.computer.revoked_at, Some(NOW));
         assert_eq!(log.announcements, vec!["h1".to_owned()]);
         assert_eq!(log.disconnects, vec!["h1".to_owned()]);
         assert!(ended.availability_announcement_failure.is_none());

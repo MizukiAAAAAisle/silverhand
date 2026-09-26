@@ -1146,9 +1146,6 @@ mod tests {
     impl ChannelArchiveAftermath for ArchiveEffects {
         fn start_runtime_cleanup(&self, _: &BoundChannelArchive) {
             self.calls.lock().unwrap().push("runtime");
-            // Model a host stop that never resolves. The adapter launches it and
-            // returns; channel publication must not await this task.
-            tokio::spawn(std::future::pending::<()>());
         }
 
         async fn workspace_channels_changed(
@@ -1173,7 +1170,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn archive_always_commits_and_attempts_every_applicable_effect_in_order() {
+    async fn archive_and_unarchive_attempt_applicable_effects_and_preserve_first_failure() {
         let archived = CommittedChannelArchive::committed(
             user("u"),
             workspace("w"),

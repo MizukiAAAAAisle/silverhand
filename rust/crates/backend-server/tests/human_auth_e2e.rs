@@ -5,7 +5,7 @@
 //! Only two collaborators are test doubles, and only because determinism demands
 //! it: the password hasher (the real Argon2id calibrates against the wall clock
 //! and would make every run slow and time-dependent) and the `user_changed` sink
-//! (no production adapter ships in this vertical — a #2215 integration residual).
+//! (counted here; WebSocket delivery is owned by its transport integration tests).
 //! Everything else is the shipping code: `SqliteHandleNamespace`,
 //! `SqliteUserStore`, `SqliteHumanRegistration`, `SqliteCredentialStore`,
 //! `SqliteSessionStore`, the real `EntropySessionTokenMint`, the real
@@ -315,34 +315,14 @@ async fn signup_creates_an_identity_and_returns_a_usable_session() {
 
     // The minted token authenticates GET /api/me end to end.
     let token = token_of(&body);
+    let stored = stored_token_hashes(&backend.path).await;
+    assert_eq!(stored.len(), 1, "signup issues exactly one session");
+    assert_ne!(stored[0], token, "the plaintext bearer must not be stored");
+    assert!(!stored[0].is_empty());
     let (status, me) = call(&backend.app, authed_get(human_auth::ME_PATH, &token)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(me["name"], json!("alice"));
     assert_eq!(me["id"], user["id"]);
-}
-
-#[tokio::test]
-async fn signup_persists_only_the_hash_while_the_response_carries_the_plaintext() {
-    let backend = backend(true).await;
-    let (status, body) = call(
-        &backend.app,
-        post_json(human_auth::SIGNUP_PATH, signup_body()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    let token = token_of(&body);
-
-    let stored = stored_token_hashes(&backend.path).await;
-    assert_eq!(stored.len(), 1, "signup issues exactly one session");
-    assert_ne!(
-        stored[0], token,
-        "the plaintext bearer must never be persisted; only its hash coordinate is"
-    );
-    assert!(!stored[0].is_empty());
-
-    // The plaintext the caller holds still resolves the stored hash — the loop closes.
-    let (status, _) = call(&backend.app, authed_get(human_auth::ME_PATH, &token)).await;
-    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -534,16 +514,39 @@ async fn get_me_projects_a_cache_busted_avatar_url_when_the_user_has_one() {
 }
 
 #[tokio::test]
-async fn get_me_without_a_bearer_is_the_perimeter_401() {
+async fn get_me_applies_public_bearer_grammar_to_the_minted_session() {
+    #[derive(serde::Deserialize)]
+    struct BearerCase {
+        name: String,
+        header: Option<String>,
+        rust_extracted_token: Option<String>,
+    }
     let backend = backend(true).await;
-    let request = Request::builder()
-        .method("GET")
-        .uri(human_auth::ME_PATH)
-        .body(Body::empty())
-        .unwrap();
-    let (status, body) = call(&backend.app, request).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body, json!({ "error": "unauthorized" }));
+    let (status, signup) = call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let token = token_of(&signup);
+    let cases: Vec<BearerCase> = serde_json::from_str(include_str!(
+        "../src/identity_access/auth/fixtures/public_bearer_grammar.json"
+    ))
+    .unwrap();
+    for case in cases {
+        let mut request = Request::builder().method("GET").uri(human_auth::ME_PATH);
+        if let Some(header) = case.header {
+            request = request.header("authorization", header.replace("valid-token", &token));
+        }
+        let (status, body) = call(&backend.app, request.body(Body::empty()).unwrap()).await;
+        if case.rust_extracted_token.as_deref() == Some("valid-token") {
+            assert_eq!(status, StatusCode::OK, "{}", case.name);
+            assert_eq!(body["id"], signup["user"]["id"], "{}", case.name);
+        } else {
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{}", case.name);
+            assert_eq!(body, json!({ "error": "unauthorized" }), "{}", case.name);
+        }
+    }
 }
 
 #[tokio::test]

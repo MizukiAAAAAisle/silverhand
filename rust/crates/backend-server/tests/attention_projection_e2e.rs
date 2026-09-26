@@ -50,7 +50,9 @@ async fn real_sqlite_and_production_router_consume_the_ts_signed_fixture() {
         "/../../../rust/test-fixtures/fixtures/attention-projection-wire.json"
     )))
     .unwrap();
+    let mut surfaces = std::collections::BTreeSet::new();
     for entry in fixture.as_array().unwrap() {
+        surfaces.insert(entry["surface"].as_str().unwrap());
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("projection.sqlite");
         seed(&path, entry["setup"].as_str().unwrap()).await;
@@ -80,4 +82,9 @@ async fn real_sqlite_and_production_router_consume_the_ts_signed_fixture() {
                 .unwrap();
         assert_eq!(body, entry["body"], "{}", entry["name"]);
     }
+    assert_eq!(
+        surfaces,
+        std::collections::BTreeSet::from(["badges", "modes"])
+    );
+    assert_eq!(fixture.as_array().unwrap().len(), 11);
 }

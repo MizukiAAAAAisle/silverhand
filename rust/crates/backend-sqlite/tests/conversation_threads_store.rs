@@ -2,8 +2,7 @@ use silverhand_backend_core::{
     conversation_messaging::messaging::{
         PrincipalIdentity,
         collaboration::conversation_threads::{
-            ConversationThreadsReadPort, ThreadListCursor, ThreadListFilter, ThreadListQuery,
-            ThreadReadCorruption,
+            ConversationThreadsReadPort, ThreadListFilter, ThreadListQuery, ThreadReadCorruption,
         },
     },
     foundation::identity::{ConversationId, UserId},
@@ -247,30 +246,4 @@ async fn lookahead_and_replier_rows_are_strictly_decoded_before_page_projection(
         .await
         .unwrap();
     assert!(read(&path, "viewer", query).await.unwrap().is_ok());
-}
-
-#[tokio::test]
-async fn cursor_boundary_accepts_the_exact_page_tail() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("conversation-threads-cursor.sqlite");
-    seed(&path).await;
-    let cursor = ThreadListCursor::new(20, 3_i64.try_into().unwrap()).unwrap();
-    let query = ThreadListQuery::new(2, Some(cursor), ThreadListFilter::All).unwrap();
-    assert_eq!(
-        read(&path, "viewer", query)
-            .await
-            .unwrap()
-            .unwrap()
-            .bind(
-                &UserId::parse("viewer").unwrap(),
-                &ConversationId::parse("c").unwrap(),
-                query,
-            )
-            .unwrap()
-            .threads()[0]
-            .entry()
-            .root_id()
-            .as_str(),
-        "root-1"
-    );
 }

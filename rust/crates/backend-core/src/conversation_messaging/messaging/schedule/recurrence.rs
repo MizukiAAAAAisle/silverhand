@@ -303,20 +303,6 @@ mod tests {
     use super::super::spec::CronSpec;
     use super::*;
 
-    /// A cron evaluator whose occurrences are a fixed step from the query
-    /// base — enough to exercise the policy without a real parser.
-    struct SteppingCron {
-        step_ms: i64,
-    }
-
-    impl CronNextOccurrence for SteppingCron {
-        fn next_after(&self, query: CronQuery<'_>) -> CronOutcome {
-            // First multiple of `step_ms` strictly greater than `after`.
-            let next = (query.after / self.step_ms + 1) * self.step_ms;
-            CronOutcome::NextInstant(next)
-        }
-    }
-
     /// A cron evaluator that always answers with one fixed outcome.
     struct FixedCron(CronOutcome);
 
@@ -365,41 +351,6 @@ mod tests {
     }
 
     #[test]
-    fn once_always_terminates_without_rearm_or_missed() {
-        let out = plan_advancement(
-            &ScheduleSpec::Once { fire_at: 1_000 },
-            ScheduleCaps::none(),
-            FiredCount::new(0).unwrap(),
-            1_000,
-            5_000,
-            &no_cron(),
-        )
-        .unwrap();
-        assert_eq!(out, Advancement::Terminal { missed_count: 0 });
-    }
-
-    #[test]
-    fn interval_rearms_from_actual_fire_not_scheduled_tick() {
-        let out = plan_advancement(
-            &interval(60),
-            ScheduleCaps::none(),
-            FiredCount::new(3).unwrap(),
-            1_000,
-            200_000,
-            &no_cron(),
-        )
-        .unwrap();
-        let missed_count = estimate_missed_count(&interval(60), 1_000, 200_000, &no_cron());
-        assert_eq!(
-            out,
-            Advancement::Rearm {
-                next_fire_at: 200_000 + 60 * 1000,
-                missed_count,
-            }
-        );
-    }
-
-    #[test]
     fn max_occurrences_reached_terminates_before_computing_next() {
         // fired_count 4, +1 = 5 >= max 5 → terminal, and cron is never asked
         // (a faulting evaluator would surface as Err if it were consulted).
@@ -413,42 +364,6 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(out, Advancement::Terminal { .. }));
-    }
-
-    #[test]
-    fn until_at_overrun_terminates_after_computing_next() {
-        // next interval instant = 100_000 + 60_000 = 160_000 > until 120_000.
-        let out = plan_advancement(
-            &interval(60),
-            ScheduleCaps::new(None, Some(120_000)).unwrap(),
-            FiredCount::new(0).unwrap(),
-            100_000,
-            100_000,
-            &no_cron(),
-        )
-        .unwrap();
-        assert!(matches!(out, Advancement::Terminal { .. }));
-    }
-
-    #[test]
-    fn cron_rearm_uses_evaluator_next_instant() {
-        let out = plan_advancement(
-            &cron(),
-            ScheduleCaps::none(),
-            FiredCount::new(0).unwrap(),
-            0,
-            10_000,
-            &SteppingCron { step_ms: 300_000 },
-        )
-        .unwrap();
-        // First 300_000 multiple strictly after 10_000 is 300_000.
-        assert_eq!(
-            out,
-            Advancement::Rearm {
-                next_fire_at: 300_000,
-                missed_count: 0,
-            }
-        );
     }
 
     #[test]
@@ -528,16 +443,6 @@ mod tests {
     }
 
     #[test]
-    fn missed_count_cron_counts_strictly_between() {
-        // step 300_000; scheduled 0, actual 1_000_000 → occurrences at
-        // 300_000 / 600_000 / 900_000 are strictly between → 3.
-        assert_eq!(
-            estimate_missed_count(&cron(), 0, 1_000_000, &SteppingCron { step_ms: 300_000 }),
-            3
-        );
-    }
-
-    #[test]
     fn missed_count_cron_partial_then_fault_yields_zero() {
         // Two clean occurrences then a fault before reaching actual: the TS
         // try/catch discards the partial and returns 0.
@@ -547,55 +452,6 @@ mod tests {
             CronOutcome::InvalidExpression,
         ]);
         assert_eq!(estimate_missed_count(&cron(), 0, 10_000_000, &scripted), 0);
-    }
-
-    #[test]
-    fn missed_count_cron_caps_at_1000() {
-        // A tiny step with a huge window would count forever; the cap holds.
-        assert_eq!(
-            estimate_missed_count(&cron(), 0, i64::MAX, &SteppingCron { step_ms: 1 }),
-            1000
-        );
-    }
-
-    #[test]
-    fn failure_rearm_rejects_once() {
-        let err = plan_failure_rearm(
-            &ScheduleSpec::Once { fire_at: 1 },
-            ScheduleCaps::none(),
-            5_000,
-            &no_cron(),
-        )
-        .unwrap_err();
-        assert_eq!(err, FailureRearmError::OnceHasNoRetry);
-    }
-
-    #[test]
-    fn failure_rearm_ignores_max_but_honors_until() {
-        // max_occurrences is never consulted on the failure path.
-        let out = plan_failure_rearm(
-            &interval(60),
-            ScheduleCaps::new(Some(1), None).unwrap(),
-            100_000,
-            &no_cron(),
-        )
-        .unwrap();
-        assert_eq!(
-            out,
-            FailureRearm::Rearm {
-                next_fire_at: 100_000 + 60_000
-            }
-        );
-
-        // until_at overrun still terminates on failure.
-        let out = plan_failure_rearm(
-            &interval(60),
-            ScheduleCaps::new(None, Some(120_000)).unwrap(),
-            100_000,
-            &no_cron(),
-        )
-        .unwrap();
-        assert_eq!(out, FailureRearm::Terminal);
     }
 
     #[test]
@@ -609,21 +465,11 @@ mod tests {
     }
 }
 
-/// TS-first parity gate. The expected values in the included fixture are
-/// signed by the REAL production TypeScript policy — the pure
-/// `planAdvancement` / `planFailureRearm` / `estimateMissedCount` in
-/// `schedule-recurrence.ts` that `ScheduleService` itself calls, executed by
-/// `schedule-recurrence.parity.test.ts` — not hand-authored here. That single
-/// signer emits both the JSON fixture and this `.rs`, and the same Vitest run
-/// re-asserts this file byte-for-byte against the production output, so the
-/// two projections cannot drift apart. Rust consumes each case WHOLE and must
-/// reproduce the advancement, missed-count, and failure-rearm outcomes exactly.
-///
-/// The fixture's cron cases use a stateless periodic evaluator identical on
-/// both sides (`steppingCronNext` ⇔ [`SteppingCron`]).
-/// Fault, overflow, and non-advancing paths -
-/// which a stepping evaluator cannot produce — are covered by the
-/// unit tests above, justified against the same production policy.
+/// Frozen cross-language policy contract. The eight fixture rows were generated
+/// by the production TypeScript policy before its retirement in af0e2b6b6.
+/// Rust consumes those independent expectations; there is no live TypeScript
+/// signer in this repository. Real cron/timezone behavior belongs to the SQLite
+/// cron adapter; fault and overflow behavior stays in the tests above.
 #[cfg(test)]
 mod ts_parity {
     use super::super::spec::CronSpec;

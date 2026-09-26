@@ -215,11 +215,9 @@ mod tests {
         assert!(JoinedAt::new(-1).is_err());
         assert_eq!(JoinedAt::new(0).unwrap().get(), 0);
         assert_eq!(
-            JoinedAt::new(JoinedAt::MAX_JAVASCRIPT_INTEGER)
-                .unwrap()
-                .get(),
-            JoinedAt::MAX_JAVASCRIPT_INTEGER
+            JoinedAt::new(9_007_199_254_740_991).unwrap().get(),
+            9_007_199_254_740_991
         );
-        assert!(JoinedAt::new(JoinedAt::MAX_JAVASCRIPT_INTEGER + 1).is_err());
+        assert!(JoinedAt::new(9_007_199_254_740_992).is_err());
     }
 }

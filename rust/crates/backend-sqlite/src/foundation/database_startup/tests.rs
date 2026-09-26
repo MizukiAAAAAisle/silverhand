@@ -1,38 +1,7 @@
 use super::*;
 
-// Deterministic subprocess barrier, absent from every production binary. It
-// pauses the actual preparation owner while contenders exercise both runners.
-pub(super) fn pause_preparation(path: &Path, phase: &str) {
-    if std::env::var_os("SILVERHAND_TEST_PREPARATION_DB").as_deref() != Some(path.as_os_str())
-        || std::env::var("SILVERHAND_TEST_PREPARATION_PHASE").as_deref() != Ok(phase)
-    {
-        return;
-    }
-    use std::io::Write as _;
-    println!("PREPARATION_PAUSED:{phase}");
-    std::io::stdout().flush().unwrap();
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input).unwrap();
-}
-
-#[tokio::test]
-async fn preparation_subprocess_owner() {
-    let Some(path) = std::env::var_os("SILVERHAND_TEST_PREPARATION_DB") else {
-        return;
-    };
-    let path = PathBuf::from(path);
-    let allowed = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../.cache")
-        .canonicalize()
-        .unwrap();
-    assert!(
-        path.parent()
-            .unwrap()
-            .canonicalize()
-            .unwrap()
-            .starts_with(allowed)
-    );
-    prepare_database(&path, true).await.unwrap();
+fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<()> {
+    copy_tree_except(src, dest, &[])
 }
 
 fn isolated() -> tempfile::TempDir {
@@ -142,6 +111,32 @@ async fn empty_store_runs_shared_history_without_ts_then_current_is_noop() {
             .map(|s| (s.version, s.name))
             .collect::<Vec<_>>()
     );
+    db.close().await.unwrap();
+
+    // Historical ledger rows before the supported baseline remain admissible;
+    // they are not gaps in the active migration prefix and must not be erased.
+    let mut db = connect(&path).await;
+    for version in 1..44 {
+        sqlx::query("INSERT INTO _migrations(version,name,applied_at) VALUES(?,'history',1)")
+            .bind(version)
+            .execute(&mut db)
+            .await
+            .unwrap();
+    }
+    db.close().await.unwrap();
+    assert!(
+        prepare_database(&path, false)
+            .await
+            .unwrap()
+            .applied_steps
+            .is_empty()
+    );
+    let mut db = connect(&path).await;
+    let history: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _migrations WHERE version<44")
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(history, 43);
     db.close().await.unwrap();
 }
 
@@ -350,7 +345,7 @@ async fn migration_lock_refuses_second_owner_then_releases() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn database_hard_link_alias_is_refused_without_releasing_lock_or_advancing_ledger() {
+async fn database_hard_link_alias_is_refused_without_changing_data_or_ledger() {
     let root = isolated();
     let path = root.path().join("data/database.sqlite");
     prepare_database(&path, true).await.unwrap();
@@ -404,11 +399,27 @@ async fn unsupported_gapped_and_malformed_ledgers_fail_without_recreating_data()
         fs::create_dir(path.parent().unwrap()).unwrap();
         let mut db = connect(&path).await;
         db.execute(sql).await.unwrap();
+        db.execute("CREATE TABLE preserved(value TEXT); INSERT INTO preserved VALUES('keep me')")
+            .await
+            .unwrap();
+        let before = snapshot(&mut db, false).await;
+        let schema: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT name,sql FROM sqlite_schema ORDER BY name")
+                .fetch_all(&mut db)
+                .await
+                .unwrap();
         db.close().await.unwrap();
         let error = prepare_database(&path, true).await.unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
-        assert!(path.exists());
-        assert!(!root.path().join("data.migration.lock").exists());
+        let mut db = connect(&path).await;
+        assert_eq!(snapshot(&mut db, false).await, before);
+        let after_schema: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT name,sql FROM sqlite_schema ORDER BY name")
+                .fetch_all(&mut db)
+                .await
+                .unwrap();
+        assert_eq!(after_schema, schema);
+        db.close().await.unwrap();
         assert_eq!(
             fs::read_dir(root.path()).unwrap().count(),
             1,
@@ -590,14 +601,16 @@ async fn task_title_migration_rejects_unrepairable_values_transactionally() {
             .execute(&mut db)
             .await
             .unwrap();
-        db.execute("BEGIN").await.unwrap();
-        let error = preconditions::run(&mut db, 96).await.unwrap_err();
+        db.execute("CREATE TABLE _migrations(version INTEGER PRIMARY KEY,name TEXT NOT NULL,applied_at INTEGER NOT NULL)")
+            .await
+            .unwrap();
+        let step = plan().steps.into_iter().find(|s| s.version == 96).unwrap();
+        let error = apply_step(&mut db, &step).await.unwrap_err();
         assert!(
             error.to_string().contains("tasks.title"),
             "{}",
             case["name"]
         );
-        db.execute("ROLLBACK").await.unwrap();
         let title: String = sqlx::query_scalar("SELECT title FROM tasks WHERE id='repairable'")
             .fetch_one(&mut db)
             .await
@@ -610,5 +623,10 @@ async fn task_title_migration_rejects_unrepairable_values_transactionally() {
         .await
         .unwrap();
         assert_eq!(temp, 0);
+        let ledger: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _migrations")
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+        assert_eq!(ledger, 0);
     }
 }

@@ -166,11 +166,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
         else {
             panic!("expected Row/Present");
         };
-        assert_eq!(
-            source,
-            agent("a-present"),
-            "the row id is read back, not the bind"
-        );
+        assert_eq!(source, agent("a-present"));
         assert_eq!(pointer.as_str(), "agents/a-present/avatars/blob-0.png");
         assert_eq!(content_type, AvatarContentType::Png);
     }
@@ -203,7 +199,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     }
 
     #[tokio::test]
-    async fn an_empty_key_row_is_a_safe_500_not_absent() {
+    async fn an_empty_key_row_is_a_persistence_failure_not_absent() {
         let (_dir, adapter) = open_seeded().await;
         adapter
             .read_agent_avatar_serve_ref(&agent("a-empty"))
@@ -212,7 +208,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     }
 
     #[tokio::test]
-    async fn an_out_of_allowlist_content_type_is_a_safe_500() {
+    async fn an_out_of_allowlist_content_type_is_a_persistence_failure() {
         let (_dir, adapter) = open_seeded().await;
         adapter
             .read_agent_avatar_serve_ref(&agent("a-badmime"))

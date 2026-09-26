@@ -463,8 +463,12 @@ mod tests {
                 vec![
                     WorkspaceId::parse("w").unwrap(),
                     WorkspaceId::parse("directed-only").unwrap(),
+                    WorkspaceId::parse("directed-only").unwrap(),
                 ],
-                vec![NotificationId::parse("n").unwrap()],
+                vec![
+                    NotificationId::parse("n").unwrap(),
+                    NotificationId::parse("n").unwrap(),
+                ],
             )),
             &effects,
             UserId::parse("u").unwrap(),
@@ -487,6 +491,10 @@ mod tests {
             "first cause"
         );
         assert_eq!(done.committed().viewer().as_str(), "u");
+        assert_eq!(
+            done.committed().dismissed_notifications(),
+            &[NotificationId::parse("n").unwrap()]
+        );
         assert_eq!(
             done.committed()
                 .directed_badge_workspaces()

@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  HostClient,
-  HostClientError,
-  ProtocolVersionMismatchError,
-} from '../src/client/index.js';
+import { HostClient, HostClientError, ProtocolVersionMismatchError } from '../src/client/index.js';
 import { createFakeTransportPair } from './_helpers/fake-transport.js';
 import { testStartOptions } from './_helpers/runtime-start-options.js';
 import { HOST_PROTOCOL_VERSION, KNOWN_CAPABILITIES_V1 } from '../src/protocol.js';
@@ -57,18 +53,34 @@ describe('HostClient — happy path', () => {
     await client.close();
   });
 
-  it('does not echo back duplicate frames', async () => {
+  it('correlates out-of-order responses and ignores late duplicates', async () => {
     const { transport, peer } = createFakeTransportPair();
     const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
     await client.connect();
-    const promise = client.echo('hi');
-    await new Promise(setImmediate);
-    const id = peer.received[0]!.id;
-    peer.send({ id, result: { echoed: 'hi' } });
-    // Late duplicate should be silently dropped (no double-resolve crash).
-    peer.send({ id, result: { echoed: 'hi (late)' } });
-    await expect(promise).resolves.toEqual({ echoed: 'hi' });
-    await client.close();
+    const events = vi.fn();
+    client.subscribe(events);
+    try {
+      const first = client.echo('first');
+      const second = client.echo('second');
+      const responses = Promise.all([
+        expect(first).resolves.toEqual({ echoed: 'first' }),
+        expect(second).resolves.toEqual({ echoed: 'second' }),
+      ]);
+      await new Promise(setImmediate);
+      const [a, b] = peer.received;
+      expect(a!.id).not.toBe(b!.id);
+      peer.send({ id: b!.id, result: { echoed: 'second' } });
+      peer.send({ id: a!.id, result: { echoed: 'first' } });
+      await responses;
+      const third = client.echo('third');
+      await new Promise(setImmediate);
+      peer.send({ id: a!.id, result: { echoed: 'late duplicate' } });
+      peer.send({ id: peer.received[2]!.id, result: { echoed: 'third' } });
+      await expect(third).resolves.toEqual({ echoed: 'third' });
+      expect(events).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
   });
 });
 
@@ -92,7 +104,7 @@ describe('HostClient — protocol handshake', () => {
     await client.close();
   });
 
-  it.each([-1, 1])('rejects older/newer daemon hello before commands (%s)', async delta => {
+  it.each([-1, 1])('rejects older/newer daemon hello before commands (%s)', async (delta) => {
     const { transport, peer } = createFakeTransportPair({ autoHello: false });
     const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
     const connect = client.connect();
@@ -120,7 +132,7 @@ describe('HostClient — protocol handshake', () => {
       reason: 'version_mismatch',
     });
     expect(client.isConnected()).toBe(false);
-    expect(peer.received.map(request => request.intent)).toEqual(['hello']);
+    expect(peer.received.map((request) => request.intent)).toEqual(['hello']);
     await client.close();
   });
 
@@ -213,13 +225,22 @@ describe('HostClient — disconnect & reconnect', () => {
       transportFactory: () => transport,
       rng: FIXED_RNG,
       initialBackoffMs: 1_000_000, // suppress automatic reconnect for this test
+      requestTimeoutMs: 200,
     });
     await client.connect();
-    const promise = client.ping();
-    await new Promise(setImmediate);
-    peer.disconnect('test_drop');
-    await expect(promise).rejects.toMatchObject({ code: 'disconnected' });
-    await client.close();
+    try {
+      const ping = client.ping();
+      const echo = client.echo('pending');
+      const rejected = Promise.all([
+        expect(ping).rejects.toMatchObject({ code: 'disconnected' }),
+        expect(echo).rejects.toMatchObject({ code: 'disconnected' }),
+      ]);
+      await new Promise(setImmediate);
+      peer.disconnect('test_drop');
+      await rejected;
+    } finally {
+      await client.close();
+    }
   });
 
   it('reconnects via the factory and invokes onReconnect handlers', async () => {
@@ -272,9 +293,12 @@ describe('HostClient — disconnect & reconnect', () => {
     });
     await client.connect();
     peers[0]!.peer.disconnect('drop');
-    await vi.waitFor(() => {
-      expect(client.isConnected()).toBe(true);
-    }, { timeout: 1_000 });
+    await vi.waitFor(
+      () => {
+        expect(client.isConnected()).toBe(true);
+      },
+      { timeout: 1_000 },
+    );
     expect(attempt).toBeGreaterThanOrEqual(3);
     await client.close();
   });
@@ -344,17 +368,6 @@ describe('HostClient — schema drift guard (review fix B2)', () => {
     });
     await expect(promise).rejects.toMatchObject({ code: 'internal_error' });
     await expect(promise).rejects.toThrow(/drift/);
-    await client.close();
-  });
-
-  it('still passes a well-shaped result through unmodified', async () => {
-    const { transport, peer } = createFakeTransportPair();
-    const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
-    await client.connect();
-    const promise = client.echo('ok');
-    await new Promise(setImmediate);
-    peer.send({ id: peer.received[0]!.id, result: { echoed: 'ok' } });
-    await expect(promise).resolves.toEqual({ echoed: 'ok' });
     await client.close();
   });
 });
@@ -428,7 +441,7 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
     await client.close();
   });
 
-  it('runtimeStatus accepts no params and merges supervisor runtimes', async () => {
+  it('runtimeStatus defaults to empty params and forwards the result', async () => {
     const { transport, peer } = createFakeTransportPair();
     const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
     await client.connect();
@@ -450,10 +463,12 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
     await client.connect();
     const stopAll = client.runtimeStopAll();
     await new Promise(setImmediate);
+    expect(peer.received[0]).toMatchObject({ intent: 'runtime_stop_all', params: {} });
     peer.send({ id: peer.received[0]!.id, result: { stopped_count: 0 } });
     await expect(stopAll).resolves.toEqual({ stopped_count: 0 });
     const closeLog = client.runtimeCloseActivityLog();
     await new Promise(setImmediate);
+    expect(peer.received[1]).toMatchObject({ intent: 'runtime_close_activity_log', params: {} });
     peer.send({ id: peer.received[1]!.id, result: { flushed: true } });
     await expect(closeLog).resolves.toEqual({ flushed: true });
     await client.close();
@@ -467,10 +482,10 @@ describe('HostClient — subscribe (unsolicited events)', () => {
     await client.connect();
     const recvA: string[] = [];
     const recvB: string[] = [];
-    client.subscribe(e => {
+    client.subscribe((e) => {
       if (e.event === 'runtime_state') recvA.push(e.state.status);
     });
-    client.subscribe(e => {
+    client.subscribe((e) => {
       if (e.event === 'runtime_state') recvB.push(e.state.status);
     });
     const stateFrame = (status: 'idle' | 'thinking'): import('../src/protocol.js').EventFrame => ({
@@ -506,7 +521,7 @@ describe('HostClient — subscribe (unsolicited events)', () => {
     const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
     await client.connect();
     const recv: string[] = [];
-    const off = client.subscribe(e => {
+    const off = client.subscribe((e) => {
       if (e.event === 'shutting_down') recv.push(e.reason);
     });
     peer.send({ event: 'shutting_down', reason: 'test_1' });
@@ -528,7 +543,7 @@ describe('HostClient — subscribe (unsolicited events)', () => {
     client.subscribe(() => {
       throw new Error('boom');
     });
-    client.subscribe(e => {
+    client.subscribe((e) => {
       if (e.event === 'shutting_down') good.push(e.reason);
     });
     peer.send({ event: 'shutting_down', reason: 'after_throw' });
@@ -550,7 +565,7 @@ describe('HostClient — subscribe (unsolicited events)', () => {
     });
     await client.connect();
     const recv: string[] = [];
-    client.subscribe(e => {
+    client.subscribe((e) => {
       if (e.event === 'shutting_down') recv.push(e.reason);
     });
     peers[0]!.peer.send({ event: 'shutting_down', reason: 'first' });
@@ -638,27 +653,24 @@ describe('HostClient — per-intent typed error scoping (Cindy D2 P1-1)', () => 
     'unsupported_template',
     'unsupported_runtime',
     'internal_error',
-  ] as const)(
-    'surfaces agent_materialize typed code: %s',
-    async code => {
-      const { transport, peer } = createFakeTransportPair();
-      const client = new HostClient({
-        transportFactory: () => transport,
-        rng: FIXED_RNG,
-      });
-      await client.connect();
+  ] as const)('surfaces agent_materialize typed code: %s', async (code) => {
+    const { transport, peer } = createFakeTransportPair();
+    const client = new HostClient({
+      transportFactory: () => transport,
+      rng: FIXED_RNG,
+    });
+    await client.connect();
 
-      const promise = client.call('agent_materialize', materializeParams);
-      await new Promise(setImmediate);
-      peer.send({
-        id: peer.received[0]!.id,
-        error: { code, message: `seeded ${code}` },
-      });
-      await expect(promise).rejects.toMatchObject({ code });
+    const promise = client.call('agent_materialize', materializeParams);
+    await new Promise(setImmediate);
+    peer.send({
+      id: peer.received[0]!.id,
+      error: { code, message: `seeded ${code}` },
+    });
+    await expect(promise).rejects.toMatchObject({ code });
 
-      await client.close();
-    },
-  );
+    await client.close();
+  });
 
   it('rejects unknown typed code with internal_error (drift catch on the client side)', async () => {
     const { transport, peer } = createFakeTransportPair();

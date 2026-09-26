@@ -97,13 +97,16 @@ export interface OutboundSupervisorDeps {
    * and must return a client object whose `start()` / `stop()` /
    * `sendEvent()` shape matches the real class.
    */
-  outboundClientFactory?: (configPath: string, deps: {
-    logger: DaemonLogger;
-    readyEvent: () => Extract<EventFrame, { event: 'ready' }>;
-    dispatchCommand: OutboundCommandDispatcher;
-    cleanupDeferredForOwner: OwnerCleanup;
-    onConfigLoaded: (config: DaemonHostConfig) => void;
-  }) => OutboundClientLike;
+  outboundClientFactory?: (
+    configPath: string,
+    deps: {
+      logger: DaemonLogger;
+      readyEvent: () => Extract<EventFrame, { event: 'ready' }>;
+      dispatchCommand: OutboundCommandDispatcher;
+      cleanupDeferredForOwner: OwnerCleanup;
+      onConfigLoaded: (config: DaemonHostConfig) => void;
+    },
+  ) => OutboundClientLike;
 }
 
 /** Subset of `OutboundDaemonClient` the supervisor relies on; lets
@@ -130,7 +133,6 @@ function deriveOutboundBinding(config: { server_url: string; host_id: string }):
     host_id: config.host_id,
   };
 }
-
 
 export class OutboundSupervisor {
   private current: {
@@ -210,10 +212,7 @@ export class OutboundSupervisor {
     try {
       stat = statSync(configPath);
     } catch (err) {
-      return failure(
-        'path_not_found',
-        (err as NodeJS.ErrnoException).message,
-      );
+      return failure('path_not_found', (err as NodeJS.ErrnoException).message);
     }
     if (!stat.isFile()) {
       // Rejects directory, FIFO, socket, char/block device, and any
@@ -224,10 +223,7 @@ export class OutboundSupervisor {
       // down a working daemon" contract. `statSync` follows symlinks
       // so symlink-to-file is accepted; symlink-to-directory /
       // symlink-to-FIFO are rejected here (the target stat decides).
-      return failure(
-        'path_not_a_file',
-        `config_path is not a regular file: ${configPath}`,
-      );
+      return failure('path_not_a_file', `config_path is not a regular file: ${configPath}`);
     }
 
     // Parse + schema-validate the JSON. `readHostConfig` returns
@@ -248,10 +244,7 @@ export class OutboundSupervisor {
         allowInsecureRemote: probe.config.allow_insecure_remote === true,
       });
     } catch (err) {
-      return failure(
-        'invalid_server_url',
-        (err as Error).message,
-      );
+      return failure('invalid_server_url', (err as Error).message);
     }
 
     // ── At this point all validation has passed. Decide the action.
@@ -270,7 +263,12 @@ export class OutboundSupervisor {
       this.current.client.stop('config_path_changed');
       this.current = null;
       const next = this.spawnClient(configPath);
-      this.current = { configPath, fingerprint, binding: deriveOutboundBinding(probe.config), client: next };
+      this.current = {
+        configPath,
+        fingerprint,
+        binding: deriveOutboundBinding(probe.config),
+        client: next,
+      };
       next.start();
       this.deps.logger.info(
         {
@@ -287,7 +285,12 @@ export class OutboundSupervisor {
     // and recovery (e.g. supervisor restart after daemon process
     // restart). Tests for "same path, no client" exercise this arm.
     const fresh = this.spawnClient(configPath);
-    this.current = { configPath, fingerprint, binding: deriveOutboundBinding(probe.config), client: fresh };
+    this.current = {
+      configPath,
+      fingerprint,
+      binding: deriveOutboundBinding(probe.config),
+      client: fresh,
+    };
     fresh.start();
     this.deps.logger.info(
       {
@@ -370,9 +373,7 @@ export class OutboundSupervisor {
       // `parse_failed`. Reason string preserved in `message` for
       // diagnostics.
       const reason: HostOutboundReloadFailureReason =
-        probe.reason === 'missing' ||
-        probe.reason === 'not_a_file' ||
-        probe.reason === 'io_error'
+        probe.reason === 'missing' || probe.reason === 'not_a_file' || probe.reason === 'io_error'
           ? 'config_unreadable'
           : 'parse_failed';
       return reloadFailure(reason, probe.reason);
@@ -533,11 +534,6 @@ export class OutboundSupervisor {
       this.current.client.stop(reason);
       this.current = null;
     }
-  }
-
-  /** Test-only inspection. */
-  currentConfigPath(): string | null {
-    return this.current?.configPath ?? null;
   }
 
   private spawnClient(configPath: string): OutboundClientLike {

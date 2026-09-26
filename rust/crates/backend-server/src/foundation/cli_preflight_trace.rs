@@ -587,9 +587,8 @@ mod tests {
         );
     }
 
-    /// A faithful self-pin authority stand-in (the production rule is in
-    /// `runtime_credential.rs`): admit ONLY when the route `{aid}` equals the enrolled
-    /// agent. Proves the route sits BEHIND the credential layer.
+    /// Supplies a refusal to test the middleware-to-handler boundary, not the
+    /// production verifier's own subject-binding policy.
     #[derive(Clone)]
     struct PinnedAuthority {
         enrolled: AgentId,
@@ -612,7 +611,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_non_self_aid_is_401_before_the_handler_with_zero_reach() {
+    async fn an_authority_refusal_is_401_before_the_handler_with_zero_reach() {
         use axum::http::header::AUTHORIZATION;
 
         let sink = RecordingSink::default();
@@ -681,15 +680,17 @@ mod tests {
         // The one file for this boot; read its single line and address the flat top-level keys.
         let mut entries = tokio::fs::read_dir(dir.path()).await.unwrap();
         let path = entries.next_entry().await.unwrap().unwrap().path();
+        assert!(entries.next_entry().await.unwrap().is_none());
         let contents = tokio::fs::read_to_string(&path).await.unwrap();
-        let line = contents.lines().next().expect("one recorded line");
-        let object: Value = serde_json::from_str(line).unwrap();
+        let lines: Vec<_> = contents.lines().collect();
+        assert_eq!(lines.len(), 1, "one request records exactly one line");
+        let object: Value = serde_json::from_str(lines[0]).unwrap();
 
         assert_eq!(object["category"], "cli.preflight_failure");
         assert_eq!(object["agentId"], "a1");
         assert_eq!(object["conversationId"], "conv-9");
         assert_eq!(object["noun"], "message");
-        assert!(object["verb"].is_null(), "absent optional is explicit null");
+        assert_eq!(object.get("verb"), Some(&Value::Null));
         assert_eq!(
             object["flags_seen"],
             json!(["--target"]),
@@ -699,7 +700,7 @@ mod tests {
             object["error_subkind"], "unknown_flag",
             "the daily-report group-by key stays addressable"
         );
-        assert!(object["error_code"].is_null());
+        assert_eq!(object.get("error_code"), Some(&Value::Null));
         assert_eq!(object["duration_ms"], json!(12.5));
         assert_eq!(object["status"], "failure");
     }

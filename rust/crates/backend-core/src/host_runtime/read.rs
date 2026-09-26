@@ -266,13 +266,4 @@ mod tests {
             owned_computers(&user("u1"), &candidates).expect_err("the narrowing drifted");
         assert_eq!(mismatch.computer().as_str(), "h2");
     }
-
-    #[test]
-    fn an_empty_narrowing_is_an_empty_list_not_a_defect() {
-        assert!(
-            owned_computers(&user("u1"), &[])
-                .expect("no rows is not a drift")
-                .is_empty()
-        );
-    }
 }

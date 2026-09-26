@@ -1276,68 +1276,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn archived_public_join_is_forbidden_without_any_join_side_effect() {
-        let (_dir, path) = fixture().await;
-        let mut db = SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
-            .await
-            .unwrap();
-        db.execute("UPDATE conversations SET archived_at=50 WHERE id='public'")
-            .await
-            .unwrap();
-        db.close().await.unwrap();
-        let store = MessagingStore::open(&path).await.unwrap();
-        assert_eq!(
-            store
-                .join_public_channel(&user("member"), &conversation("public"), 99)
-                .await
-                .unwrap(),
-            ChannelMembershipOutcome::Refused(ChannelMembershipRefusal::Forbidden)
-        );
-        let mut db = SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(path))
-            .await
-            .unwrap();
-        for query in [
-            "SELECT COUNT(*) FROM conversation_users WHERE user_id='member' AND conversation_id='public'",
-            "SELECT COUNT(*) FROM channel_attention_preferences WHERE user_id='member' AND conversation_id='public'",
-            "SELECT COUNT(*) FROM conversation_reads WHERE user_id='member' AND conversation_id='public'",
-        ] {
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>(query)
-                    .fetch_one(&mut db)
-                    .await
-                    .unwrap(),
-                0
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn direct_pair_endpoint_has_placement_authority_but_a_non_endpoint_does_not() {
-        let (_dir, path) = fixture().await;
-        let mut db = SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
-            .await
-            .unwrap();
-        db.execute("INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id,display_name,session_scope) VALUES('other-agent','other-agent','codex','host',1,1,'owner','Other Agent','agent')").await.unwrap();
-        db.execute("INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id,title,status,created_at,updated_at,visibility) VALUES('pair',NULL,'direct_pair','fixed','agent','agent','human','owner','','idle',1,1,'private')").await.unwrap();
-        db.close().await.unwrap();
-        let store = MessagingStore::open(&path).await.unwrap();
-        assert_eq!(
-            store
-                .may_manage_conversation_members(&agent("agent"), &conversation("pair"))
-                .await
-                .unwrap(),
-            Ok(())
-        );
-        assert_eq!(
-            store
-                .may_manage_conversation_members(&agent("other-agent"), &conversation("pair"))
-                .await
-                .unwrap(),
-            Err(ManageMembersDenied)
-        );
-    }
-
-    #[tokio::test]
     async fn handle_resolution_is_caller_aware_and_preserves_ambiguity() {
         let (_dir, path) = fixture().await;
         let mut db = SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))

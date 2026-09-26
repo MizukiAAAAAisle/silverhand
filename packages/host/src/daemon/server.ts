@@ -45,20 +45,13 @@ import type { IntentDispatcher } from './dispatcher.js';
 import type { DaemonLogger } from './logger.js';
 import { resolveDeliveryOwner } from './supervisor-contract.js';
 import type { DeliveryOwnerContext } from './supervisor-contract.js';
-import {
-  OutputBackpressure,
-  type OutputBackpressureOptions,
-} from './output-backpressure.js';
+import { OutputBackpressure } from './output-backpressure.js';
 import { logBackpressure, logEvent } from './daemon-logging.js';
 
 export interface DaemonServerOptions {
   socketPath: string;
   dispatcher: IntentDispatcher;
   logger: DaemonLogger;
-  /** Override OutputBackpressure thresholds — production uses defaults
-   *  (4 MiB / 2 MiB); tests trim the cap to a few KiB to drive drop
-   *  paths without 4 MiB of fixture bytes. */
-  backpressure?: OutputBackpressureOptions;
 }
 
 export class DaemonServer {
@@ -83,8 +76,7 @@ export class DaemonServer {
     this.dispatcher = opts.dispatcher;
     this.logger = opts.logger;
     this.backpressure = new OutputBackpressure({
-      ...opts.backpressure,
-      logDrop: opts.backpressure?.logDrop ?? (entry => {
+      logDrop: (entry) => {
         // §3.4 logging contract — structured fields only via the
         // typed `logBackpressure` helper. Per-chunk drops are noisy
         // under sustained pressure; we only log the FIRST drop in a
@@ -98,25 +90,23 @@ export class DaemonServer {
           dropped_count: entry.dropped_count,
           bytes_dropped: entry.bytes_dropped,
         });
-      }),
+      },
       // Cindy `POiN_oGtyDjr3Sni` note — runtime_output_dropped used to
       // bypass logEvent because OutputBackpressure wrote it directly
       // to the socket from emitSummary. Wire the summary through the
       // structured event log so every emitted event (even per-socket
       // ones) shows up alongside broadcast events.
-      onSummaryEvent: opts.backpressure?.onSummaryEvent ?? (event => {
+      onSummaryEvent: (event) => {
         logEvent(this.logger, {
           event: event.event,
           conversationId: 'conversation_id' in event ? event.conversation_id : undefined,
           agent_id: 'agent_id' in event ? event.agent_id : undefined,
-          dropped_count:
-            'dropped_count' in event ? event.dropped_count : undefined,
-          bytes_dropped:
-            'bytes_dropped' in event ? event.bytes_dropped : undefined,
+          dropped_count: 'dropped_count' in event ? event.dropped_count : undefined,
+          bytes_dropped: 'bytes_dropped' in event ? event.bytes_dropped : undefined,
         });
-      }),
+      },
     });
-    this.server = new Server(socket => this.handleConnection(socket));
+    this.server = new Server((socket) => this.handleConnection(socket));
   }
 
   /** Bind the socket. Resolves once the server is listening. */
@@ -161,10 +151,7 @@ export class DaemonServer {
         'failed to chmod socket; peers may have wider access than intended',
       );
     }
-    this.logger.info(
-      { socketPath: this.socketPath },
-      'daemon socket listening',
-    );
+    this.logger.info({ socketPath: this.socketPath }, 'daemon socket listening');
   }
 
   /** Mark dispatcher as draining, broadcast event, close connections. */
@@ -175,7 +162,7 @@ export class DaemonServer {
     // (Cindy `POiN_oGtyDjr3Sni` note: previously this used a direct
     // socket.write loop and bypassed logEvent).
     this.broadcast(event);
-    await new Promise<void>(resolve => {
+    await new Promise<void>((resolve) => {
       this.server.close(() => resolve());
       for (const socket of this.liveSockets) {
         socket.end();
@@ -199,7 +186,7 @@ export class DaemonServer {
     this.socketOwners.set(socket, `control:${++this.ownerSeq}`);
     let buffer = '';
     socket.setEncoding('utf8');
-    socket.on('data', chunk => {
+    socket.on('data', (chunk) => {
       // setEncoding('utf8') gives string chunks, but Node's type defs
       // still type `data` as Buffer; coerce defensively.
       const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
@@ -214,7 +201,7 @@ export class DaemonServer {
         void this.handleLine(socket, line);
       }
     });
-    socket.on('error', err => {
+    socket.on('error', (err) => {
       this.logger.warn(
         { err: err.message, code: (err as NodeJS.ErrnoException).code },
         'connection error',
@@ -288,12 +275,10 @@ export class DaemonServer {
           kind: 'connection',
           action: 'frame_invalid',
           err: validated.success ? 'expected_request_frame' : 'schema_mismatch',
-          issue_count: validated.success
-            ? 0
-            : validated.error.errors.length,
+          issue_count: validated.success ? 0 : validated.error.errors.length,
           issue_paths: validated.success
             ? undefined
-            : validated.error.errors.map(e => e.path.join('.')),
+            : validated.error.errors.map((e) => e.path.join('.')),
         },
         'invalid frame; ignoring',
       );
@@ -364,7 +349,7 @@ export class DaemonServer {
       // `socket.destroyed` term here would restore + redeliver bodies
       // the peer already has (review round-3 note).
       try {
-        socket.write(encodeFrame(response, request.intent), err => {
+        socket.write(encodeFrame(response, request.intent), (err) => {
           handoff(err == null);
         });
       } catch (err) {
@@ -386,11 +371,6 @@ export class DaemonServer {
     }
   }
 
-  /** Test/debug helper: number of currently-open connections. */
-  liveConnectionCount(): number {
-    return this.liveSockets.size;
-  }
-
   /**
    * Send an unsolicited event to every live connection. Routed through
    * `OutputBackpressure.emit()` so `runtime_output` frames participate
@@ -408,10 +388,8 @@ export class DaemonServer {
       conversationId: 'conversation_id' in event ? event.conversation_id : undefined,
       agent_id: 'agent_id' in event ? event.agent_id : undefined,
       delivery_ids: 'delivery_ids' in event ? event.delivery_ids : undefined,
-      dropped_count:
-        'dropped_count' in event ? event.dropped_count : undefined,
-      bytes_dropped:
-        'bytes_dropped' in event ? event.bytes_dropped : undefined,
+      dropped_count: 'dropped_count' in event ? event.dropped_count : undefined,
+      bytes_dropped: 'bytes_dropped' in event ? event.bytes_dropped : undefined,
     });
     for (const socket of this.liveSockets) {
       this.backpressure.emit(socket, event);

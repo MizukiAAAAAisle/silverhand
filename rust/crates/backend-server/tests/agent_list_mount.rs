@@ -1,16 +1,18 @@
-//! Composition-root MOUNT proof for `GET /api/agents` (#task:2197, batch 5).
+//! Perimeter/adapter composition proof for `GET /api/agents` (#task:2197, batch 5).
 //!
 //! `agent_list_contract.rs` already drives the real `SqliteAgentListColdRead` through
 //! the real `identity_access::agent_list::router` and pins the wire bytes — but it injects
 //! the `UserId` extension by hand, standing in for the perimeter. What no such test can
-//! show is that the route is actually MOUNTED behind the product's human perimeter:
+//! show is how the route behaves behind the product's human perimeter:
 //! that an anonymous caller is refused BEFORE the port is touched, that a real seeded
 //! session resolves to the viewer the body reads for, that a stranger's session yields
 //! the empty array with no existence oracle, and that the path answers `GET` only.
 //!
 //! So this composes the exact production seam — `require_human_session` over the real
 //! `HumanSessionAuthenticator`/`SqliteSessionStore`, wrapping the real adapter+router —
-//! and drives it end to end over real seeded `auth_sessions`. The adapter is wrapped in
+//! and drives it end to end over real seeded `auth_sessions`. This harness builds
+//! that composition itself; application-root mounting is covered by the app suite.
+//! The adapter is wrapped in
 //! a counting decorator ONLY so "the anonymous arm reads nothing" is a hard assertion;
 //! every admitted read still executes the real `creator UNION relation` SQL.
 //!

@@ -1,17 +1,5 @@
 import { HostClientError, type HostClient } from "@silverhand/host";
 
-export interface WaitForDaemonGenerationOptions {
-  /** Hard deadline for the wait, in ms. Default 5000. The supervisor's
-   *  attach-watchdog has its own freshness budget (5s by default); this
-   *  gate is upstream of that, so it should resolve well within. The
-   *  timer is armed before `client.connect()` is awaited so a stuck
-   *  HostClient reconnect loop cannot bypass the deadline. */
-  timeoutMs?: number;
-  /** Test seam — defaults to `setTimeout` + `clearTimeout`. Tests use
-   *  a fake clock so the timeout case is deterministic. */
-  setTimer?: (cb: () => void, ms: number) => { clear(): void };
-}
-
 export type WaitForDaemonGenerationResult =
   | { ok: true }
   | { ok: false; reason: "timeout" | "client_closed" | "connect_failed"; error?: Error };
@@ -19,11 +7,7 @@ export type WaitForDaemonGenerationResult =
 export function waitForDaemonGeneration(
   client: HostClient,
   expectedInstanceId: string,
-  opts: WaitForDaemonGenerationOptions = {},
 ): Promise<WaitForDaemonGenerationResult> {
-  const timeoutMs = opts.timeoutMs ?? 5_000;
-  const setTimer = opts.setTimer ?? defaultSetTimer;
-
   return new Promise<WaitForDaemonGenerationResult>((resolve) => {
     let settled = false;
     let unsubscribe: (() => void) | null = null;
@@ -31,7 +15,7 @@ export function waitForDaemonGeneration(
     const settle = (result: WaitForDaemonGenerationResult): void => {
       if (settled) return;
       settled = true;
-      timer.clear();
+      clearTimeout(timer);
       unsubscribe?.();
       resolve(result);
     };
@@ -40,9 +24,10 @@ export function waitForDaemonGeneration(
     // own reconnect loop wedged on, say, EAGAIN-forever) cannot bypass
     // the hard deadline. Pre-this-fix the timer only armed after
     // connect() resolved, defeating the helper's own contract.
-    const timer = setTimer(() => {
+    const timer = setTimeout(() => {
       settle({ ok: false, reason: "timeout" });
-    }, timeoutMs);
+    }, 5_000);
+    timer.unref?.();
 
     // Subscribe to reconnect BEFORE kicking connect() so any
     // reconnect event that fires during the connect path itself is
@@ -94,10 +79,4 @@ export function waitForDaemonGeneration(
       },
     );
   });
-}
-
-function defaultSetTimer(cb: () => void, ms: number): { clear(): void } {
-  const t = setTimeout(cb, ms);
-  t.unref?.();
-  return { clear: () => clearTimeout(t) };
 }

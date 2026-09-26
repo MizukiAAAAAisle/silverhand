@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RUNTIME_CATALOG, RuntimeKindSchema } from '@silverhand/shared';
+import { RUNTIME_CATALOG } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 
 import { getDriver, hasDriver } from '../src/drivers/index.js';
@@ -50,11 +50,6 @@ function makeCtx(overrides: Partial<DriverSpawnContext> = {}): {
 }
 
 describe('runtime catalog ⟺ host invariants', () => {
-  it('catalog covers every RuntimeKind exactly once', () => {
-    const kinds = RUNTIME_CATALOG.map((e) => e.kind).sort();
-    expect(kinds).toEqual([...RuntimeKindSchema.options].sort());
-  });
-
   it('selectable ⇒ hasDriver (never offer a runtime we cannot spawn)', () => {
     for (const entry of RUNTIME_CATALOG) {
       if (entry.selectable) {

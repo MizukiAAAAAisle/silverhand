@@ -35,8 +35,6 @@ export interface RuntimeUpgradeMonitor {
   onAdvertisement(advertised: DesktopApiAdvertisement | undefined): void;
   /** Re-arm after the pair is compatible again (new build / server rollback). */
   reset(): void;
-  /** Test-only visibility. */
-  isLatched(): boolean;
 }
 
 export function createRuntimeUpgradeMonitor(
@@ -109,9 +107,6 @@ export function createRuntimeUpgradeMonitor(
     },
     reset() {
       latched = false;
-    },
-    isLatched() {
-      return latched;
     },
   };
 }

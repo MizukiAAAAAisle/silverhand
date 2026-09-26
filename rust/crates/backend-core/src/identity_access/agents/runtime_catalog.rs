@@ -125,7 +125,7 @@ pub struct DetectedRuntime {
 ///
 /// ```compile_fail
 /// use silverhand_backend_core::identity_access::agents::runtime_catalog::{RuntimeCatalog, RuntimeDetection};
-/// // Three answers for five offered runtimes — there is no arm of the type that
+/// // An incomplete detection pass — there is no arm of the type that
 /// // could say which one was skipped, so this must not build a catalogue.
 /// let _ = RuntimeCatalog::from_detections([
 ///     RuntimeDetection::Absent,
@@ -142,13 +142,9 @@ pub struct DetectedRuntime {
 /// use silverhand_backend_core::identity_access::agents::runtime_catalog::{
 ///     RuntimeCatalog, RuntimeDetection, SELECTABLE_RUNTIMES,
 /// };
-/// let catalog = RuntimeCatalog::from_detections([
-///     RuntimeDetection::Absent,
-///     RuntimeDetection::Absent,
-///     RuntimeDetection::Absent,
-///     RuntimeDetection::Absent,
-///     RuntimeDetection::Absent,
-/// ]);
+/// let catalog = RuntimeCatalog::from_detections(
+///     SELECTABLE_RUNTIMES.map(|_| RuntimeDetection::Absent),
+/// );
 /// let listed: Vec<_> = catalog.entries().iter().map(|entry| entry.kind).collect();
 /// assert_eq!(listed, SELECTABLE_RUNTIMES.to_vec());
 /// ```

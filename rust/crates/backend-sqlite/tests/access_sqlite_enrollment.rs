@@ -190,7 +190,7 @@ async fn re_enrolling_is_idempotent_and_keeps_the_original_join_time() {
     let second = add_workspace_agent_member(
         &store,
         &store,
-        &clock(),
+        &FixedClock(JOIN_TIME_MS + 1000),
         &human(OWNER),
         WorkspaceId::parse(WORKSPACE).unwrap(),
         AgentId::parse(AGENT).unwrap(),
@@ -206,6 +206,16 @@ async fn re_enrolling_is_idempotent_and_keeps_the_original_join_time() {
     let mut probe = open_probe(&path).await;
     assert_eq!(membership_count(&mut probe).await, 1);
     assert_eq!(capability_tokens(&mut probe).await.len(), 11);
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT joined_at FROM workspace_members WHERE workspace_id = ? AND agent_id = ?",
+    )
+    .bind(WORKSPACE)
+    .bind(AGENT)
+    .fetch_one(&mut probe)
+    .await
+    .unwrap();
+    assert_eq!(stored, JOIN_TIME_MS);
+    assert_eq!(second.joined_at_ms, stored);
 }
 
 /// Gate 3 ①: two concurrent first-enrollments of the same key serialize on the
@@ -237,7 +247,7 @@ async fn concurrent_first_enrollments_create_the_membership_exactly_once() {
             add_workspace_agent_member(
                 &store,
                 &store,
-                &clock(),
+                &FixedClock(JOIN_TIME_MS + 1000),
                 &human(OWNER),
                 WorkspaceId::parse(WORKSPACE).unwrap(),
                 AgentId::parse(AGENT).unwrap(),
@@ -256,6 +266,16 @@ async fn concurrent_first_enrollments_create_the_membership_exactly_once() {
 
     let mut probe = open_probe(&path).await;
     assert_eq!(membership_count(&mut probe).await, 1);
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT joined_at FROM workspace_members WHERE workspace_id = ? AND agent_id = ?",
+    )
+    .bind(WORKSPACE)
+    .bind(AGENT)
+    .fetch_one(&mut probe)
+    .await
+    .unwrap();
+    assert!([JOIN_TIME_MS, JOIN_TIME_MS + 1000].contains(&stored));
+    assert_eq!(first.joined_at_ms, stored);
     assert_eq!(
         capability_tokens(&mut probe).await.len(),
         11,
@@ -297,7 +317,7 @@ async fn re_enrollment_never_re_widens_a_narrowed_capability_set() {
     let re_enrolled = add_workspace_agent_member(
         &store,
         &store,
-        &clock(),
+        &FixedClock(JOIN_TIME_MS + 1000),
         &human(OWNER),
         WorkspaceId::parse(WORKSPACE).unwrap(),
         AgentId::parse(AGENT).unwrap(),

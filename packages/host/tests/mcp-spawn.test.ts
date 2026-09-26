@@ -1,12 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-  chmodSync,
-  readdirSync,
-} from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildProfileMcpSpawnArgs } from '../src/daemon/mcp-spawn.js';
@@ -67,12 +60,21 @@ beforeEach(() => {
 
 describe('buildProfileMcpSpawnArgs', () => {
   it('Pi preserves profile MCP bytes without copying credentials or injecting configuration', async () => {
-    const raw = JSON.stringify({ mcpServers: { private: { command: 'fixture', env: { TOKEN: 'fixture-secret' } } } });
+    const raw = JSON.stringify({
+      mcpServers: { private: { command: 'fixture', env: { TOKEN: 'fixture-secret' } } },
+    });
     const path = join(homeDir, 'mcp.json');
     writeFileSync(path, raw);
     const { logger, warns } = captureLogger();
     const before = readdirSync(spawnDir);
-    const result = await buildProfileMcpSpawnArgs({ runtimeKind: 'pi', agentHomeDir: homeDir, spawnDir, systemPromptPath, agentId: AGENT_ID, logger });
+    const result = await buildProfileMcpSpawnArgs({
+      runtimeKind: 'pi',
+      agentHomeDir: homeDir,
+      spawnDir,
+      systemPromptPath,
+      agentId: AGENT_ID,
+      logger,
+    });
     expect(result).toEqual({ args: [] });
     expect(readFileSync(path, 'utf8')).toBe(raw);
     expect(readdirSync(spawnDir)).toEqual(before);
@@ -166,9 +168,7 @@ describe('buildProfileMcpSpawnArgs', () => {
       'silverhand_profile__fs',
       'silverhand_profile__remote',
     ]);
-    expect(written.mcpServers.silverhand_profile__remote.url).toBe(
-      'https://example.com/mcp',
-    );
+    expect(written.mcpServers.silverhand_profile__remote.url).toBe('https://example.com/mcp');
   });
 
   it('codex: emits one -c mcp_servers.<prefixed> override per server', async () => {
@@ -191,16 +191,16 @@ describe('buildProfileMcpSpawnArgs', () => {
       logger,
     });
     // Two servers → two `-c <override>` pairs.
-    const flags = r.args!.filter(a => a === '-c');
+    const flags = r.args!.filter((a) => a === '-c');
     expect(flags).toHaveLength(2);
     expect(r.args).toHaveLength(4);
-    const overrides = r.args!.filter(a => a !== '-c');
+    const overrides = r.args!.filter((a) => a !== '-c');
     for (const o of overrides) {
       expect(o.startsWith('mcp_servers.silverhand_profile__')).toBe(true);
     }
     // The remote server is projected to Codex native keys (url, no
     // canonical type/headers leakage). Cindy Blocker 2.
-    const remote = overrides.find(o => o.includes('__remote'))!;
+    const remote = overrides.find((o) => o.includes('__remote'))!;
     expect(remote).toContain('url = "https://example.com/mcp"');
     expect(remote).not.toContain('type =');
     expect(remote).not.toContain('headers =');
@@ -239,27 +239,29 @@ describe('buildProfileMcpSpawnArgs', () => {
     expect(warns.length).toBeGreaterThan(0);
   });
 
-  it('hard read error (unreadable file): loud, returns []', async () => {
-    if (process.getuid?.() === 0) return; // root bypasses perms
-    const filePath = join(homeDir, 'mcp.json');
-    writeFileSync(filePath, JSON.stringify({ mcpServers: {} }));
-    chmodSync(filePath, 0o000);
-    try {
-      const { logger, warns } = captureLogger();
-      const r = await buildProfileMcpSpawnArgs({
-        runtimeKind: 'claude',
-        agentHomeDir: homeDir,
-        spawnDir,
-        systemPromptPath,
-        agentId: AGENT_ID,
-        logger,
-      });
-      expect(r.args).toEqual([]);
-      expect(warns.length).toBeGreaterThan(0);
-    } finally {
-      chmodSync(filePath, 0o644);
-    }
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    'hard read error (unreadable file): loud, returns []',
+    async () => {
+      const filePath = join(homeDir, 'mcp.json');
+      writeFileSync(filePath, JSON.stringify({ mcpServers: {} }));
+      chmodSync(filePath, 0o000);
+      try {
+        const { logger, warns } = captureLogger();
+        const r = await buildProfileMcpSpawnArgs({
+          runtimeKind: 'claude',
+          agentHomeDir: homeDir,
+          spawnDir,
+          systemPromptPath,
+          agentId: AGENT_ID,
+          logger,
+        });
+        expect(r.args).toEqual([]);
+        expect(warns.length).toBeGreaterThan(0);
+      } finally {
+        chmodSync(filePath, 0o644);
+      }
+    },
+  );
 
   it('opencode: injects the standing prompt into OPENCODE_CONFIG_CONTENT even with NO mcp.json', async () => {
     const { logger, warns } = captureLogger();

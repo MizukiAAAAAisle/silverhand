@@ -11,6 +11,6 @@ describe('DirectPairListResponse shared Rust migration fixture', () => {
   });
 
   it('keeps the complete face closed to pagination metadata', () => {
-    expect(Object.keys(fixture.authority_case.response)).toEqual(['direct_pairs']);
+    expect(Object.keys(DirectPairListResponseSchema.shape)).toEqual(['direct_pairs']);
   });
 });

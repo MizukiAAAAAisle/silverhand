@@ -302,123 +302,23 @@ pub trait SendMessageUnitOfWork {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        ops::Range,
-        sync::atomic::{AtomicUsize, Ordering},
-    };
-
     use super::*;
-    use crate::conversation_messaging::messaging::PrincipalKind;
-
-    /// An authority that grants every agent the body addressed, so tests that are
-    /// not about authorization do not have to model it.
-    struct GrantsEveryAddressedAgent;
-
-    impl DirectLineAuthority for GrantsEveryAddressedAgent {
-        async fn direct_lines(
-            &self,
-            _author: &UserId,
-            addressed: &AddressedPrincipals,
-        ) -> Result<Vec<AgentId>, PersistenceFailure> {
-            Ok(addressed
-                .iter()
-                .filter(|reference| reference.kind() == PrincipalKind::Agent)
-                .map(|reference| AgentId::parse(reference.handle().as_str()).unwrap())
-                .collect())
-        }
-    }
-
-    /// A stand-in position rule: every `<…>` run, wherever it sits. The product
-    /// rule is Markdown structure — an autolink in prose, never quoted syntax —
-    /// and lives outside this crate.
-    struct EveryBracketedRun;
-
-    impl ReferencePositions for EveryBracketedRun {
-        fn autolink_spans(&self, content: &MessageContent) -> Vec<Range<usize>> {
-            let body = content.as_str();
-            let mut spans = Vec::new();
-            let mut cursor = 0;
-            while let Some(open) = body[cursor..].find('<') {
-                let open = cursor + open;
-                let Some(close) = body[open..].find('>') else {
-                    break;
-                };
-                let close = open + close;
-                spans.push(open..close + 1);
-                cursor = close + 1;
-            }
-            spans
-        }
-    }
-
-    fn conversation() -> ConversationId {
-        ConversationId::parse("conv-1").unwrap()
-    }
-
-    fn draft(content: MessageContent) -> SendMessageDraft {
-        SendMessageDraft {
-            source_conversation: conversation(),
-            target_conversation: conversation(),
-            actor: SendActor::Agent(AgentId::parse("agent-1").unwrap()),
-            content,
-            destination: SendDestination::MainLine,
-            attachment_refs: Vec::new(),
-            freshness_bypass: false,
-        }
-    }
-
-    /// A unit of work that records whether it was ever asked to write.
-    #[derive(Default)]
-    struct CountingUnitOfWork {
-        calls: AtomicUsize,
-    }
-
-    impl SendMessageUnitOfWork for CountingUnitOfWork {
-        async fn send_message(
-            &self,
-            _command: SendMessage,
-        ) -> Result<SendMessageOutcome, SendMessageError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Err(ConversationRefusal::NotFound.into())
-        }
-    }
 
     #[test]
     fn the_content_bound_counts_utf8_bytes() {
-        let full = "汉".repeat(MAX_MESSAGE_CONTENT_BYTES / 3);
-
         assert_eq!(MessageContent::parse("汉").unwrap().byte_length(), 3);
-        assert!(MessageContent::parse(&full).is_ok());
-        assert!(MessageContent::parse("a".repeat(MAX_MESSAGE_CONTENT_BYTES)).is_ok());
-        // Three bytes per character but one UTF-16 code unit: counting the wrong
-        // unit would admit three times the intended size.
-        let over = MessageContent::parse("汉".repeat(MAX_MESSAGE_CONTENT_BYTES)).unwrap_err();
-        assert_eq!(over.actual_bytes, MAX_MESSAGE_CONTENT_BYTES * 3);
-        assert_eq!(over.max_bytes, MAX_MESSAGE_CONTENT_BYTES);
-        assert!(MessageContent::parse("a".repeat(MAX_MESSAGE_CONTENT_BYTES + 1)).is_err());
-    }
-
-    /// The counter-example for the size invariant: an oversized send cannot be
-    /// expressed, so no caller can carry one to the write unit.
-    #[tokio::test]
-    async fn oversized_content_never_reaches_the_write_unit() {
-        let unit = CountingUnitOfWork::default();
-        let oversized = "a".repeat(MAX_MESSAGE_CONTENT_BYTES + 1);
-
-        if let Ok(content) = MessageContent::parse(&oversized) {
-            let _ = unit
-                .send_message(
-                    SendMessage::prepare(
-                        draft(content),
-                        &EveryBracketedRun,
-                        &GrantsEveryAddressedAgent,
-                    )
-                    .await
-                    .unwrap(),
-                )
-                .await;
+        for content in ["a".repeat(65_536), "汉".repeat(21_845)] {
+            assert!(MessageContent::parse(content).is_ok());
         }
-
-        assert_eq!(unit.calls.load(Ordering::SeqCst), 0);
+        for (content, actual_bytes) in [("a".repeat(65_537), 65_537), ("汉".repeat(21_846), 65_538)]
+        {
+            assert_eq!(
+                MessageContent::parse(content),
+                Err(ContentTooLong {
+                    actual_bytes,
+                    max_bytes: 65_536,
+                })
+            );
+        }
     }
 }

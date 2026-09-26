@@ -42,19 +42,16 @@ mod tests {
 
     #[test]
     fn exact_binary64_boundaries_are_admitted_in_both_directions() {
-        for value in [JsSafeInteger::MIN, -1, 0, 1, JsSafeInteger::MAX] {
+        for value in [-9_007_199_254_740_991, -1, 0, 1, 9_007_199_254_740_991] {
             assert_eq!(JsSafeInteger::new(value).unwrap().get(), value);
         }
         for value in [
-            JsSafeInteger::MIN - 1,
-            JsSafeInteger::MAX + 1,
+            -9_007_199_254_740_992,
+            9_007_199_254_740_992,
             i64::MIN,
             i64::MAX,
         ] {
-            assert_eq!(
-                JsSafeInteger::new(value),
-                Err(JsSafeIntegerOutOfRange(value))
-            );
+            assert_eq!(JsSafeInteger::new(value).unwrap_err().value(), value);
         }
     }
 }

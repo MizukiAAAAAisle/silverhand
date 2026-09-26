@@ -324,7 +324,9 @@ fn declarations_of(name: &str) -> Vec<(String, &'static str)> {
         .collect()
 }
 
-/// The six spellings the runtime vocabulary carries on the wire.
+/// The original six-token signature of a duplicate runtime authority.
+/// This conservative guard also catches old copies after new runtimes are added;
+/// current wire membership is owned by RuntimeKind and its cross-language tests.
 const RUNTIME_TOKENS: [&str; 6] = ["claude", "codex", "cursor", "gemini", "qoder", "opencode"];
 
 /// Whether this source knows the WHOLE runtime set — the shape a second authority
@@ -490,13 +492,17 @@ fn no_public_use_opens_a_second_path_to_a_watched_name() {
                 PublicPath::Glob("mutation::*".to_owned())
             ),
             (
+                "crates/backend-core/src/conversation_messaging/messaging/collaboration/human_search.rs".to_owned(),
+                PublicPath::Glob("identities::*".to_owned())
+            ),
+            (
                 "crates/backend-core/src/conversation_messaging/messaging/mod.rs".to_owned(),
                 PublicPath::Name("NotificationId".to_owned())
             ),
         ],
         "each public path to a watched name has to be one of these: the messaging facade \
-         publishing the private identity module, and five globs re-exporting the halves of \
-         their own module, none of which declares a watched name"
+         publishing the private identity module, and reviewed local globs; none of \
+         their targets publicly exports a watched name"
     );
 }
 

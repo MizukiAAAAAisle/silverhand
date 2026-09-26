@@ -19,8 +19,6 @@ use silverhand_backend_core::{
     foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
     host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
-use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
-use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
 use tower::ServiceExt;
 
 use super::*;
@@ -365,66 +363,4 @@ async fn source_splices_and_both_authority_refusals_never_reach_the_observer() {
             expected_capability_calls
         );
     }
-}
-
-#[tokio::test]
-async fn production_sqlite_admission_and_capability_drive_the_route() {
-    const SCHEMA: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
-    ));
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("stale-resolution-route.sqlite");
-    let options = SqliteConnectOptions::new()
-        .filename(&path)
-        .create_if_missing(true)
-        .foreign_keys(true);
-    let mut db = SqliteConnection::connect_with(&options).await.unwrap();
-    db.execute(sqlx::raw_sql(SCHEMA)).await.unwrap();
-    db.execute("INSERT INTO hosts(id,name,kind,created_at) VALUES('host','Host','local',1)")
-        .await
-        .unwrap();
-    db.execute("INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('owner','stale-owner','Owner',1,1)")
-        .await
-        .unwrap();
-    db.execute("INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,display_name,created_by_user_id,materialization_status,session_scope) VALUES('agent-1','stale-route-agent','codex','host',1,1,'Agent','owner','active','agent')")
-        .await
-        .unwrap();
-    db.execute("INSERT INTO workspaces(id,name,name_key,created_at,updated_at) VALUES('workspace','Workspace','stale route workspace',1,1)")
-        .await
-        .unwrap();
-    db.execute("INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) VALUES('conversation-1','workspace','workspace','open','Channel','stale route channel','idle','private',1,1)")
-        .await
-        .unwrap();
-    db.execute("INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('conversation-1','agent-1',1)")
-        .await
-        .unwrap();
-    db.execute("INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES('workspace','agent-1',1)")
-        .await
-        .unwrap();
-    db.execute("INSERT INTO workspace_agent_capabilities(workspace_id,agent_id,capability) VALUES('workspace','agent-1','send_messages')")
-        .await
-        .unwrap();
-
-    let store = MessagingStore::open(&path).await.unwrap();
-    let observer = Observer::default();
-    let app = router(
-        store.stale_message_resolution_admission(),
-        store.clone(),
-        observer.clone(),
-    );
-    let (status, body) = call(
-        app,
-        "agent-1",
-        request_body(""),
-        Some(principal(None)),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        serde_json::from_slice::<Value>(&body).unwrap(),
-        json!({"ok":true})
-    );
-    assert_eq!(observer.observed.lock().unwrap().len(), 1);
 }

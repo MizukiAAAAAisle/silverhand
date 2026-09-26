@@ -25,15 +25,6 @@ impl ActivityRetention {
         hub: ScopeEventHub,
         clock: C,
     ) -> Result<Self, crate::StartupError> {
-        Self::start_with_interval(store, hub, clock, Duration::from_secs(60)).await
-    }
-
-    pub(super) async fn start_with_interval<C: ProcessClock>(
-        store: MessagingStore,
-        hub: ScopeEventHub,
-        clock: C,
-        wake_cap: Duration,
-    ) -> Result<Self, crate::StartupError> {
         sweep(&store, &hub, clock.now_unix_millis()).await?;
         let (stop, mut stopped) = watch::channel(false);
         let task = tokio::spawn(async move {
@@ -42,8 +33,8 @@ impl ActivityRetention {
                 // Recheck wall time on bounded wakes, including clock adjustments.
                 // Only reaching the calendar deadline performs a sweep.
                 let now = clock.now_unix_millis();
-                let delay =
-                    Duration::from_millis(deadline.saturating_sub(now).max(1) as u64).min(wake_cap);
+                let delay = Duration::from_millis(deadline.saturating_sub(now).max(1) as u64)
+                    .min(Duration::from_secs(60));
                 tokio::select! {
                     biased;
                     _ = stopped.changed() => break,

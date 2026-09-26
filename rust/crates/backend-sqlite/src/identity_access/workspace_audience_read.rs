@@ -141,14 +141,15 @@ INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES ('ws-1'
     }
 
     #[tokio::test]
-    async fn enumerates_only_the_human_members_ordered_by_id() {
+    async fn enumerates_only_the_human_members() {
         let (_dir, adapter) = open_seeded().await;
-        let members = adapter
+        let mut members = adapter
             .human_member_ids(&WorkspaceId::parse("ws-1").unwrap())
             .await
             .unwrap();
         // The agent in `workspace_members` is NOT in this audience; only the three
-        // `workspace_users` rows, ordered by user_id.
+        // `workspace_users` rows. Audience ordering is not a consumer contract.
+        members.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         assert_eq!(
             members,
             vec![

@@ -43,14 +43,6 @@ pub enum CancelTarget {
     Workspace { manage_schedules: bool },
 }
 
-/// The facts the cancel policy grades: the schedule's own owner (for the
-/// owner-bind) and its resolved target.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ScheduleCancelFacts {
-    pub owner_agent_id: AgentId,
-    pub target: CancelTarget,
-}
-
 /// The owner-bind verdict, decided from the schedule's own `owner_agent_id`
 /// ALONE — before any target or capability fact is read.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,22 +51,11 @@ pub enum OwnerBind {
     NotOwner,
 }
 
-/// The policy verdict for a schedule that EXISTS: proceed to the CAS, or refuse.
-/// Existence, terminal-state (CAS miss), and the resulting view are the
-/// adapter's concern; this decides only owner-bind and capability.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CancelDecision {
-    Proceed,
-    NotOwner,
-    CapabilityDenied,
-}
-
 /// Owner-bind, the FIRST gate, decided from the schedule's own owner alone. The
 /// adapter runs this immediately after loading the schedule row and BEFORE it
 /// reads any target/capability fact, so a schedule the caller does not own is
 /// refused without consulting — and without being able to fault on — its
-/// target's placement or `manage_schedules` data. This is the SOLE owner rule;
-/// [`evaluate_cancel`] delegates to it rather than re-comparing.
+/// target's placement or `manage_schedules` data. This is the sole owner rule.
 pub fn bind_owner(expected_owner: &AgentId, schedule_owner: &AgentId) -> OwnerBind {
     if schedule_owner == expected_owner {
         OwnerBind::Proceed
@@ -107,22 +88,6 @@ pub fn evaluate_capability(target: &CancelTarget) -> CapabilityVerdict {
         CancelTarget::Workspace {
             manage_schedules: false,
         } => CapabilityVerdict::Denied,
-    }
-}
-
-/// Grade a loaded schedule against the caller as ONE pure composition: owner-bind
-/// first ([`bind_owner`]), then the capability gate ([`evaluate_capability`]) for
-/// a workspace-resident target. The SQLite adapter does NOT call this; it invokes
-/// the two stages separately so the owner gate physically precedes the
-/// target/capability read (a fault on target facts can never mask a `NotOwner`).
-/// This composition documents the whole policy and backs the pure tests.
-pub fn evaluate_cancel(expected_owner: &AgentId, facts: &ScheduleCancelFacts) -> CancelDecision {
-    match bind_owner(expected_owner, &facts.owner_agent_id) {
-        OwnerBind::NotOwner => CancelDecision::NotOwner,
-        OwnerBind::Proceed => match evaluate_capability(&facts.target) {
-            CapabilityVerdict::Proceed => CancelDecision::Proceed,
-            CapabilityVerdict::Denied => CancelDecision::CapabilityDenied,
-        },
     }
 }
 
@@ -159,110 +124,4 @@ pub trait ScheduleCancelUnitOfWork {
         schedule_id: &ScheduleId,
         owner: &AgentId,
     ) -> impl Future<Output = Result<ScheduleCancelOutcome, PersistenceFailure>> + Send;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn agent(id: &str) -> AgentId {
-        AgentId::parse(id).expect("agent id")
-    }
-
-    #[test]
-    fn a_schedule_owned_by_another_agent_is_refused_before_capability() {
-        let facts = ScheduleCancelFacts {
-            owner_agent_id: agent("owner"),
-            // Even a granted workspace does not rescue a non-owner.
-            target: CancelTarget::Workspace {
-                manage_schedules: true,
-            },
-        };
-        assert_eq!(
-            evaluate_cancel(&agent("someone-else"), &facts),
-            CancelDecision::NotOwner
-        );
-    }
-
-    #[test]
-    fn the_owner_needs_manage_schedules_for_a_workspace_target() {
-        let denied = ScheduleCancelFacts {
-            owner_agent_id: agent("owner"),
-            target: CancelTarget::Workspace {
-                manage_schedules: false,
-            },
-        };
-        assert_eq!(
-            evaluate_cancel(&agent("owner"), &denied),
-            CancelDecision::CapabilityDenied
-        );
-
-        let granted = ScheduleCancelFacts {
-            owner_agent_id: agent("owner"),
-            target: CancelTarget::Workspace {
-                manage_schedules: true,
-            },
-        };
-        assert_eq!(
-            evaluate_cancel(&agent("owner"), &granted),
-            CancelDecision::Proceed
-        );
-    }
-
-    #[test]
-    fn an_owner_may_always_clean_up_a_targetless_schedule() {
-        // A deleted / workspace-less target skips the capability gate entirely —
-        // the owner-bind is the only guard.
-        let facts = ScheduleCancelFacts {
-            owner_agent_id: agent("owner"),
-            target: CancelTarget::OwnerCleanup,
-        };
-        assert_eq!(
-            evaluate_cancel(&agent("owner"), &facts),
-            CancelDecision::Proceed
-        );
-    }
-
-    #[test]
-    fn bind_owner_decides_from_the_owner_alone() {
-        // The SOLE owner rule: identity match, no target input at all.
-        assert_eq!(
-            bind_owner(&agent("owner"), &agent("owner")),
-            OwnerBind::Proceed
-        );
-        assert_eq!(
-            bind_owner(&agent("someone-else"), &agent("owner")),
-            OwnerBind::NotOwner
-        );
-    }
-
-    #[test]
-    fn evaluate_capability_is_a_closed_two_verdict_gate() {
-        // Ownership is upstream; this stage only grades the capability axis, and
-        // its verdict set is closed to Proceed/Denied. The exhaustive match below
-        // has NO wildcard — a new arm would fail to compile here, which is the
-        // compile-time guard against a fail-open capability stage.
-        for (target, expected) in [
-            (CancelTarget::OwnerCleanup, CapabilityVerdict::Proceed),
-            (
-                CancelTarget::Workspace {
-                    manage_schedules: true,
-                },
-                CapabilityVerdict::Proceed,
-            ),
-            (
-                CancelTarget::Workspace {
-                    manage_schedules: false,
-                },
-                CapabilityVerdict::Denied,
-            ),
-        ] {
-            let verdict = evaluate_capability(&target);
-            let same = match verdict {
-                CapabilityVerdict::Proceed => matches!(expected, CapabilityVerdict::Proceed),
-                CapabilityVerdict::Denied => matches!(expected, CapabilityVerdict::Denied),
-            };
-            assert!(same, "{target:?} must grade to {expected:?}");
-        }
-    }
 }

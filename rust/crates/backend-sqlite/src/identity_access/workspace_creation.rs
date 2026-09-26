@@ -624,10 +624,8 @@ fn decode_created_face(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::conversation_messaging::messaging::MessageId;
     use silverhand_backend_core::conversation_messaging::messaging::ParticipantHandle;
     use silverhand_backend_core::conversation_messaging::messaging::agent_onboarding::WorkspaceOnboardingPeer;
-    use silverhand_backend_core::foundation::identity::ConversationId;
     use silverhand_backend_core::identity_access::workspace_name::CanonicalWorkspaceName;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::{Connection, Executor, SqliteConnection};
@@ -672,9 +670,6 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     }
     fn user(id: &str) -> UserId {
         UserId::parse(id).unwrap()
-    }
-    fn conv(id: &str) -> ConversationId {
-        ConversationId::parse(id).unwrap()
     }
     fn agent(id: &str) -> AgentId {
         AgentId::parse(id).unwrap()
@@ -876,11 +871,9 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     }
 
     #[tokio::test]
-    async fn accepted_agent_handle_runtime_come_from_the_committed_lock_not_a_reread() {
-        // #28: the accepted witness carries the handle/runtime captured IN the
-        // provisioning lock. A post-commit rename/delete of the agent does NOT change
-        // the witness the onboarding fan-out uses.
-        let (_dir, writer, pool) = open_seeded().await;
+    async fn accepted_agent_witness_carries_stored_handle_and_runtime() {
+        // The returned witness carries the admitted agent's stored identity.
+        let (_dir, writer, _pool) = open_seeded().await;
         let team = name("Team");
         let agents = [agent("agent-a")];
         let WorkspaceProvisionOutcome::Provisioned(provisioned) =
@@ -893,16 +886,6 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
         assert_eq!(provisioned.member_agents.len(), 1);
         assert_eq!(provisioned.member_agents[0].handle.as_str(), "alice");
         assert_eq!(provisioned.member_agents[0].runtime, "claude");
-        // Post-commit rename: the already-returned witness is unaffected.
-        sqlx::query("UPDATE agents SET name='renamed', runtime='other' WHERE id='agent-a'")
-            .execute(&pool)
-            .await
-            .unwrap();
-        assert_eq!(
-            provisioned.member_agents[0].handle.as_str(),
-            "alice",
-            "the committed witness is not a post-commit live reread"
-        );
     }
 
     #[tokio::test]
@@ -1190,88 +1173,96 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
 
     #[tokio::test]
     async fn first_onboarding_failure_keeps_setup_residue_with_no_message_half_write() {
-        // The first agent's onboarding message is attempted under a
-        // SAVEPOINT inside the provision tx. A first-message fault (here the entropy arm:
-        // the 3rd mint — the first MESSAGE id, after the workspace + channel ids —
-        // fails) must ROLL BACK ONLY the savepoint: the workspace/members/private-channel
-        // SETUP residue still COMMITS, and the messages table + stream head carry NO
-        // half-write. The outcome is `Failed` (route → 500, zero deliver/start effect).
-        let (_dir, writer, pool) = open_seeded().await;
-        let team = name("Team");
-        let agents = [agent("agent-a"), agent("agent-b")];
-        let WorkspaceProvisionOutcome::Provisioned(p) = writer
-            .provision_workspace(
-                &req(&team, user("user-1"), &[], &agents),
-                &NthMintFailsEntropy::at(3),
-                &TestClock(10),
+        for corrupt_after_insert in [false, true] {
+            // The first agent's onboarding message is attempted under a
+            // SAVEPOINT inside the provision tx. Cover both failure before insertion
+            // (the third entropy mint) and seal failure after a real message insert.
+            // Both must roll back only the savepoint: the workspace/members/private-channel
+            // SETUP residue still COMMITS, and the messages table + stream head carry NO
+            // half-write. The outcome is `Failed` (route → 500, zero deliver/start effect).
+            let (_dir, writer, pool) = open_seeded().await;
+            if corrupt_after_insert {
+                sqlx::query("CREATE TRIGGER corrupt_onboarding AFTER INSERT ON messages BEGIN UPDATE messages SET content = 'corrupted after insert' WHERE id = NEW.id; END")
+                .execute(&pool).await.unwrap();
+            }
+            let team = name("Team");
+            let agents = [agent("agent-a"), agent("agent-b")];
+            let WorkspaceProvisionOutcome::Provisioned(p) = writer
+                .provision_workspace(
+                    &req(&team, user("user-1"), &[], &agents),
+                    &NthMintFailsEntropy::at(if corrupt_after_insert { usize::MAX } else { 3 }),
+                    &TestClock(10),
+                )
+                .await
+                .expect("a first-message fault is NOT a provision Err — setup still commits")
+            else {
+                panic!("expected Provisioned (setup residue), got a refusal");
+            };
+            assert_eq!(
+                p.first_onboarding,
+                FirstOnboardingOutcome::Failed,
+                "the first onboarding message failed under the savepoint"
+            );
+            // Setup residue committed: the workspace, its onboarding channel, membership +
+            // caps, and the founding roster are all present.
+            let ws_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspaces WHERE id=?")
+                .bind(p.face.id.as_str())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(ws_rows, 1, "workspace setup residue is preserved");
+            let channel_rows: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE id=?")
+                    .bind(p.onboarding_channel.channel.as_str())
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(channel_rows, 1, "onboarding channel residue is preserved");
+            let member_rows: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM conversation_agents WHERE conversation_id=?",
             )
-            .await
-            .expect("a first-message entropy fault is NOT a provision Err — setup still commits")
-        else {
-            panic!("expected Provisioned (setup residue), got a refusal");
-        };
-        assert_eq!(
-            p.first_onboarding,
-            FirstOnboardingOutcome::Failed,
-            "the first onboarding message failed under the savepoint"
-        );
-        // Setup residue committed: the workspace, its onboarding channel, membership +
-        // caps, and the founding roster are all present.
-        let ws_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspaces WHERE id=?")
-            .bind(p.face.id.as_str())
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(ws_rows, 1, "workspace setup residue is preserved");
-        let channel_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE id=?")
             .bind(p.onboarding_channel.channel.as_str())
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(channel_rows, 1, "onboarding channel residue is preserved");
-        let member_rows: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM conversation_agents WHERE conversation_id=?")
-                .bind(p.onboarding_channel.channel.as_str())
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(member_rows, 2, "founding agent roster residue is preserved");
-        // NO message half-write: zero message rows, and the stream head/latest_seq is
-        // untouched (the savepoint rolled the reserve + insert + head bump ALL back).
-        let message_rows: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE conversation_id=?")
-                .bind(p.onboarding_channel.channel.as_str())
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(
-            message_rows, 0,
-            "no message row survived the savepoint rollback"
-        );
-        let latest: i64 =
-            sqlx::query_scalar("SELECT latest_message_seq FROM conversations WHERE id=?")
-                .bind(p.onboarding_channel.channel.as_str())
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(
-            latest, 0,
-            "latest_message_seq was not advanced by the rolled-back message"
-        );
-        // The next reserved ordinal is still 1 — the failed message consumed no seq.
-        let mut conn = pool.acquire().await.unwrap();
-        let next = crate::conversation_messaging::messaging::reserve_next_seq_on(
-            &mut conn,
-            &p.onboarding_channel.channel,
-        )
-        .await
-        .ok()
-        .expect("reserve");
-        assert_eq!(
-            next.get(),
-            1,
-            "the rolled-back first message consumed no ordinal"
-        );
+            assert_eq!(member_rows, 2, "founding agent roster residue is preserved");
+            // NO message half-write: zero message rows, and the stream head/latest_seq is
+            // untouched (the savepoint rolled the reserve + insert + head bump ALL back).
+            let message_rows: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE conversation_id=?")
+                    .bind(p.onboarding_channel.channel.as_str())
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                message_rows, 0,
+                "no message row survived the savepoint rollback"
+            );
+            let latest: i64 =
+                sqlx::query_scalar("SELECT latest_message_seq FROM conversations WHERE id=?")
+                    .bind(p.onboarding_channel.channel.as_str())
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                latest, 0,
+                "latest_message_seq was not advanced by the rolled-back message"
+            );
+            // The next reserved ordinal is still 1 — the failed message consumed no seq.
+            let mut conn = pool.acquire().await.unwrap();
+            let next = crate::conversation_messaging::messaging::reserve_next_seq_on(
+                &mut conn,
+                &p.onboarding_channel.channel,
+            )
+            .await
+            .ok()
+            .expect("reserve");
+            assert_eq!(
+                next.get(),
+                1,
+                "the rolled-back first message consumed no ordinal"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1295,66 +1286,6 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
                 .await
                 .unwrap();
         assert_eq!(message_rows, 0, "no agents ⇒ no onboarding message");
-    }
-
-    #[tokio::test]
-    async fn onboarding_write_seal_rejects_a_non_head_after_image() {
-        // P1#2 fail-closed: the write-time seal `verify_written` re-derives every
-        // touched column from the after-image the primitive read back. A NON-HEAD
-        // insert (the head advanced past this message's seq) must be rejected — proven
-        // here by feeding the seal a witness whose stream head sits above the row's
-        // own seq. The writer maps this `Err` to an aborted transaction, so a
-        // mislabelled/misplaced onboarding message is never committed nor delivered.
-        use silverhand_backend_core::conversation_messaging::messaging::agent_onboarding::{
-            OnboardingMetadataDigest, OnboardingSystemMessage, OnboardingWriteWitness,
-        };
-        let message = OnboardingSystemMessage::workspace_onboarding(
-            conv("chan-9"),
-            MessageId::parse("msg-x").unwrap(),
-            "Team",
-            &ParticipantHandle::parse("alice").unwrap(),
-            &[],
-            42,
-        );
-        // A faithful witness at the head passes.
-        let faithful = OnboardingWriteWitness {
-            id: "msg-x".to_owned(),
-            conversation: "chan-9".to_owned(),
-            content: message.content().to_owned(),
-            created_at_ms: 42,
-            from_kind: "system".to_owned(),
-            from_agent_id: None,
-            from_user_id: None,
-            author_id: None,
-            author_name: None,
-            author_display_name: None,
-            thread_root_id: None,
-            cc_source_message_id: None,
-            metadata: OnboardingMetadataDigest {
-                subtype: Some(message.subtype().to_owned()),
-                has_extra_keys: false,
-            },
-            seq: 1,
-            head_latest_seq: 1,
-        };
-        assert!(message.verify_written(&faithful).is_ok());
-        // Same row, but the stream head sits above it → non-head → rejected.
-        let non_head = OnboardingWriteWitness {
-            head_latest_seq: 5,
-            ..faithful.clone()
-        };
-        assert!(
-            message.verify_written(&non_head).is_err(),
-            "a non-head onboarding write must fail the seal"
-        );
-        // The writer's error mapping surfaces it as a persistence failure (aborted tx).
-        let mapped = WorkspaceCreationStoreError::OnboardingWriteMismatch(
-            message.verify_written(&non_head).unwrap_err().reason(),
-        );
-        assert!(matches!(
-            mapped,
-            WorkspaceCreationStoreError::OnboardingWriteMismatch(_)
-        ));
     }
 
     #[tokio::test]

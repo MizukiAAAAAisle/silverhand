@@ -1,7 +1,7 @@
 //! End-to-end audit-line falsifier for the schedule-management cancel face.
 //!
 //! The success audit line `agent schedule cancelled by user` must be emitted
-//! EXACTLY ONCE — after the unit of work commits — and NEVER on a refusal or a
+//! EXACTLY ONCE on successful cancellation and NEVER on a refusal or a
 //! CAS-miss. This wires the real `schedule_cancel_router` (a fake agent-detail
 //! gate plus a real `SqliteScheduleCancel` over the checked-in current schema)
 //! and counts the line in a captured operator log across three cases: a committed
@@ -174,10 +174,12 @@ async fn seed_schedule(connection: &mut SqliteConnection, id: &str, status: &str
     .unwrap();
 }
 
-async fn cancel_router_for(schedules: &[(&str, &str)], present_agent: bool) -> Router {
+async fn cancel_router_for(
+    schedules: &[(&str, &str)],
+    present_agent: bool,
+) -> (tempfile::TempDir, Router) {
     let directory = tempfile::tempdir().unwrap();
-    // The DB must outlive the router's pool; leak the TempDir so it survives the
-    // test (the OS temp dir is reclaimed out of band).
+    // The caller retains the directory until the request and its pool are done.
     let path = directory.path().join("schedules.sqlite");
     let mut connection = current_schema::create_current_schema(&path).await;
     seed_agent(&mut connection).await;
@@ -186,13 +188,13 @@ async fn cancel_router_for(schedules: &[(&str, &str)], present_agent: bool) -> R
     }
     sqlx::Connection::close(connection).await.unwrap();
     let cancel = SqliteScheduleCancel::open(&path).await.unwrap();
-    std::mem::forget(directory);
-    schedule_cancel_router(
+    let router = schedule_cancel_router(
         FakeDetail {
             present: present_agent,
         },
         cancel,
-    )
+    );
+    (directory, router)
 }
 
 fn cancel_request(schedule_id: &str) -> Request<Body> {
@@ -206,7 +208,7 @@ fn cancel_request(schedule_id: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn a_committed_cancel_emits_the_audit_line_exactly_once() {
-    let router = cancel_router_for(&[("s-live-ok", "pending")], true).await;
+    let (_directory, router) = cancel_router_for(&[("s-live-ok", "pending")], true).await;
     let (status, audit_lines) = observe(router, cancel_request("s-live-ok"), "s-live-ok").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(audit_lines, 1, "a 200 cancel must audit exactly once");
@@ -214,7 +216,7 @@ async fn a_committed_cancel_emits_the_audit_line_exactly_once() {
 
 #[tokio::test]
 async fn a_terminal_cas_miss_emits_no_audit_line() {
-    let router = cancel_router_for(&[("s-done", "done")], true).await;
+    let (_directory, router) = cancel_router_for(&[("s-done", "done")], true).await;
     let (status, audit_lines) = observe(router, cancel_request("s-done"), "s-done").await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(audit_lines, 0, "a CAS-miss must never audit a cancellation");
@@ -223,7 +225,7 @@ async fn a_terminal_cas_miss_emits_no_audit_line() {
 #[tokio::test]
 async fn a_gate_refusal_emits_no_audit_line() {
     // The agent is invisible → the anti-enum 404 before the unit of work runs.
-    let router = cancel_router_for(&[], false).await;
+    let (_directory, router) = cancel_router_for(&[], false).await;
     let (status, audit_lines) = observe(router, cancel_request("s-ghost"), "s-ghost").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(audit_lines, 0, "a refused request must never audit");

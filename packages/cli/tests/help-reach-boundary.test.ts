@@ -124,9 +124,9 @@ describe('CLI help teaches the reach boundary it will be refused by', () => {
     it(`${operation}: and says it nowhere else — one sentence, one source`, () => {
       const clause = RENDERING[operation]!()!;
       const help = flat(helpFor(operation));
-      const remainder = help.split(flat(clause)).join(' ');
-      // A second occurrence of the clause itself also fails here, since splitting
-      // on it removes every copy and the vocabulary check below sees none.
+      const pieces = help.split(flat(clause));
+      expect(pieces, `${operation}: exactly one reach clause`).toHaveLength(2);
+      const remainder = pieces.join(' ');
       for (const token of REACH_VOCABULARY) {
         expect(remainder, `${operation} / ${token}`).not.toContain(token);
       }

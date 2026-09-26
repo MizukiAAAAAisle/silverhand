@@ -35,13 +35,11 @@
  */
 
 /** Parsed numeric prefix, or null when the string has none. */
-export function parseNumericVersion(
-  version: string | null | undefined,
-): number[] | null {
+function parseNumericVersion(version: string | null | undefined): number[] | null {
   if (typeof version !== 'string') return null;
   const match = version.trim().match(/^v?(\d+(?:\.\d+)*)/);
   if (!match) return null;
-  return match[1]!.split('.').map(part => Number(part));
+  return match[1]!.split('.').map((part) => Number(part));
 }
 
 /**
@@ -49,10 +47,7 @@ export function parseNumericVersion(
  * owned by the calling driver and must parse — an unparseable floor is
  * a programming error, not a runtime condition, so it throws.
  */
-export function versionAtLeast(
-  version: string | null | undefined,
-  minimum: string,
-): boolean {
+export function versionAtLeast(version: string | null | undefined, minimum: string): boolean {
   const floor = parseNumericVersion(minimum);
   if (!floor) {
     throw new Error(`versionAtLeast: unparseable minimum "${minimum}"`);

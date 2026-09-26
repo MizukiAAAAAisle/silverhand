@@ -1778,7 +1778,7 @@ mod tests {
     }
 
     #[test]
-    fn page_seals_anchor_order_root_set_and_thread_head() {
+    fn page_requires_root_sidecars_and_around_anchor_but_allows_a_lagging_head() {
         let channel = conversation("c");
         let latest = ConversationMessageWindowRequest::new(
             MessageWindowStreamRequest::Mainline,

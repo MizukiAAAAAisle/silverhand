@@ -153,16 +153,13 @@ describe('FakeSupervisor — deliver spawn-with-batch (happy path)', () => {
       spawn_options: testStartOptions(),
     });
     expect(r.disposition).toBe('spawning');
-    expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
-      'startup_pending',
-    );
-    expect(h.events.map(e => e.event)).toEqual(['runtime_state']);
+    if (r.disposition === 'spawning') expect(r.pid).toBeGreaterThan(0);
+    expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>('startup_pending');
+    expect(h.events.map((e) => e.event)).toEqual(['runtime_state']);
 
     h.flush();
-    expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
-      'ready',
-    );
-    expect(h.events.map(e => e.event)).toEqual([
+    expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>('ready');
+    expect(h.events.map((e) => e.event)).toEqual([
       'runtime_state',
       'runtime_state',
       'runtime_delivery_consumed',
@@ -218,23 +215,6 @@ describe('FakeSupervisor — deliver spawn-with-batch (failure path)', () => {
 });
 
 describe('FakeSupervisor — deliver (custody dispositions per §10.3)', () => {
-  it('no live runtime → spawning (custody transferred, no sync ack)', () => {
-    const h = makeHarness();
-    const r = h.supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      target: { conversation_id: 'c1', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [42],
-      kind: 'message',
-      text: 'stub',
-      deliveries: [{ delivery_id: 42, seq: 42, presentation: { body: 'stub', instruction: 'other' } }],
-      spawn_options: testStartOptions(),
-    });
-    expect(r.disposition).toBe('spawning');
-    if (r.disposition === 'spawning') expect(r.pid).toBeGreaterThan(0);
-  });
-
   it('refused startup_pending while phase=spawning', () => {
     const h = makeHarness();
     h.supervisor.start({
@@ -421,27 +401,6 @@ describe('FakeSupervisor — stop / clearSession / stopAll', () => {
     expect(r).toEqual({ mode: 'hard', stopped: false, exit_code: null });
   });
 
-  it('clearSession hard-kills regardless of mode, returns cleared=true', () => {
-    const h = makeHarness();
-    h.supervisor.start({
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      options: testStartOptions(),
-    });
-    h.flush();
-    const r = h.supervisor.clearSession({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      runtime_generation: 1,
-    });
-    expect(r).toEqual({ cleared: true });
-    h.flush();
-    expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>(
-      'exited',
-    );
-  });
-
   it('stopAll counts only live runtimes', () => {
     const h = makeHarness();
     h.supervisor.start({
@@ -474,21 +433,25 @@ describe('FakeSupervisor — stop / clearSession / stopAll', () => {
     // sees the same wire stream regardless of which hard-kill intent
     // landed.
     const h = makeHarness();
-    h.supervisor.start({ runtime_generation: 1, conversation_id: 'c1', agent_id: 'a1', options: testStartOptions() });
+    h.supervisor.start({
+      runtime_generation: 1,
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: testStartOptions(),
+    });
     h.flush();
     const eventsBefore = h.events.length;
-    h.supervisor.clearSession({
+    const result = h.supervisor.clearSession({
       conversation_id: 'c1',
       agent_id: 'a1',
       runtime_generation: 1,
     });
+    expect(result).toEqual({ cleared: true });
     // Synchronous emit: state(draining) before the scheduled exit.
-    expect(
-      h.events.slice(eventsBefore).map(e => e.event),
-    ).toEqual(['runtime_state']);
+    expect(h.events.slice(eventsBefore).map((e) => e.event)).toEqual(['runtime_state']);
     h.flush();
     // After the scheduled exit: another runtime_state + runtime_exit.
-    expect(h.events.slice(eventsBefore).map(e => e.event)).toEqual([
+    expect(h.events.slice(eventsBefore).map((e) => e.event)).toEqual([
       'runtime_state',
       'runtime_state',
       'runtime_exit',
@@ -496,6 +459,7 @@ describe('FakeSupervisor — stop / clearSession / stopAll', () => {
     const terminal = h.events[h.events.length - 2];
     if (!terminal || terminal.event !== 'runtime_state') throw new Error('shape');
     expect(terminal.state.terminalReason).toBe('stopped');
+    expect(h.supervisor.__getPhase('c1', 'a1')).toBe<FakeSupervisorPhase>('exited');
   });
 
   it('stopAll emits runtime_state on each draining transition (Cindy `9rxtrdT2NXfX2zEs`)', () => {

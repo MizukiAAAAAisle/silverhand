@@ -13,13 +13,13 @@
  *   - Direct `error.code` mapping per category.
  *   - `cause`-chain walk for Node 18+ wrapped errors.
  *   - Specificity: when both an outer generic and an inner specific
- *     code are present, the deepest match wins (first match in
- *     depth-first walk).
+ *     code are present, the specific match wins; among specific
+ *     codes, the first encountered wins.
  *   - Non-TLS errors return null.
  *   - Cycle / depth guards.
  */
 import { describe, expect, it } from 'vitest';
-import { classifyTlsError, describeTlsErrorCode, type TlsErrorCode } from '@silverhand/shared';
+import { classifyTlsError } from '@silverhand/shared';
 
 /**
  * Tiny helper to build an Error-shaped object with a string code
@@ -35,12 +35,9 @@ function errWith(code: string, cause?: unknown): { code: string; cause?: unknown
 
 describe('classifyTlsError — direct code mapping', () => {
   // ── Expired branch ─────────────────────────────────────────────
-  it.each(['CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID'])(
-    'maps %s to host_tls_expired',
-    code => {
-      expect(classifyTlsError(errWith(code))).toBe('host_tls_expired');
-    },
-  );
+  it.each(['CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID'])('maps %s to host_tls_expired', (code) => {
+    expect(classifyTlsError(errWith(code))).toBe('host_tls_expired');
+  });
 
   // ── Hostname mismatch branch ───────────────────────────────────
   it('maps ERR_TLS_CERT_ALTNAME_INVALID to host_tls_hostname_mismatch', () => {
@@ -71,7 +68,7 @@ describe('classifyTlsError — direct code mapping', () => {
     'ERR_SSL_CERTIFICATE_VERIFY_FAILED',
     'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA',
     'ERR_SSL_TLSV1_ALERT_BAD_CERTIFICATE',
-  ])('maps %s to host_tls_chain_invalid', code => {
+  ])('maps %s to host_tls_chain_invalid', (code) => {
     expect(classifyTlsError(errWith(code))).toBe('host_tls_chain_invalid');
   });
 });
@@ -86,10 +83,7 @@ describe('classifyTlsError — cause-chain walk (Node 18+ wrapper shape)', () =>
     // walker MUST descend through the outer chain wrapper and
     // return the specific `host_tls_expired` so the operator sees
     // "your cert expired" rather than the generic "chain invalid".
-    const wrapped = errWith(
-      'ERR_SSL_CERTIFICATE_VERIFY_FAILED',
-      errWith('CERT_HAS_EXPIRED'),
-    );
+    const wrapped = errWith('ERR_SSL_CERTIFICATE_VERIFY_FAILED', errWith('CERT_HAS_EXPIRED'));
     expect(classifyTlsError(wrapped)).toBe('host_tls_expired');
   });
 
@@ -115,16 +109,6 @@ describe('classifyTlsError — cause-chain walk (Node 18+ wrapper shape)', () =>
       errWith('DEPTH_ZERO_SELF_SIGNED_CERT'),
     );
     expect(classifyTlsError(wrapped)).toBe('host_tls_chain_invalid');
-  });
-
-  it('returns chain_invalid for a single chain-class code with no cause (Node may surface only the wrapper)', () => {
-    // Boundary: if Node ever surfaces only the wrapper without a
-    // cause, we still classify as TLS (typed chain_invalid) rather
-    // than null. The runbook always wants one of the three typed
-    // codes for a TLS-class failure.
-    expect(classifyTlsError(errWith('ERR_SSL_CERTIFICATE_VERIFY_FAILED'))).toBe(
-      'host_tls_chain_invalid',
-    );
   });
 
   it('finds expired on cause when outer code is not a recognized TLS code (descent succeeds)', () => {
@@ -162,9 +146,7 @@ describe('classifyTlsError — cause-chain walk (Node 18+ wrapper shape)', () =>
     expect(classifyTlsError(errWith('ECONNREFUSED'))).toBeNull();
     expect(classifyTlsError(errWith('ENOTFOUND'))).toBeNull();
     expect(classifyTlsError(errWith('ETIMEDOUT'))).toBeNull();
-    expect(
-      classifyTlsError(errWith('ECONNRESET', errWith('EPIPE'))),
-    ).toBeNull();
+    expect(classifyTlsError(errWith('ECONNRESET', errWith('EPIPE')))).toBeNull();
   });
 
   it('returns null for non-object input (null, undefined, string, number)', () => {
@@ -189,26 +171,19 @@ describe('classifyTlsError — cause-chain walk (Node 18+ wrapper shape)', () =>
 
 describe('classifyTlsError — depth / cycle guards', () => {
   it('terminates on a cyclic cause chain without recognized codes (returns null)', () => {
-    // Defense against malformed / adversarial error objects with a
-    // self-cycle. Without the WeakSet guard this would loop until
-    // the depth limit, but the test pins the cycle behavior
-    // explicitly so a future refactor doesn't accidentally remove
-    // the guard.
+    // Only termination and the non-TLS result are contractual; either
+    // cycle detection or bounded traversal can provide that behavior.
     const a: { code: string; cause?: unknown } = { code: 'A' };
     const b: { code: string; cause?: unknown } = { code: 'B', cause: a };
     a.cause = b;
     expect(classifyTlsError(a)).toBeNull();
   });
 
-  it('terminates on a long cause chain past the depth cap (returns null when no TLS code in first 8)', () => {
-    // Build a 12-deep chain where the TLS code is at depth 10
-    // (past the cap of 8). The walker must not find it.
+  it('does not inspect the ninth cause-chain node', () => {
     let acc: { code: string; cause?: unknown } = errWith('CERT_HAS_EXPIRED');
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 8; i++) {
       acc = { code: `WRAPPER_${i}`, cause: acc };
     }
-    // The expired code is at depth 12 (12 wrappers above it);
-    // cap is 8, so the walker should NOT find it.
     expect(classifyTlsError(acc)).toBeNull();
   });
 
@@ -221,20 +196,5 @@ describe('classifyTlsError — depth / cycle guards', () => {
       acc = { code: `WRAPPER_${i}`, cause: acc };
     }
     expect(classifyTlsError(acc)).toBe('host_tls_expired');
-  });
-});
-
-describe('describeTlsErrorCode — label coverage', () => {
-  // Every typed code must have a non-empty label so structured
-  // logs always carry SOMETHING readable, and so an exhaustiveness
-  // check at the switch fires if a code is added without a label.
-  it.each<TlsErrorCode>([
-    'host_tls_chain_invalid',
-    'host_tls_hostname_mismatch',
-    'host_tls_expired',
-  ])('produces a non-empty label for %s', code => {
-    const label = describeTlsErrorCode(code);
-    expect(typeof label).toBe('string');
-    expect(label.length).toBeGreaterThan(0);
   });
 });

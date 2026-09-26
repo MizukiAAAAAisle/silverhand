@@ -13,8 +13,7 @@
 //! open signup, so UNDER-stating exposure suppresses the warning exactly where it
 //! matters most. Over-stating it costs a warning nobody needed.
 //!
-//! Ported from `packages/shared/src/bind-address-scope.ts`, arm for arm and in the
-//! same order, including its wider-than-elsewhere loopback range: the whole of
+//! The bind policy has a wider-than-client loopback range: the whole of
 //! `127.0.0.0/8` is loopback here, so an operator who binds `127.0.0.2` is not warned
 //! at a machine that is in fact unreachable.
 
@@ -85,8 +84,7 @@ pub fn classify_bind_address_scope(raw: &str) -> BindAddressScope {
         .and_then(|inner| inner.strip_suffix(']'))
         .unwrap_or(&lowered);
     // `fe80::/10` spelled as the four nibble prefixes it can start with, and `fc00::/7`
-    // as its two — the product's own approximation, kept rather than tightened so the
-    // two implementations classify identically.
+    // as its two — the product's established prefix approximation.
     if ["fe8", "fe9", "fea", "feb"]
         .iter()
         .any(|prefix| unbracketed.starts_with(prefix))
@@ -237,17 +235,5 @@ mod tests {
                 "{malformed} must not be read as a private or loopback literal"
             );
         }
-    }
-
-    #[test]
-    fn the_three_scopes_spell_themselves_the_way_the_schema_does() {
-        assert_eq!(
-            [
-                BindAddressScope::Loopback.as_str(),
-                BindAddressScope::Lan.as_str(),
-                BindAddressScope::Public.as_str()
-            ],
-            ["loopback", "lan", "public"]
-        );
     }
 }

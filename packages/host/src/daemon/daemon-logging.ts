@@ -37,19 +37,7 @@
  * `chunk: '...'` to an intent log") is caught by the type system,
  * not by hoping reviewers spot it.
  */
-import {
-  findForbiddenLogFields,
-  FORBIDDEN_LOG_FIELD_PREFIXES,
-  FORBIDDEN_LOG_FIELDS,
-} from '@silverhand/shared';
 import type { DaemonLogger } from './logger.js';
-
-/**
- * Forbidden field-name prefixes / exact matches. The redaction tests
- * verify no log entry passed through any helper carries any of these
- * as a field name.
- */
-export { FORBIDDEN_LOG_FIELD_PREFIXES, FORBIDDEN_LOG_FIELDS };
 
 // ── Intent ──────────────────────────────────────────────────────────
 
@@ -174,16 +162,4 @@ export function logBackpressure(
   entry: BackpressureLog,
 ): void {
   logger.warn({ kind: 'backpressure', ...entry }, `backpressure ${entry.action}`);
-}
-
-/**
- * Self-test helper used by `daemon-logging.test.ts`. Returns whether
- * `entry` would violate §3.4 by carrying any forbidden field name.
- * The runtime check is informational only; the typed interfaces above
- * are the primary guard.
- */
-export function findForbiddenFields(
-  entry: Record<string, unknown>,
-): string[] {
-  return findForbiddenLogFields(entry);
 }

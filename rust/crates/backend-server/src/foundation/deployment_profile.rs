@@ -44,12 +44,6 @@ impl DeploymentMode {
             Self::Standalone => "standalone",
         }
     }
-
-    /// The product's `standaloneMode(ctx)` predicate, owned by the axis it reads so a
-    /// route asks the question instead of re-spelling the comparison.
-    pub const fn is_standalone(self) -> bool {
-        matches!(self, Self::Standalone)
-    }
 }
 
 /// The launcher's explicit choice of how this backend is packaged.
@@ -119,14 +113,6 @@ mod tests {
             ],
             ["embedded", "standalone"]
         );
-    }
-
-    /// The standalone predicate is the axis's own, and `remote` is NOT standalone —
-    /// the confusion the two types exist to prevent.
-    #[test]
-    fn only_the_standalone_deployment_is_standalone() {
-        assert!(DeploymentMode::Standalone.is_standalone());
-        assert!(!DeploymentMode::Embedded.is_standalone());
     }
 
     /// The two profiles are the ONLY legal `(server, deployment)` pairings: an embedded

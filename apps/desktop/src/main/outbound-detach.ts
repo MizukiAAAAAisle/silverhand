@@ -38,7 +38,7 @@ export interface GracefulDetachOutcome {
    *  the helper never propagates the thrown value itself, in
    *  keeping with the never-throws contract. */
   registryError?: string;
-  /** Total wall-clock cost of the helper. Always ≤ `budgetMs`. */
+  /** Total wall-clock cost of the helper. Shares the 1500ms RPC + poll budget. */
   elapsedMs: number;
   /** True iff the helper hit the budget without a terminal poll
    *  observation. Useful as a structured-log "did the optimization
@@ -48,9 +48,7 @@ export interface GracefulDetachOutcome {
 }
 
 /**
- * Inputs to the helper. Dependencies are injectable so tests can
- * drive the full state machine (RPC settle, registry poll, budget
- * exhaustion) without a real daemon, backend, or wall clock.
+ * Shutdown effects: the live daemon client and optional registry observation.
  */
 export interface GracefulDetachDeps {
   /** `HostClient` instance whose `hostOutboundDetach()` we drive. */
@@ -80,39 +78,20 @@ export interface GracefulDetachDeps {
    * return type to fabricate a different sentinel.
    */
   getAttachment?: (hostId: string) => unknown;
-  /** Total budget for RPC + poll combined. Default 1500ms — the
-   *  Cindy-locked Commit 3 constraint. */
-  budgetMs?: number;
-  /** Registry poll interval. Default 100ms — small enough that
-   *  the verification feels instant, large enough to keep the
-   *  poll cost negligible. */
-  pollIntervalMs?: number;
-  /** Wall-clock supplier. Defaults to `Date.now`. */
-  now?: () => number;
-  /** Test seam for the budget + poll timers. Defaults to global
-   *  `setTimeout` / `clearTimeout`. */
-  setTimeoutImpl?: (cb: () => void, ms: number) => unknown;
-  clearTimeoutImpl?: (handle: unknown) => void;
 }
 
 /**
  * Send the detach hint and (best-effort) wait for the backend's
- * attachment row to clear, all within `budgetMs`. Never throws.
+ * attachment row to clear, all within 1500ms. Never throws.
  * Never rejects. See module header for the strict invariants.
  */
 export async function gracefullyDetachOutbound(
   deps: GracefulDetachDeps,
 ): Promise<GracefulDetachOutcome> {
-  const budget = deps.budgetMs ?? 1500;
-  const pollInterval = deps.pollIntervalMs ?? 100;
-  const now = deps.now ?? (() => Date.now());
-  const setT = deps.setTimeoutImpl ?? ((cb: () => void, ms: number) => setTimeout(cb, ms));
-  const clearT =
-    deps.clearTimeoutImpl ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
-
-  const startedAt = now();
-  const deadline = startedAt + budget;
-  const remaining = (): number => Math.max(0, deadline - now());
+  const pollInterval = 100;
+  const startedAt = Date.now();
+  const deadline = startedAt + 1500;
+  const remaining = (): number => Math.max(0, deadline - Date.now());
 
   // ── Step 1: RPC bounded by the shared budget ────────────────────
   //
@@ -121,7 +100,7 @@ export async function gracefullyDetachOutbound(
   // pathological RPC can't eat all 1.5s and starve the poll step.
   // On budget-side win the caller still continues — we just report
   // `rpc.ok: false` with a synthetic error.
-  const rpcOutcome = await raceRpc(deps.client, remaining, setT, clearT);
+  const rpcOutcome = await raceRpc(deps.client, remaining);
 
   // ── Step 2: optional registry-cleared verification ──────────────
   //
@@ -134,7 +113,7 @@ export async function gracefullyDetachOutbound(
   // attachment server-side via the normal close-detection path.
   const canPoll = deps.hostId !== null && deps.getAttachment !== undefined;
   if (!canPoll) {
-    return finish(rpcOutcome, "skipped", now() - startedAt, false);
+    return finish(rpcOutcome, "skipped", Date.now() - startedAt, false);
   }
 
   // ── Poll loop ────────────────────────────────────────────────────
@@ -162,46 +141,46 @@ export async function gracefullyDetachOutbound(
   };
   const initial = safeProbe();
   if (!initial.ok) {
-    return finishWithRegistryError(rpcOutcome, initial.error, now() - startedAt);
+    return finishWithRegistryError(rpcOutcome, initial.error, Date.now() - startedAt);
   }
   if (initial.value === null) {
-    return finish(rpcOutcome, true, now() - startedAt, false);
+    return finish(rpcOutcome, true, Date.now() - startedAt, false);
   }
   if (remaining() === 0) {
     // Budget already gone (RPC took everything). Skip the poll;
     // report budgetExhausted.
-    return finish(rpcOutcome, false, now() - startedAt, true);
+    return finish(rpcOutcome, false, Date.now() - startedAt, true);
   }
 
   return new Promise<GracefulDetachOutcome>((resolve) => {
-    let timer: unknown = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const tick = (): void => {
       const probe = safeProbe();
       if (!probe.ok) {
-        if (timer !== null) clearT(timer);
-        resolve(finishWithRegistryError(rpcOutcome, probe.error, now() - startedAt));
+        if (timer !== null) clearTimeout(timer);
+        resolve(finishWithRegistryError(rpcOutcome, probe.error, Date.now() - startedAt));
         return;
       }
       if (probe.value === null) {
-        if (timer !== null) clearT(timer);
-        resolve(finish(rpcOutcome, true, now() - startedAt, false));
+        if (timer !== null) clearTimeout(timer);
+        resolve(finish(rpcOutcome, true, Date.now() - startedAt, false));
         return;
       }
       const left = remaining();
       if (left === 0) {
-        if (timer !== null) clearT(timer);
-        resolve(finish(rpcOutcome, false, now() - startedAt, true));
+        if (timer !== null) clearTimeout(timer);
+        resolve(finish(rpcOutcome, false, Date.now() - startedAt, true));
         return;
       }
       // Don't overshoot the budget on the last poll — if the
       // remaining time is less than one poll interval, schedule the
       // last tick at the deadline exactly.
       const delay = Math.min(pollInterval, left);
-      timer = setT(tick, delay);
+      timer = setTimeout(tick, delay);
     };
     // Schedule first poll one interval out — the synchronous probe
     // above already covered the "already cleared" fast path.
-    timer = setT(tick, Math.min(pollInterval, remaining()));
+    timer = setTimeout(tick, Math.min(pollInterval, remaining()));
   });
 }
 
@@ -220,8 +199,6 @@ export async function gracefullyDetachOutbound(
 async function raceRpc(
   client: Pick<HostClient, "hostOutboundDetach">,
   remaining: () => number,
-  setT: (cb: () => void, ms: number) => unknown,
-  clearT: (h: unknown) => void,
 ): Promise<GracefulDetachOutcome["rpc"]> {
   const budget = remaining();
   if (budget === 0) {
@@ -238,16 +215,16 @@ async function raceRpc(
   } catch (err) {
     return rpcErrorFromUnknown(err);
   }
-  let timerHandle: unknown = null;
+  let timerHandle: ReturnType<typeof setTimeout> | null = null;
   const rpcPromise = rpcThenable.then(
     (res) => ({ kind: "ok" as const, action: res.action }),
     (err: unknown) => ({ kind: "err" as const, err }),
   );
   const timerPromise = new Promise<{ kind: "timeout" }>((resolve) => {
-    timerHandle = setT(() => resolve({ kind: "timeout" }), budget);
+    timerHandle = setTimeout(() => resolve({ kind: "timeout" }), budget);
   });
   const winner = await Promise.race([rpcPromise, timerPromise]);
-  if (timerHandle !== null) clearT(timerHandle);
+  if (timerHandle !== null) clearTimeout(timerHandle);
   if (winner.kind === "ok") {
     return { ok: true, action: winner.action };
   }

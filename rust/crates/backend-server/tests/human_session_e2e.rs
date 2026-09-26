@@ -159,11 +159,11 @@ async fn driver_failure_logs_one_complete_chain_and_leaks_no_credential() {
     assert!(response.1.starts_with("text/plain"));
     assert_eq!(response.2, "Internal Server Error");
     assert_eq!(calls.0.load(Ordering::SeqCst), 0);
-    assert!(!response.2.contains(TOKEN));
-    assert!(!response.2.contains(TOKEN_HASH));
-
-    let errors = logs
-        .events()
+    let events = logs.events();
+    let rendered = serde_json::to_string(&events).unwrap();
+    assert!(!rendered.contains(TOKEN));
+    assert!(!rendered.contains(TOKEN_HASH));
+    let errors = events
         .into_iter()
         .filter(|event| event["level"] == "ERROR")
         .collect::<Vec<_>>();
@@ -174,8 +174,6 @@ async fn driver_failure_logs_one_complete_chain_and_leaks_no_credential() {
     );
     let chain = errors[0]["fields"]["error_chain"].as_str().unwrap();
     assert!(chain.contains("no such table: auth_sessions"));
-    assert!(!chain.contains(TOKEN));
-    assert!(!chain.contains(TOKEN_HASH));
 }
 
 async fn request(

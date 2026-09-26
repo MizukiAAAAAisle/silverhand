@@ -43,7 +43,7 @@ use http_body_util::Limited;
 
 /// The one ratified request-body ceiling: 128 MiB per request. A JSON-representable
 /// magnitude, and the sole envelope authority for every mounted route.
-pub const MAX_REQUEST_BODY_BYTES: usize = 128 * 1024 * 1024;
+const MAX_REQUEST_BODY_BYTES: usize = 128 * 1024 * 1024;
 
 /// The perimeter's own refusal body, `{"error":"payload too large"}` — mirroring the
 /// collaboration fence's wording and distinct from any domain-specific `413`. It is the
@@ -60,12 +60,6 @@ fn payload_too_large() -> Response {
 
 /// Enforce the one 128 MiB request-body ceiling, ahead of auth and every domain check.
 pub async fn enforce_request_body_ceiling(request: Request, next: Next) -> Response {
-    enforce_with_ceiling(request, next, MAX_REQUEST_BODY_BYTES).await
-}
-
-/// The ceiling logic, parameterised for tests so both the declared-length short-circuit
-/// and the stream-wrap resource bound can be exercised without allocating 128 MiB.
-async fn enforce_with_ceiling(request: Request, next: Next, ceiling: usize) -> Response {
     // Declared oversize: reject WITHOUT reading the body, so a client announcing a
     // too-large payload never gets a single byte aggregated, and gets the perimeter's
     // own `413`.
@@ -74,7 +68,7 @@ async fn enforce_with_ceiling(request: Request, next: Next, ceiling: usize) -> R
         .get(CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
-        .is_some_and(|declared| declared > ceiling as u64);
+        .is_some_and(|declared| declared > MAX_REQUEST_BODY_BYTES as u64);
     if declared_over {
         return payload_too_large();
     }
@@ -88,7 +82,7 @@ async fn enforce_with_ceiling(request: Request, next: Next, ceiling: usize) -> R
     // default so this single wrap is the sole envelope authority and never truncates an
     // extractor route below the ceiling; product routes still cap tighter in-stream.
     let (parts, body) = request.into_parts();
-    let bounded = Body::new(Limited::new(body, ceiling));
+    let bounded = Body::new(Limited::new(body, MAX_REQUEST_BODY_BYTES));
     let mut request = Request::from_parts(parts, bounded);
     DefaultBodyLimit::disable().apply(&mut request);
     next.run(request).await
@@ -116,25 +110,24 @@ mod tests {
         (StatusCode::OK, body).into_response()
     }
 
-    fn router_with_ceiling(ceiling: usize) -> Router {
+    fn router() -> Router {
         Router::new()
             .route("/drain", post(echo_raw_drain))
-            .layer(from_fn(move |request, next| {
-                enforce_with_ceiling(request, next, ceiling)
-            }))
+            .layer(from_fn(enforce_request_body_ceiling))
     }
 
     #[tokio::test]
     async fn a_declared_content_length_over_the_ceiling_is_refused_by_the_perimeter() {
-        // Nine declared bytes against an eight-byte ceiling: rejected without reaching the
-        // raw-drain handler, which would otherwise echo the bytes back, and with the
-        // perimeter's own `413` body. A real client/proxy sends `Content-Length`; the test
-        // builder does not derive it, so it is set here.
-        let response = router_with_ceiling(8)
+        let unread = futures_util::stream::poll_fn(
+            |_| -> std::task::Poll<Option<Result<axum::body::Bytes, std::io::Error>>> {
+                panic!("declared oversize must be refused without polling the body")
+            },
+        );
+        let response = router()
             .oneshot(
                 HttpRequest::post("/drain")
-                    .header(CONTENT_LENGTH, "9")
-                    .body(Body::from("123456789"))
+                    .header(CONTENT_LENGTH, "134217729")
+                    .body(Body::from_stream(unread))
                     .unwrap(),
             )
             .await
@@ -147,36 +140,40 @@ mod tests {
 
     #[tokio::test]
     async fn an_in_limit_body_reaches_a_raw_drain_handler_with_its_bytes_intact() {
-        // Five bytes under an eight-byte ceiling: the wrap is transparent and the raw
-        // drain receives the full payload.
-        let response = router_with_ceiling(8)
-            .oneshot(
-                HttpRequest::post("/drain")
-                    .body(Body::from("hello"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        // The policy admits the exact declared boundary. This unit request has a
+        // small actual body; TCP Content-Length framing is not under test here.
+        for declared in [None, Some("134217728")] {
+            let mut request = HttpRequest::post("/drain");
+            if let Some(declared) = declared {
+                request = request.header(CONTENT_LENGTH, declared);
+            }
+            let response = router()
+                .oneshot(request.body(Body::from("hello")).unwrap())
+                .await
+                .unwrap();
 
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(&body[..], b"hello");
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(&body[..], b"hello");
+        }
     }
 
     #[tokio::test]
     async fn an_undeclared_oversize_body_is_bounded_not_aggregated() {
-        // The resource-bound evidence: a chunked body (no `Content-Length`, so the
-        // declared-length short-circuit cannot fire) that exceeds the ceiling. The stream
-        // wrap hard-caps the read, so the raw drain — which uses `usize::MAX` and would
-        // otherwise aggregate the WHOLE body without limit — errors past the ceiling and
-        // its swallow-to-empty contract admits NOTHING. That is the ratified guarantee: no
-        // unbounded aggregation on an undeclared oversize body. The ceiling makes NO claim
-        // about the resulting wire status — the handler owns that (here a `200` with an
-        // empty body), and product routes impose their own tighter caps and exact `413`.
-        let oversize = futures_util::stream::iter(vec![Ok::<_, std::io::Error>(
-            axum::body::Bytes::from_static(b"123456789"),
-        )]);
-        let response = router_with_ceiling(8)
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        // Reuse one chunk allocation; exercise the real 128MiB stream policy,
+        // not a configurable tiny copy. More chunks exist beyond the boundary.
+        let polls = Arc::new(AtomicUsize::new(0));
+        let observed = polls.clone();
+        let chunk = axum::body::Bytes::from(vec![b'x'; 1024 * 1024]);
+        let oversize = futures_util::stream::iter((0..130).map(move |_| {
+            observed.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, std::io::Error>(chunk.clone())
+        }));
+        let response = router()
             .oneshot(
                 HttpRequest::post("/drain")
                     .body(Body::from_stream(oversize))
@@ -185,12 +182,11 @@ mod tests {
             .await
             .unwrap();
 
+        // A raw drain decides its own error response; the outer policy only
+        // promises a bounded read, not a universal chunked-body HTTP status.
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert!(
-            body.is_empty(),
-            "an undeclared body past the ceiling must be bounded, not aggregated; got {} bytes",
-            body.len()
-        );
+        assert!(body.is_empty(), "the oversized raw drain must fail");
+        assert_eq!(polls.load(Ordering::Relaxed), 129);
     }
 }

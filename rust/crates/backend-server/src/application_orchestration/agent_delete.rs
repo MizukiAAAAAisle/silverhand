@@ -1737,7 +1737,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_committed_seal_announces_from_the_committed_id_not_the_request() {
+    async fn a_matching_committed_seal_announces_the_deleted_agent() {
         // The announce must ride the committed seal's id. The fake reads back the
         // agent it was asked to announce; a matching seal announces exactly once for
         // the requested (== committed) agent.

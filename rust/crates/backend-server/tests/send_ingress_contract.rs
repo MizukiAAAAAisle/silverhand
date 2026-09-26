@@ -26,11 +26,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use axum::{
-    Router,
-    body::Body,
-    http::{Request, StatusCode},
-};
+use axum::{Router, body::Body, http::Request};
 use serde_json::{Value, json};
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::{
@@ -315,29 +311,6 @@ async fn the_ingress_answers_every_case_the_contract_names() {
                     "{name}: freshness_bypass"
                 );
             }
-        }
-    }
-}
-
-/// The refusals this side answers are the shapes the product routes publish, so a case that
-/// expects one must be answered with a status the routes actually use. Three layers reach the
-/// wire, and each keeps its own status: the address axis still refuses a malformed or self-pair
-/// target with 400, the content cap answers 413, and semantic body admission
-/// (`PayloadRefusal::Invalid`, per the frozen #2236/#2247 governance) renders the shared minimal
-/// `422 {"error":"invalid input"}`.
-#[tokio::test]
-async fn every_refusal_the_contract_expects_is_one_this_door_publishes() {
-    for case in contract()["cases"].as_array().unwrap() {
-        if let Some(refused) = expected(case).get("refused") {
-            let status = refused["status"].as_u64().unwrap();
-            assert!(
-                status == u64::from(StatusCode::BAD_REQUEST.as_u16())
-                    || status == u64::from(StatusCode::PAYLOAD_TOO_LARGE.as_u16())
-                    || status == u64::from(StatusCode::UNPROCESSABLE_ENTITY.as_u16()),
-                "{}: an ingress refusal is 400 (address), 413 (content cap), or 422 (semantic \
-                 body), not {status}",
-                case["name"]
-            );
         }
     }
 }

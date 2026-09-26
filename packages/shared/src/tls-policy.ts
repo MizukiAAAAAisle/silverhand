@@ -54,19 +54,14 @@ export type TlsErrorCode =
  * into `host_tls_expired` because the UI treatment is the same:
  * tell the operator their cert time bounds don't match wall-clock.
  */
-const TLS_EXPIRED_CODES: ReadonlySet<string> = new Set([
-  'CERT_HAS_EXPIRED',
-  'CERT_NOT_YET_VALID',
-]);
+const TLS_EXPIRED_CODES: ReadonlySet<string> = new Set(['CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID']);
 
 /**
  * Node error codes that mean "the cert is trusted but doesn't match
  * the hostname we asked for". This is the alt-name / SAN mismatch
  * branch.
  */
-const TLS_HOSTNAME_CODES: ReadonlySet<string> = new Set([
-  'ERR_TLS_CERT_ALTNAME_INVALID',
-]);
+const TLS_HOSTNAME_CODES: ReadonlySet<string> = new Set(['ERR_TLS_CERT_ALTNAME_INVALID']);
 
 /**
  * Node / OpenSSL error codes that mean "the certificate chain itself
@@ -202,20 +197,4 @@ export function classifyTlsError(err: unknown): TlsErrorCode | null {
     current = (current as { cause?: unknown }).cause;
   }
   return chainFallback;
-}
-
-/**
- * Convenience: a stable human-readable label per typed code. Use in
- * structured logs; UI surfaces should i18n keyed off the typed code
- * directly rather than rendering this label.
- */
-export function describeTlsErrorCode(code: TlsErrorCode): string {
-  switch (code) {
-    case 'host_tls_chain_invalid':
-      return 'TLS certificate chain is not trusted by the system store';
-    case 'host_tls_hostname_mismatch':
-      return 'TLS certificate does not cover the requested hostname';
-    case 'host_tls_expired':
-      return 'TLS certificate is outside its validity window';
-  }
 }

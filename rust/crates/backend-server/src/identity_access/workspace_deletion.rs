@@ -1,12 +1,10 @@
 //! `DELETE /api/workspaces/{id}` — the human-perimeter workspace delete.
 //!
-//! The route is thin over two collaborators: the delete write authority (phase 1
-//! `capture_teardown` decides the refusal verdict under a lock — no plan, no delete;
-//! phase 2 `commit_deletion` re-validates under a FRESH lock, then captures the FULL
-//! teardown plan and cascades the row in the SAME transaction, returning
-//! `Committed(plan)`) and a post-commit aftermath that consumes that PHASE-2 committed
-//! plan (runtime stops + `viewer_workspaces_changed { removed }` fan-out). Refusal/
-//! no-op/superseded verdicts reach ZERO aftermath; a single failed effect leg is
+//! The route delegates to one transactional delete authority and post-commit
+//! aftermath. The writer decides, captures the teardown plan and cascades under
+//! one lock; only `Committed(plan)` authorizes runtime stops, blob cleanup and
+//! `viewer_workspaces_changed { removed }` fan-out. Refusal/no-op verdicts
+//! reach ZERO aftermath; a single failed effect leg is
 //! observable and does not suppress the others or rewrite the committed 204.
 
 use std::sync::Arc;

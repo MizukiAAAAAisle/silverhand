@@ -970,18 +970,30 @@ mod tests {
             .unwrap()
             .join(alias_basename(blob.key(), &alias).unwrap());
         let outside = tempfile::NamedTempFile::new().unwrap();
-        symlink(outside.path(), &alias_path).unwrap();
-
-        assert!(matches!(
-            store.materialize_alias(&blob, &alias).await.unwrap_err(),
-            LocalBlobStoreError::UnsafeAliasTarget
-        ));
-        assert!(matches!(
-            store.delete_alias(&blob, &alias).await.unwrap_err(),
-            LocalBlobStoreError::UnsafeAliasTarget
-        ));
-        assert!(alias_path.exists());
-        assert!(outside.path().exists());
+        let relative_target = root.path().join("attachments/outside.txt");
+        std_fs::write(&relative_target, b"not an alias-owned blob").unwrap();
+        for target in [
+            outside.path().to_path_buf(),
+            PathBuf::from("../outside.txt"),
+        ] {
+            symlink(&target, &alias_path).unwrap();
+            assert!(alias_path.exists(), "the planted link really resolves");
+            assert!(matches!(
+                store.materialize_alias(&blob, &alias).await.unwrap_err(),
+                LocalBlobStoreError::UnsafeAliasTarget
+            ));
+            assert!(matches!(
+                store.delete_alias(&blob, &alias).await.unwrap_err(),
+                LocalBlobStoreError::UnsafeAliasTarget
+            ));
+            assert_eq!(std_fs::read_link(&alias_path).unwrap(), target);
+            assert!(outside.path().exists());
+            assert_eq!(
+                std_fs::read(&relative_target).unwrap(),
+                b"not an alias-owned blob"
+            );
+            std_fs::remove_file(&alias_path).unwrap();
+        }
     }
 
     #[cfg(unix)]

@@ -20,9 +20,8 @@ pub mod settlement;
 pub mod spec;
 
 pub use cancel::{
-    CancelDecision, CancelTarget, CapabilityVerdict, OwnerBind, ScheduleCancelFacts,
-    ScheduleCancelOutcome, ScheduleCancelUnitOfWork, bind_owner, evaluate_cancel,
-    evaluate_capability,
+    CancelTarget, CapabilityVerdict, OwnerBind, ScheduleCancelOutcome, ScheduleCancelUnitOfWork,
+    bind_owner, evaluate_capability,
 };
 pub use create::{
     OnceWhen, SCHEDULE_MAX_ACTIVE_PER_AGENT, SCHEDULE_MAX_DELAY_SECONDS,

@@ -392,7 +392,7 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     }
 
     #[tokio::test]
-    async fn a_fresh_identity_commits_the_user_and_credential_atomically() {
+    async fn a_fresh_identity_returns_the_user_and_commits_its_credential() {
         let (_dir, path) = seed_db().await;
         // Eight bytes -> id "0001020304050607".
         let entropy = ScriptedEntropy::new(vec![0, 1, 2, 3, 4, 5, 6, 7]);
@@ -425,18 +425,20 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
             .filename(&path)
             .foreign_keys(true);
         let mut db = SqliteConnection::connect_with(&reopen).await.unwrap();
-        let params: String = sqlx::query_scalar(
-            "SELECT password_hash_params FROM user_password_credentials WHERE user_id = ?",
+        let (phc, params, updated_at): (String, String, i64) = sqlx::query_as(
+            "SELECT password_hash, password_hash_params, password_updated_at FROM user_password_credentials WHERE user_id = ?",
         )
         .bind("0001020304050607")
         .fetch_one(&mut db)
         .await
         .unwrap();
+        assert_eq!(phc, credential().phc);
+        assert_eq!(updated_at, 500);
         assert!(params.contains("silverhand/argon2-rustcrypto"));
     }
 
     #[tokio::test]
-    async fn a_handle_held_by_an_agent_is_a_handle_conflict_and_writes_nothing() {
+    async fn a_handle_held_by_an_agent_is_a_handle_conflict_without_a_credential() {
         let (_dir, path) = seed_db().await;
         let entropy = ScriptedEntropy::new(vec![10, 11, 12, 13, 14, 15, 16, 17]);
         let store = SqliteHumanRegistration::open_with_entropy(&path, entropy)

@@ -173,8 +173,10 @@ mod tests {
         tokio::fs::write(&file, b"secret\n").await.unwrap();
         let authority = EmbeddedBootstrapTokenAuthority::enabled("secret", file.clone());
 
-        assert!(!authority.consume("wrong").await);
-        assert!(!authority.consume("").await);
+        for wrong in ["wrong", "", "secrex"] {
+            assert!(!authority.consume(wrong).await, "{wrong}");
+            assert!(file.exists(), "no unlink for {wrong}");
+        }
         // Untouched: the real token still works and the file still exists.
         assert!(file.exists(), "file intact after a wrong attempt");
         assert!(authority.consume("secret").await);
@@ -195,7 +197,7 @@ mod tests {
     /// while the constant-time property itself is discharged by delegating to the
     /// audited `subtle::ConstantTimeEq` rather than a hand-written loop).
     #[test]
-    fn hashes_match_is_the_constant_time_digest_comparison() {
+    fn digest_comparison_rejects_first_and_last_byte_differences() {
         let a = SessionTokenHash::of_plaintext("token-a");
         let a_again = SessionTokenHash::of_plaintext("token-a");
         let b = SessionTokenHash::of_plaintext("token-b");
@@ -230,29 +232,6 @@ mod tests {
         assert!(
             !hashes_match(a.as_str(), &head_flipped),
             "first-byte difference rejects"
-        );
-    }
-
-    /// The production `consume` routes a wrong-but-same-length presented token through
-    /// that constant-time site: it neither spends the token nor unlinks the file, and
-    /// the real token still works afterward.
-    #[tokio::test]
-    async fn consume_rejects_a_same_length_wrong_token_without_side_effects() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("token");
-        tokio::fs::write(&file, b"the-real-secret\n").await.unwrap();
-        let authority = EmbeddedBootstrapTokenAuthority::enabled("the-real-secret", file.clone());
-
-        // Same byte-length as the real plaintext, different content.
-        assert_eq!("the-real-secret".len(), "the-fake-secret".len());
-        assert!(
-            !authority.consume("the-fake-secret").await,
-            "wrong token rejected"
-        );
-        assert!(file.exists(), "no unlink on a wrong attempt");
-        assert!(
-            authority.consume("the-real-secret").await,
-            "real token still live"
         );
     }
 

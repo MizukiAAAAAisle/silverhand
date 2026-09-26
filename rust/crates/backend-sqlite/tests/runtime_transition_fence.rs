@@ -139,12 +139,12 @@ async fn current_principal(
     fixture.custody.current(scope()).await.unwrap().unwrap()
 }
 
-async fn lease_owners(fixture: &Fixture) -> Vec<Option<String>> {
+async fn lease_state(fixture: &Fixture) -> Vec<(Option<String>, Option<i64>)> {
     let mut db = SqliteConnection::connect(&format!("sqlite:{}", fixture.path.display()))
         .await
         .unwrap();
     let rows = sqlx::query(
-        "SELECT in_flight_owner FROM conversation_inboxes \
+        "SELECT in_flight_owner, in_flight_at FROM conversation_inboxes \
          WHERE agent_id=? ORDER BY conversation_id",
     )
     .bind(AGENT)
@@ -152,7 +152,7 @@ async fn lease_owners(fixture: &Fixture) -> Vec<Option<String>> {
     .await
     .unwrap();
     rows.into_iter()
-        .map(|row| row.get::<Option<String>, _>("in_flight_owner"))
+        .map(|row| (row.get("in_flight_owner"), row.get("in_flight_at")))
         .collect()
 }
 
@@ -210,7 +210,10 @@ async fn held_marker_fences_custody_and_claim_then_exact_reclaim_stays_stable() 
         reclaimed.conversations(),
         &[conversation(C1), conversation(C2)]
     );
-    assert_eq!(lease_owners(&fixture).await, vec![None, None]);
+    assert_eq!(
+        lease_state(&fixture).await,
+        vec![(None, None), (None, None)]
+    );
 
     let claim = fixture
         .delivery
@@ -226,7 +229,10 @@ async fn held_marker_fences_custody_and_claim_then_exact_reclaim_stays_stable() 
         .await
         .unwrap();
     assert!(matches!(claim, ClaimPendingInbox::Transitioning));
-    assert_eq!(lease_owners(&fixture).await, vec![None, None]);
+    assert_eq!(
+        lease_state(&fixture).await,
+        vec![(None, None), (None, None)]
+    );
 
     assert_eq!(
         abort_runtime_transition(&fixture.transition, &lock)
@@ -279,7 +285,10 @@ async fn stale_lock_reclaim_is_lost_and_leaves_every_lease_untouched() {
         ReclaimRuntimeTransitionInboxes::Lost
     );
     assert_eq!(
-        lease_owners(&fixture).await,
-        vec![Some("old-owner".to_owned()), Some("old-owner".to_owned())]
+        lease_state(&fixture).await,
+        vec![
+            (Some("old-owner".to_owned()), Some(1)),
+            (Some("old-owner".to_owned()), Some(1)),
+        ]
     );
 }

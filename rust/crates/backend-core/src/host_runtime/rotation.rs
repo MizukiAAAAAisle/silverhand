@@ -892,7 +892,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_revoke_landing_under_the_lock_is_the_in_lock_verdicts_answer() {
+    async fn a_revoked_credential_issue_verdict_is_propagated() {
         let mut world = World::new();
         world.refusal = Some(CredentialIssueRefusal::HostRevoked);
 

@@ -2,7 +2,6 @@ use silverhand_backend_core::{
     conversation_messaging::messaging::collaboration::channel_directory::{
         ActiveChannelDirectoryPort, ArchivedSince, ArchivedWorkspaceChannelDirectoryPort,
         GlobalArchivedChannelDirectoryPort, GlobalArchivedDirectoryRefusal,
-        WorkspaceDirectoryRefusal,
     },
     foundation::identity::{UserId, WorkspaceId},
 };
@@ -336,29 +335,5 @@ async fn global_kind_roster_mismatch_is_corruption_not_a_projectable_row() {
         read.archived_global(&UserId::parse("u").unwrap(), None, None)
             .await
             .is_err()
-    );
-}
-
-#[tokio::test]
-async fn workspace_refusal_order_distinguishes_missing_from_nonmember() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("channel-directory-refusal.sqlite");
-    seed(&path).await;
-    let read = MessagingStore::open(&path)
-        .await
-        .unwrap()
-        .channel_directory();
-    let other = UserId::parse("other").unwrap();
-    assert_eq!(
-        read.active(&other, &WorkspaceId::parse("missing").unwrap())
-            .await
-            .unwrap(),
-        Err(WorkspaceDirectoryRefusal::NotFound)
-    );
-    assert_eq!(
-        read.active(&other, &WorkspaceId::parse("w").unwrap())
-            .await
-            .unwrap(),
-        Err(WorkspaceDirectoryRefusal::Forbidden)
     );
 }

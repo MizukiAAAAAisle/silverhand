@@ -137,10 +137,7 @@ mod tests {
 
         let long = "a".repeat(600);
         let audit = SessionAudit::capture(Some(&long), None);
-        assert_eq!(
-            audit.user_agent().unwrap().chars().count(),
-            AUDIT_FIELD_MAX_UTF16
-        );
+        assert_eq!(audit.user_agent(), Some("a".repeat(512).as_str()));
     }
 
     #[test]
@@ -148,14 +145,15 @@ mod tests {
         // 511 ASCII + one astral emoji (2 UTF-16 units) = 513 units: the emoji
         // would straddle the 512 boundary, so it is dropped whole, not halved.
         let raw = format!("{}\u{1F680}", "a".repeat(511));
-        let cut = cut_to_utf16_units(&raw, AUDIT_FIELD_MAX_UTF16);
-        assert_eq!(cut.encode_utf16().count(), 511);
-        assert!(!cut.contains('\u{1F680}'));
+        let audit = SessionAudit::capture(Some(&raw), Some(&raw));
+        let expected = "a".repeat(511);
+        assert_eq!(audit.user_agent(), Some(expected.as_str()));
+        assert_eq!(audit.ip_first_seen(), Some(expected.as_str()));
 
         // 510 ASCII + the emoji = 512 units exactly: it fits and is kept whole.
         let raw = format!("{}\u{1F680}", "a".repeat(510));
-        let cut = cut_to_utf16_units(&raw, AUDIT_FIELD_MAX_UTF16);
-        assert_eq!(cut.encode_utf16().count(), 512);
-        assert!(cut.contains('\u{1F680}'));
+        let audit = SessionAudit::capture(Some(&raw), Some(&raw));
+        assert_eq!(audit.user_agent(), Some(raw.as_str()));
+        assert_eq!(audit.ip_first_seen(), Some(raw.as_str()));
     }
 }

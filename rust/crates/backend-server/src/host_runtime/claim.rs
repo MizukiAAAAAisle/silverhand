@@ -558,10 +558,9 @@ mod tests {
         assert_eq!(claim_calls.load(SeqCst), 0);
     }
 
-    /// The principal is the perimeter's contribution; without it the route parses
-    /// NOTHING and fails closed rather than guessing a requester.
+    /// Without the perimeter's principal the admitted body never reaches claim or issue.
     #[tokio::test]
-    async fn a_missing_principal_reads_nothing_and_fails_closed() {
+    async fn a_missing_principal_never_claims_or_issues() {
         let reply = post(
             r#"{"installation_id":"11111111-1111-4111-8111-111111111111"}"#,
             false,
@@ -593,9 +592,9 @@ mod tests {
         assert_eq!(reply.issued, 1);
     }
 
-    /// A padded but non-empty label is trimmed and accepted, never a `too_small`.
+    /// A padded but non-empty label is accepted; trimming belongs to the value owner.
     #[tokio::test]
-    async fn a_padded_label_is_trimmed_and_accepted() {
+    async fn a_padded_label_is_accepted() {
         let reply = post_valid(
             r#"{"installation_id":"11111111-1111-4111-8111-111111111111","label":"  Foo  "}"#,
         )
@@ -627,7 +626,7 @@ mod tests {
     /// A credential refused because the computer was revoked under the claim is the one
     /// typed race with a `409` of its own.
     #[tokio::test]
-    async fn a_revoked_computer_under_the_claim_is_a_409() {
+    async fn a_revoked_credential_issue_verdict_maps_to_409() {
         let reply = post(
             r#"{"installation_id":"11111111-1111-4111-8111-111111111111"}"#,
             true,
@@ -658,9 +657,9 @@ mod tests {
         assert_eq!(reply.body, "Internal Server Error");
     }
 
-    /// A persistence failure in the claim is the framework's plain `500`.
+    /// A persistence failure while issuing the credential is the framework's plain `500`.
     #[tokio::test]
-    async fn a_write_failure_is_the_frameworks_plain_500() {
+    async fn a_credential_issue_failure_is_the_frameworks_plain_500() {
         let reply = post(
             r#"{"installation_id":"11111111-1111-4111-8111-111111111111"}"#,
             true,

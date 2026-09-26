@@ -14,7 +14,7 @@ use serde_json::Value;
 use silverhand_backend_core::{
     foundation::identity::UserId,
     host_runtime::{
-        environment::{EntropySource, SystemClock},
+        environment::{Clock, EntropySource},
         invite::CreateHostInvite,
     },
 };
@@ -67,9 +67,20 @@ async fn fixture(name: &str) -> (TempDir, std::path::PathBuf, SqliteHostRuntimeS
 
 fn app(store: SqliteHostRuntimeStore) -> Router {
     host_runtime::router(
-        CreateHostInvite::new(store, FixedEntropy::sequence(), SystemClock),
+        CreateHostInvite::new(store, FixedEntropy::sequence(), FixedClock),
         None,
     )
+}
+
+#[derive(Clone, Copy)]
+struct FixedClock;
+
+impl Clock for FixedClock {
+    type Error = Infallible;
+
+    fn unix_time_ms(&self) -> Result<i64, Self::Error> {
+        Ok(1_700_000_000_123)
+    }
 }
 
 #[tokio::test]
@@ -78,13 +89,19 @@ async fn real_sqlite_store_drives_the_public_host_create_wire() {
     let (status, body) = request(&app(store), "{}").await;
     assert_eq!(status, StatusCode::OK);
     let body: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(body["host_id"], body["host"]["id"]);
-    assert_eq!(body["host"]["kind"], "remote");
-    assert_eq!(body["host"]["provisioning_source"], "user_invite");
-    assert_eq!(body["host"]["status"], "pending");
-    assert_eq!(body["host"]["placeable"], false);
-    assert_eq!(body["daemon_npm_spec"], "@silverhand-ai/daemon@latest");
-    assert_eq!(body["connect_token"].as_str().unwrap().len(), 43);
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../src/host_runtime/fixtures/create_host_invite_parity.json"
+    ))
+    .unwrap();
+    let mut expected = fixture["success"]["body"].clone();
+    // Substitute independent expected values, never normalize actual response fields.
+    expected["host_id"] = "AAECAwQFBgcICQoL".into();
+    expected["host"]["id"] = "AAECAwQFBgcICQoL".into();
+    expected["host"]["name"] = "computer-0c0d0e0f".into();
+    expected["host"]["created_at"] = 1_700_000_000_123_i64.into();
+    expected["host"]["creator_user_id"] = "user-1".into();
+    expected["connect_token"] = "HB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs".into();
+    assert_eq!(body, expected);
 
     let options = SqliteConnectOptions::new()
         .filename(path)
@@ -94,7 +111,8 @@ async fn real_sqlite_store_drives_the_public_host_create_wire() {
         .fetch_one(&mut connection)
         .await
         .unwrap();
-    assert_ne!(stored_hash, body["connect_token"]);
+    // Independent Node SHA-256/base64url vector for the expected returned secret.
+    assert_eq!(stored_hash, "NqQOYYO_N23JO0dqiftLMauI6EQzdxH2jHyMjWFcvsM");
     let counts: (i64, i64) = (
         sqlx::query_scalar("SELECT count(*) FROM hosts")
             .fetch_one(&mut connection)
@@ -135,7 +153,6 @@ async fn real_credential_failure_rolls_back_and_logs_once_without_the_secret() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body, "Internal Server Error");
     let known_generated_token = "HB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs";
-    assert!(!body.contains(known_generated_token));
 
     let host_count: i64 = sqlx::query_scalar("SELECT count(*) FROM hosts")
         .fetch_one(&mut independent)

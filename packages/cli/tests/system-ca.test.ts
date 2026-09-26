@@ -1,8 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { ensureSystemCaTrusted } from '../src/system-ca.js';
 import type { NodeSystemCaActivation } from '@silverhand/host/node-system-ca';
+
+const { activate } = vi.hoisted(() => ({ activate: vi.fn() }));
+vi.mock('@silverhand/host/node-system-ca', () => ({ enableNodeSystemCa: activate }));
+beforeEach(() => {
+  activate.mockReset();
+});
 
 /**
  * The CLI is a separate spawned process (execPath + ELECTRON_RUN_AS_NODE=1) and
@@ -19,22 +25,22 @@ describe('ensureSystemCaTrusted', () => {
       systemCount: 14,
       mergedCount: 134,
     };
-    const activate = vi.fn(() => activation);
+    activate.mockReturnValue(activation);
 
-    const result = ensureSystemCaTrusted(activate);
+    const result = ensureSystemCaTrusted();
 
     expect(activate).toHaveBeenCalledTimes(1);
     expect(result).toBe(activation);
   });
 
   it('swallows activation failures so the CLI still runs on the bundled bundle', () => {
-    const activate = vi.fn(() => {
+    activate.mockImplementation(() => {
       throw new Error('trust store unreadable');
     });
 
     let result: unknown;
     expect(() => {
-      result = ensureSystemCaTrusted(activate);
+      result = ensureSystemCaTrusted();
     }).not.toThrow();
     expect(result).toBeUndefined();
     expect(activate).toHaveBeenCalledTimes(1);
@@ -52,10 +58,7 @@ describe('ensureSystemCaTrusted', () => {
  * repo's other structural fences.
  */
 describe('cli entry activates system CA at bootstrap', () => {
-  const source = readFileSync(
-    fileURLToPath(new URL('../src/cli.ts', import.meta.url)),
-    'utf8',
-  );
+  const source = readFileSync(fileURLToPath(new URL('../src/cli.ts', import.meta.url)), 'utf8');
 
   it('imports the activation seam', () => {
     expect(source).toMatch(/import\s*\{\s*ensureSystemCaTrusted\s*\}\s*from\s*'\.\/system-ca\.js'/);

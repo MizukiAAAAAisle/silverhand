@@ -1,4 +1,4 @@
-import { type ReasoningEffort, type RuntimeKind, RuntimeKindSchema } from './db/schema.js';
+import { type ReasoningEffort, type RuntimeKind } from './db/schema.js';
 
 /**
  * Single source of truth for per-runtime UI facts.
@@ -297,12 +297,4 @@ export function isBaselineReasoningEffort(kind: RuntimeKind, value: ReasoningEff
  *  the raw lowercase token; this is display-only. */
 export function reasoningEffortLabel(value: ReasoningEffort): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-/** Guard used by tests to keep `RUNTIME_ORDER` exhaustive. */
-export function runtimeCatalogCoversAllKinds(): boolean {
-  return (
-    RUNTIME_ORDER.length === RuntimeKindSchema.options.length &&
-    RuntimeKindSchema.options.every((k) => RUNTIME_ORDER.includes(k))
-  );
 }

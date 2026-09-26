@@ -24,11 +24,7 @@ import {
  *  an expectation derived from the code under test proves nothing. That limits
  *  this helper to ASCII titles — every row whose fold is interesting is written
  *  out by hand below. */
-function clean(
-  id: string,
-  title: string,
-  workspaceId = 'w1',
-): ConversationTitleAuditRow {
+function clean(id: string, title: string, workspaceId = 'w1'): ConversationTitleAuditRow {
   return { id, workspaceId, title, titleKey: title.normalize('NFC').trim().toLowerCase() };
 }
 
@@ -118,7 +114,7 @@ describe('title address audit: defect classes (#task:2016)', () => {
       ],
       { keysExpected: true },
     );
-    const collision = report.defects.find(d => d.kind === 'folded_collision');
+    const collision = report.defects.find((d) => d.kind === 'folded_collision');
     expect(collision).toEqual({
       kind: 'folded_collision',
       workspaceId: 'w1',
@@ -177,23 +173,17 @@ describe('title address audit: pre-migration mode (#task:2016)', () => {
     // v72: the column does not exist, and the migration itself canonicalizes
     // the title as it keys it.
     const report = auditConversationTitleAddresses(ROWS, { keysExpected: false });
-    expect(report.defects.map(d => d.kind)).toEqual(['folded_collision']);
-  });
-
-  it('finds the collision through padding and case together', () => {
-    // `Design` and `  design  ` are one address. This pair is legal data below
-    // v72 and is exactly what the UNIQUE index would refuse with a message
-    // naming neither row.
-    const report = auditConversationTitleAddresses(ROWS, { keysExpected: false });
-    expect(report.defects[0]).toEqual({
-      kind: 'folded_collision',
-      workspaceId: 'w1',
-      key: 'design',
-      members: [
-        { id: 'c1', title: 'Design' },
-        { id: 'c2', title: '  design  ' },
-      ],
-    });
+    expect(report.defects).toEqual([
+      {
+        kind: 'folded_collision',
+        workspaceId: 'w1',
+        key: 'design',
+        members: [
+          { id: 'c1', title: 'Design' },
+          { id: 'c2', title: '  design  ' },
+        ],
+      },
+    ]);
   });
 
   it('passes a database whose titles merely need normalizing', () => {

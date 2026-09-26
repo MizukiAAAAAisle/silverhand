@@ -33,7 +33,7 @@ mod tests {
     fn count_is_non_negative_and_exact_on_the_javascript_wire() {
         assert_eq!(ReactionCount::new(0).unwrap().value(), 0);
         assert!(ReactionCount::new(-1).is_err());
-        assert!(ReactionCount::new(MAX_SAFE_INTEGER).is_ok());
-        assert!(ReactionCount::new(MAX_SAFE_INTEGER + 1).is_err());
+        assert!(ReactionCount::new(9_007_199_254_740_991).is_ok());
+        assert!(ReactionCount::new(9_007_199_254_740_992).is_err());
     }
 }

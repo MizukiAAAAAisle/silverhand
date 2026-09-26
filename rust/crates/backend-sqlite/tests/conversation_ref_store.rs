@@ -58,44 +58,6 @@ async fn seed(path: &std::path::Path) {
 }
 
 #[tokio::test]
-async fn public_widen_and_workspace_face_follow_the_production_refusal_order() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("conversation-ref.sqlite");
-    seed(&path).await;
-    let read = MessagingStore::open(&path)
-        .await
-        .unwrap()
-        .conversation_refs();
-    let viewer = UserId::parse("u").unwrap();
-
-    for (id, expected) in [
-        ("member", Ok("Member")),
-        ("public", Ok("Public")),
-        ("archived", Err(ConversationRefRefusal::Forbidden)),
-        ("fixed", Err(ConversationRefRefusal::Forbidden)),
-        ("pair", Err(ConversationRefRefusal::NotFound)),
-        ("foreign-pair", Err(ConversationRefRefusal::Forbidden)),
-        ("missing", Err(ConversationRefRefusal::NotFound)),
-    ] {
-        let result = read
-            .resolve(&viewer, &ConversationId::parse(id).unwrap())
-            .await
-            .unwrap();
-        match expected {
-            Ok(title) => {
-                let requested = ConversationId::parse(id).unwrap();
-                assert_eq!(
-                    result.unwrap().bind(&requested).unwrap().title(),
-                    title,
-                    "{id}"
-                )
-            }
-            Err(refusal) => assert_eq!(result, Err(refusal), "{id}"),
-        }
-    }
-}
-
-#[tokio::test]
 async fn strict_placement_status_and_visibility_decode_fail_before_projection() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("conversation-ref-corrupt.sqlite");

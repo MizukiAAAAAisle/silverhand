@@ -23,22 +23,14 @@ import {
   defaultAppRoot,
   resolveComputerSlotFromComputersRoot,
 } from '@silverhand/shared/app-data-layout';
-import {
-  claimPidFile,
-  installShutdownHandlers,
-  releasePidFile,
-} from './lifecycle.js';
+import { claimPidFile, installShutdownHandlers, releasePidFile } from './lifecycle.js';
 import { readFileSync } from 'node:fs';
 import type { DaemonHostConfig } from '@silverhand/shared';
 import { IntentDispatcher } from './dispatcher.js';
 import { AgentHomeMutationCoordinator } from './agent-home-mutation-coordinator.js';
 import { DaemonServer } from './server.js';
 import { createDaemonLogger, type DaemonLogger } from './logger.js';
-import {
-  encodeFrame,
-  type EventFrame,
-  type AgentMaterializeParams,
-} from '../protocol.js';
+import { encodeFrame, type EventFrame } from '../protocol.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import { logDaemon } from './daemon-logging.js';
 import {
@@ -46,20 +38,11 @@ import {
   type DaemonIdentity,
   readOrCreateDaemonIdentity,
 } from './identity.js';
-import {
-  OutboundSupervisor,
-  type OutboundBinding,
-} from './outbound-supervisor.js';
-import {
-  OutboundDaemonClient,
-  type OutboundCommandDispatcher,
-} from './outbound-client.js';
+import { OutboundSupervisor, type OutboundBinding } from './outbound-supervisor.js';
+import { OutboundDaemonClient, type OutboundCommandDispatcher } from './outbound-client.js';
 import type { OwnerCleanup } from './outbound-frame-mapping.js';
 import { LocalOutboundFrameServer } from './local-outbound-frame-server.js';
-import {
-  AgentMaterializeError,
-  materializeAgent,
-} from './agent-materialize/index.js';
+import { AgentMaterializeError, materializeAgent } from './agent-materialize/index.js';
 import {
   AgentWorkspaceIndexError,
   indexAgentWorkspaces,
@@ -90,10 +73,7 @@ import {
   reconcileRuntimePidfiles,
 } from './runtime-pidfiles.js';
 import type { SupervisorContract } from './supervisor-contract.js';
-import {
-  readDaemonProxyConfig,
-  writeDaemonProxyConfig,
-} from './proxy-config.js';
+import { readDaemonProxyConfig, writeDaemonProxyConfig } from './proxy-config.js';
 import { computerProxyConfigPath } from './computer-profile.js';
 import {
   resolveLocalSilverhandCliLauncher,
@@ -274,53 +254,6 @@ export interface RunDaemonOptions {
         controlPlaneServerUrl: () => string | null;
       }) => SupervisorContract)
     | null;
-  /**
-   * D4.d D6 — **test-only** hooks. NOT part of the embedder
-   * contract. Production MUST omit this field. The dispatcher
-   * slot ALWAYS calls `materializeAgent(...)` — there is no
-   * embedder-facing seam to replace the handler. The hook
-   * below is a narrow test surface:
-   *
-   *   - `agentMaterializeFaultInjector` is a deterministic
-   *     typed-error pre-hook: if it returns an
-   *     `AgentMaterializeError`, the dispatcher surfaces the
-   *     typed wire code (Cindy D2 pre-gate #3 narrowing path);
-   *     if it returns `undefined`, the real `materializeAgent`
-   *     runs. The injector cannot return a synthetic success
-   *     result, cannot mutate handler behavior, and is fired
-   *     BEFORE `materializeAgent` — so the only behavior under
-   *     test control is "fail this dispatch with code X" or
-   *     "let the real handler run".
-   *
-   * There is deliberately NO home-dir seam (#task:1813): tests
-   * sandbox the durable agent tree the same way production roots
-   * it — by passing `agentHomeRootDir` / `computersRootDir`. A
-   * test-only home override existed only to keep the retired
-   * home-relative default from writing into the real user home,
-   * and that default is gone.
-   *
-   * Cindy D6-2 P1-1 (`d4IID_Nnn1VShRa5`): a previous draft
-   * exposed `agentMaterializeHandler?` at the top of
-   * `RunDaemonOptions`, which read like an embedder-facing
-   * seam to replace formal server↔daemon semantics. This
-   * narrow `testHooks` namespace makes the test-only scope
-   * explicit in the API shape and preserves the D4.d invariant
-   * that the wire arm is additive only — no fork, no
-   * replacement.
-   */
-  testHooks?: {
-    agentMaterializeFaultInjector?: (
-      params: AgentMaterializeParams,
-    ) => AgentMaterializeError | undefined;
-    /**
-     * D4.e-1 (Cindy P1-3) — override the app/state root of this computer.
-     * Production derives it from the composition root (desktop app root /
-     * connect home root); tests set it explicitly so the state-root-derived
-     * coordinates (today: the per-computer proxy config path) can be exercised
-     * against a tmp tree without depending on the real `~/.silverhand`.
-     */
-    silverhandStateRoot?: string;
-  };
 }
 
 export interface RunningDaemon {
@@ -366,10 +299,7 @@ function resolveControlPlaneServerUrl(input: {
   controlPlaneServerUrlPath: string | null | undefined;
   logger: DaemonLogger;
 }): string | null {
-  const daemonLocalUrl = readControlPlaneServerUrl(
-    input.controlPlaneServerUrlPath,
-    input.logger,
-  );
+  const daemonLocalUrl = readControlPlaneServerUrl(input.controlPlaneServerUrlPath, input.logger);
   if (daemonLocalUrl) return daemonLocalUrl;
 
   const origin = input.controlPlaneBinding?.server_origin ?? null;
@@ -391,16 +321,12 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   const startedAt = Date.now();
   const daemonInstanceId = buildDaemonInstanceId(startedAt);
   const runtimePidRootDir =
-    opts.runtimePidRootDir === undefined
-      ? defaultRuntimePidRootDir()
-      : opts.runtimePidRootDir;
+    opts.runtimePidRootDir === undefined ? defaultRuntimePidRootDir() : opts.runtimePidRootDir;
   const daemonIdentityPath =
-    opts.daemonIdentityPath === undefined
-      ? defaultDaemonIdentityPath()
-      : opts.daemonIdentityPath;
+    opts.daemonIdentityPath === undefined ? defaultDaemonIdentityPath() : opts.daemonIdentityPath;
   const daemonIdentity =
     opts.daemonIdentity !== undefined
-      ? opts.daemonIdentity ?? undefined
+      ? (opts.daemonIdentity ?? undefined)
       : daemonIdentityPath === null
         ? undefined
         : readOrCreateDaemonIdentity(daemonIdentityPath);
@@ -503,9 +429,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // outbound socket can be open before this function returns, so the
   // throw is unreachable in practice.
   let commandForwarder: OutboundCommandDispatcher = () => {
-    throw new Error(
-      'outbound dispatchCommand invoked before dispatcher was wired',
-    );
+    throw new Error('outbound dispatchCommand invoked before dispatcher was wired');
   };
   // Late-bound like `commandForwarder` (the dispatcher is created below): the
   // owner-scoped deferred-queue cleanup an outbound ingress fires on its
@@ -515,7 +439,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     logger,
     readyEvent,
     dispatchCommand: (command, ctx) => commandForwarder(command, ctx),
-    cleanupDeferredForOwner: owner => ownerCleanup(owner),
+    cleanupDeferredForOwner: (owner) => ownerCleanup(owner),
   });
   const directOutboundBinding = opts.hostConfig
     ? {
@@ -545,10 +469,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // home root. relocation-v1 §7-4: its former job — rooting the registry's
   // requested-path guard — went away with `validateRequestedPath`; what still
   // reads it is the per-computer proxy-config path below.
-  const silverhandStateRoot =
-    opts.testHooks?.silverhandStateRoot ??
-    opts.silverhandStateRootDir ??
-    defaultAppRoot();
+  const silverhandStateRoot = opts.silverhandStateRootDir ?? defaultAppRoot();
   const fallbackEmbeddedHostId = daemonIdentity?.daemon_id ?? 'local';
   const liveOutboundBinding = (): OutboundBinding | null =>
     directOutboundBinding ?? outboundSupervisor.currentBinding();
@@ -598,10 +519,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         : live;
     const slot =
       opts.computersRootDir != null
-        ? resolveComputerSlotFromComputersRoot(
-            opts.computersRootDir,
-            binding.host_id,
-          )
+        ? resolveComputerSlotFromComputersRoot(opts.computersRootDir, binding.host_id)
         : null;
     computerContext = {
       binding,
@@ -630,9 +548,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // daemon can hold an accepted binding and still have no agents root (no
   // `computersRootDir` to resolve the slot with, no explicit root), so
   // "until the machine binds" would misreport that half of the refusal set.
-  const agentsRootFor = <E extends Error>(
-    wrap: (message: string) => E,
-  ): string => {
+  const agentsRootFor = <E extends Error>(wrap: (message: string) => E): string => {
     const root = currentAgentsRoot();
     if (root === undefined) {
       throw wrap(
@@ -667,9 +583,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // Generation-scoped (#task:1608): reads the FROZEN context at spawn
     // time via a getter — never a mutable binding lookup.
     get agentHomeRootDir(): string {
-      return agentsRootFor(
-        m => new RuntimeStartResolveError('registry_unavailable', m),
-      );
+      return agentsRootFor((m) => new RuntimeStartResolveError('registry_unavailable', m));
     },
     // The prompt's This Context → Computer line. Authority is the LIVE
     // authenticated outbound binding only — never
@@ -678,8 +592,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // (`daemon_id` / 'local') when desktop has not claimed yet. Pre-attach
     // this fails closed (typed, recoverable) instead of stamping a
     // placeholder into prompt provenance.
-    resolveComputerId: (): string =>
-      resolveAuthenticatedComputerId(liveOutboundBinding()),
+    resolveComputerId: (): string => resolveAuthenticatedComputerId(liveOutboundBinding()),
   };
   // One authority is shared by both dispatcher ingresses and Supervisor.
   // Installing a purge fence is therefore immediately visible to internal
@@ -688,7 +601,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   const supervisor = opts.supervisorFactory
     ? opts.supervisorFactory({
         agentHomeMutationCoordinator,
-        emit: event => broadcaster(event),
+        emit: (event) => broadcaster(event),
         logger,
         daemonInstanceId,
         runtimePidRootDir,
@@ -714,7 +627,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // path context changes: freeze after an accepted attach/reload, fence
     // BEFORE detach so no in-flight operation can land in a stale (or,
     // after re-registration, a new) computer directory.
-    hostOutboundAttachHandler: async params => {
+    hostOutboundAttachHandler: async (params) => {
       const result = await outboundSupervisor.attach(params);
       freezeComputerContext();
       // #task:1719 dogfood finding — the connection-scoped `ready` is
@@ -753,7 +666,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     hostProxyConfigGetHandler: () => ({
       config: readDaemonProxyConfig(resolveProxyConfigPath(), logger),
     }),
-    hostProxyConfigSetHandler: params => {
+    hostProxyConfigSetHandler: (params) => {
       const proxyConfigPath = resolveProxyConfigPath();
       if (!proxyConfigPath) {
         throw new Error('host proxy config path is not configured');
@@ -766,18 +679,11 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // owns the §4.6 idempotency decision tree + atomic seed +
     // sentinel write. The L1 root is the agents root resolved above
     // — always explicit, never derived from the daemon process's
-    // `homedir()` (#task:1813). D4.d D6 narrowed the test seam to
-    // `testHooks` per Cindy `d4IID_Nnn1VShRa5` P1-1: there is NO
-    // embedder-facing handler-replacement option. The dispatcher slot
-    // ALWAYS invokes `materializeAgent`; tests may inject a
-    // deterministic typed-error fault BEFORE the real handler runs.
-    agentMaterializeHandler: async params => {
-      const fault = opts.testHooks?.agentMaterializeFaultInjector?.(params);
-      if (fault) throw fault;
+    // `homedir()` (#task:1813). The dispatcher always invokes the real
+    // handler; filesystem errors are classified at their owner.
+    agentMaterializeHandler: async (params) => {
       return materializeAgent(params, {
-        agentHomeRootDir: agentsRootFor(
-          m => new AgentMaterializeError('fs_unavailable', m),
-        ),
+        agentHomeRootDir: agentsRootFor((m) => new AgentMaterializeError('fs_unavailable', m)),
       });
     },
     // D4.e-1 — agent_workspace_index: route-time `agent_dir` resolver.
@@ -786,10 +692,10 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // deterministic agent-centric bundle coordinate and report `agent_dir`
     // only when that bundle is materialized here (relocation-v1 §7 task 4 —
     // no registry establishment gate; availability is an fs fact).
-    agentWorkspaceIndexHandler: async params => {
+    agentWorkspaceIndexHandler: async (params) => {
       return indexAgentWorkspaces(params, {
         agentHomeRootDir: agentsRootFor(
-          m => new AgentWorkspaceIndexError('registry_unavailable', m),
+          (m) => new AgentWorkspaceIndexError('registry_unavailable', m),
         ),
       });
     },
@@ -801,10 +707,10 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // materialized bundle degrades to an empty tree, not a refusal), or
     // agent_home/DM back to the same L1 dir. No server-derived path crosses
     // the wire.
-    agentWorkspaceTreeHandler: async params =>
+    agentWorkspaceTreeHandler: async (params) =>
       listAgentWorkspaceTree(params, {
         agentHomeRootDir: agentsRootFor(
-          m => new AgentWorkspaceFsError('registry_unavailable', m),
+          (m) => new AgentWorkspaceFsError('registry_unavailable', m),
         ),
       }),
     // #task:811/#1190 — agent_workspace_file_read: read one file from the
@@ -813,10 +719,10 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // so the daemon never follows a symlink or reads outside the resolved base.
     // Regular workspaces resolve by deterministic coordinate (§7 task 4); no
     // registry lookup.
-    agentWorkspaceFileReadHandler: async params =>
+    agentWorkspaceFileReadHandler: async (params) =>
       readAgentWorkspaceFile(params, {
         agentHomeRootDir: agentsRootFor(
-          m => new AgentWorkspaceFsError('registry_unavailable', m),
+          (m) => new AgentWorkspaceFsError('registry_unavailable', m),
         ),
       }),
     // D4.e-3 — agent_l2_seed: materialize a member agent's L2 (per-workspace)
@@ -825,11 +731,9 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // system_prompt.md), idempotent. relocation-v1 §7 task 4: no registry
     // establishment gate — seeding IS what makes the coordinate available, and
     // fails closed only on the fs.
-    agentL2SeedHandler: async params => {
+    agentL2SeedHandler: async (params) => {
       return seedAgentL2(params, {
-        agentHomeRootDir: agentsRootFor(
-          m => new AgentL2SeedError('registry_unavailable', m),
-        ),
+        agentHomeRootDir: agentsRootFor((m) => new AgentL2SeedError('registry_unavailable', m)),
       });
     },
     // D4.e-4 — agent_files_purge: remove an agent's host-local files on the
@@ -839,42 +743,34 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // so the purge removes that tree in one rm and consults NO registry. A
     // hard fs failure → typed `partial_purge` so the route keeps the DB row
     // for retry.
-    agentFilesPurgeHandler: async params => {
+    agentFilesPurgeHandler: async (params) => {
       return purgeAgentFiles(params, {
-        agentHomeRootDir: agentsRootFor(
-          m => new AgentFilesPurgeError('partial_purge', m),
-        ),
+        agentHomeRootDir: agentsRootFor((m) => new AgentFilesPurgeError('partial_purge', m)),
       });
     },
     // #task:1135 — agent_profile_mcp_read / _write: the host-local truth
     // behind `silverhand profile mcp get|set`. L1 resolves under the agents
     // root above; the write handler
     // re-validates the canonical schema and replaces `mcp.json` atomically.
-    agentProfileMcpReadHandler: async params =>
+    agentProfileMcpReadHandler: async (params) =>
       readAgentProfileMcp(params, {
-        agentHomeRootDir: agentsRootFor(
-          m => new AgentProfileMcpError('fs_unavailable', m),
-        ),
+        agentHomeRootDir: agentsRootFor((m) => new AgentProfileMcpError('fs_unavailable', m)),
       }),
-    agentProfileMcpWriteHandler: async params =>
+    agentProfileMcpWriteHandler: async (params) =>
       writeAgentProfileMcp(params, {
-        agentHomeRootDir: agentsRootFor(
-          m => new AgentProfileMcpError('fs_unavailable', m),
-        ),
+        agentHomeRootDir: agentsRootFor((m) => new AgentProfileMcpError('fs_unavailable', m)),
       }),
     // #task:1137 — mcp_probe: open a one-shot live MCP connection to a named
     // server (initialize + optional tools/list) and close it immediately. L1
     // resolves under the same agents root as read/write.
-    mcpProbeHandler: async params =>
+    mcpProbeHandler: async (params) =>
       probeMcpServer(params, {
-        agentHomeRootDir: agentsRootFor(
-          m => new AgentProfileMcpError('fs_unavailable', m),
-        ),
+        agentHomeRootDir: agentsRootFor((m) => new AgentProfileMcpError('fs_unavailable', m)),
       }),
   });
   commandForwarder = (command, ctx) =>
     dispatcher.dispatch(command.id, String(command.kind), command.params, ctx);
-  ownerCleanup = owner => dispatcher.cleanupDeferredForOwner(owner);
+  ownerCleanup = (owner) => dispatcher.cleanupDeferredForOwner(owner);
   const server = new DaemonServer({
     socketPath: opts.socketPath,
     dispatcher,
@@ -892,7 +788,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         logger,
         readyEvent,
         dispatchCommand: (command, ctx) => commandForwarder(command, ctx),
-        cleanupDeferredForOwner: owner => ownerCleanup(owner),
+        cleanupDeferredForOwner: (owner) => ownerCleanup(owner),
       })
     : null;
   const localOutboundServer =
@@ -900,7 +796,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       ? new LocalOutboundFrameServer({
           socketPath: opts.localOutboundSocketPath,
           dispatchCommand: (command, ctx) => commandForwarder(command, ctx),
-          cleanupDeferredForOwner: owner => ownerCleanup(owner),
+          cleanupDeferredForOwner: (owner) => ownerCleanup(owner),
           logger,
           // Same handshake the standalone WSS client sends on connect
           // (`outbound-client.ts` → `sendEvent(readyEvent())`). The
@@ -909,7 +805,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           readyEvent,
         })
       : null;
-  broadcaster = event => {
+  broadcaster = (event) => {
     server.broadcast(event);
     outboundSupervisor.sendEvent(event);
     directOutboundClient?.sendEvent(event);
@@ -1013,10 +909,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     try {
       await supervisor?.shutdown();
     } catch (err) {
-      logger.error(
-        { err: (err as Error).message },
-        'runtime shutdown failed; continuing teardown',
-      );
+      logger.error({ err: (err as Error).message }, 'runtime shutdown failed; continuing teardown');
     }
     outboundSupervisor.stop(reason);
     directOutboundClient?.stop(reason);
@@ -1033,10 +926,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     try {
       await server.stop(reason);
     } catch (err) {
-      logger.error(
-        { err: (err as Error).message },
-        'server.stop threw; continuing teardown',
-      );
+      logger.error({ err: (err as Error).message }, 'server.stop threw; continuing teardown');
     }
     releasePidFile(opts.pidFilePath);
     logger.info({ reason }, 'daemon stopped');
@@ -1048,7 +938,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   };
 
   if (opts.installSignals ?? true) {
-    installShutdownHandlers(logger, async signal => {
+    installShutdownHandlers(logger, async (signal) => {
       await stop(signal);
     });
   }
@@ -1057,7 +947,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     socketPath: opts.socketPath,
     pidFilePath: opts.pidFilePath,
     logger,
-    broadcast: event => broadcaster(event),
+    broadcast: (event) => broadcaster(event),
     stop,
   };
 }

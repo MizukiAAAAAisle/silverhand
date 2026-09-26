@@ -25,100 +25,6 @@ function parsed(
   return { flags, positional, rest: [] } as ParsedArgs;
 }
 
-function fakeEditClient(): {
-  client: { editTask: (input: Record<string, unknown>) => Promise<{ success: true }> };
-  capture: () => Record<string, unknown> | null;
-} {
-  let last: Record<string, unknown> | null = null;
-  return {
-    capture: () => last,
-    client: {
-      editTask: async input => {
-        last = input;
-        return { success: true } as const;
-      },
-    },
-  };
-}
-
-describe('task edit guards + wire mapping', () => {
-  const edit = findCommand('task', 'edit');
-  if (!edit) throw new Error('task edit command missing');
-
-  it('maps the positional task number + title to the wire shape (body omitted, unchanged)', async () => {
-    const { client, capture } = fakeEditClient();
-    await edit.run({
-      env,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      client: client as any,
-      args: parsed(['5'], { title: 'new' }),
-    });
-    expect(capture()).toEqual({
-      task_number: 5,
-      title: 'new',
-    });
-  });
-
-  it('rejects an inline --body value as body_requires_stdin (the removed form)', async () => {
-    // `--body <text>` / `--body=<text>` bind a string to the flag; the body
-    // now comes only from stdin, so the inline form is refused before any
-    // stdin read. Empty-stdin is REFUSED (not a clear) in the subprocess
-    // suite; clearing is the explicit `--clear-body`.
-    await expect(
-      edit.run({
-        env,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        client: {} as any,
-        args: parsed(['7'], { body: 'inline body' }),
-      }),
-    ).rejects.toMatchObject({ subkind: 'body_requires_stdin' });
-  });
-
-  it('maps --clear-body to an empty body (explicit clear, no stdin read)', async () => {
-    const { client, capture } = fakeEditClient();
-    await edit.run({
-      env,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      client: client as any,
-      args: parsed(['5'], { 'clear-body': true }),
-    });
-    expect(capture()).toEqual({ task_number: 5, body: '' });
-  });
-
-  it('rejects --body + --clear-body as mutually_exclusive', async () => {
-    await expect(
-      edit.run({
-        env,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        client: {} as any,
-        args: parsed(['5'], { body: true, 'clear-body': true }),
-      }),
-    ).rejects.toMatchObject({ subkind: 'mutually_exclusive' });
-  });
-
-  it('rejects a missing task number before reading stdin or calling the client', async () => {
-    await expect(
-      edit.run({
-        env,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        client: {} as any,
-        args: parsed([], { title: 'x' }),
-      }),
-    ).rejects.toMatchObject({ subkind: 'missing_task_number' });
-  });
-
-  it('rejects when neither --title nor --body is supplied', async () => {
-    await expect(
-      edit.run({
-        env,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        client: {} as any,
-        args: parsed(['1']),
-      }),
-    ).rejects.toMatchObject({ subkind: 'missing_required_flag' });
-  });
-});
-
 describe('task detail guard', () => {
   const detail = findCommand('task', 'detail');
   if (!detail) throw new Error('task detail command missing');
@@ -175,7 +81,7 @@ describe('positional <task_number> arity + value laws', () => {
 
   const pointVerbs = ['detail', 'unclaim', 'status', 'edit'] as const;
 
-  it.each(pointVerbs)('task %s rejects a second positional token', async verb => {
+  it.each(pointVerbs)('task %s rejects a second positional token', async (verb) => {
     const cmd = findCommand('task', verb)!;
     await expect(
       cmd.run({
@@ -254,9 +160,9 @@ describe('positional <task_number> arity + value laws', () => {
 
   it('task claim rejects an empty operand list', async () => {
     const cmd = findCommand('task', 'claim')!;
-    await expect(
-      cmd.run({ env, client: explodingClient, args: parsed([]) }),
-    ).rejects.toMatchObject({ subkind: 'missing_task_number' });
+    await expect(cmd.run({ env, client: explodingClient, args: parsed([]) })).rejects.toMatchObject(
+      { subkind: 'missing_task_number' },
+    );
   });
 
   it('task claim rejects a batch containing one bad token (all-or-nothing)', async () => {

@@ -794,37 +794,6 @@ mod tests {
     use sqlx::{Connection, Executor};
     use tower::ServiceExt;
 
-    fn decode(body: &str) -> Result<AddBody, serde_json::Error> {
-        crate::foundation::wire_admission::from_object_slice(body.as_bytes())
-    }
-
-    #[test]
-    fn member_body_does_not_cross_wire_identity_kinds() {
-        assert!(
-            decode(r#"{"kind":"agent","user_id":"u"}"#)
-                .unwrap()
-                .candidate()
-                .is_none()
-        );
-        assert!(
-            decode(r#"{"kind":"human","agent_id":"a"}"#)
-                .unwrap()
-                .candidate()
-                .is_none()
-        );
-        assert!(matches!(
-            decode(r#"{"kind":"agent","agent_id":"a"}"#)
-                .unwrap()
-                .candidate(),
-            Some(ConversationMemberCandidate::Agent(_))
-        ));
-    }
-
-    #[test]
-    fn body_admission_rejects_a_top_level_array_before_classification() {
-        assert!(decode(r#"["agent","a"]"#).is_err());
-    }
-
     #[test]
     fn handle_normalization_matches_the_ascii_stored_name_envelope() {
         assert_eq!(
@@ -835,16 +804,6 @@ mod tests {
         );
         assert!(NormalizedMemberHandle::try_from("@@alice".to_owned()).is_err());
         assert!(NormalizedMemberHandle::try_from("1alice".to_owned()).is_err());
-    }
-
-    #[test]
-    fn an_explicit_identity_arm_never_falls_back_to_a_handle() {
-        assert!(
-            decode(r#"{"kind":"agent","agent_id":"","handle":"member"}"#)
-                .unwrap()
-                .candidate()
-                .is_none()
-        );
     }
 
     #[derive(Clone, Copy)]
@@ -1338,39 +1297,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remove_target_specific_wire_and_add_ambiguity_are_exact() {
-        let response = mutation(
-            ConversationMemberMutation::Unsupported,
-            MutationOperation::RemoveHuman,
-            &Effects::default(),
+    async fn member_body_identity_arms_are_enforced_by_the_route() {
+        for body in [
+            r#"{"kind":"agent","user_id":"target"}"#,
+            r#"{"kind":"human","agent_id":"peer"}"#,
+            r#"["agent","peer"]"#,
+            r#"{"kind":"agent","agent_id":"","handle":"target"}"#,
+        ] {
+            let response = public_call(
+                Method::POST,
+                "/api/conversations/public/members",
+                "owner",
+                Some(body),
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{body}"
+            );
+        }
+        let response = public_call(
+            Method::POST,
+            "/api/conversations/public/members",
+            "owner",
+            Some(r#"{"kind":"agent","agent_id":"peer"}"#),
         )
         .await;
-        let json: serde_json::Value =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        assert_eq!(
-            json["error"],
-            "human members can only be removed from channels"
-        );
-        let response = mutation(
-            ConversationMemberMutation::CandidateNotFound,
-            MutationOperation::RemoveAgent,
-            &Effects::default(),
-        )
-        .await;
-        let json: serde_json::Value =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        assert_eq!(json["error"], "agent not found");
-        let response = mutation(ConversationMemberMutation::HandleAmbiguous { candidates: vec![
-            silverhand_backend_core::conversation_messaging::messaging::collaboration::membership::AmbiguousMemberCandidate::Agent { id: AgentId::parse("agent").unwrap(), display_name: "Agent".into(), handle: "@same".into() },
-            silverhand_backend_core::conversation_messaging::messaging::collaboration::membership::AmbiguousMemberCandidate::Human { id: UserId::parse("human").unwrap(), display_name: "Human".into(), handle: "@same".into() },
-        ] }, MutationOperation::Add, &Effects::default()).await;
-        let json: serde_json::Value =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        assert_eq!(json["code"], "handle_ambiguous");
-        assert_eq!(json["candidates"][0]["kind"], "agent");
-        assert_eq!(json["candidates"][1]["kind"], "human");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn removal_target_errors_are_rendered_by_the_actual_route() {
+        for (path, expected_status, expected_error) in [
+            (
+                "/api/conversations/caller-pair/members/users/target",
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "human members can only be removed from channels",
+            ),
+            (
+                "/api/conversations/public/members/agents/absent",
+                StatusCode::NOT_FOUND,
+                "agent not found",
+            ),
+        ] {
+            let response = public_call(Method::DELETE, path, "owner", None).await;
+            assert_eq!(response.status(), expected_status, "{path}");
+            let body: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(body["error"], expected_error, "{path}");
+        }
     }
 }

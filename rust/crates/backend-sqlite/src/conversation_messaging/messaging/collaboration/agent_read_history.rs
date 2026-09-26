@@ -1252,6 +1252,51 @@ INSERT INTO conversations (id,placement_kind,roster_policy,title,status,visibili
             .unwrap()
             .unwrap();
         assert_eq!(w2.messages[0].attachments, serde_json::Value::Null);
+
+        for (label, expected) in [
+            ("Image #1", Some("Image #1")),
+            ("File #9999", Some("File #9999")),
+            ("image 1", None),
+            ("Image #01", None),
+            ("Image #10000", None),
+            ("Image #0", None),
+            ("Photo #1", None),
+        ] {
+            let metadata = serde_json::json!({"attachments": [{
+                "id": "a1", "filename": "f.png", "size": 1.5,
+                "content_type": "image/png", "label": label,
+            }]});
+            sqlx::query("UPDATE messages SET metadata=? WHERE id='m1'")
+                .bind(metadata.to_string())
+                .execute(&pool)
+                .await
+                .unwrap();
+            let window = read
+                .read_history(
+                    &agent("agent-a"),
+                    &conv("chan"),
+                    None,
+                    &ReadHistoryAnchor::Head,
+                    true,
+                    false,
+                    50,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let attachments = window.messages[0].attachments.as_array().unwrap();
+            assert_eq!(
+                attachments.len(),
+                1,
+                "invalid label preserves the attachment: {label}"
+            );
+            assert_eq!(attachments[0]["id"], "a1");
+            assert_eq!(
+                attachments[0].get("label"),
+                expected.map(serde_json::Value::from).as_ref(),
+                "{label}"
+            );
+        }
     }
 
     #[test]
@@ -1276,30 +1321,5 @@ INSERT INTO conversations (id,placement_kind,roster_policy,title,status,visibili
             let produced = attachment_snapshots(Some(&cell.metadata));
             assert_eq!(produced, cell.attachments, "cell {}", cell.label);
         }
-    }
-
-    #[test]
-    fn label_authority_matches_the_shared_regex() {
-        // `^(Image|File) #([1-9]\d{0,3})$` — capitalized kind, ` #`, ordinal
-        // 1..=9999 (no leading zero); lowercase / leading-zero / 5-digit rejected.
-        assert!(is_canonical_attachment_label("Image #1"));
-        assert!(is_canonical_attachment_label("File #9999"));
-        assert!(
-            !is_canonical_attachment_label("image 1"),
-            "lowercase+space rejected"
-        );
-        assert!(
-            !is_canonical_attachment_label("Image #01"),
-            "leading zero rejected"
-        );
-        assert!(
-            !is_canonical_attachment_label("Image #10000"),
-            "5 digits rejected"
-        );
-        assert!(!is_canonical_attachment_label("Image #0"), "zero rejected");
-        assert!(
-            !is_canonical_attachment_label("Photo #1"),
-            "wrong kind rejected"
-        );
     }
 }

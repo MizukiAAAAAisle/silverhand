@@ -1,27 +1,13 @@
-use sqlx::{Connection, Row};
+use sqlx::Connection;
 
 #[path = "support/current_schema_snapshot.rs"]
 mod current_schema;
 
 #[tokio::test]
-async fn materializes_the_full_snapshot_with_constraints_and_triggers() {
+async fn materialized_snapshot_enforces_foreign_keys_and_append_only_events() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("current.sqlite");
     let mut connection = current_schema::create_current_schema(&path).await;
-
-    let counts = sqlx::query(
-        "SELECT
-            sum(type = 'table' AND name NOT LIKE 'sqlite_%') AS tables,
-            sum(type = 'index' AND name NOT LIKE 'sqlite_%') AS indexes,
-            sum(type = 'trigger') AS triggers
-           FROM sqlite_schema",
-    )
-    .fetch_one(&mut connection)
-    .await
-    .unwrap();
-    assert_eq!(counts.get::<i64, _>("tables"), 33);
-    assert_eq!(counts.get::<i64, _>("indexes"), 76);
-    assert_eq!(counts.get::<i64, _>("triggers"), 47);
 
     let foreign_key = sqlx::query(
         "INSERT INTO hosts

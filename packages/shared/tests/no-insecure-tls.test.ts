@@ -153,19 +153,14 @@ async function findOccurrences(): Promise<FoundOccurrence[]> {
     const files = await walkSourceFiles(absDir);
     for (const abs of files) {
       const text = await readFile(abs, 'utf8');
-      // Quick reject: skip file split if the pattern doesn't
-      // appear at all (lineless test on the raw blob).
-      if (!FORBIDDEN_PATTERN.test(text)) continue;
-      // Per-line scan to compose accurate diagnostics.
-      const lines = text.split(/\r?\n/);
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (line === undefined) continue;
-        if (!FORBIDDEN_PATTERN.test(line)) continue;
+      // Match the whole source: a colon and its value may span lines.
+      // Splitting before matching would silently miss that same violation.
+      for (const match of text.matchAll(new RegExp(FORBIDDEN_PATTERN.source, 'g'))) {
+        const line = text.slice(0, match.index).split('\n').length;
         found.push({
           relPath: abs.startsWith(REPO_ROOT + '/') ? abs.slice(REPO_ROOT.length + 1) : abs,
-          line: i + 1,
-          excerpt: line.trim(),
+          line,
+          excerpt: match[0].replace(/\s+/g, ' '),
         });
       }
     }

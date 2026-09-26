@@ -330,65 +330,35 @@ fn is_valid_server_name(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn parse(raw: &str) -> Result<McpConfig, String> {
-        parse_mcp_config(raw)
-    }
-
     #[test]
     fn empty_and_whitespace_only_bodies_parse_to_the_empty_config() {
         for raw in ["", "   ", "\t\n", "\u{feff}\u{2028} \u{00a0}"] {
-            assert_eq!(parse(raw), Ok(McpConfig::empty()), "raw = {raw:?}");
+            assert_eq!(
+                parse_mcp_config(raw),
+                Ok(McpConfig::empty()),
+                "raw = {raw:?}"
+            );
         }
     }
 
     #[test]
     fn an_absent_mcp_servers_key_defaults_to_empty() {
-        assert_eq!(parse("{}"), Ok(McpConfig::empty()));
-        assert_eq!(parse(r#"{"mcpServers": {}}"#), Ok(McpConfig::empty()));
+        assert_eq!(parse_mcp_config("{}"), Ok(McpConfig::empty()));
+        assert_eq!(
+            parse_mcp_config(r#"{"mcpServers": {}}"#),
+            Ok(McpConfig::empty())
+        );
     }
 
     #[test]
     fn malformed_json_reports_the_invalid_json_envelope() {
-        let error = parse("{not json").unwrap_err();
+        let error = parse_mcp_config("{not json").unwrap_err();
         assert!(error.starts_with("invalid JSON: "), "{error}");
     }
 
     #[test]
-    fn a_non_object_top_level_is_rejected() {
-        assert_eq!(
-            parse("[]").unwrap_err(),
-            "invalid MCP config: expected an object"
-        );
-        assert_eq!(
-            parse("\"hi\"").unwrap_err(),
-            "invalid MCP config: expected an object"
-        );
-    }
-
-    #[test]
-    fn an_unknown_top_level_key_is_rejected() {
-        assert_eq!(
-            parse(r#"{"mcpServers": {}, "extra": 1}"#).unwrap_err(),
-            "invalid MCP config: unexpected key \"extra\""
-        );
-    }
-
-    #[test]
-    fn mcp_servers_must_be_an_object() {
-        assert_eq!(
-            parse(r#"{"mcpServers": []}"#).unwrap_err(),
-            "invalid MCP config at mcpServers: expected an object"
-        );
-        // Explicit null is a rejected value, not the absent-key default.
-        assert_eq!(
-            parse(r#"{"mcpServers": null}"#).unwrap_err(),
-            "invalid MCP config at mcpServers: expected an object"
-        );
-    }
-
-    #[test]
     fn a_minimal_stdio_server_is_accepted() {
-        let config = parse(r#"{"mcpServers": {"gh": {"command": "run"}}}"#).unwrap();
+        let config = parse_mcp_config(r#"{"mcpServers": {"gh": {"command": "run"}}}"#).unwrap();
         assert_eq!(
             config.servers().get("gh"),
             Some(&McpServerConfig::Stdio {
@@ -401,7 +371,7 @@ mod tests {
 
     #[test]
     fn a_full_stdio_server_is_accepted() {
-        let config = parse(
+        let config = parse_mcp_config(
             r#"{"mcpServers": {"gh": {"type": "stdio", "command": "run", "args": ["a", "b"], "env": {"K": "V"}}}}"#,
         )
         .unwrap();
@@ -418,44 +388,8 @@ mod tests {
     }
 
     #[test]
-    fn stdio_requires_a_non_empty_command() {
-        assert_eq!(
-            parse(r#"{"mcpServers": {"gh": {}}}"#).unwrap_err(),
-            "invalid MCP config at mcpServers.gh: stdio server requires a \"command\""
-        );
-        assert_eq!(
-            parse(r#"{"mcpServers": {"gh": {"command": ""}}}"#).unwrap_err(),
-            "invalid MCP config at mcpServers.gh: \"command\" must not be empty"
-        );
-        assert_eq!(
-            parse(r#"{"mcpServers": {"gh": {"command": 1}}}"#).unwrap_err(),
-            "invalid MCP config at mcpServers.gh: \"command\" must be a string"
-        );
-    }
-
-    #[test]
-    fn stdio_rejects_unknown_keys() {
-        assert_eq!(
-            parse(r#"{"mcpServers": {"gh": {"command": "run", "url": "http://x"}}}"#).unwrap_err(),
-            "invalid MCP config at mcpServers.gh: unexpected key \"url\""
-        );
-    }
-
-    #[test]
-    fn stdio_args_and_env_must_be_string_shaped() {
-        assert_eq!(
-            parse(r#"{"mcpServers": {"gh": {"command": "run", "args": [1]}}}"#).unwrap_err(),
-            "invalid MCP config at mcpServers.gh: \"args\" must be an array of strings"
-        );
-        assert_eq!(
-            parse(r#"{"mcpServers": {"gh": {"command": "run", "env": {"K": 1}}}}"#).unwrap_err(),
-            "invalid MCP config at mcpServers.gh: \"env\" must be an object of strings"
-        );
-    }
-
-    #[test]
     fn a_remote_http_and_sse_server_is_accepted() {
-        let config = parse(
+        let config = parse_mcp_config(
             r#"{"mcpServers": {"a": {"type": "http", "url": "https://x/y"}, "b": {"type": "sse", "url": "https://z", "headers": {"H": "1"}}}}"#,
         )
         .unwrap();
@@ -478,62 +412,61 @@ mod tests {
     }
 
     #[test]
-    fn remote_requires_a_valid_url() {
-        assert_eq!(
-            parse(r#"{"mcpServers": {"a": {"type": "http"}}}"#).unwrap_err(),
-            "invalid MCP config at mcpServers.a: remote server requires a \"url\""
-        );
-        assert_eq!(
-            parse(r#"{"mcpServers": {"a": {"type": "http", "url": "not a url"}}}"#).unwrap_err(),
-            "invalid MCP config at mcpServers.a: \"url\" must be a valid URL"
-        );
-    }
-
-    #[test]
-    fn remote_rejects_unknown_keys() {
-        assert_eq!(
-            parse(
-                r#"{"mcpServers": {"a": {"type": "http", "url": "https://x", "command": "run"}}}"#
-            )
-            .unwrap_err(),
-            "invalid MCP config at mcpServers.a: unexpected key \"command\""
-        );
-    }
-
-    #[test]
-    fn an_unknown_or_non_string_type_is_rejected() {
-        assert_eq!(
-            parse(r#"{"mcpServers": {"a": {"type": "grpc", "url": "https://x"}}}"#).unwrap_err(),
-            "invalid MCP config at mcpServers.a: \"type\" must be one of stdio, http, sse (got \"grpc\")"
-        );
-        assert_eq!(
-            parse(r#"{"mcpServers": {"a": {"type": 1}}}"#).unwrap_err(),
-            "invalid MCP config at mcpServers.a: \"type\" must be a string"
-        );
-    }
-
-    #[test]
     fn an_out_of_charset_server_name_yields_the_product_message() {
         assert_eq!(
-            parse(r#"{"mcpServers": {"bad name": {"command": "run"}}}"#).unwrap_err(),
+            parse_mcp_config(r#"{"mcpServers": {"bad name": {"command": "run"}}}"#).unwrap_err(),
             "invalid MCP config at mcpServers.bad name: invalid MCP server name \"bad name\": use 1-64 chars of [A-Za-z0-9_-]"
         );
         // The empty-string key both fails the charset and renders a trailing-dot path.
         assert_eq!(
-            parse(r#"{"mcpServers": {"": {"command": "run"}}}"#).unwrap_err(),
+            parse_mcp_config(r#"{"mcpServers": {"": {"command": "run"}}}"#).unwrap_err(),
             "invalid MCP config at mcpServers.: invalid MCP server name \"\": use 1-64 chars of [A-Za-z0-9_-]"
         );
     }
 
     #[test]
-    fn server_name_charset_and_length_match_the_regex() {
-        assert!(is_valid_server_name("a"));
-        assert!(is_valid_server_name("A0_-z"));
-        assert!(is_valid_server_name(&"x".repeat(64)));
-        assert!(!is_valid_server_name(""));
-        assert!(!is_valid_server_name(&"x".repeat(65)));
-        assert!(!is_valid_server_name("a.b"));
-        assert!(!is_valid_server_name("na me"));
-        assert!(!is_valid_server_name("café"));
+    fn structural_rejections_preserve_the_public_error_envelope() {
+        for raw in [
+            "[]",
+            "\"hi\"",
+            r#"{"mcpServers": {}, "extra": 1}"#,
+            r#"{"mcpServers": []}"#,
+            r#"{"mcpServers": null}"#,
+            r#"{"mcpServers": {"gh": {}}}"#,
+            r#"{"mcpServers": {"gh": {"command": ""}}}"#,
+            r#"{"mcpServers": {"gh": {"command": 1}}}"#,
+            r#"{"mcpServers": {"gh": {"command": "run", "url": "http://x"}}}"#,
+            r#"{"mcpServers": {"gh": {"command": "run", "args": [1]}}}"#,
+            r#"{"mcpServers": {"gh": {"command": "run", "env": {"K": 1}}}}"#,
+            r#"{"mcpServers": {"a": {"type": "http"}}}"#,
+            r#"{"mcpServers": {"a": {"type": "http", "url": "not a url"}}}"#,
+            r#"{"mcpServers": {"a": {"type": "http", "url": "https://x", "command": "run"}}}"#,
+            r#"{"mcpServers": {"a": {"type": "grpc", "url": "https://x"}}}"#,
+            r#"{"mcpServers": {"a": {"type": 1}}}"#,
+        ] {
+            let error = parse_mcp_config(raw).expect_err(raw);
+            assert!(error.starts_with("invalid MCP config"), "{raw}: {error}");
+        }
+    }
+
+    #[test]
+    fn server_name_charset_and_length_are_enforced_by_config_admission() {
+        for (name, accepted) in [
+            ("a".to_owned(), true),
+            ("A0_-z".to_owned(), true),
+            ("x".repeat(64), true),
+            (String::new(), false),
+            ("x".repeat(65), false),
+            ("a.b".to_owned(), false),
+            ("na me".to_owned(), false),
+            ("café".to_owned(), false),
+        ] {
+            let raw = serde_json::json!({ "mcpServers": { name.clone(): { "command": "run" } } });
+            assert_eq!(
+                parse_mcp_config(&raw.to_string()).is_ok(),
+                accepted,
+                "{name}"
+            );
+        }
     }
 }

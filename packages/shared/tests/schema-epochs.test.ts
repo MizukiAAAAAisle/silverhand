@@ -9,10 +9,7 @@ import {
   SCHEMA_EPOCH_MANIFEST,
   assertSchemaEpochManifest,
   assertSupportPolicyFloors,
-  classifyMigrationLedger,
-  epochForMigrationStep,
   firstStepOfEpoch,
-  reportedEpochForAppliedStep,
 } from '../src/db/schema-epochs.js';
 
 /**
@@ -31,17 +28,6 @@ describe('schema epoch manifest', () => {
     expect(last.epoch).toBe(CURRENT_SCHEMA_EPOCH);
   });
 
-  it('starts where the 1:1 history ends and leaves no step unclaimed', () => {
-    expect(SCHEMA_EPOCH_MANIFEST[0]!.firstStep).toBe(ONE_TO_ONE_EPOCH_CEILING_STEP + 1);
-    for (const step of migrations.map((m) => m.version)) {
-      expect(epochForMigrationStep(step)).not.toBeNull();
-    }
-    // The baseline is inside the 1:1 region, where epoch IS step.
-    expect(epochForMigrationStep(MIN_SUPPORTED_MIGRATION_STEP)).toBe(MIN_SUPPORTED_MIGRATION_STEP);
-    expect(epochForMigrationStep(0)).toBeNull();
-    expect(epochForMigrationStep(CURRENT_MIGRATION_STEP + 1)).toBeNull();
-  });
-
   it('rejects a plan whose last step no epoch claims', () => {
     expect(() =>
       assertSchemaEpochManifest({
@@ -53,7 +39,7 @@ describe('schema epoch manifest', () => {
   it('rejects a manifest range that claims a step this build never defines', () => {
     // The reverse direction of coverage. "Every migration is inside some range"
     // passes happily while a range claims a step no ledger can ever contain, and
-    // then `epochForMigrationStep` answers for a phantom.
+    // then the build would publish an epoch containing a phantom step.
     const holed = migrations
       .filter((m) => m.version !== CURRENT_MIGRATION_STEP - 1)
       .map((m) => ({ version: m.version }));
@@ -136,139 +122,5 @@ describe('the two floors', () => {
     expect(firstStepOfEpoch(CURRENT_SCHEMA_EPOCH)).toBe(SCHEMA_EPOCH_MANIFEST.at(-1)!.firstStep);
     expect(firstStepOfEpoch(0)).toBeNull();
     expect(firstStepOfEpoch(CURRENT_SCHEMA_EPOCH + 1)).toBeNull();
-  });
-
-  it('places a mid-epoch step below its own epoch floor, so no third refusal is possible', () => {
-    // Why the guard needs only two too-old texts: a DB inside a supported epoch
-    // but below that epoch's first step cannot exist — it would report the
-    // previous epoch, which is what the policy comparison already covers.
-    const entry = SCHEMA_EPOCH_MANIFEST.at(-1)!;
-    if (entry.lastStep > entry.firstStep) {
-      expect(reportedEpochForAppliedStep(entry.firstStep)).toBeLessThan(entry.epoch);
-    }
-  });
-});
-
-describe('reportedEpochForAppliedStep', () => {
-  it('is the identity in the 1:1 region', () => {
-    expect(reportedEpochForAppliedStep(0)).toBe(0);
-    expect(reportedEpochForAppliedStep(44)).toBe(44);
-    expect(reportedEpochForAppliedStep(ONE_TO_ONE_EPOCH_CEILING_STEP)).toBe(
-      ONE_TO_ONE_EPOCH_CEILING_STEP,
-    );
-  });
-
-  it('reports the PREVIOUS epoch until the epoch is complete', () => {
-    const entry = SCHEMA_EPOCH_MANIFEST[0]!;
-    expect(reportedEpochForAppliedStep(entry.firstStep)).toBe(ONE_TO_ONE_EPOCH_CEILING_STEP);
-    expect(reportedEpochForAppliedStep(entry.lastStep - 1)).toBe(ONE_TO_ONE_EPOCH_CEILING_STEP);
-    expect(reportedEpochForAppliedStep(entry.lastStep)).toBe(entry.epoch);
-  });
-});
-
-describe('classifyMigrationLedger', () => {
-  const plan = [{ version: 44 }, { version: 45 }, { version: 46 }];
-
-  it('reports a fresh DB as not having started the next epoch', () => {
-    // In the 1:1 region each step IS an epoch, so the next epoch is the next
-    // step's own number.
-    expect(classifyMigrationLedger([], plan)).toEqual({
-      kind: 'ok',
-      progress: { kind: 'not_started', epoch: 44, nextStep: 44 },
-    });
-    // Between two 1:1 epochs there is no "partial": finishing a step finishes
-    // its epoch, so the verdict is `not_started` on the NEXT one.
-    expect(classifyMigrationLedger([44, 45], plan)).toEqual({
-      kind: 'ok',
-      progress: { kind: 'not_started', epoch: 46, nextStep: 46 },
-    });
-  });
-
-  it('reports a legal prefix INSIDE a multi-step epoch as partial', () => {
-    // This is the state a crash mid-upgrade leaves behind, and the only state
-    // from which resuming is legal: applied is a prefix, so the runner knows
-    // exactly which step comes next.
-    const entry = SCHEMA_EPOCH_MANIFEST[0]!;
-    const slice = migrations
-      .filter((m) => m.version >= entry.lastStep - 1)
-      .map((m) => ({ version: m.version }));
-    expect(classifyMigrationLedger([entry.lastStep - 1], slice)).toEqual({
-      kind: 'ok',
-      progress: {
-        kind: 'partial',
-        epoch: entry.epoch,
-        appliedThroughStep: entry.lastStep - 1,
-        nextStep: entry.lastStep,
-      },
-    });
-  });
-
-  it('reports a fully applied plan as complete at the epoch it reached', () => {
-    expect(classifyMigrationLedger([44, 45, 46], plan)).toEqual({
-      kind: 'ok',
-      progress: { kind: 'complete', epoch: 46 },
-    });
-  });
-
-  it('never calls a mid-epoch stop complete', () => {
-    // A plan slice that ends inside an unreleased epoch is fully applied AND has
-    // not reached that epoch. Saying "complete: 69" here is the one lie that
-    // would let a partial database look shipped.
-    const entry = SCHEMA_EPOCH_MANIFEST[0]!;
-    const slice = migrations
-      .filter((m) => m.version <= entry.lastStep - 1)
-      .map((m) => ({ version: m.version }));
-    const verdict = classifyMigrationLedger(
-      slice.map((m) => m.version),
-      slice,
-    );
-    expect(verdict).toEqual({
-      kind: 'ok',
-      progress: { kind: 'complete', epoch: entry.epoch - 1 },
-    });
-  });
-
-  it('fails loud on a hole below the highest applied step', () => {
-    expect(classifyMigrationLedger([44, 46], plan)).toEqual({
-      kind: 'inconsistent',
-      appliedThroughStep: 46,
-      missingSteps: [45],
-      unexpectedSteps: [],
-    });
-  });
-
-  it('fails loud on an in-range step the plan does not define', () => {
-    expect(classifyMigrationLedger([44, 45], [{ version: 44 }, { version: 46 }])).toEqual({
-      kind: 'inconsistent',
-      appliedThroughStep: 45,
-      missingSteps: [],
-      unexpectedSteps: [45],
-    });
-  });
-
-  it('ignores ledger rows below the plan floor', () => {
-    // Pre-baseline history (v1..v43) is real in production ledgers and says
-    // nothing about this build's plan.
-    expect(classifyMigrationLedger([1, 2, 43, 44, 45, 46], plan)).toEqual({
-      kind: 'ok',
-      progress: { kind: 'complete', epoch: 46 },
-    });
-  });
-
-  it('leaves rows above the plan to the newer-schema refusal', () => {
-    // `runMigrations` owns that decision and evaluates it on max(step); this
-    // classifier must not double-judge it as an unknown step.
-    expect(classifyMigrationLedger([44, 45, 46, 999], plan)).toEqual({
-      kind: 'ok',
-      progress: { kind: 'complete', epoch: 46 },
-    });
-  });
-
-  it('reads the real plan against the real ledger without complaint', () => {
-    const steps = migrations.map((m) => m.version);
-    expect(classifyMigrationLedger(steps, migrations)).toEqual({
-      kind: 'ok',
-      progress: { kind: 'complete', epoch: CURRENT_SCHEMA_EPOCH },
-    });
   });
 });

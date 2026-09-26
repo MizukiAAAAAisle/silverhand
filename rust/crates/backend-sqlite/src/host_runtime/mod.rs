@@ -1000,185 +1000,75 @@ mod tests {
 
     #[tokio::test]
     async fn real_schema_credential_predicates_match_the_ts_verdicts() {
-        let (_directory, store) = fixture().await;
-        let fact = CreateHostInvite::new(store.clone(), OsEntropy, SystemClock)
-            .execute(UserId::parse("user-1").unwrap())
-            .await
-            .unwrap();
-        let host_id = fact.host.id().to_owned();
-        let token = fact.connect_token.reveal_once();
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Case {
+            name: String,
+            now: i64,
+            state: serde_json::Map<String, serde_json::Value>,
+            expected: String,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct State {
+            kind: String,
+            expires_at: Option<i64>,
+            consumed_at: Option<i64>,
+            revoked_at: Option<i64>,
+            host_user_id: Option<String>,
+            host_revoked_at: Option<i64>,
+        }
 
-        assert_accepted(&store, &token, 100, "accepted").await;
-
-        sqlx::query("UPDATE host_credentials SET kind = 'bootstrap' WHERE host_id = ?")
-            .bind(&host_id)
-            .execute(&store.pool)
-            .await
-            .unwrap();
-        assert_rejection(
-            &store,
-            &token,
-            100,
-            HostTokenRejection::CredentialNotUsable,
-            "bootstrap_kind",
-        )
-        .await;
-        sqlx::query("UPDATE host_credentials SET kind = 'long_lived' WHERE host_id = ?")
-            .bind(&host_id)
-            .execute(&store.pool)
-            .await
-            .unwrap();
-
-        sqlx::query("UPDATE host_credentials SET expires_at = 101 WHERE host_id = ?")
-            .bind(&host_id)
-            .execute(&store.pool)
-            .await
-            .unwrap();
-        assert_accepted(&store, &token, 100, "unexpired").await;
-        assert_rejection(
-            &store,
-            &token,
-            101,
-            HostTokenRejection::CredentialExpired,
-            "expired",
-        )
-        .await;
-        sqlx::query("UPDATE host_credentials SET expires_at = NULL WHERE host_id = ?")
-            .bind(&host_id)
-            .execute(&store.pool)
-            .await
-            .unwrap();
-
-        sqlx::query("UPDATE host_credentials SET consumed_at = 50 WHERE host_id = ?")
-            .bind(&host_id)
-            .execute(&store.pool)
-            .await
-            .unwrap();
-        assert_rejection(
-            &store,
-            &token,
-            100,
-            HostTokenRejection::CredentialNotUsable,
-            "consumed_without_grace",
-        )
-        .await;
-        sqlx::query("UPDATE host_credentials SET consumed_at = NULL WHERE host_id = ?")
-            .bind(&host_id)
-            .execute(&store.pool)
-            .await
-            .unwrap();
-
-        sqlx::query("UPDATE host_credentials SET revoked_at = 200 WHERE host_id = ?")
-            .bind(&host_id)
-            .execute(&store.pool)
-            .await
-            .unwrap();
-        assert_rejection(
-            &store,
-            &token,
-            100,
-            HostTokenRejection::CredentialRevoked,
-            "revoked_without_grace",
-        )
-        .await;
-
-        sqlx::query(
-            "UPDATE host_credentials SET consumed_at = 50, revoked_at = 101 WHERE host_id = ?",
-        )
-        .bind(&host_id)
-        .execute(&store.pool)
-        .await
-        .unwrap();
-        assert_accepted(&store, &token, 100, "inside_grace").await;
-        assert_rejection(
-            &store,
-            &token,
-            101,
-            HostTokenRejection::CredentialExpired,
-            "grace_expired",
-        )
-        .await;
-        sqlx::query(
-            "UPDATE host_credentials SET consumed_at = NULL, revoked_at = NULL WHERE host_id = ?",
-        )
-        .bind(&host_id)
-        .execute(&store.pool)
-        .await
-        .unwrap();
-
-        sqlx::query("UPDATE hosts SET revoked_at = 50 WHERE id = ?")
-            .bind(&host_id)
-            .execute(&store.pool)
-            .await
-            .unwrap();
-        assert_rejection(
-            &store,
-            &token,
-            100,
-            HostTokenRejection::HostRevoked,
-            "host_revoked",
-        )
-        .await;
-        sqlx::query("UPDATE hosts SET revoked_at = NULL, user_id = NULL WHERE id = ?")
-            .bind(&host_id)
-            .execute(&store.pool)
-            .await
-            .unwrap();
-        assert_rejection(
-            &store,
-            &token,
-            100,
-            HostTokenRejection::HostUnbound,
-            "host_unbound",
-        )
-        .await;
-    }
-
-    async fn assert_accepted(
-        store: &SqliteHostRuntimeStore,
-        token: &str,
-        now: i64,
-        fixture_name: &str,
-    ) {
-        assert_eq!(expected_ts_verdict(fixture_name), "accepted");
-        assert!(matches!(
-            verify_host_token(store, token.to_owned(), now)
-                .await
-                .unwrap(),
-            VerifyHostTokenFact::Accepted { .. }
-        ));
-    }
-
-    async fn assert_rejection(
-        store: &SqliteHostRuntimeStore,
-        token: &str,
-        now: i64,
-        expected: HostTokenRejection,
-        fixture_name: &str,
-    ) {
-        assert_eq!(expected_ts_verdict(fixture_name), rejection_code(expected));
-        assert_eq!(
-            verify_host_token(store, token.to_owned(), now)
-                .await
-                .unwrap(),
-            VerifyHostTokenFact::Rejected(expected)
-        );
-    }
-
-    fn expected_ts_verdict(name: &str) -> String {
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
             "../../tests/fixtures/host_credential_verdicts.json"
         ))
         .unwrap();
-        fixture
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["name"] == name)
-            .unwrap_or_else(|| panic!("missing credential verdict fixture {name:?}"))["expected"]
-            .as_str()
-            .unwrap()
-            .to_owned()
+        for case in cases {
+            let (_directory, store) = fixture().await;
+            let fact = CreateHostInvite::new(store.clone(), OsEntropy, SystemClock)
+                .execute(UserId::parse("user-1").unwrap())
+                .await
+                .unwrap();
+            let host_id = fact.host.id().to_owned();
+            let token = fact.connect_token.reveal_once();
+            // Match the independent oracle's defaults; explicit null overrides
+            // the bound owner instead of being mistaken for an absent field.
+            let mut state = serde_json::json!({
+                "kind": "long_lived",
+                "expires_at": null,
+                "consumed_at": null,
+                "revoked_at": null,
+                "host_user_id": "user-1",
+                "host_revoked_at": null
+            });
+            state.as_object_mut().unwrap().extend(case.state);
+            let state: State = serde_json::from_value(state).unwrap();
+            sqlx::query(
+                "UPDATE host_credentials SET kind=?, expires_at=?, consumed_at=?, revoked_at=?
+                 WHERE host_id=?",
+            )
+            .bind(state.kind)
+            .bind(state.expires_at)
+            .bind(state.consumed_at)
+            .bind(state.revoked_at)
+            .bind(&host_id)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+            sqlx::query("UPDATE hosts SET user_id=?, revoked_at=? WHERE id=?")
+                .bind(state.host_user_id)
+                .bind(state.host_revoked_at)
+                .bind(&host_id)
+                .execute(&store.pool)
+                .await
+                .unwrap();
+
+            let actual = match verify_host_token(&store, token, case.now).await.unwrap() {
+                VerifyHostTokenFact::Accepted { .. } => "accepted",
+                VerifyHostTokenFact::Rejected(rejection) => rejection_code(rejection),
+            };
+            assert_eq!(actual, case.expected, "{}", case.name);
+        }
     }
 
     fn rejection_code(rejection: HostTokenRejection) -> &'static str {

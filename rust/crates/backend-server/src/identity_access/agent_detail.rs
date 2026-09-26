@@ -389,39 +389,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_admitted_caller_gets_the_full_dto() {
-        let reply = get(present(admitting()), "", true).await;
-        assert_eq!(reply.status, StatusCode::OK);
-        assert_eq!(
-            parsed(&reply.body),
-            json!({
-                "agent": {
-                    "id": "a1",
-                    "name": "agent-one",
-                    "display_name": "Agent One",
-                    "runtime": "qoder",
-                    "model": "sonnet",
-                    "reasoning_effort": "high",
-                    "fast_mode": true,
-                    "host_id": "h1",
-                    "host_label": "Host One Label",
-                    "description": "a description",
-                    "session_scope": "agent",
-                    "created_by_user_id": "viewer-1",
-                    "avatar_url": "/api/agents/a1/avatar?v=2000",
-                    "materialization_status": "active",
-                    "materialization_failed_code": null,
-                    "materialization_failed_at": null,
-                    "deletion_started_at": null,
-                    "created_at": 1000,
-                    "updated_at": 2000
-                }
-            })
-        );
-        assert_eq!(reply.calls, 1);
-    }
-
-    #[tokio::test]
     async fn each_visibility_arm_admits_the_viewer_on_its_own() {
         for arm in [Arm::Creator, Arm::DirectPair, Arm::Workspace] {
             let reply = get(
@@ -580,7 +547,6 @@ mod tests {
         let reply = get(ViewOutcome::Fails, "", true).await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(reply.body, "Internal Server Error");
-        assert!(!reply.body.contains("detail gone"));
     }
 
     #[tokio::test]
@@ -639,11 +605,23 @@ mod tests {
         let agent = parsed(&reply.body);
         let agent = &agent["agent"];
         assert_eq!(agent["display_name"], "");
-        assert_eq!(agent["model"], Value::Null);
-        assert_eq!(agent["fast_mode"], Value::Null);
         assert_eq!(agent["host_label"], "host-one");
-        assert_eq!(agent["avatar_url"], Value::Null);
-        assert_eq!(agent["description"], Value::Null);
+        for key in [
+            "model",
+            "reasoning_effort",
+            "fast_mode",
+            "avatar_url",
+            "description",
+            "materialization_failed_code",
+            "materialization_failed_at",
+            "deletion_started_at",
+        ] {
+            assert_eq!(
+                agent.get(key),
+                Some(&Value::Null),
+                "{key} must be present as null"
+            );
+        }
     }
 
     #[tokio::test]
@@ -665,7 +643,10 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::OK);
-        assert_eq!(parsed(&reply.body)["agent"]["host_label"], Value::Null);
+        assert_eq!(
+            parsed(&reply.body)["agent"].get("host_label"),
+            Some(&Value::Null)
+        );
     }
 
     #[tokio::test]

@@ -77,9 +77,7 @@ describe('CursorDriver.classifyInitProgress', () => {
   it('treats any complete stream-json frame as protocol-ready', () => {
     const d = new CursorDriver();
     expect(
-      d.classifyInitProgress(
-        JSON.stringify({ type: 'assistant', message: { content: [] } }),
-      ),
+      d.classifyInitProgress(JSON.stringify({ type: 'assistant', message: { content: [] } })),
     ).toBe('protocol_ready');
   });
 
@@ -156,9 +154,7 @@ describe('CursorDriver.buildArgs', () => {
 
 describe('CursorDriver.parseLine event mapping', () => {
   it('returns kind=unknown for non-JSON lines', () => {
-    expect(new CursorDriver().parseLine('garbage')).toEqual([
-      { kind: 'unknown', raw: 'garbage' },
-    ]);
+    expect(new CursorDriver().parseLine('garbage')).toEqual([{ kind: 'unknown', raw: 'garbage' }]);
   });
 
   it('ignores empty / whitespace-only lines', () => {
@@ -175,9 +171,7 @@ describe('CursorDriver.parseLine event mapping', () => {
   it('emits compaction lifecycle from system.subtype variants', () => {
     const driver = new CursorDriver();
     expect(
-      driver.parseLine(
-        JSON.stringify({ type: 'system', subtype: 'status', status: 'compacting' }),
-      ),
+      driver.parseLine(JSON.stringify({ type: 'system', subtype: 'status', status: 'compacting' })),
     ).toEqual([{ kind: 'compaction_started' }]);
     expect(
       driver.parseLine(JSON.stringify({ type: 'system', subtype: 'compact_boundary' })),
@@ -225,12 +219,14 @@ describe('CursorDriver.parseLine event mapping', () => {
     expect(events).toEqual([{ kind: 'turn_end', sessionId: 'sess-9' }]);
   });
 
-  it('emits error + turn_end on result with is_error / non-success subtype', () => {
+  it.each([
+    { subtype: 'success', is_error: true },
+    { subtype: 'error', is_error: false },
+  ])('emits error + turn_end for $subtype with is_error=$is_error', (signal) => {
     const events = new CursorDriver().parseLine(
       JSON.stringify({
         type: 'result',
-        subtype: 'error',
-        is_error: true,
+        ...signal,
         errors: ['boom'],
         result: 'see errors',
         session_id: 'sess-9',
@@ -246,15 +242,10 @@ describe('CursorDriver.parseLine event mapping', () => {
     const events = new CursorDriver().parseLine(
       JSON.stringify({ type: 'result', subtype: 'error', is_error: true }),
     );
-    expect(events).toEqual([
-      { kind: 'error', message: 'Execution failed' },
-      { kind: 'turn_end' },
-    ]);
+    expect(events).toEqual([{ kind: 'error', message: 'Execution failed' }, { kind: 'turn_end' }]);
   });
 
   it('ignores unknown event types silently', () => {
-    expect(
-      new CursorDriver().parseLine(JSON.stringify({ type: 'mystery' })),
-    ).toEqual([]);
+    expect(new CursorDriver().parseLine(JSON.stringify({ type: 'mystery' }))).toEqual([]);
   });
 });

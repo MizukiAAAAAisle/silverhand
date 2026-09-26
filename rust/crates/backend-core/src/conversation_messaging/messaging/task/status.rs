@@ -211,12 +211,12 @@ mod tests {
     fn allowed_agent_targets(from: TaskStatus) -> Vec<TaskStatus> {
         TaskStatus::ALL
             .into_iter()
-            .filter(|&to| from.agent_can_transition_to(to))
+            .filter(|&to| agent_status_change(from, to, None, 42).is_ok())
             .collect()
     }
 
     #[test]
-    fn agent_transition_table_matches_valid_transitions_verbatim() {
+    fn agent_planner_admits_exactly_the_valid_transitions() {
         assert_eq!(allowed_agent_targets(Todo), vec![Closed]);
         assert_eq!(
             allowed_agent_targets(InProgress),
@@ -231,15 +231,6 @@ mod tests {
             allowed_agent_targets(Closed),
             vec![Todo, InProgress, InReview, Done]
         );
-    }
-
-    #[test]
-    fn agent_verb_never_allows_a_status_to_itself_nor_todo_to_in_progress() {
-        for from in TaskStatus::ALL {
-            assert!(!from.agent_can_transition_to(from), "{from:?} → {from:?}");
-        }
-        // `todo → in_progress` is claim/dispatch only, never the status verb.
-        assert!(!Todo.agent_can_transition_to(InProgress));
     }
 
     #[test]

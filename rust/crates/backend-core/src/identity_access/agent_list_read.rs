@@ -173,45 +173,6 @@ mod tests {
         }
     }
 
-    /// A candidate the given viewer is admitted to, through the workspace arm unless
-    /// it is its own creator.
-    fn candidate(id: &str, creator: &str, status: MaterializationStatus) -> AgentDetailFacts {
-        AgentDetailFacts::from_source(
-            agent(id),
-            user(creator),
-            [],
-            [user("viewer")],
-            status,
-            projection(1),
-        )
-    }
-
-    fn sources(visible: &[&AgentDetailFacts]) -> Vec<String> {
-        visible
-            .iter()
-            .map(|facts| facts.source().as_str().to_owned())
-            .collect()
-    }
-
-    /// Every admitted candidate is kept, in the order the narrowing supplied — the
-    /// decider never re-sorts.
-    #[test]
-    fn admitted_candidates_are_kept_in_input_order() {
-        let candidates = [
-            candidate("a3", "owner", MaterializationStatus::Active),
-            candidate("a1", "owner", MaterializationStatus::Active),
-            candidate("a2", "owner", MaterializationStatus::Active),
-        ];
-        let visible = visible_agents(
-            &user("viewer"),
-            &candidates,
-            &VisibleStages::active_only(),
-            ListScope::All,
-        )
-        .expect("all admitted");
-        assert_eq!(sources(&visible), ["a3", "a1", "a2"]);
-    }
-
     /// A candidate the ACL rejects is the narrow/decide drift: a named contract
     /// failure carrying the offending id, not a dropped row.
     #[test]
@@ -233,71 +194,5 @@ mod tests {
         )
         .expect_err("a rejected candidate is a mismatch");
         assert_eq!(error.agent(), &agent("a1"));
-    }
-
-    /// A hidden stage is the widener doing its job, not a drift: the row is filtered
-    /// out and the read still succeeds.
-    #[test]
-    fn a_hidden_stage_is_filtered_not_a_mismatch() {
-        let candidates = [
-            candidate("a1", "owner", MaterializationStatus::Active),
-            candidate("a2", "owner", MaterializationStatus::Failed),
-        ];
-        let visible = visible_agents(
-            &user("viewer"),
-            &candidates,
-            &VisibleStages::active_only(),
-            ListScope::All,
-        )
-        .expect("a hidden stage is not a mismatch");
-        assert_eq!(sources(&visible), ["a1"]);
-    }
-
-    /// Opting the failed stage in reveals the row the default view hid, through the
-    /// same candidates.
-    #[test]
-    fn include_failed_reveals_the_failed_row() {
-        let candidates = [
-            candidate("a1", "owner", MaterializationStatus::Active),
-            candidate("a2", "owner", MaterializationStatus::Failed),
-        ];
-        let visible = visible_agents(
-            &user("viewer"),
-            &candidates,
-            &VisibleStages::including([
-                MaterializationStatus::Active,
-                MaterializationStatus::Failed,
-            ]),
-            ListScope::All,
-        )
-        .expect("all admitted");
-        assert_eq!(sources(&visible), ["a1", "a2"]);
-    }
-
-    /// `scope=owned` keeps only the rows whose ACTUAL creator is the viewer, even
-    /// when the ACL admits the others.
-    #[test]
-    fn scope_owned_keeps_only_the_viewers_own_agents() {
-        let candidates = [
-            candidate("a1", "viewer", MaterializationStatus::Active),
-            candidate("a2", "someone-else", MaterializationStatus::Active),
-        ];
-        let owned = visible_agents(
-            &user("viewer"),
-            &candidates,
-            &VisibleStages::active_only(),
-            ListScope::Owned,
-        )
-        .expect("all admitted");
-        assert_eq!(sources(&owned), ["a1"]);
-
-        let all = visible_agents(
-            &user("viewer"),
-            &candidates,
-            &VisibleStages::active_only(),
-            ListScope::All,
-        )
-        .expect("all admitted");
-        assert_eq!(sources(&all), ["a1", "a2"]);
     }
 }

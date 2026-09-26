@@ -58,11 +58,6 @@ const MAX_PREVIEW_BYTES = 512 * 1024;
  */
 const TRUNCATED_SUFFIX = '\n\n… (truncated)';
 
-/** Exported so callers and tests state the bound and the marker once instead of
- *  restating a number or a literal (the renderer labels the truncation banner
- *  from its own copy). */
-export { MAX_PREVIEW_BYTES, TRUNCATED_SUFFIX };
-
 export async function readAgentWorkspaceFile(
   params: AgentWorkspaceFileReadParams,
   deps: ReadAgentWorkspaceFileDeps,

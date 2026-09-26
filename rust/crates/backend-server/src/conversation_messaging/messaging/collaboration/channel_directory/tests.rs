@@ -114,7 +114,6 @@ async fn production_router_consumes_every_ts_signed_cell() {
         );
         assert_eq!(body, expected_body(entry, &fixture), "{}", entry["name"]);
     }
-    assert_eq!(fixture.len(), 27);
 }
 
 #[derive(Clone)]

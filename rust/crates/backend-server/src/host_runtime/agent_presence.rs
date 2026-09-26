@@ -316,6 +316,7 @@ mod tests {
 
     struct Reply {
         status: StatusCode,
+        content_type: Option<String>,
         body: String,
         calls: usize,
     }
@@ -342,9 +343,14 @@ mod tests {
             .await
             .unwrap();
         let status = response.status();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .map(|value| value.to_str().unwrap().to_owned());
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         Reply {
             status,
+            content_type,
             body: String::from_utf8(body.to_vec()).unwrap(),
             calls: calls.load(SeqCst),
         }
@@ -358,6 +364,7 @@ mod tests {
     async fn an_admitted_caller_gets_the_away_deadline_and_the_injected_now() {
         let reply = get(present(admitting()), true).await;
         assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.content_type.as_deref(), Some("application/json"));
         assert_eq!(
             parsed(&reply.body),
             json!({
@@ -417,6 +424,7 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND);
+        assert_eq!(reply.content_type.as_deref(), Some("application/json"));
         assert_eq!(parsed(&reply.body), json!({ "error": "agent not found" }));
     }
 
@@ -459,7 +467,6 @@ mod tests {
         let reply = get(ViewOutcome::Fails, true).await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(reply.body, "Internal Server Error");
-        assert!(!reply.body.contains("presence gone"));
     }
 
     #[tokio::test]

@@ -30,7 +30,11 @@ describe('address segment round trip (#task:2016)', () => {
     ['a/b c%d', 'a%2Fb%20c%25d', 'all three at once'],
     ['\u{1F680} launch', '\u{1F680}%20launch', 'a pictograph stays raw'],
     ['#2016', '#2016', 'a hash needs no escape — it is not a separator here'],
-    ['thread:1', 'thread:1', 'a colon needs none either: `/thread:` cannot appear, the slash is escaped'],
+    [
+      'thread:1',
+      'thread:1',
+      'a colon needs none either: `/thread:` cannot appear, the slash is escaped',
+    ],
     // The space separators are written as ESCAPES, never as the character itself: a
     // literal U+00A0 or U+2009 in this file is indistinguishable from a space to
     // every reviewer, and which space it is is the entire content of these rows.
@@ -158,22 +162,18 @@ describe('address token budget (#task:2016)', () => {
     // A legal title, refused by no validator, whose token cannot be spelled inside
     // the budget. The formatter's answer is `#conv:<id>` — permanent, total, and
     // the reason a name-shaped address is allowed to be unavailable.
-    const token
-      = `${ENVELOPE}team/`
-      + TARGET_SEGMENT_CODEC.encode('\u{1F680}'.repeat(CONVERSATION_TITLE_MAX_CODE_POINTS));
-    expect(addressTokenByteLength(token)).toBeGreaterThan(
-      ADDRESS_TOKEN_MAX_BYTES,
-    );
+    const token =
+      `${ENVELOPE}team/` +
+      TARGET_SEGMENT_CODEC.encode('\u{1F680}'.repeat(CONVERSATION_TITLE_MAX_CODE_POINTS));
+    expect(addressTokenByteLength(token)).toBeGreaterThan(ADDRESS_TOKEN_MAX_BYTES);
   });
 
   it('admits the names people actually type, envelope and thread suffix included', () => {
-    const token
-      = `${ENVELOPE}${TARGET_SEGMENT_CODEC.encode('silverhand 工作区')}`
-      + `/${TARGET_SEGMENT_CODEC.encode('UI/UX 优化')}`
-      + '/thread:lHtaFjNlIiZNGk_J';
-    expect(addressTokenByteLength(token)).toBeLessThanOrEqual(
-      ADDRESS_TOKEN_MAX_BYTES,
-    );
+    const token =
+      `${ENVELOPE}${TARGET_SEGMENT_CODEC.encode('silverhand 工作区')}` +
+      `/${TARGET_SEGMENT_CODEC.encode('UI/UX 优化')}` +
+      '/thread:lHtaFjNlIiZNGk_J';
+    expect(addressTokenByteLength(token)).toBeLessThanOrEqual(ADDRESS_TOKEN_MAX_BYTES);
   });
 });
 
@@ -211,14 +211,6 @@ describe('segment carriers (#task:2119)', () => {
       expect(URI_SEGMENT_CODEC.decode(raw)).toBeNull();
     });
   }
-
-  it('escape sets nest, and the difference is exactly those four', () => {
-    const target = TARGET_SEGMENT_CODEC.escaped;
-    const uri = URI_SEGMENT_CODEC.escaped;
-    for (const character of target) expect(uri.has(character)).toBe(true);
-    const added = [...uri].filter(character => !target.has(character));
-    expect(new Set(added)).toEqual(new Set(DIFFERING.map(([raw]) => raw)));
-  });
 
   it('agrees on every shared member, so the carriers differ ONLY in those four', () => {
     const shared = ['%', '/', ' ', '\u{3000}', '\u{00A0}'];

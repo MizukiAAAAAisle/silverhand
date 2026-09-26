@@ -255,10 +255,11 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
-    struct FakeMint;
+    #[derive(Clone, Default)]
+    struct FakeMint(Arc<AtomicUsize>);
     impl SessionTokenMint for FakeMint {
         fn mint(&self) -> Result<MintedSession, SessionMintError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
             EntropySessionTokenMint::new(CountingEntropy(Arc::new(Mutex::new(1)))).mint()
         }
     }
@@ -321,7 +322,7 @@ mod tests {
     #[tokio::test]
     async fn zero_users_creates_issues_a_session_and_announces_exactly_once() {
         let uow = FakeUnitOfWork(BootstrapChoice::Created { user: record("u1") });
-        let mint = FakeMint;
+        let mint = FakeMint::default();
         let issue = RecordingIssue {
             issued: Arc::new(Mutex::new(Vec::new())),
         };
@@ -356,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn one_user_selects_issues_a_session_and_never_announces() {
         let uow = FakeUnitOfWork(BootstrapChoice::Selected { user: record("u1") });
-        let mint = FakeMint;
+        let mint = FakeMint::default();
         let issue = RecordingIssue {
             issued: Arc::new(Mutex::new(Vec::new())),
         };
@@ -387,7 +388,7 @@ mod tests {
     #[tokio::test]
     async fn many_users_is_ambiguous_and_mints_nothing() {
         let uow = FakeUnitOfWork(BootstrapChoice::Conflict);
-        let mint = FakeMint;
+        let mint = FakeMint::default();
         let issue = RecordingIssue {
             issued: Arc::new(Mutex::new(Vec::new())),
         };
@@ -402,6 +403,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(outcome, EmbeddedBootstrap::Ambiguous));
+        assert_eq!(mint.0.load(Ordering::SeqCst), 0);
         // No session, no announce — the refusal is pure.
         assert!(issue.issued.lock().unwrap().is_empty());
         assert_eq!(sink.0.load(Ordering::SeqCst), 0);

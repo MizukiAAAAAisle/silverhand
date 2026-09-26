@@ -32,19 +32,15 @@ export interface ExpectedAttachWindow {
 }
 
 /**
- * Pure predicate — keep this synchronous and side-effect-free so the
- * unit test for the freshness contract does not need a fake clock,
- * fake controller, or fake IPC. The polling loop simply re-evaluates
- * this against the latest controller snapshot.
- *
- * Semantics (positive form — see file header for the OR rationale):
+ * Attachment freshness relative to the pre-write snapshot.
+ * Semantics:
  *   accept ⇔ attachment is non-null
  *            AND attachment.hostId === expectedHostId
  *            AND ( attachedAt >= expectAttachSince
  *                  OR ( previousConnectionId !== null
  *                       AND connectionId !== previousConnectionId ) )
  */
-export function attachmentSatisfies(
+function attachmentSatisfies(
   attachment: OutboundAttachmentSnapshot | null,
   window: ExpectedAttachWindow,
 ): boolean {
@@ -74,27 +70,6 @@ export function attachmentSatisfies(
 export interface AttachWatchdogDeps {
   /** Returns the current attachment snapshot for `hostId`, or null. */
   getAttachment(hostId: string): OutboundAttachmentSnapshot | null;
-  /**
-   * Poll interval in ms. Default 250. Kept injectable so tests can
-   * drive the loop deterministically with a fake scheduler.
-   */
-  pollIntervalMs?: number;
-  /**
-   * Overall budget before the watchdog gives up. Default 10_000.
-   * Timeout is a *diagnostic* signal only — UI-facing status stays
-   * `connecting` (per Cindy `EDu21iazTBvFqXHJ`/`HAdYZRVoogy852Qt`,
-   * we do NOT introduce a `connecting_timeout` enum).
-   */
-  timeoutMs?: number;
-  /**
-   * Optional scheduler hook for tests. Defaults to `setTimeout`.
-   */
-  setTimeoutImpl?: (cb: () => void, ms: number) => unknown;
-  clearTimeoutImpl?: (handle: unknown) => void;
-  /**
-   * Clock hook. Defaults to `Date.now`.
-   */
-  now?: () => number;
 }
 
 export type AttachWatchdogOutcome =
@@ -130,16 +105,9 @@ export function startAttachWatchdog(
   window: ExpectedAttachWindow,
   deps: AttachWatchdogDeps,
 ): AttachWatchdogHandle {
-  const interval = deps.pollIntervalMs ?? 250;
-  const budget = deps.timeoutMs ?? 10_000;
-  const setT = deps.setTimeoutImpl ?? ((cb, ms) => setTimeout(cb, ms));
-  const clearT =
-    deps.clearTimeoutImpl ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
-  const now = deps.now ?? (() => Date.now());
-
-  const startedAt = now();
+  const startedAt = Date.now();
   let terminated = false;
-  let timer: unknown = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
   let resolveOutcome: (o: AttachWatchdogOutcome) => void = () => {};
   const promise = new Promise<AttachWatchdogOutcome>((resolve) => {
     resolveOutcome = resolve;
@@ -147,7 +115,7 @@ export function startAttachWatchdog(
 
   const tick = (): void => {
     if (terminated) return;
-    const elapsed = now() - startedAt;
+    const elapsed = Date.now() - startedAt;
     const att = deps.getAttachment(window.expectedHostId);
     if (attachmentSatisfies(att, window)) {
       terminated = true;
@@ -155,12 +123,12 @@ export function startAttachWatchdog(
       resolveOutcome({ ok: true, attachment: att!, elapsedMs: elapsed });
       return;
     }
-    if (elapsed >= budget) {
+    if (elapsed >= 10_000) {
       terminated = true;
       resolveOutcome({ ok: false, reason: "timeout", elapsedMs: elapsed });
       return;
     }
-    timer = setT(tick, interval);
+    timer = setTimeout(tick, 250);
   };
 
   // Initial synchronous probe: catches the case where the attachment
@@ -173,8 +141,8 @@ export function startAttachWatchdog(
     abort: () => {
       if (terminated) return;
       terminated = true;
-      if (timer !== null) clearT(timer);
-      resolveOutcome({ ok: false, reason: "aborted", elapsedMs: now() - startedAt });
+      if (timer !== null) clearTimeout(timer);
+      resolveOutcome({ ok: false, reason: "aborted", elapsedMs: Date.now() - startedAt });
     },
   };
 }

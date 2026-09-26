@@ -328,10 +328,6 @@ mod tests {
         }
     }
 
-    fn permissive() -> PortsBuilder {
-        permissive_fields()
-    }
-
     impl Ports {
         fn placement_calls(&self) -> usize {
             self.inner.placement_calls.load(Ordering::SeqCst)
@@ -533,7 +529,18 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(body_json(response).await["profile"]["name"], json!("alice"));
+        assert_eq!(
+            body_json(response).await,
+            json!({
+                "profile": {
+                    "id": "t1",
+                    "name": "alice",
+                    "display_name": "alice",
+                    "description": "a bio",
+                    "avatar_url": "/api/agents/t1/avatar?v=7"
+                }
+            })
+        );
         assert_eq!(ports.reader_asked(), vec!["alice".to_string()]);
     }
 
@@ -592,7 +599,7 @@ mod tests {
     async fn a_missing_conversation_is_a_404() {
         let ports = PortsBuilder {
             placement: None,
-            ..permissive_fields()
+            ..permissive()
         }
         .build();
         let response = call(
@@ -629,7 +636,7 @@ mod tests {
     async fn a_workspace_less_conversation_names_the_placement() {
         let ports = PortsBuilder {
             placement: Some(WorkspacePlacement::WorkspaceLess),
-            ..permissive_fields()
+            ..permissive()
         }
         .build();
         let response = call(
@@ -657,7 +664,7 @@ mod tests {
     async fn outside_the_horizon_is_a_bare_forbidden() {
         let ports = PortsBuilder {
             horizon_ok: false,
-            ..permissive_fields()
+            ..permissive()
         }
         .build();
         let response = call(
@@ -676,7 +683,7 @@ mod tests {
     async fn a_missing_capability_is_the_capability_denied_body() {
         let ports = PortsBuilder {
             capability_ok: false,
-            ..permissive_fields()
+            ..permissive()
         }
         .build();
         let response = call(
@@ -703,7 +710,7 @@ mod tests {
     async fn an_unknown_target_is_the_collapsed_404() {
         let ports = PortsBuilder {
             rows: vec![],
-            ..permissive_fields()
+            ..permissive()
         }
         .build();
         let response = call(
@@ -719,34 +726,8 @@ mod tests {
         );
     }
 
-    /// The whole ladder passes → the target profile at `200`, in the SAME envelope
-    /// the self read serves.
-    #[tokio::test]
-    async fn a_present_peer_is_projected_at_200() {
-        let ports = permissive().build();
-        let response = call(
-            ports,
-            "?handle=alice",
-            Some(conversation_slot("a1", "conv000000000001")),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            body_json(response).await,
-            json!({
-                "profile": {
-                    "id": "t1",
-                    "name": "alice",
-                    "display_name": "alice",
-                    "description": "a bio",
-                    "avatar_url": "/api/agents/t1/avatar?v=7"
-                }
-            })
-        );
-    }
-
     /// The permissive default's raw fields, so a test can override exactly one.
-    fn permissive_fields() -> PortsBuilder {
+    fn permissive() -> PortsBuilder {
         PortsBuilder {
             placement: Some(WorkspacePlacement::Workspace(workspace("w1"))),
             horizon_ok: true,

@@ -14,8 +14,6 @@ export {
 } from './tree.js';
 export {
   readAgentWorkspaceFile,
-  MAX_PREVIEW_BYTES,
-  TRUNCATED_SUFFIX,
   type ReadAgentWorkspaceFileDeps,
 } from './read-file.js';
 export {

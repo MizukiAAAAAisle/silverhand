@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import contract from '../src/backend-admission.json' with { type: 'json' };
 import { BACKEND_ADMISSION } from '../src/backend-admission.generated.js';
 import { apiPaths } from '../src/api/paths.js';
+import { PROTOCOL_VERSIONS } from '../src/protocol-versions.js';
 import { EVENT_WS_SESSION_COOKIE } from '../src/config.js';
 import {
   DESKTOP_API_EPOCH_HEADER,
@@ -26,13 +27,14 @@ describe('backend admission authority', () => {
 
   it('drives every desktop client admission consumer', () => {
     expect(BACKEND_ADMISSION).toEqual(contract);
+    expect(PROTOCOL_VERSIONS.desktopApi).toBe(contract.desktopApi);
+    expect(PROTOCOL_VERSIONS.desktopMinClient).toBe(contract.desktopMinClient);
+    expect(PROTOCOL_VERSIONS.desktopMinServer).toBe(contract.desktopMinServer);
     expect(DESKTOP_SERVER_API_EPOCH).toBe(contract.desktopApi);
     expect(MINIMUM_CLIENT_API_EPOCH).toBe(contract.desktopMinClient);
     expect(MINIMUM_SERVER_API_EPOCH).toBe(contract.desktopMinServer);
     expect(apiPaths.eventWebSocket).toBe(contract.eventWebSocketPath);
-    expect(EVENT_WS_SESSION_COOKIE).toBe(
-      contract.eventWebSocketSessionCookie,
-    );
+    expect(EVENT_WS_SESSION_COOKIE).toBe(contract.eventWebSocketSessionCookie);
     expect(DESKTOP_API_EPOCH_HEADER).toBe(contract.desktopApiEpochHeader);
   });
 });

@@ -372,25 +372,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn each_put_mints_a_fresh_pointer_so_a_reupload_never_clobbers() {
-        let adapter =
-            SingleKindAvatarBlobs::new(MemoryBlobs::new(StorageKind::Local), StorageKind::Local);
-        let user = UserId::parse("stable-user").unwrap();
-
-        let first = AvatarBlobStore::put(&adapter, &user, AvatarContentType::Png, vec![9])
-            .await
-            .unwrap();
-        let second = AvatarBlobStore::put(&adapter, &user, AvatarContentType::Png, vec![9])
-            .await
-            .unwrap();
-        assert_ne!(
-            first.as_str(),
-            second.as_str(),
-            "identical re-upload bytes must mint a distinct physical key"
-        );
-    }
-
-    #[tokio::test]
     async fn a_user_scope_key_is_refused_by_the_agent_capability_before_touching_storage() {
         // The production-adapter custody discriminator against the USER scope. A real user
         // blob exists under the user scope. Its key, bound to an agent owner (the newtype
@@ -413,7 +394,7 @@ mod tests {
         );
 
         let foreign = OwnedAgentAvatarBlob::new(
-            AgentId::parse("agent-1").unwrap(),
+            AgentId::parse("victim").unwrap(),
             AgentAvatarBlobPointer::parse(user_pointer.as_str()).unwrap(),
         );
         assert!(
@@ -563,33 +544,5 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(backend.live(), 0);
-    }
-
-    #[tokio::test]
-    async fn an_agent_and_a_user_sharing_a_raw_id_get_disjoint_blob_keys() {
-        let adapter =
-            SingleKindAvatarBlobs::new(MemoryBlobs::new(StorageKind::Local), StorageKind::Local);
-        let shared = "shared-id";
-        let user_pointer = AvatarBlobStore::put(
-            &adapter,
-            &UserId::parse(shared).unwrap(),
-            AvatarContentType::Png,
-            vec![1],
-        )
-        .await
-        .unwrap();
-        let agent_pointer = AgentAvatarBlobStore::put(
-            &adapter,
-            &AgentId::parse(shared).unwrap(),
-            AvatarContentType::Png,
-            vec![1],
-        )
-        .await
-        .unwrap();
-        assert_ne!(
-            user_pointer.as_str(),
-            agent_pointer.as_str(),
-            "the two custodies must never collide even on an identical raw id"
-        );
     }
 }

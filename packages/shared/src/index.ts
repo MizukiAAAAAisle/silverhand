@@ -6,7 +6,6 @@
 // dependency-free and stays here.
 export * from './api/index.js';
 export * from './agent-home-workspace.js';
-export * from './bind-address-scope.js';
 export * from './chat-limits.js';
 export * from './db/schema.js';
 export * from './driver/index.js';

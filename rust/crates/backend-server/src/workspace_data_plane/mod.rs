@@ -19,5 +19,5 @@ mod route;
 
 pub use adapter::ProductionWorkspaceDataPlane;
 #[cfg(test)]
-pub(crate) use adapter::{WORKSPACE_FS_CAPABILITY_CODES, admits_workspace_fs_refusal};
+pub(crate) use adapter::admits_workspace_fs_refusal;
 pub use route::{AGENT_WORKSPACE_FILE_PATH, AGENT_WORKSPACE_TREE_PATH, router};

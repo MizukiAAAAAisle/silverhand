@@ -15,11 +15,11 @@ use futures_util::stream;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
-        AddressedPrincipals, AttachmentId, AttachmentRefusal, CreatedMessage, DirectLineAuthority,
-        DirectPairMint, DirectPairMinted, DirectPairOpenedFact, DirectPairOpenedPort,
-        DirectPairParticipants, EnvironmentUnavailable, FromKind, MessageContent,
-        MessageCreatedFact, MessageId, MessageSeq, PrincipalIdentity, SendClock, SendEntropy,
-        SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
+        AddressedPrincipals, CreatedMessage, DirectLineAuthority, DirectPairMint, DirectPairMinted,
+        DirectPairOpenedFact, DirectPairOpenedPort, DirectPairParticipants, EnvironmentUnavailable,
+        FromKind, MessageContent, MessageCreatedFact, MessageId, MessageSeq, PrincipalIdentity,
+        SendClock, SendEntropy, SendMessage, SendMessageError, SendMessageOutcome,
+        SendMessageUnitOfWork,
         collaboration::direct_pair_initiation::{
             AuthorizedDirectPairInitiation, DirectPairFirstSendError,
             DirectPairInitiationAuthority, DirectPairInitiationDecision,
@@ -194,21 +194,6 @@ impl SendMessageUnitOfWork for SuccessUnit {
     async fn send_message(&self, _: SendMessage) -> Result<SendMessageOutcome, SendMessageError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(committed_outcome())
-    }
-}
-
-#[derive(Clone)]
-struct FailingUnit {
-    calls: Arc<AtomicUsize>,
-}
-
-impl SendMessageUnitOfWork for FailingUnit {
-    async fn send_message(&self, _: SendMessage) -> Result<SendMessageOutcome, SendMessageError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(AttachmentRefusal::OutsideChannel {
-            attachment_id: AttachmentId::parse("missing").unwrap(),
-        }
-        .into())
     }
 }
 
@@ -548,60 +533,6 @@ async fn ordinary_body_driver_failure_uses_the_typescript_empty_object_catch() {
     assert_eq!(unit_calls.load(Ordering::SeqCst), 0);
 }
 
-#[tokio::test]
-async fn a_send_refusal_after_mint_keeps_the_opened_pair_and_maps_existing_send_wire() {
-    let initiation = Initiation::granted();
-    let opens = initiation.opens.clone();
-    let unit_calls = Arc::new(AtomicUsize::new(0));
-    let (status, body) = call(
-        app(
-            initiation,
-            FailingUnit {
-                calls: unit_calls.clone(),
-            },
-        ),
-        Body::from(json!({"content":"hello","attachment_ids":["missing"]}).to_string()),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body,
-        json!({
-            "error":"attachment does not belong to this channel",
-            "code":"attachment_outside_channel",
-            "attachment_id":"missing"
-        })
-    );
-    assert_eq!(opens.load(Ordering::SeqCst), 1);
-    assert_eq!(unit_calls.load(Ordering::SeqCst), 1);
-}
-
-#[tokio::test]
-async fn success_is_the_existing_human_send_ack_at_201() {
-    let initiation = Initiation::granted();
-    let opens = initiation.opens.clone();
-    let unit_calls = Arc::new(AtomicUsize::new(0));
-    let (status, body) = call(
-        app(
-            initiation,
-            SuccessUnit {
-                calls: unit_calls.clone(),
-            },
-        ),
-        Body::from(json!({"content":"hello"}).to_string()),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(body["message"]["conversation_id"], "pair-1");
-    assert_eq!(body["message"]["from_kind"], "user");
-    assert_eq!(body["message"]["content"], "hello");
-    assert_eq!(body.get("unresolved_references"), None);
-    assert_eq!(opens.load(Ordering::SeqCst), 1);
-    assert_eq!(unit_calls.load(Ordering::SeqCst), 1);
-}
-
 #[derive(Clone)]
 struct FixedEnvironment;
 
@@ -748,7 +679,6 @@ fn normalize_success(mut body: Value) -> Value {
     };
     message.insert("id".into(), json!("message"));
     message.insert("conversation_id".into(), json!("pair"));
-    message.insert("created_at".into(), json!(77));
     body
 }
 

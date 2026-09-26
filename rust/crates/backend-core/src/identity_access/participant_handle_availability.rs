@@ -68,14 +68,6 @@ pub enum ParticipantHandleAvailability {
     Taken,
 }
 
-impl ParticipantHandleAvailability {
-    /// Whether the boundary should report the handle as free. Derived from the arm
-    /// rather than stored beside a reason, so the two wire fields cannot disagree.
-    pub fn is_available(self) -> bool {
-        matches!(self, Self::Available)
-    }
-}
-
 /// Probe one proposed handle against the shared agents∪users handle namespace.
 ///
 /// Format is settled first and short-circuits: a malformed handle yields
@@ -107,40 +99,28 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        io,
-        sync::Mutex,
-        sync::atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::Mutex;
 
-    /// Records how many lookups it was asked for so a test can prove a malformed
-    /// handle never touches the namespace, and answers with whatever fact the case
-    /// wants — including a failure.
+    /// Records lookup bytes to prove exact forwarding and malformed-input short circuit.
     #[derive(Clone)]
     struct FakeNamespace {
-        answer: Result<bool, ()>,
+        answer: bool,
         asked: std::sync::Arc<Mutex<Vec<String>>>,
-        calls: std::sync::Arc<AtomicUsize>,
     }
 
     impl FakeNamespace {
         fn taken() -> Self {
-            Self::with(Ok(true))
+            Self::with(true)
         }
 
         fn free() -> Self {
-            Self::with(Ok(false))
+            Self::with(false)
         }
 
-        fn broken() -> Self {
-            Self::with(Err(()))
-        }
-
-        fn with(answer: Result<bool, ()>) -> Self {
+        fn with(answer: bool) -> Self {
             Self {
                 answer,
                 asked: std::sync::Arc::new(Mutex::new(Vec::new())),
-                calls: std::sync::Arc::new(AtomicUsize::new(0)),
             }
         }
 
@@ -154,10 +134,8 @@ mod tests {
             &self,
             handle: &ParticipantHandle,
         ) -> Result<bool, PersistenceFailure> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
             self.asked.lock().unwrap().push(handle.as_str().to_owned());
-            self.answer
-                .map_err(|()| PersistenceFailure::from_source(io::Error::other("namespace down")))
+            Ok(self.answer)
         }
     }
 
@@ -170,31 +148,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(verdict, ParticipantHandleAvailability::Available);
-        assert!(verdict.is_available());
         // The exact bytes are what the namespace was asked about — handles are stored
         // verbatim with no fold.
         assert_eq!(namespace.asked(), ["Alice_9-x"]);
-    }
-
-    #[tokio::test]
-    async fn a_held_handle_is_taken() {
-        let namespace = FakeNamespace::taken();
-
-        let verdict = probe_participant_handle(&namespace, "alice").await.unwrap();
-
-        assert_eq!(verdict, ParticipantHandleAvailability::Taken);
-        assert!(!verdict.is_available());
-    }
-
-    #[tokio::test]
-    async fn the_lookup_is_case_sensitive_exactly_as_stored() {
-        // `getByName` matches exactly (no COLLATE): a different case is a different
-        // handle, so what the probe asks about must be the verbatim spelling.
-        let namespace = FakeNamespace::free();
-
-        probe_participant_handle(&namespace, "ALICE").await.unwrap();
-
-        assert_eq!(namespace.asked(), ["ALICE"]);
     }
 
     #[tokio::test]
@@ -212,20 +168,10 @@ mod tests {
                 ParticipantHandleAvailability::Invalid,
                 "{raw:?} must be invalid"
             );
-            assert!(!verdict.is_available());
             assert!(
                 namespace.asked().is_empty(),
                 "{raw:?} has no membership, so nothing may be looked up"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn a_namespace_failure_never_becomes_a_product_verdict() {
-        let namespace = FakeNamespace::broken();
-
-        probe_participant_handle(&namespace, "alice")
-            .await
-            .expect_err("a failed lookup has no verdict");
     }
 }

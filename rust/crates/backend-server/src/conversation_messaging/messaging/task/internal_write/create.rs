@@ -1258,27 +1258,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_conflict_maps_to_the_envelope() {
-        let (app, _counts) = app(Spec {
-            created: false,
-            ..Spec::default()
-        });
-        let (status, body) = call(
-            app,
-            AGENT,
-            r##"{"tasks":[{"title":"x"}],"target":"#general"}"##,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        // Whole-create source-conflict envelope (NOT a per-item array).
-        assert_eq!(body["error"], "source_conflict");
-        assert!(body.get("tasks").is_none());
-    }
-
-    #[tokio::test]
-    async fn a_two_item_batch_conflict_writes_zero_and_fires_no_aftermath() {
-        // The whole batch is one transaction: a conflict on any item leaves 0/2 tasks
-        // and 0 aftermath — the batch atomicity the per-item loop violated.
+    async fn a_two_item_batch_conflict_is_one_refusal_without_aftermath() {
+        // The route hands off one batch and emits no aftermath on refusal.
+        // Actual row/event rollback is owned by the SQLite create integration tests.
         let (app, counts) = app(Spec {
             created: false,
             ..Spec::default()
@@ -1291,6 +1273,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["error"], "source_conflict");
+        assert!(body.get("tasks").is_none());
         assert_eq!(
             counts.write.load(Ordering::SeqCst),
             1,

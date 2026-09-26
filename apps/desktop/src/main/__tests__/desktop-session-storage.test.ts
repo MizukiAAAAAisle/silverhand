@@ -1,5 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,7 +21,10 @@ describe("desktop-session-storage", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "desktop-session-storage-"));
+    const artifacts = process.env.SILVERHAND_DIR;
+    if (!artifacts) throw new Error("session storage test requires isolated SILVERHAND_DIR");
+    mkdirSync(artifacts, { recursive: true });
+    root = mkdtempSync(join(artifacts, "desktop-session-storage-"));
   });
 
   afterEach(() => {
@@ -30,13 +40,15 @@ describe("desktop-session-storage", () => {
     const path = desktopSessionPath(root);
     expect(readFileSync(path, "utf8")).toBe("session-token-plain");
     expect(statSync(path).mode & 0o777).toBe(0o600);
+    chmodSync(path, 0o644);
+    persistDesktopSessionToken({ sessionPath: path, token: "replacement-token" });
+    expect(readFileSync(path, "utf8")).toBe("replacement-token");
+    expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
   it("loads a persisted token and trims trailing whitespace", () => {
-    const path = desktopSessionPath(root);
     persistDesktopSessionToken({ sessionPath: desktopSessionPath(root), token: "abc\n" });
     expect(loadPersistedDesktopSessionToken({ sessionPath: desktopSessionPath(root) })).toBe("abc");
-    expect(path).toBe(join(root, "desktop", "session.bin"));
   });
 
   it("treats missing or empty files as no token", () => {
@@ -71,6 +83,5 @@ describe("desktop-session-storage", () => {
       }),
     ).toBeNull();
     expect(warn).toHaveBeenCalled();
-    expect(path).toBe(join(root, "desktop", "session.bin"));
   });
 });

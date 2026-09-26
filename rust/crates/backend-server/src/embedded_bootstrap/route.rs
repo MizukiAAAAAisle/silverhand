@@ -590,67 +590,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_empty_token_is_a_404() {
-        let (token, _dir, _file) = armed_token();
-        let h = harness(BootstrapChoice::Created { user: record() }, token);
-        let (status, _) = send(&h, Some(loopback_v4()), &body("   ")).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(h.issues.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn a_non_object_body_is_a_404() {
-        let (token, _dir, _file) = armed_token();
-        let h = harness(BootstrapChoice::Created { user: record() }, token);
-        // A JSON array is a structural fault the ObjectOnly admission rejects; the
-        // handler maps it to the indistinguishable 404, never a 422.
-        let (status, _) = send(&h, Some(loopback_v4()), "[\"x\"]").await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-
-    // The next three are true body-fault discriminators: each is dispatched from a
-    // loopback peer with the authority ARMED, so the only possible cause of the 404
-    // is the body shape — and none of them may consume the token or mint a session.
-
-    #[tokio::test]
-    async fn malformed_json_is_a_404_and_does_not_consume() {
-        let (token, _dir, _file) = armed_token();
-        let h = harness(BootstrapChoice::Created { user: record() }, token);
-        // Truncated object → a JSON syntax fault → decode Err → 404.
-        let (status, _) = send(&h, Some(loopback_v4()), "{\"token\":").await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(
-            h.issues.load(Ordering::SeqCst),
-            0,
-            "no mint on malformed body"
-        );
-        // The real token survives, proving no consume happened on the fault.
-        let (ok, _) = send(&h, Some(loopback_v4()), &body(TOKEN)).await;
-        assert_eq!(ok, StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn a_missing_token_field_is_a_404() {
-        let (token, _dir, _file) = armed_token();
-        let h = harness(BootstrapChoice::Created { user: record() }, token);
-        // Well-formed object, but the required `token` string is absent → decode Err.
-        let (status, _) = send(&h, Some(loopback_v4()), "{}").await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(h.issues.load(Ordering::SeqCst), 0);
-        let (ok, _) = send(&h, Some(loopback_v4()), &body(TOKEN)).await;
-        assert_eq!(ok, StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn a_wrong_typed_token_is_a_404() {
-        let (token, _dir, _file) = armed_token();
-        let h = harness(BootstrapChoice::Created { user: record() }, token);
-        // `token` present but a number, not a string → decode Err → 404.
-        let (status, _) = send(&h, Some(loopback_v4()), "{\"token\":123}").await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(h.issues.load(Ordering::SeqCst), 0);
-        let (ok, _) = send(&h, Some(loopback_v4()), &body(TOKEN)).await;
-        assert_eq!(ok, StatusCode::OK);
+    async fn body_refusals_are_empty_404s_and_leave_the_token_live() {
+        for raw in [
+            r#"{"token":"   "}"#,
+            r#"["x"]"#,
+            r#"{"token":"#,
+            "{}",
+            r#"{"token":123}"#,
+        ] {
+            let (token, _dir, _file) = armed_token();
+            let h = harness(BootstrapChoice::Created { user: record() }, token);
+            let (status, out) = send(&h, Some(loopback_v4()), raw).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{raw}");
+            assert!(out.is_empty(), "{raw}: {out}");
+            assert_eq!(h.issues.load(Ordering::SeqCst), 0, "{raw}");
+            assert_eq!(h.announces.load(Ordering::SeqCst), 0, "{raw}");
+            let (ok, _) = send(&h, Some(loopback_v4()), &body(TOKEN)).await;
+            assert_eq!(ok, StatusCode::OK, "token survives {raw}");
+        }
     }
 
     #[tokio::test]

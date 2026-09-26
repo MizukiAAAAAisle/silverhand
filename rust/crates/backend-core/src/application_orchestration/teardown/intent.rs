@@ -459,12 +459,15 @@ mod tests {
             let failure = begin_agent_deletion(&port, &agent("a1"), 1)
                 .await
                 .expect_err("a spliced marker is not an answer");
+            let TeardownFailure::Contract(violation) = failure else {
+                panic!("expected a contract violation");
+            };
             assert_eq!(
-                failure.violation(),
-                Some(&TeardownContractViolation::AgentMismatch {
+                violation,
+                TeardownContractViolation::AgentMismatch {
                     expected: agent("a1"),
                     found: agent("a2"),
-                })
+                }
             );
         }
     }
@@ -521,12 +524,15 @@ mod tests {
         let failure = complete_agent_deletion(&port, &attempt, PurgeReceipt::sealed())
             .await
             .expect_err("a spliced outcome is not an answer");
+        let TeardownFailure::Contract(violation) = failure else {
+            panic!("expected a contract violation");
+        };
         assert_eq!(
-            failure.violation(),
-            Some(&TeardownContractViolation::AgentMismatch {
+            violation,
+            TeardownContractViolation::AgentMismatch {
                 expected: agent("a1"),
                 found: agent("a2"),
-            })
+            }
         );
     }
 
@@ -541,12 +547,15 @@ mod tests {
         let failure = complete_agent_deletion(&port, &attempt, PurgeReceipt::sealed())
             .await
             .expect_err("a spliced outcome is not an answer");
+        let TeardownFailure::Contract(violation) = failure else {
+            panic!("expected a contract violation");
+        };
         assert_eq!(
-            failure.violation(),
-            Some(&TeardownContractViolation::ComputerMismatch {
+            violation,
+            TeardownContractViolation::ComputerMismatch {
                 expected: HostId::parse("h1").expect("host id"),
                 found: HostId::parse("h2").expect("host id"),
-            })
+            }
         );
     }
 }

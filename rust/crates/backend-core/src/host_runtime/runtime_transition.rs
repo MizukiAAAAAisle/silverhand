@@ -647,11 +647,6 @@ pub async fn reclaim_runtime_transition_inboxes<P: RuntimeTransitionInboxWrite>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering::SeqCst},
-    };
-
     use super::*;
 
     fn agent(id: &str) -> AgentId {
@@ -680,26 +675,16 @@ mod tests {
         }
     }
 
-    /// A fake whose begin/complete outcomes are scripted, counting how often each write is
-    /// reached — so a rejected witness proves as zero downstream calls, not just a fault.
+    /// Scripted adapter outcomes exercise the domain's independent witness seals.
     #[derive(Clone)]
     struct ScriptedPort {
         begin: BeginTransitionRecord,
         complete: CompleteTransitionRecord,
-        begins: Arc<AtomicUsize>,
-        aborts: Arc<AtomicUsize>,
-        completes: Arc<AtomicUsize>,
     }
 
     impl ScriptedPort {
         fn new(begin: BeginTransitionRecord, complete: CompleteTransitionRecord) -> Self {
-            Self {
-                begin,
-                complete,
-                begins: Arc::new(AtomicUsize::new(0)),
-                aborts: Arc::new(AtomicUsize::new(0)),
-                completes: Arc::new(AtomicUsize::new(0)),
-            }
+            Self { begin, complete }
         }
     }
 
@@ -710,7 +695,6 @@ mod tests {
             _target: RuntimeKind,
             _now_ms: i64,
         ) -> Result<BeginTransitionRecord, PersistenceFailure> {
-            self.begins.fetch_add(1, SeqCst);
             Ok(self.begin.clone())
         }
 
@@ -718,7 +702,6 @@ mod tests {
             &self,
             _lock: &RuntimeTransitionLock,
         ) -> Result<AbortTransition, PersistenceFailure> {
-            self.aborts.fetch_add(1, SeqCst);
             Ok(AbortTransition::Released)
         }
 
@@ -728,7 +711,6 @@ mod tests {
             _commit: &RuntimeTransitionCommit,
             _now_ms: i64,
         ) -> Result<CompleteTransitionRecord, PersistenceFailure> {
-            self.completes.fetch_add(1, SeqCst);
             Ok(self.complete.clone())
         }
     }
@@ -866,9 +848,14 @@ mod tests {
         let mut wrong_stamp = faithful_after("a1", 42);
         wrong_stamp.updated_at = 41;
 
-        let mut lock_left = faithful_after("a1", 42);
-        lock_left.transition_target = Some("codex".to_string());
-        lock_left.transition_started_at = Some(5);
+        let mut target_left = faithful_after("a1", 42);
+        target_left.transition_target = Some("codex".to_string());
+
+        let mut started_at_left = faithful_after("a1", 42);
+        started_at_left.transition_started_at = Some(5);
+
+        let mut both_left = target_left.clone();
+        both_left.transition_started_at = Some(5);
 
         for after in [
             wrong_agent,
@@ -877,7 +864,9 @@ mod tests {
             wrong_effort,
             wrong_fast,
             wrong_stamp,
-            lock_left,
+            target_left,
+            started_at_left,
+            both_left,
         ] {
             let port = ScriptedPort::new(
                 locked("a1", "codex", 5),

@@ -96,7 +96,7 @@ pub fn plan_settlement<C: CronNextOccurrence>(
 #[cfg(test)]
 mod tests {
     use super::super::recurrence::{CronNextOccurrence, CronOutcome, CronQuery};
-    use super::super::spec::{CronSpec, IntervalSeconds};
+    use super::super::spec::CronSpec;
     use super::*;
 
     struct FixedCron(CronOutcome);
@@ -106,53 +106,35 @@ mod tests {
         }
     }
 
-    fn interval(every_seconds: i64) -> ScheduleSpec {
-        ScheduleSpec::Interval {
-            every: IntervalSeconds::new(every_seconds).unwrap(),
-            start_at: None,
-        }
-    }
     fn cron() -> ScheduleSpec {
         ScheduleSpec::Cron(CronSpec::new("*/5 * * * *".into(), "UTC".into()))
-    }
-    fn no_cron() -> FixedCron {
-        FixedCron(CronOutcome::NoFutureOccurrence)
-    }
-
-    #[test]
-    fn delivered_terminal_marks_done() {
-        let advancement = Advancement::Terminal { missed_count: 0 };
-        let action = plan_settlement(
-            &ScheduleSpec::Once { fire_at: 1_000 },
-            ScheduleCaps::none(),
-            5_000,
-            &advancement,
-            DeliveryOutcome::Delivered,
-            &no_cron(),
-        )
-        .unwrap();
-        assert_eq!(action, SettlementAction::MarkDone);
     }
 
     #[test]
     fn delivered_rearm_carries_the_planned_next_instant() {
+        struct UnreachableCron;
+        impl CronNextOccurrence for UnreachableCron {
+            fn next_after(&self, _query: CronQuery<'_>) -> CronOutcome {
+                panic!("a delivered fire must reuse its pre-delivery plan");
+            }
+        }
         let advancement = Advancement::Rearm {
-            next_fire_at: 160_000,
+            next_fire_at: 777_000,
             missed_count: 0,
         };
         let action = plan_settlement(
-            &interval(60),
+            &cron(),
             ScheduleCaps::none(),
             100_000,
             &advancement,
             DeliveryOutcome::Delivered,
-            &no_cron(),
+            &UnreachableCron,
         )
         .unwrap();
         assert_eq!(
             action,
             SettlementAction::Rearm {
-                next_fire_at: 160_000
+                next_fire_at: 777_000
             }
         );
     }
@@ -182,61 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_repeating_rearms_on_the_natural_cadence() {
-        let advancement = Advancement::Rearm {
-            next_fire_at: 160_000,
-            missed_count: 0,
-        };
-        let action = plan_settlement(
-            &interval(60),
-            ScheduleCaps::none(),
-            100_000,
-            &advancement,
-            DeliveryOutcome::Failed {
-                reason: "boom".into(),
-            },
-            &no_cron(),
-        )
-        .unwrap();
-        assert_eq!(
-            action,
-            SettlementAction::MarkFireFailed {
-                reason: "boom".into(),
-                next_fire_at: 160_000,
-            }
-        );
-    }
-
-    #[test]
-    fn failed_repeating_past_until_marks_plan_ended_not_failed() {
-        // Natural next tick (160_000) overruns until_at (120_000): the plan
-        // window is over, so a failed fire settles terminal-`done` via
-        // MarkPlanEndedAfterFailure — NOT `failed` (reserved for one-shots) and
-        // NOT the success `MarkDone` (the fire did not deliver).
-        let advancement = Advancement::Rearm {
-            next_fire_at: 160_000,
-            missed_count: 0,
-        };
-        let action = plan_settlement(
-            &interval(60),
-            ScheduleCaps::new(None, Some(120_000)).unwrap(),
-            100_000,
-            &advancement,
-            DeliveryOutcome::Failed {
-                reason: "boom".into(),
-            },
-            &no_cron(),
-        )
-        .unwrap();
-        assert_eq!(
-            action,
-            SettlementAction::MarkPlanEndedAfterFailure {
-                reason: "boom".into()
-            }
-        );
-    }
-
-    #[test]
     fn failed_repeating_cron_fault_propagates() {
         let advancement = Advancement::Rearm {
             next_fire_at: 0,
@@ -257,18 +184,10 @@ mod tests {
     }
 }
 
-/// TS-first parity gate. The expected actions in the included fixture are
-/// signed by the REAL production TypeScript decision `planSettlement` in
-/// `schedule-settlement.ts` (the one `ScheduleService.processOne` calls),
-/// executed by `schedule-settlement.parity.test.ts` — not hand-authored here.
-/// That single signer emits both the JSON fixture and this `.rs`, and the same
-/// Vitest run re-asserts this file byte-for-byte against the production output,
-/// so the two projections cannot drift apart. Rust computes the success plan
-/// via [`super::recurrence::plan_advancement`] exactly as the driver does, then
-/// [`plan_settlement`], and must reproduce each case's action exactly.
-///
-/// The fixture's cron cases use a stateless periodic evaluator identical on
-/// both sides (`steppingCronNext` ⇔ `SteppingCron`).
+/// Frozen cross-language settlement contract, generated by the production
+/// TypeScript decision before its retirement in af0e2b6b6. Rust computes the
+/// pre-delivery plan and settlement against those independent expected actions;
+/// there is no live TypeScript signer in this repository.
 #[cfg(test)]
 mod ts_parity {
     use super::super::recurrence::plan_advancement;

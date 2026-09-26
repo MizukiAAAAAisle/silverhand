@@ -1,11 +1,6 @@
 import type { DaemonHostConfig, ServerConnectionProfile } from "@silverhand/shared";
 import type { HostOutboundReloadFailureReason, HostOutboundReloadResult } from "@silverhand/host";
-import {
-  startAttachWatchdog,
-  type AttachWatchdogDeps,
-  type AttachWatchdogOutcome,
-  type ExpectedAttachWindow,
-} from "./outbound-attach.js";
+import { startAttachWatchdog, type ExpectedAttachWindow } from "./outbound-attach.js";
 import type {
   GetHostAttachmentFn,
   HostOutboundReloadFn,
@@ -77,26 +72,13 @@ export interface ApplyServerProfileDeps {
    *  has no token field — combined with a non-null `currentLocalHostId`,
    *  this surfaces as `partial_apply_pending/host_token_missing`. */
   currentHostToken: () => string | null;
-  /** Test seam for `startAttachWatchdog`. Production passes
-   *  `startAttachWatchdog` from `outbound-attach.ts`; tests supply a
-   *  fake that resolves deterministically. */
-  startWatchdog?: (
-    window: ExpectedAttachWindow,
-    watchdogDeps: AttachWatchdogDeps,
-  ) => { promise: Promise<AttachWatchdogOutcome>; abort(): void };
-  /** Test clock; defaults to `Date.now`. */
-  now?: () => number;
-  /** Watchdog tuning — defaults match `outbound-attach.ts` (250ms / 10s). */
-  watchdogPollIntervalMs?: number;
-  watchdogTimeoutMs?: number;
 }
 
 export async function applyServerProfile(
   input: ApplyServerProfileInput,
   deps: ApplyServerProfileDeps,
 ): Promise<ServerProfileApplyOutcome> {
-  const now = deps.now ?? (() => Date.now());
-  const startedAt = now();
+  const startedAt = Date.now();
   const profileVersion = input.profile.version;
 
   // Pre-auth path: no host claim → nothing to reload AND nothing
@@ -182,7 +164,7 @@ export async function applyServerProfile(
       kind: "fully_applied",
       profileVersion,
       reloadKind: "unchanged",
-      elapsedMs: now() - startedAt,
+      elapsedMs: Date.now() - startedAt,
     };
   }
 
@@ -203,12 +185,8 @@ export async function applyServerProfile(
     previousConnectionId,
     expectAttachSince,
   };
-  const startWatchdog = deps.startWatchdog ?? startAttachWatchdog;
-  const watchdog = startWatchdog(window, {
+  const watchdog = startAttachWatchdog(window, {
     getAttachment: (id) => (deps.getAttachment ? deps.getAttachment(id) : null),
-    pollIntervalMs: deps.watchdogPollIntervalMs,
-    timeoutMs: deps.watchdogTimeoutMs,
-    now,
   });
   const outcome = await watchdog.promise;
   if (outcome.ok) {
@@ -216,7 +194,7 @@ export async function applyServerProfile(
       kind: "fully_applied",
       profileVersion,
       reloadKind: "reloaded",
-      elapsedMs: now() - startedAt,
+      elapsedMs: Date.now() - startedAt,
     };
   }
   // Watchdog timeout / abort — daemon swapped, config is saved, we
@@ -230,7 +208,7 @@ export async function applyServerProfile(
     kind: "fully_applied",
     profileVersion,
     reloadKind: "connectivity_unverified",
-    elapsedMs: now() - startedAt,
+    elapsedMs: Date.now() - startedAt,
   };
 }
 
@@ -294,13 +272,11 @@ export interface ReconcilePartialApplyDeps {
   readProfile: () => ReadProfileResult;
   readDaemonHostConfig: () => DaemonHostConfig | null;
   applyProfile: (profile: ServerConnectionProfile) => Promise<ServerProfileApplyOutcome>;
-  now?: () => number;
 }
 
 export async function reconcilePartialApplyAtBoot(
   deps: ReconcilePartialApplyDeps,
 ): Promise<PartialApplyState> {
-  const now = deps.now ?? (() => Date.now());
   const read = deps.readProfile();
   if (!read.ok) {
     if (read.reason === "not_found") {
@@ -310,7 +286,7 @@ export async function reconcilePartialApplyAtBoot(
       kind: "unusable_profile",
       reason: read.reason,
       detail: read.detail,
-      lastReadAt: now(),
+      lastReadAt: Date.now(),
     };
   }
   const profile = read.profile;
@@ -321,5 +297,5 @@ export async function reconcilePartialApplyAtBoot(
   }
 
   const outcome = await deps.applyProfile(profile);
-  return derivePartialApplyState(outcome, now());
+  return derivePartialApplyState(outcome, Date.now());
 }

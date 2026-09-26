@@ -13,17 +13,15 @@
  *
  * The fix: `SocketTransport.write()` ignores the Node return value
  * and always returns `true` when the socket is connected. This test
- * pins that behaviour by forcing a connected socket to report
- * `false` on the next write (via a low `writableHighWaterMark` + a
- * payload exceeding it) and asserts the transport still claims
- * success.
+ * pins that behaviour by filling a real connected socket until Node
+ * actually reports false, while the transport still claims success.
  *
  * Why no e2e involvement: this is a unit-level contract on
  * SocketTransport.write — the corresponding behaviour at the
  * HostClient layer (don't reject pending on backpressure) is
  * automatically preserved as long as `write` returns true.
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Server, Socket } from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -35,6 +33,7 @@ interface Fixture {
   socketPath: string;
   server: Server;
   serverSocket?: Socket;
+  transport?: SocketTransport;
 }
 
 describe('SocketTransport — backpressure not treated as failure', () => {
@@ -43,8 +42,9 @@ describe('SocketTransport — backpressure not treated as failure', () => {
   afterEach(async () => {
     while (fixtures.length) {
       const f = fixtures.pop()!;
+      f.transport?.close();
       f.serverSocket?.destroy();
-      await new Promise<void>(resolve => f.server.close(() => resolve()));
+      await new Promise<void>((resolve) => f.server.close(() => resolve()));
       rmSync(f.dir, { recursive: true, force: true });
     }
   });
@@ -52,7 +52,7 @@ describe('SocketTransport — backpressure not treated as failure', () => {
   it('returns true even when the underlying socket reports highWaterMark exceeded', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'silverhand-host-bp-'));
     const socketPath = join(dir, 'bp.sock');
-    const server = new Server(socket => {
+    const server = new Server((socket) => {
       // Pause reading so writes from the client side accumulate in
       // both the kernel send buffer and the Node-side writable
       // buffer — this is what tips Socket.write() into returning
@@ -63,31 +63,46 @@ describe('SocketTransport — backpressure not treated as failure', () => {
     });
     const f: Fixture = { dir, socketPath, server };
     fixtures.push(f);
-    await new Promise<void>(resolve => server.listen(socketPath, resolve));
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
 
     const transport = new SocketTransport({ socketPath });
+    f.transport = transport;
     await transport.connect();
-    // Push enough bytes to overflow a tiny in-process buffer. 256KB
-    // is well past Node's default 16KB highWaterMark and several
-    // multiples past anything the kernel will absorb instantly
-    // without the peer reading.
     const big = 'x'.repeat(256 * 1024) + '\n';
-    const ok = transport.write(big);
-    expect(ok).toBe(true);
-    transport.close();
+    const originalWrite = Socket.prototype.write;
+    const results: boolean[] = [];
+    const spy = vi.spyOn(Socket.prototype, 'write').mockImplementation(function (
+      this: Socket,
+      ...args
+    ) {
+      const result = Reflect.apply(originalWrite, this, args);
+      if (args[0] === big) results.push(result);
+      return result;
+    });
+    try {
+      // Bound the fixture to 8MiB; do not infer kernel pressure from size.
+      for (let attempt = 0; attempt < 32 && !results.includes(false); attempt++) {
+        expect(transport.write(big)).toBe(true);
+      }
+      expect(results).toContain(false);
+    } finally {
+      spy.mockRestore();
+      transport.close();
+    }
   });
 
   it('returns false only when the transport is not connected', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'silverhand-host-bp2-'));
     const socketPath = join(dir, 'bp.sock');
-    const server = new Server(socket => {
+    const server = new Server((socket) => {
       f.serverSocket = socket;
     });
     const f: Fixture = { dir, socketPath, server };
     fixtures.push(f);
-    await new Promise<void>(resolve => server.listen(socketPath, resolve));
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
 
     const transport = new SocketTransport({ socketPath });
+    f.transport = transport;
     await transport.connect();
     expect(transport.write('hi\n')).toBe(true);
     transport.close();

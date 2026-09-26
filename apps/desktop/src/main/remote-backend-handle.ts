@@ -53,19 +53,7 @@ export interface RemoteBackendHandleInput {
   insecure: boolean;
 }
 
-/**
- * Pure factory: produce a {@link RemoteBackendHandle} from a boot
- * decision payload. Throw-free, deterministic, no I/O.
- *
- * The function is intentionally trivial today; it exists as a named
- * constructor so:
- *   - callers can pin a single import in `index.ts` instead of
- *     scattering inline object literals,
- *   - the unit test surface has a stable name to assert against,
- *   - future remote-mode validation that needs to run BEFORE the
- *     handle is usable (e.g. a `/readyz` ping, a TLS info snapshot)
- *     can live behind this constructor without changing the call site.
- */
+/** Remote handle has no local backend process to close. */
 export function buildRemoteBackendHandle(input: RemoteBackendHandleInput): RemoteBackendHandle {
   return {
     kind: "remote",

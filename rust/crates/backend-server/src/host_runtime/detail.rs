@@ -16,11 +16,9 @@
 //! user-invite draft, so the add-computer modal that minted it can watch
 //! pending → attached → active.
 //!
-//! [`ConnectedHostName`] is a REQUIREMENT SEAM: it names what this route needs from
-//! the live websocket controller — the hostname the currently attached daemon
-//! announced — without that controller existing in this crate yet. It is declared,
-//! consumed, faked in tests, and left UNMOUNTED; wiring the real controller is the
-//! composition root's job (#task:2197). The human principal's ABSENCE is a
+//! [`ConnectedHostName`] reads the hostname the currently attached daemon announced.
+//! The composition root supplies the controller's [`ConnectedHostNameView`].
+//! The human principal's ABSENCE is a
 //! composition fault, so it takes a fail-closed `500` having read nothing.
 
 use axum::{
@@ -224,8 +222,9 @@ mod tests {
 
         async fn read_computer(
             &self,
-            _computer: HostId,
+            computer: HostId,
         ) -> Result<Option<ComputerRecord>, PersistenceFailure> {
+            assert_eq!(computer.as_str(), "h1");
             self.reads.fetch_add(1, SeqCst);
             match &self.outcome {
                 ReadOutcome::Present(record) => Ok(Some(record.clone())),
@@ -256,7 +255,8 @@ mod tests {
     }
 
     impl ConnectedHostName for FakeAttachment {
-        fn connected_host_name(&self, _computer: &HostId) -> Option<String> {
+        fn connected_host_name(&self, computer: &HostId) -> Option<String> {
+            assert_eq!(computer.as_str(), "h1");
             self.lookups.fetch_add(1, SeqCst);
             self.name.clone()
         }
@@ -352,17 +352,17 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::OK);
         assert_eq!(
-            parsed(&reply.body)["host"]["connected_host_name"],
-            Value::Null
+            parsed(&reply.body)["host"].get("connected_host_name"),
+            Some(&Value::Null)
         );
         assert_eq!(reply.lookups, 1);
     }
 
-    /// An absent row and a foreign one render the SAME bytes, and neither ever reaches
+    /// An absent row and a foreign one render the same envelope, and neither reaches
     /// the live-attachment seam — a refused requester learns nothing about a computer
     /// they cannot see.
     #[tokio::test]
-    async fn a_missing_or_foreign_computer_is_one_byte_identical_404_that_never_looks_up() {
+    async fn a_missing_or_foreign_computer_has_the_same_404_and_never_looks_up() {
         let refused = json!({ "error": "host not found", "error_code": "host_not_found" });
         for outcome in [
             ReadOutcome::Absent,

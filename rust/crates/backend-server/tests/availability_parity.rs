@@ -1,7 +1,7 @@
 //! Rust half of the cross-language GET /api/agents/{id}/availability whole-wire
 //! parity gate (#task:2195, batch 2).
 //!
-//! The SAME checked-in fixtures the TypeScript oracle replays
+//! The checked-in fixtures ratified by the now-retired TypeScript oracle
 //! (packages/backend/tests/availability-cold-read-parity.test.ts) are replayed
 //! here: one `seed.sql` executed verbatim against a fresh current-schema database,
 //! one `input.json` naming the authenticated viewer, the agent asked about, and
@@ -14,9 +14,9 @@
 //! one anti-enumeration `404 {"error":"agent not found"}` an absent row, a refused
 //! viewer, and a hidden stage all collapse to — is what gets compared.
 //!
-//! The TS side runs first as the oracle: the expected JSON is hand-authored but
-//! signed by the real TS authority before the Rust side is asked to match it, so
-//! this test is a pure differential against that ratified artifact. The route is
+//! The expected JSON was hand-authored and signed by the real TS authority
+//! during migration. This test compares Rust against that frozen artifact;
+//! it does not run a live TS oracle. The route is
 //! authenticated, so the request injects the `UserId` extension the composition
 //! perimeter would attach; the auth-refusal body is the perimeter's (#task:2197),
 //! not this gate's.

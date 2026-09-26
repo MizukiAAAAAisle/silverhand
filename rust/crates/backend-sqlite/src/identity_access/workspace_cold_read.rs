@@ -133,9 +133,8 @@ impl WorkspaceColdReadUnitOfWork for SqliteWorkspaceColdRead {
             .begin_snapshot()
             .await
             .map_err(PersistenceFailure::from_source)?;
-        // Both halves read through this one snapshot; the driver-free composition
-        // owns the ordering (workspaces, then the sort state scoped to their
-        // visible non-archived ids), so neither context can sample another instant.
+        // Workspace identity is read through one snapshot; sidebar ordering is
+        // a separate endpoint and is not included in this read.
         let read = compose_workspace_cold_read(&mut snapshot, viewer).await?;
         snapshot
             .tx
@@ -146,7 +145,7 @@ impl WorkspaceColdReadUnitOfWork for SqliteWorkspaceColdRead {
     }
 }
 
-/// One deferred-read transaction shared by both bounded-context ports. It is
+/// One deferred-read transaction for workspace identity. It is
 /// private to the adapter: the application depends only on the unit of work.
 struct ColdReadSnapshot<'p> {
     tx: Transaction<'p, Sqlite>,

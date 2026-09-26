@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveEffectiveBootProfile } from "../desktop-build-config.js";
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(20);
+});
+afterEach(() => vi.useRealTimers());
 
 describe("resolveEffectiveBootProfile", () => {
   it("keeps a saved profile ahead of the package-time default URL", () => {
@@ -11,7 +17,6 @@ describe("resolveEffectiveBootProfile", () => {
       packagedDefaultServerUrl: "https://default.example.test",
       allowInsecureRemote: false,
       remoteOnly: true,
-      now: () => 20,
     });
 
     expect(result).toEqual({
@@ -30,7 +35,6 @@ describe("resolveEffectiveBootProfile", () => {
       packagedDefaultServerUrl: "HTTPS://Default.Example.Test/",
       allowInsecureRemote: false,
       remoteOnly: true,
-      now: () => 20,
     });
 
     expect(result).toEqual({
@@ -49,7 +53,6 @@ describe("resolveEffectiveBootProfile", () => {
       packagedDefaultServerUrl: "http://203.0.113.10:8080",
       allowInsecureRemote: false,
       remoteOnly: true,
-      now: () => 20,
     });
     expect(rejected.source).toBe("none");
     expect(rejected.profileView).toBeNull();
@@ -60,7 +63,6 @@ describe("resolveEffectiveBootProfile", () => {
       packagedDefaultServerUrl: "http://203.0.113.10:8080",
       allowInsecureRemote: true,
       remoteOnly: true,
-      now: () => 20,
     });
     expect(accepted).toEqual({
       source: "packaged_default",
@@ -78,7 +80,6 @@ describe("resolveEffectiveBootProfile", () => {
       packagedDefaultServerUrl: "http://127.0.0.1:7321",
       allowInsecureRemote: false,
       remoteOnly: true,
-      now: () => 20,
     });
 
     expect(result.profileView).toBeNull();
@@ -92,7 +93,6 @@ describe("resolveEffectiveBootProfile", () => {
       packagedDefaultServerUrl: "http://127.0.0.1:7321",
       allowInsecureRemote: false,
       remoteOnly: false,
-      now: () => 20,
     });
 
     expect(result).toEqual({
@@ -111,7 +111,6 @@ describe("resolveEffectiveBootProfile", () => {
       packagedDefaultServerUrl: "https://backend.example.test/path",
       allowInsecureRemote: false,
       remoteOnly: false,
-      now: () => 20,
     });
 
     expect(result.source).toBe("none");

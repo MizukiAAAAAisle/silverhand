@@ -234,23 +234,6 @@ export class OutputBackpressure {
   }
 
   /**
-   * Manually flush the current `dropping_window` summary for testing /
-   * shutdown. Production callers don't use this — recovery emits the
-   * summary automatically when the in-flight counter drops below the
-   * low-water mark.
-   */
-  flushSummaries(socket: Socket): void {
-    const sock = this.bySocket.get(socket);
-    if (!sock) return;
-    for (const [conv, byAgent] of sock) {
-      for (const [agent, state] of byAgent) {
-        if (!state.dropping_window) continue;
-        this.emitSummary(socket, conv, agent, state);
-      }
-    }
-  }
-
-  /**
    * Drop all per-key state for `socket`. Call on socket-close so a
    * reconnect starts with a fresh ledger. Pending write-callbacks
    * scheduled before this no-op safely (they look up state by
@@ -258,20 +241,6 @@ export class OutputBackpressure {
    */
   forgetSocket(socket: Socket): void {
     this.bySocket.delete(socket);
-  }
-
-  /** Test hook: read back the per-key in-flight counter. */
-  __peekBytes(socket: Socket, conv: string, agent: string): number {
-    return this.peekKeyState(socket, conv, agent)?.bytes_in_node_buffer ?? 0;
-  }
-
-  /** Test hook: read back the per-key dropping window, if any. */
-  __peekWindow(
-    socket: Socket,
-    conv: string,
-    agent: string,
-  ): DropWindow | null {
-    return this.peekKeyState(socket, conv, agent)?.dropping_window ?? null;
   }
 
   private peekKeyState(

@@ -44,13 +44,6 @@ impl<E> MessagingStore<E> {
     }
 }
 
-impl SqliteFavoritesRead {
-    #[cfg(test)]
-    pub(crate) fn from_pool(pool: sqlx::SqlitePool) -> Self {
-        Self { pool }
-    }
-}
-
 #[derive(Debug, Error)]
 pub enum FavoritesReadError {
     #[error("database operation failed")]
@@ -395,7 +388,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let read = SqliteFavoritesRead::from_pool(pool);
+        let read = SqliteFavoritesRead { pool };
         let listed = read
             .list_favorites(&UserId::parse("user-1").unwrap())
             .await
@@ -410,8 +403,8 @@ mod tests {
 
     #[tokio::test]
     async fn parent_title_uses_ecmascript_trim_not_rust_trim_for_emptiness() {
-        // U+FEFF is ECMAScript trim-whitespace: `"\u{FEFF}"`.trim() is empty in BOTH
-        // JS and Rust → both fall back to the agent handle `alice`.
+        // U+FEFF is ECMAScript trim-whitespace but not Rust trim-whitespace:
+        // the stored BOM-only name must fall back to the agent handle `alice`.
         assert_eq!(parent_title_for("\u{FEFF}").await, "alice");
 
         // U+0085 (NEL) is Rust Unicode-White_Space but NOT ECMAScript trim-whitespace:

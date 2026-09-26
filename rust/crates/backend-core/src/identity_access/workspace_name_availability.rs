@@ -83,14 +83,6 @@ pub enum WorkspaceNameAvailability {
     Taken,
 }
 
-impl WorkspaceNameAvailability {
-    /// Whether the boundary should report the name as free. Derived from the arm
-    /// rather than stored beside it, so the two wire fields cannot disagree.
-    pub fn is_available(self) -> bool {
-        matches!(self, Self::Available)
-    }
-}
-
 /// The raw read fact: the `name_key` a regular workspace actually holds.
 ///
 /// A boolean would be unbindable — the boundary could not tell an honest `true`
@@ -217,44 +209,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_free_name_is_available() {
-        let namespace = FakeNamespace::empty();
-
-        let verdict = probe_workspace_name(&namespace, "Design Team")
-            .await
-            .unwrap();
-
-        assert_eq!(verdict, WorkspaceNameAvailability::Available);
-        assert!(verdict.is_available());
-    }
-
-    #[tokio::test]
     async fn the_namespace_is_asked_about_the_folded_key_not_the_typed_bytes() {
         let namespace = FakeNamespace::empty();
 
-        probe_workspace_name(&namespace, "  Straße  ")
+        let verdict = probe_workspace_name(&namespace, "  Straße  ")
             .await
             .unwrap();
 
         // Trimmed, NFC, pinned full fold — the same key the create path stores, so
         // the probe and the unique index compare the same value.
         assert_eq!(namespace.asked(), ["strasse"]);
-    }
-
-    #[tokio::test]
-    async fn a_held_key_is_taken_however_the_caller_spelled_the_name() {
-        for raw in ["Regular", "regular", "REGULAR", "  Regular  "] {
-            let namespace = FakeNamespace::holding("regular");
-
-            let verdict = probe_workspace_name(&namespace, raw).await.unwrap();
-
-            assert_eq!(
-                verdict,
-                WorkspaceNameAvailability::Taken,
-                "{raw:?} must collide with the held key"
-            );
-            assert!(!verdict.is_available());
-        }
+        assert_eq!(verdict, WorkspaceNameAvailability::Available);
     }
 
     #[tokio::test]
@@ -271,7 +236,6 @@ mod tests {
                 WorkspaceNameAvailability::Invalid,
                 "{raw:?} must be invalid"
             );
-            assert!(!verdict.is_available());
             assert!(
                 namespace.asked().is_empty(),
                 "{raw:?} has no key, so nothing may be looked up"

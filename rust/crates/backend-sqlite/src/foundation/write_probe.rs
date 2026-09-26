@@ -143,8 +143,8 @@ mod tests {
         let (_, store) = store_over_a_product_database(&dir, Duration::from_secs(5)).await;
         let probe = store.write_probe();
 
-        // Twice: the second probe can only succeed if the first left no transaction
-        // open on the handle the store also writes through.
+        // Repeated calls remain usable through the store's shared pool. This does
+        // not assert which pooled connection served either call.
         probe.probe_write().await.expect("first probe");
         probe.probe_write().await.expect("second probe");
     }

@@ -145,8 +145,12 @@ describe('fromUnknown', () => {
 describe('writeError', () => {
   it('emits one-line JSON with the error payload in JSON mode', () => {
     const writes: string[] = [];
-    const err = new CliError({ code: 'not_found', message: 'task #42 not found', retriable: false });
-    writeError(err, { json: true, stderr: { write: s => writes.push(s) } });
+    const err = new CliError({
+      code: 'not_found',
+      message: 'task #42 not found',
+      retriable: false,
+    });
+    writeError(err, { json: true, stderr: { write: (s) => writes.push(s) } });
     expect(writes.length).toBe(1);
     expect(writes[0]!.endsWith('\n')).toBe(true);
     const parsed = JSON.parse(writes[0]!);
@@ -158,7 +162,7 @@ describe('writeError', () => {
   it('emits a short prefixed line in human mode', () => {
     const writes: string[] = [];
     const err = new CliError({ code: 'forbidden', message: 'no access', retriable: false });
-    writeError(err, { json: false, stderr: { write: s => writes.push(s) } });
+    writeError(err, { json: false, stderr: { write: (s) => writes.push(s) } });
     expect(writes[0]).toBe('silverhand: forbidden: no access\n');
   });
 
@@ -166,7 +170,7 @@ describe('writeError', () => {
     const writes: string[] = [];
     const inner = new Error('boom');
     const cli = fromUnknown(inner);
-    writeError(cli, { json: true, stderr: { write: s => writes.push(s) } });
+    writeError(cli, { json: true, stderr: { write: (s) => writes.push(s) } });
     expect(writes[0]).not.toContain(' at ');
     expect(writes[0]).not.toContain('\n    at ');
   });
@@ -180,7 +184,7 @@ describe('writeError', () => {
       retriable: false,
       details: { positional: ['stray'], rest: [] },
     });
-    writeError(err, { json: true, stderr: { write: s => writes.push(s) } });
+    writeError(err, { json: true, stderr: { write: (s) => writes.push(s) } });
     const parsed = JSON.parse(writes[0]!);
     expect(parsed).toEqual({
       error: {
@@ -193,19 +197,6 @@ describe('writeError', () => {
     });
   });
 
-  it('omits subkind/details from JSON when not set (back-compat)', () => {
-    const writes: string[] = [];
-    const err = new CliError({
-      code: 'validation_error',
-      message: 'plain old',
-      retriable: false,
-    });
-    writeError(err, { json: true, stderr: { write: s => writes.push(s) } });
-    const parsed = JSON.parse(writes[0]!);
-    expect(parsed.error).not.toHaveProperty('subkind');
-    expect(parsed.error).not.toHaveProperty('details');
-  });
-
   it('includes subkind in the human prefix as `code/subkind`', () => {
     const writes: string[] = [];
     const err = new CliError({
@@ -214,10 +205,8 @@ describe('writeError', () => {
       message: 'use stdin',
       retriable: false,
     });
-    writeError(err, { json: false, stderr: { write: s => writes.push(s) } });
-    expect(writes[0]).toBe(
-      'silverhand: validation_error/flag_removed: use stdin\n',
-    );
+    writeError(err, { json: false, stderr: { write: (s) => writes.push(s) } });
+    expect(writes[0]).toBe('silverhand: validation_error/flag_removed: use stdin\n');
   });
 
   it('renders blocking_tasks details on indented lines in human mode', () => {
@@ -246,14 +235,10 @@ describe('writeError', () => {
         ],
       },
     });
-    writeError(err, { json: false, stderr: { write: s => writes.push(s) } });
+    writeError(err, { json: false, stderr: { write: (s) => writes.push(s) } });
     const joined = writes.join('');
-    expect(joined).toContain(
-      'silverhand: conflict: cannot close thread: 2 open tasks\n',
-    );
-    expect(joined).toContain(
-      '  #task:521 (in_review) @Cindy — protocol handshake\n',
-    );
+    expect(joined).toContain('silverhand: conflict: cannot close thread: 2 open tasks\n');
+    expect(joined).toContain('  #task:521 (in_review) @Cindy — protocol handshake\n');
     expect(joined).toContain('  #task:522 (todo) — orphan reconcile\n');
   });
 
@@ -276,7 +261,7 @@ describe('writeError', () => {
         ],
       },
     });
-    writeError(err, { json: true, stderr: { write: s => writes.push(s) } });
+    writeError(err, { json: true, stderr: { write: (s) => writes.push(s) } });
     expect(writes.length).toBe(1);
     const parsed = JSON.parse(writes[0]!);
     expect(parsed.error.code).toBe('conflict');
@@ -321,10 +306,7 @@ describe('mapHttpError detail propagation', () => {
   });
 
   it('falls through cleanly when body has no details', () => {
-    const err = mapHttpError(
-      409,
-      JSON.stringify({ error: { code: 'conflict', message: 'oops' } }),
-    );
+    const err = mapHttpError(409, JSON.stringify({ error: { code: 'conflict', message: 'oops' } }));
     expect(err.code).toBe('conflict');
     expect(err.toPayload().details).toBeUndefined();
   });

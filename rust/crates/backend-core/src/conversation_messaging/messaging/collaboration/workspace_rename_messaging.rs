@@ -629,12 +629,13 @@ mod tests {
     fn created_at_is_wire_safe() {
         assert!(WorkspaceRenameMessageCreatedAt::new(-1).is_err());
         assert_eq!(WorkspaceRenameMessageCreatedAt::new(0).unwrap().get(), 0);
-        assert!(
-            WorkspaceRenameMessageCreatedAt::new(
-                WorkspaceRenameMessageCreatedAt::MAX_JAVASCRIPT_INTEGER + 1
-            )
-            .is_err()
+        assert_eq!(
+            WorkspaceRenameMessageCreatedAt::new(9_007_199_254_740_991)
+                .unwrap()
+                .get(),
+            9_007_199_254_740_991
         );
+        assert!(WorkspaceRenameMessageCreatedAt::new(9_007_199_254_740_992).is_err());
     }
 
     #[derive(Debug, thiserror::Error)]
@@ -821,57 +822,11 @@ mod tests {
         }
     }
 
-    /// IDENTITY-SPLICE FALSIFIER: the effect target is the sealed message's own
-    /// conversation, never a caller coordinate. A message sealed for `c1` can be
-    /// delivered/published only against `c1` — there is NO second parameter by
-    /// which a caller could aim it at `c2`, so a `c1` body can never surface on the
-    /// `c2` scope or wake `c2`'s runtime. This test pins that the recorded target is
-    /// exactly the sealed conversation; the impossibility of the mismatch itself is
-    /// structural (the ports take only `&BoundWorkspaceRenameMessage`), so this
-    /// would need to be rewritten before any target parameter could be re-added.
-    #[tokio::test]
-    async fn effect_target_is_the_sealed_conversation_not_a_caller_coordinate() {
-        let draft = WorkspaceRenameMessageDraft::for_names(
-            workspace("w"),
-            conversation("c1"),
-            "Old",
-            "New",
-        );
-        let sealed = CommittedWorkspaceRenameMessage::committed(
-            draft.clone(),
-            MessageId::parse("message").unwrap(),
-            MessageSeq::try_from(2).unwrap(),
-            WorkspaceRenameMessageCreatedAt::new(3).unwrap(),
-        )
-        .bind(&draft)
-        .unwrap();
-
-        let delivery = RecordingDelivery {
-            attempted: Arc::new(Mutex::new(Vec::new())),
-            fail_on_agent: None,
-        };
-        let publication = RecordingPublication {
-            attempted: Arc::new(Mutex::new(Vec::new())),
-            fail_on: None,
-        };
-        delivery
-            .deliver(&AgentId::parse("agent-a").unwrap(), &sealed)
-            .await
-            .unwrap();
-        publication.publish(&sealed).await.unwrap();
-
-        assert_eq!(
-            delivery.attempted.lock().unwrap().clone(),
-            [("c1".to_owned(), "agent-a".to_owned())]
-        );
-        assert_eq!(publication.attempted.lock().unwrap().clone(), ["c1"]);
-    }
-
-    /// SUCCESS ARM: every leg fires for every channel, in order. This is the
+    /// SUCCESS ARM: every leg fires for every channel. This is the
     /// baseline the three falsifiers each perturb by exactly one leg — proving no
     /// leg is a no-op that a single stub could fake away.
     #[tokio::test]
-    async fn success_fires_author_then_every_delivery_then_publication_per_channel() {
+    async fn success_authors_delivers_and_publishes_every_channel() {
         let probe = FanoutProbe::new(None, None, None);
         probe.run().await.unwrap();
         assert_eq!(probe.authored(), ["c1", "c2"]);
@@ -909,7 +864,7 @@ mod tests {
 
     /// FALSIFIER ②: one agent's delivery failure never aborts the rest. agent-a
     /// fails in both channels, yet agent-b is still attempted in each, and each
-    /// channel's publication still runs afterward. Aggregate is `Err`.
+    /// channel's publication is still attempted. Aggregate is `Err`.
     #[tokio::test]
     async fn one_delivery_failure_isolates_to_its_agent_and_publication_still_runs() {
         let probe = FanoutProbe::new(None, Some("agent-a"), None);
@@ -929,11 +884,9 @@ mod tests {
         assert_eq!(probe.published(), ["c1", "c2"]);
     }
 
-    /// FALSIFIER ③: a publication failure is downstream of author and delivery,
-    /// which have already fired. c1's publication fails; author and every delivery
-    /// for c1 still happened, c2 is fully unaffected, and the aggregate is `Err`.
+    /// A failed publication does not prevent either channel's other effects.
     #[tokio::test]
-    async fn publication_failure_leaves_author_and_delivery_already_executed() {
+    async fn publication_failure_preserves_all_author_and_delivery_attempts() {
         let probe = FanoutProbe::new(None, None, Some("c1"));
         let outcome = probe.run().await;
         assert!(outcome.is_err());

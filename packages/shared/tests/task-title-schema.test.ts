@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TASK_TITLE_MAX_LEN, TaskTitleSchema } from '../src/api/index.js';
+import { TaskTitleSchema } from '../src/api/index.js';
 
 // The title single-line invariant lives in exactly one authority
 // (TaskTitleSchema), shared by create + both edit paths, so CLI `--title` and
@@ -19,10 +19,12 @@ describe('TaskTitleSchema — single-line title invariant', () => {
 
   it('measures the length cap on the canonical (collapsed) form, not raw', () => {
     // Raw far exceeds the cap purely through a whitespace run; canonical is short → valid.
-    const raw = `foo${' '.repeat(TASK_TITLE_MAX_LEN * 3)}bar`;
+    const raw = `foo${' '.repeat(600)}bar`;
     expect(TaskTitleSchema.parse(raw)).toBe('foo bar');
     // A canonical form over the cap is still rejected.
-    expect(TaskTitleSchema.safeParse('x'.repeat(TASK_TITLE_MAX_LEN + 1)).success).toBe(false);
-    expect(TaskTitleSchema.parse('x'.repeat(TASK_TITLE_MAX_LEN))).toHaveLength(TASK_TITLE_MAX_LEN);
+    expect(TaskTitleSchema.safeParse('x'.repeat(201)).success).toBe(false);
+    expect(TaskTitleSchema.parse('x'.repeat(200))).toHaveLength(200);
+    expect(TaskTitleSchema.parse('😀'.repeat(100))).toBe('😀'.repeat(100));
+    expect(TaskTitleSchema.safeParse('😀'.repeat(101)).success).toBe(false);
   });
 });

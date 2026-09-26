@@ -1,21 +1,8 @@
-//! Rust half of the cross-language GET /api/workspaces/name-availability parity
-//! gate (#task:2193).
-//!
-//! The SAME checked-in fixture the TypeScript oracle replays
-//! (packages/backend/tests/workspace-name-availability-parity.test.ts) is replayed
-//! here: one `seed.sql` executed verbatim against a fresh current-schema database,
-//! and one `cases.json` of (input → {available, reason}) pairs. Here each verdict
-//! is produced by the REAL production stack — the SQLite
-//! `SqliteRegularWorkspaceNamespace` behind the real `workspace_name_availability`
-//! router, so the actual `NameAvailabilityDto` projector (single-enum match,
-//! `available ⇔ reason=="available"`, always HTTP 200) is what gets compared.
-//!
-//! The TS side runs first as the oracle: the expected verdicts are hand-authored
-//! but signed by the real TS authority (the exact route body — `WorkspaceNameSchema`
-//! then the shared `isWorkspaceNameAvailable`) before the Rust side is asked to
-//! match them, so the two implementations cannot drift on the format gate, the
-//! uniqueness predicate, or the wire mapping. The two cross-length inputs both
-//! collapse to `invalid` here: this endpoint publishes no refusal precedence.
+//! Preserved name-availability wire contract over the real HTTP/SQLite stack.
+//! The checked-in seed and literal expected verdicts originated in TS parity;
+//! the TS backend is retired. This runner remains the owner of available/taken/
+//! invalid projection, Unicode query transport and regular-only namespace scope.
+//! It does not claim to reserve a name or prove a concurrent create succeeds.
 
 use axum::{
     Router,
@@ -71,6 +58,25 @@ async fn the_real_probe_produces_the_shared_expected_verdicts() {
 
     let namespace = SqliteRegularWorkspaceNamespace::open(&path).await.unwrap();
     let app: Router = workspace_name_availability::router(namespace);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(WORKSPACE_NAME_AVAILABILITY_PATH)
+                .extension(UserId::parse("user-1").unwrap())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).unwrap(),
+        serde_json::json!({"available": false, "reason": "invalid"}),
+        "an omitted query parameter defaults to an invalid empty name"
+    );
 
     let fixture: Value = serde_json::from_str(CASES_JSON).unwrap();
     let expected_status = fixture["status"].as_u64().unwrap() as u16;

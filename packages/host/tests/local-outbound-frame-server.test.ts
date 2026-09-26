@@ -19,11 +19,9 @@ import {
   LocalOutboundFrameServer,
   deriveLocalOutboundFrameSocketPath,
 } from '../src/daemon/local-outbound-frame-server.js';
-import {
-  createDaemonLogControl,
-  type DaemonLogger,
-} from '../src/daemon/logger.js';
+import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 import type { OutboundDispatcherResponse } from '../src/daemon/outbound-frame-mapping.js';
+import { testStartOptions } from './_helpers/runtime-start-options.js';
 
 /**
  * D5.a-2 — host-side unit test for {@link LocalOutboundFrameServer}.
@@ -42,9 +40,7 @@ import type { OutboundDispatcherResponse } from '../src/daemon/outbound-frame-ma
 let socketSeq = 0;
 
 class CapturingDaemonLogger implements DaemonLogger {
-  readonly entries: Array<
-    Record<string, unknown> & { level: string; msg?: string }
-  > = [];
+  readonly entries: Array<Record<string, unknown> & { level: string; msg?: string }> = [];
   readonly filePath = '/tmp/silverhand-local-outbound-server-test.log';
   readonly logControl = createDaemonLogControl('debug');
 
@@ -188,7 +184,7 @@ class RawClient {
 
   /** Send several objects as ONE NDJSON write (one chunk, multiple lines). */
   sendRawBatch(objs: unknown[]): void {
-    this.socket.write(objs.map(o => `${JSON.stringify(o)}\n`).join(''));
+    this.socket.write(objs.map((o) => `${JSON.stringify(o)}\n`).join(''));
   }
 
   /** Send a well-formed command via the real outbound encoder. */
@@ -205,7 +201,7 @@ class RawClient {
         reject(new Error('no frame received in time'));
       }, timeoutMs);
       timer.unref?.();
-      this.waiter = frame => {
+      this.waiter = (frame) => {
         clearTimeout(timer);
         resolve(frame);
       };
@@ -267,7 +263,7 @@ describe('deriveLocalOutboundFrameSocketPath', () => {
 
 describe('LocalOutboundFrameServer', () => {
   it('round-trips a runtime_status command as raw outbound frame bytes', async () => {
-    const { client } = await makeHarness(async command => ({
+    const { client } = await makeHarness(async (command) => ({
       id: command.id,
       result: {
         runtimes: [
@@ -306,7 +302,7 @@ describe('LocalOutboundFrameServer', () => {
   });
 
   it('passes an agent_materialize typed wire error through with its code intact', async () => {
-    const { client } = await makeHarness(async command => ({
+    const { client } = await makeHarness(async (command) => ({
       id: command.id,
       error: {
         code: 'agent_dir_collision',
@@ -330,7 +326,7 @@ describe('LocalOutboundFrameServer', () => {
     // and the mapper collapses it to internal_error BEFORE bytes leave —
     // the foreign code never reaches the backend. This is the daemon-side
     // half of the shared contract's negative typed-error pin.
-    const { client, logger } = await makeHarness(async command => ({
+    const { client, logger } = await makeHarness(async (command) => ({
       id: command.id,
       error: {
         code: 'agent_dir_collision',
@@ -344,13 +340,11 @@ describe('LocalOutboundFrameServer', () => {
     const parsed = OutboundDaemonToServerCommandResponseFrameSchema.parse(raw);
     expect('error' in parsed && parsed.error.code).toBe('internal_error');
     expect('error' in parsed && parsed.error.code).not.toBe('agent_dir_collision');
-    expect(
-      logger.entries.some(e => e.action === 'command_response_shape_drift'),
-    ).toBe(true);
+    expect(logger.entries.some((e) => e.action === 'command_response_shape_drift')).toBe(true);
   });
 
   it('drops the connection on an inbound frame with the wrong direction', async () => {
-    const { client, logger } = await makeHarness(async command => ({
+    const { client, logger } = await makeHarness(async (command) => ({
       id: command.id,
       result: {},
     }));
@@ -368,34 +362,41 @@ describe('LocalOutboundFrameServer', () => {
 
     await client.waitForClose();
     expect(client.closed).toBe(true);
-    expect(logger.entries.some(e => e.action === 'frame_invalid')).toBe(true);
+    expect(logger.entries.some((e) => e.action === 'frame_invalid')).toBe(true);
   });
 
   it('drops the connection on a command whose params fail the per-command schema', async () => {
-    let dispatched = false;
-    const { client } = await makeHarness(async command => {
-      dispatched = true;
-      return { id: command.id, result: {} };
+    const dispatched: string[] = [];
+    const { client } = await makeHarness(async (command) => {
+      dispatched.push(command.id);
+      return { id: command.id, result: { started: true, pid: 42, started_at: 1 } };
     });
-
-    // runtime_start requires a well-formed `options` object; an empty
-    // payload must be rejected at the schema gate and never dispatched.
+    const params = { conversation_id: 'c1', agent_id: 'a1', runtime_generation: 1 };
+    client.sendCommand({
+      direction: 'server_to_daemon',
+      type: 'command',
+      id: 'cmd-good',
+      kind: 'runtime_start',
+      params: { ...params, options: testStartOptions() },
+    });
+    expect(await client.nextFrame()).toMatchObject({ id: 'cmd-good', result: { started: true } });
+    // Only options is absent; generation and outer routing remain valid.
     client.sendRaw({
       direction: 'server_to_daemon',
       type: 'command',
       id: 'cmd-bad',
       kind: 'runtime_start',
-      params: { conversation_id: 'c1', agent_id: 'a1' },
+      params,
     });
 
     await client.waitForClose();
     expect(client.closed).toBe(true);
-    expect(dispatched).toBe(false);
+    expect(dispatched).toEqual(['cmd-good']);
   });
 
   it('does not dispatch a valid command queued behind an invalid frame in the same chunk (P1-1)', async () => {
     let dispatched = false;
-    const { client, logger } = await makeHarness(async command => {
+    const { client, logger } = await makeHarness(async (command) => {
       dispatched = true;
       return { id: command.id, result: {} };
     });
@@ -418,7 +419,7 @@ describe('LocalOutboundFrameServer', () => {
     await client.waitForClose();
     expect(client.closed).toBe(true);
     expect(dispatched).toBe(false);
-    expect(logger.entries.some(e => e.action === 'frame_invalid')).toBe(true);
+    expect(logger.entries.some((e) => e.action === 'frame_invalid')).toBe(true);
   });
 
   it('drops runtime_output at the write-buffer cap without enqueuing or closing (P1-2)', async () => {
@@ -426,31 +427,35 @@ describe('LocalOutboundFrameServer', () => {
     // droppable kind: it is dropped, the connection stays open, and nothing
     // reaches the peer.
     const { server, client, logger } = await makeHarness(
-      async command => ({ id: command.id, result: {} }),
+      async (command) => ({ id: command.id, result: {} }),
       { writeBuffer: { maxBytes: 8, maxFrames: 1024 } },
     );
 
     server.broadcast({
       event: 'runtime_output',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
       conversation_id: 'c1',
       agent_id: 'a1',
       stream: 'stdout',
       chunk: 'x'.repeat(512),
       ts: 1717000000,
-    } as EventFrame);
+    });
 
     await expect(client.nextFrame(60)).rejects.toThrow(/no frame/i);
     expect(client.closed).toBe(false);
     expect(
       logger.entries.some(
-        e => e.action === 'runtime_output_dropped' && e.kind === 'local_outbound',
+        (e) =>
+          e.action === 'runtime_output_dropped' &&
+          e.kind === 'local_outbound' &&
+          e.reason === 'buffer_limit',
       ),
     ).toBe(true);
   });
 
   it('closes the connection on a non-droppable event overflowing the cap (P1-2)', async () => {
     const { server, client, logger } = await makeHarness(
-      async command => ({ id: command.id, result: {} }),
+      async (command) => ({ id: command.id, result: {} }),
       { writeBuffer: { maxBytes: 8, maxFrames: 1024 } },
     );
 
@@ -472,13 +477,11 @@ describe('LocalOutboundFrameServer', () => {
 
     await client.waitForClose();
     expect(client.closed).toBe(true);
-    expect(
-      logger.entries.some(e => e.action === 'buffer_overflow_close'),
-    ).toBe(true);
+    expect(logger.entries.some((e) => e.action === 'buffer_overflow_close')).toBe(true);
   });
 
   it('broadcasts a daemon event as a mapped outbound event frame', async () => {
-    const { server, client } = await makeHarness(async command => ({
+    const { server, client } = await makeHarness(async (command) => ({
       id: command.id,
       result: {},
     }));
@@ -514,15 +517,15 @@ describe('LocalOutboundFrameServer', () => {
     });
   });
 
-  it('emits a connection-scoped ready as the first frame on a new connection (P1-1)', async () => {
+  it('emits exactly one private ready per connection without broadcasting to existing peers', async () => {
     // The embedded adapter relies on this handshake (mirrors the
     // standalone WSS client's `sendEvent(readyEvent())` on open) to
     // latch the daemon key and trigger its fanout hydrate. The ready is
     // mapped through `toOutboundEventFrame`, so the daemon-local
     // `socket_path` is stripped and the outbound protocol version is
     // stamped.
-    const { client } = await makeHarness(
-      async command => ({ id: command.id, result: {} }),
+    const { client, socketPath } = await makeHarness(
+      async (command) => ({ id: command.id, result: {} }),
       { readyEvent: makeReadyEvent },
     );
 
@@ -537,25 +540,13 @@ describe('LocalOutboundFrameServer', () => {
     });
     // socket_path is daemon-local and MUST NOT cross the outbound wire.
     expect('socket_path' in parsed).toBe(false);
-  });
-
-  it('does not replay a prior connection ready to a later joiner (P1-1 connection-scoped)', async () => {
-    // A second client connecting after the first must receive ITS OWN
-    // ready exactly once — not a broadcast/replay of another socket's
-    // handshake. We assert the second client sees a single ready and no
-    // duplicate.
-    const { socketPath } = await makeHarness(
-      async command => ({ id: command.id, result: {} }),
-      { readyEvent: makeReadyEvent },
-    );
-
     const second = await RawClient.connect(socketPath);
     cleanups.push(async () => second.destroy());
-    const raw = await second.nextFrame();
-    const parsed = OutboundDaemonToServerEventFrameSchema.parse(raw);
-    expect(parsed).toMatchObject({ kind: 'ready' });
-    // No second handshake frame queued for this socket.
-    await expect(second.nextFrame(60)).rejects.toThrow(/no frame/i);
+    expect(await second.nextFrame()).toEqual(raw);
+    await Promise.all([
+      expect(client.nextFrame(60)).rejects.toThrow(/no frame/i),
+      expect(second.nextFrame(60)).rejects.toThrow(/no frame/i),
+    ]);
   });
 
   it('calls cleanupDeferredForOwner with the connection’s minted owner on socket close (#task:1417 Stage 3)', async () => {
@@ -571,7 +562,7 @@ describe('LocalOutboundFrameServer', () => {
         if (ctx) dispatchedOwner = ctx.owner;
         return { id: command.id, result: { runtimes: [] } };
       },
-      { cleanupDeferredForOwner: owner => cleaned.push(owner) },
+      { cleanupDeferredForOwner: (owner) => cleaned.push(owner) },
     );
 
     client.sendCommand(runtimeStatusCommand('cmd-owner'));
@@ -604,7 +595,7 @@ function makeReadyEvent(): Extract<EventFrame, { event: 'ready' }> {
 
 describe('LocalOutboundFrameServer — heartbeat (#task:1588 slice 2)', () => {
   it('answers a server-initiated ping with a pong echoing ts', async () => {
-    const { client } = await makeHarness(async command => ({
+    const { client } = await makeHarness(async (command) => ({
       id: command.id,
       result: {},
     }));
@@ -632,7 +623,7 @@ describe('LocalOutboundFrameServer — heartbeat (#task:1588 slice 2)', () => {
   });
 
   it('tolerates an inbound pong without treating it as a violation', async () => {
-    const { client, logger } = await makeHarness(async command => ({
+    const { client, logger } = await makeHarness(async (command) => ({
       id: command.id,
       result: {},
     }));
@@ -657,13 +648,28 @@ describe('LocalOutboundFrameServer — heartbeat (#task:1588 slice 2)', () => {
       if (Date.now() > deadline) throw new Error('no command response');
     }
     expect(client.closed).toBe(false);
-    expect(logger.entries.some(e => e.action === 'frame_invalid')).toBe(false);
+    expect(logger.entries.some((e) => e.action === 'frame_invalid')).toBe(false);
   });
 });
 
 it('carries a worst-escaped workspace preview through the real local socket', async () => {
-  const result = { ok: true, file: { path: 'MEMORY.md', content: '\u0001'.repeat(512 * 1024), size: 512 * 1024, mtime: 1, truncated: false } };
-  const { client } = await makeHarness(async command => ({ id: command.id, result }));
-  client.sendCommand({ direction: 'server_to_daemon', type: 'command', id: 'large-read', kind: 'agent_workspace_file_read', params: { agent_id: 'agent', path: 'MEMORY.md' } });
+  const result = {
+    ok: true,
+    file: {
+      path: 'MEMORY.md',
+      content: '\u0001'.repeat(512 * 1024),
+      size: 512 * 1024,
+      mtime: 1,
+      truncated: false,
+    },
+  };
+  const { client } = await makeHarness(async (command) => ({ id: command.id, result }));
+  client.sendCommand({
+    direction: 'server_to_daemon',
+    type: 'command',
+    id: 'large-read',
+    kind: 'agent_workspace_file_read',
+    params: { agent_id: 'agent', path: 'MEMORY.md' },
+  });
   expect(await client.nextFrame()).toMatchObject({ id: 'large-read', result });
 });

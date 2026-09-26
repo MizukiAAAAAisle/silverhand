@@ -64,7 +64,7 @@ describe('listAgentWorkspaceTree', () => {
       const deps = { agentHomeRootDir };
       const tree = await listAgentWorkspaceTree(params, deps);
       const file = await readAgentWorkspaceFile({ ...params, path: 'MEMORY.md' }, deps);
-      expect(tree.tree.nodes.find(node => node.path === 'MEMORY.md')?.mtime).toBe(mtime);
+      expect(tree.tree.nodes.find((node) => node.path === 'MEMORY.md')?.mtime).toBe(mtime);
       expect(file.file.mtime).toBe(mtime);
       expect(file.file.content).toBe('workspace file proof\n');
     }
@@ -97,7 +97,7 @@ describe('listAgentWorkspaceTree', () => {
 
     const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
     expect(r.ok).toBe(true);
-    const paths = r.tree.nodes.map(n => `${n.kind}:${n.path}`);
+    const paths = r.tree.nodes.map((n) => `${n.kind}:${n.path}`);
     // Preorder: each directory is followed immediately by its
     // descendants, then the next sibling. Within one parent, dirs
     // sort before files and entries are alphabetic per kind. Cindy
@@ -130,12 +130,8 @@ describe('listAgentWorkspaceTree', () => {
       { agent_id: AGENT_ID, workspace_id: 'ws_1' },
       { agentHomeRootDir },
     );
-    const paths = r.tree.nodes.map(n => `${n.kind}:${n.path}`);
-    expect(paths).toEqual([
-      'directory:notes',
-      'file:notes/work.md',
-      'file:MEMORY.md',
-    ]);
+    const paths = r.tree.nodes.map((n) => `${n.kind}:${n.path}`);
+    expect(paths).toEqual(['directory:notes', 'file:notes/work.md', 'file:MEMORY.md']);
     expect(paths).not.toContain('file:system_prompt.md');
   });
 
@@ -152,26 +148,8 @@ describe('listAgentWorkspaceTree', () => {
       },
       { agentHomeRootDir },
     );
-    const paths = r.tree.nodes.map(n => n.path);
+    const paths = r.tree.nodes.map((n) => n.path);
     expect(paths).toEqual(['MEMORY.md', 'system_prompt.md']);
-  });
-
-  it('resolves a regular workspace with ZERO registry — a pure-DB-created workspace whose bundle first-spawn materialized reads by coordinate (relocation-v1 §7-4 falsifier)', async () => {
-    // Model the U4 end-state: the workspace was created as a pure DB write
-    // (no `workspace_provision`, no registry binding anywhere), then its
-    // bundle was materialized at first spawn. The tree must resolve purely by
-    // the deterministic agent-centric coordinate. No registry is constructed;
-    // if the resolver still consulted one it would fail-closed here.
-    const scoped = l2BundleDir('ws_pure_db');
-    mkdirSync(scoped, { recursive: true });
-    writeFileSync(join(scoped, 'MEMORY.md'), 'l2');
-
-    const r = await listAgentWorkspaceTree(
-      { agent_id: AGENT_ID, workspace_id: 'ws_pure_db' },
-      { agentHomeRootDir },
-    );
-    expect(r.ok).toBe(true);
-    expect(r.tree.nodes.map(n => n.path)).toEqual(['MEMORY.md']);
   });
 
   it('a never-materialized regular workspace degrades to an empty tree — NOT a workspace_not_provisioned refusal (relocation-v1 §7-4)', async () => {
@@ -194,7 +172,7 @@ describe('listAgentWorkspaceTree', () => {
     writeFileSync(join(dir, 'dirA', 'dirB', 'fileB.md'), 'b');
 
     const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
-    const paths = r.tree.nodes.map(n => `${n.kind}:${n.path}`);
+    const paths = r.tree.nodes.map((n) => `${n.kind}:${n.path}`);
     // Preorder, dir-first within each parent. Even though `fileR.md`
     // has the same parent as `dirA`, it appears AFTER every descendant
     // of `dirA` because preorder walks dirA's subtree first.
@@ -217,7 +195,7 @@ describe('listAgentWorkspaceTree', () => {
     writeFileSync(join(dir, 'notes', 'real.md'), 'r');
 
     const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
-    const paths = r.tree.nodes.map(n => n.path);
+    const paths = r.tree.nodes.map((n) => n.path);
     expect(paths).not.toContain('.env');
     expect(paths).not.toContain('.hiddenDir');
     expect(paths).not.toContain('notes/.gitkeep');
@@ -238,14 +216,11 @@ describe('listAgentWorkspaceTree', () => {
       // A real file alongside, to prove the rest of the walk continues
       writeFileSync(join(dir, 'MEMORY.md'), 'mem');
 
-      const r = await listAgentWorkspaceTree(
-        { agent_id: AGENT_ID },
-        { agentHomeRootDir },
-      );
-      const paths = r.tree.nodes.map(n => n.path);
+      const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
+      const paths = r.tree.nodes.map((n) => n.path);
       expect(paths).toEqual(['MEMORY.md']);
       // The symlink target name should never leak into the tree:
-      expect(paths.some(p => p.includes('leak'))).toBe(false);
+      expect(paths.some((p) => p.includes('leak'))).toBe(false);
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
@@ -256,8 +231,8 @@ describe('listAgentWorkspaceTree', () => {
     mkdirSync(join(dir, 'notes', 'sub'), { recursive: true });
     writeFileSync(join(dir, 'notes', 'sub', 'nested.md'), 'n');
     const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
-    expect(r.tree.nodes.some(n => n.path === 'notes/sub/nested.md')).toBe(true);
-    expect(r.tree.nodes.every(n => !n.path.includes('\\'))).toBe(true);
+    expect(r.tree.nodes.some((n) => n.path === 'notes/sub/nested.md')).toBe(true);
+    expect(r.tree.nodes.every((n) => !n.path.includes('\\'))).toBe(true);
   });
 
   it('skips a POSIX file whose name contains a backslash (Cindy round-2 P1)', async () => {
@@ -274,7 +249,7 @@ describe('listAgentWorkspaceTree', () => {
     writeFileSync(join(dir, 'MEMORY.md'), 'mem');
 
     const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
-    const paths = r.tree.nodes.map(n => n.path);
+    const paths = r.tree.nodes.map((n) => n.path);
     // The sneaky entry must not appear, in any normalization.
     expect(paths).not.toContain('foo\\bar.md');
     expect(paths).not.toContain('foo/bar.md');
@@ -321,34 +296,30 @@ describe('listAgentWorkspaceTree', () => {
       mkdirSync(agentHomeRootDir, { recursive: true });
       symlinkSync(outside, dir);
 
-      await expect(
-        listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir }),
-      ).rejects.toBeInstanceOf(AgentWorkspaceFsError);
-      await expect(
-        listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir }),
-      ).rejects.toMatchObject({ code: 'forbidden_path' });
+      const tree = listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
+      await expect(tree).rejects.toBeInstanceOf(AgentWorkspaceFsError);
+      await expect(tree).rejects.toMatchObject({ code: 'forbidden_path' });
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
   });
 
-  it('fails closed with fs_unavailable on a HARD readdir error', async () => {
-    if (process.getuid?.() === 0) return; // root bypasses perms
-    const dir = agentDir();
-    const notes = join(dir, 'notes');
-    mkdirSync(notes, { recursive: true });
-    writeFileSync(join(dir, 'MEMORY.md'), 'mem');
-    writeFileSync(join(notes, 'a.md'), 'a');
-    chmodSync(notes, 0o000);
-    try {
-      await expect(
-        listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir }),
-      ).rejects.toBeInstanceOf(AgentWorkspaceFsError);
-      await expect(
-        listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir }),
-      ).rejects.toMatchObject({ code: 'fs_unavailable' });
-    } finally {
-      chmodSync(notes, 0o755);
-    }
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    'fails closed with fs_unavailable on a HARD readdir error',
+    async () => {
+      const dir = agentDir();
+      const notes = join(dir, 'notes');
+      mkdirSync(notes, { recursive: true });
+      writeFileSync(join(dir, 'MEMORY.md'), 'mem');
+      writeFileSync(join(notes, 'a.md'), 'a');
+      chmodSync(notes, 0o000);
+      try {
+        const tree = listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
+        await expect(tree).rejects.toBeInstanceOf(AgentWorkspaceFsError);
+        await expect(tree).rejects.toMatchObject({ code: 'fs_unavailable' });
+      } finally {
+        chmodSync(notes, 0o755);
+      }
+    },
+  );
 });

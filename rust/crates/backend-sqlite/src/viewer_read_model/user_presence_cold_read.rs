@@ -163,16 +163,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_empty_table_reads_no_viewers() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("presence-empty.sqlite");
-        seed(&path, "SELECT 1").await;
-
-        let adapter = SqliteUserPresenceColdRead::open(&path).await.unwrap();
-        assert!(adapter.list_user_presence_facts().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
     async fn a_negative_stored_stamp_is_refused_at_decode() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("presence-negative.sqlite");

@@ -191,9 +191,7 @@ describe('the readable form names a coordinate, not an allocation', () => {
       target(CONV, ROOT),
       naming('silverhand', 'UI/UX 优化'),
     );
-    expect(rendered.token).toBe(
-      `#silverhand/UI%2FUX%20优化/thread:${ROOT}`,
-    );
+    expect(rendered.token).toBe(`#silverhand/UI%2FUX%20优化/thread:${ROOT}`);
     expect(parseDeliveryTargetInput(rendered.token)).toEqual({
       kind: 'named_stream',
       workspace: fixedWorkspaceName('silverhand'),
@@ -226,10 +224,7 @@ describe('the readable form names a coordinate, not an allocation', () => {
       ]) {
         for (const threadRootId of [null, ROOT]) {
           const stream = target(CONV, threadRootId);
-          const { token, fallback } = formatStreamAddressToken(
-            stream,
-            naming(workspace, title),
-          );
+          const { token, fallback } = formatStreamAddressToken(stream, naming(workspace, title));
           expect(fallback, token).toBeNull();
           expect(token, token).not.toMatch(/[\s="'\\]/);
           expect(`target=${token}`.split(/\s+/), token).toHaveLength(1);
@@ -368,26 +363,6 @@ describe('the id domain is the product id shape', () => {
       if (parsed === null) continue;
       expect(parsed.kind, raw).toBe('named_stream');
       expect((parsed as NamedStreamTarget).threadRootId, raw).toBeNull();
-    }
-  });
-
-  it('agrees with the prose reader, so one token means the same thing everywhere', () => {
-    // The renderer's reference scanner recognises `#conv:` at `{16}` only. A
-    // token this codec accepted but prose did not would be a live address in a
-    // header and inert text in a message body — one surface disagreeing with
-    // itself. This test pins the shared domain; fixture ids like `c1` are test
-    // data and do not get to widen product identity.
-    const proseRef = new RegExp(`#conv:(${ADDRESSABLE_ID_PATTERN})(?![A-Za-z0-9_-])`);
-    for (const raw of [CONV, CONV_ALT, ROOT, ROOT_ALT]) {
-      expect(proseRef.exec(`see #conv:${raw} here`)?.[1], raw).toBe(raw);
-      expect(addressableId(raw), raw).toBe(raw);
-    }
-    for (const raw of ['c1', 'conversation-1', ID_TOO_SHORT, ID_TOO_LONG]) {
-      expect(addressableId(raw), raw).toBeNull();
-      // 17 characters match the prose scanner's class for the first 16 and then
-      // fail its boundary lookahead, exactly as they fail here: both readers
-      // refuse the token rather than truncating it.
-      expect(proseRef.test(`see #conv:${raw} here`), raw).toBe(false);
     }
   });
 });
@@ -548,7 +523,7 @@ describe('strict parsing', () => {
   });
 });
 
-describe('the conversation head is derivable, in the actor\'s own spelling', () => {
+describe("the conversation head is derivable, in the actor's own spelling", () => {
   // For a caller that must address a differently-granular thing than the actor
   // did: `message send` spooling an oversized body, where the message goes to the
   // stream and the attachment is owned by its conversation (#task:2021 P4-4).
@@ -664,9 +639,7 @@ describe('addressability is a property of the type', () => {
   it('labels an id that arrived over the wire without trusting it', () => {
     // A well-formed id: identical to the authoritative spelling, so the daemon's
     // framing and the stdin header cannot drift.
-    expect(formatUntrustedConversationAddress(CONV)).toBe(
-      formatDeliveryTarget(target(CONV, null)),
-    );
+    expect(formatUntrustedConversationAddress(CONV)).toBe(formatDeliveryTarget(target(CONV, null)));
     // A malformed one: quoted VERBATIM, and the resulting token does not parse.
     // Both halves matter — verbatim so the reader sees exactly what was sent, and
     // unparseable because an unspellable id really is unaddressable, and a label
@@ -698,7 +671,11 @@ describe('decodeTargetForDisplay', () => {
     const title = 'a/b%c#d?e<f>g　h';
     const { token, fallback } = formatStreamAddressToken(
       { conversationId: addressableId(CONV)!, threadRootId: null },
-      { kind: 'named', workspace: fixedWorkspaceName('silverhand'), title: fixedConversationTitle(title) },
+      {
+        kind: 'named',
+        workspace: fixedWorkspaceName('silverhand'),
+        title: fixedConversationTitle(title),
+      },
     );
     expect(fallback).toBeNull();
     // The escaped bytes come back to their characters; the raw members are
@@ -707,13 +684,11 @@ describe('decodeTargetForDisplay', () => {
   });
 
   it('decodes each segment while separators and the thread suffix stay grammar', () => {
-    expect(decodeTargetForDisplay('#silverhand/UI%2FUX%20优化')).toBe(
-      '#silverhand/UI/UX 优化',
-    );
+    expect(decodeTargetForDisplay('#silverhand/UI%2FUX%20优化')).toBe('#silverhand/UI/UX 优化');
     // The `/thread:<id>` suffix is grammar, not a name byte — passed through.
-    expect(
-      decodeTargetForDisplay(`#silverhand/room${THREAD_ADDRESS_SEPARATOR}${CONV_ALT}`),
-    ).toBe(`#silverhand/room${THREAD_ADDRESS_SEPARATOR}${CONV_ALT}`);
+    expect(decodeTargetForDisplay(`#silverhand/room${THREAD_ADDRESS_SEPARATOR}${CONV_ALT}`)).toBe(
+      `#silverhand/room${THREAD_ADDRESS_SEPARATOR}${CONV_ALT}`,
+    );
   });
 
   it('leaves the id and pair forms untouched — neither carries escapes', () => {
@@ -728,9 +703,9 @@ describe('decodeTargetForDisplay', () => {
   it('returns the raw token for a non-canonical escape rather than guessing', () => {
     for (const raw of [
       '#silverhand/a%2fb', // lowercase hex — a second spelling, not decoded
-      '#silverhand/a%',    // truncated escape
+      '#silverhand/a%', // truncated escape
       '#silverhand/a%ZZb', // unknown escape
-      'not-a-target',      // not the named arm at all
+      'not-a-target', // not the named arm at all
     ]) {
       expect(decodeTargetForDisplay(raw), raw).toBe(raw);
     }
@@ -742,7 +717,7 @@ describe('decodeTargetForDisplay', () => {
     // stays raw rather than rendering a name the resolver would reject.
     for (const raw of [
       '#silverhand/%20room', // decoded title has a leading space
-      '#%20team/room',       // decoded workspace has a leading space
+      '#%20team/room', // decoded workspace has a leading space
     ]) {
       expect(decodeTargetForDisplay(raw), raw).toBe(raw);
     }

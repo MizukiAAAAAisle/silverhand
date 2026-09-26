@@ -1,20 +1,8 @@
-//! Rust half of the cross-language GET /api/workspaces/:id detail parity gate
-//! (#task:2193).
+//! Real HTTP/SQLite contract for GET /api/workspaces/:id.
 //!
-//! The SAME checked-in fixture the TypeScript oracle replays
-//! (packages/backend/tests/workspace-detail-parity.test.ts) is replayed here: one
-//! `seed.sql` executed verbatim against a fresh current-schema database, and one
-//! `cases.json` of (id → {status, body}) pairs. Here each response is produced by
-//! the REAL production stack — the SQLite `SqliteWorkspaceDetailRead` adapter
-//! driven through the real `workspace_detail::router`, so the actual admission
-//! ladder (existence before visibility, the classifier's identity-sealed 200 face,
-//! the 403/404 refusal bodies) is what gets compared.
-//!
-//! The TS side runs first as the oracle: the expected status+body are hand-authored
-//! but signed by the real TS authority (`workspaces.get` + `canViewWorkspace` +
-//! `toViewerWorkspace`) before the Rust side is asked to match them, so the two
-//! implementations cannot drift on existence/visibility ordering, the DM
-//! derivation, or the published face shape.
+//! Literal fixture responses preserve the legacy contract after TS retirement.
+//! The real adapter, classifier and DTO enforce existence-before-visibility,
+//! ordered home DM channels, and the published face without a mocked read port.
 
 use axum::{
     Router,

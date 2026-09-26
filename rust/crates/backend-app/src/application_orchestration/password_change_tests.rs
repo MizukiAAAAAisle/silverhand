@@ -255,7 +255,11 @@ async fn password_change_revokes_sessions_and_connected_socket_without_touching_
         .unwrap()
         .unwrap()
         .unwrap();
-    assert!(matches!(frame, ClientMessage::Close(_)), "{frame:?}");
+    let ClientMessage::Close(Some(close)) = frame else {
+        panic!("expected session revocation close, got {frame:?}");
+    };
+    assert_eq!(u16::from(close.code), 1008);
+    assert_eq!(close.reason, "session_expired");
     let _ = shutdown_tx.send(());
     running.await.unwrap().unwrap();
     pool.close().await;
@@ -280,11 +284,35 @@ async fn concurrent_password_replacement_commits_once() {
     let store = SqliteCredentialStore::open(&fixture.path).await.unwrap();
     let user = UserId::parse("user-1").unwrap();
     let token = SessionTokenHash::of_plaintext(TOKEN);
-    let replacement = hasher.hash("next-password").await.unwrap();
+    let first = hasher.hash("first-next-password").await.unwrap();
+    let second = hasher.hash("second-next-password").await.unwrap();
     let (a, b) = tokio::join!(
-        store.replace_password(&user, &token, &old.phc, replacement.clone(), 100),
-        store.replace_password(&user, &token, &old.phc, replacement, 100)
+        store.replace_password(&user, &token, &old.phc, first.clone(), 100),
+        store.replace_password(&user, &token, &old.phc, second.clone(), 200)
     );
-    assert_eq!(usize::from(a.unwrap()) + usize::from(b.unwrap()), 1);
+    let (a, b) = (a.unwrap(), b.unwrap());
+    assert_ne!(a, b, "exactly one replacement must commit");
+    let (winner, committed_at) = if a { (first, 100) } else { (second, 200) };
+    let stored: (String, String, i64) = sqlx::query_as(
+        "SELECT password_hash, password_hash_params, password_updated_at
+         FROM user_password_credentials WHERE user_id='user-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        stored,
+        (
+            winner.phc,
+            serialize_password_hash_params(&winner.params),
+            committed_at
+        )
+    );
+    let revoked_at: Option<i64> =
+        sqlx::query_scalar("SELECT revoked_at FROM auth_sessions WHERE id='session-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(revoked_at, Some(committed_at));
     pool.close().await;
 }

@@ -62,7 +62,7 @@ minimum_client_epoch }`.
 - **Explain**: desktop `desktopAuthState()` compares ranges right after the
   server-info fetch and returns the typed gate arm.
 
-Exempt REST paths (`DESKTOP_API_EPOCH_EXEMPT_PATHS`, same shared file):
+Historical TS REST exemption list (the retired shared helper has been removed):
 `/api/health`, `/api/server/info`, `/api/hosts/connect-token/resolve`
 (daemon surface), `/api/hosts/connect` (daemon WS upgrade; defensive pin —
 upgrades bypass middleware anyway). `/auth/*`, `/readyz`, and `/internal/*`

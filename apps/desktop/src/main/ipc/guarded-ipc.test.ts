@@ -19,8 +19,8 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { createGuardedIpcRegistrar, matchesRendererEntry } from "./guarded-ipc.js";
-import { resolveRendererEntry } from "../renderer-entry.js";
+import { createGuardedIpcRegistrar } from "./guarded-ipc.js";
+import { resolveRendererEntry, type RendererEntry } from "../renderer-entry.js";
 
 /**
  * #task:1762 — IPC sender validation behavior.
@@ -61,9 +61,10 @@ describe("guarded IPC registrar — sender validation", () => {
       entry: FILE_ENTRY,
     });
     ipc.handle("probe", listener);
-    const result = handlers.get("probe")!(event(wc, wc.mainFrame));
+    const message = event(wc, wc.mainFrame);
+    const result = handlers.get("probe")!(message, "payload", 42);
     expect(result).toBe("ok");
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledExactlyOnceWith(message, "payload", 42);
   });
 
   it("serves a packaged entry URL carrying a HashRouter fragment and query", () => {
@@ -154,21 +155,29 @@ describe("guarded IPC registrar — sender validation", () => {
 });
 
 describe("renderer entry URL contract", () => {
+  function expectRefused(url: string, entry: RendererEntry): void {
+    const wc = fakeWebContents(1);
+    wc.mainFrame.url = url;
+    const listener = vi.fn();
+    createGuardedIpcRegistrar({ resolveRendererWebContents: () => wc, entry }).handle(
+      "url-probe",
+      listener,
+    );
+    expect(() => handlers.get("url-probe")!(event(wc, wc.mainFrame))).toThrow();
+    expect(listener).not.toHaveBeenCalled();
+  }
   it("rejects malformed, empty, and cross-origin URLs on both entry kinds", () => {
     for (const bad of ["", "not a url", "://", "http://evil.test/index.html"]) {
-      expect(matchesRendererEntry(bad, FILE_ENTRY)).toBe(false);
-      expect(matchesRendererEntry(bad, DEV_ENTRY)).toBe(false);
+      expectRefused(bad, FILE_ENTRY);
+      expectRefused(bad, DEV_ENTRY);
     }
     // a file URL must never satisfy the dev contract, nor vice versa
-    expect(matchesRendererEntry(entryUrl, DEV_ENTRY)).toBe(false);
-    expect(matchesRendererEntry("http://localhost:5173/", FILE_ENTRY)).toBe(false);
-    // a sibling file in the same directory is not the entry
-    expect(
-      matchesRendererEntry(
-        pathToFileURL(ENTRY_FILE.replace("index.html", "other.html")).toString(),
-        FILE_ENTRY,
-      ),
-    ).toBe(false);
+    expectRefused(entryUrl, DEV_ENTRY);
+    expectRefused("http://localhost:5173/", FILE_ENTRY);
+    expectRefused(
+      pathToFileURL(ENTRY_FILE.replace("index.html", "other.html")).toString(),
+      FILE_ENTRY,
+    );
   });
 
   it("rejects opaque-origin dev URLs on both sides of the contract", () => {
@@ -178,13 +187,7 @@ describe("renderer entry URL contract", () => {
         resolveRendererEntry({ devServerUrl: bad, mainDirname: "/x/out/main" }),
       ).toThrow();
     }
-    // and the matcher never treats an opaque origin as same-origin
-    expect(
-      matchesRendererEntry("data:text/html,<p>evil", {
-        kind: "dev-server",
-        url: "data:text/html,<p>x",
-      }),
-    ).toBe(false);
+    expectRefused("data:text/html,<p>evil", { kind: "dev-server", url: "data:text/html,<p>x" });
   });
 
   it("derives dev vs packaged from the same resolver the window loader uses", () => {
@@ -318,8 +321,39 @@ describe("IPC ingress source fence", () => {
   });
 
   it("no production main module calls the electron ingress registration API", () => {
+    const hasRawRegistration = (src: string): boolean => {
+      const sf = ts.createSourceFile("probe.ts", src, ts.ScriptTarget.ESNext, true);
+      let found = false;
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node)) {
+          const call = node.expression;
+          const receiver =
+            ts.isPropertyAccessExpression(call) || ts.isElementAccessExpression(call)
+              ? call.expression
+              : undefined;
+          const method = ts.isPropertyAccessExpression(call)
+            ? call.name.text
+            : ts.isElementAccessExpression(call) && ts.isStringLiteralLike(call.argumentExpression)
+              ? call.argumentExpression.text
+              : undefined;
+          if (
+            receiver &&
+            ts.isIdentifier(receiver) &&
+            receiver.text === "ipcMain" &&
+            (method === "handle" || method === "on")
+          )
+            found = true;
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+      return found;
+    };
+    expect(hasRawRegistration("// ipcMain.handle('not code')")).toBe(false);
+    expect(hasRawRegistration("ipcMain /* comment */ . handle ('x', fn)")).toBe(true);
+    expect(hasRawRegistration("ipcMain['on']('x', fn)")).toBe(true);
     const offenders = productionMainSources()
-      .filter(({ src }) => /\bipcMain\s*\.\s*(handle|on)\s*\(/.test(src))
+      .filter(({ src }) => hasRawRegistration(src))
       .map(({ path }) => path);
     expect(offenders).toEqual([]);
   });

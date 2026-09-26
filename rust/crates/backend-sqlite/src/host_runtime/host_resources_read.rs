@@ -323,13 +323,7 @@ mod tests {
             visible(&cold_read, "u-owner", "h-owned").await,
             Some(vec!["a-early".to_string(), "a-late".to_string()])
         );
-    }
-
-    /// The agents statement is scoped to the bound computer: the other computer's
-    /// list holds only its own row, never the neighbour's.
-    #[tokio::test]
-    async fn each_computer_lists_only_its_own_agents() {
-        let (_directory, cold_read) = seeded().await;
+        // The neighboring computer must resolve its own set from the same adapter.
         assert_eq!(
             visible(&cold_read, "u-other", "h-theirs").await,
             Some(vec!["a-elsewhere".to_string()])

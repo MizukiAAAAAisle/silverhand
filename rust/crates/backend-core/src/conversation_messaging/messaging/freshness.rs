@@ -80,9 +80,7 @@ pub struct StaleRefusal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversation_messaging::messaging::{
-        ConversationId, EnvironmentUnavailable, UserId,
-    };
+    use crate::conversation_messaging::messaging::{EnvironmentUnavailable, UserId};
 
     /// Entropy with no randomness in it, so the identity can be asserted exactly.
     struct FixedEntropy(&'static [u8; 16]);
@@ -128,19 +126,5 @@ mod tests {
         // low six bits under a forced variant 1.
         assert_eq!(ascending.as_str(), "00010203-0405-4607-8809-0a0b0c0d0e0f");
         assert_eq!(ones.as_str(), "ffffffff-ffff-4fff-bfff-ffffffffffff");
-    }
-
-    #[test]
-    fn a_stale_refusal_carries_signal_metadata_only() {
-        let refusal = StaleRefusal {
-            stale_event_id: StaleEventId::mint(&FixedEntropy(&[0u8; 16])).unwrap(),
-            target_conversation_id: ConversationId::parse("conv-1").unwrap(),
-        };
-
-        assert_eq!(
-            refusal.target_conversation_id,
-            ConversationId::parse("conv-1").unwrap()
-        );
-        assert!(refusal.to_string().contains("undelivered input"));
     }
 }

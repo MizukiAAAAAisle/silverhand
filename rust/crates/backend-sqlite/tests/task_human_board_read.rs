@@ -66,6 +66,13 @@ async fn viewer_gate_precedes_window_counts_and_facets() {
         matches!(&facets.assignees[0], TaskBoardPerson::User { id, .. } if id.as_str() == "user-1")
     );
     assert!(facets.has_unassigned);
+    assert_eq!(
+        facets.creators,
+        vec![TaskBoardPerson::User {
+            id: UserId::parse("user-1").unwrap(),
+            name: "Zoe".into(),
+        }]
+    );
 
     // A later request starts from the revoked population and cannot retain a
     // private person from the earlier statement snapshot.

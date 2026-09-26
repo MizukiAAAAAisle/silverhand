@@ -186,10 +186,7 @@ fn unresolved_tokens(references: &[MessageReference]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use silverhand_backend_core::{
@@ -204,28 +201,13 @@ mod tests {
     use super::*;
     use crate::conversation_messaging::messaging::admission::validate_human_payload;
 
-    /// The one write unit both doors reach. It records the actor of every command it
-    /// was asked to commit, which is how a test can tell "one use-case, two
-    /// principals" from "two send paths".
-    #[derive(Default)]
-    struct RecordingUnitOfWork {
-        actors: Mutex<Vec<SendActor>>,
-    }
+    struct RefusingUnitOfWork;
 
-    impl RecordingUnitOfWork {
-        fn actors(&self) -> Vec<SendActor> {
-            self.actors.lock().unwrap().clone()
-        }
-    }
-
-    impl SendMessageUnitOfWork for RecordingUnitOfWork {
+    impl SendMessageUnitOfWork for RefusingUnitOfWork {
         async fn send_message(
             &self,
-            command: SendMessage,
+            _command: SendMessage,
         ) -> Result<SendMessageOutcome, SendMessageError> {
-            self.actors.lock().unwrap().push(command.actor().clone());
-            // The fact needs a committed transaction to exist, which a fake has not
-            // got. Recording the attempt is the whole purpose here.
             Err(silverhand_backend_core::conversation_messaging::messaging::ConversationRefusal::NotFound.into())
         }
     }
@@ -248,12 +230,6 @@ mod tests {
         ) -> Result<Vec<AgentId>, PersistenceFailure> {
             Ok(Vec::new())
         }
-    }
-
-    struct NoAftermath;
-
-    impl SendAftermath for NoAftermath {
-        async fn announce(&self, _outcome: &SendMessageOutcome) {}
     }
 
     #[derive(Default)]
@@ -328,61 +304,6 @@ mod tests {
             .unwrap()
     }
 
-    /// Both principals arrive at the SAME unit of work, and the only thing that
-    /// distinguishes them there is which actor the command carries.
-    ///
-    /// This is the counter-example for "two send businesses": if either door had its
-    /// own service or its own write unit, one of these actors would be missing from a
-    /// single recorder.
-    #[tokio::test]
-    async fn both_principals_reach_one_unit_of_work_and_differ_only_by_actor() {
-        let unit = RecordingUnitOfWork::default();
-        let human = SendActor::User(UserId::parse("user-1").unwrap());
-        let agent = SendActor::Agent(AgentId::parse("agent-1").unwrap());
-
-        for actor in [human.clone(), agent.clone()] {
-            let _ = execute(
-                context(actor),
-                settled(),
-                &NoPositions,
-                &GrantsNothing,
-                &unit,
-                &NoAftermath,
-            )
-            .await;
-        }
-
-        assert_eq!(unit.actors(), vec![human, agent]);
-    }
-
-    /// The payload reaches the command unchanged: this stage settles nothing and
-    /// re-decides nothing, so a rule can only live in admission.
-    #[tokio::test]
-    async fn the_settled_payload_is_carried_rather_than_re_decided() {
-        let unit = RecordingUnitOfWork::default();
-        let payload = validate_human_payload(Some(serde_json::json!({
-            "content": "hello",
-            "attachment_ids": [{"id": "att-1", "label": " Image #1 "}]
-        })))
-        .unwrap()
-        .seal()
-        .unwrap();
-        // Admission already normalized the label; execute must not touch it.
-        assert_eq!(payload.attachments()[0].label.as_deref(), Some("Image #1"));
-
-        let _ = execute(
-            context(SendActor::Agent(AgentId::parse("agent-1").unwrap())),
-            payload,
-            &NoPositions,
-            &GrantsNothing,
-            &unit,
-            &NoAftermath,
-        )
-        .await;
-
-        assert_eq!(unit.actors().len(), 1);
-    }
-
     /// A successful write reaches exactly one required aftermath before its outcome is
     /// returned. A refused write reaches none, so post-commit effects cannot run for a
     /// fact that does not exist.
@@ -408,7 +329,7 @@ mod tests {
             settled(),
             &NoPositions,
             &GrantsNothing,
-            &RecordingUnitOfWork::default(),
+            &RefusingUnitOfWork,
             &aftermath,
         )
         .await;

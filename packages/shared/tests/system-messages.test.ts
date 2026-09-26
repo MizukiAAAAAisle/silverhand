@@ -1,20 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   SYSTEM_SUBTYPES,
-  TASK_MUTATION_KINDS,
   TASK_SUBTYPES,
   readChannelContextMetadata,
   readChildContextMetadata,
   readRenameMetadata,
   readScheduleFireMetadata,
   readSessionClearedMetadata,
-  readSubtype,
   readTaskSystemMetadata,
   readTaskSystemMetadataPartial,
   readThreadAnchorMetadata,
   resolveSubtype,
-  systemSubtype,
-  taskSystemSubtype,
 } from '@silverhand/shared';
 
 describe('system-messages constants', () => {
@@ -24,38 +20,9 @@ describe('system-messages constants', () => {
     expect(SYSTEM_SUBTYPES.length).toBeGreaterThan(0);
   });
 
-  it('TASK_SUBTYPES is exactly task_${TaskMutationKind} for every kind', () => {
-    const expected = TASK_MUTATION_KINDS.map((k) => `task_${k}` as const);
-    expect([...TASK_SUBTYPES].sort()).toEqual([...expected].sort());
-  });
-
   it('every TASK_SUBTYPES entry appears in SYSTEM_SUBTYPES', () => {
     for (const s of TASK_SUBTYPES) {
       expect(SYSTEM_SUBTYPES).toContain(s);
-    }
-  });
-
-});
-
-describe('systemSubtype helper', () => {
-  it('returns the input unchanged (identity)', () => {
-    expect(systemSubtype('mention_cc')).toBe('mention_cc');
-    expect(systemSubtype('task_create')).toBe('task_create');
-  });
-});
-
-describe('taskSystemSubtype helper', () => {
-  it('maps every TaskMutationKind to a member of TASK_SUBTYPES', () => {
-    for (const kind of TASK_MUTATION_KINDS) {
-      const out = taskSystemSubtype(kind);
-      expect(TASK_SUBTYPES).toContain(out);
-      expect(out).toBe(`task_${kind}`);
-    }
-  });
-
-  it('produces results that all live in SYSTEM_SUBTYPES', () => {
-    for (const kind of TASK_MUTATION_KINDS) {
-      expect(SYSTEM_SUBTYPES).toContain(taskSystemSubtype(kind));
     }
   });
 });
@@ -81,30 +48,6 @@ describe('resolveSubtype', () => {
     expect(resolveSubtype('session_context')).toEqual({ kind: 'unknown' });
     expect(resolveSubtype('child_summary')).toEqual({ kind: 'unknown' });
     expect(resolveSubtype('thread_summary')).toEqual({ kind: 'unknown' });
-  });
-});
-
-describe('readSubtype', () => {
-  it('extracts and resolves metadata.subtype', () => {
-    expect(readSubtype({ subtype: 'onboarding' })).toEqual({
-      kind: 'current',
-      subtype: 'onboarding',
-    });
-    expect(readSubtype({ subtype: 'join' })).toEqual({ kind: 'unknown' });
-    expect(readSubtype({ subtype: 'mystery' })).toEqual({ kind: 'unknown' });
-  });
-
-  it('returns unknown for null/undefined metadata', () => {
-    expect(readSubtype(null)).toEqual({ kind: 'unknown' });
-    expect(readSubtype(undefined)).toEqual({ kind: 'unknown' });
-  });
-
-  it('returns unknown when subtype is missing or non-string', () => {
-    expect(readSubtype({})).toEqual({ kind: 'unknown' });
-    expect(readSubtype({ subtype: 42 as unknown as string })).toEqual({
-      kind: 'unknown',
-    });
-    expect(readSubtype({ other: 'mention_cc' })).toEqual({ kind: 'unknown' });
   });
 });
 
@@ -144,9 +87,7 @@ describe('readTaskSystemMetadata + readTaskSystemMetadataPartial', () => {
   });
 
   it('partial parse fails when task_status is missing', () => {
-    expect(
-      readTaskSystemMetadataPartial({ subtype: 'task_create', task_number: 1 }),
-    ).toBeNull();
+    expect(readTaskSystemMetadataPartial({ subtype: 'task_create', task_number: 1 })).toBeNull();
   });
 
   it('partial parse rejects non-task subtypes', () => {
@@ -172,7 +113,6 @@ describe('readTaskSystemMetadata + readTaskSystemMetadataPartial', () => {
     expect(m).not.toBeNull();
     expect(m!.cross_conversation).toBeUndefined();
   });
-
 });
 
 interface ParserRejectionCase {
@@ -351,8 +291,8 @@ const parserRejectionCases: ParserRejectionCase[] = [
   },
 ];
 
-const invalidParserCases = parserRejectionCases.flatMap(testCase =>
-  (testCase.invalid ?? []).map(invalid => ({
+const invalidParserCases = parserRejectionCases.flatMap((testCase) =>
+  (testCase.invalid ?? []).map((invalid) => ({
     parser: testCase.parser,
     read: testCase.read,
     ...invalid,
@@ -364,7 +304,7 @@ describe('metadata parser rejection matrix', () => {
     expect(read(metadata)).toBeNull();
   });
 
-  it.each(parserRejectionCases.filter(testCase => testCase.nullish))(
+  it.each(parserRejectionCases.filter((testCase) => testCase.nullish))(
     '$parser returns null for null/undefined',
     ({ read }) => {
       expect(read(null)).toBeNull();
@@ -402,7 +342,6 @@ describe('readSessionClearedMetadata', () => {
     expect(m!.actor_user_id).toBeNull();
     expect(m!.previous_cli_session_id_prefix).toBeNull();
   });
-
 });
 
 describe('readScheduleFireMetadata', () => {
@@ -438,7 +377,6 @@ describe('readScheduleFireMetadata', () => {
     expect(m!.spec_summary).toBeUndefined();
     expect(m!.body).toBeUndefined();
   });
-
 });
 
 describe('readThreadAnchorMetadata', () => {
@@ -474,7 +412,6 @@ describe('readThreadAnchorMetadata', () => {
     expect(m!.quoted_from_kind).toBe('agent');
     expect(m!.quoted_agent_name).toBe('Alice');
   });
-
 });
 
 describe('readChildContextMetadata', () => {
@@ -490,7 +427,6 @@ describe('readChildContextMetadata', () => {
     expect(m).not.toBeNull();
     expect(m!.parent_title).toBe('feature/cli design');
   });
-
 });
 
 describe('readChannelContextMetadata', () => {
@@ -519,7 +455,6 @@ describe('readChannelContextMetadata', () => {
     expect(m!.source_conversation_title).toBeUndefined();
     expect(m!.created_by_agent_name).toBeUndefined();
   });
-
 });
 
 describe('readRenameMetadata', () => {
@@ -533,5 +468,4 @@ describe('readRenameMetadata', () => {
     expect(m!.old_name).toBe('version2');
     expect(m!.new_name).toBe('version3');
   });
-
 });

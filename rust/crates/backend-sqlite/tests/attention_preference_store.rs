@@ -155,7 +155,7 @@ impl SendClock for FailingClock {
 }
 
 #[tokio::test]
-async fn clock_is_consumed_only_after_every_product_gate() {
+async fn preflight_avoids_the_clock_and_a_commit_clock_failure_writes_nothing() {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("a.sqlite");
     seeded(&path).await;

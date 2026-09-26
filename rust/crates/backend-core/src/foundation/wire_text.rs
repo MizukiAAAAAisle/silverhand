@@ -34,11 +34,9 @@ mod tests {
         // ASCII: one code unit each.
         assert_eq!(utf16_len("abc"), 3);
         // A BMP multi-byte scalar is ONE UTF-16 unit but multiple UTF-8 bytes.
-        assert_eq!("é".len(), 2);
         assert_eq!(utf16_len("é"), 1);
         // An astral scalar is ONE Unicode scalar but a UTF-16 surrogate PAIR (two
         // units) — exactly what JS `.length` reports.
-        assert_eq!("😀".chars().count(), 1);
         assert_eq!(utf16_len("😀"), 2);
     }
 

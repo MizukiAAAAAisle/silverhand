@@ -155,8 +155,8 @@ mod tests {
                 ConversationRosterPolicy::Open,
                 format!("Title for {}", self.0),
                 WorkspaceId::parse("w").unwrap(),
-                None,
-                None,
+                Some(3),
+                Some(7),
             )))
         }
     }
@@ -201,8 +201,14 @@ mod tests {
 
         let (status, body) = call_identity(ProjectedIdentity("a")).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["ref"]["id"], "a");
-        assert_eq!(body["ref"]["title"], "Title for a");
+        assert_eq!(
+            body,
+            json!({"ref": {
+                "id": "a", "placement_kind": "workspace", "roster_policy": "open",
+                "title": "Title for a", "workspace_id": "w", "closed_at": 3,
+                "archived_at": 7
+            }})
+        );
     }
 
     async fn fixture_store(setup: &str) -> (tempfile::TempDir, MessagingStore) {

@@ -110,7 +110,7 @@
 //!
 //! ## The success fact keeps its subject
 //!
-//! [`read_visible_task`] returns a [`VisibleTask`] that retains the [`ReadViewer`]
+//! [`read_visible_task_on`] returns a [`VisibleTask`] that retains the [`ReadViewer`]
 //! the read was authorized for. Its ONLY accessor to the aggregate is
 //! [`VisibleTask::for_viewer`], which yields the task only to that same principal —
 //! so an A-authorized task cannot drive B's viewer-resolved view. There is no bare
@@ -607,7 +607,7 @@ pub enum ReadViewer {
 /// A read-authorized task, retaining the [`ReadViewer`] it was authorized for.
 ///
 /// The fields are private and it is minted ONLY by this module's read authorities —
-/// [`read_visible_task`] over one requested coordinate and [`list_visible_tasks`] over a
+/// [`read_visible_task_on`] over one requested coordinate and [`list_visible_tasks`] over a
 /// fetched candidate set — so holding one is proof the gates passed AND that the subject
 /// is known. There is NO
 /// unconditional accessor to the bare [`TaskAggregate`]: it is reachable only
@@ -670,45 +670,7 @@ impl VisibleTask {
 /// `task` must be the row the lookup produced for `request.address` — the identity gate
 /// below refuses (as corruption) any other, for EVERY actor, before consulting a single
 /// authority.
-pub async fn read_visible_task<P, C>(
-    request: &TaskReadRequest,
-    task: TaskAggregate,
-    participation: &mut P,
-    capability: &mut C,
-) -> Result<Option<VisibleTask>, PersistenceFailure>
-where
-    P: TaskParticipationReads,
-    C: TaskReadCapability,
-{
-    // 0. IDENTITY — actor-independent, and FIRST: the task the lookup returned must be
-    //    the one the request's address named, or nothing else is worth asking. It runs
-    //    above the actor dispatch precisely because it is not an actor's privilege: a
-    //    human read answered with someone else's task is the same miswiring as an
-    //    agent's. A mismatch is a safe-500 — not a denial and not a 404, both of which
-    //    would report a fact about the WRONG task.
-    if !request.address.names(&task) {
-        return Err(PersistenceFailure::from_source(AddressIdentityViolation));
-    }
-
-    let authorized = match &request.actor {
-        TaskReadActor::User(user) => {
-            participation
-                .is_user_participant(task.conversation_id(), user)
-                .await?
-        }
-        TaskReadActor::Agent(read) => {
-            authorize_agent_read(read, &request.address, &task, participation, capability).await?
-        }
-    };
-
-    Ok(authorized.then_some(VisibleTask {
-        viewer: request.actor.viewer(),
-        task,
-    }))
-}
-
-/// Snapshot-oriented sibling of [`read_visible_task`] for an adapter whose
-/// participation and capability reads share one connection-bound authority.
+/// Participation and capability reads share one connection-bound authority.
 pub async fn read_visible_task_on<A>(
     request: &TaskReadRequest,
     task: TaskAggregate,
@@ -736,6 +698,9 @@ where
     }))
 }
 
+/// After the actor-independent identity gate: witness provenance, board coordinate,
+/// participation, then workspace capability. The scope supplies the subject. A
+/// provenance mismatch is corruption; other denials short-circuit later authorities.
 async fn authorize_agent_read_on<A>(
     read: &AgentRead,
     address: &TaskReadAddress,
@@ -770,74 +735,11 @@ where
     Ok(true)
 }
 
-/// The agent-only gates, ANDed in a load-bearing order after the actor-independent
-/// identity gate has already bound the fetched task to the requested address: witness
-/// provenance (the coordinate-less witness was minted for THIS address), then
-/// coordinate (board-scoped only), then participation, then capability (workspace
-/// boards only). The agent asked about is the one the scope carries. Provenance, like
-/// identity, raises corruption rather than a denial: a witness presented against a
-/// request it was not minted for is a wired-wrong call site, not an unauthorized
-/// caller. Every other miss denies (`Ok(false)`) without consulting the rest, so no
-/// gate leaks whether a later one would pass.
-async fn authorize_agent_read<P, C>(
-    read: &AgentRead,
-    address: &TaskReadAddress,
-    task: &TaskAggregate,
-    participation: &mut P,
-    capability: &mut C,
-) -> Result<bool, PersistenceFailure>
-where
-    P: TaskParticipationReads,
-    C: TaskReadCapability,
-{
-    let agent = read.agent();
-
-    // 1. WITNESS PROVENANCE — the coordinate-less witness may only accompany the
-    //    request it was minted for. Its sole privilege is skipping the coordinate gate
-    //    below, so without this bind a by-number read could mint a global witness from
-    //    a throwaway `ById` and escape that gate. Composed with the identity gate
-    //    (address ↔ task), this yields the end-to-end property: a witness minted for one
-    //    id authorizes only the task that id names.
-    if let AgentRead::GlobalById(global) = read
-        && !matches!(address, TaskReadAddress::ById(id) if id == global.requested())
-    {
-        return Err(PersistenceFailure::from_source(AddressProvenanceViolation));
-    }
-
-    // 2. COORDINATE — board-scoped only, the LIMIT on which board a read may reach.
-    //    GlobalById has no board limit (but never skips participation below). A
-    //    by-number address's own board is already bound to the task by the identity
-    //    gate, so this also pins the address's board to the authorized one.
-    if let AgentRead::BoardScoped(board) = read
-        && task.board() != board.board()
-    {
-        return Ok(false);
-    }
-
-    // 3. PARTICIPATION — every agent arm, for the scope's own agent. Never bypassed.
-    if !participation
-        .is_agent_participant(task.conversation_id(), agent)
-        .await?
-    {
-        return Ok(false);
-    }
-
-    // 4. CAPABILITY — workspace boards only. A direct-pair board has no capability
-    //    axis; participation was its whole authority.
-    if let Some(workspace) = task.board().workspace_id()
-        && !capability.may_read_tasks(agent, workspace).await?
-    {
-        return Ok(false);
-    }
-
-    Ok(true)
-}
-
 // ============================================================================
 // Board list read model
 // ============================================================================
 //
-// The list is the plural sibling of [`read_visible_task`]: instead of one
+// The list is the plural sibling of [`read_visible_task_on`]: instead of one
 // requested coordinate it walks a fetched CANDIDATE SET and keeps the rows a
 // viewer may see, in the arm's order, trimmed to a limit. It composes the SAME
 // ports and mints the SAME [`VisibleTask`] witness, so a listed task is exactly
@@ -1530,6 +1432,65 @@ mod tests {
         }
     }
 
+    /// Combines independent fixture verdicts into the same authority shape the real
+    /// snapshot adapter supplies. Policy remains entirely in the production owner.
+    struct TestAuthority<'a, P, C> {
+        participation: &'a mut P,
+        capability: &'a mut C,
+    }
+
+    impl<P: TaskParticipationReads + Send, C: Send> TaskParticipationReads for TestAuthority<'_, P, C> {
+        async fn is_agent_participant(
+            &mut self,
+            conversation: &ConversationId,
+            agent: &AgentId,
+        ) -> Result<bool, PersistenceFailure> {
+            self.participation
+                .is_agent_participant(conversation, agent)
+                .await
+        }
+
+        async fn is_user_participant(
+            &mut self,
+            conversation: &ConversationId,
+            user: &UserId,
+        ) -> Result<bool, PersistenceFailure> {
+            self.participation
+                .is_user_participant(conversation, user)
+                .await
+        }
+
+        async fn agent_participating_conversations(
+            &mut self,
+            agent: &AgentId,
+            conversations: &[ConversationId],
+        ) -> Result<HashSet<ConversationId>, PersistenceFailure> {
+            self.participation
+                .agent_participating_conversations(agent, conversations)
+                .await
+        }
+    }
+
+    impl<P: Send, C: TaskReadCapability + Send> TaskReadCapability for TestAuthority<'_, P, C> {
+        async fn may_read_tasks(
+            &mut self,
+            agent: &AgentId,
+            workspace: &WorkspaceId,
+        ) -> Result<bool, PersistenceFailure> {
+            self.capability.may_read_tasks(agent, workspace).await
+        }
+
+        async fn readable_task_workspaces(
+            &mut self,
+            agent: &AgentId,
+            workspaces: &[WorkspaceId],
+        ) -> Result<HashSet<WorkspaceId>, PersistenceFailure> {
+            self.capability
+                .readable_task_workspaces(agent, workspaces)
+                .await
+        }
+    }
+
     /// Runs a read whose address names the fixture task by its own id, so the identity
     /// gate passes and the test's own gate is the only one in question.
     async fn visible(
@@ -1552,11 +1513,13 @@ mod tests {
     ) -> bool {
         let mut participation = Participation { agent, user };
         let mut capability = Capability { grant };
-        read_visible_task(
+        read_visible_task_on(
             &request(address, actor),
             task,
-            &mut participation,
-            &mut capability,
+            &mut TestAuthority {
+                participation: &mut participation,
+                capability: &mut capability,
+            },
         )
         .await
         .expect("the fake authorities never fail")
@@ -1572,11 +1535,13 @@ mod tests {
     ) -> (PersistenceFailure, usize) {
         let mut participation = CountingParticipation { calls: 0 };
         let mut capability = Capability { grant: true };
-        let failure = read_visible_task(
+        let failure = read_visible_task_on(
             &request(address, actor),
             task,
-            &mut participation,
-            &mut capability,
+            &mut TestAuthority {
+                participation: &mut participation,
+                capability: &mut capability,
+            },
         )
         .await
         .err()
@@ -1669,11 +1634,13 @@ mod tests {
             user: false,
         };
         let mut capability = NeverCapability;
-        let seen = read_visible_task(
+        let seen = read_visible_task_on(
             &request(by_id(), global_by_id("agent_1")),
             pair_task(),
-            &mut participation,
-            &mut capability,
+            &mut TestAuthority {
+                participation: &mut participation,
+                capability: &mut capability,
+            },
         )
         .await
         .expect("participation never fails")
@@ -1694,11 +1661,13 @@ mod tests {
         let mut participation = ParticipationFor { agent: "agent_1" };
         let mut capability = Capability { grant: true };
         assert!(
-            read_visible_task(
+            read_visible_task_on(
                 &request(by_id(), actor),
                 workspace_task(),
-                &mut participation,
-                &mut capability
+                &mut TestAuthority {
+                    participation: &mut participation,
+                    capability: &mut capability,
+                },
             )
             .await
             .unwrap()
@@ -1709,11 +1678,13 @@ mod tests {
         let mut participation = ParticipationFor { agent: "agent_1" };
         let mut capability = Capability { grant: true };
         assert!(
-            read_visible_task(
+            read_visible_task_on(
                 &request(by_id(), mismatched),
                 workspace_task(),
-                &mut participation,
-                &mut capability
+                &mut TestAuthority {
+                    participation: &mut participation,
+                    capability: &mut capability,
+                },
             )
             .await
             .unwrap()
@@ -2152,11 +2123,13 @@ mod tests {
             user: true,
         };
         let mut capability = Capability { grant: false };
-        let visible = read_visible_task(
+        let visible = read_visible_task_on(
             &request(by_id(), TaskReadActor::User(user_a.clone())),
             workspace_task(),
-            &mut participation,
-            &mut capability,
+            &mut TestAuthority {
+                participation: &mut participation,
+                capability: &mut capability,
+            },
         )
         .await
         .unwrap()
@@ -2185,11 +2158,13 @@ mod tests {
             user: false,
         };
         let mut capability = Capability { grant: true };
-        let visible = read_visible_task(
+        let visible = read_visible_task_on(
             &request(by_id(), actor),
             workspace_task(),
-            &mut participation,
-            &mut capability,
+            &mut TestAuthority {
+                participation: &mut participation,
+                capability: &mut capability,
+            },
         )
         .await
         .unwrap()
@@ -2624,26 +2599,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_capability_authority_is_asked_once_per_distinct_board() {
-        // Three witnesses collapsing to ONE distinct workspace board consult the capability
-        // read exactly once — a repeated input board cannot amplify it.
-        let witnesses = vec![
-            AuthorizedAgentBoard(agent_id("agent_1"), workspace_board("workspace_1")),
-            AuthorizedAgentBoard(agent_id("agent_1"), workspace_board("workspace_1")),
-            AuthorizedAgentBoard(agent_id("agent_1"), workspace_board("workspace_1")),
-        ];
-        let mut capability = CountingCapability {
-            calls: 0,
-            grant: true,
-        };
-        let boards = authorize_task_list_boards(agent_id("agent_1"), witnesses, &mut capability)
-            .await
-            .unwrap();
-        assert_eq!(capability.calls, 1);
-        assert!(!boards.is_multi_board());
-    }
-
-    #[tokio::test]
     async fn the_capability_read_is_one_round_trip_regardless_of_board_count() {
         // FAN-OUT FALSIFIER: the `read_tasks` fold is a single set read, so growing the
         // DISTINCT board count leaves the authority round-trip count at ONE. A regression
@@ -2701,20 +2656,5 @@ mod tests {
         );
         // The set read grants all, so every on-board candidate is visible.
         assert_eq!(visible.len(), 12);
-    }
-
-    #[tokio::test]
-    async fn two_distinct_boards_are_a_multi_board_union() {
-        // The dedup must not collapse GENUINELY distinct boards: two different workspaces
-        // remain a two-board union, ordered by created_at DESC.
-        let witnesses = vec![
-            AuthorizedAgentBoard(agent_id("agent_1"), workspace_board("workspace_1")),
-            AuthorizedAgentBoard(agent_id("agent_1"), workspace_board("workspace_2")),
-        ];
-        let mut capability = Capability { grant: true };
-        let boards = authorize_task_list_boards(agent_id("agent_1"), witnesses, &mut capability)
-            .await
-            .unwrap();
-        assert!(boards.is_multi_board());
     }
 }

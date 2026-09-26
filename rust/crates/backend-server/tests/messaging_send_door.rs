@@ -665,14 +665,7 @@ async fn our_own_failure_is_answered_safely_and_reported_once_at_either_door() {
 
         assert_eq!(unit.calls(), 1, "{label}");
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{label}");
-        // Not JSON, so there is no code or reason for a client to branch on…
-        assert!(
-            serde_json::from_str::<Value>(&body).is_err(),
-            "{label}: {body}"
-        );
-        // …and nothing of the cause reaches them.
-        assert!(!body.contains(UNDERLYING_CAUSE), "{label}: {body}");
-        assert!(!body.contains("persistence"), "{label}: {body}");
+        assert_eq!(body, "Internal Server Error", "{label}");
 
         // ONE report, with the whole chain. Not "at least one": a second would leave an
         // operator unable to tell one broken request from two.
@@ -1032,33 +1025,6 @@ async fn a_request_that_fails_two_gates_is_answered_by_the_earlier_one() {
         (through.address, through.capability, through.committed),
         (1, 1, 1)
     );
-}
-
-/// Unknown and non-participant are ONE contract answer, so nothing above this port can tell
-/// them apart.
-///
-/// What this pins is the SHAPE: there is a single `AddressRefusal::Unresolved` for both facts,
-/// and it renders byte-identically. It does NOT claim the database distinction is mechanically
-/// proven — that needs the real resolver against a real schema, and two fakes cannot stand in
-/// for it.
-#[tokio::test]
-async fn an_unknown_stream_and_one_that_is_not_yours_are_the_same_answer() {
-    let mut answers = Vec::new();
-    for _ in 0..2 {
-        let unit = CountingUnitOfWork::default();
-        let (status, body) = answered(
-            mounted(
-                Ok(()),
-                Err(AddressRefusal::Unresolved),
-                Ok(()),
-                unit.clone(),
-            ),
-            agent_request(AGENT_PATH, Body::from(agent_send_body(16))),
-        )
-        .await;
-        answers.push((status, body));
-    }
-    assert_eq!(answers[0], answers[1]);
 }
 
 /// The two doors keep their own vocabularies. The human door's gate answers carry NO code,

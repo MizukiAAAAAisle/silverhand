@@ -62,15 +62,23 @@ function runCli(
       stderr += chunk.toString('utf8');
     });
     child.on('error', reject);
-    child.on('close', code => resolvePromise({ code, stdout, stderr }));
+    child.on('close', (code) => resolvePromise({ code, stdout, stderr }));
     if (opts.stdin !== undefined) child.stdin.end(opts.stdin);
     else child.stdin.end();
   });
 }
 
-function parseStderrJson(stderr: string): { error: { code: string; subkind?: string; message: string; retriable: boolean; details?: Record<string, unknown> } } {
+function parseStderrJson(stderr: string): {
+  error: {
+    code: string;
+    subkind?: string;
+    message: string;
+    retriable: boolean;
+    details?: Record<string, unknown>;
+  };
+} {
   // The dispatcher prints exactly one JSON line on stderr; find it.
-  const line = stderr.split(/\r?\n/).find(l => l.trim().startsWith('{'));
+  const line = stderr.split(/\r?\n/).find((l) => l.trim().startsWith('{'));
   if (!line) throw new Error(`no JSON line in stderr:\n${stderr}`);
   return JSON.parse(line);
 }
@@ -118,7 +126,12 @@ describe('dispatcher A1 hard guard (real subprocess)', { timeout: 20_000 }, () =
     const r = await runCli(['task', 'list']);
     expect(r.code).not.toBe(0);
     const body = parseStderrJson(r.stderr);
-    expect(body.error.subkind).not.toBe('unexpected_arguments');
+    expect(body.error).toEqual({
+      code: 'validation_error',
+      message:
+        'silverhand CLI is missing required env: SILVERHAND_AGENT_ID, SILVERHAND_SERVER_URL, SILVERHAND_AUTH_TOKEN',
+      retriable: false,
+    });
   });
 
   it('lets commands with an explicit positional contract reach their handler path', async () => {
@@ -128,7 +141,12 @@ describe('dispatcher A1 hard guard (real subprocess)', { timeout: 20_000 }, () =
     // Env is stripped, so success is impossible here. The contract we
     // need is narrower: the dispatcher must not reject the positional
     // query before env loading / command execution.
-    expect(body.error.subkind).not.toBe('unexpected_arguments');
+    expect(body.error).toEqual({
+      code: 'validation_error',
+      message:
+        'silverhand CLI is missing required env: SILVERHAND_AGENT_ID, SILVERHAND_SERVER_URL, SILVERHAND_AUTH_TOKEN',
+      retriable: false,
+    });
   });
 
   // ── verb_removed migration hint ────────────────────────────────────

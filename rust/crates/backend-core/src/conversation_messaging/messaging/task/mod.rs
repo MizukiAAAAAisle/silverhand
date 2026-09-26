@@ -24,7 +24,7 @@
 //! [`TaskEditChange`]) that only their planner can mint, so a write path
 //! expresses "I was authorized to change this" in its signature instead of
 //! trusting every caller to have asked first. The read side has its own
-//! authorization: [`read_visible_task`] is the whole "may see this task" authority
+//! authorization: [`read_visible_task_on`] is the whole "may see this task" authority
 //! over one decoded task. It takes a [`TaskReadRequest`] — the [`TaskReadAddress`] that
 //! was asked for plus the actor asking — because "the task I got back is the one I
 //! asked for" is a property of the REQUEST, not of a reader mode; the address is
@@ -94,7 +94,7 @@ pub use human_board::{
 pub use point_detail::{
     TaskAuthorizedPointRead, TaskConversationBoardRead, TaskEditorDisplay, TaskMessageRef,
     TaskNavigation, TaskPointCandidate, TaskPointFetch, TaskPointSource, VisibleTaskPoint,
-    authorize_task_point, authorize_task_point_on,
+    authorize_task_point_on,
 };
 pub use read::{
     AgentBoardResolver, AgentRead, AgentReadableBoards, AuthorizedAgentBoard, AuthorizedTaskBoards,
@@ -103,7 +103,7 @@ pub use read::{
     TaskParticipationReads, TaskReadActor, TaskReadAddress, TaskReadCapability, TaskReadRequest,
     TaskSummarySource, VisibleTask, VisibleTaskListRow, authorize_agent_board,
     authorize_global_by_id, authorize_readable_agent_boards, authorize_task_list_boards,
-    list_visible_tasks, read_visible_task, read_visible_task_on,
+    list_visible_tasks, read_visible_task_on,
 };
 pub use spec::{
     Assignee, ContentTooLong, Creator, EmptyTaskId, InvalidTaskNumber, InvalidTitle,

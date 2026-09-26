@@ -19,7 +19,7 @@
     "build:publish": "SILVERHAND_MINIFY=true pnpm run build",
     "pack:dry": "npm pack --dry-run",
     "publish:check": "pnpm --filter @silverhand/host run test:publish-guards",
-    "verify:publish-build": "test -f dist/daemon.js && test -f dist/cli.js && node -e \"const fs=require('fs');const pkg=require('./package.json');const daemon=fs.readFileSync('dist/daemon.js','utf8');if(!daemon.includes(pkg.version)){throw new Error('dist/daemon.js does not include package version '+pkg.version)}\"",
+    "verify:publish-build": "pnpm --filter @silverhand/host exec tsx tests/verify-daemon-package.ts",
     "prepack": "pnpm run build:publish",
     "prepublishOnly": "pnpm run publish:check && pnpm run build:publish && pnpm run verify:publish-build"
   }

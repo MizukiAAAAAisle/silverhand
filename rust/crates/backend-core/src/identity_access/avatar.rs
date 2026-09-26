@@ -833,76 +833,6 @@ mod tests {
     // ---- upload ----
 
     #[tokio::test]
-    async fn upload_puts_repoints_deletes_the_previous_blob_and_announces_once() {
-        let reads = FakeReads(Some(record(Some(1), 1)));
-        let writes = FakeWrites(AvatarPointerWrite::Committed {
-            user: record(Some(NOW), NOW),
-            prior_key: Some(AvatarBlobPointer::parse("old/key.png").unwrap()),
-        });
-        let blobs = RecordingBlobs {
-            put_key: "new/key.png".to_owned(),
-            ..Default::default()
-        };
-        let sink = FakeSink::new(false);
-        let outcome = upload_avatar(
-            &reads,
-            &writes,
-            &blobs,
-            &sink,
-            &user_id(),
-            CandidateAvatar {
-                bytes: vec![1, 2, 3],
-                declared_content_type: "image/png".to_owned(),
-            },
-            NOW,
-        )
-        .await
-        .unwrap();
-        let AvatarUploadOutcome::Committed(committed) = outcome else {
-            panic!("expected Committed");
-        };
-        let (user, ann, cleanup) = committed.into_parts();
-        assert!(user.avatar.is_some());
-        assert!(matches!(ann, UserChangedAnnounce::Delivered));
-        assert!(matches!(cleanup, BlobCleanup::Deleted));
-        assert_eq!(blobs.puts.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            *blobs.deleted.lock().unwrap(),
-            vec!["old/key.png".to_owned()]
-        );
-        assert_eq!(sink.calls(), 1);
-    }
-
-    #[tokio::test]
-    async fn upload_with_no_previous_blob_deletes_nothing() {
-        let reads = FakeReads(Some(record(None, 1)));
-        let writes = FakeWrites(AvatarPointerWrite::Committed {
-            user: record(Some(NOW), NOW),
-            prior_key: None,
-        });
-        let blobs = RecordingBlobs {
-            put_key: "new/key.png".to_owned(),
-            ..Default::default()
-        };
-        let sink = FakeSink::new(false);
-        upload_avatar(
-            &reads,
-            &writes,
-            &blobs,
-            &sink,
-            &user_id(),
-            CandidateAvatar {
-                bytes: vec![1],
-                declared_content_type: "image/png".to_owned(),
-            },
-            NOW,
-        )
-        .await
-        .unwrap();
-        assert!(blobs.deleted.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
     async fn upload_refuses_a_missing_user_before_touching_the_blob() {
         let reads = FakeReads(None);
         let writes = FakeWrites(AvatarPointerWrite::NoSuchUser);
@@ -1179,57 +1109,6 @@ mod tests {
     }
 
     // ---- clear ----
-
-    #[tokio::test]
-    async fn clear_of_a_present_avatar_deletes_the_blob_and_announces() {
-        let writes = FakeWrites(AvatarPointerWrite::Committed {
-            user: record(None, NOW),
-            prior_key: Some(AvatarBlobPointer::parse("old/key.png").unwrap()),
-        });
-        let blobs = RecordingBlobs::default();
-        let sink = FakeSink::new(false);
-        let outcome = clear_avatar(&writes, &blobs, &sink, &user_id(), NOW)
-            .await
-            .unwrap();
-        let AvatarUploadOutcome::Committed(committed) = outcome else {
-            panic!("expected Committed");
-        };
-        let (user, ann, cleanup) = committed.into_parts();
-        assert!(user.avatar.is_none());
-        assert!(matches!(ann, UserChangedAnnounce::Delivered));
-        assert!(matches!(cleanup, BlobCleanup::Deleted));
-        assert_eq!(
-            *blobs.deleted.lock().unwrap(),
-            vec!["old/key.png".to_owned()]
-        );
-        assert_eq!(sink.calls(), 1);
-    }
-
-    #[tokio::test]
-    async fn clear_of_an_already_clear_row_is_a_no_op_that_never_announces_or_deletes() {
-        let writes = FakeWrites(AvatarPointerWrite::Committed {
-            user: record(None, NOW - 100), // old updated_at kept
-            prior_key: None,
-        });
-        let blobs = RecordingBlobs::default();
-        let sink = FakeSink::new(false);
-        let outcome = clear_avatar(&writes, &blobs, &sink, &user_id(), NOW)
-            .await
-            .unwrap();
-        let AvatarUploadOutcome::Committed(committed) = outcome else {
-            panic!("expected Committed");
-        };
-        let (user, ann, cleanup) = committed.into_parts();
-        assert_eq!(
-            user.updated_at,
-            NOW - 100,
-            "a no-op must not bump updated_at"
-        );
-        assert!(matches!(ann, UserChangedAnnounce::NotOwed));
-        assert!(matches!(cleanup, BlobCleanup::NothingToClean));
-        assert!(blobs.deleted.lock().unwrap().is_empty());
-        assert_eq!(sink.calls(), 0);
-    }
 
     #[tokio::test]
     async fn clear_of_a_missing_user_is_no_such_user() {

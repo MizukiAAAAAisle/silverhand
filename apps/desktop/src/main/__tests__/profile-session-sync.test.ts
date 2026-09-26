@@ -142,7 +142,7 @@ describe("extractViewerUserFromProxyResponse", () => {
     expect(
       extractViewerUserFromProxyResponse(
         { method: "GET", path: apiPaths.users },
-        { status: 200, bodyText: JSON.stringify({ users: [user] }) },
+        { status: 200, bodyText: JSON.stringify(user) },
       ),
     ).toBeNull();
   });
@@ -248,7 +248,7 @@ describe("setup response through main proxy and auth:getState", () => {
     expect(await main.state()).toMatchObject({ status: "authenticated", user: completed });
   });
 
-  it("ignores responses after logout or replacement of the issuing session", async () => {
+  it("ignores responses for another session or a different returned identity", async () => {
     for (const replacement of [
       { token: null, user: null },
       { token: "session-b", user: userDto({ id: "u-2", name: "Bob" }) },
@@ -261,6 +261,12 @@ describe("setup response through main proxy and auth:getState", () => {
       await pending;
       expect(main.cachedUser()).toEqual(replacement.user);
     }
+    const main = mainSessionHarness();
+    const original = main.cachedUser();
+    const pending = main.start();
+    main.finish(userDto({ id: "u-2", name: "WrongViewer" }));
+    await pending;
+    expect(main.cachedUser()).toEqual(original);
   });
 
   it("does not clear a newer session when an older request returns unauthorized", async () => {

@@ -33,7 +33,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OutboundSupervisor, type OutboundClientLike } from '../src/daemon/outbound-supervisor.js';
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
-import { daemonHostConfigFingerprint } from '../src/daemon/outbound-client.js';
 import type { EventFrame, ResponseFrame } from '../src/protocol.js';
 import { HOST_PROTOCOL_VERSION } from '../src/protocol.js';
 import type { DaemonHostConfig } from '@silverhand/shared';
@@ -61,6 +60,7 @@ function silentLogger(): DaemonLogger {
 function makeFakeClient(
   configPath: string,
   onConfigLoaded: (config: DaemonHostConfig) => void,
+  lifecycle: Array<{ path: string; action: 'start' | 'stop' }>,
 ): FakeClient {
   const fake: FakeClient = {
     configPath,
@@ -69,9 +69,11 @@ function makeFakeClient(
     sentEvents: [],
     onConfigLoaded,
     start() {
+      lifecycle.push({ path: configPath, action: 'start' });
       this.startCalls += 1;
     },
     stop(reason?: string) {
+      lifecycle.push({ path: configPath, action: 'stop' });
       this.stopCalls.push({ reason });
     },
     sendEvent(event) {
@@ -85,6 +87,7 @@ interface SupervisorFixture {
   supervisor: OutboundSupervisor;
   /** Every fake client the factory has handed out, in spawn order. */
   spawned: FakeClient[];
+  lifecycle: Array<{ path: string; action: 'start' | 'stop' }>;
   tmp: string;
   writeValidConfig(name?: string): string;
   writeInvalidJson(name?: string): string;
@@ -99,6 +102,7 @@ interface SupervisorFixture {
 function makeFixture(): SupervisorFixture {
   const tmp = mkdtempSync(join(tmpdir(), 'silverhand-outbound-sup-'));
   const spawned: FakeClient[] = [];
+  const lifecycle: SupervisorFixture['lifecycle'] = [];
   const readyEvent = (): Extract<EventFrame, { event: 'ready' }> => ({
     event: 'ready',
     protocol_version: HOST_PROTOCOL_VERSION,
@@ -114,10 +118,10 @@ function makeFixture(): SupervisorFixture {
   const supervisor = new OutboundSupervisor({
     logger: silentLogger(),
     readyEvent,
-    dispatchCommand: async () => ({ id: 'unused', result: {} } as ResponseFrame),
+    dispatchCommand: async () => ({ id: 'unused', result: {} }) as ResponseFrame,
     cleanupDeferredForOwner: () => {},
     outboundClientFactory: (configPath, deps) => {
-      const fake = makeFakeClient(configPath, deps.onConfigLoaded);
+      const fake = makeFakeClient(configPath, deps.onConfigLoaded, lifecycle);
       spawned.push(fake);
       return fake;
     },
@@ -132,6 +136,7 @@ function makeFixture(): SupervisorFixture {
   return {
     supervisor,
     spawned,
+    lifecycle,
     tmp,
     writeValidConfig: (name = 'daemon-config.json') =>
       writeJson(
@@ -142,8 +147,7 @@ function makeFixture(): SupervisorFixture {
           host_token: 'token-1',
         }),
       ),
-    writeInvalidJson: (name = 'daemon-config-bad.json') =>
-      writeJson(name, '{not really json'),
+    writeInvalidJson: (name = 'daemon-config-bad.json') => writeJson(name, '{not really json'),
     writeInvalidShape: (name = 'daemon-config-shape.json') =>
       writeJson(name, JSON.stringify({ server_url: 'http://127.0.0.1:1' })),
     writeNonLoopbackHttp: (name = 'daemon-config-non-loopback.json') =>
@@ -197,7 +201,6 @@ describe('OutboundSupervisor — stale-config invariant', () => {
     // Supervisor constructed; no attach yet. Stale config is sitting
     // right there.
     expect(f.spawned).toEqual([]);
-    expect(f.supervisor.currentConfigPath()).toBeNull();
   });
 });
 
@@ -321,7 +324,9 @@ describe('OutboundSupervisor — validation matrix (fail-closed; never mutates a
 
     expect(f.spawned).toHaveLength(1);
     expect(live.stopCalls).toEqual([]);
-    expect(f.supervisor.currentConfigPath()).toBe(goodPath);
+    const event: EventFrame = { event: 'shutting_down', reason: 'still-bound' };
+    f.supervisor.sendEvent(event);
+    expect(live.sentEvents).toEqual([event]);
   });
 });
 
@@ -514,7 +519,11 @@ describe('OutboundSupervisor — idempotency matrix (started / noop / switched)'
     expect(clientA.stopCalls).toEqual([{ reason: 'config_path_changed' }]);
     expect(clientB.startCalls).toBe(1);
     expect(clientB.stopCalls).toEqual([]);
-    expect(f.supervisor.currentConfigPath()).toBe(pathB);
+    expect(f.lifecycle).toEqual([
+      { path: pathA, action: 'start' },
+      { path: pathA, action: 'stop' },
+      { path: pathB, action: 'start' },
+    ]);
   });
 
   it('attach with same path AFTER stop() rejects with reason=parse_failed/supervisor stopped (not a recovery path)', () => {
@@ -577,13 +586,14 @@ describe('OutboundSupervisor — stop()', () => {
     f = null;
   });
 
-  it('stops the active client with the supplied reason and clears currentConfigPath', () => {
+  it('stops the active client with the supplied reason and stops forwarding', () => {
     f = makeFixture();
     const path = f.writeValidConfig();
     f.supervisor.attach({ config_path: path });
     f.supervisor.stop('daemon_quit');
     expect(f.spawned[0]!.stopCalls).toEqual([{ reason: 'daemon_quit' }]);
-    expect(f.supervisor.currentConfigPath()).toBeNull();
+    f.supervisor.sendEvent({ event: 'shutting_down', reason: 'late' });
+    expect(f.spawned[0]!.sentEvents).toEqual([]);
   });
 
   it('stop() is idempotent', () => {
@@ -611,7 +621,6 @@ describe('OutboundSupervisor — detach() (D3.b Commit 3)', () => {
     const res = f.supervisor.detach();
     expect(res).toEqual({ detached: true, action: 'noop' });
     expect(f.spawned).toEqual([]);
-    expect(f.supervisor.currentConfigPath()).toBeNull();
   });
 
   it('detach with an active client returns action=detached and stops the client with a grep-friendly reason', () => {
@@ -628,7 +637,8 @@ describe('OutboundSupervisor — detach() (D3.b Commit 3)', () => {
     const res = f.supervisor.detach();
     expect(res).toEqual({ detached: true, action: 'detached' });
     expect(client.stopCalls).toEqual([{ reason: 'host_outbound_detach' }]);
-    expect(f.supervisor.currentConfigPath()).toBeNull();
+    f.supervisor.sendEvent({ event: 'shutting_down', reason: 'late' });
+    expect(client.sentEvents).toEqual([]);
   });
 
   it('detach is NOT terminal — a later attach succeeds and spawns a fresh client', () => {
@@ -643,7 +653,6 @@ describe('OutboundSupervisor — detach() (D3.b Commit 3)', () => {
     f.supervisor.attach({ config_path: pathA });
     expect(f.spawned).toHaveLength(1);
     f.supervisor.detach();
-    expect(f.supervisor.currentConfigPath()).toBeNull();
 
     // Re-attach must succeed AND must use a fresh client (not revive
     // the stopped one). Action is 'started' because there is no
@@ -666,9 +675,7 @@ describe('OutboundSupervisor — detach() (D3.b Commit 3)', () => {
     const second = f.supervisor.detach();
     expect(second).toEqual({ detached: true, action: 'noop' });
     // Client received exactly one stop.
-    expect(f.spawned[0]!.stopCalls).toEqual([
-      { reason: 'host_outbound_detach' },
-    ]);
+    expect(f.spawned[0]!.stopCalls).toEqual([{ reason: 'host_outbound_detach' }]);
   });
 
   it('detach AFTER stop() returns noop (terminal stop already cleared the client)', () => {
@@ -877,21 +884,40 @@ describe('OutboundSupervisor — reload() (D3.c Commit 2)', () => {
     expect(f.spawned).toHaveLength(2);
     expect(f.spawned[0]!.stopCalls).toEqual([{ reason: 'config_reload' }]);
     expect(f.spawned[1]!.startCalls).toBe(1);
+    expect(f.lifecycle).toEqual([
+      { path, action: 'start' },
+      { path, action: 'stop' },
+      { path, action: 'start' },
+    ]);
   });
 
   // ── Fingerprint behavior pinning (Cindy review point 3:
   //    config fingerprint 单源共用) ──────────────────────────────────
 
-  it('changes to server_url alone are enough to flip unchanged → reloaded (fingerprint covers the URL byte)', () => {
+  it.each([
+    { label: 'server_url', initial: {}, changed: { server_url: 'http://127.0.0.1:8766' } },
+    {
+      label: 'server_url with profile_version',
+      initial: { profile_version: 1 },
+      changed: { server_url: 'http://127.0.0.1:8766' },
+    },
+    { label: 'allow_insecure_remote', initial: {}, changed: { allow_insecure_remote: true } },
+  ])('changing only $label forces a reload', ({ initial, changed }) => {
     f = makeFixture();
     const path = f.writeValidConfig();
+    const base = {
+      server_url: 'http://127.0.0.1:8765',
+      host_id: 'host-1',
+      host_token: 'token-1',
+      ...initial,
+    };
+    writeFileSync(path, JSON.stringify(base));
     f.supervisor.attach({ config_path: path });
     writeFileSync(
       path,
       JSON.stringify({
-        server_url: 'http://127.0.0.1:8766',
-        host_id: 'host-1',
-        host_token: 'token-1',
+        ...base,
+        ...changed,
       }),
       'utf8',
     );
@@ -899,6 +925,7 @@ describe('OutboundSupervisor — reload() (D3.c Commit 2)', () => {
     expect(res.reloaded).toBe(true);
     if (!res.reloaded) throw new Error('unreachable');
     expect(res.action).toBe('reloaded');
+    expect(f.spawned).toHaveLength(2);
   });
 
   it('changes to host_id alone flip unchanged → reloaded (fingerprint covers the host_id byte)', () => {
@@ -1022,57 +1049,6 @@ describe('OutboundSupervisor — reload() (D3.c Commit 2)', () => {
     expect(flipped.reloaded).toBe(true);
     if (!flipped.reloaded) throw new Error('unreachable');
     expect(flipped.action).toBe('reloaded');
-  });
-});
-
-describe('daemonHostConfigFingerprint — D4.a Commit 5b profile_version coverage', () => {
-  // Direct helper-level pins for the byte set the fingerprint
-  // covers. The supervisor tests above already exercise behavior
-  // end-to-end; these unit pins document the contract verbatim so a
-  // future field addition forces a fixture decision.
-  const baseConfig = {
-    server_url: 'http://127.0.0.1:8765',
-    host_id: 'host-1',
-    host_token: 'token-1',
-  };
-
-  it('absent profile_version produces the same fingerprint regardless of call site', () => {
-    expect(daemonHostConfigFingerprint(baseConfig)).toEqual(
-      daemonHostConfigFingerprint({ ...baseConfig }),
-    );
-  });
-
-  it('absent profile_version differs from explicit profile_version: 0', () => {
-    expect(daemonHostConfigFingerprint(baseConfig)).not.toEqual(
-      daemonHostConfigFingerprint({ ...baseConfig, profile_version: 0 }),
-    );
-  });
-
-  it('different profile_versions produce different fingerprints (URL/host/token unchanged)', () => {
-    const a = daemonHostConfigFingerprint({ ...baseConfig, profile_version: 1 });
-    const b = daemonHostConfigFingerprint({ ...baseConfig, profile_version: 2 });
-    const c = daemonHostConfigFingerprint({ ...baseConfig, profile_version: 1 });
-    expect(a).not.toEqual(b);
-    expect(a).toEqual(c);
-  });
-
-  it('allow_insecure_remote participates in the fingerprint', () => {
-    expect(daemonHostConfigFingerprint(baseConfig)).not.toEqual(
-      daemonHostConfigFingerprint({
-        ...baseConfig,
-        allow_insecure_remote: true,
-      }),
-    );
-  });
-
-  it('profile_version is independent of the other three fields (changing URL alone still flips even with same profile_version)', () => {
-    const a = daemonHostConfigFingerprint({ ...baseConfig, profile_version: 1 });
-    const b = daemonHostConfigFingerprint({
-      ...baseConfig,
-      server_url: 'http://127.0.0.1:9999',
-      profile_version: 1,
-    });
-    expect(a).not.toEqual(b);
   });
 });
 

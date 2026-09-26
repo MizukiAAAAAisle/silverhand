@@ -169,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn every_transport_failure_has_one_operation_outcome() {
+    fn pending_and_timeout_transport_failures_have_distinct_outcomes() {
         for pending in [
             HostDataPlaneFailure::NoCurrentDaemon,
             HostDataPlaneFailure::ConnectionGenerationMismatch,

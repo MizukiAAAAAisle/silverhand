@@ -8,17 +8,17 @@
 
 /** The startup protocol version this launcher understands. Must match the Rust
  * `STARTUP_PROTOCOL_VERSION`; a frame with any other `v` is rejected. */
-export const STARTUP_PROTOCOL_VERSION = 2;
+const STARTUP_PROTOCOL_VERSION = 2;
 
 /** The only frame kind the child emits: bound (listener up, app composed) — NOT yet
  * `/readyz`-confirmed. The launcher still polls `/readyz` before publishing. */
-export const BOUND_FRAME_KIND = "bound";
+const BOUND_FRAME_KIND = "bound";
 
 /** Hard cap on a single stdout frame line (bytes, matching the Rust
  * `BOUND_FRAME_MAX_BYTES`). A line whose byte length REACHES this cap (`>=`) is rejected
  * rather than buffered — the SAME boundary the Rust emitter enforces (`>= 4096` fails),
  * so a line of exactly 4096 bytes is over the limit on both sides (#task:2343 P1-9). */
-export const BOUND_FRAME_MAX_BYTES = 4096;
+const BOUND_FRAME_MAX_BYTES = 4096;
 
 /** The validated bound frame: the effective loopback URL + resolved port the launcher
  * targets. `generation` is intentionally not surfaced — it was already checked against
@@ -54,7 +54,7 @@ const EXPECTED_KEYS = ["v", "kind", "generation", "url", "port"] as const;
  * echo against the value this spawn minted. `raw` is a single line WITHOUT its trailing
  * newline (the reader splits on `\n`). Never throws.
  */
-export function parseBoundFrame(raw: string, expectedGeneration: string): BoundFrameParse {
+function parseBoundFrame(raw: string, expectedGeneration: string): BoundFrameParse {
   // Length bound measured on the raw bytes BEFORE JSON.parse (cheap hostile-input guard,
   // mirrored with the Rust emitter's byte bound: `>= BOUND_FRAME_MAX_BYTES` is over).
   if (Buffer.byteLength(raw, "utf8") >= BOUND_FRAME_MAX_BYTES) {
@@ -194,7 +194,7 @@ export class BoundFrameReader {
   }
 
   /** The settled outcome, or `null` if no complete line has arrived yet. */
-  outcome(): StartupFrameParse | { status: "duplicate" } | null {
+  private outcome(): StartupFrameParse | { status: "duplicate" } | null {
     return this.settled;
   }
 }

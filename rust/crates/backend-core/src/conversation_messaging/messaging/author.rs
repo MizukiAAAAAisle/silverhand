@@ -357,29 +357,8 @@ mod tests {
             deleted.stable_identity(),
             Some(PrincipalIdentity::Agent(agent_id()))
         );
-    }
-
-    #[test]
-    fn two_unresolved_authors_of_one_kind_never_aggregate_as_one_identity() {
-        use std::collections::HashSet;
-
-        let first = MessageAuthor::unresolved(PrincipalKind::Agent);
-        let second = MessageAuthor::unresolved(PrincipalKind::Agent);
-
-        // The only aggregation key is `stable_identity`; both answer `None`, so a
-        // distinct-by-identity pass keys nothing and cannot merge them.
-        assert_eq!(first.stable_identity(), None);
-        assert_eq!(second.stable_identity(), None);
-
-        let mut identities: HashSet<PrincipalIdentity> = HashSet::new();
-        for author in [&first, &second] {
-            if let Some(identity) = author.stable_identity() {
-                identities.insert(identity);
-            }
+        for kind in [PrincipalKind::Agent, PrincipalKind::Human] {
+            assert_eq!(MessageAuthor::unresolved(kind).stable_identity(), None);
         }
-        assert!(
-            identities.is_empty(),
-            "unresolved authors must contribute no identity to aggregate on"
-        );
     }
 }

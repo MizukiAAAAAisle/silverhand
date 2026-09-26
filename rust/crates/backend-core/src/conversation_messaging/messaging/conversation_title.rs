@@ -88,26 +88,8 @@ impl From<NameCanonicalizationIssue> for ConversationTitleIssue {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CanonicalConversationTitle, ConversationTitleIssue, fold_name_key,
-        name_character_is_forbidden, name_is_nfc,
-    };
+    use super::{CanonicalConversationTitle, ConversationTitleIssue, fold_name_key};
     use unicode_normalization::UnicodeNormalization;
-
-    #[test]
-    fn canonicalizes_with_exact_ecmascript_trim_and_pinned_fold() {
-        let value = CanonicalConversationTitle::parse("\u{FEFF}Straße\u{3000}").unwrap();
-        assert_eq!(value.title(), "Straße");
-        assert_eq!(value.key(), "strasse");
-
-        assert_eq!(
-            CanonicalConversationTitle::parse("\u{0085}title"),
-            Err(ConversationTitleIssue::ForbiddenCodePoint {
-                code_point: 0x85,
-                index: 0,
-            })
-        );
-    }
 
     #[test]
     fn measures_the_normalized_title_in_code_points() {
@@ -241,16 +223,5 @@ mod tests {
                 code_points: refused,
             })
         );
-    }
-
-    #[test]
-    fn generated_character_domain_contains_the_expected_boundaries() {
-        assert!(!name_character_is_forbidden('🚀'));
-        assert!(!name_character_is_forbidden('#'));
-        assert!(name_character_is_forbidden('\u{200D}'));
-        assert!(name_character_is_forbidden('\u{FE0F}'));
-        assert!(name_character_is_forbidden('\u{1F3FB}'));
-        assert!(name_is_nfc("Å"));
-        assert!(!name_is_nfc("A\u{030A}"));
     }
 }

@@ -60,17 +60,6 @@ pub enum TeardownFailure {
     Contract(#[from] TeardownContractViolation),
 }
 
-impl TeardownFailure {
-    /// The violation, when that is what this was. Lets a test say "this failed
-    /// because the facts were spliced" without matching on infrastructure.
-    pub fn violation(&self) -> Option<&TeardownContractViolation> {
-        match self {
-            Self::Persistence(_) => None,
-            Self::Contract(violation) => Some(violation),
-        }
-    }
-}
-
 /// Both facts must name the same computer.
 pub(crate) fn same_computer(
     expected: &HostId,
@@ -97,46 +86,4 @@ pub(crate) fn same_agent(
         expected: expected.clone(),
         found: found.clone(),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_spliced_composition_is_not_infrastructure_failing() {
-        let violation = TeardownContractViolation::AgentMismatch {
-            expected: AgentId::parse("a1").expect("agent id"),
-            found: AgentId::parse("a2").expect("agent id"),
-        };
-        let failure = TeardownFailure::from(violation.clone());
-        assert_eq!(failure.violation(), Some(&violation));
-
-        let infrastructure = TeardownFailure::from(PersistenceFailure::from_source(
-            AgentId::parse("").expect_err("empty agent id"),
-        ));
-        assert_eq!(infrastructure.violation(), None);
-    }
-
-    #[test]
-    fn a_coordinate_check_names_both_sides_of_what_it_refused() {
-        let expected = HostId::parse("h1").expect("host id");
-        let found = HostId::parse("h2").expect("host id");
-        assert_eq!(same_computer(&expected, &expected), Ok(()));
-        assert_eq!(
-            same_computer(&expected, &found),
-            Err(TeardownContractViolation::ComputerMismatch {
-                expected: expected.clone(),
-                found: found.clone(),
-            })
-        );
-
-        let expected = AgentId::parse("a1").expect("agent id");
-        let found = AgentId::parse("a2").expect("agent id");
-        assert_eq!(same_agent(&expected, &expected), Ok(()));
-        assert_eq!(
-            same_agent(&expected, &found),
-            Err(TeardownContractViolation::AgentMismatch { expected, found })
-        );
-    }
 }

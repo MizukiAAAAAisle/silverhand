@@ -46,7 +46,9 @@ function makeFakeSocket(): FakeSocket {
     __writes: writes,
     writableNeedDrain: false,
     writable: true,
-    get destroyed(): boolean { return destroyed; },
+    get destroyed(): boolean {
+      return destroyed;
+    },
     write(chunk: string, cb?: WriteCb): boolean {
       if (destroyed) return false;
       writes.push({ line: chunk, cb });
@@ -57,7 +59,7 @@ function makeFakeSocket(): FakeSocket {
     },
     __ack(count = 1): void {
       for (let i = 0; i < count; i++) {
-        const next = writes.find(w => w.cb);
+        const next = writes.find((w) => w.cb);
         if (!next || !next.cb) break;
         const cb = next.cb;
         next.cb = undefined;
@@ -93,7 +95,7 @@ function outputFrame(chunkSize: number, conv = 'c1', agent = 'a1'): EventFrame {
 
 describe('OutputBackpressure — non-droppable events', () => {
   it('writes runtime_state straight through without touching the counter', () => {
-    const bp = new OutputBackpressure({ highWaterBytes: 1024, lowWaterBytes: 512 });
+    const bp = new OutputBackpressure({ highWaterBytes: 256, lowWaterBytes: 128 });
     const sock = makeFakeSocket();
     sock.writableNeedDrain = true;
     const r = bp.emit(asSocket(sock), {
@@ -119,7 +121,8 @@ describe('OutputBackpressure — non-droppable events', () => {
     });
     expect(r).toBe('sent');
     expect(sock.__writes).toHaveLength(1);
-    expect(bp.__peekBytes(asSocket(sock), 'c1', 'a1')).toBe(0);
+    // Control events must not consume the following output frame's capacity.
+    expect(bp.emit(asSocket(sock), outputFrame(10))).toBe('sent');
   });
 
   it('runtime_exit, ready_for_drain, startup_delivery_consumed are all non-droppable', () => {
@@ -176,14 +179,14 @@ describe('OutputBackpressure — non-droppable events', () => {
 
 describe('OutputBackpressure — happy path (no kernel pressure)', () => {
   it('runtime_output writes pass through and decrement counter on ack', () => {
-    const bp = new OutputBackpressure({ highWaterBytes: 4096, lowWaterBytes: 1024 });
+    const bp = new OutputBackpressure({ highWaterBytes: 512, lowWaterBytes: 256 });
     const sock = makeFakeSocket();
     expect(bp.emit(asSocket(sock), outputFrame(100))).toBe('sent');
     expect(bp.emit(asSocket(sock), outputFrame(200))).toBe('sent');
-    // Bytes-in-flight tracks encoded length (chunk + JSON envelope).
-    expect(bp.__peekBytes(asSocket(sock), 'c1', 'a1')).toBeGreaterThan(0);
+    sock.writableNeedDrain = true;
+    expect(bp.emit(asSocket(sock), outputFrame(100))).toBe('dropped');
     sock.__ack(2);
-    expect(bp.__peekBytes(asSocket(sock), 'c1', 'a1')).toBe(0);
+    expect(bp.emit(asSocket(sock), outputFrame(100))).toBe('sent');
   });
 
   it('does not enter the dropping state when writableNeedDrain is false even past high-water', () => {
@@ -192,34 +195,12 @@ describe('OutputBackpressure — happy path (no kernel pressure)', () => {
     const bp = new OutputBackpressure({ highWaterBytes: 64, lowWaterBytes: 32 });
     const sock = makeFakeSocket();
     expect(bp.emit(asSocket(sock), outputFrame(100))).toBe('sent');
-    expect(bp.__peekWindow(asSocket(sock), 'c1', 'a1')).toBeNull();
+    sock.__ack();
+    expect(sock.__writes.map((w) => JSON.parse(w.line).event)).toEqual(['runtime_output']);
   });
 });
 
 describe('OutputBackpressure — drop window', () => {
-  it('starts a window and drops chunks when needDrain && over high-water', () => {
-    const bp = new OutputBackpressure({
-      highWaterBytes: 64,
-      lowWaterBytes: 32,
-      now: () => 1_700_000_000_000,
-    });
-    const sock = makeFakeSocket();
-    // Fill the in-flight counter without back-pressure first.
-    expect(bp.emit(asSocket(sock), outputFrame(60))).toBe('sent');
-    const baseline = bp.__peekBytes(asSocket(sock), 'c1', 'a1');
-    expect(baseline).toBeGreaterThan(0);
-    // Now flip the kernel into back-pressure mode and emit again.
-    // Counter (~baseline) plus chunk pushes us over high-water.
-    sock.writableNeedDrain = true;
-    expect(bp.emit(asSocket(sock), outputFrame(60))).toBe('dropped');
-    expect(bp.emit(asSocket(sock), outputFrame(60))).toBe('dropped');
-    const win = bp.__peekWindow(asSocket(sock), 'c1', 'a1');
-    expect(win).not.toBeNull();
-    expect(win!.dropped_count).toBe(2);
-    expect(win!.bytes_dropped).toBeGreaterThan(0);
-    expect(win!.since_ts).toBe(1_700_000_000_000);
-  });
-
   it('emits exactly ONE runtime_output_dropped summary on recovery', () => {
     const bp = new OutputBackpressure({
       highWaterBytes: 64,
@@ -231,16 +212,16 @@ describe('OutputBackpressure — drop window', () => {
     // get dropped.
     bp.emit(asSocket(sock), outputFrame(60));
     sock.writableNeedDrain = true;
-    bp.emit(asSocket(sock), outputFrame(60));
-    bp.emit(asSocket(sock), outputFrame(60));
-    expect(bp.__peekWindow(asSocket(sock), 'c1', 'a1')).not.toBeNull();
+    expect(bp.emit(asSocket(sock), outputFrame(60))).toBe('dropped');
+    expect(bp.emit(asSocket(sock), outputFrame(60))).toBe('dropped');
+    expect(sock.__writes).toHaveLength(1);
     // Kernel takes the first chunk → callback fires → counter drops
     // below low-water → summary should land.
     sock.writableNeedDrain = false;
     sock.__ack(1);
     const summaryWrites = sock.__writes
-      .map(w => JSON.parse(w.line) as Record<string, unknown>)
-      .filter(p => p.event === 'runtime_output_dropped');
+      .map((w) => JSON.parse(w.line) as Record<string, unknown>)
+      .filter((p) => p.event === 'runtime_output_dropped');
     expect(summaryWrites).toHaveLength(1);
     expect(summaryWrites[0]).toMatchObject({
       conversation_id: 'c1',
@@ -248,8 +229,11 @@ describe('OutputBackpressure — drop window', () => {
       dropped_count: 2,
       since_ts: 1_700_000_000_000,
     });
-    expect((summaryWrites[0] as { bytes_dropped: number }).bytes_dropped).toBeGreaterThan(0);
-    expect(bp.__peekWindow(asSocket(sock), 'c1', 'a1')).toBeNull();
+    expect(summaryWrites[0]!.bytes_dropped).toBe(
+      2 * Buffer.byteLength(JSON.stringify(outputFrame(60)) + '\n'),
+    );
+    sock.__ack(1);
+    expect(sock.__writes).toHaveLength(2);
   });
 
   it('opens a new window after a previous one has closed', () => {
@@ -271,9 +255,10 @@ describe('OutputBackpressure — drop window', () => {
     sock.writableNeedDrain = false;
     sock.__ack(1); // recovery → summary 2
     const summaries = sock.__writes
-      .map(w => JSON.parse(w.line) as Record<string, unknown>)
-      .filter(p => p.event === 'runtime_output_dropped');
+      .map((w) => JSON.parse(w.line) as Record<string, unknown>)
+      .filter((p) => p.event === 'runtime_output_dropped');
     expect(summaries).toHaveLength(2);
+    expect(summaries.map((s) => s.dropped_count)).toEqual([1, 1]);
   });
 
   it('invokes onSummaryEvent with the synthesized frame before the socket write (§3.4 event log path)', () => {
@@ -283,13 +268,18 @@ describe('OutputBackpressure — drop window', () => {
     // logEvent so runtime_output_dropped shows up in the event log
     // like every other broadcast event.
     const captured: EventFrame[] = [];
+    const sock = makeFakeSocket();
     const bp = new OutputBackpressure({
       highWaterBytes: 64,
       lowWaterBytes: 32,
       now: () => 1_700_000_000_000,
-      onSummaryEvent: ev => captured.push(ev),
+      onSummaryEvent: (ev) => {
+        expect(
+          sock.__writes.some((w) => JSON.parse(w.line).event === 'runtime_output_dropped'),
+        ).toBe(false);
+        captured.push(ev);
+      },
     });
-    const sock = makeFakeSocket();
     bp.emit(asSocket(sock), outputFrame(60));
     sock.writableNeedDrain = true;
     bp.emit(asSocket(sock), outputFrame(60));
@@ -309,7 +299,10 @@ describe('OutputBackpressure — drop window', () => {
 });
 
 describe('OutputBackpressure — per-key isolation', () => {
-  it('does not let one (conv, agent) starve another on the same socket', () => {
+  it.each([
+    ['A', 'a2'],
+    ['B', 'a1'],
+  ])('isolates %s/%s from A/a1 on the same socket', (conv, agent) => {
     // Sized so that two 60-byte chunks for A push past 256 bytes (with
     // JSON envelope overhead each chunk encodes to ~150 bytes), but a
     // single B chunk's encoding fits comfortably under high-water — so
@@ -323,18 +316,19 @@ describe('OutputBackpressure — per-key isolation', () => {
     expect(bp.emit(asSocket(sock), outputFrame(60, 'A', 'a1'))).toBe('dropped');
     // B shares the kernel's needDrain but starts at 0 — its first
     // chunk must NOT be dropped (would-exceed=false for B).
-    expect(bp.emit(asSocket(sock), outputFrame(40, 'B', 'b1'))).toBe('sent');
+    expect(bp.emit(asSocket(sock), outputFrame(40, conv, agent))).toBe('sent');
   });
 
   it('keeps per-socket buckets isolated', () => {
-    const bp = new OutputBackpressure({ highWaterBytes: 64, lowWaterBytes: 32 });
+    const bp = new OutputBackpressure({ highWaterBytes: 256, lowWaterBytes: 128 });
     const slow = makeFakeSocket();
     const fast = makeFakeSocket();
     bp.emit(asSocket(slow), outputFrame(60));
     slow.writableNeedDrain = true;
     expect(bp.emit(asSocket(slow), outputFrame(60))).toBe('dropped');
     // Fast socket's counter is untouched; it accepts.
-    expect(bp.emit(asSocket(fast), outputFrame(60))).toBe('sent');
+    fast.writableNeedDrain = true;
+    expect(bp.emit(asSocket(fast), outputFrame(40))).toBe('sent');
   });
 });
 
@@ -347,32 +341,25 @@ describe('OutputBackpressure — closed sockets', () => {
     expect(sock.__writes).toHaveLength(0);
   });
 
-  it('forgetSocket clears per-key state', () => {
+  it('forgetSocket discards a pending drop window before a late write callback', () => {
     const bp = new OutputBackpressure({ highWaterBytes: 64, lowWaterBytes: 32 });
     const sock = makeFakeSocket();
     bp.emit(asSocket(sock), outputFrame(60));
-    expect(bp.__peekBytes(asSocket(sock), 'c1', 'a1')).toBeGreaterThan(0);
-    bp.forgetSocket(asSocket(sock));
-    expect(bp.__peekBytes(asSocket(sock), 'c1', 'a1')).toBe(0);
-  });
-
-  it('write-callback firing after forgetSocket is a no-op', () => {
-    const bp = new OutputBackpressure({ highWaterBytes: 64, lowWaterBytes: 32 });
-    const sock = makeFakeSocket();
-    bp.emit(asSocket(sock), outputFrame(60));
+    sock.writableNeedDrain = true;
+    expect(bp.emit(asSocket(sock), outputFrame(60))).toBe('dropped');
     bp.forgetSocket(asSocket(sock));
     // ack the pending write — should not throw and should not
     // resurrect any state.
     expect(() => sock.__ack(1)).not.toThrow();
-    expect(bp.__peekBytes(asSocket(sock), 'c1', 'a1')).toBe(0);
+    expect(sock.__writes.map((w) => JSON.parse(w.line).event)).toEqual(['runtime_output']);
   });
 });
 
 describe('OutputBackpressure — config validation & logging', () => {
   it('rejects lowWaterBytes > highWaterBytes', () => {
-    expect(
-      () => new OutputBackpressure({ highWaterBytes: 100, lowWaterBytes: 200 }),
-    ).toThrow(/lowWater/);
+    expect(() => new OutputBackpressure({ highWaterBytes: 100, lowWaterBytes: 200 })).toThrow(
+      /lowWater/,
+    );
   });
 
   it('logDrop hook receives drop and summary events without payload bodies', () => {
@@ -380,7 +367,7 @@ describe('OutputBackpressure — config validation & logging', () => {
     const bp = new OutputBackpressure({
       highWaterBytes: 64,
       lowWaterBytes: 32,
-      logDrop: e => entries.push(e),
+      logDrop: (e) => entries.push(e),
     });
     const sock = makeFakeSocket();
     bp.emit(asSocket(sock), outputFrame(60));
@@ -389,8 +376,8 @@ describe('OutputBackpressure — config validation & logging', () => {
     bp.emit(asSocket(sock), outputFrame(60));
     sock.writableNeedDrain = false;
     sock.__ack(1);
-    const drops = entries.filter(e => e.kind === 'drop');
-    const summaries = entries.filter(e => e.kind === 'summary');
+    const drops = entries.filter((e) => e.kind === 'drop');
+    const summaries = entries.filter((e) => e.kind === 'summary');
     expect(drops).toHaveLength(2);
     expect(summaries).toHaveLength(1);
     // §3.4 logging contract: structured fields only, never the chunk body.

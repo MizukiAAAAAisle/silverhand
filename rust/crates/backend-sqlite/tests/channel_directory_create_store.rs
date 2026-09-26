@@ -306,10 +306,21 @@ async fn preflight_refusals_preserve_route_order_and_do_not_consume_host_or_writ
 
 #[tokio::test]
 async fn successful_path_waits_for_writer_then_revalidates_each_changed_authority() {
+    async fn wait_for_preflight(environment: &FixedEnvironment, attempt: usize) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while environment.entropy_calls.load(Ordering::SeqCst) < attempt {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the request must complete preflight before authority changes");
+    }
+
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("channel-create-authority-race.sqlite");
     seed(&path).await;
-    let create = MessagingStore::open_with(&path, FixedEnvironment::new(4))
+    let environment = FixedEnvironment::new(4);
+    let create = MessagingStore::open_with(&path, environment.clone())
         .await
         .unwrap()
         .channel_directory_create();
@@ -328,7 +339,7 @@ async fn successful_path_waits_for_writer_then_revalidates_each_changed_authorit
             )
             .await
     });
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    wait_for_preflight(&environment, 1).await;
     assert!(
         !pending.is_finished(),
         "admitted write must wait for reservation"
@@ -363,7 +374,7 @@ async fn successful_path_waits_for_writer_then_revalidates_each_changed_authorit
             )
             .await
     });
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    wait_for_preflight(&environment, 2).await;
     assert!(!pending.is_finished());
     writer
         .execute("DELETE FROM workspace_members WHERE workspace_id='w' AND agent_id='a'")
@@ -392,7 +403,7 @@ async fn successful_path_waits_for_writer_then_revalidates_each_changed_authorit
             )
             .await
     });
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    wait_for_preflight(&environment, 3).await;
     assert!(!pending.is_finished());
     writer
         .execute(
@@ -456,13 +467,14 @@ async fn post_insert_corruption_rolls_back_and_repair_allows_same_request() {
     let mut db = SqliteConnection::connect(path.to_str().unwrap())
         .await
         .unwrap();
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE title='Corruption Probe'")
+    let counts: (i64, i64, i64) =
+        sqlx::query_as("SELECT (SELECT COUNT(*) FROM conversations), (SELECT COUNT(*) FROM conversation_agents), (SELECT COUNT(*) FROM conversation_users)")
             .fetch_one(&mut db)
             .await
             .unwrap();
     assert_eq!(
-        count, 0,
+        counts,
+        (1, 0, 0),
         "strict decode failure must roll back row and roster"
     );
     db.execute("DROP TRIGGER corrupt_new_channel")
@@ -500,12 +512,16 @@ async fn post_insert_corruption_rolls_back_and_repair_allows_same_request() {
     let mut db = SqliteConnection::connect(path.to_str().unwrap())
         .await
         .unwrap();
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE title='Corruption Probe'")
+    let counts: (i64, i64, i64) =
+        sqlx::query_as("SELECT (SELECT COUNT(*) FROM conversations), (SELECT COUNT(*) FROM conversation_agents), (SELECT COUNT(*) FROM conversation_users)")
             .fetch_one(&mut db)
             .await
             .unwrap();
-    assert_eq!(count, 0);
+    assert_eq!(
+        counts,
+        (1, 0, 0),
+        "strict decode failure must roll back row and roster"
+    );
     db.execute("DROP TRIGGER corrupt_new_channel")
         .await
         .unwrap();

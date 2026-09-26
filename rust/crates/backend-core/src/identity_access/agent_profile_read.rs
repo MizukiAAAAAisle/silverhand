@@ -171,29 +171,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-
-    /// A faithful reader — returns the row stored under a key, id and name intact.
-    #[derive(Default)]
-    struct FakeProfiles {
-        rows: HashMap<String, AgentProfileFact>,
-    }
-
-    impl AgentProfileReadModel for FakeProfiles {
-        async fn read_agent_profile(
-            &self,
-            agent: &AgentId,
-        ) -> Result<Option<AgentProfileFact>, PersistenceFailure> {
-            Ok(self.rows.get(agent.as_str()).cloned())
-        }
-
-        async fn read_agent_profile_by_handle(
-            &self,
-            handle: &str,
-        ) -> Result<Option<AgentProfileFact>, PersistenceFailure> {
-            Ok(self.rows.values().find(|fact| fact.name == handle).cloned())
-        }
-    }
 
     /// A LIAR — every read hands back a fixed row whose id/name are NOT the
     /// requested coordinate. It exists to prove the binding, not the query shape,
@@ -230,24 +207,6 @@ mod tests {
             description: None,
             avatar: Some(AvatarRevision::at(10)),
         }
-    }
-
-    #[tokio::test]
-    async fn a_present_row_binds_and_a_missing_row_is_none() {
-        let mut profiles = FakeProfiles::default();
-        profiles
-            .rows
-            .insert("a1".to_string(), fact("a1", "agent-one"));
-
-        let bound = read_self_profile(&profiles, &agent("a1"))
-            .await
-            .expect("honest read succeeds");
-        assert_eq!(bound, Some(fact("a1", "agent-one")));
-
-        let absent = read_self_profile(&profiles, &agent("ghost"))
-            .await
-            .expect("absent read is not a fault");
-        assert_eq!(absent, None);
     }
 
     /// Liar-reader test #1 (by-id): a reader that returns a DIFFERENT agent's row

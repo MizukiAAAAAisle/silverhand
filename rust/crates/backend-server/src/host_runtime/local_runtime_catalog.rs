@@ -313,15 +313,6 @@ mod tests {
         assert_eq!(reply.passes, 1);
     }
 
-    /// The response carries `{ runtimes }` and nothing else — no `detected_at`, whose
-    /// value would describe a cache the client cannot refresh.
-    #[tokio::test]
-    async fn the_response_carries_only_the_catalogue() {
-        let reply = detect(every_outcome()).await;
-        let object = reply.body.as_object().expect("a JSON object");
-        assert_eq!(object.keys().collect::<Vec<_>>(), vec!["runtimes"]);
-    }
-
     /// The control-plane face refuses with the product's exact bytes — and there is no
     /// detector to probe: `control_plane_router` takes none, so "probes nothing" is a
     /// property of its TYPE rather than a branch that must be tested for every input.

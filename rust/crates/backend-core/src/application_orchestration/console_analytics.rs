@@ -184,11 +184,22 @@ mod tests {
         assert_eq!(window.dates.first().unwrap(), "2026-08-11");
         assert_eq!(window.dates.last().unwrap(), "2026-09-09");
         assert_eq!(window.bounds[29].1 - window.bounds[29].0, 86_400_000);
+        let utc = |text| {
+            chrono::DateTime::parse_from_rfc3339(text)
+                .unwrap()
+                .timestamp_millis()
+        };
+        assert_eq!(window.start_ms(), Some(utc("2026-08-10T16:00:00Z")));
+        assert_eq!(window.bounds[29].1, utc("2026-09-09T16:00:00Z"));
+        assert!(window.bounds.windows(2).all(|pair| pair[0].1 == pair[1].0));
     }
 
     #[test]
     fn calendar_window_rejects_unbounded_ranges() {
         assert!(CalendarWindow::ending_at(0, 0).is_none());
         assert!(CalendarWindow::ending_at(0, 367).is_none());
+        assert!(CalendarWindow::ending_at(i64::MAX, 1).is_none());
+        assert_eq!(CalendarWindow::ending_at(0, 1).unwrap().dates.len(), 1);
+        assert_eq!(CalendarWindow::ending_at(0, 366).unwrap().dates.len(), 366);
     }
 }

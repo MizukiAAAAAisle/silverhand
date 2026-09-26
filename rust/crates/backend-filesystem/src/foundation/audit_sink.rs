@@ -1168,40 +1168,34 @@ mod tests {
         owner.close().await;
 
         // The file is named for this boot's UTC stamp.
-        let expected_name = format!("cli-{}.log", filename_stamp(ANCHOR_MS));
+        let expected_name = "cli-2023-11-14T22-15-23-123Z.log";
         let path = dir.path().join(&expected_name);
         let contents = tokio::fs::read_to_string(&path).await.unwrap();
-        let line = contents.lines().next().expect("one recorded line");
-        let value: serde_json::Value = serde_json::from_str(line).unwrap();
-        let object = value.as_object().unwrap();
-
-        assert_eq!(object["ts"], "2023-11-14T22:15:23.123Z");
-        assert_eq!(object["level"], "warn");
-        assert_eq!(object["msg"], "cli.preflight_failure");
-        assert_eq!(object["app"], "silverhand-desktop");
-        assert!(object["pid"].is_number());
-        assert_eq!(object["category"], "cli.preflight_failure");
-        assert_eq!(object["agentId"], "agent-7");
-        assert!(
-            object["conversationId"].is_null(),
-            "absent optional is explicit null"
-        );
-        assert_eq!(object["noun"], "message");
-        assert!(object["verb"].is_null());
+        let lines: Vec<serde_json::Value> = contents
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
         assert_eq!(
-            object["flags_seen"],
-            serde_json::json!([]),
-            "empty flags is [] not null"
+            lines,
+            vec![serde_json::json!({
+                "ts": "2023-11-14T22:15:23.123Z",
+                "level": "warn",
+                "msg": "cli.preflight_failure",
+                "app": "silverhand-desktop",
+                "pid": std::process::id(),
+                "category": "cli.preflight_failure",
+                "agentId": "agent-7",
+                "conversationId": null,
+                "noun": "message",
+                "verb": null,
+                "flags_seen": [],
+                "error_code": "E_STRICT_FLAG",
+                "error_subkind": null,
+                "error_message": "unknown flag --nope",
+                "duration_ms": 12.5,
+                "status": "failure"
+            })]
         );
-        assert_eq!(object["error_code"], "E_STRICT_FLAG");
-        assert!(object["error_subkind"].is_null());
-        assert_eq!(object["error_message"], "unknown flag --nope");
-        assert_eq!(
-            object["duration_ms"],
-            serde_json::json!(12.5),
-            "fractional ms is verbatim"
-        );
-        assert_eq!(object["status"], "failure");
 
         assert_eq!(owner.state(), WriterState::ClosedShutdown);
     }
@@ -1248,7 +1242,7 @@ mod tests {
         });
         owner.close().await;
 
-        let expected_name = format!("cli-{}.log", filename_stamp(ANCHOR_MS));
+        let expected_name = "cli-2023-11-14T22-15-23-123Z.log";
         let contents = tokio::fs::read_to_string(dir.path().join(expected_name))
             .await
             .unwrap();
@@ -1300,7 +1294,7 @@ mod tests {
         });
         sink.close().await;
 
-        let expected_name = format!("agent-audit-{}.log", filename_stamp(ANCHOR_MS));
+        let expected_name = "agent-audit-2023-11-14T22-15-23-123Z.log";
         let path = dir.path().join(&expected_name);
         let contents = tokio::fs::read_to_string(&path).await.unwrap();
         let lines: Vec<serde_json::Value> = contents
@@ -1316,7 +1310,7 @@ mod tests {
             assert_eq!(o["level"], "info");
             assert_eq!(o["msg"], "agent.audit_event");
             assert_eq!(o["app"], "silverhand-server");
-            assert!(o["pid"].is_number());
+            assert_eq!(o["pid"], std::process::id());
             assert_eq!(o["viewer"], "viewer-1");
             assert_eq!(o["agentId"], "agent-7");
             assert_eq!(o["status"], "success");

@@ -15,6 +15,16 @@ use sqlx::{
 use std::{path::Path, str::FromStr, time::Duration};
 use thiserror::Error;
 
+const WINDOW_SESSIONS_SQL: &str = "SELECT COUNT(*) FROM (SELECT user_id FROM auth_sessions \
+             INDEXED BY idx_auth_sessions_last_used_at \
+             WHERE last_used_at>=? AND last_used_at<=? GROUP BY user_id)";
+const WINDOW_ACTIVITY_SQL: &str = "SELECT COUNT(DISTINCT CASE WHEN from_kind='user' THEN from_user_id END) AS speakers, \
+             SUM(CASE WHEN from_kind='user' THEN 1 ELSE 0 END) AS human_messages, \
+             SUM(CASE WHEN from_kind='agent' THEN 1 ELSE 0 END) AS agent_messages \
+             FROM messages WHERE created_at>=? AND created_at<=? \
+             AND from_kind IN ('user','agent') \
+             AND cc_source_message_id IS NULL";
+
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Error)]
@@ -56,27 +66,16 @@ impl SqliteConsoleAnalyticsRead {
         start_ms: i64,
         now_ms: i64,
     ) -> Result<ActivityWindow, sqlx::Error> {
-        let authenticated_users = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM (SELECT user_id FROM auth_sessions \
-             INDEXED BY idx_auth_sessions_last_used_at \
-             WHERE last_used_at>=? AND last_used_at<=? GROUP BY user_id)",
-        )
-        .bind(start_ms)
-        .bind(now_ms)
-        .fetch_one(&mut **transaction)
-        .await?;
-        let row = sqlx::query(
-            "SELECT COUNT(DISTINCT CASE WHEN from_kind='user' THEN from_user_id END) AS speakers, \
-             SUM(CASE WHEN from_kind='user' THEN 1 ELSE 0 END) AS human_messages, \
-             SUM(CASE WHEN from_kind='agent' THEN 1 ELSE 0 END) AS agent_messages \
-             FROM messages WHERE created_at>=? AND created_at<=? \
-             AND from_kind IN ('user','agent') \
-             AND cc_source_message_id IS NULL",
-        )
-        .bind(start_ms)
-        .bind(now_ms)
-        .fetch_one(&mut **transaction)
-        .await?;
+        let authenticated_users = sqlx::query_scalar::<_, i64>(WINDOW_SESSIONS_SQL)
+            .bind(start_ms)
+            .bind(now_ms)
+            .fetch_one(&mut **transaction)
+            .await?;
+        let row = sqlx::query(WINDOW_ACTIVITY_SQL)
+            .bind(start_ms)
+            .bind(now_ms)
+            .fetch_one(&mut **transaction)
+            .await?;
 
         Ok(ActivityWindow {
             days,
@@ -322,21 +321,17 @@ mod tests {
         let path = directory.path().join("plans.sqlite");
         let mut database = crate::current_schema::create_current_schema(&path).await;
 
-        let session_plan = sqlx::query(
-            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM (SELECT user_id FROM auth_sessions \
-             INDEXED BY idx_auth_sessions_last_used_at \
-             WHERE last_used_at>=? AND last_used_at<=? GROUP BY user_id)",
-        )
+        let session_plan = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN QUERY PLAN {WINDOW_SESSIONS_SQL}"
+        )))
         .bind(0_i64)
         .bind(1_i64)
         .fetch_all(&mut database)
         .await
         .unwrap();
-        let message_plan = sqlx::query(
-            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM messages \
-             WHERE created_at>=? AND created_at<=? \
-             AND from_kind IN ('user','agent') AND cc_source_message_id IS NULL",
-        )
+        let message_plan = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN QUERY PLAN {WINDOW_ACTIVITY_SQL}"
+        )))
         .bind(0_i64)
         .bind(1_i64)
         .fetch_all(&mut database)

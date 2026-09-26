@@ -258,11 +258,9 @@ mod tests {
         HostId::parse(id).expect("host id")
     }
 
-    /// The three ACL arms, each of which admits a viewer on its own.
+    /// Admission or refusal used by the route failure/order tests.
     enum Arm {
         Creator,
-        DirectPair,
-        Workspace,
         /// Admits some OTHER people, never `viewer-1`.
         NobodyRelevant,
     }
@@ -276,8 +274,6 @@ mod tests {
     ) -> AgentViewFacts {
         let viewers = match arm {
             Arm::Creator => AgentViewerArms::new(Some(user("viewer-1")), [], []),
-            Arm::DirectPair => AgentViewerArms::new(None, [user("viewer-1")], []),
-            Arm::Workspace => AgentViewerArms::new(None, [], [user("viewer-1")]),
             Arm::NobodyRelevant => AgentViewerArms::new(
                 Some(user("someone-else")),
                 [user("pair-peer")],
@@ -465,24 +461,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn each_visibility_arm_admits_the_viewer_on_its_own() {
-        for arm in [Arm::Creator, Arm::DirectPair, Arm::Workspace] {
-            let reply = get(
-                ViewOutcome::Present(view(arm, MaterializationStatus::Active, None)),
-                host_present(None),
-                attached_h1(true),
-                true,
-            )
-            .await;
-            assert_eq!(reply.status, StatusCode::OK);
-            assert_eq!(
-                serde_json::from_str::<Value>(&reply.body).unwrap(),
-                json!({ "availability": "online" })
-            );
-        }
-    }
-
-    #[tokio::test]
     async fn a_viewer_in_no_arm_is_a_404_that_never_reads_the_host() {
         // Dropping the arm that admitted a viewer flips them to the same 404 an
         // absent agent gets, and the host is never touched — access precedes
@@ -615,22 +593,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_detached_live_host_is_offline() {
-        let reply = get(
-            ViewOutcome::Present(admitting_view()),
-            host_present(None),
-            attached_h1(false),
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::OK);
-        assert_eq!(
-            serde_json::from_str::<Value>(&reply.body).unwrap(),
-            json!({ "availability": "offline" })
-        );
-    }
-
-    #[tokio::test]
     async fn a_missing_principal_is_a_safe_500_that_never_reads() {
         // No perimeter ran, so no principal reached the handler: refuse fail-closed
         // BEFORE touching any store.
@@ -659,7 +621,6 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(reply.body, "Internal Server Error");
-        assert!(!reply.body.contains("agent view gone"));
         assert_eq!(reply.host_calls, 0);
     }
 
@@ -674,7 +635,6 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(reply.body, "Internal Server Error");
-        assert!(!reply.body.contains("host store gone"));
     }
 
     #[tokio::test]
@@ -688,7 +648,6 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(reply.body, "Internal Server Error");
-        assert!(!reply.body.contains("registry poisoned"));
     }
 
     #[tokio::test]

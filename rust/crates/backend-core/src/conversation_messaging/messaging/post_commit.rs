@@ -541,20 +541,6 @@ pub struct EffectReport {
     pub failed: Vec<(MessageId, EffectStep, EffectFailure)>,
 }
 
-impl EffectReport {
-    pub fn steps_for(&self, message: &MessageId) -> Vec<EffectStep> {
-        self.attempted
-            .iter()
-            .filter(|(id, _)| id == message)
-            .map(|(_, step)| *step)
-            .collect()
-    }
-
-    pub fn failed_steps(&self) -> Vec<EffectStep> {
-        self.failed.iter().map(|(_, step, _)| *step).collect()
-    }
-}
-
 /// The capabilities one send's aftermath needs, held together only for the call.
 /// Each is its own type parameter, so an implementation may combine them and this
 /// orchestration still cannot make one attempt depend on another.
@@ -973,6 +959,20 @@ mod tests {
         mention_cc::{MENTION_COPY_SUBTYPE, MentionCopyMetadata},
     };
 
+    impl EffectReport {
+        pub fn steps_for(&self, message: &MessageId) -> Vec<EffectStep> {
+            self.attempted
+                .iter()
+                .filter(|(id, _)| id == message)
+                .map(|(_, step)| *step)
+                .collect()
+        }
+
+        pub fn failed_steps(&self) -> Vec<EffectStep> {
+            self.failed.iter().map(|(_, step, _)| *step).collect()
+        }
+    }
+
     #[derive(Debug, thiserror::Error)]
     #[error("this effect was told to fail")]
     struct Told;
@@ -1317,6 +1317,7 @@ mod tests {
                 "{failing:?} truncated the announcement"
             );
             assert_eq!(report.failed_steps(), vec![failing]);
+            assert!(recorder.called(EffectStep::CopyDelivered));
         }
     }
 
@@ -1338,22 +1339,6 @@ mod tests {
             std::error::Error::source(failure).unwrap().to_string(),
             "this effect was told to fail"
         );
-    }
-
-    /// The one that used to be described as a dependency: a recipient that could not
-    /// be started is still owed the message, and delivery enqueues on its own.
-    #[tokio::test]
-    async fn a_recipient_that_cannot_be_started_is_still_delivered_to() {
-        let recorder = Recorder::failing(&[EffectStep::RuntimeStarted]);
-
-        let report = announce_send(
-            &fact(vec![copied("copy-1", "line-1", "agent-1", "Alice")]),
-            ports(&recorder),
-        )
-        .await;
-
-        assert!(recorder.called(EffectStep::CopyDelivered));
-        assert_eq!(report.failed_steps(), vec![EffectStep::RuntimeStarted]);
     }
 
     #[tokio::test]
@@ -1645,10 +1630,12 @@ mod tests {
             let steps = report.steps_for(&MessageId::parse("source-message").unwrap());
             let recorded = steps
                 .iter()
-                .position(|step| *step == EffectStep::MentionedViewerRecorded);
+                .position(|step| *step == EffectStep::MentionedViewerRecorded)
+                .expect("the mention record must be attempted");
             let unread = steps
                 .iter()
-                .position(|step| *step == EffectStep::UnreadPublished);
+                .position(|step| *step == EffectStep::UnreadPublished)
+                .expect("unread must be published");
             assert!(
                 recorded < unread,
                 "{failing:?} disturbed the one order that carries weight: {steps:?}"
@@ -1724,11 +1711,10 @@ mod tests {
         );
     }
 
-    /// Entitlement is decided when the record is written, not when the message was
-    /// sent. A person who lost access in between is told nothing — and the excerpt the
-    /// notification would have carried never reaches them.
+    /// No recorded rows means no viewer publication; the real store owns the
+    /// entitlement decision, exercised separately by the SQLite revocation tests.
     #[tokio::test]
-    async fn someone_who_lost_access_after_the_commit_is_told_nothing() {
+    async fn an_empty_record_result_notifies_nobody() {
         let recorder = Recorder::entitling(&[]);
         let committed = fact_with(Vec::new(), main_plan(&["viewer-1"], &["agent-1"]));
 
@@ -1852,10 +1838,12 @@ mod tests {
             let steps = report.steps_for(&MessageId::parse("source-message").unwrap());
             let recorded = steps
                 .iter()
-                .position(|step| *step == EffectStep::MentionedViewerRecorded);
+                .position(|step| *step == EffectStep::MentionedViewerRecorded)
+                .expect("the mention record must be attempted");
             let unread = steps
                 .iter()
-                .position(|step| *step == EffectStep::UnreadPublished);
+                .position(|step| *step == EffectStep::UnreadPublished)
+                .expect("unread must be published");
             assert!(
                 recorded < unread,
                 "{failing:?} disturbed the one order that carries weight: {steps:?}"
@@ -2005,32 +1993,5 @@ mod tests {
             committed.thread.is_some(),
             "the reply stopped being a reply"
         );
-    }
-
-    /// The store mints the row's identity and changes nothing else: what the
-    /// publication receives is the draft it was given, field for field.
-    #[tokio::test]
-    async fn a_recorded_row_carries_the_draft_it_was_given() {
-        let recorder = default_recorder();
-        let committed = fact_with(Vec::new(), main_plan(&["viewer-1"], &[]));
-        let intent = committed
-            .main_line()
-            .unwrap()
-            .mentions()
-            .expect("an intent")
-            .clone();
-
-        let rows = recorder
-            .record_mentioned_viewers(&intent)
-            .await
-            .expect("the record was accepted");
-
-        // One row per name that is still entitled, and each carries the intent it was
-        // written from — the store adds an identity and a moment, nothing else.
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].intent(), &intent);
-        assert_eq!(rows[0].mentioned_name().as_str(), "viewer-1");
-        assert!(!rows[0].id().as_str().is_empty());
-        assert_eq!(rows[0].created_at_ms(), 11);
     }
 }

@@ -787,30 +787,42 @@ mod tests {
     use sqlx::{Connection, Executor};
     use tower::ServiceExt;
 
-    #[test]
-    fn role_and_capability_bodies_keep_missing_null_and_wrong_shape_distinct() {
-        assert!(
-            crate::foundation::wire_admission::from_object_slice::<RoleBody>(br#"{}"#).is_err()
-        );
-        assert!(
-            crate::foundation::wire_admission::from_object_slice::<RoleBody>(br#"{"role":null}"#)
-                .is_err()
-        );
-        assert!(
-            crate::foundation::wire_admission::from_object_slice::<RoleBody>(br#"["admin"]"#)
-                .is_err()
-        );
-        let body = crate::foundation::wire_admission::from_object_slice::<CapabilityBody>(
-            br#"{"capabilities":[]}"#,
+    #[tokio::test]
+    async fn admitted_membership_requests_reject_invalid_bodies_but_allow_empty_capabilities() {
+        for body in [r#"{}"#, r#"{"role":null}"#, r#"["admin"]"#] {
+            let response = route_call(
+                Method::PATCH,
+                "/api/workspaces/workspace/members/users/target/role",
+                "owner",
+                Some(body),
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{body}"
+            );
+        }
+        let response = route_call(
+            Method::PUT,
+            "/api/workspaces/workspace/agents/agent/capabilities",
+            "owner",
+            Some(r#"{"capabilities":["be_root"]}"#),
         )
-        .unwrap();
-        assert!(body.capabilities.is_empty());
-    }
-
-    #[test]
-    fn closed_capability_vocabulary_rejects_unknown_tokens() {
-        assert!(Capability::parse("read_messages").is_some());
-        assert!(Capability::parse("be_root").is_none());
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let response = route_call(
+            Method::PUT,
+            "/api/workspaces/workspace/agents/agent/capabilities",
+            "owner",
+            Some(r#"{"capabilities":[]}"#),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["capabilities"], serde_json::json!([]));
     }
 
     #[derive(Clone, Default)]

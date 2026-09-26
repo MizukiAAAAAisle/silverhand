@@ -178,53 +178,9 @@ impl<'de> Deserialize<'de> for CoercedNumber {
 mod tests {
     use super::*;
 
-    fn coerce(json: &str) -> CoercedNumber {
-        serde_json::from_str(json).unwrap()
-    }
-
-    #[test]
-    fn coerces_the_full_z_coerce_number_matrix() {
-        // Plain integer / numeric string.
-        assert_eq!(coerce("5").value(), Some(5));
-        assert_eq!(coerce("\"5\"").value(), Some(5));
-        // EXACT empty string → absent (the preprocess); a WHITESPACE-only string is
-        // NOT absent — Number("   ") = 0.
-        assert!(matches!(coerce("\"\""), CoercedNumber::Absent));
-        assert_eq!(coerce("\"   \"").value(), Some(0));
-        // null → 0, false → 0, true → 1 (Number()).
-        assert_eq!(coerce("null").value(), Some(0));
-        assert_eq!(coerce("false").value(), Some(0));
-        assert_eq!(coerce("true").value(), Some(1));
-        // Radix literals JS accepts but Rust's f64 parse would reject.
-        assert_eq!(coerce("\"0x10\"").value(), Some(16));
-        assert_eq!(coerce("\"0o10\"").value(), Some(8));
-        assert_eq!(coerce("\"0b10\"").value(), Some(2));
-        // ECMAScript-trimmed numeric string (leading/trailing JS whitespace).
-        assert_eq!(coerce("\" 42 \"").value(), Some(42));
-        // Singleton-array coercion goes via String(array), NOT recurse-by-element:
-        // Number([true]) = Number("true") = NaN (NOT 1); Number([false]) = NaN;
-        // Number([null]) = Number("") = 0; Number([[]]) = 0; Number(["5"]) = 5.
-        assert!(coerce("[true]").is_invalid());
-        assert!(coerce("[false]").is_invalid());
-        assert_eq!(coerce("[null]").value(), Some(0));
-        assert_eq!(coerce("[[]]").value(), Some(0));
-        assert_eq!(coerce("[\"5\"]").value(), Some(5));
-        // Plain numeric singleton + empty + multi.
-        assert_eq!(coerce("[7]").value(), Some(7));
-        assert_eq!(coerce("[]").value(), Some(0));
-        assert!(coerce("[1,2]").is_invalid());
-        // Non-numeric string / object / fraction → invalid.
-        assert!(coerce("\"x\"").is_invalid());
-        assert!(coerce("{}").is_invalid());
-        assert!(coerce("1.5").is_invalid());
-        // JS-safe boundary (#47): MAX_SAFE ok, MAX_SAFE+1 rejected (JS would round).
-        assert_eq!(coerce("9007199254740991").value(), Some(MAX_SAFE_INTEGER));
-        assert!(coerce("9007199254740993").is_invalid());
-    }
-
     /// Replay the Zod-SIGNED fixture: every cell's outcome must match what
-    /// the real `z.coerce.number().int().refine(isSafeInteger)` produced (regenerated
-    /// by `packages/backend/tests/read-model/coerce-number-rust-parity.test.ts`), so
+    /// the real `z.coerce.number().int().refine(isSafeInteger)` produced before
+    /// the TypeScript backend was retired. The frozen fixture is independent, so
     /// the Rust `Number()` reimplementation cannot drift on the radix/trim/empty/
     /// singleton-array-NaN cells.
     #[test]

@@ -9,14 +9,13 @@
 //!     `500` reading nothing. Create has NO visibility/authority ladder: any
 //!     authenticated caller may create, and the principal IS the creator. Mounting the
 //!     real bearer perimeter is the composition root's job — done by the backend-app
-//!     #2234 CP6 mount. The auth gate staying pre-body matches the ratified admission ordering.
+//!     #2234 CP6 mount. Framework body extraction precedes this composition check.
 //!  2. WIRE ADMISSION (body) — parse against `CreateAgentInputSchema`: the handle
 //!     grammar, the runtime enum, the reasoning-effort token shape AND its
 //!     runtime/model allowlist, the fast-mode runtime allowlist, and the session-scope
-//!     enum. A malformed body, a type mismatch, an out-of-range value, and any illegal
-//!     combo all collapse to ONE terminal `400 {"error":"invalid input"}`. (The Zod
-//!     `issues` array is deliberately dropped — the ratified `PATCH /api/agents`
-//!     precedent; no consumer branches on it.) `host_id: ""` is FALSY in the TS
+//!     enum. Structural failures keep native JSON `400/422/415`; semantic rule
+//!     failures return `422 {"error":"invalid input"}` without an issues array.
+//!     `host_id: ""` is FALSY in the TS
 //!     placement check, so an empty host maps to `None` (default placement), never a
 //!     named host.
 //!  3. WIRE ADMISSION (Idempotency-Key header, design §14 Q1) — the header MUST be
@@ -943,7 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn a_minimal_agent_scoped_body_admits() {
+    fn a_minimal_defaulted_body_admits() {
         let input = admit(json!({ "name": "alice", "runtime": "codex" })).expect("admits");
         assert_eq!(input.name, ParticipantHandle::parse("alice").unwrap());
         assert_eq!(input.runtime, RuntimeKind::Codex);
@@ -954,84 +953,6 @@ mod tests {
     #[test]
     fn unknown_keys_are_stripped_not_rejected() {
         assert!(admit(json!({ "name": "alice", "runtime": "codex", "surprise": 1 })).is_some());
-    }
-
-    #[test]
-    fn a_missing_name_or_runtime_is_invalid() {
-        assert!(admit(json!({ "runtime": "codex" })).is_none());
-        assert!(admit(json!({ "name": "alice" })).is_none());
-    }
-
-    #[test]
-    fn a_present_null_on_an_optional_field_is_a_decode_fault() {
-        // Every optional field is `.optional()` but NOT `.nullable()`: a present `null`
-        // is a structural decode fault (`RequiredPatchField` rejects it), never folded
-        // into "absent". Each widens the accepted set if mishandled.
-        for field in [
-            "model",
-            "reasoning_effort",
-            "fast_mode",
-            "description",
-            "host_id",
-            "session_scope",
-        ] {
-            let mut object = serde_json::Map::new();
-            object.insert("name".to_owned(), json!("alice"));
-            object.insert("runtime".to_owned(), json!("codex"));
-            object.insert(field.to_owned(), Value::Null);
-            assert!(
-                serde_json::from_value::<RawCreateBody>(Value::Object(object)).is_err(),
-                "present-null {field} must be a decode fault"
-            );
-        }
-    }
-
-    #[test]
-    fn a_bad_runtime_enum_is_invalid() {
-        assert!(admit(json!({ "name": "alice", "runtime": "nope" })).is_none());
-    }
-
-    #[test]
-    fn a_bad_handle_grammar_is_invalid() {
-        assert!(admit(json!({ "name": "has space", "runtime": "codex" })).is_none());
-    }
-
-    #[test]
-    fn a_type_mismatch_is_invalid() {
-        // `fast_mode` must be a boolean; a string fails the whole deserialize.
-        assert!(
-            admit(json!({ "name": "alice", "runtime": "codex", "fast_mode": "yes" })).is_none()
-        );
-    }
-
-    #[test]
-    fn a_reasoning_token_with_a_bad_shape_is_invalid() {
-        // Uppercase fails the `^[a-z]` shape before the allowlist is even consulted.
-        assert!(
-            admit(json!({ "name": "a", "runtime": "codex", "reasoning_effort": "HIGH" })).is_none()
-        );
-    }
-
-    #[test]
-    fn a_reasoning_token_not_in_the_runtime_allowlist_is_invalid() {
-        // Claude has no reasoning options; any token is out of the allowlist.
-        assert!(
-            admit(json!({ "name": "a", "runtime": "claude", "reasoning_effort": "high" }))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn fast_mode_on_a_non_capable_runtime_is_invalid() {
-        // Only Codex accepts fast_mode; Claude with any fast_mode present is invalid.
-        assert!(admit(json!({ "name": "a", "runtime": "claude", "fast_mode": false })).is_none());
-    }
-
-    #[test]
-    fn a_bad_session_scope_is_invalid() {
-        assert!(
-            admit(json!({ "name": "a", "runtime": "codex", "session_scope": "team" })).is_none()
-        );
     }
 
     #[test]
@@ -1324,9 +1245,12 @@ mod tests {
         let reply = drive(Ok(created_agent_arm(true)), true, &fx).await;
         assert_eq!(reply.status, StatusCode::CREATED);
         assert!(reply.json["agent"].is_object());
-        assert!(reply.json["agent_home_workspace_id"].is_null());
-        assert!(reply.json["dm_channel_id"].is_null());
-        assert!(reply.json["onboarding_message_id"].is_null());
+        assert_eq!(
+            reply.json.get("agent_home_workspace_id"),
+            Some(&Value::Null)
+        );
+        assert_eq!(reply.json.get("dm_channel_id"), Some(&Value::Null));
+        assert_eq!(reply.json.get("onboarding_message_id"), Some(&Value::Null));
         // The two in-process broadcasts already ran inline; the two remote legs are
         // scheduled but not yet run (the `201` did not wait on them).
         assert_eq!(fx.counts(), (1, 1, 0, 0));
@@ -1401,25 +1325,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_201_is_sealed_before_the_remote_legs_run() {
-        // A deliver leg that never completes must not delay the `201`. The fake captures
-        // the leg without polling it, so `finish` returning at all proves it did not
-        // await the remote IO; both legs are handed off independently.
-        let fx = Effects::new();
-        let reply = drive(Ok(created_agent_arm(true)), true, &fx).await;
-        assert_eq!(reply.status, StatusCode::CREATED);
-        assert_eq!(fx.aftermath.scheduled(), 2, "both remote legs scheduled");
-        assert_eq!(
-            (fx.deliver.calls.load(SeqCst), fx.start.calls.load(SeqCst)),
-            (0, 0),
-            "neither remote leg ran before the 201 was produced"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_panicking_deliver_leg_does_not_swallow_the_start_leg() {
-        // Isolation: the deliver leg panics when run, but the start leg — a separate,
-        // separately-owned task — still runs to completion.
+    async fn separately_scheduled_legs_can_run_after_a_delivery_panic() {
+        // The face schedules separate futures; this fake aftermath runs them in
+        // isolated tasks. The application's real task tracker is not exercised here.
         let fx = Effects::with_panicking_deliver(true);
         let reply = drive(Ok(created_agent_arm(true)), true, &fx).await;
         assert_eq!(reply.status, StatusCode::CREATED);
@@ -1441,7 +1349,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_terminal_conflict_and_refusal_arms_map_to_their_exact_bodies() {
+    async fn terminal_arms_map_status_codes_and_detail_fields() {
         let fx = Effects::new();
 
         let in_progress = drive(Ok(CreateAgentOutcome::InProgress), true, &fx).await;
@@ -1512,9 +1420,11 @@ mod tests {
             &fx,
         )
         .await;
-        // The canonical mapper owns the exact status/body; assert it is a client 4xx
-        // and not a generic 500, and that no effect fired.
-        assert!(reply.status.is_client_error());
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            reply.json,
+            json!({"error": "daemon host was not found", "code": "host_missing"})
+        );
         assert_eq!(fx.counts(), (0, 0, 0, 0));
     }
 
@@ -1522,17 +1432,49 @@ mod tests {
     async fn each_materialize_failure_code_maps_to_its_status() {
         let fx = Effects::new();
         let cases = [
-            (MaterializeFailureCode::DaemonInternalError, 502),
-            (MaterializeFailureCode::HostAttachPending, 503),
-            (MaterializeFailureCode::MaterializeTimeout, 504),
-            (MaterializeFailureCode::AgentDirCollision, 409),
-            (MaterializeFailureCode::FsQuotaExceeded, 507),
-            (MaterializeFailureCode::FsUnavailable, 502),
-            (MaterializeFailureCode::UnsupportedTemplate, 400),
-            (MaterializeFailureCode::UnsupportedRuntime, 400),
-            (MaterializeFailureCode::DaemonShuttingDown, 503),
+            (
+                MaterializeFailureCode::DaemonInternalError,
+                502,
+                "daemon_internal_error",
+            ),
+            (
+                MaterializeFailureCode::HostAttachPending,
+                503,
+                "host_attach_pending",
+            ),
+            (
+                MaterializeFailureCode::MaterializeTimeout,
+                504,
+                "materialize_timeout",
+            ),
+            (
+                MaterializeFailureCode::AgentDirCollision,
+                409,
+                "agent_dir_collision",
+            ),
+            (
+                MaterializeFailureCode::FsQuotaExceeded,
+                507,
+                "fs_quota_exceeded",
+            ),
+            (MaterializeFailureCode::FsUnavailable, 502, "fs_unavailable"),
+            (
+                MaterializeFailureCode::UnsupportedTemplate,
+                400,
+                "unsupported_template",
+            ),
+            (
+                MaterializeFailureCode::UnsupportedRuntime,
+                400,
+                "unsupported_runtime",
+            ),
+            (
+                MaterializeFailureCode::DaemonShuttingDown,
+                503,
+                "daemon_shutting_down",
+            ),
         ];
-        for (code, status) in cases {
+        for (code, status, wire_code) in cases {
             let reply = drive(
                 Ok(CreateAgentOutcome::MaterializeFailed { code }),
                 true,
@@ -1540,7 +1482,7 @@ mod tests {
             )
             .await;
             assert_eq!(reply.status.as_u16(), status, "code {}", code.as_str());
-            assert_eq!(reply.json["code"], code.as_str());
+            assert_eq!(reply.json["code"], wire_code);
             assert!(reply.json["error"].is_string());
         }
     }
@@ -1558,7 +1500,6 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(reply.raw, "Internal Server Error");
-        assert!(!reply.raw.contains("home DM"));
         assert_eq!(fx.counts(), (0, 0, 0, 0));
     }
 
@@ -1814,6 +1755,11 @@ mod tests {
             r#"{"name":123,"runtime":"codex"}"#,
             r#"{"name":"a","runtime":"codex","fast_mode":"yes"}"#,
             r#"{"name":"a","runtime":"codex","model":null}"#,
+            r#"{"name":"a","runtime":"codex","reasoning_effort":null}"#,
+            r#"{"name":"a","runtime":"codex","fast_mode":null}"#,
+            r#"{"name":"a","runtime":"codex","description":null}"#,
+            r#"{"name":"a","runtime":"codex","host_id":null}"#,
+            r#"{"name":"a","runtime":"codex","session_scope":null}"#,
             // The accepted-set falsifier: field-aligned and well-typed, this array would
             // positionally bind name="alice"/runtime="codex" — a body that WOULD create —
             // under a bare derive. The shared object-only floor (#2246) makes it a native
@@ -1839,6 +1785,7 @@ mod tests {
             r#"{"name":"has space","runtime":"codex"}"#,
             r#"{"name":"a","runtime":"nope"}"#,
             r#"{"name":"a","runtime":"codex","reasoning_effort":"HIGH"}"#,
+            r#"{"name":"a","runtime":"claude","reasoning_effort":"high"}"#,
             r#"{"name":"a","runtime":"claude","fast_mode":false}"#,
             r#"{"name":"a","runtime":"codex","session_scope":"team"}"#,
         ] {

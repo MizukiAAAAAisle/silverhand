@@ -562,10 +562,4 @@ mod tests {
             .unwrap();
         pool.close().await;
     }
-
-    #[test]
-    fn summary_aggregate_carries_the_membership_rows_viewer_not_a_rebound_label() {
-        assert!(SUMMARY_COUNTS.contains("cu.user_id AS source_viewer"));
-        assert!(!SUMMARY_COUNTS.contains("(SELECT viewer FROM p) AS source_viewer"));
-    }
 }

@@ -4,6 +4,9 @@ import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
 const { readUuid, renewUuid } = require("../../../scripts/mac-executable-identity.cjs");
+const builderRequire = createRequire(require.resolve("electron-builder/package.json"));
+const packagingRequire = createRequire(builderRequire.resolve("app-builder-lib/package.json"));
+const { load: parseYaml } = packagingRequire("js-yaml");
 
 function executable() {
   const bytes = Buffer.alloc(96, 0xaa);
@@ -26,7 +29,9 @@ describe("macOS packaged main executable identity", () => {
     const first = renewUuid(source);
     const second = renewUuid(source);
     expect(source).toEqual(before);
-    expect(first.originalUuid).toBe(readUuid(source));
+    expect(first.originalUuid).toBe("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    expect(readUuid(source)).toBe("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    expect(first.bytes.subarray(40, 56).toString("hex")).toBe(first.uuid.replaceAll("-", ""));
     expect(readUuid(first.bytes)).toBe(first.uuid);
     expect(first.uuid).not.toBe(first.originalUuid);
     expect(first.uuid).not.toBe(second.uuid);
@@ -46,7 +51,7 @@ describe("macOS packaged main executable identity", () => {
     ["oversized command", 36, 1000],
     ["missing uuid", 32, 0x99],
     ["wrong uuid size", 36, 32],
-    ["duplicate uuid", 56, 0x1b],
+    ["short second uuid command", 56, 0x1b],
     ["unconsumed table", 16, 1],
   ])("fails closed for %s without changing input", (_name, offset, value) => {
     const source = executable();
@@ -71,9 +76,9 @@ describe("macOS packaged main executable identity", () => {
   it.each(["electron-builder.yml", "electron-builder.remote-only.yml"])(
     "%s includes the local network usage declaration",
     (name) => {
-      const config = readFileSync(new URL(`../../../${name}`, import.meta.url), "utf8");
-      expect(config).toMatch(/mac:\n  extendInfo:\n    NSLocalNetworkUsageDescription: .+/);
-      expect(config).toContain("afterPack: scripts/afterPack.cjs");
+      const config = parseYaml(readFileSync(new URL(`../../../${name}`, import.meta.url), "utf8"));
+      expect(config.mac.extendInfo.NSLocalNetworkUsageDescription).toMatch(/\S/);
+      expect(config.afterPack).toBe("scripts/afterPack.cjs");
     },
   );
 });

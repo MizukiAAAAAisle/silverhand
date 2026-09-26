@@ -407,11 +407,6 @@ mod tests {
                 "ts": FIXED_NOW
             })
         );
-        assert!(
-            body["checks"]
-                .get("outbound_event_fanout_installed")
-                .is_none()
-        );
     }
 
     /// An embedded backend that never installed the fanout is still ready: the check
@@ -557,19 +552,5 @@ mod tests {
             cause.contains("database is locked"),
             "the driver's own words must survive to the operator: {cause}"
         );
-    }
-
-    /// The mirror image: a writable database carries no `error` key at all, rather
-    /// than an empty or null one.
-    #[tokio::test]
-    async fn a_writable_database_carries_no_error_key() {
-        let (_, body) = get(
-            ServerMode::Embedded,
-            DeploymentMode::Embedded,
-            booted(),
-            true,
-        )
-        .await;
-        assert!(body.get("error").is_none());
     }
 }

@@ -676,12 +676,8 @@ export class IntentDispatcher {
    * is wired — that keeps backward-compatibility with PR-1 tests
    * that construct a dispatcher without a supervisor.
    *
-   * `protected` so a test-only subclass can override one intent's
-   * output to verify the result-drift guard in `dispatch()` (without
-   * monkey-patching production code). Production callers go through
-   * `dispatch()` and never see this method directly.
    */
-  protected async runHandler(
+  private async runHandler(
     intent: IntentName,
     params: unknown,
     ctx: DeliveryOwnerContext,

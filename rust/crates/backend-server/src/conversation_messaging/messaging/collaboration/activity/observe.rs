@@ -605,7 +605,6 @@ mod tests {
         .await;
         assert_eq!((status, &body), (StatusCode::OK, &json!({"changed":true})));
         assert_eq!(*effects.0.lock().unwrap(), ["conversation", "dismiss"]);
-        assert!(!body.to_string().contains("aftermath cause"));
 
         let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
             .await
@@ -633,47 +632,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auth_and_wire_refusals_precede_product_writes() {
-        let (_dir, path, store) = fixture_store().await;
-        let app = router(store.observation(), Effects::default());
-        let missing = call(app.clone(), json!({"sources":[]}), false).await;
-        assert_eq!(missing.0, StatusCode::INTERNAL_SERVER_ERROR);
-
-        // An empty `sources` array fails the `.min(1)` garde rule — a request-local
-        // semantic refusal → shared minimal 422 (no re-rendered issue schema).
-        let invalid = call(app.clone(), json!({"sources":[]}), true).await;
-        assert_eq!(invalid.0, StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(invalid.1, json!({"error":"invalid input"}));
-
-        // `position_future` is a DOMAIN refusal decided by the core use case AFTER a
-        // well-formed body is admitted — it keeps its product 400 + code, not a body-shape
-        // status. This proves per-source legality is not folded into body admission.
-        let future = call(
-            app,
-            json!({"sources":[{
-                "kind":"stream","conversation_id":"c","thread_root_id":null,
-                "position":{"kind":"at_seq","seq":3}
-            }]}),
-            true,
-        )
-        .await;
+    async fn missing_principal_precedes_invalid_body_without_reaching_observation() {
+        let (_dir, _path, store) = fixture_store().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let effects = Effects::default();
+        let app = router(
+            CountingObservationPort {
+                inner: store.observation(),
+                calls: calls.clone(),
+            },
+            effects.clone(),
+        );
+        let missing = call(app, json!({"sources":[]}), false).await;
         assert_eq!(
-            future,
+            missing,
             (
-                StatusCode::BAD_REQUEST,
-                json!({
-                    "error":"position seq is beyond the current stream head","code":"position_future"
-                })
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"error":"internal error"})
             )
         );
-        let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
-            .await
-            .unwrap();
-        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM conversation_reads")
-            .fetch_one(&mut db)
-            .await
-            .unwrap();
-        assert_eq!(count, 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(effects.0.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -685,8 +664,8 @@ mod tests {
         // fractional/negative/overflow seq) whose TS signer emits the legacy 400{issues};
         // the Rust terminal admission is the shared native structural axis (400/422), so
         // those are NOT dual-signed here and are covered by the focused local
-        // `admission_only_cells_take_the_native_structural_axis` test. The TS parity test
-        // continues to sign its own full 19/19 legacy behavior.
+        // `all_eight_admission_only_cells_refuse_on_the_native_axis_before_the_observation_port`
+        // test. The fixture was signed before TS retirement; no live TS signer runs.
         let fixture: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../../rust/test-fixtures/fixtures/activity-observe-wire.json"
@@ -698,7 +677,7 @@ mod tests {
                 continue;
             }
             consumed += 1;
-            let (_dir, _path, store) = fixture_store().await;
+            let (_dir, path, store) = fixture_store().await;
             let app = router(store.observation(), Effects::default());
             let raw = case["request_json"]
                 .as_str()
@@ -712,6 +691,16 @@ mod tests {
                 case["name"]
             );
             assert_eq!(body, case["body"], "{}", case["name"]);
+            if case["name"] == "position_future" {
+                let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+                    .await
+                    .unwrap();
+                let count: i64 = sqlx::query_scalar("SELECT count(*) FROM conversation_reads")
+                    .fetch_one(&mut db)
+                    .await
+                    .unwrap();
+                assert_eq!(count, 0, "future refusal must not advance a cursor");
+            }
         }
         assert_eq!(fixture.as_array().unwrap().len(), 19);
         assert_eq!(consumed, 11, "shared cross-language denominator is 11/19");
@@ -751,7 +740,7 @@ mod tests {
                 .as_str()
                 .map(str::to_owned)
                 .unwrap_or_else(|| serde_json::to_string(&case["request"]).unwrap());
-            let (status, _) = call_raw(app, raw, true).await;
+            let (status, body) = call_raw(app, raw, true).await;
             let name = case["name"].as_str().unwrap();
             let expected = match name {
                 "positive_json_number_overflow_is_rejected"
@@ -765,6 +754,9 @@ mod tests {
                 other => panic!("unexpected admission_only cell {other}"),
             };
             assert_eq!(status, expected, "{name}");
+            if name == "empty_sources" {
+                assert_eq!(body, json!({"error":"invalid input"}));
+            }
             assert_eq!(
                 calls.load(Ordering::SeqCst),
                 0,

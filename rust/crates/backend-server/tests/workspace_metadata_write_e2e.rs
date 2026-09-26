@@ -1,18 +1,16 @@
 //! Full-route behaviour for the workspace metadata-write surface (#task:2193):
 //! `PATCH /api/workspaces/{id}` and `PATCH /api/workspaces/{id}/archive`, driven
 //! through the REAL Axum router with the REAL SQLite governance-read and
-//! write-unit-of-work adapters. Only the three effects this task does not own a
-//! production adapter for yet — the `metadata_changed` viewer hint, the per-channel
-//! rename fan-out, and the clock — are fakes; the hint and fan-out are
+//! write-unit-of-work adapters. The `metadata_changed` viewer hint, the per-channel
+//! rename fan-out, and the clock are test doubles; the hint and fan-out are
 //! recording/failing spies so the route's two committed-rename obligations are
 //! observable.
 //!
 //! This is the Rust-self-guarded half of the slice's evidence: the refusal
 //! ORDERING (404 → 403 → 400 → 409 → 200) and the committed `200` body. It is NOT
 //! a cross-language gate — those rungs are structural, readable straight from the
-//! TS route, not byte-drift-prone. The one drift-prone boundary (the `400`
-//! Zod-issue bytes) is pinned separately by the shared admission fixture and its
-//! TS oracle.
+//! route contract. Semantic rejection is the minimal 422 response; the old
+//! Zod-issue oracle was retired and is not part of this suite.
 //!
 //! ## Both committed-rename effects are exercised here as REQUIREMENTS
 //!
@@ -20,9 +18,8 @@
 //! one sealed `WorkspaceNameChange`: the `viewer_workspaces_changed` cache hint (a
 //! pure id-only signal the domain fires) and the per-channel rename SYSTEM MESSAGE
 //! (a messaging-context whole fan-out this route calls as a narrow requirement,
-//! `WorkspaceRenameFanout`). Neither ships a production adapter in this leaf — the
-//! #2215 residual is to implement the one complete fan-out adapter + its
-//! catalogue/hub and mount it — so here both are recording spies. This suite pins
+//! `WorkspaceRenameFanout`). Here both are recording spies rather than the
+//! production hub/daemon adapters. This suite pins
 //! that a rename drives BOTH exactly once for the renamed workspace, that a
 //! description-only edit drives NEITHER, and — the discriminating grid — that with
 //! BOTH the hint AND the fan-out failing, each is still attempted exactly once and
@@ -365,7 +362,7 @@ async fn an_agent_home_workspace_is_not_found_through_the_regular_door() {
 }
 
 #[tokio::test]
-async fn a_malformed_body_from_an_admin_is_invalid_input() {
+async fn an_empty_edit_from_an_admin_is_invalid_input() {
     let harness = Harness::seeded().await;
     let app = harness
         .router(FixedClock(777), RecordingSink::new(false))
@@ -583,7 +580,7 @@ async fn a_missing_archived_flag_is_a_native_structural_rejection() {
 }
 
 #[tokio::test]
-async fn a_large_body_with_unknown_keys_is_accepted_no_size_cap() {
+async fn a_body_above_the_legacy_16kib_cap_with_unknown_keys_is_accepted() {
     let harness = Harness::seeded().await;
     let sink = RecordingSink::new(false);
     let app = harness.router(FixedClock(777), sink.clone()).await;
@@ -604,18 +601,20 @@ async fn a_large_body_with_unknown_keys_is_accepted_no_size_cap() {
 }
 
 #[tokio::test]
-async fn a_large_body_from_a_non_governor_is_403_before_the_body_is_read() {
+async fn a_non_governor_is_refused_without_polling_the_body() {
     let harness = Harness::seeded().await;
     let app = harness
         .router(FixedClock(777), RecordingSink::new(false))
         .await;
 
-    // user-3 is a plain member: the floor refuses BEFORE the body is read, so the
-    // body's size is irrelevant — the deferred read proves the floor gates it.
-    let large = format!(r#"{{"name":"Design","pad":"{}"}}"#, "a".repeat(20_000));
-    let response = app
-        .oneshot(metadata_request("ws-1", "user-3", &large))
-        .await
-        .unwrap();
+    let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = polls.clone();
+    let body = Body::from_stream(futures_util::stream::once(async move {
+        observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok::<_, std::io::Error>(r#"{"name":"Design"}"#)
+    }));
+    let request = metadata_request("ws-1", "user-3", "").map(|_| body);
+    let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(polls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }

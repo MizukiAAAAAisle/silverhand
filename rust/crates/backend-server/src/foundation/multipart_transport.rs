@@ -176,10 +176,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accumulate_stops_at_the_limit_and_drain_consumes_the_rest() {
-        // A file part larger than the limit: accumulate retains exactly `limit` bytes and
-        // leaves the remainder unread; an explicit drain then finishes it, so a following
-        // part is still reachable off the same stream.
+    async fn capped_accumulation_and_explicit_drain_allow_the_next_part() {
+        // Retain the prefix, call drain, then read another part from the same stream.
+        // This roundtrip does not prove drain is necessary: multer can consume the
+        // whole field in one chunk or drain it when advancing to the next field.
         async fn handler(mut multipart: Multipart) -> String {
             let mut field = multipart.next_field().await.unwrap().unwrap();
             let ct = declared_content_type(&field);

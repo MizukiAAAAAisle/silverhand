@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn a_finite_non_negative_duration_is_carried_verbatim() {
-        for value in [0.0, 0.5, 1.0, 1234.0, 1234.567, f64::MAX] {
+        for value in [-0.0, 0.0, 0.5, 1.0, 1234.0, 1234.567, f64::MAX] {
             assert_eq!(NonNegativeFiniteF64::new(value).unwrap().get(), value);
         }
     }
@@ -128,11 +128,5 @@ mod tests {
                 "{value} must be rejected"
             );
         }
-    }
-
-    #[test]
-    fn negative_zero_is_admitted_as_zero() {
-        // -0.0 >= 0.0 is true and it is finite: it is a legal, if unusual, zero.
-        assert_eq!(NonNegativeFiniteF64::new(-0.0).unwrap().get(), -0.0);
     }
 }

@@ -585,19 +585,19 @@ mod tests {
         let minted = mint_credential(&FixedEntropy::bytes(64), "host-1").unwrap();
         assert_eq!(minted.credential().host_id(), "host-1");
         assert_eq!(minted.credential().id(), "AAECAwQFBgcICQoL");
-        let expected_hash = minted.credential().token_hash().to_owned();
         let (credential, token) = minted.into_parts();
         let raw = token.reveal_once();
 
-        // 32 bytes, unpadded base64url.
-        assert_eq!(raw.len(), 43);
-        assert_eq!(credential.token_hash(), expected_hash);
-        assert_eq!(credential.token_hash(), hash_host_token(&raw));
-        assert_ne!(credential.token_hash(), raw);
+        // Independent base64url and SHA-256 vectors for entropy bytes 12..44.
+        assert_eq!(raw, "DA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKis");
+        assert_eq!(
+            credential.token_hash(),
+            "AxP1ZVhTWFkBwbwNPuuRTxGPDCBKB8T-MT20HD4DRaQ"
+        );
     }
 
     #[test]
-    fn two_mints_never_repeat_a_secret() {
+    fn two_sampled_mints_have_distinct_credentials() {
         let first = mint_credential(&OsEntropy, "host-1").unwrap();
         let second = mint_credential(&OsEntropy, "host-1").unwrap();
         assert_ne!(first.credential().id(), second.credential().id());
@@ -640,11 +640,6 @@ mod tests {
             hash_host_token("host token"),
             "AaArGqMOKkFjJjNtp11rIN4CVXC7R5Hhxa1iE3_W-b0"
         );
-    }
-
-    #[test]
-    fn the_grace_window_is_the_ts_constant() {
-        assert_eq!(ROTATION_GRACE_MS, 60_000);
     }
 
     fn eligible(user: Option<&str>, revoked_at: Option<i64>) -> HostCredentialEligibilityFacts {
@@ -726,6 +721,8 @@ mod tests {
     async fn a_grace_sweep_leaves_the_old_token_working_until_the_window_closes() {
         let issued_at = 1_700_000_000_000;
         let sweep = CredentialSweep::after_grace(issued_at);
+        assert_eq!(sweep.consumed_at(), issued_at);
+        assert_eq!(sweep.revoked_at(), issued_at + 60_000);
         let store = swept_by(sweep);
 
         assert!(matches!(
@@ -733,7 +730,7 @@ mod tests {
             VerifyHostTokenFact::Accepted { .. }
         ));
         assert_eq!(
-            verdict_at(&store, sweep.revoked_at() - 1).await,
+            verdict_at(&store, issued_at + 59_999).await,
             VerifyHostTokenFact::Accepted {
                 host_id: "h1".to_owned(),
                 user_id: UserId::parse("u1").unwrap(),
@@ -741,7 +738,7 @@ mod tests {
             }
         );
         assert_eq!(
-            verdict_at(&store, sweep.revoked_at()).await,
+            verdict_at(&store, issued_at + 60_000).await,
             VerifyHostTokenFact::Rejected(HostTokenRejection::CredentialExpired)
         );
     }
@@ -754,14 +751,6 @@ mod tests {
             verdict_at(&store, now).await,
             VerifyHostTokenFact::Rejected(HostTokenRejection::CredentialExpired)
         );
-    }
-
-    #[test]
-    fn a_grace_sweep_supersedes_now_and_dies_one_window_later() {
-        let issued_at = 1_700_000_000_000;
-        let sweep = CredentialSweep::after_grace(issued_at);
-        assert_eq!(sweep.consumed_at(), issued_at);
-        assert_eq!(sweep.revoked_at() - sweep.consumed_at(), ROTATION_GRACE_MS);
     }
 
     fn computer(

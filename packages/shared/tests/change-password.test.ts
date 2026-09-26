@@ -6,16 +6,17 @@ import {
 } from '../src/api/user.js';
 
 describe('self password change contract', () => {
-  it('uses signup password bounds without trimming or normalizing secrets', () => {
-    for (const password of [
-      'short',
-      '12345678',
-      ' a b c d ',
-      'x'.repeat(1024),
-      'x'.repeat(1025),
-      '😀'.repeat(512),
-      '😀'.repeat(513),
-    ]) {
+  it('admits 8..1024 UTF-16 units in signup and password changes without altering secrets', () => {
+    for (const [password, accepted] of [
+      ['short', false],
+      ['1234567', false],
+      ['12345678', true],
+      [' a b c d ', true],
+      ['x'.repeat(1024), true],
+      ['x'.repeat(1025), false],
+      ['😀'.repeat(512), true],
+      ['😀'.repeat(513), false],
+    ] as const) {
       const change = ChangePasswordInputSchema.safeParse({
         current_password: 'old',
         new_password: password,
@@ -25,8 +26,10 @@ describe('self password change contract', () => {
         name: 'alice',
         password,
       });
-      expect(change.success).toBe(signup.success);
+      expect(change.success).toBe(accepted);
+      expect(signup.success).toBe(accepted);
       if (change.success) expect(change.data.new_password).toBe(password);
+      if (signup.success) expect(signup.data.password).toBe(password);
     }
   });
   it('rejects caller identity and blank current passwords', () => {

@@ -333,7 +333,7 @@ mod tests {
         let detector = detector(dir.path(), clock.clone());
 
         let first = detector.detect_runtimes().await;
-        clock.advance(DETECTION_WINDOW - Duration::from_millis(1));
+        clock.advance(Duration::from_millis(29_999));
         let second = detector.detect_runtimes().await;
 
         assert_eq!(first, second);
@@ -360,7 +360,7 @@ mod tests {
         install_executable(&dir, "claude", "3.0.1");
         // Still inside the window: a newly installed runtime is invisible, which is
         // what a cache MEANS.
-        clock.advance(DETECTION_WINDOW - Duration::from_millis(1));
+        clock.advance(Duration::from_millis(29_999));
         assert_eq!(
             detection_of(&detector.detect_runtimes().await, RuntimeKind::Claude),
             RuntimeDetection::Absent

@@ -3,7 +3,7 @@
 //!
 //! The agent-pane data plane resolves a `?workspace_id=…` scoped read through
 //! [`AgentWorkspaceScopeRead`]: existence, the human's `workspace_users` edge, and
-//! the agent's `workspace_members` edge, read under ONE transaction and judged by
+//! the agent's `workspace_members` edge, read in one statement and judged by
 //! the pure [`resolve_agent_workspace_scope`]. These tests pin the five-way branch
 //! against real rows, and in particular the load-bearing discriminator: an agent's
 //! private HOME container (whose schema forbids a `workspace_members` row) admits
@@ -172,35 +172,37 @@ async fn another_agents_home_is_not_a_member() {
 }
 
 #[tokio::test]
-async fn a_read_stamps_the_requested_triple_even_when_no_edge_matches() {
-    // Behavioral evidence that the request coordinates are always available to stamp:
-    // a read whose viewer and agent match NOTHING still returns exactly the requested
-    // workspace/viewer/agent with both edges false. (This alone does NOT prove the
-    // coordinates come from the CTE rather than the method params — a param-clone would
-    // pass it too; the SQL SHAPE guard in `reader.rs` pins that. Here we only pin the
-    // no-match behavior the resolver relies on.)
+async fn request_coordinates_bind_each_membership_edge_independently() {
     let (_dir, store) = seeded().await;
-    let stranger = UserId::parse("user-stranger").expect("user id");
-    let outsider = agent("agent-outsider");
-    let facts = store
-        .read_agent_workspace_scope(&workspace("ws-regular"), &stranger, &outsider)
-        .await
-        .expect("scope read");
-    assert_eq!(facts.requested().as_str(), "ws-regular");
-    assert_eq!(facts.viewer().as_str(), "user-stranger");
-    assert_eq!(facts.subject_agent().as_str(), "agent-outsider");
-    // The stranger is not on the roster, so the human-view edge is the first refusal.
-    assert_eq!(
-        resolve_agent_workspace_scope(&facts),
-        AgentWorkspaceScopeResolution::Refused(AgentWorkspaceScopeRefusal::ViewerForbidden)
-    );
+    use AgentWorkspaceScopeRefusal::{AgentNotAMember, ViewerForbidden};
+    use AgentWorkspaceScopeResolution::{Authorized, Refused};
+    for (viewer_id, agent_id, expected) in [
+        (VIEWER, AGENT, Authorized),
+        ("user-stranger", AGENT, Refused(ViewerForbidden)),
+        (VIEWER, "agent-outsider", Refused(AgentNotAMember)),
+        ("user-stranger", "agent-outsider", Refused(ViewerForbidden)),
+    ] {
+        let facts = store
+            .read_agent_workspace_scope(
+                &workspace("ws-regular"),
+                &UserId::parse(viewer_id).unwrap(),
+                &agent(agent_id),
+            )
+            .await
+            .expect("scope read");
+        assert_eq!(facts.requested().as_str(), "ws-regular");
+        assert_eq!(facts.viewer().as_str(), viewer_id);
+        assert_eq!(facts.subject_agent().as_str(), agent_id);
+        assert_eq!(
+            resolve_agent_workspace_scope(&facts),
+            expected,
+            "{viewer_id}/{agent_id}"
+        );
+    }
 }
 
 #[tokio::test]
-async fn the_pane_agent_home_ownership_ignores_a_foreign_member_edge() {
-    // A defensive cross-check that the owner branch, not the member edge, decides a
-    // home: `a2`'s home has no member edge for `a1`, and even the viewer roster is
-    // present, so only the owner-identity rule can produce the not-a-member answer.
+async fn a_second_requested_agent_is_admitted_to_its_own_home() {
     let (_dir, store) = seeded().await;
     let facts = store
         .read_agent_workspace_scope(&workspace("ws-home-a2"), &viewer(), &agent(OTHER_AGENT))

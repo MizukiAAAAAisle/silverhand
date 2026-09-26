@@ -29,8 +29,6 @@ use silverhand_backend_core::{
     identity_access::credential::Argon2idPasswordHasher,
     viewer_read_model::presence_grace::GraceWindow,
 };
-#[cfg(test)]
-use silverhand_backend_filesystem::foundation::audit_sink::CliPreflightFileSink;
 use silverhand_backend_filesystem::foundation::{
     audit_sink::{AgentAuditFileSink, CliAuditFile},
     blob_store::LocalBlobStore,
@@ -249,24 +247,7 @@ const BOOTSTRAP_TOKEN_PATH_ENV: &str = "SILVERHAND_BOOTSTRAP_TOKEN_PATH";
 /// `cargo run` / standalone launch has no launcher awaiting a frame).
 const STARTUP_GENERATION_ENV: &str = "SILVERHAND_STARTUP_GENERATION";
 #[cfg(test)]
-const BASELINE_MIGRATION_STEP: i64 = const_parse_i64(env!("SILVERHAND_BASELINE_MIGRATION_STEP"));
-#[cfg(test)]
-const CURRENT_MIGRATION_STEP: i64 = const_parse_i64(env!("SILVERHAND_CURRENT_MIGRATION_STEP"));
-#[cfg(test)]
 const MIGRATION_STEPS: &str = env!("SILVERHAND_MIGRATION_STEPS");
-
-#[cfg(test)]
-const fn const_parse_i64(value: &str) -> i64 {
-    let bytes = value.as_bytes();
-    let mut index = 0;
-    let mut parsed = 0_i64;
-    while index < bytes.len() {
-        let digit = bytes[index] - b'0';
-        parsed = parsed * 10 + digit as i64;
-        index += 1;
-    }
-    parsed
-}
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -705,23 +686,6 @@ impl PreparedApp {
         // #2255/#2257: the embedded-bootstrap token is disarmed and its unconsumed file
         // unlinked on this teardown path too; idempotent and ENOENT-tolerant.
         self.embedded_bootstrap_token.cleanup().await;
-    }
-
-    /// A clone of the composition-owned CLI audit sink, for composition tests to record
-    /// through the REAL `prepare()`-constructed sink (and to witness its terminal state
-    /// after close). The sink shares its writer via `Arc`, so the clone drives the SAME
-    /// file.
-    #[cfg(test)]
-    fn cli_audit_sink(&self) -> CliPreflightFileSink<SystemProcessClock> {
-        self.cli_audit_sink.preflight_sink()
-    }
-
-    /// A clone of the composition-owned agent-chat audit sink, for composition tests to
-    /// record through the REAL `prepare()`-constructed sink. It shares its writer via
-    /// `Arc`, so the clone drives the SAME file.
-    #[cfg(test)]
-    fn agent_audit_sink(&self) -> AgentAuditFileSink<SystemProcessClock> {
-        self.agent_audit_sink.clone()
     }
 
     /// A clone of the composition-owned embedded-bootstrap token authority, for

@@ -92,7 +92,7 @@ mod tests {
         let scope = RuntimeScope::AgentSlot {
             agent: AgentId::parse("agent-a").unwrap(),
         };
-        for invalid in [0, JsSafeInteger::MAX + 1, i64::MAX] {
+        for invalid in [0, 9_007_199_254_740_992, i64::MAX] {
             assert_eq!(
                 RuntimeStopCommand::encode(&scope, RuntimeGeneration::new(invalid).unwrap())
                     .unwrap_err(),
@@ -101,18 +101,24 @@ mod tests {
                 }
             );
         }
-        let params =
-            RuntimeStopCommand::encode(&scope, RuntimeGeneration::new(JsSafeInteger::MAX).unwrap())
-                .unwrap()
-                .into_params();
+        let params = RuntimeStopCommand::encode(
+            &scope,
+            RuntimeGeneration::new(9_007_199_254_740_991).unwrap(),
+        )
+        .unwrap()
+        .into_params();
         assert_eq!(
-            params["runtime_generation"].as_i64(),
-            Some(JsSafeInteger::MAX)
+            params,
+            json!({
+                "runtime_scope": {"kind":"agent", "agent_id":"agent-a"},
+                "runtime_generation": 9_007_199_254_740_991_i64,
+                "mode": "hard",
+            })
         );
     }
 
     #[test]
-    fn both_scope_arms_and_the_result_schema_are_exact() {
+    fn conversation_command_and_result_schema_are_closed() {
         let command = RuntimeStopCommand::encode(
             &RuntimeScope::ConversationSlot {
                 agent: AgentId::parse("agent-a").unwrap(),
@@ -134,11 +140,25 @@ mod tests {
                 "mode": "hard",
             })
         );
-        assert!(valid_result(
-            &json!({ "mode": "hard", "stopped": true, "exit_code": null })
-        ));
-        assert!(!valid_result(&json!({
-            "mode": "hard", "stopped": true, "exit_code": null, "extra": true
-        })));
+        for (result, expected) in [
+            (json!({"mode":"hard","stopped":true,"exit_code":null}), true),
+            (json!({"mode":"hard","stopped":false,"exit_code":7}), true),
+            (
+                json!({"mode":"hard","stopped":true,"exit_code":null,"extra":true}),
+                false,
+            ),
+            (json!({"stopped":true,"exit_code":null}), false),
+            (
+                json!({"mode":"soft","stopped":true,"exit_code":null}),
+                false,
+            ),
+            (json!({"mode":"hard","exit_code":null}), false),
+            (json!({"mode":"hard","stopped":1,"exit_code":null}), false),
+            (json!({"mode":"hard","stopped":true}), false),
+            (json!({"mode":"hard","stopped":true,"exit_code":1.5}), false),
+            (json!(null), false),
+        ] {
+            assert_eq!(valid_result(&result), expected, "{result}");
+        }
     }
 }

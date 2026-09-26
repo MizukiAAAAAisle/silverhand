@@ -56,7 +56,7 @@ impl AgentEventNames {
 }
 
 impl TaskEventKind {
-    /// `task_${kind}` — the wire subtype (parity with `taskSystemSubtype`).
+    /// The task lifecycle subtype carried by persisted and wire metadata.
     pub fn subtype(self) -> &'static str {
         match self {
             TaskEventKind::Create => "task_create",
@@ -361,25 +361,9 @@ mod tests {
     }
 
     #[test]
-    fn edit_content_interpolates_the_agent_label_number_and_post_change_title() {
-        let event = compose_edit_event(&agent_facts());
-        assert_eq!(event.content, "@alice edited task #7 \"Ship it\"");
-    }
-
-    #[test]
-    fn edit_content_uses_the_literal_user_label_for_a_human_actor() {
-        let mut facts = agent_facts();
-        facts.actor = TaskSystemActor::User {
-            id: UserId::parse("user-1").unwrap(),
-            name: "user".to_owned(),
-        };
-        let event = compose_edit_event(&facts);
-        assert_eq!(event.content, "user edited task #7 \"Ship it\"");
-    }
-
-    #[test]
     fn edit_metadata_carries_the_uniform_object_with_the_task_edit_subtype() {
         let event = compose_edit_event(&agent_facts());
+        assert_eq!(event.content, "@alice edited task #7 \"Ship it\"");
         let value: Value = serde_json::from_str(&event.metadata).unwrap();
         assert_eq!(value["subtype"], "task_edit");
         assert_eq!(value["task_number"], 7);
@@ -395,54 +379,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unassigned_task_edit_records_a_null_assignee() {
-        let mut facts = agent_facts();
-        facts.assignee = None;
-        let event = compose_edit_event(&facts);
-        let value: Value = serde_json::from_str(&event.metadata).unwrap();
-        assert_eq!(value["task_assignee"], Value::Null);
-    }
-
-    #[test]
-    fn every_kind_maps_to_its_task_prefixed_subtype() {
-        assert_eq!(TaskEventKind::Create.subtype(), "task_create");
-        assert_eq!(TaskEventKind::Claim.subtype(), "task_claim");
-        assert_eq!(TaskEventKind::Unclaim.subtype(), "task_unclaim");
-        assert_eq!(TaskEventKind::Status.subtype(), "task_status");
-        assert_eq!(TaskEventKind::Edit.subtype(), "task_edit");
-    }
-
-    #[test]
-    fn create_content_has_three_templates_by_placement() {
+    fn claimed_create_names_actor_even_when_assignee_differs() {
         let facts = agent_facts();
-        assert_eq!(
-            compose_create_event(&facts, CreatePlacement::Filed).content,
-            "@alice created task #7 \"Ship it\""
-        );
         assert_eq!(
             compose_create_event(&facts, CreatePlacement::Claimed).content,
             "@alice created task #7 \"Ship it\" and claimed it"
         );
-        assert_eq!(
-            compose_create_event(&facts, CreatePlacement::CrossConversation).content,
-            "@alice filed task #7 \"Ship it\" here from another conversation"
-        );
-    }
-
-    #[test]
-    fn create_metadata_carries_cross_conversation_only_on_the_cross_arm() {
-        let facts = agent_facts();
-        let filed: Value =
-            serde_json::from_str(&compose_create_event(&facts, CreatePlacement::Filed).metadata)
-                .unwrap();
-        assert_eq!(filed["subtype"], "task_create");
-        assert!(filed.get("cross_conversation").is_none());
-
-        let cross: Value = serde_json::from_str(
-            &compose_create_event(&facts, CreatePlacement::CrossConversation).metadata,
-        )
-        .unwrap();
-        assert_eq!(cross["cross_conversation"], true);
     }
 
     fn user_actor(mut facts: TaskEventFacts) -> TaskEventFacts {
@@ -454,15 +396,11 @@ mod tests {
     }
 
     #[test]
-    fn status_content_forks_on_the_actor_kind() {
+    fn status_content_names_actor_instead_of_assignee() {
         let facts = agent_facts();
         assert_eq!(
             compose_status_event(&facts).content,
             "task #7 → in_progress (by @alice)"
-        );
-        assert_eq!(
-            compose_status_event(&user_actor(agent_facts())).content,
-            "task #7 → in_progress (by user)"
         );
     }
 

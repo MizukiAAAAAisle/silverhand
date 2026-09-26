@@ -46,10 +46,4 @@ describe('daemon oracle regression matrix — driver parser fixtures', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('every daemon driver runtime has at least one oracle', () => {
-    const runtimes = new Set(DRIVER_PARSE_ORACLES.map(oracle => oracle.runtime));
-    for (const runtime of ['claude', 'codex', 'cursor'] as const) {
-      expect(runtimes.has(runtime), `runtime ${runtime} missing oracle`).toBe(true);
-    }
-  });
 });

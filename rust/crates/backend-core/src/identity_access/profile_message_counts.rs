@@ -70,18 +70,31 @@ mod tests {
         let y = MessageCountYear::new(2024).unwrap();
         assert_eq!(y.dates.len(), 366);
         assert_eq!(y.dates[59], "2024-02-29");
-        assert_eq!(shanghai_year(y.start_ms - 1), Some(2023));
-        assert_eq!(shanghai_year(y.start_ms), Some(2024));
-        assert_eq!(shanghai_year(y.end_ms - 1), Some(2024));
-        assert_eq!(shanghai_year(y.end_ms), Some(2025));
-        assert_eq!(MessageCountYear::new(2023).unwrap().dates.len(), 365);
-        assert!(MessageCountYear::new(9999).is_none());
-        let historical = MessageCountYear::new(1988).unwrap();
-        assert!(
-            historical
-                .day_bounds
-                .iter()
-                .any(|(a, b)| b - a != 86_400_000)
+        assert_eq!(
+            (y.start_ms, y.end_ms),
+            (1_704_038_400_000, 1_735_660_800_000)
         );
+        for (instant, expected) in [
+            (1_704_038_399_999, 2023),
+            (1_704_038_400_000, 2024),
+            (1_735_660_799_999, 2024),
+            (1_735_660_800_000, 2025),
+        ] {
+            assert_eq!(shanghai_year(instant), Some(expected));
+        }
+        assert_eq!(MessageCountYear::new(2023).unwrap().dates.len(), 365);
+        for year in [1969, 9999] {
+            assert!(MessageCountYear::new(year).is_none());
+        }
+        assert!(MessageCountYear::new(1970).is_some());
+        assert!(MessageCountYear::new(9998).is_some());
+        let historical = MessageCountYear::new(1988).unwrap();
+        for (date, bounds) in [
+            ("1988-04-17", (577_209_600_000, 577_292_400_000)),
+            ("1988-09-11", (589_906_800_000, 589_996_800_000)),
+        ] {
+            let index = historical.dates.iter().position(|d| d == date).unwrap();
+            assert_eq!(historical.day_bounds[index], bounds);
+        }
     }
 }

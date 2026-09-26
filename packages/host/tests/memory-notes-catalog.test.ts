@@ -1,17 +1,8 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  MEMORY_NOTES_CATALOG_MAX_ENTRIES,
-  readMemoryNotesCatalog,
-} from '../src/daemon/memory-notes-catalog.js';
+import { readMemoryNotesCatalog } from '../src/daemon/memory-notes-catalog.js';
 
 const roots: string[] = [];
 
@@ -63,6 +54,10 @@ describe('readMemoryNotesCatalog', () => {
       join(l2, 'notes', 'domain', 'legacy.md'),
       '# Legacy Runtime Notes\n\nExisting content stays unchanged.',
     );
+    writeFileSync(
+      join(l2, 'notes', 'domain', 'runtime.md'),
+      indexedNote({ name: 'runtime', description: 'Read before runtime work.' }),
+    );
     writeFileSync(join(l2, 'notes', 'ignored.txt'), '# Not Markdown');
     const outside = join(l2, 'outside.md');
     writeFileSync(outside, indexedNote({ name: 'outside', description: 'no' }));
@@ -71,10 +66,15 @@ describe('readMemoryNotesCatalog', () => {
     await expect(readMemoryNotesCatalog(l2)).resolves.toEqual({
       entries: [
         {
+          path: 'notes/domain/runtime.md',
+          name: 'runtime',
+          description: 'Read before runtime work.',
+          category: 'project',
+        },
+        {
           path: 'notes/user-preferences.md',
           name: 'user-preferences',
-          description:
-            'Communication and review preferences; read before proposing work.',
+          description: 'Communication and review preferences; read before proposing work.',
           category: 'user',
         },
       ],
@@ -94,12 +94,13 @@ describe('readMemoryNotesCatalog', () => {
     );
     writeFileSync(
       join(l2, 'notes', 'broken.md'),
-      '---\nname: Broken Name\ndescription: missing metadata\n---\n# Broken',
+      indexedNote({ name: 'Broken Name', description: 'Invalid name only.' }),
     );
     writeFileSync(
-      join(l2, 'notes', 'malformed.md'),
-      '---\nname: [unterminated\n---\n# Malformed',
+      join(l2, 'notes', 'missing-metadata.md'),
+      '---\nname: valid-name\ndescription: missing metadata\n---\n# Broken',
     );
+    writeFileSync(join(l2, 'notes', 'malformed.md'), '---\nname: [unterminated\n---\n# Malformed');
     writeFileSync(
       join(l2, 'notes', 'too-long.md'),
       indexedNote({
@@ -124,7 +125,7 @@ describe('readMemoryNotesCatalog', () => {
 
   it('caps injected entries while reporting the omitted count', async () => {
     const l2 = makeL2();
-    for (let index = 0; index <= MEMORY_NOTES_CATALOG_MAX_ENTRIES; index += 1) {
+    for (let index = 0; index <= 20; index += 1) {
       writeFileSync(
         join(l2, 'notes', `note-${String(index).padStart(3, '0')}.md`),
         indexedNote({
@@ -136,7 +137,7 @@ describe('readMemoryNotesCatalog', () => {
 
     const catalog = await readMemoryNotesCatalog(l2);
 
-    expect(catalog.entries).toHaveLength(MEMORY_NOTES_CATALOG_MAX_ENTRIES);
+    expect(catalog.entries).toHaveLength(20);
     expect(catalog.omittedCount).toBe(1);
   });
 });

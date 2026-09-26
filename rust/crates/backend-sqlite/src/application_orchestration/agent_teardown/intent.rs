@@ -364,7 +364,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn begin_refuses_each_precedence_arm() {
+    async fn begin_refuses_missing_nonactive_and_transitioning_agents() {
         let dir = tempfile::tempdir().unwrap();
 
         let missing = seed_schema(&dir, "missing.db", &[USER, HOST]).await;

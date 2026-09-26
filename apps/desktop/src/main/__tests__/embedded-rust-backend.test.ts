@@ -1,19 +1,16 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   composeRustBackendChildEnv,
-  DEFAULT_TIMINGS,
   EmbeddedRustBackendStartError,
   startEmbeddedRustBackend,
   type EmbeddedRustBackendConfig,
   type EmbeddedRustBackendDeps,
   type EmbeddedRustBackendTerminalReason,
-  type EmbeddedRustBackendTimings,
 } from "../embedded-rust-backend.js";
-import { BOUND_FRAME_KIND, STARTUP_PROTOCOL_VERSION } from "../rust-backend-frame.js";
 
 const GENERATION = "gen-fixed-1";
 
@@ -67,8 +64,8 @@ function boundLine(overrides: Record<string, unknown> = {}): string {
     phaseLine("preparing") +
     phaseLine("prepared") +
     `${JSON.stringify({
-      v: STARTUP_PROTOCOL_VERSION,
-      kind: BOUND_FRAME_KIND,
+      v: 2,
+      kind: "bound",
       generation: GENERATION,
       url: "http://127.0.0.1:51763",
       port: 51763,
@@ -78,21 +75,7 @@ function boundLine(overrides: Record<string, unknown> = {}): string {
 }
 
 function phaseLine(kind: "preparing" | "prepared"): string {
-  return `${JSON.stringify({ v: STARTUP_PROTOCOL_VERSION, kind, generation: GENERATION })}\n`;
-}
-
-/** A clock backed by real timers so vitest fake timers drive it deterministically:
- * `now` = `Date.now()`, `sleep` = a real `setTimeout`. Tests use
- * `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync` to control frame/ready/grace
- * waits without wall-clock delay. */
-function timerClock() {
-  return {
-    now: () => Date.now(),
-    sleep: (ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }),
-  };
+  return `${JSON.stringify({ v: 2, kind, generation: GENERATION })}\n`;
 }
 
 interface Harness {
@@ -128,7 +111,6 @@ function harness(overrides: Partial<EmbeddedRustBackendDeps> = {}): Harness {
     removeBootstrapToken: async (p) => {
       removedTokens.push(p);
     },
-    clock: timerClock(),
     ...overrides,
   };
   return {
@@ -145,17 +127,29 @@ function harness(overrides: Partial<EmbeddedRustBackendDeps> = {}): Harness {
   };
 }
 
-const FAST: EmbeddedRustBackendTimings = {
-  ...DEFAULT_TIMINGS,
-  // Tiny REAL delays so the tests run in a few ms with real timers (no fake-timer
-  // choreography against the piped-stdout event stream). A `queueMicrotask` stdout emit
-  // always beats these, and the timeout arms fire promptly.
-  frameTimeoutMs: 40,
-  readyTimeoutMs: 40,
-  readyPollIntervalMs: 2,
-  shutdownGraceMs: 20,
-  httpAttemptTimeoutMs: 10,
-};
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+});
+afterEach(() => vi.useRealTimers());
+
+async function rejectsAfter(pending: Promise<unknown>, ms: number, kind: string): Promise<void> {
+  const settled = vi.fn();
+  const result = pending.then(
+    (value) => {
+      settled();
+      return value;
+    },
+    (error) => {
+      settled();
+      return error;
+    },
+  );
+  await vi.advanceTimersByTimeAsync(ms);
+  expect(settled).toHaveBeenCalledOnce();
+  expect(await result).toBeInstanceOf(EmbeddedRustBackendStartError);
+  expect(await result).toMatchObject({ kind });
+}
 
 describe("startup ordering and cancellation", () => {
   it("bound does not reset the prepared-to-service deadline", async () => {
@@ -232,7 +226,7 @@ describe("startup ordering and cancellation", () => {
           phaseLine("preparing") + (phase === "prepared" ? phaseLine("prepared") : ""),
         );
         abort.abort();
-        await vi.advanceTimersByTimeAsync(DEFAULT_TIMINGS.shutdownGraceMs);
+        await vi.advanceTimersByTimeAsync(5000);
         expect(await starting).toMatchObject({ kind: "shutdown-during-startup" });
         expect(h.child.killed).toEqual(["SIGTERM", "SIGKILL"]);
         expect(vi.getTimerCount()).toBe(0);
@@ -250,7 +244,6 @@ describe("startup ordering and cancellation", () => {
         { executablePath: "/app/backend" },
         { ...config(), signal: abort.signal },
         h.deps,
-        DEFAULT_TIMINGS,
       ).catch((error) => error);
       await Promise.resolve();
       abort.abort();
@@ -262,11 +255,11 @@ describe("startup ordering and cancellation", () => {
       vi.useRealTimers();
     }
   });
-  it("one total deadline includes time waiting for the frame and time in both probes", async () => {
+  it("one total deadline includes frame, readiness and epoch verification", async () => {
     let attemptSignal: AbortSignal | undefined;
     const h = harness({
       probeReadyz: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 15));
+        await new Promise((resolve) => setTimeout(resolve, 4000));
         return true;
       },
       probeServerInfoEpoch: async (_url, signal) => {
@@ -274,27 +267,29 @@ describe("startup ordering and cancellation", () => {
         return new Promise(() => {});
       },
     });
-    const start = Date.now();
-    const promise = startEmbeddedRustBackend({ executablePath: "/app/backend" }, config(), h.deps, {
-      ...FAST,
-      frameTimeoutMs: 200,
-      readyTimeoutMs: 70,
-      httpAttemptTimeoutMs: 200,
+    const starting = startEmbeddedRustBackend({ executablePath: "/app/backend" }, config(), h.deps);
+    const settled = vi.fn();
+    const result = starting.catch((error) => {
+      settled(error);
+      return error;
     });
-    setTimeout(() => h.child.emitStdout(boundLine()), 20);
-    await expect(promise).rejects.toMatchObject({ kind: "readiness-timeout" });
-    expect(Date.now() - start).toBeLessThan(150);
-    expect(attemptSignal?.aborted).toBe(true);
+    await Promise.resolve();
+    h.child.emitStdout(phaseLine("preparing") + phaseLine("prepared"));
+    await vi.advanceTimersByTimeAsync(25000);
+    h.child.emitStdout(boundLine().split("\n")[2]! + "\n");
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(attemptSignal).toBeDefined();
+    expect(attemptSignal!.aborted).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledOnce();
+    expect(await result).toMatchObject({ kind: "readiness-timeout" });
+    expect(attemptSignal!.aborted).toBe(true);
     expect(h.child.killed).toContain("SIGTERM");
   });
   it("replays terminal delivered synchronously after bound but before the gate installs its waiter", async () => {
     const h = harness();
-    const starting = startEmbeddedRustBackend(
-      { executablePath: "/app/backend" },
-      config(),
-      h.deps,
-      FAST,
-    );
+    const starting = startEmbeddedRustBackend({ executablePath: "/app/backend" }, config(), h.deps);
     queueMicrotask(() => {
       h.child.emitStdout(boundLine());
       h.child.emitStdout("duplicate\n");
@@ -308,18 +303,31 @@ describe("startup ordering and cancellation", () => {
     it(`shutdown cancels ${phase} even when its probe ignores AbortSignal`, async () => {
       const abort = new AbortController();
       const h = harness();
-      if (phase === "ready") h.deps.probeReadyz = async () => new Promise(() => {});
-      if (phase === "epoch") h.deps.probeServerInfoEpoch = async () => new Promise(() => {});
+      let entered!: () => void;
+      const probing = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      if (phase === "ready")
+        h.deps.probeReadyz = async () => {
+          entered();
+          return new Promise(() => {});
+        };
+      if (phase === "epoch")
+        h.deps.probeServerInfoEpoch = async () => {
+          entered();
+          return new Promise(() => {});
+        };
       const starting = startEmbeddedRustBackend(
         { executablePath: "/app/backend" },
         { ...config(), signal: abort.signal },
         h.deps,
-        FAST,
       );
       queueMicrotask(() => {
         if (phase !== "frame") h.child.emitStdout(boundLine());
       });
-      setTimeout(() => abort.abort(), 3);
+      if (phase !== "frame") await probing;
+      else await Promise.resolve();
+      abort.abort();
       await expect(starting).rejects.toMatchObject({ kind: "shutdown-during-startup" });
       expect(h.child.killed).toContain("SIGTERM");
       expect(h.removedTokens).toContain(config().bootstrapTokenPath);
@@ -327,27 +335,27 @@ describe("startup ordering and cancellation", () => {
   }
 
   it("child exit interrupts a probe that never settles", async () => {
-    const h = harness({ probeReadyz: async () => new Promise(() => {}) });
-    const starting = startEmbeddedRustBackend(
-      { executablePath: "/app/backend" },
-      config(),
-      h.deps,
-      FAST,
-    );
+    let entered!: () => void;
+    const probing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const h = harness({
+      probeReadyz: async () => {
+        entered();
+        return new Promise(() => {});
+      },
+    });
+    const starting = startEmbeddedRustBackend({ executablePath: "/app/backend" }, config(), h.deps);
     queueMicrotask(() => h.child.emitStdout(boundLine()));
-    setTimeout(() => h.child.simulateExit(9, null), 3);
+    await probing;
+    h.child.simulateExit(9, null);
     await expect(starting).rejects.toMatchObject({ kind: "child-exited-early" });
     expect(h.removedTokens).toContain(config().bootstrapTokenPath);
   });
 
   it("replays post-publish terminal to an owner registered after the event", async () => {
     const h = harness();
-    const starting = startEmbeddedRustBackend(
-      { executablePath: "/app/backend" },
-      config(),
-      h.deps,
-      FAST,
-    );
+    const starting = startEmbeddedRustBackend({ executablePath: "/app/backend" }, config(), h.deps);
     queueMicrotask(() => h.child.emitStdout(boundLine()));
     const handle = await starting;
     h.child.simulateExit(9, null);
@@ -359,12 +367,7 @@ describe("startup ordering and cancellation", () => {
 
   it("stdout EOF after bound interrupts startup", async () => {
     const h = harness({ probeReadyz: async () => new Promise(() => {}) });
-    const starting = startEmbeddedRustBackend(
-      { executablePath: "/app/backend" },
-      config(),
-      h.deps,
-      FAST,
-    );
+    const starting = startEmbeddedRustBackend({ executablePath: "/app/backend" }, config(), h.deps);
     queueMicrotask(() => {
       h.child.emitStdout(boundLine());
       h.child.stdout.emit("end");
@@ -381,7 +384,6 @@ describe("startEmbeddedRustBackend — happy path", () => {
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     // The child emits its single bound frame.
     queueMicrotask(() => h.child.emitStdout(boundLine()));
@@ -434,16 +436,17 @@ describe("startEmbeddedRustBackend — happy path", () => {
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine()));
     const handle = await promise;
 
-    await handle.close();
-    expect(h.child.killed).toContain("SIGTERM");
+    await Promise.all([handle.close(), handle.close()]);
+    expect(h.child.killed).toEqual(["SIGTERM"]);
     expect(h.removedTokens).toContain("/data/bootstrap.token");
     // Idempotent.
     await handle.close();
+    expect(h.child.killed).toEqual(["SIGTERM"]);
+    expect(h.removedTokens).toEqual(["/data/bootstrap.token", "/data/bootstrap.token"]);
   });
 });
 
@@ -455,7 +458,7 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       },
     });
     await expect(
-      startEmbeddedRustBackend({ executablePath: "/missing" }, config(), h.deps, FAST),
+      startEmbeddedRustBackend({ executablePath: "/missing" }, config(), h.deps),
     ).rejects.toMatchObject({ kind: "spawn-failed" });
   });
 
@@ -465,7 +468,6 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.simulateExit(1, null));
     await expect(promise).rejects.toMatchObject({ kind: "child-exited-early" });
@@ -478,7 +480,6 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine({ generation: "wrong" })));
     await expect(promise).rejects.toMatchObject({ kind: "invalid-frame" });
@@ -495,7 +496,6 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(`${boundLine()}duplicate\n`));
     await expect(promise).rejects.toMatchObject({ kind: "duplicate-frame" });
@@ -508,7 +508,6 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine()));
     const handle = await promise;
@@ -523,7 +522,6 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
     expect(h.child.killed).not.toContain("SIGTERM"); // still not auto-killed
 
     h.child.emitStdout("unexpected post-startup line\n");
-    await new Promise((r) => setTimeout(r, 5));
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toMatchObject({ kind: "protocol-violation" });
     // The child is still alive until the OWNER closes it — that is the main's job.
@@ -542,7 +540,6 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine()));
     const handle = await promise;
@@ -550,34 +547,29 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
     handle.onTerminal((reason) => reasons.push(reason));
 
     h.child.simulateExit(139, null); // crash
-    await new Promise((r) => setTimeout(r, 5));
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toMatchObject({ kind: "child-exited", code: 139 });
     await handle.close();
   });
 
-  it("P0-1: a SECOND stdout line arriving DURING the ready probe (pre-publish) rejects startup + reclaims — no handle published", async () => {
-    const h = harness();
-    // Hold readiness until the duplicate line arrives, so the second line lands in the
-    // pre-publish `bound` window (between frame and publish).
-    let readyGate = false;
-    h.setReadyz(() => readyGate);
-    const promise = startEmbeddedRustBackend(
-      { executablePath: "/app/silverhand-backend" },
-      config(),
-      h.deps,
-      FAST,
-    );
-    queueMicrotask(() => {
-      h.child.emitStdout(boundLine());
-      // A stray SECOND line while /readyz is still failing (pre-publish).
-      queueMicrotask(() => h.child.emitStdout("stray pre-publish line\n"));
+  it("a second stdout line during an entered ready probe rejects before publication", async () => {
+    let entered!: () => void;
+    const probing = new Promise<void>((resolve) => {
+      entered = resolve;
     });
-    await expect(promise).rejects.toMatchObject({ kind: "duplicate-frame" });
-    // Reclaimed before any publish — child killed, token cleaned.
+    const h = harness({
+      probeReadyz: async () => {
+        entered();
+        return new Promise(() => {});
+      },
+    });
+    const starting = startEmbeddedRustBackend({ executablePath: "/app/backend" }, config(), h.deps);
+    queueMicrotask(() => h.child.emitStdout(boundLine()));
+    await probing;
+    h.child.emitStdout("stray pre-publish line\n");
+    await expect(starting).rejects.toMatchObject({ kind: "duplicate-frame" });
     expect(h.child.killed).toContain("SIGTERM");
     expect(h.removedTokens).toContain("/data/bootstrap.token");
-    void readyGate;
   });
 
   it("P0: server-info unavailable after readyz → server-info-unavailable + reclaim", async () => {
@@ -587,7 +579,6 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine()));
     await expect(promise).rejects.toMatchObject({ kind: "server-info-unavailable" });
@@ -611,10 +602,11 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       cfg,
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine()));
-    await expect(promise).resolves.toMatchObject({ port: 51763 });
+    const handle = await promise;
+    expect(handle.port).toBe(51763);
+    await handle.close();
   });
 
   it("P0: client_too_old (client < server.minimum_client_epoch) → epoch-incompatible", async () => {
@@ -629,7 +621,6 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       cfg,
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine()));
     await expect(promise).rejects.toMatchObject({
@@ -652,7 +643,6 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       cfg,
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine()));
     await expect(promise).rejects.toMatchObject({
@@ -670,10 +660,9 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine()));
-    await expect(promise).rejects.toMatchObject({ kind: "readiness-timeout" });
+    await rejectsAfter(promise, 30000, "readiness-timeout");
     expect(h.child.killed).toContain("SIGTERM");
     expect(h.removedTokens).toContain("/data/bootstrap.token");
   });
@@ -693,7 +682,6 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine()));
     await expect(promise).rejects.toMatchObject({ kind: "child-exited-early" });
@@ -705,10 +693,9 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     // never emit a frame; the frame-timeout sleep advances the fake clock and fires.
-    await expect(promise).rejects.toMatchObject({ kind: "eof-before-frame" });
+    await rejectsAfter(promise, 30000, "eof-before-frame");
     expect(h.child.killed).toContain("SIGTERM");
     expect(h.removedTokens).toContain("/data/bootstrap.token");
   });
@@ -721,10 +708,9 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine()));
-    await expect(promise).rejects.toMatchObject({ kind: "readiness-timeout" });
+    await rejectsAfter(promise, 35000, "readiness-timeout");
     expect(h.child.killed).toContain("SIGTERM");
     expect(h.child.killed).toContain("SIGKILL");
   });
@@ -737,43 +723,49 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
     h.child.ignoreTerm = true;
     const noExitChild = h.child;
     // Suppress SIGKILL-triggered exit too, to model a truly phantom child.
-    const originalKill = noExitChild.kill.bind(noExitChild);
     noExitChild.kill = (signal: NodeJS.Signals): boolean => {
       noExitChild.killed.push(signal);
       return true; // never simulate exit
     };
-    void originalKill;
     const promise = startEmbeddedRustBackend(
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     // Emit `error` (before the frame) with no following `exit`.
     queueMicrotask(() => h.child.emit("error", new Error("ENOENT: spawn failed async")));
-    await expect(promise).rejects.toMatchObject({ kind: "spawn-failed" });
+    await rejectsAfter(promise, 10000, "spawn-failed");
     // Reclaim still completed (token cleaned) despite no `exit` ever arriving.
     expect(h.removedTokens).toContain("/data/bootstrap.token");
   });
 
   it("#task:2343 P0-2: a hung /readyz fetch is bounded by the attempt timeout and does not bypass the ready budget", async () => {
     const h = harness();
+    const signals: AbortSignal[] = [];
     // A probe that never resolves unless its signal aborts — models a hung socket. The
     // per-attempt timeout must abort it so the ready-deadline loop still fails loud.
-    h.deps.probeReadyz = (_url, signal) =>
-      new Promise<boolean>((resolve) => {
+    h.deps.probeReadyz = (_url, signal) => {
+      signals.push(signal);
+      return new Promise<boolean>((resolve) => {
         if (signal.aborted) resolve(false);
         else signal.addEventListener("abort", () => resolve(false), { once: true });
       });
+    };
     const promise = startEmbeddedRustBackend(
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine()));
-    // The hung fetch is aborted each attempt; the ready deadline eventually fires.
-    await expect(promise).rejects.toMatchObject({ kind: "readiness-timeout" });
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signals[0]!.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(signals).toHaveLength(2);
+    // The per-attempt timeout releases the first socket before the total budget.
+    await rejectsAfter(promise, 24900, "readiness-timeout");
     expect(h.child.killed).toContain("SIGTERM");
     expect(h.removedTokens).toContain("/data/bootstrap.token");
   });
@@ -789,10 +781,9 @@ describe("startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       { executablePath: "/app/silverhand-backend" },
       config(),
       h.deps,
-      FAST,
     );
     queueMicrotask(() => h.child.emitStdout(boundLine()));
-    await expect(promise).rejects.toMatchObject({ kind: "server-info-unavailable" });
+    await rejectsAfter(promise, 5000, "server-info-unavailable");
     expect(h.child.killed).toContain("SIGTERM");
     expect(h.removedTokens).toContain("/data/bootstrap.token");
   });
@@ -883,15 +874,15 @@ describe("composeRustBackendChildEnv — closed OS allowlist + explicit boundary
   });
 
   it("a launcher-boundary key always wins over an inherited allowlisted key of the same name", () => {
-    // (Defense-in-depth: even if a boundary key collided with an OS key, the boundary is
-    // written last and wins.) Here PATH is allowlisted; the boundary does not set it, so
-    // the inherited value survives — and the daemon spec only appears when the BOUNDARY
-    // sets it.
     const composed = composeRustBackendChildEnv(
-      { SILVERHAND_DATABASE_PATH: "/y/db", SILVERHAND_DAEMON_NPM_SPEC: "trusted@1" },
+      {
+        PATH: "/trusted/bin",
+        SILVERHAND_DATABASE_PATH: "/y/db",
+        SILVERHAND_DAEMON_NPM_SPEC: "trusted@1",
+      },
       { PATH: "/bin", SILVERHAND_DAEMON_NPM_SPEC: "evil" },
     );
-    expect(composed.PATH).toBe("/bin");
+    expect(composed.PATH).toBe("/trusted/bin");
     expect(composed.SILVERHAND_DATABASE_PATH).toBe("/y/db");
     expect(composed.SILVERHAND_DAEMON_NPM_SPEC).toBe("trusted@1");
   });

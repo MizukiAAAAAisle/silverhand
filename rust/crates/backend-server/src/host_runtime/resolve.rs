@@ -174,7 +174,7 @@ mod tests {
     use std::{
         io,
         sync::{
-            Arc,
+            Arc, Mutex,
             atomic::{AtomicUsize, Ordering::SeqCst},
         },
     };
@@ -251,14 +251,16 @@ mod tests {
     struct FakeCredentials {
         outcome: CredOutcome,
         lookups: Arc<AtomicUsize>,
+        hashes: Arc<Mutex<Vec<String>>>,
     }
 
     impl HostCredentialLookup for FakeCredentials {
         async fn lookup_by_token_hash(
             &self,
-            _token_hash: String,
+            token_hash: String,
         ) -> Result<Option<CredentialAuthState>, PersistenceFailure> {
             self.lookups.fetch_add(1, SeqCst);
+            self.hashes.lock().unwrap().push(token_hash);
             match &self.outcome {
                 CredOutcome::Found(state) => Ok(Some(state.clone())),
                 CredOutcome::Absent => Ok(None),
@@ -292,8 +294,9 @@ mod tests {
 
         async fn read_computer(
             &self,
-            _computer: HostId,
+            computer: HostId,
         ) -> Result<Option<ComputerRecord>, PersistenceFailure> {
+            assert_eq!(computer.as_str(), "h1");
             self.reads.fetch_add(1, SeqCst);
             match &self.outcome {
                 ReadOutcome::Present(record) => Ok(Some(record.clone())),
@@ -319,6 +322,7 @@ mod tests {
         body: String,
         lookups: usize,
         reads: usize,
+        hashes: Vec<String>,
     }
 
     async fn resolve_with(
@@ -328,9 +332,11 @@ mod tests {
     ) -> Reply {
         let lookups = Arc::new(AtomicUsize::new(0));
         let reads = Arc::new(AtomicUsize::new(0));
+        let hashes = Arc::new(Mutex::new(Vec::new()));
         let credentials = FakeCredentials {
             outcome: cred,
             lookups: lookups.clone(),
+            hashes: hashes.clone(),
         };
         let computers = FakeComputers {
             outcome: read,
@@ -351,6 +357,7 @@ mod tests {
             body: String::from_utf8(body.to_vec()).unwrap(),
             lookups: lookups.load(SeqCst),
             reads: reads.load(SeqCst),
+            hashes: hashes.lock().unwrap().clone(),
         }
     }
 
@@ -372,6 +379,10 @@ mod tests {
         assert_eq!(parsed(&reply.body), json!({ "host_id": "h1" }));
         assert_eq!(reply.lookups, 1);
         assert_eq!(reply.reads, 1);
+        assert_eq!(
+            reply.hashes,
+            ["RhyqgKUhBENuNABhiUMNE6uhA7LENE1EbqPZMksN4cA"]
+        );
     }
 
     /// The bearer grammar is case-insensitive and tolerates padding, exactly as the
@@ -386,39 +397,30 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::OK);
         assert_eq!(parsed(&reply.body), json!({ "host_id": "h1" }));
-    }
-
-    /// No credential at all is `401` before any read — there is nothing to verify.
-    #[tokio::test]
-    async fn an_absent_authorization_header_is_unauthorized_before_any_read() {
-        let reply = resolve_with(
-            CredOutcome::Found(accepted("h1", "u1")),
-            ReadOutcome::Present(live_user_managed("h1", "u1")),
-            None,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
         assert_eq!(
-            parsed(&reply.body),
-            json!({ "error": "unauthorized", "error_code": "unauthorized" })
+            reply.hashes,
+            ["RhyqgKUhBENuNABhiUMNE6uhA7LENE1EbqPZMksN4cA"]
         );
-        assert_eq!(reply.lookups, 0);
-        assert_eq!(reply.reads, 0);
     }
 
-    /// A non-bearer scheme presents no credential this route accepts, so it is the same
-    /// `401` before any read.
+    /// Missing and wrong-scheme credentials are `401` before any read.
     #[tokio::test]
-    async fn a_non_bearer_scheme_is_unauthorized_before_any_read() {
-        let reply = resolve_with(
-            CredOutcome::Found(accepted("h1", "u1")),
-            ReadOutcome::Present(live_user_managed("h1", "u1")),
-            Some("Basic good-token"),
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
-        assert_eq!(reply.lookups, 0);
-        assert_eq!(reply.reads, 0);
+    async fn absent_or_non_bearer_authorization_is_unauthorized_before_any_read() {
+        for authorization in [None, Some("Basic good-token")] {
+            let reply = resolve_with(
+                CredOutcome::Found(accepted("h1", "u1")),
+                ReadOutcome::Present(live_user_managed("h1", "u1")),
+                authorization,
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                parsed(&reply.body),
+                json!({ "error": "unauthorized", "error_code": "unauthorized" })
+            );
+            assert_eq!(reply.lookups, 0);
+            assert_eq!(reply.reads, 0);
+        }
     }
 
     /// A token no verifier matches is `401`, and never reaches the computer read.

@@ -111,14 +111,10 @@ export interface EmbeddedRustBackendDeps {
   mintGeneration: () => string;
   /** Best-effort removal of the bootstrap token file on teardown. */
   removeBootstrapToken: (path: string) => Promise<void>;
-  clock: {
-    now(): number;
-    sleep(ms: number): Promise<void>;
-  };
   logger?: { warn(payload: Record<string, unknown>, message: string): void };
 }
 
-export interface EmbeddedRustBackendTimings {
+interface EmbeddedRustBackendTimings {
   /** Max wait for the stdout `preparing` frame after spawn. */
   frameTimeoutMs: number;
   /** Service budget from `prepared` through bound, readiness and epoch verification. */
@@ -132,7 +128,7 @@ export interface EmbeddedRustBackendTimings {
   httpAttemptTimeoutMs: number;
 }
 
-export const DEFAULT_TIMINGS: EmbeddedRustBackendTimings = {
+const DEFAULT_TIMINGS: EmbeddedRustBackendTimings = {
   frameTimeoutMs: 30_000,
   readyTimeoutMs: 30_000,
   readyPollIntervalMs: 100,
@@ -151,8 +147,8 @@ export async function startEmbeddedRustBackend(
   sidecar: VerifiedSidecar,
   config: EmbeddedRustBackendConfig,
   deps: EmbeddedRustBackendDeps,
-  timings: EmbeddedRustBackendTimings = DEFAULT_TIMINGS,
 ): Promise<EmbeddedRustBackendHandle> {
+  const timings = DEFAULT_TIMINGS;
   await deps.removeBootstrapToken(config.bootstrapTokenPath);
   if (config.signal?.aborted) {
     throw new EmbeddedRustBackendStartError("shutdown-during-startup", "startup cancelled");
@@ -180,7 +176,7 @@ export async function startEmbeddedRustBackend(
   // A single owner for teardown across every failure path — no orphan, token cleaned.
   const reclaim = async (): Promise<void> => {
     monitor.dispose();
-    await terminateChild(child, timings.shutdownGraceMs, deps.clock);
+    await terminateChild(child, timings.shutdownGraceMs);
     await deps
       .removeBootstrapToken(config.bootstrapTokenPath)
       .catch((err) =>
@@ -218,7 +214,7 @@ export async function startEmbeddedRustBackend(
       };
     });
     try {
-      const frame = await Promise.race([monitor.awaitBoundFrame(timings, deps), cancelled]);
+      const frame = await Promise.race([monitor.awaitBoundFrame(timings), cancelled]);
       bound = true;
       // Bound and probes share the deadline established at preparation completion.
       await Promise.race([
@@ -291,10 +287,7 @@ class StartupProtocolMonitor {
     });
   }
 
-  awaitBoundFrame(
-    timings: EmbeddedRustBackendTimings,
-    deps: EmbeddedRustBackendDeps,
-  ): Promise<{ url: string; port: number }> {
+  awaitBoundFrame(timings: EmbeddedRustBackendTimings): Promise<{ url: string; port: number }> {
     return new Promise((resolve, reject) => {
       let done = false;
       const settleReject = (err: EmbeddedRustBackendStartError): void => {
@@ -380,7 +373,7 @@ class StartupProtocolMonitor {
           });
         }
       };
-      const timeout = setTimeoutHandle(deps.clock, timings.frameTimeoutMs, () => {
+      const timeout = setTimeoutHandle(timings.frameTimeoutMs, () => {
         settleReject(
           new EmbeddedRustBackendStartError(
             "eof-before-frame",
@@ -553,7 +546,7 @@ async function awaitReadyz(
   timings: EmbeddedRustBackendTimings,
   deps: EmbeddedRustBackendDeps,
 ): Promise<void> {
-  const deadline = deps.clock.now() + timings.readyTimeoutMs;
+  const deadline = Date.now() + timings.readyTimeoutMs;
   for (;;) {
     if (signal.aborted) {
       throw new EmbeddedRustBackendStartError(
@@ -570,13 +563,13 @@ async function awaitReadyz(
     if (await probeWithAttemptTimeout((s) => deps.probeReadyz(url, s), signal, timings, deps)) {
       return;
     }
-    if (deps.clock.now() >= deadline) {
+    if (Date.now() >= deadline) {
       throw new EmbeddedRustBackendStartError(
         "readiness-timeout",
         `embedded Rust backend /readyz not 200 within ${timings.readyTimeoutMs}ms`,
       );
     }
-    await deps.clock.sleep(timings.readyPollIntervalMs);
+    await new Promise<void>((resolve) => setTimeout(resolve, timings.readyPollIntervalMs));
   }
 }
 
@@ -691,7 +684,7 @@ function buildHandle(
   const close = (): Promise<void> =>
     (closing ??= (async () => {
       monitor.dispose();
-      await terminateChild(child, timings.shutdownGraceMs, deps.clock);
+      await terminateChild(child, timings.shutdownGraceMs);
       await deps
         .removeBootstrapToken(config.bootstrapTokenPath)
         .catch((err) =>
@@ -727,11 +720,7 @@ function buildHandle(
 /** Signal the child and await its exit within the grace period; SIGKILL on timeout so
  * there is never an orphan. Resolves once the child is gone (or was never alive).
  **/
-async function terminateChild(
-  child: ChildProcess,
-  graceMs: number,
-  clock: EmbeddedRustBackendDeps["clock"],
-): Promise<void> {
+async function terminateChild(child: ChildProcess, graceMs: number): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const timers: ReturnType<typeof setTimeout>[] = [];
   const wait = (ms: number): Promise<void> =>
@@ -768,12 +757,8 @@ async function terminateChild(
   }
 }
 
-/** Bridge the module's minimal clock to a clearable timeout. */
-function setTimeoutHandle(
-  clock: EmbeddedRustBackendDeps["clock"],
-  ms: number,
-  fn: () => void,
-): { clear(): void } {
+/** A clearable frame-entry timeout, owned by the protocol monitor. */
+function setTimeoutHandle(ms: number, fn: () => void): { clear(): void } {
   const timer = setTimeout(fn, ms);
   return {
     clear: () => {

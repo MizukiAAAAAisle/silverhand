@@ -493,6 +493,7 @@ mod tests {
     #[derive(Clone)]
     enum FakeWrites {
         Fault,
+        Unexpected,
         Row(AgentProfileRowWrite),
     }
     impl AgentProfileWriteUnitOfWork for FakeWrites {
@@ -506,6 +507,7 @@ mod tests {
             D: FnOnce(&AgentRowBefore) -> Option<AdmittedAgentProfileEdit> + Send,
         {
             match self {
+                FakeWrites::Unexpected => panic!("row write must not be reached"),
                 FakeWrites::Fault => {
                     #[derive(Debug, Error)]
                     #[error("db down")]
@@ -616,7 +618,7 @@ mod tests {
     // ================= combined text + avatar: single UoW / single announce =================
 
     #[tokio::test]
-    async fn a_combined_text_and_avatar_set_commits_once_and_announces_once() {
+    async fn a_combined_text_and_avatar_set_announces_once_after_a_trustworthy_fact() {
         // before Absent → first avatar; combined with a display_name change.
         let writes = FakeWrites::Row(AgentProfileRowWrite::Committed {
             before: before("Old", None, AgentAvatarRow::Absent),
@@ -679,9 +681,9 @@ mod tests {
         let (_id, _announce, cleanup) = effect.into_parts();
         assert!(matches!(cleanup, BlobCleanup::Deleted));
         assert_eq!(
-            blobs.deleted_pointers(),
-            vec!["agents/prior/blob-9".to_owned()],
-            "the PRIOR blob is cleaned, never the fresh committed one"
+            blobs.deleted(),
+            vec![(agent(), "agents/prior/blob-9".to_owned())],
+            "the prior delete is bound to the subject; the fresh blob is retained"
         );
         assert_eq!(sink.calls(), 1);
     }
@@ -737,7 +739,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_avatar_clear_on_an_absent_avatar_with_a_text_edit_still_commits_once() {
+    async fn an_avatar_clear_on_an_absent_avatar_with_a_text_edit_announces_once() {
         // clear-on-absent is no transition, but the text edit warrants the single commit
         // and the single announce; the avatar blob is untouched.
         let writes = FakeWrites::Row(AgentProfileRowWrite::Committed {
@@ -785,32 +787,6 @@ mod tests {
             vec!["agents/prior/blob-9".to_owned()]
         );
         assert_eq!(sink.calls(), 1);
-    }
-
-    // ================= owner-bound blob face =================
-
-    #[tokio::test]
-    async fn every_blob_delete_rides_an_owner_bound_blob_for_the_subject() {
-        let writes = FakeWrites::Row(AgentProfileRowWrite::Committed {
-            before: before("Name", None, present("agents/prior/blob-9")),
-            row: committed("Name", None, present(FRESH)),
-        });
-        let blobs = FakeBlobs::new(false);
-        let sink = FakeSink::new(false);
-        let edit = InternalProfileEdit {
-            display_name: RequiredEdit::Leave,
-            description: RequiredEdit::Leave,
-            avatar: set_avatar(),
-        };
-        let _ = update_internal_profile(&writes, &blobs, &sink, &agent(), edit, NOW).await;
-        let deletes = blobs.deleted();
-        assert_eq!(deletes.len(), 1);
-        assert_eq!(
-            deletes[0].0,
-            agent(),
-            "the prior-blob delete must be bound to the write subject as owner"
-        );
-        assert_eq!(deletes[0].1, "agents/prior/blob-9".to_owned());
     }
 
     // ================= fresh-orphan cleanup on pre-commit failures =================
@@ -890,7 +866,7 @@ mod tests {
                 Ok(())
             }
         }
-        let writes = FakeWrites::Row(AgentProfileRowWrite::NoSuchAgent);
+        let writes = FakeWrites::Unexpected;
         let sink = FakeSink::new(false);
         let edit = InternalProfileEdit {
             display_name: RequiredEdit::Set("New".to_owned()),

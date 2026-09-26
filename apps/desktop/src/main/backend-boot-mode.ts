@@ -162,31 +162,6 @@ export class RemoteOnlyServerProfileRequiredError extends Error {
   }
 }
 
-export type ProbeSuccessKind = "loopback_ok" | "system_ca_verified" | "insecure_dev_remote";
-
-export type ProfileCommitGuardOutcome =
-  | { allow: true }
-  | {
-      allow: false;
-      reason: "remote_backend_not_yet_supported";
-      message: string;
-    };
-
-export function evaluateProfileCommitGuard(probeKind: ProbeSuccessKind): ProfileCommitGuardOutcome {
-  switch (probeKind) {
-    case "loopback_ok":
-    case "system_ca_verified":
-    case "insecure_dev_remote":
-      return { allow: true };
-    default: {
-      const exhaustive: never = probeKind;
-      throw new Error(
-        `evaluateProfileCommitGuard: unhandled probe success kind: ${String(exhaustive)}`,
-      );
-    }
-  }
-}
-
 export type BackendStartupPlan =
   | {
       mode: "embedded";

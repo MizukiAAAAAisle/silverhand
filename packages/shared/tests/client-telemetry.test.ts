@@ -51,19 +51,17 @@ describe('parseClientInfoHeader', () => {
 
   it('accepts semver prerelease/build variants', () => {
     for (const v of ['0.1.0', '34.0.0', '1.2.3-beta.1', '1.2.3+build.5']) {
-      expect(
-        parseClientInfoHeader(JSON.stringify({ ...VALID, app_version: v })).status,
-        v,
-      ).toBe('valid');
+      expect(parseClientInfoHeader(JSON.stringify({ ...VALID, app_version: v })).status, v).toBe(
+        'valid',
+      );
     }
   });
 
   it('rejects pseudo-versions that are not semver (P2 — fleet data quality)', () => {
     for (const v of ['abc', '---', 'dev', '1', '1.2', 'v1.2.3', '1.2.3 ']) {
-      expect(
-        parseClientInfoHeader(JSON.stringify({ ...VALID, app_version: v })).status,
-        v,
-      ).toBe('invalid');
+      expect(parseClientInfoHeader(JSON.stringify({ ...VALID, app_version: v })).status, v).toBe(
+        'invalid',
+      );
     }
   });
 
@@ -74,9 +72,9 @@ describe('parseClientInfoHeader', () => {
   });
 
   it('reports invalid for a repeated header (array)', () => {
-    expect(
-      parseClientInfoHeader([JSON.stringify(VALID), JSON.stringify(VALID)]).status,
-    ).toBe('invalid');
+    expect(parseClientInfoHeader([JSON.stringify(VALID), JSON.stringify(VALID)]).status).toBe(
+      'invalid',
+    );
   });
 
   it('reports invalid for non-JSON', () => {
@@ -84,19 +82,21 @@ describe('parseClientInfoHeader', () => {
     expect(parseClientInfoHeader('{').status).toBe('invalid');
   });
 
-  it('reports invalid when it exceeds the byte cap', () => {
-    const oversized = JSON.stringify({
-      ...VALID,
-      // pad app_version past the cap; still valid JSON, just too big.
-      app_version: 'x'.repeat(CLIENT_INFO_HEADER_MAX_BYTES + 10),
-    });
-    expect(parseClientInfoHeader(oversized).status).toBe('invalid');
+  it('accepts the byte cap and rejects one byte more independently of field validation', () => {
+    const json = JSON.stringify(VALID);
+    // Internal JSON whitespace survives trim without invalidating any field.
+    const padding = ' '.repeat(
+      CLIENT_INFO_HEADER_MAX_BYTES - new TextEncoder().encode(json).length,
+    );
+    const atLimit = `{${padding}${json.slice(1)}`;
+    expect(parseClientInfoHeader(atLimit)).toEqual({ status: 'valid', value: VALID });
+    expect(parseClientInfoHeader(`{ ${atLimit.slice(1)}`)).toEqual({ status: 'invalid' });
   });
 
   it('rejects unknown keys (strict)', () => {
-    expect(
-      parseClientInfoHeader(JSON.stringify({ ...VALID, injected: 'x' })).status,
-    ).toBe('invalid');
+    expect(parseClientInfoHeader(JSON.stringify({ ...VALID, injected: 'x' })).status).toBe(
+      'invalid',
+    );
   });
 
   // #task:1761 — the API-epoch fields travel as a pair; a half payload is a
@@ -115,15 +115,11 @@ describe('parseClientInfoHeader', () => {
   });
 
   it('rejects a lone epoch field and an inverted range', () => {
+    expect(parseClientInfoHeader(JSON.stringify({ ...VALID, desktop_api_epoch: 1 })).status).toBe(
+      'invalid',
+    );
     expect(
-      parseClientInfoHeader(
-        JSON.stringify({ ...VALID, desktop_api_epoch: 1 }),
-      ).status,
-    ).toBe('invalid');
-    expect(
-      parseClientInfoHeader(
-        JSON.stringify({ ...VALID, minimum_server_api_epoch: 1 }),
-      ).status,
+      parseClientInfoHeader(JSON.stringify({ ...VALID, minimum_server_api_epoch: 1 })).status,
     ).toBe('invalid');
     expect(
       parseClientInfoHeader(

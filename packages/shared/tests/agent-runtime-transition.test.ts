@@ -1,31 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import {
-  CreateAgentInputSchema,
-  SwitchAgentRuntimeInputSchema,
-} from '../src/index.js';
+import { CreateAgentInputSchema, SwitchAgentRuntimeInputSchema } from '../src/index.js';
 
 describe('SwitchAgentRuntimeInputSchema', () => {
   it('requires every tuning key while accepting explicit null defaults', () => {
-    expect(
-      SwitchAgentRuntimeInputSchema.parse({
-        runtime: 'claude',
-        model: null,
-        reasoning_effort: null,
-        fast_mode: null,
-      }),
-    ).toEqual({
+    const explicitDefaults = {
       runtime: 'claude',
       model: null,
       reasoning_effort: null,
       fast_mode: null,
-    });
-    expect(
-      SwitchAgentRuntimeInputSchema.safeParse({
-        runtime: 'claude',
-        model: null,
-        reasoning_effort: null,
-      }).success,
-    ).toBe(false);
+    };
+    expect(SwitchAgentRuntimeInputSchema.parse(explicitDefaults)).toEqual(explicitDefaults);
+    for (const key of ['model', 'reasoning_effort', 'fast_mode'] as const) {
+      const { [key]: _omitted, ...input } = explicitDefaults;
+      const result = SwitchAgentRuntimeInputSchema.safeParse(input);
+      expect(result.success, key).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.map((issue) => issue.path)).toContainEqual([key]);
+      }
+    }
   });
 
   it('validates tuning against the target runtime', () => {
@@ -73,9 +65,7 @@ describe('SwitchAgentRuntimeInputSchema', () => {
         model: 'gpt-5.6-luna',
       }).success,
     ).toBe(false);
-    expect(
-      SwitchAgentRuntimeInputSchema.safeParse({ ...input, model: null }).success,
-    ).toBe(false);
+    expect(SwitchAgentRuntimeInputSchema.safeParse({ ...input, model: null }).success).toBe(false);
   });
 
   it('rejects a structurally-valid but product-unknown token (#task:1492)', () => {
@@ -110,13 +100,10 @@ describe('SwitchAgentRuntimeInputSchema', () => {
 
 describe('CreateAgentInputSchema runtime tuning', () => {
   it('requires a participant name to start with a letter', () => {
-    expect(
-      CreateAgentInputSchema.safeParse({ name: 'agent-2b', runtime: 'claude' })
-        .success,
-    ).toBe(true);
-    expect(
-      CreateAgentInputSchema.safeParse({ name: '2b', runtime: 'claude' }).success,
-    ).toBe(false);
+    expect(CreateAgentInputSchema.safeParse({ name: 'agent-2b', runtime: 'claude' }).success).toBe(
+      true,
+    );
+    expect(CreateAgentInputSchema.safeParse({ name: '2b', runtime: 'claude' }).success).toBe(false);
   });
 
   it('rejects fast mode outside runtimes that support it', () => {

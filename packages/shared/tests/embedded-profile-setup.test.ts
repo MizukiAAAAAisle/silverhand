@@ -19,7 +19,7 @@ describe('embedded profile setup contract', () => {
       expect(CompleteEmbeddedProfileSetupInputSchema.safeParse(input).success).toBe(false);
   });
 
-  it('returns durable status with the current viewer, without credentials', () => {
+  it('requires explicit durable status and preserves the current viewer', () => {
     const user = {
       id: 'u1',
       name: 'Alice',

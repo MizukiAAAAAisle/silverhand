@@ -181,7 +181,9 @@ describe('QoderDriver.encode', () => {
 // ===========================================================================
 describe('QoderDriver version-gated release profile (#task:1909)', () => {
   it('defaults to next-turn-batch before any version is bound', () => {
-    expect(new QoderDriver().releaseProfile).toBe('next-turn-batch');
+    const driver = new QoderDriver();
+    expect(driver.releaseProfile).toBe('next-turn-batch');
+    expect(driver.admissionPolicy).toBe('write-success');
   });
 
   it('claims tool-boundary-steer at and above the verified floor', () => {
@@ -189,6 +191,7 @@ describe('QoderDriver version-gated release profile (#task:1909)', () => {
       const driver = new QoderDriver();
       driver.bindRuntimeVersion(version);
       expect(driver.releaseProfile, version).toBe('tool-boundary-steer');
+      expect(driver.admissionPolicy, version).toBe('lifecycle-start');
     }
   });
 
@@ -209,6 +212,7 @@ describe('QoderDriver version-gated release profile (#task:1909)', () => {
       const driver = new QoderDriver();
       driver.bindRuntimeVersion(version);
       expect(driver.releaseProfile, String(version)).toBe('next-turn-batch');
+      expect(driver.admissionPolicy, String(version)).toBe('write-success');
     }
   });
 

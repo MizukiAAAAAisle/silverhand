@@ -162,10 +162,7 @@ fn safe_500() -> Response {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::{Arc, Mutex};
 
     use axum::{body::Body, extract::Extension, http::Request};
     use serde::Deserialize;
@@ -186,12 +183,13 @@ mod tests {
     struct QueryCase {
         raw: String,
         accepted: bool,
+        value: Option<i64>,
     }
 
     #[derive(Clone)]
-    struct CountingRead(Arc<AtomicUsize>);
+    struct RecordingRead(Arc<Mutex<Vec<i64>>>);
 
-    impl TaskAuthorizedPointRead for CountingRead {
+    impl TaskAuthorizedPointRead for RecordingRead {
         async fn read_authorized_point(
             &self,
             _request: TaskReadRequest,
@@ -203,9 +201,9 @@ mod tests {
             &self,
             _viewer: UserId,
             _conversation: ConversationId,
-            _number: silverhand_backend_core::conversation_messaging::messaging::task::TaskNumber,
+            number: silverhand_backend_core::conversation_messaging::messaging::task::TaskNumber,
         ) -> Result<Option<VisibleTaskPoint>, PersistenceFailure> {
-            self.0.fetch_add(1, Ordering::SeqCst);
+            self.0.lock().unwrap().push(number.get());
             Ok(None)
         }
     }
@@ -234,9 +232,9 @@ mod tests {
         .unwrap();
         for case in fixture.canonical_query {
             let encoded: String = form_urlencoded::byte_serialize(case.raw.as_bytes()).collect();
-            let calls = Arc::new(AtomicUsize::new(0));
+            let numbers = Arc::new(Mutex::new(Vec::new()));
             let app = human_task_point_router(HumanTaskPointState {
-                read: CountingRead(Arc::clone(&calls)),
+                read: RecordingRead(Arc::clone(&numbers)),
             })
             .layer(Extension(UserId::parse("user-1").unwrap()));
             let response = app
@@ -261,8 +259,12 @@ mod tests {
                 case.raw
             );
             assert_eq!(
-                calls.load(Ordering::SeqCst),
-                usize::from(case.accepted),
+                *numbers.lock().unwrap(),
+                if case.accepted {
+                    vec![case.value.expect("accepted corpus value")]
+                } else {
+                    Vec::new()
+                },
                 "{:?}",
                 case.raw
             );

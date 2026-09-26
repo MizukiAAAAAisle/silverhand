@@ -1,12 +1,10 @@
 //! Real-SQLite gates for the task `status` write unit-of-work.
 //!
 //! Drives `SqliteTaskStatusWrite::apply_agent_status` against a database built
-//! from the checked-in current schema. Proves the decision is made from the row
-//! read UNDER THE WRITE LOCK: a legal transition by the assignee applies; a close
-//! records `closed_at`; a non-assignee is refused; an illegal transition is
-//! refused; and — the P1 positive control — a status that stays put while the
-//! ASSIGNEE changes after the caller's intent was formed is refused, with no
-//! status write, because the authorization is re-decided against the fresh row.
+//! from the checked-in current schema. Covers actual transitions, close stamps,
+//! assignment/participation refusals, a deleted peer, and the human override.
+//! Revocations here complete before the write call; lock timing is exercised
+//! separately by task_write_clock.rs.
 
 use silverhand_backend_core::conversation_messaging::messaging::task::{
     AgentEventNames, AgentStatusRefusal, AgentStatusWriteOutcome, StatusTransitionRefusal, TaskId,
@@ -184,7 +182,7 @@ async fn the_creator_of_an_unassigned_self_task_may_advance_it() {
 }
 
 #[tokio::test]
-async fn a_non_assignee_non_creator_is_refused_not_assignee() {
+async fn a_task_assigned_to_another_agent_refuses_its_creator() {
     // Assigned to OTHER; OWNER is neither assignee nor (since assigned) the
     // unassigned-creator: NotAssignee, no write.
     let (_dir, path) = open_db("in_progress", Some(OTHER)).await;
@@ -247,62 +245,12 @@ async fn a_missing_task_is_not_found() {
     assert_eq!(outcome, AgentStatusWriteOutcome::NotFound);
 }
 
-/// P1 POSITIVE CONTROL: the status stays put, but the ASSIGNEE is reassigned to
-/// another agent after the caller formed its intent. Because the authorization is
-/// re-decided against the row read under the write lock — not a pre-lock witness —
-/// the OWNER's status change is refused NotAssignee, and no status is written.
+/// Removed conversation membership is a uniform NotFound with no status write.
 #[tokio::test]
-async fn a_concurrent_reassignment_before_commit_refuses_the_stale_authorization() {
-    // Row starts assigned to OWNER; the caller intends OWNER -> in_review.
+async fn an_agent_without_conversation_membership_is_notfound_with_zero_status_write() {
     let (_dir, path) = open_db("in_progress", Some(OWNER)).await;
 
-    // Simulate the concurrent claim that reassigns to OTHER (status unchanged)
-    // BEFORE the status write runs.
-    {
-        let mut connection = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
-            .await
-            .unwrap();
-        sqlx::query("UPDATE tasks SET assignee_agent_id = ? WHERE id = ?")
-            .bind(OTHER)
-            .bind(TASK)
-            .execute(&mut connection)
-            .await
-            .unwrap();
-    }
-
-    // The OWNER's status write now re-reads the fresh row (assignee = OTHER, status
-    // still in_progress) and refuses: the stale authorization does not apply.
-    let writer = SqliteTaskStatusWrite::open(&path).await.unwrap();
-    let outcome = writer
-        .apply_agent_status(
-            &task_id(),
-            &owner(),
-            &AgentEventNames::new("actor", "Actor"),
-            TaskStatus::InReview,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        outcome,
-        AgentStatusWriteOutcome::Refused(AgentStatusRefusal::NotAssignee),
-        "a status change stale-authorized against a since-reassigned row must be refused"
-    );
-    assert_eq!(
-        read_status(&path, TASK).await.0,
-        "in_progress",
-        "no status is written when the fresh row refuses"
-    );
-}
-
-/// RACE FALSIFIER 1 (workspace participation): the actor is a roster member at
-/// precheck, but the membership is removed before the write transaction runs. The
-/// in-tx participation read then fails and the write is a uniform `NotFound` (the
-/// write-face ACL, no existence leak), with no status write.
-#[tokio::test]
-async fn membership_removed_after_precheck_is_notfound_in_tx_with_zero_write() {
-    let (_dir, path) = open_db("in_progress", Some(OWNER)).await;
-
-    // Concurrent removal of the OWNER's workspace roster row (status unchanged).
+    // Remove the OWNER's conversation roster row before calling the writer.
     {
         let mut connection = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
             .await
@@ -338,15 +286,9 @@ async fn membership_removed_after_precheck_is_notfound_in_tx_with_zero_write() {
     );
 }
 
-/// RACE FALSIFIER 2 (direct-pair read-only): the task is on a direct pair the actor
-/// participates in; after precheck the PEER endpoint's principal is deleted
-/// (tombstoned). The in-tx read-only check then observes the gone peer and the
-/// write is `ConversationReadonly`, with no status write. Participation still holds
-/// (the shared predicate does not narrow by endpoint_deleted), so this is the
-/// read-only fact, not a participation miss — proving the participation → read-only
-/// ordering.
+/// A participant still sees the deleted peer as read-only, not a membership miss.
 #[tokio::test]
-async fn a_deleted_direct_pair_peer_after_precheck_is_conversation_readonly_in_tx() {
+async fn a_deleted_direct_pair_peer_is_conversation_readonly_with_zero_status_write() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("tasks.sqlite");
     let mut connection = current_schema::create_current_schema(&path).await;
@@ -410,7 +352,7 @@ async fn a_deleted_direct_pair_peer_after_precheck_is_conversation_readonly_in_t
     .unwrap();
     connection.close().await.unwrap();
 
-    // Concurrent deletion of the PEER (OTHER) principal after precheck.
+    // Delete the PEER (OTHER) principal before calling the writer.
     {
         let mut connection = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
             .await

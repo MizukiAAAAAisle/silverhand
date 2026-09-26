@@ -105,11 +105,11 @@ function normalizeRuntimeScopeFixture(value: unknown): unknown {
   }
   const frame = value as Record<string, unknown>;
   if (
-    typeof frame.event === 'string'
-    && frame.event.startsWith('runtime_')
-    && typeof frame.conversation_id === 'string'
-    && typeof frame.agent_id === 'string'
-    && frame.runtime_scope === undefined
+    typeof frame.event === 'string' &&
+    frame.event.startsWith('runtime_') &&
+    typeof frame.conversation_id === 'string' &&
+    typeof frame.agent_id === 'string' &&
+    frame.runtime_scope === undefined
   ) {
     return {
       ...frame,
@@ -121,16 +121,16 @@ function normalizeRuntimeScopeFixture(value: unknown): unknown {
     };
   }
   if (
-    (frame.intent === 'runtime_stop' || frame.intent === 'runtime_clear_session')
-    && frame.params !== null
-    && typeof frame.params === 'object'
-    && !Array.isArray(frame.params)
+    (frame.intent === 'runtime_stop' || frame.intent === 'runtime_clear_session') &&
+    frame.params !== null &&
+    typeof frame.params === 'object' &&
+    !Array.isArray(frame.params)
   ) {
     const params = frame.params as Record<string, unknown>;
     if (
-      typeof params.conversation_id === 'string'
-      && typeof params.agent_id === 'string'
-      && params.runtime_scope === undefined
+      typeof params.conversation_id === 'string' &&
+      typeof params.agent_id === 'string' &&
+      params.runtime_scope === undefined
     ) {
       const { conversation_id, agent_id, ...rest } = params;
       return {
@@ -146,18 +146,14 @@ function normalizeRuntimeScopeFixture(value: unknown): unknown {
       };
     }
   }
-  if (
-    frame.result !== null
-    && typeof frame.result === 'object'
-    && !Array.isArray(frame.result)
-  ) {
+  if (frame.result !== null && typeof frame.result === 'object' && !Array.isArray(frame.result)) {
     const result = frame.result as Record<string, unknown>;
     if (Array.isArray(result.runtimes)) {
       return {
         ...frame,
         result: {
           ...result,
-          runtimes: result.runtimes.map(runtime => {
+          runtimes: result.runtimes.map((runtime) => {
             if (runtime === null || typeof runtime !== 'object' || Array.isArray(runtime)) {
               return runtime;
             }
@@ -229,8 +225,7 @@ const REQUESTS: WireFixture[] = [
   },
   {
     name: 'request/conversation_log_debug-enable',
-    description:
-      'Conversation log debug toggle — enabled arm carries expires_at.',
+    description: 'Conversation log debug toggle — enabled arm carries expires_at.',
     frame: enc({
       id: 'req-cld-on',
       intent: 'conversation_log_debug',
@@ -240,8 +235,7 @@ const REQUESTS: WireFixture[] = [
   },
   {
     name: 'request/conversation_log_debug-disable',
-    description:
-      'Conversation log debug toggle — disabled arm omits expires_at.',
+    description: 'Conversation log debug toggle — disabled arm omits expires_at.',
     frame: enc({
       id: 'req-cld-off',
       intent: 'conversation_log_debug',
@@ -256,7 +250,12 @@ const REQUESTS: WireFixture[] = [
     frame: enc({
       id: 'req-start-1',
       intent: 'runtime_start',
-      params: { runtime_generation: 1, conversation_id: C, agent_id: A, options: RUNTIME_START_OPTIONS },
+      params: {
+        runtime_generation: 1,
+        conversation_id: C,
+        agent_id: A,
+        options: RUNTIME_START_OPTIONS,
+      },
     }),
     kind: { kind: 'request', intent: 'runtime_start' },
   },
@@ -288,7 +287,7 @@ const REQUESTS: WireFixture[] = [
         target: { conversation_id: C, workspace: null },
         agent_id: A,
         delivery_ids: DELIVERY_IDS,
-        deliveries: DELIVERY_IDS.map(id => ({
+        deliveries: DELIVERY_IDS.map((id) => ({
           delivery_id: id,
           seq: id,
           presentation: {
@@ -305,8 +304,7 @@ const REQUESTS: WireFixture[] = [
   },
   {
     name: 'request/runtime_deliver-schedule_fire',
-    description:
-      '#task:1417 Stage 2 delivery — kind=schedule_fire (timer-driven).',
+    description: '#task:1417 Stage 2 delivery — kind=schedule_fire (timer-driven).',
     frame: enc({
       id: 'req-deliver-2',
       intent: 'runtime_deliver',
@@ -389,8 +387,7 @@ const REQUESTS: WireFixture[] = [
   },
   {
     name: 'request/runtime_clear_session',
-    description:
-      'runtime_clear_session — drop driver-side session id (e.g. claude resume).',
+    description: 'runtime_clear_session — drop driver-side session id (e.g. claude resume).',
     frame: enc({
       id: 'req-clear',
       intent: 'runtime_clear_session',
@@ -448,8 +445,7 @@ const REQUESTS: WireFixture[] = [
   },
   {
     name: 'request/host_outbound_attach',
-    description:
-      'Late-attach the daemon outbound WS to a daemon-config.json (D3.a Commit 3).',
+    description: 'Late-attach the daemon outbound WS to a daemon-config.json (D3.a Commit 3).',
     frame: enc({
       id: 'req-outbound-attach',
       intent: 'host_outbound_attach',
@@ -538,7 +534,7 @@ const REQUESTS: WireFixture[] = [
   {
     name: 'request/agent_workspace_tree',
     description:
-      "#task:811: flat tree of every visible file/directory under the agent home dir. Backend sends ONLY {agent_id} — no path. The daemon walks resolveAgentDir(agent_id), filters dotfiles + symlinks (intermediate or leaf), and emits `nodes` ordered (parent dir, kind=directory-first, name). A brand-new agent (no L1 dir yet) returns `{ nodes: [] }` gracefully — never an error.",
+      '#task:811: flat tree of every visible file/directory under the agent home dir. Backend sends ONLY {agent_id} — no path. The daemon walks resolveAgentDir(agent_id), filters dotfiles + symlinks (intermediate or leaf), and emits `nodes` ordered (parent dir, kind=directory-first, name). A brand-new agent (no L1 dir yet) returns `{ nodes: [] }` gracefully — never an error.',
     frame: enc({
       id: 'req-agent-workspace-tree-1',
       intent: 'agent_workspace_tree',
@@ -551,7 +547,7 @@ const REQUESTS: WireFixture[] = [
   {
     name: 'request/agent_workspace_file_read',
     description:
-      "#task:811: read one file from the agent home dir by virtual path. Backend forwards a /-joined virtual path (no leading or trailing slash, no `.`/`..`/dotfile/NUL/backslash segments); the daemon enforces those rules + a per-segment lstat walk (refuses symlinks intermediate or leaf) + a final realpath boundary check against the agent-home base. Bounded preview cap (daemon-side); `truncated` is set when exceeded.",
+      '#task:811: read one file from the agent home dir by virtual path. Backend forwards a /-joined virtual path (no leading or trailing slash, no `.`/`..`/dotfile/NUL/backslash segments); the daemon enforces those rules + a per-segment lstat walk (refuses symlinks intermediate or leaf) + a final realpath boundary check against the agent-home base. Bounded preview cap (daemon-side); `truncated` is set when exceeded.',
     frame: enc({
       id: 'req-agent-workspace-file-read-1',
       intent: 'agent_workspace_file_read',
@@ -691,8 +687,7 @@ const REQUESTS: WireFixture[] = [
 const RESPONSES_SUCCESS: WireFixture[] = [
   {
     name: 'response/hello',
-    description:
-      'hello result — protocol_version + daemon identity + capabilities.',
+    description: 'hello result — protocol_version + daemon identity + capabilities.',
     frame: enc({
       id: 'req-hello',
       result: {
@@ -808,8 +803,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   },
   {
     name: 'response/conversation_log_debug-enabled',
-    description:
-      'Conversation log debug result — enabled with future expires_at.',
+    description: 'Conversation log debug result — enabled with future expires_at.',
     frame: enc({
       id: 'req-cld-on',
       result: { ok: true, enabled: true, expires_at: TS + 60_000 },
@@ -818,8 +812,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   },
   {
     name: 'response/conversation_log_debug-disabled',
-    description:
-      'Conversation log debug result — disabled, expires_at:null.',
+    description: 'Conversation log debug result — disabled, expires_at:null.',
     frame: enc({
       id: 'req-cld-off',
       result: { ok: true, enabled: false, expires_at: null },
@@ -828,8 +821,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   },
   {
     name: 'response/agent_message_send-success',
-    description:
-      'Daemon-owned freshness send success returns backend message id and seq.',
+    description: 'Daemon-owned freshness send success returns backend message id and seq.',
     frame: enc({
       id: 'req-agent-message-send-1',
       result: {
@@ -846,8 +838,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   },
   {
     name: 'response/agent_stale_resolve-success',
-    description:
-      'Daemon-owned stale resolution consumed the pending event and recorded obsolete.',
+    description: 'Daemon-owned stale resolution consumed the pending event and recorded obsolete.',
     frame: enc({
       id: 'req-agent-stale-resolve-1',
       result: { ok: true, resolved: true },
@@ -949,8 +940,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   },
   {
     name: 'response/runtime_start-cooldown',
-    description:
-      'runtime_start cooldown arm — started:false + reason=init_cooldown (Cindy 3c).',
+    description: 'runtime_start cooldown arm — started:false + reason=init_cooldown (Cindy 3c).',
     frame: enc({
       id: 'req-start-3',
       result: {
@@ -996,6 +986,16 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     frame: enc({
       id: 'req-deliver-1',
       result: { disposition: 'admitted', pid: PID, started_at: TS },
+    }),
+    kind: { kind: 'response_success', intent: 'runtime_deliver' },
+  },
+  {
+    name: 'response/runtime_deliver-deferred',
+    description:
+      'Ready handle retained the delivery for a later safe input window; custody transfers without claiming stdin admission.',
+    frame: enc({
+      id: 'req-deliver-1',
+      result: { disposition: 'deferred', pid: PID, started_at: TS },
     }),
     kind: { kind: 'response_success', intent: 'runtime_deliver' },
   },
@@ -1105,8 +1105,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   },
   {
     name: 'response/host_outbound_attach-started',
-    description:
-      'Late-attach success first time: action=started, fresh outbound client spawned.',
+    description: 'Late-attach success first time: action=started, fresh outbound client spawned.',
     frame: enc({
       id: 'req-outbound-attach',
       result: {
@@ -1119,8 +1118,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   },
   {
     name: 'response/host_outbound_attach-noop',
-    description:
-      'Late-attach success on same path with live client: action=noop, no respawn.',
+    description: 'Late-attach success on same path with live client: action=noop, no respawn.',
     frame: enc({
       id: 'req-outbound-attach',
       result: {
@@ -1147,8 +1145,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   },
   {
     name: 'response/host_outbound_attach-failed-path_not_absolute',
-    description:
-      'Late-attach refusal: config_path must be absolute. Existing client untouched.',
+    description: 'Late-attach refusal: config_path must be absolute. Existing client untouched.',
     frame: enc({
       id: 'req-outbound-attach',
       result: {
@@ -1329,8 +1326,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   },
   {
     name: 'response/host_proxy_config_get',
-    description:
-      'Daemon-local proxy config read result. Server settings never carry these bytes.',
+    description: 'Daemon-local proxy config read result. Server settings never carry these bytes.',
     frame: enc({
       id: 'req-host-proxy-get',
       result: {
@@ -1344,8 +1340,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   },
   {
     name: 'response/host_proxy_config_set',
-    description:
-      'Daemon-local proxy config write result echoes the normalized config.',
+    description: 'Daemon-local proxy config write result echoes the normalized config.',
     frame: enc({
       id: 'req-host-proxy-set',
       result: {
@@ -1366,8 +1361,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
       result: {
         ok: true,
         agent_dir: '/home/silverhand/.silverhand/agents/aid_FpzaAEM',
-        agent_home_workspace_path:
-          '/home/silverhand/.silverhand/agents/aid_FpzaAEM',
+        agent_home_workspace_path: '/home/silverhand/.silverhand/agents/aid_FpzaAEM',
         materialized_at: 1_730_000_000_000,
       },
     }),
@@ -1388,8 +1382,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
           },
           {
             workspace_id: 'ws_8K2nQ',
-            agent_dir:
-              '/home/silverhand/.silverhand/agents/aid_FpzaAEM/workspaces/ws_8K2nQ',
+            agent_dir: '/home/silverhand/.silverhand/agents/aid_FpzaAEM/workspaces/ws_8K2nQ',
           },
         ],
         unresolved: ['ws_missing'],
@@ -1539,8 +1532,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
 const RESPONSES_ERROR: WireFixture[] = [
   {
     name: 'response/error-unknown_intent',
-    description:
-      'Daemon received an intent name not in the registry (typo / version skew).',
+    description: 'Daemon received an intent name not in the registry (typo / version skew).',
     frame: enc({
       id: 'req-bogus',
       error: { code: 'unknown_intent', message: 'unknown intent: foo' },
@@ -1578,8 +1570,7 @@ const RESPONSES_ERROR: WireFixture[] = [
   },
   {
     name: 'response/error-request_too_large',
-    description:
-      'Incoming frame exceeded MAX_FRAME_BYTES — splitter signalled overflow.',
+    description: 'Incoming frame exceeded MAX_FRAME_BYTES — splitter signalled overflow.',
     frame: enc({
       id: 'req-huge',
       error: { code: 'request_too_large', message: 'frame > 1 MiB' },
@@ -1613,7 +1604,8 @@ const RESPONSES_ERROR_TYPED: WireFixture[] = [
       id: 'req-agent-materialize-1',
       error: {
         code: 'agent_dir_collision',
-        message: 'agent_dir already materialized with mismatched metadata; sentinel.template_choice=minimal but request.template_choice=default',
+        message:
+          'agent_dir already materialized with mismatched metadata; sentinel.template_choice=minimal but request.template_choice=default',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_materialize' },
@@ -1626,7 +1618,8 @@ const RESPONSES_ERROR_TYPED: WireFixture[] = [
       id: 'req-agent-materialize-1',
       error: {
         code: 'fs_quota_exceeded',
-        message: 'failed to seed template under /home/silverhand/.silverhand/agents/aid_X: ENOSPC: no space left on device',
+        message:
+          'failed to seed template under /home/silverhand/.silverhand/agents/aid_X: ENOSPC: no space left on device',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_materialize' },
@@ -1678,7 +1671,8 @@ const RESPONSES_ERROR_TYPED: WireFixture[] = [
       id: 'req-agent-materialize-1',
       error: {
         code: 'internal_error',
-        message: 'failed to seed template under /home/silverhand/.silverhand/agents/aid_X: EIO: i/o error',
+        message:
+          'failed to seed template under /home/silverhand/.silverhand/agents/aid_X: EIO: i/o error',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_materialize' },
@@ -1688,8 +1682,7 @@ const RESPONSES_ERROR_TYPED: WireFixture[] = [
   // (custody facts travel only in the result outcomes).
   {
     name: 'response/agent_stale_receive-error-agent_deleting',
-    description:
-      'The terminal deletion fence refuses a new stale-receive custody reservation.',
+    description: 'The terminal deletion fence refuses a new stale-receive custody reservation.',
     frame: enc({
       id: 'req-agent-stale-receive-1',
       error: {
@@ -1720,7 +1713,8 @@ const RESPONSES_ERROR_TYPED: WireFixture[] = [
       id: 'req-agent-stale-receive-1',
       error: {
         code: 'stale_event_replaced',
-        message: 'pending stale event changed while the pull was waiting; re-issue against the new event',
+        message:
+          'pending stale event changed while the pull was waiting; re-issue against the new event',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_stale_receive' },
@@ -1746,7 +1740,8 @@ const RESPONSES_ERROR_TYPED: WireFixture[] = [
       id: 'req-agent-stale-receive-1',
       error: {
         code: 'handoff_unsupported',
-        message: 'agent_stale_receive requires an ingress that proves response transport handoff (control socket only)',
+        message:
+          'agent_stale_receive requires an ingress that proves response transport handoff (control socket only)',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_stale_receive' },
@@ -1773,8 +1768,7 @@ const AGENT_WORKSPACE_INDEX_ERROR_FIXTURES: WireFixture[] = [
   },
   {
     name: 'response/agent_workspace_index-error-internal_error',
-    description:
-      'Catch-all for an unexpected failure while resolving agent_dir entries.',
+    description: 'Catch-all for an unexpected failure while resolving agent_dir entries.',
     frame: enc({
       id: 'req-agent-workspace-index-1',
       error: { code: 'internal_error', message: 'unexpected resolver failure' },
@@ -1848,8 +1842,7 @@ const AGENT_WORKSPACE_TREE_ERROR_FIXTURES: WireFixture[] = [
   },
   {
     name: 'response/agent_workspace_tree-error-internal_error',
-    description:
-      'Catch-all for an unexpected failure while walking the agent home dir.',
+    description: 'Catch-all for an unexpected failure while walking the agent home dir.',
     frame: enc({
       id: 'req-agent-workspace-tree-1',
       error: { code: 'internal_error', message: 'unexpected walk failure' },
@@ -1995,8 +1988,7 @@ const AGENT_L2_SEED_ERROR_FIXTURES: WireFixture[] = [
   },
   {
     name: 'response/agent_l2_seed-error-internal_error',
-    description:
-      'Catch-all for an unexpected failure while seeding the L2 dir.',
+    description: 'Catch-all for an unexpected failure while seeding the L2 dir.',
     frame: enc({
       id: 'req-agent-l2-seed-1',
       error: { code: 'internal_error', message: 'unexpected seed failure' },
@@ -2008,7 +2000,8 @@ const AGENT_L2_SEED_ERROR_FIXTURES: WireFixture[] = [
 const AGENT_FILES_PURGE_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/agent_files_purge-error-quiesce_failed',
-    description: 'A runtime child remained alive after SIGKILL timeout; rm did not run and the terminal fence remains.',
+    description:
+      'A runtime child remained alive after SIGKILL timeout; rm did not run and the terminal fence remains.',
     frame: enc({
       id: 'req-agent-files-purge-1',
       error: { code: 'quiesce_failed', message: 'runtime child did not exit' },
@@ -2024,15 +2017,14 @@ const AGENT_FILES_PURGE_ERROR_FIXTURES: WireFixture[] = [
       error: {
         code: 'partial_purge',
         message:
-          "failed to remove agent home tree /home/.silverhand/agents/aid_FpzaAEM: EACCES: permission denied",
+          'failed to remove agent home tree /home/.silverhand/agents/aid_FpzaAEM: EACCES: permission denied',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_files_purge' },
   },
   {
     name: 'response/agent_files_purge-error-internal_error',
-    description:
-      'Catch-all for an unexpected failure while purging the agent files.',
+    description: 'Catch-all for an unexpected failure while purging the agent files.',
     frame: enc({
       id: 'req-agent-files-purge-1',
       error: { code: 'internal_error', message: 'unexpected purge failure' },
@@ -2067,8 +2059,7 @@ const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
       id: 'req-runtime-start-1',
       error: {
         code: 'workspace_not_provisioned',
-        message:
-          "agent_home workspace ref 'agent-home:a2' does not belong to agent 'a1'",
+        message: "agent_home workspace ref 'agent-home:a2' does not belong to agent 'a1'",
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'runtime_start' },
@@ -2124,8 +2115,7 @@ const RUNTIME_DELIVER_ERROR_FIXTURES: WireFixture[] = [
       id: 'req-runtime-deliver-1',
       error: {
         code: 'workspace_not_provisioned',
-        message:
-          "agent_home workspace ref 'agent-home:a2' does not belong to agent 'a1'",
+        message: "agent_home workspace ref 'agent-home:a2' does not belong to agent 'a1'",
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'runtime_deliver' },
@@ -2198,7 +2188,10 @@ const AGENT_PROFILE_MCP_ERROR_FIXTURES: WireFixture[] = [
       'Write re-validates fail-loud: a payload that fails the canonical schema is rejected and nothing is persisted.',
     frame: enc({
       id: 'req-agent-profile-mcp-write-1',
-      error: { code: 'invalid_config', message: 'invalid mcp config: mcpServers.fs: unrecognized key "bogus"' },
+      error: {
+        code: 'invalid_config',
+        message: 'invalid mcp config: mcpServers.fs: unrecognized key "bogus"',
+      },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_profile_mcp_write' },
   },
@@ -2306,8 +2299,7 @@ const EVENTS: WireFixture[] = [
   },
   {
     name: 'event/runtime_state-idle',
-    description:
-      'Driver emitted a run-state transition; daemon broadcasts to backend.',
+    description: 'Driver emitted a run-state transition; daemon broadcasts to backend.',
     frame: enc({
       runtime_generation: 1,
       event: 'runtime_state',
@@ -2439,8 +2431,7 @@ const EVENTS: WireFixture[] = [
   },
   {
     name: 'event/runtime_delivery_failed-write_failed',
-    description:
-      '#task:1417 Stage 2 — unified delivery rollback: stdin write failed mid-batch.',
+    description: '#task:1417 Stage 2 — unified delivery rollback: stdin write failed mid-batch.',
     frame: enc({
       runtime_generation: 1,
       event: 'runtime_delivery_failed',
@@ -2469,8 +2460,7 @@ const EVENTS: WireFixture[] = [
   },
   {
     name: 'event/runtime_init_timeout-silence',
-    description:
-      'Tier 1 watchdog: silence between bytes for too long. Retrying.',
+    description: 'Tier 1 watchdog: silence between bytes for too long. Retrying.',
     frame: enc({
       runtime_generation: 1,
       event: 'runtime_init_timeout',
@@ -2488,8 +2478,7 @@ const EVENTS: WireFixture[] = [
   },
   {
     name: 'event/runtime_init_timeout-pre_protocol_cap',
-    description:
-      'Tier 2 watchdog: hit the pre-protocol cap before driver said hello. Retrying.',
+    description: 'Tier 2 watchdog: hit the pre-protocol cap before driver said hello. Retrying.',
     frame: enc({
       runtime_generation: 1,
       event: 'runtime_init_timeout',
@@ -2569,8 +2558,7 @@ const EVENTS: WireFixture[] = [
   },
   {
     name: 'event/runtime_output_dropped',
-    description:
-      'Daemon shed runtime_output bytes to enforce per-(conv,agent) buffer cap.',
+    description: 'Daemon shed runtime_output bytes to enforce per-(conv,agent) buffer cap.',
     frame: enc({
       event: 'runtime_output_dropped',
       conversation_id: C,

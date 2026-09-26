@@ -623,9 +623,8 @@ mod tests {
     }
 
     #[test]
-    fn empty_attachments_and_reactions_are_null_and_metadata_null_is_distinct() {
-        // #7: TS emits `attachments: null` / `reactions: null` when empty (NOT `[]`);
-        // metadata `null` is a distinct absent-object carrier.
+    fn null_metadata_attachments_and_reactions_remain_null_in_the_projection() {
+        // Storage represents absent carriers as null; projection preserves them.
         let dto = message_dto(
             &msg(
                 serde_json::Value::Null,
@@ -642,10 +641,8 @@ mod tests {
     }
 
     #[test]
-    fn a_malicious_port_cannot_emit_a_wrong_shaped_200() {
-        // Even a port that hands back metadata=7 / attachments={} /
-        // reactions="x" is fail-closed at the wire projector — each wrong shape is an
-        // Err, never a wrong-shaped 200.
+    fn message_projection_rejects_wrong_shaped_json_carriers() {
+        // Each malformed top-level carrier is a projection error.
         // metadata that is not object|null.
         assert!(
             message_dto(
@@ -688,7 +685,7 @@ mod tests {
     }
 
     #[test]
-    fn a_malicious_port_cannot_emit_a_wrong_shaped_attachment_or_reaction_item() {
+    fn message_projection_rejects_malformed_attachment_and_reaction_items() {
         // Per-ITEM domain validation, not just top-level array shape.
         let bad_attachment_cases = [
             // a non-object element

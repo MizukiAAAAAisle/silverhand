@@ -821,24 +821,30 @@ mod tests {
         ] {
             assert!(AttachmentContentType::parse(content_type).is_err());
         }
-        assert!(
+        let projected = |size, revision, created_at| {
             AttachmentRecord::projected(
                 AttachmentId::parse("a").unwrap(),
                 ConversationId::parse("c").unwrap(),
                 None,
                 AttachmentFilename::parse("a.bin").unwrap(),
-                -1,
+                size,
                 AttachmentContentType::parse("application/octet-stream").unwrap(),
                 StoredBlob::new(
                     StorageKind::Local,
-                    BlobStorageKey::parse("a/b.bin").unwrap()
+                    BlobStorageKey::parse("a/b.bin").unwrap(),
                 ),
-                0,
+                revision,
                 AttachmentCreator::Human(UserId::parse("u").unwrap()),
-                -1,
+                created_at,
             )
-            .is_err()
-        );
+        };
+        assert!(projected(0, 1, 0).is_ok());
+        for (size, revision, created_at) in [(-1, 1, 0), (0, 0, 0), (0, 1, -1)] {
+            assert!(
+                projected(size, revision, created_at).is_err(),
+                "size={size}, revision={revision}, created_at={created_at}"
+            );
+        }
     }
 
     #[test]

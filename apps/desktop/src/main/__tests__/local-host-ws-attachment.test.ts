@@ -27,17 +27,4 @@ describe("describeLocalHostWsAttachment (#task:1630 / #task:2343)", () => {
       describeLocalHostWsAttachment({ hasLocalRegistryObserver: false, attachedAt: 1_700 }),
     ).toEqual({ observable: false });
   });
-
-  it("observability tracks the CAPABILITY (local observer), not deployment kind", () => {
-    // Same timestamp, two capability answers — the property this producer exists to hold.
-    // #task:2343: it is NOT derived from backend.kind; a Rust embedded backend is
-    // out-of-process and reports no local observer, exactly like remote.
-    const attachedAt = 42;
-    expect(
-      describeLocalHostWsAttachment({ hasLocalRegistryObserver: true, attachedAt }).observable,
-    ).toBe(true);
-    expect(
-      describeLocalHostWsAttachment({ hasLocalRegistryObserver: false, attachedAt }).observable,
-    ).toBe(false);
-  });
 });

@@ -218,20 +218,6 @@ async fn a_non_participant_claim_is_notfound() {
 }
 
 #[tokio::test]
-async fn an_agent_unclaims_its_own_task() {
-    let (_dir, path) = open_db("in_progress", Some(OWNER)).await;
-    let writer = SqliteTaskClaimWrite::open(&path).await.unwrap();
-    let outcome = writer.agent_unclaim(&task_id(), &owner()).await.unwrap();
-    assert!(matches!(outcome, UnclaimOutcome::Unclaimed(_)));
-    let (status, assignee) = read_assignment(&path).await;
-    assert_eq!(assignee, None);
-    assert_eq!(
-        status, "todo",
-        "agent release returns the task to the todo pool"
-    );
-}
-
-#[tokio::test]
 async fn an_agent_cannot_unclaim_a_task_it_does_not_own() {
     let (_dir, path) = open_db("in_progress", Some(OTHER)).await;
     let writer = SqliteTaskClaimWrite::open(&path).await.unwrap();
@@ -251,46 +237,35 @@ async fn unclaiming_a_terminal_task_is_refused() {
 }
 
 #[tokio::test]
-async fn a_human_unclaim_is_ownership_agnostic() {
-    // Assigned to OTHER; a participant human may still clear it.
-    let (_dir, path) = open_db("in_progress", Some(OTHER)).await;
-    let writer = SqliteTaskClaimWrite::open(&path).await.unwrap();
-    let outcome = writer
-        .human_unclaim(&task_id(), &UserId::parse(HUMAN).unwrap())
-        .await
-        .unwrap();
-    assert!(matches!(outcome, UnclaimOutcome::Unclaimed(_)));
-    assert_eq!(read_assignment(&path).await.1, None);
-}
+async fn agent_and_human_unclaim_keep_their_distinct_workflow_rules() {
+    for initial_status in ["in_progress", "in_review"] {
+        let (_dir, agent_path) = open_db(initial_status, Some(OWNER)).await;
+        let agent_writer = SqliteTaskClaimWrite::open(&agent_path).await.unwrap();
+        let agent_outcome = agent_writer
+            .agent_unclaim(&task_id(), &owner())
+            .await
+            .unwrap();
+        let UnclaimOutcome::Unclaimed(agent_witness) = agent_outcome else {
+            panic!("agent release must commit");
+        };
+        assert_eq!(agent_witness.status, TaskStatus::Todo);
+        assert_eq!(read_assignment(&agent_path).await, ("todo".into(), None));
 
-#[tokio::test]
-async fn agent_and_human_unclaim_keep_their_distinct_in_review_state_machines() {
-    let (_dir, agent_path) = open_db("in_review", Some(OWNER)).await;
-    let agent_writer = SqliteTaskClaimWrite::open(&agent_path).await.unwrap();
-    let agent_outcome = agent_writer
-        .agent_unclaim(&task_id(), &owner())
-        .await
-        .unwrap();
-    let UnclaimOutcome::Unclaimed(agent_witness) = agent_outcome else {
-        panic!("agent release must commit");
-    };
-    assert_eq!(agent_witness.status, TaskStatus::Todo);
-    assert_eq!(read_assignment(&agent_path).await, ("todo".into(), None));
-
-    let (_dir, human_path) = open_db("in_review", Some(OWNER)).await;
-    let human_writer = SqliteTaskClaimWrite::open(&human_path).await.unwrap();
-    let human_outcome = human_writer
-        .human_unclaim(&task_id(), &UserId::parse(HUMAN).unwrap())
-        .await
-        .unwrap();
-    let UnclaimOutcome::Unclaimed(human_witness) = human_outcome else {
-        panic!("human unassign must commit");
-    };
-    assert_eq!(human_witness.status, TaskStatus::InReview);
-    assert_eq!(
-        read_assignment(&human_path).await,
-        ("in_review".into(), None)
-    );
+        let (_dir, human_path) = open_db(initial_status, Some(OTHER)).await;
+        let human_writer = SqliteTaskClaimWrite::open(&human_path).await.unwrap();
+        let human_outcome = human_writer
+            .human_unclaim(&task_id(), &UserId::parse(HUMAN).unwrap())
+            .await
+            .unwrap();
+        let UnclaimOutcome::Unclaimed(human_witness) = human_outcome else {
+            panic!("human unassign must commit");
+        };
+        assert_eq!(human_witness.status.as_str(), initial_status);
+        assert_eq!(
+            read_assignment(&human_path).await,
+            (initial_status.into(), None)
+        );
+    }
 }
 
 #[tokio::test]

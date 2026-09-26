@@ -49,10 +49,6 @@ export interface RuntimePidfileReconcileResult {
   errors: number;
 }
 
-export interface RuntimePidfileDeps {
-  kill?: (pid: number, signal?: NodeJS.Signals | 0) => void;
-}
-
 type ProbeResult = 'alive' | 'dead' | 'eperm' | 'error';
 
 export function defaultRuntimePidRootDir(): string {
@@ -135,7 +131,6 @@ export function reconcileRuntimePidfiles(params: {
   rootDir: string;
   selfDaemonInstanceId: string;
   logger: DaemonLogger;
-  deps?: RuntimePidfileDeps;
 }): RuntimePidfileReconcileResult {
   const result: RuntimePidfileReconcileResult = {
     skipped: false,
@@ -237,7 +232,7 @@ export function reconcileRuntimePidfiles(params: {
           continue;
         }
 
-        const probe = probeProcess(record.pid, params.deps);
+        const probe = probeProcess(record.pid);
         if (probe === 'dead') {
           unlinkIfExists(filePath);
           result.unlinkedDead++;
@@ -281,7 +276,7 @@ export function reconcileRuntimePidfiles(params: {
           continue;
         }
 
-        const killed = killForeignRuntime(record.pid, params.deps);
+        const killed = killForeignRuntime(record.pid);
         if (killed === 'killed' || killed === 'gone') {
           unlinkIfExists(filePath);
           result.killedForeign++;
@@ -369,9 +364,9 @@ function readRuntimePidfile(filePath: string): RuntimePidfileRecord | null {
   }
 }
 
-function probeProcess(pid: number, deps?: RuntimePidfileDeps): ProbeResult {
+function probeProcess(pid: number): ProbeResult {
   try {
-    (deps?.kill ?? process.kill)(pid, 0);
+    process.kill(pid, 0);
     return 'alive';
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -381,12 +376,9 @@ function probeProcess(pid: number, deps?: RuntimePidfileDeps): ProbeResult {
   }
 }
 
-function killForeignRuntime(
-  pid: number,
-  deps?: RuntimePidfileDeps,
-): 'killed' | 'gone' | 'eperm' | 'error' {
+function killForeignRuntime(pid: number): 'killed' | 'gone' | 'eperm' | 'error' {
   try {
-    (deps?.kill ?? process.kill)(pid, 'SIGKILL');
+    process.kill(pid, 'SIGKILL');
     return 'killed';
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;

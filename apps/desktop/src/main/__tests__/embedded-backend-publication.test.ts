@@ -77,7 +77,12 @@ describe("embedded URL publication owner", () => {
         },
         new AbortController().signal,
       ).then(publish);
-      await expect(startup).rejects.toThrow();
+      await expect(startup).rejects.toMatchObject({
+        kind:
+          fault === "config" || fault === "controlUrl"
+            ? "persistence-failed"
+            : "terminal-before-publication",
+      });
       expect(publish).not.toHaveBeenCalled();
       expect(order).toEqual(["close", "invalidate"]);
       expect(configUrl).toBeNull();

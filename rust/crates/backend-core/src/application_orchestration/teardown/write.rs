@@ -595,10 +595,9 @@ mod tests {
 
     #[test]
     fn a_witness_for_another_agent_is_not_this_requests_teardown() {
-        // Checked against the request rather than against the capture: two channels
-        // agreeing with each other about a third agent is a splice too.
+        // Keep the capture valid so it cannot mask a missing witness identity check.
         assert_eq!(
-            AgentTornDown::seal(&agent("a1"), held("a2", "h1"), capture("a2")),
+            AgentTornDown::seal(&agent("a1"), held("a2", "h1"), capture("a1")),
             Err(TeardownContractViolation::AgentMismatch {
                 expected: agent("a1"),
                 found: agent("a2"),

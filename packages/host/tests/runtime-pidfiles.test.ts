@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
 import {
   existsSync,
   mkdirSync,
@@ -21,6 +22,11 @@ import {
   runtimePidFilePath,
   writeRuntimePidfile,
 } from '../src/daemon/runtime-pidfiles.js';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, renameSync: vi.fn(actual.renameSync) };
+});
 
 function silentLogger(warnings: string[] = []): DaemonLogger {
   return {
@@ -77,6 +83,7 @@ describe('runtime pidfile orphan reconcile', () => {
   const children: ChildProcess[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     while (children.length) {
       const child = children.pop()!;
       if (child.pid && isAlive(child.pid)) {
@@ -213,17 +220,16 @@ describe('runtime pidfile orphan reconcile', () => {
       cmd: execPath,
     });
 
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw makeErr('ESRCH');
+    });
     const result = reconcileRuntimePidfiles({
       rootDir: f.rootDir,
       selfDaemonInstanceId: 'self',
       logger: silentLogger(),
-      deps: {
-        kill: () => {
-          throw makeErr('ESRCH');
-        },
-      },
     });
 
+    expect(kill.mock.calls).toEqual([[123_456, 0]]);
     expect(result.unlinkedDead).toBe(1);
     expect(existsSync(filePath)).toBe(false);
   });
@@ -265,45 +271,54 @@ describe('runtime pidfile orphan reconcile', () => {
       cmd: execPath,
     });
 
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw makeErr('EPERM');
+    });
     const warnings: string[] = [];
     const result = reconcileRuntimePidfiles({
       rootDir: f.rootDir,
       selfDaemonInstanceId: 'self',
       logger: silentLogger(warnings),
-      deps: {
-        kill: () => {
-          throw makeErr('EPERM');
-        },
-      },
     });
 
+    expect(kill.mock.calls).toEqual([[1234, 0]]);
     expect(result.preservedEperm).toBe(1);
     expect(existsSync(filePath)).toBe(true);
-    expect(warnings.some(msg => msg.includes('cannot be signaled'))).toBe(true);
+    expect(warnings.some((msg) => msg.includes('cannot be signaled'))).toBe(true);
   });
 
   it('writes pidfiles atomically as JSON records', () => {
     const f = makeFixture();
     fixtures.push(f);
-    const filePath = writeRuntimePidfile({
+    const params = {
       rootDir: f.rootDir,
       daemonInstanceId: 'self',
       runtimeScope: {
-        kind: 'conversation',
+        kind: 'conversation' as const,
         conversation_id: 'conv/unsafe',
         agent_id: 'agent',
       },
       pid: 42,
       startedAt: 100,
-      runtime: 'claude',
+      runtime: 'claude' as const,
       cmd: execPath,
+    };
+    const expectedPath = join(f.rootDir, 'self', 'conv', 'conv%2Funsafe-agent.json');
+    mkdirSync(join(f.rootDir, 'self', 'conv'), { recursive: true });
+    writeFileSync(expectedPath, 'previous complete record', { mode: 0o600 });
+    const failure = makeErr('EIO');
+    vi.mocked(fs.renameSync).mockImplementationOnce(() => {
+      throw failure;
     });
 
-    expect(filePath).toBe(runtimePidFilePath(f.rootDir, 'self', {
-      kind: 'conversation',
-      conversation_id: 'conv/unsafe',
-      agent_id: 'agent',
-    }));
+    expect(() => writeRuntimePidfile(params)).toThrow(failure);
+    expect(readFileSync(expectedPath, 'utf8')).toBe('previous complete record');
+    expect(fs.readdirSync(join(f.rootDir, 'self', 'conv'))).toEqual(['conv%2Funsafe-agent.json']);
+
+    const filePath = writeRuntimePidfile(params);
+
+    expect(filePath).toBe(expectedPath);
+    if (process.platform !== 'win32') expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
     const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
     expect(parsed).toMatchObject({
       pid: 42,

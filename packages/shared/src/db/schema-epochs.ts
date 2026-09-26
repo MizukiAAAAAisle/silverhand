@@ -119,16 +119,6 @@ export const SCHEMA_EPOCH_MANIFEST: readonly SchemaEpochEntry[] = [
 export const CURRENT_SCHEMA_EPOCH: number =
   SCHEMA_EPOCH_MANIFEST[SCHEMA_EPOCH_MANIFEST.length - 1]?.epoch ?? ONE_TO_ONE_EPOCH_CEILING_STEP;
 
-/** Epoch that owns a given migration step, or `null` if no epoch claims it. */
-export function epochForMigrationStep(step: number): number | null {
-  if (step <= 0) return null;
-  if (step <= ONE_TO_ONE_EPOCH_CEILING_STEP) return step;
-  for (const entry of SCHEMA_EPOCH_MANIFEST) {
-    if (step >= entry.firstStep && step <= entry.lastStep) return entry.epoch;
-  }
-  return null;
-}
-
 /** First migration step of an epoch, or `null` if no such epoch exists. */
 export function firstStepOfEpoch(epoch: number): number | null {
   if (epoch <= 0) return null;
@@ -173,121 +163,6 @@ if (minSupportedStep === null) {
 export const MIN_SUPPORTED_MIGRATION_STEP: number = minSupportedStep;
 
 /**
- * Epoch to REPORT for a database whose highest applied step is `step`.
- *
- * Deliberately different from `epochForMigrationStep`: a database stopped in the
- * middle of an epoch has not reached that epoch, so it still reports the previous
- * one. Reporting the target epoch for a partial upgrade would be the single most
- * dangerous lie this module could tell — it is the number an operator would use
- * to decide a partial database is safe to ship or restore.
- */
-export function reportedEpochForAppliedStep(step: number): number {
-  if (step <= ONE_TO_ONE_EPOCH_CEILING_STEP) return Math.max(step, 0);
-  let reported = ONE_TO_ONE_EPOCH_CEILING_STEP;
-  for (const entry of SCHEMA_EPOCH_MANIFEST) {
-    if (step >= entry.lastStep) reported = entry.epoch;
-  }
-  return reported;
-}
-
-export type SchemaEpochProgress =
-  /** Nothing of `epoch` is applied yet; the DB sits at the previous epoch. */
-  | { readonly kind: 'not_started'; readonly epoch: number; readonly nextStep: number }
-  /**
-   * Some but not all of `epoch`'s steps are applied — a legal prefix, i.e. the
-   * state any crash mid-upgrade leaves behind. Resume at `nextStep`; do NOT
-   * report `epoch` as reached.
-   */
-  | {
-      readonly kind: 'partial';
-      readonly epoch: number;
-      readonly appliedThroughStep: number;
-      readonly nextStep: number;
-    }
-  /** Every step of `epoch` is applied. */
-  | { readonly kind: 'complete'; readonly epoch: number };
-
-export type MigrationLedgerVerdict =
-  | { readonly kind: 'ok'; readonly progress: SchemaEpochProgress }
-  /**
-   * The ledger is not a prefix of the plan: a step below the highest applied one
-   * is missing, or a step inside the plan's range was applied that the plan does
-   * not contain. Both mean the sequence is unknown, so the runner must fail loud
-   * rather than guess an order or replay anything.
-   */
-  | {
-      readonly kind: 'inconsistent';
-      readonly appliedThroughStep: number;
-      readonly missingSteps: readonly number[];
-      readonly unexpectedSteps: readonly number[];
-    };
-
-/**
- * Classify a `_migrations` ledger against a migration plan.
- *
- * The plan's own lowest step is the lower bound, and that is the whole reason
- * this takes a plan rather than a constant: a real pre-baseline database still
- * carries ledger rows for v1..v43 while the in-code plan starts at the baseline
- * (44). A naive "every applied step must be in the plan" would call those rows
- * unknown and refuse to open a perfectly healthy production database. Rows below
- * the plan's floor are HISTORY, not evidence about this plan.
- *
- * Rows ABOVE the plan (`step > max(plan)`) are not judged here — that is the
- * newer-schema refusal, which the runner already owns and evaluates on
- * `max(step)`.
- */
-export function classifyMigrationLedger(
-  appliedSteps: readonly number[],
-  plan: readonly Pick<Migration, 'version'>[],
-): MigrationLedgerVerdict {
-  const planSteps = [...new Set(plan.map((m) => m.version))].sort((a, b) => a - b);
-  const highestApplied = appliedSteps.reduce((max, step) => Math.max(max, step), 0);
-  if (planSteps.length === 0) {
-    return {
-      kind: 'ok',
-      progress: { kind: 'complete', epoch: reportedEpochForAppliedStep(highestApplied) },
-    };
-  }
-  const floor = planSteps[0]!;
-  const ceiling = planSteps[planSteps.length - 1]!;
-  const planSet = new Set(planSteps);
-  const applied = new Set(appliedSteps);
-  const inRange = [...applied].filter((s) => s >= floor && s <= ceiling).sort((a, b) => a - b);
-  const unexpectedSteps = inRange.filter((s) => !planSet.has(s));
-  const appliedThroughStep = inRange.length > 0 ? inRange[inRange.length - 1]! : 0;
-  const missingSteps = planSteps.filter((s) => s <= appliedThroughStep && !applied.has(s));
-  if (missingSteps.length > 0 || unexpectedSteps.length > 0) {
-    return { kind: 'inconsistent', appliedThroughStep, missingSteps, unexpectedSteps };
-  }
-
-  const pending = planSteps.filter((s) => !applied.has(s));
-  if (pending.length === 0) {
-    // The epoch a fully-applied PLAN reaches is not necessarily this build's
-    // epoch: a plan slice (tests, staged fixtures) can end mid-epoch, and saying
-    // "complete: epoch 69" there would report a partial database as shipped.
-    return {
-      kind: 'ok',
-      progress: { kind: 'complete', epoch: reportedEpochForAppliedStep(appliedThroughStep) },
-    };
-  }
-  const nextStep = pending[0]!;
-  const epochOfNext = epochForMigrationStep(nextStep) ?? CURRENT_SCHEMA_EPOCH;
-  const startedEpoch =
-    appliedThroughStep > 0 && epochForMigrationStep(appliedThroughStep) === epochOfNext;
-  return {
-    kind: 'ok',
-    progress: startedEpoch
-      ? {
-          kind: 'partial',
-          epoch: epochOfNext,
-          appliedThroughStep,
-          nextStep,
-        }
-      : { kind: 'not_started', epoch: epochOfNext, nextStep },
-  };
-}
-
-/**
  * Structural invariants of the manifest, asserted by the static fence
  * (`packages/shared/tests/schema-epochs.test.ts`) and cheap enough to be called
  * anywhere. Throws with a message that says what to do, because the person who
@@ -296,8 +171,7 @@ export function classifyMigrationLedger(
  * It reads the whole migration plan, not just its last step: coverage has to be
  * an EQUALITY between the steps the manifest claims and the steps the build
  * defines. One-directional checks miss both interesting mistakes — a step no
- * epoch claims (which would report as `epochForMigrationStep(...) === null` at
- * runtime) and an epoch range claiming a step nobody implements.
+ * epoch claims and an epoch range claiming a step nobody implements.
  *
  * What it does NOT prove: that a `released: true` epoch was never extended. See
  * `SchemaEpochEntry.released`.
@@ -363,7 +237,7 @@ export function assertSchemaEpochManifest(
   if (phantom.length > 0) {
     throw new Error(
       `schema epoch manifest: epoch range(s) claim step(s) ${phantom.join(', ')} that this build does not define. ` +
-        'An epoch may only claim steps that exist, or `epochForMigrationStep` answers for a step no ledger can ever contain.',
+        'An epoch may only claim steps that exist in the migration plan.',
     );
   }
 }

@@ -53,10 +53,24 @@ mod tests {
             parse_token(Some(&"x".repeat(32)), false),
             Err(ConfigError::ConsoleRequiresRemoteOnly)
         ));
-        assert!(matches!(
-            parse_token(Some("too-short"), true),
-            Err(ConfigError::InvalidConsoleToken)
-        ));
-        assert!(parse_token(Some(&"x".repeat(32)), true).unwrap().is_some());
+        for token in [
+            "x".repeat(31),
+            "x".repeat(257),
+            " ".repeat(32),
+            "é".repeat(32),
+            format!("{}\n", "x".repeat(32)),
+        ] {
+            assert!(matches!(
+                parse_token(Some(&token), true),
+                Err(ConfigError::InvalidConsoleToken)
+            ));
+        }
+        for length in [32, 256] {
+            assert!(
+                parse_token(Some(&"x".repeat(length)), true)
+                    .unwrap()
+                    .is_some()
+            );
+        }
     }
 }

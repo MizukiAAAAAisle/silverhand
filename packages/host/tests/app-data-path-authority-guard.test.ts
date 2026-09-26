@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import ts from 'typescript';
 
 /**
  * #task:1598 — the app-data PATH AUTHORITY source guard
@@ -12,11 +13,11 @@ import { join, relative, resolve } from 'node:path';
  * selectors / process-boundary wrappers.
  *
  * Exceptions live HERE, as a structured occurrence inventory bound to
- * (file, token, EXACT trimmed source line) — never as source-side pragmas
+ * (file, token, source-line tokens) — never as source-side pragmas
  * (a comment a regressor could add alongside the new hardcode) and never
  * as whole-file exemptions. An inventory entry that stops matching FAILS
  * the guard too, so the inventory can only shrink deliberately; because
- * the binding is line-exact, editing an exempted line (e.g. appending a
+ * the binding ignores only trivia and string quote style, editing a line (e.g. appending a
  * second join to it) breaks the exemption instead of hiding behind it.
  */
 
@@ -61,7 +62,7 @@ interface OccurrenceExemption {
   file: string;
   /** The violation token this exemption is scoped to. */
   token: string;
-  /** EXACT trimmed source line (comment-stripped) the occurrence is on. */
+  /** Source line matched by tokens, ignoring trivia and string quote style. */
   line: string;
   reason: string;
   /** EXACT number of occurrences allowed; more or fewer both fail. */
@@ -349,6 +350,18 @@ function collectTsFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+function sourceLineSignature(line: string): string {
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, line);
+  const tokens: Array<[ts.SyntaxKind, string]> = [];
+  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
+    tokens.push([
+      kind,
+      kind === ts.SyntaxKind.StringLiteral ? scanner.getTokenValue() : scanner.getTokenText(),
+    ]);
+  }
+  return JSON.stringify(tokens);
+}
+
 describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
   it('production sources spell app-data path fragments only in the resolver or the structured occurrence inventory', () => {
     const violations: string[] = [];
@@ -359,10 +372,13 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
         if (rel === AUTHORITY_FILE) continue;
         const source = readFileSync(file, 'utf-8');
         for (const v of scanSourceForPathAuthorityViolations(source)) {
-          // Exemption binding is EXACT (file, token, trimmed line): a
-          // needle-substring can never authorize a whole edited line.
+          // Match the whole token sequence, never a substring. Formatting
+          // cannot invalidate an exemption; added expressions still do.
           const exemption = OCCURRENCE_INVENTORY.find(
-            (e) => e.file === rel && e.token === v.token && e.line === v.text,
+            (e) =>
+              e.file === rel &&
+              e.token === v.token &&
+              sourceLineSignature(e.line) === sourceLineSignature(v.text),
           );
           if (exemption) {
             exemptionHits.set(exemption, (exemptionHits.get(exemption) ?? 0) + 1);
@@ -375,7 +391,7 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
     expect(
       violations,
       'app-data paths must come from the shared resolver; a genuinely non-app-data occurrence must be added ' +
-        'to OCCURRENCE_INVENTORY in this guard with file + token + exact line + reason:\n' +
+        'to OCCURRENCE_INVENTORY in this guard with file + token + source line + reason:\n' +
         violations.join('\n'),
     ).toEqual([]);
 
@@ -395,6 +411,15 @@ describe('app-data path authority (docs/app-data-layout-v2.md §3)', () => {
   });
 
   // ── Scanner falsifiers: the guard must demonstrably CATCH regressions ──
+
+  it.each([
+    ['join( homedir(), ".local", "bin" ),', true],
+    ["join(homedir(), '.silverhand', 'bin'),", false],
+    ["join(homedir(), '.local', 'bin'), join(homedir(), '.silverhand'),", false],
+  ])('exemption binding for %s is %s', (line, allowed) => {
+    const original = "join(homedir(), '.local', 'bin'),";
+    expect(sourceLineSignature(line) === sourceLineSignature(original)).toBe(allowed);
+  });
 
   it('catches single/double/backtick-quoted app-data literals', () => {
     expect(

@@ -419,6 +419,7 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct FakeResidue {
+        steps: Steps,
         announced: Arc<AtomicUsize>,
         swept: Arc<AtomicUsize>,
         fail_announce: bool,
@@ -427,6 +428,7 @@ mod tests {
 
     impl AgentDeletionResidue for FakeResidue {
         async fn agent_deleted(&self, _agent: &AgentId) -> Result<(), CustodyEffectFailure> {
+            self.steps.record("announce");
             self.announced.fetch_add(1, SeqCst);
             if self.fail_announce {
                 return Err(CustodyEffectFailure::from_source(std::io::Error::other(
@@ -440,6 +442,7 @@ mod tests {
             &self,
             _blob: &StoredBlobRef,
         ) -> Result<(), CustodyEffectFailure> {
+            self.steps.record("sweep");
             self.swept.fetch_add(1, SeqCst);
             if self.fail_sweep {
                 return Err(CustodyEffectFailure::from_source(std::io::Error::other(
@@ -527,6 +530,7 @@ mod tests {
         assert!(faults.is_empty());
         assert_eq!(residue.announced.load(SeqCst), 1);
         assert_eq!(residue.swept.load(SeqCst), 2);
+        assert_eq!(residue.steps.taken(), ["announce", "sweep", "sweep"]);
     }
 
     #[tokio::test]

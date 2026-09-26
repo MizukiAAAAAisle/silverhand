@@ -1,11 +1,11 @@
-//! Authenticated composition e2e for GET /internal/agents/{aid}/tasks (#task:2196).
+//! SQLite-backed HTTP contract for GET /internal/agents/{aid}/tasks (#task:2196).
 //!
-//! Drives the REAL mounted composition — `task_list_router` over the production
+//! Drives `task_list_router` over the production
 //! `MessagingStore` board/participation authorities and the `SqliteTaskStore`
 //! candidate fetch — to prove the three properties the driver-free unit tests and
 //! the sqlite adapter tests cannot, because they exercise the layers in isolation:
 //!
-//!   * the whole vertical composes: an authenticated agent's request parses,
+//!   * the read vertical composes: a request with an injected agent principal parses,
 //!     resolves its board scope, fetches, trims to what it participates in, and
 //!     projects the EXACT wire envelope the summary projector ratifies — over a
 //!     real database, not a fake;
@@ -14,13 +14,13 @@
 //!     workspace that exists but the agent is not a member of is a `403`
 //!     (`workspace_membership_required`), and a workspace the agent is a member of
 //!     but lacks `read_tasks` on is a `403` (`capability_denied`);
-//!   * a query naming a value outside its schema is a `400`
-//!     decided before any authority is touched.
+//!   * a query naming a value outside its schema has the specified `400` body.
 //!
 //! The board-resolution ARMS themselves (union / selected / frame, capability and
 //! participation folds) are proven against the real adapter in the sqlite crate's
-//! `messaging_authorities` suite; this test proves the HTTP mount that composes
-//! them, so it seeds one representative happy path plus the refusal shapes.
+//! `messaging_authorities` suite; this test seeds one representative happy path
+//! plus the refusal shapes. Credential authentication belongs to task_list_mount.rs;
+//! application route registration and zero-authority reach are not observed here.
 
 use axum::{
     Router,
@@ -234,8 +234,7 @@ async fn a_selector_without_read_tasks_is_capability_forbidden() {
     );
 }
 
-/// A query naming a status outside the schema is a `400` decided before any authority is
-/// consulted — a stable `invalid_query` code plus a message naming the field and its rule.
+/// Invalid status receives the stable code and a message naming the field and rule.
 #[tokio::test]
 async fn a_query_outside_its_schema_is_a_specific_bad_request() {
     let directory = tempfile::tempdir().unwrap();

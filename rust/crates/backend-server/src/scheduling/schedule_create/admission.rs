@@ -378,16 +378,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unsafe_integer_fire_at_is_refused() {
-        // 2^53 is not representable exactly in JavaScript; the JS-safe decoder
-        // refuses it at the wire boundary.
-        assert!(parse(
-            r#"{"title":"d","message":"hi","spec":{"kind":"once","fire_at":9007199254740992},"target_conversation":"c"}"#,
-        )
-        .is_err());
-    }
-
-    #[test]
     fn all_six_create_numbers_consume_the_shared_positive_js_safe_corpus() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),

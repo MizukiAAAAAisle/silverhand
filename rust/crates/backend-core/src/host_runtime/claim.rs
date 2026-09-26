@@ -823,7 +823,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_reclaim_without_a_label_leaves_the_stored_one_alone() {
+    async fn an_adoption_without_a_label_emits_no_label_update() {
         let store = RecordingStore::new(
             LocalClaimFacts {
                 claimed: None,
@@ -951,28 +951,6 @@ mod tests {
         assert_eq!(store.attempted(), taken);
     }
 
-    #[tokio::test]
-    async fn a_caller_already_on_this_computer_with_a_working_token_is_given_none() {
-        let store = RecordingStore::new(
-            LocalClaimFacts {
-                claimed: Some(computer("h-existing")),
-                unclaimed_local: None,
-            },
-            &[],
-        );
-        let credentials = RecordingCredentials::holding_an_active_credential();
-        let service = claim(store, credentials.clone());
-
-        let claimed = service
-            .execute(owner(), request(None, Some("h-existing")))
-            .await
-            .expect("the existing computer is reused");
-
-        assert!(claimed.host_token.is_none());
-        assert_eq!(credentials.asked.load(Ordering::SeqCst), 1);
-        assert!(credentials.issued.lock().unwrap().is_empty());
-    }
-
     /// Falsifier for the lazy id: a reuse that already holds a working token writes no
     /// computer and no credential, so it must succeed even when entropy is down. Minting
     /// the id up front — the bug — turns this deterministic reuse into a `500`.
@@ -1000,6 +978,7 @@ mod tests {
             .expect("a reuse that needs no token never touches entropy");
 
         assert!(claimed.host_token.is_none());
+        assert_eq!(credentials.asked.load(Ordering::SeqCst), 1);
         assert_eq!(
             store.only_write(),
             LocalClaimWrite::TouchLastSeen(TouchLocalComputer {
@@ -1062,7 +1041,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_computer_revoked_under_the_claim_refuses_the_credential() {
+    async fn a_revoked_credential_issue_verdict_is_propagated() {
         let store = RecordingStore::new(
             LocalClaimFacts {
                 claimed: Some(computer("h-existing")),

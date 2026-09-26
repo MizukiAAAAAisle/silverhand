@@ -516,10 +516,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manage_schedules_without_send_messages_succeeds() {
-        // The capability port judges ONLY manage_schedules; send_messages is a
-        // separate grant this door never consults. A credential with manage but
-        // not send is authorized here.
+    async fn manage_schedules_grant_creates_and_rearms_timer() {
         let (app, counts) = app(None, true);
         let (status, body) = call(app, once_body()).await;
         assert_eq!(status, StatusCode::OK);
@@ -541,7 +538,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_messages_without_manage_schedules_is_refused_and_store_is_untouched() {
+    async fn manage_schedules_denial_refuses_without_store_or_effect() {
         // Resolution succeeds; the manage_schedules capability is denied. The store
         // is NEVER reached — zero-reach — and the answer is 403 forbidden.
         let (app, counts) = app(None, false);

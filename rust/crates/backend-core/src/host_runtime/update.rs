@@ -278,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn a_first_attach_requires_a_name_and_stamps_finalize_once() {
+    fn a_first_attach_requires_a_name_and_selects_the_finalize_stamp() {
         let mut draft = record("owner");
         draft.finalized_at = None;
         assert_eq!(
@@ -329,6 +329,15 @@ mod tests {
         let mut valid = before.clone();
         valid.display_label = Some("Studio Mac".to_owned());
         valid.finalized_at = Some(1_700_000_000_123);
+
+        let accepted = UpdateComputer::new(Witness(UpdateComputerTransaction::Committed {
+            before: before.clone(),
+            committed: valid.clone(),
+        }))
+        .execute(command(label(" Studio Mac ")))
+        .await
+        .unwrap();
+        assert_eq!(accepted, UpdateComputerOutcome::Finalized(valid.clone()));
 
         let mut lies = Vec::new();
         let mut wrong_id = valid.clone();

@@ -334,35 +334,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn principal_scope_never_confuses_source_with_target() {
-        let agent = AgentId::parse("agent-1").unwrap();
-        let source = ConversationId::parse("source-1").unwrap();
-        let custody = RuntimeCustody::new(
-            RuntimeGeneration::new(7).unwrap(),
-            DaemonInstanceId::parse("daemon-1").unwrap(),
-        );
-
-        let conversation = RuntimePrincipal::for_scope(
-            RuntimeScope::ConversationSlot {
-                agent: agent.clone(),
-                source: source.clone(),
-            },
-            custody.clone(),
-        );
-        assert_eq!(conversation.agent(), &agent);
-        assert_eq!(conversation.source(), Some(&source));
-
-        let agent_slot = RuntimePrincipal::for_scope(
-            RuntimeScope::AgentSlot {
-                agent: agent.clone(),
-            },
-            custody,
-        );
-        assert_eq!(agent_slot.agent(), &agent);
-        assert_eq!(agent_slot.source(), None);
-    }
-
-    #[test]
     fn generation_is_nonnegative_and_cannot_wrap() {
         assert!(RuntimeGeneration::new(-1).is_err());
         assert_eq!(

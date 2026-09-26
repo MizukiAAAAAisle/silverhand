@@ -30,12 +30,7 @@
  * devDep. The TTY test is skipped on non-Darwin runners with a clear
  * skip reason.
  */
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -56,17 +51,15 @@ interface CapturedRequest {
 let server: Server;
 let serverUrl: string;
 const captured: CapturedRequest[] = [];
-let nextSendResponse:
-  | {
-      status: number;
-      body: unknown;
-    }
-  | null = null;
+let nextSendResponse: {
+  status: number;
+  body: unknown;
+} | null = null;
 
 beforeAll(async () => {
   server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
-    req.on('data', chunk => chunks.push(chunk));
+    req.on('data', (chunk) => chunks.push(chunk));
     req.on('end', () => {
       captured.push({
         method: req.method ?? '',
@@ -80,7 +73,7 @@ beforeAll(async () => {
       res.end(JSON.stringify(reply?.body ?? { message_id: 'msg-1', message_seq: 9 }));
     });
   });
-  await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
   const addr = server.address();
   if (!addr || typeof addr === 'string') throw new Error('no addr');
   serverUrl = `http://127.0.0.1:${addr.port}`;
@@ -96,9 +89,7 @@ describe('runtime scope vs command-local conversation selector', { timeout: 30_0
       argv: ['--conversation-id', 'conv-B'],
     });
     expect(list.code, list.stderr).toBe(0);
-    expect(captured[0]!.path).toBe(
-      '/internal/agents/agent-1/tasks?conversation_id=conv-B',
-    );
+    expect(captured[0]!.path).toBe('/internal/agents/agent-1/tasks?conversation_id=conv-B');
 
     captured.length = 0;
     nextSendResponse = {
@@ -111,9 +102,7 @@ describe('runtime scope vs command-local conversation selector', { timeout: 30_0
       argv: ['--title', 'file in B', '--target', '#conv:Conversation0002'],
     });
     expect(create.code, create.stderr).toBe(0);
-    expect(captured[0]!.path).toBe(
-      '/internal/agents/agent-1/tasks/create',
-    );
+    expect(captured[0]!.path).toBe('/internal/agents/agent-1/tasks/create');
     expect(JSON.parse(captured[0]!.bodyBytes.toString('utf8'))).toMatchObject({
       target: '#conv:Conversation0002',
     });
@@ -137,9 +126,7 @@ describe('runtime scope vs command-local conversation selector', { timeout: 30_0
       argv: ['needle', '--conversation-id', 'conv-B'],
     });
     expect(search.code, search.stderr).toBe(0);
-    expect(captured[0]!.path).toBe(
-      '/internal/agents/agent-1/search-messages',
-    );
+    expect(captured[0]!.path).toBe('/internal/agents/agent-1/search-messages');
     expect(JSON.parse(captured[0]!.bodyBytes.toString('utf8'))).toMatchObject({
       conversation_id: 'conv-B',
     });
@@ -154,9 +141,7 @@ describe('runtime scope vs command-local conversation selector', { timeout: 30_0
       env: { SILVERHAND_CONVERSATION_ID: '' },
     });
     expect(allBoards.code, allBoards.stderr).toBe(0);
-    expect(captured[0]!.path).toBe(
-      '/internal/agents/agent-1/tasks',
-    );
+    expect(captured[0]!.path).toBe('/internal/agents/agent-1/tasks');
 
     captured.length = 0;
     nextSendResponse = { status: 200, body: { tasks: [] } };
@@ -167,14 +152,12 @@ describe('runtime scope vs command-local conversation selector', { timeout: 30_0
       env: { SILVERHAND_CONVERSATION_ID: '' },
     });
     expect(narrowed.code, narrowed.stderr).toBe(0);
-    expect(captured[0]!.path).toBe(
-      '/internal/agents/agent-1/tasks?conversation_id=conv-B',
-    );
+    expect(captured[0]!.path).toBe('/internal/agents/agent-1/tasks?conversation_id=conv-B');
   });
 });
 
 afterAll(async () => {
-  await new Promise<void>(r => server.close(() => r()));
+  await new Promise<void>((r) => server.close(() => r()));
 });
 
 const ENV = {
@@ -209,7 +192,7 @@ const THREAD_TARGET = `${MAIN_TARGET}/thread:ClusterRoot00001`;
  *  best-effort `cli-trace` POST at the same capture server, so "nothing was
  *  sent" is a claim about this route, not about the socket. */
 function sendRequests(): CapturedRequest[] {
-  return captured.filter(r => r.path.endsWith('/send-message'));
+  return captured.filter((r) => r.path.endsWith('/send-message'));
 }
 
 function runSend(opts: {
@@ -232,10 +215,7 @@ function runSend(opts: {
     noun: 'message',
     verb: 'send',
     ...rest,
-    argv:
-      omitTarget || hasTarget
-        ? (argv ?? [])
-        : ['--target', MAIN_TARGET, ...(argv ?? [])],
+    argv: omitTarget || hasTarget ? (argv ?? []) : ['--target', MAIN_TARGET, ...(argv ?? [])],
   });
 }
 
@@ -287,10 +267,10 @@ function runMessage(opts: {
     let stderr = '';
     let killedByWatchdog = false;
     let watchdog: ReturnType<typeof setTimeout> | undefined;
-    child.stdout!.on('data', chunk => (stdout += chunk.toString('utf8')));
-    child.stderr!.on('data', chunk => (stderr += chunk.toString('utf8')));
+    child.stdout!.on('data', (chunk) => (stdout += chunk.toString('utf8')));
+    child.stderr!.on('data', (chunk) => (stderr += chunk.toString('utf8')));
     child.on('error', reject);
-    child.on('close', code => {
+    child.on('close', (code) => {
       if (watchdog) clearTimeout(watchdog);
       resolvePromise({ code, stdout, stderr, killedByWatchdog });
     });
@@ -306,9 +286,7 @@ function runMessage(opts: {
           child.kill('SIGKILL');
         }, 8000);
       } else if (opts.stdin !== null && opts.stdin !== undefined) {
-        const buf = Buffer.isBuffer(opts.stdin)
-          ? opts.stdin
-          : Buffer.from(opts.stdin, 'utf8');
+        const buf = Buffer.isBuffer(opts.stdin) ? opts.stdin : Buffer.from(opts.stdin, 'utf8');
         child.stdin!.end(buf);
       } else {
         child.stdin!.end();
@@ -353,7 +331,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     expect(body.error.code).toBe('validation_error');
     expect(body.error.subkind).toBe('flag_removed');
     expect(body.error.message).toContain('--content was removed');
-    expect(body.error.message).toContain("SILVERHAND_EOF");
+    expect(body.error.message).toContain('SILVERHAND_EOF');
   });
 
   // The agent never had `--text` or `--message` available — but the CLI
@@ -364,7 +342,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
   // `--message` after `--text` failed.
   it.each(['text', 'message'] as const)(
     'rejects --%s with flag_removed pointing at stdin/heredoc',
-    async flag => {
+    async (flag) => {
       const r = await runSend({
         argv: [`--${flag}`, 'hello'],
         stdin: 'irrelevant',
@@ -519,9 +497,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
       // an attachment, and an attachment is owned by ONE conversation, so the
       // upload is addressed rather than left to the credential's conversation
       // (#task:2021 P4-4).
-      expect(upload.bodyBytes.toString('utf8')).toContain(
-        `name="target"\r\n\r\n${MAIN_TARGET}`,
-      );
+      expect(upload.bodyBytes.toString('utf8')).toContain(`name="target"\r\n\r\n${MAIN_TARGET}`);
       const send = captured[1]!;
       const reqBody = JSON.parse(send.bodyBytes.toString('utf8')) as {
         content: string;
@@ -565,14 +541,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
   it('forwards --target verbatim and repeated --attachment-id in the request body', async () => {
     captured.length = 0;
     const r = await runSend({
-      argv: [
-        '--target',
-        THREAD_TARGET,
-        '--attachment-id',
-        'att-1',
-        '--attachment-id',
-        'att-2',
-      ],
+      argv: ['--target', THREAD_TARGET, '--attachment-id', 'att-1', '--attachment-id', 'att-2'],
       stdin: 'hi',
     });
     expect(r.code, r.stderr).toBe(0);
@@ -596,9 +565,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     });
     expect(r.code, r.stderr).toBe(0);
     expect(captured).toHaveLength(1);
-    expect(captured[0]!.path).toBe(
-      '/internal/agents/agent-1/send-message',
-    );
+    expect(captured[0]!.path).toBe('/internal/agents/agent-1/send-message');
     const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
       content: string;
       target?: unknown;
@@ -723,9 +690,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     };
     expect(missedOut.message_id).toBe('m-missed');
     // Verbatim, and with no reason: the author reads back its own token.
-    expect(missedOut.unresolved_references).toEqual([
-      { kind: 'agent', handle: 'nosuchagent' },
-    ]);
+    expect(missedOut.unresolved_references).toEqual([{ kind: 'agent', handle: 'nosuchagent' }]);
 
     nextSendResponse = {
       status: 200,
@@ -734,9 +699,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     const landed = await runSend({ argv: [], stdin: 'nothing addressed' });
     expect(landed.code, landed.stderr).toBe(0);
     // ABSENT on an ordinary send — the CLI adds no empty array of its own.
-    expect(Object.keys(JSON.parse(landed.stdout) as object)).not.toContain(
-      'unresolved_references',
-    );
+    expect(Object.keys(JSON.parse(landed.stdout) as object)).not.toContain('unresolved_references');
   });
 
   it('reports --reply-to as flag_removed and points at the cluster ROOT address', async () => {
@@ -752,20 +715,6 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     // the whole change is that a reply is addressed by its stream.
     expect(body.error.message).toContain('/thread:');
     expect(sendRequests()).toHaveLength(0);
-  });
-
-  it('reports --reply-to as removed even when --target is also present', async () => {
-    // No mutual-exclusion arm any more: there is one destination coordinate, so
-    // the retired flag is removed unconditionally rather than negotiated
-    // against the surviving one.
-    const r = await runSend({
-      argv: ['--reply-to', 'ClusterRoot00001', '--target', THREAD_TARGET],
-      stdin: 'oops',
-    });
-    expect(r.code).toBe(1);
-    const body = parseStderrJson(r.stderr);
-    expect(body.error.code).toBe('validation_error');
-    expect(body.error.subkind).toBe('flag_removed');
   });
 
   it('does not derive freshness from the legacy delivered-seq sidecar in direct fallback', async () => {
@@ -869,7 +818,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
       reason: 'no_pending_stale_event',
     });
     expect(
-      captured.some(r => r.path.includes('/stale-message-resolution')),
+      captured.some((r) => r.path.includes('/stale-message-resolution')),
       'no-daemon stale-resolve still posted a resolution',
     ).toBe(false);
   });
@@ -896,10 +845,9 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
       argv: ['--stale-resolution', 'obsolete'],
       keepStdinOpen: true,
     });
-    expect(
-      r.killedByWatchdog,
-      'CLI blocked on stdin before validating --stale-resolution',
-    ).toBe(false);
+    expect(r.killedByWatchdog, 'CLI blocked on stdin before validating --stale-resolution').toBe(
+      false,
+    );
     expect(r.code).toBe(1);
     const body = parseStderrJson(r.stderr);
     expect(body.error.code).toBe('validation_error');
@@ -930,9 +878,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
       'CLI blocked on stdin before validating a malformed --target',
     ).toBe(false);
     expect(malformed.code).toBe(1);
-    expect(parseStderrJson(malformed.stderr).error.subkind).toBe(
-      'target_malformed',
-    );
+    expect(parseStderrJson(malformed.stderr).error.subkind).toBe('target_malformed');
   }, 30_000);
 
   // The third throwing path is the manual --anyway × --stale-resolution

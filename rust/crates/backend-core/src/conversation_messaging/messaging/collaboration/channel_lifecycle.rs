@@ -564,30 +564,4 @@ mod tests {
             Err(ChannelLifecycleProjectionError::WorkspaceRoleWithoutWorkspace)
         );
     }
-
-    #[test]
-    fn source_viewer_and_conversation_bind_before_projection() {
-        let fact = ChannelDetailFact::projected(
-            UserId::parse("u-a").unwrap(),
-            workspace_row(DirectoryRoster::Open, ChannelVisibility::Public, None),
-            false,
-            Some(WorkspaceRole::Member),
-            0,
-        )
-        .unwrap();
-        assert_eq!(
-            fact.clone()
-                .bind(&UserId::parse("u-b").unwrap(), &conversation("c")),
-            Err(ChannelDetailIdentityMismatch)
-        );
-        assert_eq!(
-            fact.clone()
-                .bind(&UserId::parse("u-a").unwrap(), &conversation("other")),
-            Err(ChannelDetailIdentityMismatch)
-        );
-        assert!(
-            fact.bind(&UserId::parse("u-a").unwrap(), &conversation("c"))
-                .is_ok()
-        );
-    }
 }

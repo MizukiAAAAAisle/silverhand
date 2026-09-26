@@ -179,29 +179,3 @@ pub trait AgentMaterializePort: Clone + Send + Sync + 'static {
         Output = Result<Result<AgentMaterializeReceipt, AgentMaterializeRefusal>, Self::Error>,
     > + Send;
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn target_keeps_the_selected_host_and_receipt_cannot_split_its_paths() {
-        let target = AgentMaterializeTarget::reserved(
-            HostId::parse("host-a").unwrap(),
-            AgentId::parse("agent-a").unwrap(),
-            WorkspaceId::parse("wsah_agent-a").unwrap(),
-            "Agent A".to_owned(),
-            RuntimeKind::Codex,
-            None,
-            Some("description".to_owned()),
-            AgentMaterializeTemplate::Default,
-        );
-        assert_eq!(target.host().as_str(), "host-a");
-        assert_eq!(target.agent().as_str(), "agent-a");
-        assert_eq!(target.agent_home_workspace().as_str(), "wsah_agent-a");
-
-        let receipt = AgentMaterializeReceipt::admitted("/opaque/agent-a".to_owned(), 7);
-        assert_eq!(receipt.agent_dir(), receipt.agent_home_workspace_path());
-        assert_eq!(receipt.materialized_at(), 7);
-    }
-}

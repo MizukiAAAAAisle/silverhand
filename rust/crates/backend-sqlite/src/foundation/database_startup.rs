@@ -126,17 +126,8 @@ pub async fn prepare_database(
         .foreign_keys(true)
         .busy_timeout(Duration::ZERO);
     let mut db = SqliteConnection::connect_with(&options).await?;
-    #[cfg(test)]
-    assert_eq!(
-        sqlx::query_scalar::<_, String>("PRAGMA locking_mode")
-            .fetch_one(&mut db)
-            .await?,
-        "exclusive"
-    );
     let result = async {
         db.execute("BEGIN EXCLUSIVE; COMMIT;").await?;
-        #[cfg(test)]
-        tests::pause_preparation(&path, "locked");
         prepare_connected(&mut db, &path, allow_upgrade, &plan()).await
     }
     .await;
@@ -219,8 +210,6 @@ async fn prepare_connected(
         }
         applied?;
         applied_steps.push(step.version);
-        #[cfg(test)]
-        tests::pause_preparation(path, "between-steps");
     }
     if applied_steps.is_empty() {
         db.begin_with("BEGIN EXCLUSIVE").await?.commit().await?;
@@ -294,8 +283,6 @@ async fn backup(db: &mut SqliteConnection, path: &Path) -> Result<PathBuf, Datab
     ];
     copy_tree_except(dir, &partial, &excluded).map_err(DatabaseStartupError::Backup)?;
     let output = partial.join(name);
-    #[cfg(test)]
-    tests::pause_preparation(path, "backing-up");
     // Never open/close the source file outside SQLite while it owns POSIX locks.
     // The output is a standalone consistent database, without source WAL/SHM.
     sqlx::query("VACUUM INTO ?")
@@ -308,14 +295,7 @@ async fn backup(db: &mut SqliteConnection, path: &Path) -> Result<PathBuf, Datab
         .await?;
     fs::set_permissions(&output, fs::metadata(path)?.permissions())?;
     fs::rename(&partial, &dest).map_err(DatabaseStartupError::Backup)?;
-    #[cfg(test)]
-    tests::pause_preparation(path, "backed-up");
     Ok(dest)
-}
-
-#[cfg(test)]
-fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<()> {
-    copy_tree_except(src, dest, &[])
 }
 
 fn copy_tree_except(src: &Path, dest: &Path, excluded: &[PathBuf]) -> std::io::Result<()> {

@@ -9,6 +9,7 @@ pnpm test
 ./scripts/test.sh --scope shared
 ./scripts/test.sh --scope host tests/supervisor.test.ts
 pnpm typecheck
+node rust/tools/verify-scaffold.mjs
 cd rust
 cargo test --workspace
 ```
@@ -26,6 +27,14 @@ The JavaScript gate runs shared → host → cli → desktop. There is no SQLite
 - `rust/crates/backend-server`: routing, authentication, WebSocket and delivery tests.
 - `rust/crates/backend-app`: fully composed production application tests.
 
+## Test audits
+
+Inventory by package/crate, then production-owned folder or module, then test file. Include inline Rust tests, subprocess scenarios, fixtures and executable gates; assign cross-package proofs to their canonical owner. Record exclusions explicitly. Track review decisions separately from test execution: a passing suite is not an audited suite.
+
+For each reviewed test, record **retain**, **repair**, **consolidate** or **delete**, with the behavior it protects and the remaining owner of any moved assertion. Preserve independent protocol, security, migration and packaging contracts even when they use static checks. Before removing a test-only production export, verify it has no real callers and move meaningful assertions to the observable boundary.
+
+Keep each edit batch within a coherent owner boundary. Capture its baseline, then verify the replacement with a deliberate isolated fault: a timeout mock must respond to the production abort signal, and a parser fixture must actually exercise the token-consumption branch it names. Restore the control checkout after testing. Never delete a failing baseline test merely to make the suite green.
+
 ## Independent regression data
 
 `rust/test-fixtures` contains frozen SQL/JSON oracles previously captured during the TypeScript-to-Rust migration. Their bytes are retained independently of the deleted implementation. Rust tests consume these directly; they do not invoke the old server.
@@ -41,3 +50,5 @@ Driver-oracle regressions live in `packages/host/tests/driver-oracle-regression.
 `pnpm dev` still builds and launches the Rust embedded sidecar. `pnpm dev:headless` is an Electron main-process mode, not a legacy TypeScript server. Use an isolated `SILVERHAND_DIR` for manual testing.
 
 Both embedded and remote-only Desktop builds must pass the module-graph guard. Remote-only additionally excludes the Rust launcher and sidecar resources. Its final package must contain neither embedded binary nor manifest; the daemon/CLI remain required.
+
+Release packaging contracts belong to the executable package gate, not source-string assertions over shell variables or function names. On an arm64 macOS builder, run `./scripts/package.sh --dir --output-dir <isolated-name>` and the corresponding `--remote-only --server-url https://example.invalid` invocation with a second output directory and an explicit isolated `SILVERHAND_DIR`. These commands build and verify artifacts without launching the App: the final signature, canonical version, daemon identity and signed sidecar manifest must pass. Fast unit tests cover rejected CLI arguments, dependency/config boundaries, binary UUID bytes and startup-side artifact validation.

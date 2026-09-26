@@ -93,44 +93,23 @@ mod tests {
     fn every_stamp_combination_has_one_state() {
         let at = Some(7);
         let expected = [
-            (stamps(None, None, None), HostLifecycleStatus::Pending),
-            (stamps(None, at, None), HostLifecycleStatus::Pending),
-            (stamps(at, None, None), HostLifecycleStatus::Attached),
-            (stamps(at, at, None), HostLifecycleStatus::Active),
-            (stamps(None, None, at), HostLifecycleStatus::Revoked),
-            (stamps(None, at, at), HostLifecycleStatus::Revoked),
-            (stamps(at, None, at), HostLifecycleStatus::Revoked),
-            (stamps(at, at, at), HostLifecycleStatus::Revoked),
+            (
+                stamps(None, None, None),
+                HostLifecycleStatus::Pending,
+                false,
+            ),
+            (stamps(None, at, None), HostLifecycleStatus::Pending, false),
+            (stamps(at, None, None), HostLifecycleStatus::Attached, false),
+            (stamps(at, at, None), HostLifecycleStatus::Active, true),
+            (stamps(None, None, at), HostLifecycleStatus::Revoked, false),
+            (stamps(None, at, at), HostLifecycleStatus::Revoked, false),
+            (stamps(at, None, at), HostLifecycleStatus::Revoked, false),
+            (stamps(at, at, at), HostLifecycleStatus::Revoked, false),
         ];
 
-        for (stamps, status) in expected {
+        for (stamps, status, placeable) in expected {
             assert_eq!(lifecycle_status(&stamps), status, "stamps {stamps:?}");
-        }
-    }
-
-    /// A finalized computer that was never activated is not usable: both halves of
-    /// the handshake are required, and only their conjunction admits placement.
-    #[test]
-    fn finalized_without_activation_is_not_placeable() {
-        let status = lifecycle_status(&stamps(None, Some(7), None));
-        assert_eq!(status, HostLifecycleStatus::Pending);
-        assert!(!status.placeable());
-    }
-
-    #[test]
-    fn placeable_is_exactly_the_active_state() {
-        let states = [
-            HostLifecycleStatus::Pending,
-            HostLifecycleStatus::Attached,
-            HostLifecycleStatus::Active,
-            HostLifecycleStatus::Revoked,
-        ];
-        for state in states {
-            assert_eq!(
-                state.placeable(),
-                state == HostLifecycleStatus::Active,
-                "state {state:?}"
-            );
+            assert_eq!(status.placeable(), placeable, "stamps {stamps:?}");
         }
     }
 }

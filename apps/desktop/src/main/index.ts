@@ -142,7 +142,6 @@ import {
 } from "./profile-session-sync.js";
 import {
   decideBackendBootMode,
-  evaluateProfileCommitGuard,
   executeBackendStartup,
   planBackendStartup,
   ProfileUnusableError,
@@ -1430,7 +1429,6 @@ async function saveServerUrlFromSettings(rawServerUrl: string): Promise<Outbound
   const outcome = await performOutboundReload(
     { serverUrl: rawServerUrl },
     {
-      classifyServerUrl,
       allowInsecureRemote,
       writeDaemonHostConfig: (config) => writeDaemonHostConfig(daemonConfigPath, config),
       hostOutboundReload: () => client.hostOutboundReload(),
@@ -2209,8 +2207,7 @@ function openSettings(): void {
 // registry / correlation / timeout / outcome-gating contract lives in the pure
 // `./contextual-close.ts` module (unit-tested there); here we only inject the
 // Electron seams: `webContents.send` for the request, `app.hide()` for the
-// terminal "send to background" action, and `setTimeout` for the fail-closed
-// timeout.
+// terminal "send to background" action. The coordinator owns its timeout.
 
 /** How long main waits for the renderer's close outcome before failing
  *  closed. Generous for a normal round-trip, short enough that a wedged
@@ -2218,15 +2215,6 @@ function openSettings(): void {
 const CLOSE_OUTCOME_TIMEOUT_MS = 250;
 
 const contextualClose = new ContextualCloseCoordinator(
-  {
-    set: (fn, ms) => {
-      const timer = setTimeout(fn, ms);
-      // Never let a pending timer keep the process alive during shutdown.
-      timer.unref?.();
-      return timer;
-    },
-    clear: (token) => clearTimeout(token as NodeJS.Timeout),
-  },
   CLOSE_OUTCOME_TIMEOUT_MS,
   // Terminal action when ⌘W found nothing in-app to close: send the whole app
   // to the background (macOS Hide). The window is preserved — never destroyed —
@@ -2455,21 +2443,6 @@ async function handleProfileSaveWithTest(
   if (!test.ok) {
     logger?.warn({ kind: test.kind, serverUrl }, "profile:saveWithTest test phase failed");
     return { ok: false, phase: "test", test };
-  }
-
-  const guard = evaluateProfileCommitGuard(test.kind);
-  if (!guard.allow) {
-    logger?.warn(
-      { kind: test.kind, serverUrl, reason: guard.reason },
-      "profile:saveWithTest commit-guard refused",
-    );
-    return {
-      ok: false,
-      phase: "commit_guard",
-      reason: guard.reason,
-      message: guard.message,
-      test,
-    };
   }
 
   const writeResult = writeServerConnectionProfile({

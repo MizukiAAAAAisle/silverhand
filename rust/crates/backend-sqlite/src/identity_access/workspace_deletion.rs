@@ -1,11 +1,6 @@
-//! The workspace-delete write authority: two `BEGIN IMMEDIATE` transactions.
-//! Phase 1 (`capture_teardown`) reads the subject under the lock and decides the
-//! REFUSAL verdict only — it captures NO plan and deletes NO row. Phase 2
-//! (`commit_deletion`) re-reads the subject under a FRESH lock, and only if it is
-//! still deletable by this requester, captures the FULL teardown plan and runs the
-//! conditional DELETE (FK cascade) in the SAME transaction — so the plan reflects
-//! exactly the rows this DELETE cascaded, never a stale phase-1
-//! snapshot.
+//! The workspace-delete authority uses one `BEGIN IMMEDIATE` transaction:
+//! read the subject, decide the verdict, capture the teardown plan and cascade
+//! the row under the same lock. Refusals never produce a teardown plan.
 //!
 //! The delete row uses the SAME `owner_agent_id IS NULL` guard the reference
 //! `workspaces.delete` uses, so an agent-home can never be removed even if the
@@ -451,17 +446,24 @@ INSERT INTO attachments (id, channel_id, filename, size, content_type, storage, 
 
     #[tokio::test]
     async fn a_non_owner_member_is_forbidden_and_the_row_survives() {
-        let (_dir, adapter) = open_seeded().await;
-        let outcome = adapter
-            .delete_workspace(&user("user-2"), &ws("ws-1"))
+        for role in ["member", "admin"] {
+            let (_dir, adapter) = open_seeded().await;
+            sqlx::query("UPDATE workspace_users SET role = ? WHERE workspace_id = 'ws-1' AND user_id = 'user-2'")
+            .bind(role)
+            .execute(&adapter.pool)
             .await
             .unwrap();
-        assert_eq!(outcome, WorkspaceDeletionOutcome::Forbidden);
-        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspaces WHERE id = 'ws-1'")
-            .fetch_one(&adapter.pool)
-            .await
-            .unwrap();
-        assert_eq!(rows, 1, "forbidden delete leaves the row");
+            let outcome = adapter
+                .delete_workspace(&user("user-2"), &ws("ws-1"))
+                .await
+                .unwrap();
+            assert_eq!(outcome, WorkspaceDeletionOutcome::Forbidden);
+            let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspaces WHERE id = 'ws-1'")
+                .fetch_one(&adapter.pool)
+                .await
+                .unwrap();
+            assert_eq!(rows, 1, "forbidden delete leaves the row");
+        }
     }
 
     #[tokio::test]
@@ -521,10 +523,9 @@ INSERT INTO attachments (id, channel_id, filename, size, content_type, storage, 
     }
 
     #[tokio::test]
-    async fn a_concurrent_winner_leaves_the_loser_an_idempotent_noop() {
-        // Ttwo deletes race. The winner cascades (Committed); the loser
-        // finds the row gone under its own lock and is IdempotentNoop (204) — never a
-        // 500, never a second destructive authority.
+    async fn retry_after_committed_delete_is_an_idempotent_noop() {
+        // A sequential retry finds the committed deletion and does not produce
+        // a second destructive authority. This is not a concurrency test.
         let (_dir, adapter) = open_seeded().await;
         assert!(
             matches!(

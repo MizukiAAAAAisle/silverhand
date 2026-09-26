@@ -58,10 +58,6 @@ export interface McpProbeDeps {
    * composition root. Required — no implicit default (#task:1813).
    */
   agentHomeRootDir: string;
-  /** Test seam: build a transport for a server. Default = real SDK transports
-   *  (stdio child / streamable-http / sse). Tests inject an in-memory pair so
-   *  the connect/initialize/tools/teardown flow runs without real I/O. */
-  buildTransport?: (server: McpServerConfig) => Transport;
 }
 
 /** Connect (transport open + MCP `initialize`) budget. Short — probe is a
@@ -97,11 +93,8 @@ export async function probeMcpServer(
   }
 
   // 2. One-shot connect → initialize → (optional) tools/list → always close.
-  const transport = (deps.buildTransport ?? buildTransport)(server);
-  const client = new Client(
-    { name: 'silverhand-probe', version: '1' },
-    { capabilities: {} },
-  );
+  const transport = buildTransport(server);
+  const client = new Client({ name: 'silverhand-probe', version: '1' }, { capabilities: {} });
 
   try {
     await withTimeout(
@@ -118,9 +111,7 @@ export async function probeMcpServer(
 
   try {
     const info = client.getServerVersion();
-    const server_info = info
-      ? { name: info.name, version: info.version }
-      : undefined;
+    const server_info = info ? { name: info.name, version: info.version } : undefined;
 
     if (!params.include_tools) {
       return { ok: true, phase: 'initialize', server_info };
@@ -132,7 +123,7 @@ export async function probeMcpServer(
         TOOLS_TIMEOUT_MS,
         'tools/list',
       );
-      const tools = listed.tools.map(t => ({
+      const tools = listed.tools.map((t) => ({
         name: t.name,
         description: t.description,
       }));
@@ -155,25 +146,18 @@ async function readSourceConfig(
   deps: McpProbeDeps,
 ): Promise<string | null> {
   const { source } = params;
-  const filePath = join(
-    resolveAgentDir(source.agent_id, deps),
-    MCP_CONFIG_FILENAME,
-  );
+  const filePath = join(resolveAgentDir(source.agent_id, deps), MCP_CONFIG_FILENAME);
   try {
     return await fs.readFile(filePath, 'utf-8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
-    throw new McpProbeError(
-      'fs_unavailable',
-      err instanceof Error ? err.message : String(err),
-    );
+    throw new McpProbeError('fs_unavailable', err instanceof Error ? err.message : String(err));
   }
 }
 
-/** Build the real SDK transport for a server, honoring its declared type. The
- *  prefix is never applied here — a probe talks to the raw endpoint.
- *  Exported for the transport-construction regression test. */
-export function buildTransport(server: McpServerConfig): Transport {
+/** Build the real SDK transport for a server, honoring its declared type.
+ * The prefix is never applied here — a probe talks to the raw endpoint. */
+function buildTransport(server: McpServerConfig): Transport {
   if ('url' in server) {
     const url = new URL(server.url);
     const headers = server.headers;
@@ -198,9 +182,7 @@ export function buildTransport(server: McpServerConfig): Transport {
   return new StdioClientTransport({
     command: server.command,
     args: server.args,
-    env: server.env
-      ? { ...getDefaultEnvironment(), ...server.env }
-      : undefined,
+    env: server.env ? { ...getDefaultEnvironment(), ...server.env } : undefined,
   });
 }
 
@@ -244,17 +226,10 @@ function redact(err: unknown): string {
 /** Race a promise against a timeout, clearing the timer either way. The
  *  underlying op is abandoned on timeout; `safeClose` then tears down the
  *  transport so nothing leaks. */
-async function withTimeout<T>(
-  p: Promise<T>,
-  ms: number,
-  label: string,
-): Promise<T> {
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`${label} timed out after ${ms}ms`)),
-      ms,
-    );
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
   });
   try {
     return await Promise.race([p, timeout]);

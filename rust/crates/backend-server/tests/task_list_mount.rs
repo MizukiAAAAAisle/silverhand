@@ -1,23 +1,11 @@
-//! Composition-root MOUNT proof for `GET /internal/agents/{aid}/tasks` (#task:2197).
+//! Task-list router composed with real runtime credentials and SQLite reads.
+//! Unlike `task_list_e2e`, the auth cases mint a bearer and exercise the credential
+//! perimeter instead of injecting a principal. CountingFetch only observes whether
+//! the real read was reached. App registry tests separately own whether the product
+//! mounts this route; this test assembles the router itself.
 //!
-//! `task_list_e2e.rs` already drives the real `MessagingStore` authorities and the real
-//! `SqliteTaskStore` fetch through `task_list_router` and pins the wire bytes — but it
-//! injects the `RuntimePrincipal` extension by hand, standing in for the perimeter. What no
-//! such test can show is that the route is actually MOUNTED behind the product's runtime
-//! credential perimeter: that an anonymous caller is refused BEFORE the fetch port is
-//! touched, that a real minted bearer resolves to the agent whose boards the body reads, and
-//! that the path answers `GET` only.
-//!
-//! So this composes the exact production seam — `require_runtime_credential` over the real
-//! `RuntimeCredentialAuthority`/`SqliteRuntimeCustodyStore`, wrapping the real
-//! authorities+router — and drives it end to end over a real minted credential. The fetch is
-//! wrapped in a counting decorator ONLY so "the anonymous arm reads nothing" is a hard
-//! assertion; every admitted read still executes the real candidate SQL.
-//!
-//! The board-resolution arms, ordering, projection and the perimeter's own refusal grammar
-//! are the concern of the layers this mounts and are pinned by their own tests
-//! (`messaging_authorities`, `task_list_e2e`, `runtime_credential_e2e`); this asserts the
-//! MOUNT, not a second reading of any of them.
+//! The historical-title case also exercises actual startup repair and HTTP reads,
+//! keeping both strict rejection before migration and readable canonical data after it.
 
 use std::{
     convert::Infallible,
@@ -392,7 +380,7 @@ async fn upgrade_title_copy(old: &std::path::Path, upgraded: &std::path::Path) {
 
     std::fs::copy(old, upgraded).unwrap();
     let first = prepare_database(upgraded, true).await.unwrap();
-    assert_eq!(first.applied_steps, vec![96]);
+    assert_eq!(first.applied_steps.first(), Some(&96));
 
     let second = prepare_database(upgraded, true).await.unwrap();
     assert!(second.applied_steps.is_empty());

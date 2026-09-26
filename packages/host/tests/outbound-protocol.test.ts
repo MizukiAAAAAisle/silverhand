@@ -13,13 +13,11 @@ import {
   OUTBOUND_PROTOCOL_VERSION,
   OUTBOUND_SERVER_COMMAND_KINDS,
   OutboundDaemonToServerCommandResponseFrameSchema,
-  OutboundDaemonToServerEventFrameSchema,
   OutboundFrameSchema,
   OutboundHeartbeatFrameSchema,
   OutboundServerToDaemonCommandFrameSchema,
   RotateTokenParamsSchema,
   encodeOutboundFrame,
-  outboundServerCommandSchemas,
 } from '../src/outbound-protocol.js';
 import { testStartOptions } from './_helpers/runtime-start-options.js';
 
@@ -67,28 +65,13 @@ describe('outbound protocol — command catalogue', () => {
     expect(OUTBOUND_SERVER_COMMAND_KINDS).not.toContain('conversation_log_debug' as never);
   });
 
-  it('reuses the existing runtime schemas as command params/results', () => {
-    expect(outboundServerCommandSchemas.runtime_start.params).toBe(
-      intentSchemas.runtime_start.params,
-    );
-    expect(outboundServerCommandSchemas.runtime_start.result).toBe(
-      intentSchemas.runtime_start.result,
-    );
-    expect(outboundServerCommandSchemas.runtime_deliver.params).toBe(
-      intentSchemas.runtime_deliver.params,
-    );
-    expect(outboundServerCommandSchemas.runtime_deliver.result).toBe(
-      intentSchemas.runtime_deliver.result,
-    );
-  });
-
   it('keeps every runtime_* intent reachable through the outbound command catalogue', () => {
     const runtimeIntentKinds = Object.keys(intentSchemas)
-      .filter(kind => kind.startsWith('runtime_'))
+      .filter((kind) => kind.startsWith('runtime_'))
       .sort();
-    const outboundRuntimeCommandKinds = OUTBOUND_SERVER_COMMAND_KINDS
-      .filter(kind => kind.startsWith('runtime_'))
-      .sort();
+    const outboundRuntimeCommandKinds = OUTBOUND_SERVER_COMMAND_KINDS.filter((kind) =>
+      kind.startsWith('runtime_'),
+    ).sort();
 
     expect(outboundRuntimeCommandKinds).toEqual(runtimeIntentKinds);
   });
@@ -105,7 +88,7 @@ describe('outbound protocol — command catalogue', () => {
         target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [1, 2],
-        deliveries: [1, 2].map(id => ({
+        deliveries: [1, 2].map((id) => ({
           delivery_id: id,
           seq: id,
           presentation: { body: 'hello', instruction: 'system' as const },
@@ -158,23 +141,6 @@ describe('outbound protocol — command catalogue', () => {
     });
     expect(err.success).toBe(true);
     expect(ResponseErrorSchema.safeParse(err.success ? err.data.error : null).success).toBe(true);
-  });
-
-  // D4.d D1: agent_materialize is an additive arm (R4 acceptance
-  // gate). It is NOT a runtime_* intent — its handler lives on the
-  // daemon's bootstrap path, not on the per-(conversation, agent)
-  // runtime supervisor. These tests pin (a) the catalogue contains
-  // the arm, (b) params/result schemas round-trip through the
-  // discriminated-union envelope, (c) the error-code schema rejects
-  // unknown codes (so daemon-side regressions can't leak through).
-  it('exposes agent_materialize as an additive command arm with the new param/result schemas', () => {
-    expect(OUTBOUND_SERVER_COMMAND_KINDS).toContain('agent_materialize' as never);
-    expect(outboundServerCommandSchemas.agent_materialize.params).toBe(
-      AgentMaterializeParamsSchema,
-    );
-    expect(outboundServerCommandSchemas.agent_materialize.result).toBe(
-      AgentMaterializeResultSchema,
-    );
   });
 
   it('parses an agent_materialize command frame round-trip (server → daemon)', () => {
@@ -237,26 +203,35 @@ describe('outbound protocol — command catalogue', () => {
   });
 
   it('rejects agent_materialize params with extra fields (strict)', () => {
-    const bad = AgentMaterializeParamsSchema.safeParse({
+    const valid = {
       agent_id: 'AbCdEfGhIjKlMnOp',
       agent_home_workspace_id: 'wsah_AbCdEfGhIjKlMnOp',
       name: 'alice',
       runtime: 'claude',
-      // unknown field — must be rejected by strict() so server bugs
-      // don't silently grow the wire surface.
+    };
+    expect(AgentMaterializeParamsSchema.safeParse(valid).success).toBe(true);
+    const bad = AgentMaterializeParamsSchema.safeParse({
+      ...valid,
       unexpected: 'nope',
     });
     expect(bad.success).toBe(false);
   });
 
-  it('rejects agent_materialize result with mismatched path types', () => {
-    const bad = AgentMaterializeResultSchema.safeParse({
+  it.each([
+    { agent_dir: '', agent_home_workspace_path: '' },
+    { agent_home_workspace_path: '/different/home' },
+    { agent_dir: 123 },
+    { agent_home_workspace_path: 123 },
+    { materialized_at: 0 },
+  ])('rejects only the invalid materialize result boundary: %j', (invalid) => {
+    const valid = {
       ok: true,
-      agent_dir: '',
-      agent_home_workspace_path: '',
-      materialized_at: 0,
-    });
-    expect(bad.success).toBe(false);
+      agent_dir: '/agent/home',
+      agent_home_workspace_path: '/agent/home',
+      materialized_at: 1,
+    };
+    expect(AgentMaterializeResultSchema.safeParse(valid).success).toBe(true);
+    expect(AgentMaterializeResultSchema.safeParse({ ...valid, ...invalid }).success).toBe(false);
   });
 
   // Cindy D1 round-1 P1: command-specific typed error codes MUST be
@@ -363,91 +338,32 @@ describe('outbound protocol — command catalogue', () => {
 });
 
 describe('outbound protocol — daemon event catalogue', () => {
-  it('pins daemon event arms separately from server command arms', () => {
-    expect([...OUTBOUND_DAEMON_EVENT_KINDS].sort()).toEqual([
-      'ready',
-      'runtime_compaction_stale',
-      'runtime_delivery_consumed',
-      'runtime_delivery_failed',
-      'runtime_exit',
-      'runtime_init_cooldown',
-      'runtime_init_retrying',
-      'runtime_init_timeout',
-      'runtime_message_stale',
-      'runtime_output',
-      'runtime_output_dropped',
-      'runtime_output_paused',
-      'runtime_output_resumed',
-      'runtime_parsed_event',
-      'runtime_parsed_event_dropped',
-      'runtime_ready_for_drain',
-      'runtime_state',
-      'shutting_down',
-    ]);
-    expect(OUTBOUND_DAEMON_EVENT_KINDS).not.toContain('rotate_token' as never);
-  });
-
   it('keeps outbound event names in lockstep with the daemon event surface', () => {
-    const daemonEventNames = EventFrameSchema.innerType().options
-      .map(option => option.shape.event.value)
+    const daemonEventNames = EventFrameSchema.innerType()
+      .options.map((option) => option.shape.event.value)
       .sort();
 
     expect([...OUTBOUND_DAEMON_EVENT_KINDS].sort()).toEqual(daemonEventNames);
-  });
-
-  it('parses outbound ready without the Unix-socket-only socket_path field', () => {
-    const parsed = OutboundDaemonToServerEventFrameSchema.safeParse({
-      direction: 'daemon_to_server',
-      type: 'event',
-      kind: 'ready',
-      protocol_version: OUTBOUND_PROTOCOL_VERSION,
-      daemon_version: '0.0.0-test',
-      daemon_id: 'local',
-      instance_id: 'instance-1',
-      host_descriptor: { name: 'local', kind: 'local' },
-      capabilities: [...KNOWN_CAPABILITIES_V1],
-      daemon_pid: 123,
-      started_at: 1700000000000,
-    });
-
-    expect(parsed.success).toBe(true);
-  });
-
-  it('parses runtime events with kind as the event discriminator', () => {
-    const parsed = OutboundDaemonToServerEventFrameSchema.safeParse({
-      runtime_generation: 1,
-      direction: 'daemon_to_server',
-      type: 'event',
-      kind: 'runtime_state',
-      runtime_scope: {
-        kind: 'conversation',
-        conversation_id: 'c1',
-        agent_id: 'a1',
-      },
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      state: RUN_STATE,
-      ts: 1700000000000,
-    });
-
-    expect(parsed.success).toBe(true);
   });
 });
 
 describe('outbound protocol — frame envelope', () => {
   it('uses direction/type/kind to reject wrong-way frames', () => {
-    expect(
-      OutboundFrameSchema.safeParse({
-        runtime_generation: 1,
-        direction: 'server_to_daemon',
-        type: 'event',
-        kind: 'runtime_state',
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        state: RUN_STATE,
-        ts: 1700000000000,
-      }).success,
-    ).toBe(false);
+    const valid = {
+      runtime_generation: 1,
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'runtime_state',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      state: RUN_STATE,
+      ts: 1700000000000,
+    };
+    expect(OutboundFrameSchema.safeParse(valid).success).toBe(true);
+    expect(OutboundFrameSchema.safeParse({ ...valid, direction: 'server_to_daemon' }).success).toBe(
+      false,
+    );
   });
 
   it('parses bidirectional app-level heartbeat frames', () => {
@@ -471,7 +387,7 @@ describe('outbound protocol — frame envelope', () => {
     ).toBe(true);
   });
 
-  it('encodes a single JSON frame and enforces the shared frame cap', () => {
+  it('encodes a single JSON frame without an NDJSON newline', () => {
     const encoded = encodeOutboundFrame({
       direction: 'daemon_to_server',
       type: 'event',

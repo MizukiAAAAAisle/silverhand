@@ -3,9 +3,6 @@
 use crate::conversation_messaging::runtime_delivery::conversation_allows_delivery;
 use std::collections::HashSet;
 
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
         PrincipalIdentity, ThreadRootId,
@@ -27,9 +24,6 @@ use crate::conversation_messaging::messaging::MessagingStore;
 use super::conversation_participation::{
     ConversationParticipationStoreError, Placement, decode_conversation, participates,
 };
-
-#[cfg(test)]
-static LIVE_PARTICIPATION_STATEMENTS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone)]
 pub struct SqliteThreadFollow<E> {
@@ -518,8 +512,6 @@ async fn workspace_live_agent_rows(
     conversation: &ConversationId,
     candidates: &str,
 ) -> Result<Vec<SqliteRow>, sqlx::Error> {
-    #[cfg(test)]
-    LIVE_PARTICIPATION_STATEMENTS.fetch_add(1, Ordering::SeqCst);
     sqlx::query(
         "SELECT a.id FROM json_each(?) candidate \
          JOIN agents a ON a.id=candidate.value \
@@ -537,8 +529,6 @@ async fn direct_pair_live_agent_rows(
     candidates: &str,
     endpoints: &str,
 ) -> Result<Vec<SqliteRow>, sqlx::Error> {
-    #[cfg(test)]
-    LIVE_PARTICIPATION_STATEMENTS.fetch_add(1, Ordering::SeqCst);
     sqlx::query(
         "SELECT a.id FROM json_each(?) candidate \
          JOIN agents a ON a.id=candidate.value \
@@ -841,83 +831,12 @@ async fn agent_follow_gates(
 
 #[cfg(test)]
 mod tests {
-    use silverhand_backend_core::foundation::identity::WorkspaceId;
     use sqlx::{
         Connection, Executor, SqliteConnection,
         sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     };
 
     use super::*;
-
-    #[tokio::test]
-    async fn candidate_cardinality_does_not_change_the_number_of_participation_statements() {
-        const SCHEMA: &str = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../rust/test-fixtures/migration-baseline/schema-current.sql"
-        ));
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("thread-follow-set-authority.sqlite");
-        let options = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true)
-            .foreign_keys(true);
-        let mut db = SqliteConnection::connect_with(&options).await.unwrap();
-        db.execute(sqlx::raw_sql(SCHEMA)).await.unwrap();
-        db.execute(sqlx::raw_sql(
-            "INSERT INTO users(id,name,display_name,created_at,updated_at) \
-             VALUES('local','local-thread-follow-set','Local',1,1); \
-             INSERT INTO hosts(id,name,kind,created_at) VALUES('host','Host','local',1); \
-             INSERT INTO workspaces(id,name,name_key,created_at,updated_at) \
-             VALUES('w','Workspace','thread-follow-set',1,1); \
-             INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) \
-             VALUES('c','w','workspace','open','General','thread-follow-set','idle','private',1,1);",
-        ))
-        .await
-        .unwrap();
-        let mut candidates = Vec::new();
-        for ordinal in 0..32_i64 {
-            let id = format!("agent-{ordinal:02}");
-            let name = format!("thread-follow-set-{ordinal:02}");
-            sqlx::query(
-                "INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id) \
-                 VALUES(?,?,'claude','host',1,1,'local')",
-            )
-            .bind(&id)
-            .bind(name)
-            .execute(&mut db)
-            .await
-            .unwrap();
-            sqlx::query(
-                "INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('c',?,1)",
-            )
-            .bind(&id)
-            .execute(&mut db)
-            .await
-            .unwrap();
-            candidates.push(DecodedFollower {
-                conversation: ConversationId::parse("c").unwrap(),
-                root: ThreadRootId::parse("root").unwrap(),
-                principal: FollowerPrincipal::Agent(AgentId::parse(id).unwrap()),
-                followed_at: FollowedAt::new(ordinal).unwrap(),
-            });
-        }
-        db.close().await.unwrap();
-
-        let store = MessagingStore::open(path).await.unwrap();
-        let mut tx = store.pool.begin_with("BEGIN DEFERRED").await.unwrap();
-        LIVE_PARTICIPATION_STATEMENTS.store(0, Ordering::SeqCst);
-        let live = live_participating_agents(
-            &mut tx,
-            &ConversationId::parse("c").unwrap(),
-            &Placement::Workspace(WorkspaceId::parse("w").unwrap()),
-            &candidates,
-        )
-        .await
-        .unwrap();
-        assert_eq!(live.len(), 32);
-        assert_eq!(LIVE_PARTICIPATION_STATEMENTS.load(Ordering::SeqCst), 1);
-        tx.commit().await.unwrap();
-    }
 
     const FOLLOW_SCHEMA: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -939,7 +858,8 @@ INSERT INTO workspace_agent_capabilities(workspace_id,agent_id,capability) VALUE
 INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) VALUES('chan','ws','workspace','open','Chan','fchan','idle','private',1,1); \
 INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('chan','agent-a',1); \
 INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('chan','agent-c',1); \
-INSERT INTO messages(id,conversation_id,from_kind,from_agent_id,content,seq,created_at) VALUES('m1','chan','agent','agent-a','root',1,10);";
+INSERT INTO messages(id,conversation_id,from_kind,from_agent_id,content,seq,created_at) VALUES('m1','chan','agent','agent-a','root',1,10); \
+INSERT INTO messages(id,conversation_id,from_kind,from_agent_id,content,seq,created_at,thread_root_id) VALUES('m2','chan','agent','agent-c','reply',2,11,'m1');";
 
     async fn follow_store() -> (
         tempfile::TempDir,
@@ -1003,6 +923,36 @@ INSERT INTO messages(id,conversation_id,from_kind,from_agent_id,content,seq,crea
             .await
             .unwrap();
         assert_eq!(queued, 0);
+        let followers: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM thread_followers WHERE principal_id='agent-a'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(followers, 1);
+        AgentThreadFollowWrite::unfollow(
+            &store.thread_follow(),
+            ag("agent-a"),
+            cv("chan"),
+            rt("m1"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        sqlx::query("UPDATE conversations SET archived_at=NULL WHERE id='chan'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        AgentThreadFollowWrite::follow(&store.thread_follow(), ag("agent-a"), cv("chan"), rt("m1"))
+            .await
+            .unwrap()
+            .unwrap();
+        let messages: Vec<String> =
+            sqlx::query_scalar("SELECT message_id FROM conversation_inboxes")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(messages, ["m2"]);
     }
 
     #[tokio::test]
@@ -1032,6 +982,13 @@ INSERT INTO messages(id,conversation_id,from_kind,from_agent_id,content,seq,crea
             "SELECT COUNT(*) FROM thread_followers WHERE principal_kind='agent' AND principal_id='agent-a'")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(followers_now, 1, "follow inserted the follower row");
+        let deliveries: Vec<(String, String)> = sqlx::query_as(
+            "SELECT message_id,delivery_kind FROM conversation_inboxes ORDER BY message_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(deliveries, [("m2".to_owned(), "observe".to_owned())]);
         // Revoke read_messages (a competing writer). A brand-new agent-c that IS a
         // member but now needs cap is refused — proving the writer replays capability
         // in-snapshot rather than caching the earlier authorized read (#5).

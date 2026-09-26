@@ -272,22 +272,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_viewers_is_an_empty_wrapper() {
-        let (status, body, _) = get(Outcome::Facts(Vec::new()), Present(Vec::new()), true).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            serde_json::from_str::<Value>(&body).unwrap(),
-            json!({ "users": [] })
-        );
-    }
-
-    #[tokio::test]
     async fn a_read_failure_is_a_safe_500() {
         let (status, body, calls) = get(Outcome::Fails, Present(Vec::new()), true).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(calls, 1);
         assert_eq!(body, "Internal Server Error");
-        assert!(!body.contains("presence store gone"));
     }
 
     #[tokio::test]

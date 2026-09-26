@@ -301,32 +301,44 @@ mod tests {
         }
     }
 
-    #[test]
-    fn token_comparison_is_exact() {
-        assert!(constant_time_equal(&[1, 2, 3], &[1, 2, 3]));
-        assert!(!constant_time_equal(&[1, 2, 3], &[1, 2, 4]));
-        assert!(!constant_time_equal(&[1, 2], &[1, 2, 3]));
-    }
-
     #[tokio::test]
-    async fn overview_requires_the_exact_token_and_reuses_the_bounded_cache() {
+    async fn overview_requires_the_exact_token_and_reuses_the_cached_snapshot() {
         let token = "01234567890123456789012345678901";
         let hash = Sha256::digest(token.as_bytes()).into();
         let calls = Arc::new(AtomicUsize::new(0));
         let app = router(FakeRead(calls.clone()), hash, "<html>console</html>");
 
-        let unauthorized = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/console/api/overview")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        for offered in [
+            None,
+            Some(""),
+            Some("Bearer wrong-token"),
+            Some("Bearer 01234567890123456789012345678900"),
+            Some("Basic 01234567890123456789012345678901"),
+        ] {
+            let mut request = Request::builder().uri("/console/api/overview");
+            if let Some(value) = offered {
+                request = request.header(header::AUTHORIZATION, value);
+            }
+            let unauthorized = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                unauthorized.headers()[header::CACHE_CONTROL],
+                "no-store, private"
+            );
+            assert_eq!(
+                unauthorized.headers()[header::WWW_AUTHENTICATE],
+                "Bearer realm=\"silverhand-console\""
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "denied requests must not read analytics"
+            );
+        }
 
         for _ in 0..2 {
             let response = app
@@ -353,11 +365,8 @@ mod tests {
 
     #[tokio::test]
     async fn index_exposes_no_data_and_sets_browser_isolation_headers() {
-        let app = router(
-            FakeRead(Arc::new(AtomicUsize::new(0))),
-            [7; 32],
-            "<html>console</html>",
-        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let app = router(FakeRead(calls.clone()), [7; 32], "<html>console</html>");
         let response = app
             .oneshot(
                 Request::builder()
@@ -370,7 +379,32 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()["x-frame-options"], "DENY");
-        assert!(response.headers().contains_key("content-security-policy"));
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "no-store, private"
+        );
+        let policy = response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap();
+        for directive in [
+            "default-src 'none'",
+            "connect-src 'self'",
+            "frame-ancestors 'none'",
+            "base-uri 'none'",
+        ] {
+            assert!(
+                policy
+                    .split(';')
+                    .map(str::trim)
+                    .any(|value| value == directive)
+            );
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "the public shell must not query private analytics"
+        );
     }
     #[tokio::test]
     async fn user_routes_are_authorized_validated_and_never_cache_identity_responses() {

@@ -11,8 +11,7 @@
  *  2. No log entry passed through any helper carries any forbidden
  *     field name (`payload`, `chunk`, `body`, `text`, `prompt`,
  *     `env`, `env_*`, `stdout`, `stderr`, `soft_directive`). Compile-time enforcement happens via the typed
- *     interfaces; the runtime guard `findForbiddenFields` is a
- *     belt-and-suspenders check the test exercises.
+ *     interfaces; daemon-logger.test.ts exercises sanitization on disk.
  *  3. End-to-end: dispatch a real intent through `IntentDispatcher`
  *     with a `payload`-bearing param (e.g. `runtime_deliver`) and assert
  *     the log line emitted by `logIntent` does NOT carry the payload
@@ -21,9 +20,6 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  FORBIDDEN_LOG_FIELDS,
-  FORBIDDEN_LOG_FIELD_PREFIXES,
-  findForbiddenFields,
   logBackpressure,
   logDaemon,
   logEvent,
@@ -146,79 +142,7 @@ describe('§3.4 — typed helpers stamp the right `kind` discriminator', () => {
       error_code: 'internal_error',
     });
 
-    expect(lines.map(line => line.level)).toEqual(['debug', 'debug', 'warn']);
-  });
-});
-
-describe('§3.4 — forbidden field names never reach the log line', () => {
-  it('findForbiddenFields detects every listed name', () => {
-    for (const name of FORBIDDEN_LOG_FIELDS) {
-      expect(findForbiddenFields({ [name]: 'anything' })).toContain(name);
-    }
-    for (const prefix of FORBIDDEN_LOG_FIELD_PREFIXES) {
-      const k = `${prefix}MY_VAR`;
-      expect(findForbiddenFields({ [k]: 'value' })).toContain(k);
-    }
-  });
-
-  it('findForbiddenFields ignores allowed structural fields', () => {
-    expect(
-      findForbiddenFields({
-        kind: 'intent',
-        intent: 'ping',
-        request_id: 'r1',
-        status: 'ok',
-        conversationId: 'c1',
-        agent_id: 'a1',
-        delivery_ids: [1, 2, 3],
-        dropped_count: 0,
-        bytes_dropped: 0,
-        pid: 1234,
-        socket_path: '/tmp/s',
-      }),
-    ).toEqual([]);
-  });
-
-  it('every typed helper emits a line whose top-level keys are forbidden-free', () => {
-    const { lines, logger } = capturingLogger();
-    logIntent(logger, {
-      intent: 'runtime_deliver',
-      request_id: 'r1',
-      status: 'received',
-      conversationId: 'c1',
-      agent_id: 'a1',
-    });
-    logEvent(logger, {
-      event: 'runtime_output_dropped',
-      conversationId: 'c1',
-      agent_id: 'a1',
-      dropped_count: 5,
-      bytes_dropped: 1024,
-    });
-    logProcess(logger, {
-      action: 'reclaim',
-      pid: 1234,
-      conversationId: 'c1',
-      agent_id: 'a1',
-      cmdline_match: true,
-    });
-    logDaemon(logger, {
-      action: 'pid_claim',
-      pid: 1234,
-      pid_file_path: '/tmp/daemon.pid',
-    });
-    logBackpressure(logger, {
-      conversationId: 'c1',
-      agent_id: 'a1',
-      action: 'dropped',
-      buffer_bytes: 4_000_000,
-      dropped_count: 12,
-      bytes_dropped: 8192,
-    });
-    expect(lines).toHaveLength(5);
-    for (const line of lines) {
-      expect(findForbiddenFields(line.obj)).toEqual([]);
-    }
+    expect(lines.map((line) => line.level)).toEqual(['debug', 'debug', 'warn']);
   });
 });
 
@@ -257,21 +181,28 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     const { lines, logger } = capturingLogger();
     const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
     const SECRET_TEXT = 'VERY-CONFIDENTIAL-USER-INPUT-XYZ';
-    await d.dispatch('req-1', 'runtime_deliver', {
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      target: { conversation_id: 'c1', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [42],
-      deliveries: [{
-        delivery_id: 42,
-        seq: 42,
-        presentation: { body: 'delivery-42', instruction: 'system' as const },
-      }],
-      kind: 'message',
-      text: SECRET_TEXT,
-      spawn_options: testStartOptions(),
-    }, { owner: 'test-owner' });
+    await d.dispatch(
+      'req-1',
+      'runtime_deliver',
+      {
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [42],
+        deliveries: [
+          {
+            delivery_id: 42,
+            seq: 42,
+            presentation: { body: 'delivery-42', instruction: 'system' as const },
+          },
+        ],
+        kind: 'message',
+        text: SECRET_TEXT,
+        spawn_options: testStartOptions(),
+      },
+      { owner: 'test-owner' },
+    );
     // §3.4: NO log line may carry the text value or the field name.
     // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): `text` replaces the old
     // pre-encoded `payload`; `FORBIDDEN_LOG_FIELDS` covers both.
@@ -282,8 +213,8 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
       expect(flat).not.toContain('"payload"');
     }
     // Sanity: at least one received + one ok log line landed.
-    const received = lines.filter(l => (l.obj as { status?: string }).status === 'received');
-    const ok = lines.filter(l => (l.obj as { status?: string }).status === 'ok');
+    const received = lines.filter((l) => (l.obj as { status?: string }).status === 'received');
+    const ok = lines.filter((l) => (l.obj as { status?: string }).status === 'ok');
     expect(received).toHaveLength(1);
     expect(ok).toHaveLength(1);
     expect(ok[0]!.obj).toMatchObject({
@@ -301,21 +232,26 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     const { lines, logger } = capturingLogger();
     const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
     // Pass a malformed deliver — missing delivery_ids → invalid_params.
-    await d.dispatch('req-2', 'runtime_deliver', {
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      kind: 'message',
-      text: 'LEAK-ATTEMPT',
-      spawn_options: testStartOptions(),
-    }, { owner: 'test-owner' });
+    await d.dispatch(
+      'req-2',
+      'runtime_deliver',
+      {
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        kind: 'message',
+        text: 'LEAK-ATTEMPT',
+        spawn_options: testStartOptions(),
+      },
+      { owner: 'test-owner' },
+    );
     for (const line of lines) {
       const flat = JSON.stringify(line.obj);
       expect(flat).not.toContain('LEAK-ATTEMPT');
       expect(flat).not.toContain('"text"');
       expect(flat).not.toContain('"payload"');
     }
-    const errLine = lines.find(l => (l.obj as { status?: string }).status === 'error');
+    const errLine = lines.find((l) => (l.obj as { status?: string }).status === 'error');
     expect(errLine?.obj).toMatchObject({
       kind: 'intent',
       intent: 'runtime_deliver',
@@ -328,23 +264,28 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
     const { lines, logger } = capturingLogger();
     const d = new IntentDispatcher({ logger, supervisor: stubSupervisor });
     d.markShuttingDown();
-    await d.dispatch('req-3', 'runtime_deliver', {
-      runtime_generation: 1,
-      conversation_id: 'c1',
-      target: { conversation_id: 'c1', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [1],
-      kind: 'message',
-      text: 'POST-SHUTDOWN-LEAK',
-      spawn_options: testStartOptions(),
-    }, { owner: 'test-owner' });
+    await d.dispatch(
+      'req-3',
+      'runtime_deliver',
+      {
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [1],
+        kind: 'message',
+        text: 'POST-SHUTDOWN-LEAK',
+        spawn_options: testStartOptions(),
+      },
+      { owner: 'test-owner' },
+    );
     for (const line of lines) {
       const flat = JSON.stringify(line.obj);
       expect(flat).not.toContain('POST-SHUTDOWN-LEAK');
       expect(flat).not.toContain('"text"');
       expect(flat).not.toContain('"payload"');
     }
-    const errLine = lines.find(l => (l.obj as { status?: string }).status === 'error');
+    const errLine = lines.find((l) => (l.obj as { status?: string }).status === 'error');
     expect(errLine?.obj.error_code).toBe('shutting_down');
   });
 });

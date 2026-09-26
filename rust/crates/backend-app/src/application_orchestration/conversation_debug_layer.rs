@@ -445,14 +445,25 @@ mod tests {
         if std::env::var(CHILD).as_deref() == Ok(name) {
             return false;
         }
-        let test = format!("application_orchestration::conversation_debug_layer::tests::{name}");
+        // libtest names omit the crate prefix. Follow module moves instead of
+        // keeping a copied module path that could select zero tests successfully.
+        let (_, module) = module_path!().split_once("::").unwrap();
+        let test = format!("{module}::{name}");
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", &test, "--nocapture"])
+            .args([
+                "--exact",
+                &test,
+                "--nocapture",
+                "--format=pretty",
+                "--color=never",
+            ])
             .env(CHILD, name)
             .output()
             .unwrap();
         assert!(
-            output.status.success(),
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout)
+                    .contains("test result: ok. 1 passed; 0 failed; 0 ignored;"),
             "{}\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)

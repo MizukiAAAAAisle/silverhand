@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
 import {
   resolveAuthenticatedComputerId,
@@ -39,11 +41,7 @@ import type { StartOptions } from '../src/protocol.js';
 const AGENTS_ROOT = '/tmp/d4e6-agents';
 
 /** The deterministic regular-workspace L2/cwd path (relocation-v1 §3.2). */
-function bundle(
-  agentId: string,
-  workspaceId: string,
-  agentHomeRootDir = AGENTS_ROOT,
-): string {
+function bundle(agentId: string, workspaceId: string, agentHomeRootDir = AGENTS_ROOT): string {
   return resolveAgentWorkspaceBundleDir(agentId, workspaceId, {
     agentHomeRootDir,
   });
@@ -76,7 +74,7 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
     const probed: string[] = [];
     const resolved = await resolveRuntimeStartPaths(
       options,
-      depsWith(async dir => {
+      depsWith(async (dir) => {
         probed.push(dir);
         return true;
       }),
@@ -112,7 +110,7 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
     };
     const resolved = await resolveRuntimeStartPaths(
       options,
-      depsWith(async dir => dir === bundle('a1', 'ws1')),
+      depsWith(async (dir) => dir === bundle('a1', 'ws1')),
     );
     expect(resolved.workspace!.path).toBe(bundle('a1', 'ws1'));
     expect(resolved.workspace_memory_index).toEqual([
@@ -121,20 +119,30 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
     ]);
   });
 
-  it('half-seed: an index entry with an mkdir-only bundle (MEMORY.md absent ⇒ bundleL2Present false) is never available', async () => {
+  it('offers a memory path only after a mkdir-only bundle gains a readable MEMORY.md', async () => {
     const base = testStartOptions({ agentId: 'a1', workspaceKind: 'regular' });
     const options: StartOptions = {
       ...base,
       workspace_memory_index: [{ id: 'ws_half', name: 'half' }],
     };
-    // The completion predicate returns false for the half-seeded dir.
-    const resolved = await resolveRuntimeStartPaths(
-      options,
-      depsWith(async () => false),
-    );
-    expect(resolved.workspace_memory_index).toEqual([
-      { id: 'ws_half', name: 'half', path: null },
-    ]);
+    const testRoot = process.env.SILVERHAND_DIR;
+    if (!testRoot) throw new Error('This filesystem test requires isolated SILVERHAND_DIR');
+    mkdirSync(testRoot, { recursive: true });
+    const agentHomeRootDir = mkdtempSync(join(testRoot, 'runtime-paths-'));
+    try {
+      const half = join(agentHomeRootDir, 'a1', 'workspaces', 'ws_half');
+      mkdirSync(half, { recursive: true });
+      const deps = { agentHomeRootDir, resolveComputerId: () => 'computer-1' };
+      const before = await resolveRuntimeStartPaths(options, deps);
+      expect(before.workspace_memory_index).toEqual([{ id: 'ws_half', name: 'half', path: null }]);
+      expect(before.cwd).toBe(join(agentHomeRootDir, 'a1', 'workspaces', 'ws1'));
+      writeFileSync(join(half, 'MEMORY.md'), '# workspace memory');
+      const after = await resolveRuntimeStartPaths(options, deps);
+      expect(after.workspace_memory_index).toEqual([{ id: 'ws_half', name: 'half', path: half }]);
+      expect(after.cwd).toBe(before.cwd);
+    } finally {
+      rmSync(agentHomeRootDir, { recursive: true, force: true });
+    }
   });
 
   it('fails closed for the active workspace on an unsafe id (registry_unavailable), before any availability probe', async () => {
@@ -172,9 +180,7 @@ describe('resolveRuntimeStartPaths — agent_home workspace', () => {
     });
     const resolved = await resolveRuntimeStartPaths(options, depsWith());
     expect(resolved.workspace!.path).toBe(l1('a9'));
-    expect(resolved.workspace_memory_index[0]!.path).toBe(
-      l1('a9'),
-    );
+    expect(resolved.workspace_memory_index[0]!.path).toBe(l1('a9'));
     expect(resolved.agent.home_dir).toBe(l1('a9'));
     // The valid ref is THIS agent's own home workspace id.
     expect(resolved.workspace!.id).toBe(agentHomeWorkspaceId('a9'));
@@ -213,9 +219,7 @@ describe('resolveRuntimeStartPaths — agent_home workspace', () => {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(RuntimeStartResolveError);
-    expect((thrown as RuntimeStartResolveError).code).toBe(
-      'workspace_not_provisioned',
-    );
+    expect((thrown as RuntimeStartResolveError).code).toBe('workspace_not_provisioned');
   });
 
   it("memory-index entry carrying ANOTHER agent's home id degrades to unavailable (never resolves onto own L1)", async () => {
@@ -229,17 +233,13 @@ describe('resolveRuntimeStartPaths — agent_home workspace', () => {
     // Recognized as an agent-home ref by its `wsah_` id, then fails closed
     // because it is not THIS agent's home → the index entry degrades to null
     // rather than resolving onto this agent's L1.
-    expect(resolved.workspace_memory_index).toEqual([
-      { id: foreignHome, name: 'DM', path: null },
-    ]);
+    expect(resolved.workspace_memory_index).toEqual([{ id: foreignHome, name: 'DM', path: null }]);
   });
 });
 
 describe('resolveAuthenticatedComputerId — prompt computer authority', () => {
   it('returns the authenticated binding host id', () => {
-    expect(
-      resolveAuthenticatedComputerId({ host_id: 'computer-9' }),
-    ).toBe('computer-9');
+    expect(resolveAuthenticatedComputerId({ host_id: 'computer-9' })).toBe('computer-9');
   });
 
   it('fails closed with typed registry_unavailable when not attached — never a placeholder', () => {
@@ -253,9 +253,7 @@ describe('resolveAuthenticatedComputerId — prompt computer authority', () => {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(RuntimeStartResolveError);
-    expect((thrown as RuntimeStartResolveError).code).toBe(
-      'registry_unavailable',
-    );
+    expect((thrown as RuntimeStartResolveError).code).toBe('registry_unavailable');
   });
 });
 
@@ -271,7 +269,7 @@ describe('resolveRuntimeStartPaths — mixed memory index', () => {
       ],
     };
     const resolved = await resolveRuntimeStartPaths(options, depsWith());
-    expect(resolved.workspace_memory_index.map(w => w.path)).toEqual([
+    expect(resolved.workspace_memory_index.map((w) => w.path)).toEqual([
       bundle('a1', 'ws1'),
       l1('a1'),
       bundle('a1', 'ws2'),
@@ -303,9 +301,9 @@ describe('resolveRuntimeStartPaths — mixed memory index', () => {
       ...base,
       workspace: { id: '../escape', name: 'peer' },
     };
-    await expect(
-      resolveRuntimeStartPaths(activeUnsafe, depsWith()),
-    ).rejects.toBeInstanceOf(RuntimeStartResolveError);
+    await expect(resolveRuntimeStartPaths(activeUnsafe, depsWith())).rejects.toBeInstanceOf(
+      RuntimeStartResolveError,
+    );
   });
 });
 
@@ -360,8 +358,7 @@ describe('resolveAgentWorkspaceBundleDir — sole path authority self-validates'
 
   it('a conforming id resolves under the agent home', () => {
     const path = resolveAgentWorkspaceBundleDir('a1', 'ws1', { agentHomeRootDir: AGENTS_ROOT });
-    expect(path).toBe(bundle('a1', 'ws1'));
-    expect(path.startsWith(l1('a1'))).toBe(true);
+    expect(path).toBe(join(AGENTS_ROOT, 'a1', 'workspaces', 'ws1'));
   });
 });
 
@@ -374,9 +371,19 @@ describe('runtime action cwd follows the runtime scope', () => {
       { conversation_id: 'direct-pair', workspace: null },
     ];
     for (const target of targets) {
-      expect(resolveRuntimeActionWorkdir({ kind: 'agent', agent_id: 'a1' }, target, deps)).toBe(l1('a1'));
-      const path = resolveRuntimeActionWorkdir({ kind: 'conversation', agent_id: 'a1', conversation_id: target.conversation_id }, target, deps);
-      expect(path).toBe(target.workspace ? bundle('a1', target.workspace.id) : `${l1('a1')}/conversations/direct-pair`);
+      expect(resolveRuntimeActionWorkdir({ kind: 'agent', agent_id: 'a1' }, target, deps)).toBe(
+        l1('a1'),
+      );
+      const path = resolveRuntimeActionWorkdir(
+        { kind: 'conversation', agent_id: 'a1', conversation_id: target.conversation_id },
+        target,
+        deps,
+      );
+      expect(path).toBe(
+        target.workspace
+          ? bundle('a1', target.workspace.id)
+          : `${l1('a1')}/conversations/direct-pair`,
+      );
     }
   });
 });

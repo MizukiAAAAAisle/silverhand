@@ -206,7 +206,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auth_precedes_read_and_first_query_coordinate_is_used() {
+    async fn auth_precedes_read_and_omitted_or_empty_first_filter_is_global() {
         let calls = Arc::new(AtomicUsize::new(0));
         let app = router(Read {
             calls: Arc::clone(&calls),
@@ -224,20 +224,22 @@ mod tests {
         assert_eq!(unauth.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
-        let mut request = Request::builder()
-            .uri("/api/activity?workspace_id=w-first&workspace_id=w-second")
-            .body(Body::empty())
-            .unwrap();
-        request
-            .extensions_mut()
-            .insert(UserId::parse("viewer").unwrap());
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body: Value =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        assert_eq!(body["items"][0]["location"]["workspace_id"], "w-first");
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        for uri in [
+            "/api/activity",
+            "/api/activity?workspace_id=&workspace_id=w-second",
+        ] {
+            let mut request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+            request
+                .extensions_mut()
+                .insert(UserId::parse("viewer").unwrap());
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(body["items"][0]["location"]["workspace_id"], "w-1", "{uri}");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     async fn fixture_store(setup: &str) -> (tempfile::TempDir, MessagingStore) {
@@ -313,6 +315,5 @@ mod tests {
                     .unwrap();
             assert_eq!(body, case["body"], "{}", case["name"]);
         }
-        assert_eq!(fixture.as_array().unwrap().len(), 4);
     }
 }

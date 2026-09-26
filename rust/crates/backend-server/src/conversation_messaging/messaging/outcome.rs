@@ -319,6 +319,9 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            assert_eq!(body.as_ref(), b"Internal Server Error");
+        }
         let reported = logs.errors();
         let parsed = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
         (status, parsed, reported)
@@ -437,26 +440,6 @@ mod tests {
             // nothing and buries the failures that are ours.
             assert_eq!(reported, 0, "{cause:?} was reported to the operator");
         }
-    }
-
-    /// A refusal about an attachment names WHICH one, and the field is absent — not null —
-    /// on every refusal that is not about an attachment.
-    #[tokio::test(flavor = "current_thread")]
-    async fn only_an_attachment_refusal_carries_an_attachment_id() {
-        let (_, with_id, _) = answered(
-            &AttachmentRefusal::OutsideChannel {
-                attachment_id: attachment_id(),
-            }
-            .into(),
-        )
-        .await;
-        assert_eq!(with_id["attachment_id"], "att-7");
-
-        let (_, without, _) = answered(&ConversationRefusal::NotFound.into()).await;
-        assert!(
-            without.get("attachment_id").is_none(),
-            "an unrelated refusal carried an attachment field: {without}"
-        );
     }
 
     /// THE STALE ENVELOPE IS NESTED, and every field in it is consumed fail-closed.

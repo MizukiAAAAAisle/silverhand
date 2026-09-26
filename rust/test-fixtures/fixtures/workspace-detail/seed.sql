@@ -1,7 +1,6 @@
--- Shared cross-language fixture for GET /api/workspaces/:id (#task:2193).
--- Executed VERBATIM against a fresh current-schema database by both the TypeScript
--- oracle (tests/workspace-detail-parity.test.ts) and the Rust parity test
--- (backend-server/tests/workspace_detail_parity.rs). Both then replay cases.json:
+-- Legacy contract fixture for GET /api/workspaces/:id (#task:2193).
+-- Executed against a fresh current-schema database by the Rust HTTP/SQLite test
+-- (backend-server/tests/workspace_detail_parity.rs), which replays cases.json:
 -- given viewer user-1, each id must yield the same HTTP status and body.
 -- foreign_keys are ON, so principals precede the rows that reference them.
 

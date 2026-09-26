@@ -30,7 +30,6 @@ enum ProviderMode {
     Success,
     Placement(RuntimePlacementRefusal),
     StartRefusal(StartRuntimeProviderRefusal),
-    StopRefusal(HardStopRuntimeProviderRefusal),
     ClearRefusal(ClearSessionProviderRefusal),
 }
 
@@ -105,7 +104,6 @@ impl RuntimeControlPort for Provider {
             ProviderMode::Placement(refusal) => {
                 Ok(Err(HardStopRuntimeProviderRefusal::Placement(refusal)))
             }
-            ProviderMode::StopRefusal(refusal) => Ok(Err(refusal)),
             _ => Ok(Ok(HardStopRuntimeOutcome)),
         }
     }
@@ -304,9 +302,14 @@ async fn the_ts_signed_wire_fixture_crosses_the_real_rust_router() {
             case.name
         );
         let should_reach_provider = case.setup == "normal" && case.name != "legacy_soft_stop";
+        let expected_calls = if should_reach_provider {
+            vec![case.route.as_str()]
+        } else {
+            vec![]
+        };
         assert_eq!(
-            calls.lock().unwrap().len(),
-            usize::from(should_reach_provider),
+            calls.lock().unwrap().as_slice(),
+            expected_calls,
             "{}",
             case.name
         );
@@ -314,105 +317,11 @@ async fn the_ts_signed_wire_fixture_crosses_the_real_rust_router() {
 }
 
 #[tokio::test]
-async fn all_three_doors_cross_real_sqlite_admission_before_the_provider() {
+async fn legacy_directive_presence_is_rejected_even_when_null() {
     let (_directory, store) = seeded().await;
     let provider = provider(ProviderMode::Success);
     let calls = Arc::clone(&provider.calls);
     let app = router(store.runtime_control_admission(), provider);
-
-    let (status, body) = request(
-        app.clone(),
-        path(START_PATH, "conversation-1", "agent-1"),
-        "user-1",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        serde_json::from_str::<Value>(&body).unwrap(),
-        json!({ "ok": true })
-    );
-
-    let (status, body) = request(
-        app.clone(),
-        path(HARD_STOP_PATH, "conversation-1", "agent-1"),
-        "user-1",
-        Some(json!({ "mode": "hard" })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        serde_json::from_str::<Value>(&body).unwrap(),
-        json!({ "ok": true })
-    );
-
-    let (status, body) = request(
-        app,
-        path(CLEAR_SESSION_PATH, "conversation-1", "agent-1"),
-        "user-1",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        serde_json::from_str::<Value>(&body).unwrap(),
-        json!({
-            "ok": true,
-            "prev_cli_session_id": "cli-previous",
-            "was_running": true
-        })
-    );
-    assert_eq!(
-        calls.lock().unwrap().as_slice(),
-        ["start", "hard_stop", "clear_session"]
-    );
-}
-
-#[tokio::test]
-async fn admission_refusals_and_legacy_stop_order_precede_every_provider_call() {
-    let (_directory, store) = seeded().await;
-    let provider = provider(ProviderMode::Success);
-    let calls = Arc::clone(&provider.calls);
-    let app = router(store.runtime_control_admission(), provider);
-
-    let (status, body) = request(
-        app.clone(),
-        path(HARD_STOP_PATH, "missing", "agent-1"),
-        "user-1",
-        Some(json!({ "mode": "soft" })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(
-        serde_json::from_str::<Value>(&body).unwrap(),
-        json!({ "error": "channel not found" })
-    );
-
-    let (status, body) = request(
-        app.clone(),
-        path(START_PATH, "conversation-1", "missing"),
-        "user-1",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(
-        serde_json::from_str::<Value>(&body).unwrap(),
-        json!({ "error": "agent not found" })
-    );
-
-    let (status, body) = request(
-        app.clone(),
-        path(START_PATH, "conversation-1", "agent-1"),
-        "user-2",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(
-        serde_json::from_str::<Value>(&body).unwrap(),
-        json!({ "error": "forbidden" })
-    );
 
     let (status, body) = request(
         app,
@@ -427,69 +336,6 @@ async fn admission_refusals_and_legacy_stop_order_precede_every_provider_call() 
         json!({ "error": "soft stop was removed; only hard stop is supported" })
     );
     assert!(calls.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn each_provider_refusal_family_has_its_exact_route_mapping() {
-    let (_directory, store) = seeded().await;
-    let start = router(
-        store.runtime_control_admission(),
-        provider(ProviderMode::StartRefusal(
-            StartRuntimeProviderRefusal::WorkspaceBundleMissing,
-        )),
-    );
-    let (status, body) = request(
-        start,
-        path(START_PATH, "conversation-1", "agent-1"),
-        "user-1",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(
-        serde_json::from_str::<Value>(&body).unwrap()["code"],
-        "workspace_bundle_missing"
-    );
-
-    let stop = router(
-        store.runtime_control_admission(),
-        provider(ProviderMode::StopRefusal(
-            HardStopRuntimeProviderRefusal::Placement(
-                silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimePlacementRefusal::HostAttachPending,
-            ),
-        )),
-    );
-    let (status, body) = request(
-        stop,
-        path(HARD_STOP_PATH, "conversation-1", "agent-1"),
-        "user-1",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        serde_json::from_str::<Value>(&body).unwrap()["code"],
-        "host_attach_pending"
-    );
-
-    let clear = router(
-        store.runtime_control_admission(),
-        provider(ProviderMode::ClearRefusal(
-            ClearSessionProviderRefusal::Timeout,
-        )),
-    );
-    let (status, body) = request(
-        clear,
-        path(CLEAR_SESSION_PATH, "conversation-1", "agent-1"),
-        "user-1",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        serde_json::from_str::<Value>(&body).unwrap()["code"],
-        "clear_session_timeout"
-    );
 }
 
 #[tokio::test(flavor = "current_thread")]

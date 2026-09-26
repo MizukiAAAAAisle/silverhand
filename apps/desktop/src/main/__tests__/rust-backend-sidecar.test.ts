@@ -1,18 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveBackendSidecarManifestPath, verifySidecar } from "../rust-backend-sidecar.js";
 
-import {
-  SIDECAR_MANIFEST_FILENAME,
-  SidecarVerificationError,
-  resolveBackendSidecarManifestPath,
-  verifySidecar,
-  type SidecarDeps,
-} from "../rust-backend-sidecar.js";
+// SHA-256 of the literal artifact bytes "abc", not computed by the verifier under test.
+const SHA = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+const archDescriptor = Object.getOwnPropertyDescriptor(process, "arch")!;
+let root: string;
+let manifestPath: string;
+let executablePath: string;
 
-const SHA = "a".repeat(64);
+function platform(platform: string, arch: string): void {
+  Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
+  Object.defineProperty(process, "arch", { ...archDescriptor, value: arch });
+}
 
 function manifest(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
-    executable: "silverhand-backend",
+    executable: "backend",
     target: "aarch64-apple-darwin",
     arch: "arm64",
     sha256: SHA,
@@ -20,200 +26,143 @@ function manifest(overrides: Record<string, unknown> = {}): string {
   });
 }
 
-function deps(overrides: Partial<SidecarDeps> = {}): SidecarDeps {
-  return {
-    readManifest: async () => manifest(),
-    hashFile: async () => SHA,
-    // By default the executable is a contained, regular, executable file whose realpath
-    // stays inside the manifest dir.
-    realpath: async (p) => p,
-    statExecutable: async () => ({ isRegularFile: true, isExecutable: true }),
-    currentPlatform: "darwin",
-    currentArch: "arm64",
-    ...overrides,
-  };
-}
+beforeEach(async () => {
+  const parent = process.env.SILVERHAND_DIR;
+  if (!parent) throw new Error("sidecar tests require isolated SILVERHAND_DIR");
+  await mkdir(parent, { recursive: true });
+  root = await mkdtemp(join(parent, "sidecar-"));
+  await mkdir(join(root, "artifact"));
+  manifestPath = join(root, "artifact", "manifest.json");
+  executablePath = join(root, "artifact", "backend");
+  await writeFile(executablePath, "abc", { mode: 0o700 });
+  await writeFile(manifestPath, manifest());
+  platform("darwin", "arm64");
+});
 
-describe("verifySidecar — artifact identity + integrity (no version)", () => {
-  it("resolves the executable path (relative to the manifest dir) on a full match", async () => {
-    const result = await verifySidecar("/app/resources/silverhand-backend.manifest.json", deps());
-    expect(result.executablePath).toBe("/app/resources/silverhand-backend");
-  });
+afterEach(async () => {
+  Object.defineProperty(process, "platform", platformDescriptor);
+  Object.defineProperty(process, "arch", archDescriptor);
+  if (root) await rm(root, { recursive: true, force: true });
+});
 
-  it("#task:2343 P1-8: REJECTS an absolute executable path (must be contained in the manifest dir)", async () => {
-    await expect(
-      verifySidecar(
-        "/app/m.json",
-        deps({
-          readManifest: async () => manifest({ executable: "/opt/silverhand-backend" }),
-        }),
-      ),
-    ).rejects.toMatchObject({ kind: "executable-uncontained" });
-  });
-
-  it("#task:2343 P1-8: REJECTS a `..` escape in the executable path", async () => {
-    await expect(
-      verifySidecar(
-        "/app/resources/silverhand-backend/m.json",
-        deps({
-          readManifest: async () => manifest({ executable: "../../../etc/evil" }),
-        }),
-      ),
-    ).rejects.toMatchObject({ kind: "executable-uncontained" });
-  });
-
-  it("#task:2343 P1-8: REJECTS a symlink that escapes the manifest directory", async () => {
-    await expect(
-      verifySidecar(
-        "/app/sidecar/m.json",
-        deps({
-          // The relative path is contained, but its realpath points outside the dir.
-          realpath: async (p) =>
-            p.endsWith("silverhand-backend") ? "/opt/outside/silverhand-backend" : p,
-        }),
-      ),
-    ).rejects.toMatchObject({ kind: "executable-uncontained" });
-  });
-
-  it("#task:2343 P1-8: REJECTS a non-regular file (directory/device)", async () => {
-    await expect(
-      verifySidecar(
-        "/app/sidecar/m.json",
-        deps({
-          statExecutable: async () => ({ isRegularFile: false, isExecutable: true }),
-        }),
-      ),
-    ).rejects.toMatchObject({ kind: "executable-not-regular" });
-  });
-
-  it("#task:2343 P1-8: REJECTS a non-executable file", async () => {
-    await expect(
-      verifySidecar(
-        "/app/sidecar/m.json",
-        deps({
-          statExecutable: async () => ({ isRegularFile: true, isExecutable: false }),
-        }),
-      ),
-    ).rejects.toMatchObject({ kind: "executable-not-executable" });
-  });
-
-  it("#task:2343 P1-8: REJECTS a manifest whose arch contradicts the running process", async () => {
-    // target matches the required desktop triple, but the redundant `arch` field lies.
-    await expect(
-      verifySidecar(
-        "/app/sidecar/m.json",
-        deps({
-          readManifest: async () => manifest({ target: "aarch64-apple-darwin", arch: "x64" }),
-          currentPlatform: "darwin",
-          currentArch: "arm64",
-        }),
-      ),
-    ).rejects.toMatchObject({ kind: "arch-mismatch" });
-  });
-
-  it("fails loud when the manifest is missing", async () => {
-    await expect(
-      verifySidecar(
-        "/nope.json",
-        deps({
-          readManifest: async () => {
-            throw new Error("ENOENT");
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({ kind: "manifest-missing" });
-  });
-
-  it("fails loud on invalid manifest JSON / shape", async () => {
-    await expect(
-      verifySidecar("/m.json", deps({ readManifest: async () => "not json" })),
-    ).rejects.toMatchObject({ kind: "manifest-invalid" });
-    await expect(
-      verifySidecar("/m.json", deps({ readManifest: async () => manifest({ sha256: "short" }) })),
-    ).rejects.toMatchObject({ kind: "manifest-invalid" });
-    await expect(
-      verifySidecar("/m.json", deps({ readManifest: async () => manifest({ arch: "" }) })),
-    ).rejects.toMatchObject({ kind: "manifest-invalid" });
-  });
-
-  it("fails loud on a target mismatch — wrong arch on this platform (no fallback)", async () => {
-    // darwin/x64 requires x86_64-apple-darwin; the manifest is aarch64-apple-darwin.
-    await expect(verifySidecar("/m.json", deps({ currentArch: "x64" }))).rejects.toMatchObject({
-      kind: "target-mismatch",
+describe("packaged sidecar verification", () => {
+  it.each([
+    ["darwin", "arm64", "aarch64-apple-darwin"],
+    ["darwin", "x64", "x86_64-apple-darwin"],
+    ["linux", "arm64", "aarch64-unknown-linux-gnu"],
+    ["linux", "x64", "x86_64-unknown-linux-gnu"],
+    ["win32", "x64", "x86_64-pc-windows-msvc"],
+  ])("verifies actual bytes for %s/%s", async (os, arch, target) => {
+    platform(os, arch);
+    await writeFile(manifestPath, manifest({ arch, target }));
+    await expect(verifySidecar(manifestPath)).resolves.toEqual({
+      executablePath: await realpath(executablePath),
     });
   });
 
-  it("REJECTS a forged manifest whose arch matches but target is a Linux triple (#task:2343)", async () => {
-    // The exact ECS/desktop confusion: same arch label (arm64) but an ECS Linux target.
-    // Verifying only arch would wrongly accept it; the target check fails closed.
-    await expect(
-      verifySidecar(
-        "/m.json",
-        deps({
-          readManifest: async () =>
-            manifest({ target: "aarch64-unknown-linux-gnu", arch: "arm64" }),
-          currentPlatform: "darwin",
-          currentArch: "arm64",
-        }),
-      ),
-    ).rejects.toMatchObject({ kind: "target-mismatch" });
+  it.each(["absolute", "parent", "directory", "symlink"])(
+    "rejects %s containment escape even when artifact integrity matches",
+    async (escape) => {
+      const outside = join(root, "outside");
+      await writeFile(outside, "abc", { mode: 0o700 });
+      let executable = "..";
+      if (escape === "absolute") executable = outside;
+      if (escape === "parent") executable = "../outside";
+      if (escape === "symlink") {
+        await symlink(outside, join(root, "artifact", "link"));
+        executable = "link";
+      }
+      await writeFile(manifestPath, manifest({ executable }));
+      await expect(verifySidecar(manifestPath)).rejects.toMatchObject({
+        kind: "executable-uncontained",
+      });
+    },
+  );
+
+  it("returns the canonical path of an allowed contained symlink", async () => {
+    await symlink("backend", join(root, "artifact", "link"));
+    await writeFile(manifestPath, manifest({ executable: "link" }));
+    await expect(verifySidecar(manifestPath)).resolves.toEqual({
+      executablePath: await realpath(executablePath),
+    });
   });
 
-  it("fails loud on an unsupported platform/arch pair", async () => {
-    await expect(
-      verifySidecar("/m.json", deps({ currentPlatform: "aix", currentArch: "ppc64" })),
-    ).rejects.toMatchObject({ kind: "unsupported-platform" });
+  it.each(["directory", "not executable", "missing"])("rejects a %s artifact", async (fault) => {
+    let kind = "executable-missing";
+    if (fault === "directory") {
+      await rm(executablePath);
+      await mkdir(executablePath);
+      kind = "executable-not-regular";
+    } else if (fault === "not executable") {
+      await chmod(executablePath, 0o600);
+      kind = "executable-not-executable";
+    } else await rm(executablePath);
+    await expect(verifySidecar(manifestPath)).rejects.toMatchObject({ kind });
   });
 
-  it("fails loud when the executable is unreadable", async () => {
-    await expect(
-      verifySidecar(
-        "/m.json",
-        deps({
-          hashFile: async () => {
-            throw new Error("ENOENT");
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({ kind: "executable-missing" });
+  it.skipIf(process.getuid?.() === 0 || process.platform === "win32")(
+    "reports an unreadable executable without accepting its manifest digest",
+    async () => {
+      await chmod(executablePath, 0o100);
+      await expect(verifySidecar(manifestPath)).rejects.toMatchObject({
+        kind: "executable-missing",
+      });
+    },
+  );
+
+  it.each([
+    ["darwin", "arm64", { arch: "x64" }, "arch-mismatch"],
+    ["darwin", "x64", {}, "target-mismatch"],
+    ["darwin", "arm64", { target: "aarch64-unknown-linux-gnu" }, "target-mismatch"],
+    ["aix", "ppc64", {}, "unsupported-platform"],
+  ] as const)("rejects incompatible identity %s/%s %j", async (os, arch, overrides, kind) => {
+    platform(os, arch);
+    await writeFile(manifestPath, manifest(overrides));
+    await expect(verifySidecar(manifestPath)).rejects.toMatchObject({ kind });
   });
 
-  it("fails loud on a SHA-256 mismatch (corrupt/substituted binary)", async () => {
-    await expect(
-      verifySidecar("/m.json", deps({ hashFile: async () => "b".repeat(64) })),
-    ).rejects.toMatchObject({ kind: "sha256-mismatch" });
+  it("reports a missing manifest", async () => {
+    await rm(manifestPath);
+    await expect(verifySidecar(manifestPath)).rejects.toMatchObject({ kind: "manifest-missing" });
   });
 
-  it("is case-insensitive on the hex digest comparison", async () => {
-    const result = await verifySidecar(
-      "/app/m.json",
-      deps({
-        readManifest: async () => manifest({ sha256: SHA.toUpperCase() }),
-        hashFile: async () => SHA,
-      }),
-    );
-    expect(result.executablePath).toBe("/app/silverhand-backend");
+  it.each([
+    "not json",
+    "null",
+    "[]",
+    manifest({ sha256: "short" }),
+    manifest({ arch: "" }),
+    manifest({ executable: "" }),
+    manifest({ target: 1 }),
+    manifest({ extra: "unexpected" }),
+  ])("rejects malformed manifest %s", async (raw) => {
+    await writeFile(manifestPath, raw);
+    await expect(verifySidecar(manifestPath)).rejects.toMatchObject({ kind: "manifest-invalid" });
+  });
+
+  it("rejects replaced bytes and accepts the restored artifact with an uppercase digest", async () => {
+    await writeFile(executablePath, "substituted artifact");
+    await expect(verifySidecar(manifestPath)).rejects.toMatchObject({ kind: "sha256-mismatch" });
+    await writeFile(executablePath, "abc");
+    await writeFile(manifestPath, manifest({ sha256: SHA.toUpperCase() }));
+    await expect(verifySidecar(manifestPath)).resolves.toEqual({
+      executablePath: await realpath(executablePath),
+    });
   });
 });
 
-describe("resolveBackendSidecarManifestPath — dev vs packaged (no runtime Cargo)", () => {
-  it("packaged: under resourcesPath/silverhand-backend", () => {
-    const path = resolveBackendSidecarManifestPath({
-      isPackaged: true,
+it.each([
+  [
+    true,
+    "/Applications/Silverhand.app/Contents/Resources/silverhand-backend/silverhand-backend.manifest.json",
+  ],
+  [false, "/project/rust/target/release/silverhand-backend.manifest.json"],
+] as const)("locates the manifest for packaged=%s", (isPackaged, expected) => {
+  expect(
+    resolveBackendSidecarManifestPath({
+      isPackaged,
       resourcesPath: "/Applications/Silverhand.app/Contents/Resources",
-      appPath: "/whatever",
-    });
-    expect(path).toBe(
-      `/Applications/Silverhand.app/Contents/Resources/silverhand-backend/${SIDECAR_MANIFEST_FILENAME}`,
-    );
-  });
-
-  it("dev: under <repo>/rust/target/release (repo root = appPath ../..)", () => {
-    const path = resolveBackendSidecarManifestPath({
-      isPackaged: false,
-      resourcesPath: "/unused",
-      appPath: "/Users/x/workspace/repo/apps/desktop",
-    });
-    expect(path).toBe(`/Users/x/workspace/repo/rust/target/release/${SIDECAR_MANIFEST_FILENAME}`);
-  });
+      appPath: "/project/apps/desktop",
+    }),
+  ).toBe(expected);
 });

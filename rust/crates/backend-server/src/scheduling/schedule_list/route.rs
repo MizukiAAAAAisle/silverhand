@@ -178,9 +178,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tower::ServiceExt;
 
-    /// The `statuses` the read observed: outer `Option` = reached-or-not, inner
-    /// `Option<Vec<_>>` = the query's status constraint (`None` for `all`).
-    type SeenStatuses = Arc<std::sync::Mutex<Option<Option<Vec<String>>>>>;
+    type SeenQuery = Arc<std::sync::Mutex<Option<ScheduleListQuery>>>;
 
     fn agent_slot(agent: &str) -> RuntimePrincipal {
         RuntimePrincipal::for_scope(
@@ -197,7 +195,7 @@ mod tests {
     /// A list read that records the query it received and returns nothing.
     struct Reads {
         calls: Arc<AtomicUsize>,
-        seen_statuses: SeenStatuses,
+        seen_query: SeenQuery,
     }
     impl ScheduleListReadModel for Reads {
         async fn list_owned_schedules(
@@ -205,22 +203,18 @@ mod tests {
             query: &ScheduleListQuery,
         ) -> Result<Vec<ScheduleView>, PersistenceFailure> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            let statuses = query
-                .statuses
-                .as_ref()
-                .map(|set| set.iter().map(|s| s.as_token().to_owned()).collect());
-            *self.seen_statuses.lock().unwrap() = Some(statuses);
+            *self.seen_query.lock().unwrap() = Some(query.clone());
             Ok(Vec::new())
         }
     }
 
-    fn app() -> (Router, Arc<AtomicUsize>, SeenStatuses) {
+    fn app() -> (Router, Arc<AtomicUsize>, SeenQuery) {
         let calls = Arc::new(AtomicUsize::new(0));
         let seen = Arc::new(std::sync::Mutex::new(None));
         let router = schedule_list_router(ScheduleListState {
             list_reads: Reads {
                 calls: Arc::clone(&calls),
-                seen_statuses: Arc::clone(&seen),
+                seen_query: Arc::clone(&seen),
             },
         })
         .layer(Extension(agent_slot("agent-1")));
@@ -253,18 +247,26 @@ mod tests {
         assert_eq!(body["schedules"], serde_json::json!([]));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         // `all` -> no status constraint.
-        assert_eq!(*seen.lock().unwrap(), Some(None));
+        let query = seen.lock().unwrap().clone().unwrap();
+        assert_eq!(query.statuses, None);
+        assert_eq!(query.limit.get(), 100);
+        assert_eq!(query.owner_agent_id.as_str(), "agent-1");
     }
 
     #[tokio::test]
     async fn the_active_alias_expands_to_pending_and_firing() {
         let (app, _calls, seen) = app();
-        let (status, _body) = call_at(app, "agent-1", r#"{"status":"active"}"#).await;
+        let (status, _body) = call_at(app, "agent-1", r#"{"status":"active","limit":1}"#).await;
         assert_eq!(status, StatusCode::OK);
+        let query = seen.lock().unwrap().clone().unwrap();
         assert_eq!(
-            *seen.lock().unwrap(),
-            Some(Some(vec!["pending".to_owned(), "firing".to_owned()]))
+            query.statuses,
+            Some(vec![
+                silverhand_backend_core::conversation_messaging::messaging::schedule::ScheduleStatus::Pending,
+                silverhand_backend_core::conversation_messaging::messaging::schedule::ScheduleStatus::Firing,
+            ])
         );
+        assert_eq!(query.limit.get(), 1);
     }
 
     #[tokio::test]
@@ -277,12 +279,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn optional_list_fields_accept_absence_but_reject_null_and_empty_status_zero_reach() {
-        let (router, calls, _seen) = app();
-        let (status, _) = call_at(router, "agent-1", r#"{}"#).await;
-        assert_eq!(status, StatusCode::OK, "both optional fields absent");
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-
+    async fn optional_list_fields_reject_null_and_empty_status_zero_reach() {
         for body in [r#"{"status":null}"#, r#"{"limit":null}"#] {
             let (app, calls, _seen) = app();
             let (status, _body) = call_at(app, "agent-1", body).await;

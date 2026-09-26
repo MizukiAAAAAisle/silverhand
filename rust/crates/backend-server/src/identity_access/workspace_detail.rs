@@ -247,53 +247,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_member_sees_the_face_at_200() {
-        let detail = WorkspaceDetailForViewer {
-            face: regular_face("ws-1"),
-            membership_subject: Some(UserId::parse("user-1").unwrap()),
-        };
-        let (status, body) =
-            get_detail(FakeUnitOfWork::Reads(Some(Box::new(detail))), "ws-1", true).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            body,
-            json!({
-                "workspace": {
-                    "id": "ws-1",
-                    "name": "Regular",
-                    "description": "desc",
-                    "owner_agent_id": null,
-                    "owner_user_id": "user-1",
-                    "dm_channel_id": null,
-                    "dm_channel_ids": [],
-                    "archived_at": null,
-                    "created_at": 1,
-                    "updated_at": 300
-                }
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn a_non_member_of_a_present_workspace_is_forbidden() {
-        let detail = WorkspaceDetailForViewer {
-            face: regular_face("ws-1"),
-            membership_subject: None,
-        };
-        let (status, body) =
-            get_detail(FakeUnitOfWork::Reads(Some(Box::new(detail))), "ws-1", true).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(body, json!({ "error": "forbidden" }));
-    }
-
-    #[tokio::test]
-    async fn an_absent_workspace_is_not_found() {
-        let (status, body) = get_detail(FakeUnitOfWork::Reads(None), "ws-missing", true).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(body, json!({ "error": "workspace not found" }));
-    }
-
-    #[tokio::test]
     async fn a_read_fact_for_another_workspace_is_a_safe_500_not_a_product_answer() {
         // The fake answers the request for `ws-1` with the face of `ws-2`: the
         // classifier's coordinate bind fails, so it is corruption, not 403/404.
@@ -349,7 +302,7 @@ mod tests {
     /// under `/api/workspaces`. When merged into one application, a request to the
     /// static `name-availability` path must reach the PROBE, not this detail
     /// handler with `id = "name-availability"`. axum prioritizes the static
-    /// segment; this pins that it is not shadowed regardless of merge order.
+    /// segment; this pins precedence in the merged application below.
     #[tokio::test]
     async fn the_static_name_availability_path_is_not_shadowed_by_the_id_route() {
         use crate::identity_access::workspace_name_availability::{

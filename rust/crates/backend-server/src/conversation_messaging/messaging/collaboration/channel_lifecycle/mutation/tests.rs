@@ -346,7 +346,7 @@ async fn authentication_and_admission_precede_body_polling_and_product_writes() 
 }
 
 #[tokio::test]
-async fn archive_has_its_simple_boolean_wire_and_bounded_body() {
+async fn archive_requires_a_boolean_field_and_object_body() {
     let cases = [
         // missing `archived` → native data-shape 422; writer untouched
         (Body::from("{}"), None, StatusCode::UNPROCESSABLE_ENTITY, 0),
@@ -398,6 +398,7 @@ struct AdmissionCell {
     request: Value,
     schema_accepted: bool,
     operation: Option<String>,
+    canonical_title: Option<String>,
 }
 
 #[tokio::test]
@@ -408,7 +409,7 @@ async fn production_update_router_consumes_the_shared_schema_accepted_cells() {
     // 400{issues}; the Rust terminal admission is the shared native structural axis plus the
     // minimal-422 exactly-one refinement, so they are NOT dual-signed here and are covered by
     // the focused `schema_rejected_update_cells_take_the_native_axis` local test. The TS
-    // parity test continues to sign its own full 9/9 legacy behavior.
+    // retired TS parity test signed its own full 9/9 legacy behavior.
     let cells: Vec<AdmissionCell> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../../rust/test-fixtures/fixtures/channel-lifecycle-update-admission.json"
@@ -432,8 +433,27 @@ async fn production_update_router_consumes_the_shared_schema_accepted_cells() {
         assert_eq!(status, StatusCode::OK, "{}", cell.name);
         assert_eq!(body["channel"]["id"], "c", "{}", cell.name);
         match cell.operation.as_deref() {
-            Some("rename") => assert_eq!(calls.rename.load(Ordering::SeqCst), 1),
-            Some("visibility") => assert_eq!(calls.visibility.load(Ordering::SeqCst), 1),
+            Some("rename") => {
+                assert_eq!(calls.rename.load(Ordering::SeqCst), 1, "{}", cell.name);
+                assert_eq!(calls.visibility.load(Ordering::SeqCst), 0, "{}", cell.name);
+                assert_eq!(
+                    body["channel"]["title"],
+                    cell.canonical_title
+                        .as_deref()
+                        .expect("rename fixture title"),
+                    "{}",
+                    cell.name
+                );
+            }
+            Some("visibility") => {
+                assert_eq!(calls.visibility.load(Ordering::SeqCst), 1, "{}", cell.name);
+                assert_eq!(calls.rename.load(Ordering::SeqCst), 0, "{}", cell.name);
+                assert_eq!(
+                    body["channel"]["visibility"], cell.request["visibility"],
+                    "{}",
+                    cell.name
+                );
+            }
             other => panic!("unexpected operation {other:?}"),
         }
     }

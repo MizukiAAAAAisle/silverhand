@@ -306,11 +306,9 @@ mod tests {
         }
     }
 
-    /// A UoW that runs the real in-lock `decide` against a genuine owned record, so a
-    /// `Write` decision commits (and a rename would publish the effect) while a `Refuse`
-    /// leaves the row untouched. This is what makes the object-floor test meaningful:
-    /// without the floor, `[null]` would bind `display_label=null` positionally, decide
-    /// would `Write { display_label: None }`, and the label would really be CLEARED.
+    /// The fake runs the real decision and returns its corresponding witness.
+    /// It stores no row: the HTTP status and announcement are the observable
+    /// boundary here; actual label persistence belongs to the SQLite suite.
     #[derive(Clone)]
     struct FaithfulWitness {
         owned: ComputerRecord,
@@ -411,11 +409,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_value_shaped_array_body_is_structurally_refused_and_never_clears_the_label() {
+    async fn a_value_shaped_array_body_is_refused_without_a_rename_announcement() {
         // `[null]` would, under a bare positional derive, bind `display_label=null` and
         // clear the label. The shared object-only floor refuses the array shape before any
         // field bind: the decode fault collapses to `Invalid`, decide refuses with `400`,
-        // the owned row is never written and the rename effect never publishes.
+        // the response is refused and the rename effect never publishes.
         let effect = RecordingEffect::default();
         let witness = FaithfulWitness {
             owned: record("host-1", Some("Original"), Some(2)),

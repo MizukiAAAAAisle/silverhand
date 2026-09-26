@@ -166,8 +166,9 @@ mod tests {
     impl ComputerReadModel for FakeComputers {
         async fn list_for_owner(
             &self,
-            _owner: UserId,
+            owner: UserId,
         ) -> Result<Vec<ComputerRecord>, PersistenceFailure> {
+            assert_eq!(owner.as_str(), REQUESTER);
             self.calls.fetch_add(1, SeqCst);
             match &self.outcome {
                 ListOutcome::Rows(rows) => Ok(rows.clone()),

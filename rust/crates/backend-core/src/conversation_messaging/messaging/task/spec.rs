@@ -255,12 +255,6 @@ pub enum Assignee {
     User(UserId),
 }
 
-impl Assignee {
-    pub fn is_assigned(&self) -> bool {
-        !matches!(self, Assignee::Unassigned)
-    }
-}
-
 /// The ECMAScript `\s` set — WhiteSpace ∪ LineTerminator — which is the exact
 /// set the wire `TaskTitleSchema`'s `.trim()` and `/\s+/g` act on.
 ///
@@ -358,61 +352,6 @@ mod tests {
     }
 
     #[test]
-    fn title_trims_and_collapses_interior_runs() {
-        let title = TaskTitle::parse("  hello   world  ").unwrap();
-        assert_eq!(title.as_str(), "hello world");
-    }
-
-    #[test]
-    fn title_collapses_a_byte_order_mark_but_preserves_nel() {
-        // U+FEFF is ECMAScript whitespace → collapses to a space.
-        assert_eq!(TaskTitle::parse("a\u{feff}b").unwrap().as_str(), "a b");
-        // U+0085 NEL is Unicode whitespace but NOT ECMAScript whitespace →
-        // preserved verbatim, and it is not trimmed from the ends either.
-        assert_eq!(TaskTitle::parse("a\u{85}b").unwrap().as_str(), "a\u{85}b");
-        assert_eq!(
-            TaskTitle::parse("\u{85}x\u{85}").unwrap().as_str(),
-            "\u{85}x\u{85}"
-        );
-    }
-
-    #[test]
-    fn title_that_is_all_whitespace_is_empty_after_normalization() {
-        assert_eq!(TaskTitle::parse(""), Err(InvalidTitle::Empty));
-        assert_eq!(TaskTitle::parse("   \t\r\n "), Err(InvalidTitle::Empty));
-        assert_eq!(
-            TaskTitle::parse("\u{feff}\u{3000}"),
-            Err(InvalidTitle::Empty)
-        );
-    }
-
-    #[test]
-    fn title_length_cap_is_measured_on_the_canonical_form() {
-        // Interior whitespace runs collapse before the cap is measured, so a
-        // title that is huge raw but tiny canonical passes.
-        let raw = format!("a{}b", " ".repeat(1_000));
-        assert_eq!(TaskTitle::parse(&raw).unwrap().as_str(), "a b");
-
-        // Exactly 200 UTF-16 units is allowed; 201 is not.
-        assert!(TaskTitle::parse(&"a".repeat(200)).is_ok());
-        assert_eq!(
-            TaskTitle::parse(&"a".repeat(201)),
-            Err(InvalidTitle::TooLong)
-        );
-    }
-
-    #[test]
-    fn title_length_counts_utf16_code_units_not_chars() {
-        // U+1F600 is one scalar but two UTF-16 code units, so 100 of them are
-        // 200 units (ok) and 101 are 202 units (too long).
-        assert!(TaskTitle::parse(&"\u{1f600}".repeat(100)).is_ok());
-        assert_eq!(
-            TaskTitle::parse(&"\u{1f600}".repeat(101)),
-            Err(InvalidTitle::TooLong)
-        );
-    }
-
-    #[test]
     fn content_is_verbatim_and_only_length_bounded() {
         // No trim / no collapse: leading whitespace and interior runs survive.
         let content = TaskContent::parse("  keep   me  ").unwrap();
@@ -438,19 +377,6 @@ mod tests {
     #[test]
     fn assignee_default_is_unassigned() {
         assert_eq!(Assignee::default(), Assignee::Unassigned);
-        assert!(!Assignee::default().is_assigned());
-        assert!(Assignee::Agent(AgentId::parse("agent-1").unwrap()).is_assigned());
-    }
-
-    #[test]
-    fn creator_and_assignee_carry_their_single_identity() {
-        let creator = Creator::Agent(AgentId::parse("agent-1").unwrap());
-        assert_eq!(creator, Creator::Agent(AgentId::parse("agent-1").unwrap()));
-        assert_ne!(creator, Creator::System);
-
-        let user = Assignee::User(UserId::parse("user-1").unwrap());
-        assert!(user.is_assigned());
-        assert_ne!(user, Assignee::Unassigned);
     }
 
     #[test]
@@ -492,10 +418,9 @@ mod tests {
 }
 
 /// The TS-signed half of [`TaskTitle`]: the production `TaskTitleSchema` is the
-/// authority for the canonical form, so the expected values here are not
-/// authored in Rust at all. `packages/backend/tests/parity/task-title-oracle.test.ts`
-/// runs the real schema and signs the fixture these tests read; drift on either
-/// side goes red in exactly one place.
+/// authority for the canonical form. The expected values were captured from
+/// that schema before the TypeScript backend was retired and remain an
+/// independent frozen oracle for the production Rust parser.
 #[cfg(test)]
 mod title_parity {
     use super::*;

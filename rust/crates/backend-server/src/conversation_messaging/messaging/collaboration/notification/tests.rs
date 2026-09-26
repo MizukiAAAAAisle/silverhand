@@ -45,15 +45,16 @@ impl NotificationClearPort for Ports {
         viewer: UserId,
         s: NotificationClearSelector,
     ) -> Result<CommittedNotificationClear, Self::Error> {
-        self.calls.lock().unwrap().push(
-            match s {
-                NotificationClearSelector::Id(_) => "id",
-                NotificationClearSelector::Workspace(_) => "workspace",
-                NotificationClearSelector::Conversation(_) => "conversation",
-                NotificationClearSelector::All => "all",
-            }
-            .into(),
-        );
+        let target = match s {
+            NotificationClearSelector::Id(id) => format!("id:{}", id.as_str()),
+            NotificationClearSelector::Workspace(id) => format!("workspace:{}", id.as_str()),
+            NotificationClearSelector::Conversation(id) => format!("conversation:{}", id.as_str()),
+            NotificationClearSelector::All => "all".into(),
+        };
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("{}:{target}", viewer.as_str()));
         Ok(CommittedNotificationClear::changed(
             viewer,
             NonZeroU64::new(1).unwrap(),
@@ -148,10 +149,10 @@ async fn auth_refusal_reaches_no_product_port() {
 #[tokio::test]
 async fn four_selectors_map_exactly_and_effect_failure_keeps_committed_200() {
     for (body, expected) in [
-        (json!({"id":"n"}), "id"),
-        (json!({"workspace_id":"w"}), "workspace"),
-        (json!({"conversation_id":"c"}), "conversation"),
-        (json!({"all":true}), "all"),
+        (json!({"id":"n"}), "u:id:n"),
+        (json!({"workspace_id":"w"}), "u:workspace:w"),
+        (json!({"conversation_id":"c"}), "u:conversation:c"),
+        (json!({"all":true}), "u:all"),
     ] {
         let ports = Ports::default();
         let effects = Effects::default();

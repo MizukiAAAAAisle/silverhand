@@ -1,6 +1,9 @@
 use std::{
     convert::Infallible,
-    sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use axum::{
@@ -62,10 +65,8 @@ impl ConversationAgentActivityReadPort for FakeRead {
         _: &ConversationId,
         _: &AgentId,
         page: ActivityPageRequest,
-    ) -> Result<
-        Result<ConversationAgentActivityPage, ConversationAgentActivityRefusal>,
-        Self::Error,
-    > {
+    ) -> Result<Result<ConversationAgentActivityPage, ConversationAgentActivityRefusal>, Self::Error>
+    {
         self.read_calls.fetch_add(1, Ordering::SeqCst);
         self.pages.lock().unwrap().push(page);
         if let Some(refusal) = self.read_refusal {
@@ -100,10 +101,8 @@ async fn call(port: FakeRead, uri: &str, authenticated: bool) -> (StatusCode, Va
     }
     let response = router(port).oneshot(request).await.unwrap();
     let status = response.status();
-    let body = serde_json::from_slice(
-        &to_bytes(response.into_body(), usize::MAX).await.unwrap(),
-    )
-    .unwrap();
+    let body =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     (status, body)
 }
 
@@ -170,33 +169,46 @@ async fn auth_and_product_authority_precede_query_and_projection() {
     assert_eq!(changed.read_calls.load(Ordering::SeqCst), 1);
 }
 
-#[test]
-fn query_numbers_preserve_defaults_caps_invalids_and_large_cursor_classification() {
-    let default = page_request(&ActivityQuery::default()).unwrap();
-    assert_eq!(default.limit(), 100);
-    assert!(default.before().is_none());
-
-    let page = page_request(&ActivityQuery {
-        limit: Some("1e20".to_owned()),
-        before_id: Some("1e20".to_owned()),
-    })
-    .unwrap();
-    assert_eq!(page.limit(), 200);
-    assert_eq!(page.before(), Some(ActivityBefore::BeyondPersistedRange));
-    assert_eq!(
-        page_request(&ActivityQuery {
-            limit: Some("1.5".to_owned()),
-            before_id: None,
-        }),
-        Err(QueryRefusal::Limit)
-    );
-    assert_eq!(
-        page_request(&ActivityQuery {
-            limit: None,
-            before_id: Some("0".to_owned()),
-        }),
-        Err(QueryRefusal::Before)
-    );
+#[tokio::test]
+async fn query_numbers_preserve_defaults_caps_invalids_and_large_cursor_classification() {
+    for (query, expected_page, expected_body) in [
+        ("", Some((100, None)), None),
+        (
+            "?limit=1e20&before_id=1e20",
+            Some((200, Some(ActivityBefore::BeyondPersistedRange))),
+            None,
+        ),
+        (
+            "?limit=1.5",
+            None,
+            Some(json!({"error":"invalid limit","code":"invalid_limit"})),
+        ),
+        (
+            "?before_id=0",
+            None,
+            Some(json!({"error":"invalid before_id","code":"invalid_before_id"})),
+        ),
+    ] {
+        let port = FakeRead::successful();
+        let (status, body) = call(
+            port.clone(),
+            &format!("/api/conversations/c/agents/a/activity{query}"),
+            true,
+        )
+        .await;
+        assert_eq!(port.admit_calls.load(Ordering::SeqCst), 1);
+        let pages = port.pages.lock().unwrap();
+        if let Some((limit, before)) = expected_page {
+            assert_eq!(status, StatusCode::OK, "{query}");
+            assert_eq!(pages.len(), 1, "{query}");
+            assert_eq!((pages[0].limit(), pages[0].before()), (limit, before));
+        } else {
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+            assert_eq!(body, expected_body.unwrap(), "{query}");
+            assert!(pages.is_empty(), "{query}");
+            assert_eq!(port.read_calls.load(Ordering::SeqCst), 0);
+        }
+    }
 }
 
 #[tokio::test]
@@ -209,28 +221,26 @@ async fn returned_coordinates_and_payload_bind_before_wire() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({
-        "events":[{
-            "id":7,
-            "conversation_id":"c",
-            "agent_id":"a",
-            "kind":"text",
-            "payload":{"text":"hello"},
-            "created_at":9
-        }],
-        "next_before_id":null
-    }));
+    assert_eq!(
+        body,
+        json!({
+            "events":[{
+                "id":7,
+                "conversation_id":"c",
+                "agent_id":"a",
+                "kind":"text",
+                "payload":{"text":"hello"},
+                "created_at":9
+            }],
+            "next_before_id":null
+        })
+    );
 
     let foreign = FakeRead {
         projected_conversation: "other",
         ..FakeRead::successful()
     };
-    let (status, body) = call(
-        foreign,
-        "/api/conversations/c/agents/a/activity",
-        true,
-    )
-    .await;
+    let (status, body) = call(foreign, "/api/conversations/c/agents/a/activity", true).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body, json!({"error":"internal error"}));
 
@@ -251,12 +261,7 @@ async fn returned_coordinates_and_payload_bind_before_wire() {
         payload: "{",
         ..FakeRead::successful()
     };
-    let (status, body) = call(
-        malformed,
-        "/api/conversations/c/agents/a/activity",
-        true,
-    )
-    .await;
+    let (status, body) = call(malformed, "/api/conversations/c/agents/a/activity", true).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body, json!({"error":"internal error"}));
 }
@@ -286,9 +291,10 @@ async fn production_router_reads_the_current_schema_snapshot() {
     }
     db.close().await.unwrap();
 
-    let store = silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore::open(&path)
-        .await
-        .unwrap();
+    let store =
+        silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore::open(&path)
+            .await
+            .unwrap();
     let mut request = Request::builder()
         .uri("/api/conversations/c/agents/a/activity?limit=2")
         .body(Body::empty())
@@ -301,10 +307,8 @@ async fn production_router_reads_the_current_schema_snapshot() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let body: Value = serde_json::from_slice(
-        &to_bytes(response.into_body(), usize::MAX).await.unwrap(),
-    )
-    .unwrap();
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(body["events"][0]["payload"], json!({"text":"one"}));
     assert_eq!(body["events"][1]["payload"], Value::Null);
     assert_eq!(body["next_before_id"], Value::Null);

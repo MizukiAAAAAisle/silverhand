@@ -16,7 +16,7 @@ function tempDir(): string {
 function readLines(filePath: string): Array<Record<string, unknown>> {
   const text = readFileSync(filePath, 'utf8').trim();
   if (!text) return [];
-  return text.split('\n').map(line => JSON.parse(line) as Record<string, unknown>);
+  return text.split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 describe('daemon file logger levels', () => {
@@ -39,9 +39,7 @@ describe('daemon file logger levels', () => {
       const [line] = readLines(logger.filePath);
       expect(line?.msg).toBe('daemon ready');
       expect(typeof line?.ts).toBe('string');
-      expect(line?.ts).toMatch(
-        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{2}:\d{2}$/,
-      );
+      expect(line?.ts).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{2}:\d{2}$/);
       expect(typeof line?.ts_unix_ms).toBe('number');
     } finally {
       if (previous === undefined) {
@@ -54,7 +52,7 @@ describe('daemon file logger levels', () => {
 
   it('mirrors the exact JSONL line to stderr when requested', async () => {
     const writes: string[] = [];
-    vi.spyOn(process.stderr, 'write').mockImplementation(chunk => {
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
       writes.push(String(chunk));
       return true;
     });
@@ -86,13 +84,13 @@ describe('daemon file logger levels', () => {
     logger.warn({ conversationId: 'other' }, 'visible warn');
     await logger.close();
 
-    expect(readLines(logger.filePath).map(line => line.msg)).toEqual([
+    expect(readLines(logger.filePath).map((line) => line.msg)).toEqual([
       'visible debug',
       'visible warn',
     ]);
   });
 
-  it('redacts forbidden top-level fields before writing', async () => {
+  it('redacts content fields on disk while preserving structural diagnostics', async () => {
     const logger = createDaemonLogger({
       dir: tempDir(),
       logControl: createDaemonLogControl('debug'),
@@ -105,6 +103,12 @@ describe('daemon file logger levels', () => {
         text: 'SECRET-TEXT',
         stderr: 'SECRET-STDERR',
         env_TOKEN: 'SECRET-ENV',
+        payload: 'SECRET-PAYLOAD',
+        body: 'SECRET-BODY',
+        prompt: 'SECRET-PROMPT',
+        line: 'SECRET-LINE',
+        env: 'SECRET-ENV-OBJECT',
+        stdout: 'SECRET-STDOUT',
         nested: { soft_directive: 'SECRET-DIRECTIVE', keep: 'visible' },
         ok: true,
       },
@@ -115,7 +119,8 @@ describe('daemon file logger levels', () => {
     const serialized = JSON.stringify(readLines(logger.filePath)[0]);
     expect(serialized).toContain('"ok":true');
     expect(serialized).toContain('"keep":"visible"');
-    expect(serialized).toContain('"redactedFieldCount":5');
+    expect(serialized).toContain('"redactedFieldCount":11');
+    expect(serialized).not.toContain('SECRET-');
     expect(serialized).not.toContain('SECRET-CHUNK');
     expect(serialized).not.toContain('SECRET-TEXT');
     expect(serialized).not.toContain('SECRET-STDERR');

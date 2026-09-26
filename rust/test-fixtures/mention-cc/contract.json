@@ -1,6 +1,11 @@
 {
   "excerpt": [
     {
+      "name": "all whitespace becomes empty",
+      "input": "   ",
+      "expected": ""
+    },
+    {
       "name": "collapses runs of ascii whitespace",
       "input": "  hello\n\tthere  ",
       "expected": "hello there"

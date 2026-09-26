@@ -146,8 +146,8 @@ mod tests {
             RuntimeKind::Claude,
         );
         assert_eq!(
-            author_dto(&without_avatar)["avatar_url"],
-            Value::Null,
+            author_dto(&without_avatar).get("avatar_url"),
+            Some(&Value::Null),
             "an agent with no avatar still reports the member"
         );
         assert_eq!(author_dto(&without_avatar)["runtime"], "claude");

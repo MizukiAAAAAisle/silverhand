@@ -883,7 +883,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_absent_or_foreign_computer_is_one_byte_identical_404() {
+    async fn an_absent_or_foreign_computer_is_one_json_404() {
         let refused = json!({ "error": "host not found", "error_code": "host_not_found" });
         for read in [
             ReadOutcome::Absent,
@@ -1042,9 +1042,9 @@ mod tests {
         assert_eq!(writes.load(SeqCst), 0);
     }
 
-    /// A revoke landing under the write is the in-lock verdict's `409`, in both arms.
+    /// The embedded arm maps the credential issuer's revoked verdict to `409`.
     #[tokio::test]
-    async fn a_revoke_under_the_write_is_the_in_lock_409() {
+    async fn a_revoked_credential_issue_verdict_maps_to_embedded_409() {
         let (router, _reads, writes) = embedded(
             ReadOutcome::Present(app_managed("h1", REQUESTER)),
             WriteOutcome::Refused(CredentialIssueRefusal::HostRevoked),

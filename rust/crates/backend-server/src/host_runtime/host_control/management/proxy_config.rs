@@ -255,30 +255,76 @@ fn coded(message: &'static str, code: Option<&'static str>, status: u16) -> Resp
 
 #[cfg(test)]
 mod tests {
+    use axum::{body::Body, http::StatusCode};
+    use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
+        host_runtime::computer::{ComputerRecord, HostKind, ProvisioningSource},
+    };
+    use tower::ServiceExt;
+
+    use crate::foundation::daemon_transport::{DaemonDeliveryConfig, DaemonTransport};
+
     use super::*;
 
-    // The handler's SOLE body decode gate is `from_object_slice::<ProxyBody>` (the
-    // `.and_then(|body| from_object_slice…ok())` in `write`). A decode `Err` collapses to
-    // `None`, so `into_config` never runs and the handler returns `400` before `resolve`
-    // and dispatch. These assertions pin that gate directly: no data-plane scaffolding is
-    // needed to prove a value-shaped array can never reach the config dispatch.
+    #[derive(Clone)]
+    struct OwnedComputer;
 
-    #[test]
-    fn a_value_shaped_array_is_refused_before_any_positional_field_bind() {
-        // Under a bare `from_slice`, this would bind `proxy_url: null` +
-        // `proxy_runtimes: ["codex"]` positionally and yield a dispatchable config.
-        assert!(from_object_slice::<ProxyBody>(br#"[null,["codex"]]"#).is_err());
+    impl ComputerReadModel for OwnedComputer {
+        async fn list_for_owner(
+            &self,
+            _: UserId,
+        ) -> Result<Vec<ComputerRecord>, PersistenceFailure> {
+            panic!("the point route must not list computers")
+        }
+
+        async fn read_computer(
+            &self,
+            id: HostId,
+        ) -> Result<Option<ComputerRecord>, PersistenceFailure> {
+            Ok(Some(ComputerRecord {
+                id,
+                name: "studio".into(),
+                kind: HostKind::Remote,
+                created_at: 1,
+                owner: Some(UserId::parse("owner").unwrap()),
+                installation_id: None,
+                last_seen_at: None,
+                activated_at: Some(1),
+                finalized_at: Some(1),
+                revoked_at: None,
+                provisioning_source: ProvisioningSource::UserInvite,
+                display_label: None,
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn array_bodies_are_refused_while_an_equivalent_object_reaches_transport_resolution() {
+        let transport = DaemonTransport::new(DaemonDeliveryConfig::production()).unwrap();
+        let app = router(OwnedComputer, transport.owning_host_data_plane());
+        for (body, expected) in [
+            (r#"[null,["codex"]]"#, StatusCode::BAD_REQUEST),
+            ("[]", StatusCode::BAD_REQUEST),
+            (
+                r#"{"proxy_url":null,"proxy_runtimes":["codex"]}"#,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ] {
+            let mut request = axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/hosts/host-1/proxy-config")
+                .body(Body::from(body))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(UserId::parse("owner").unwrap());
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected, "{body}");
+        }
     }
 
     #[test]
-    fn an_empty_array_is_refused_rather_than_defaulting_the_body() {
-        assert!(from_object_slice::<ProxyBody>(br#"[]"#).is_err());
-    }
-
-    #[test]
-    fn the_equivalent_object_still_decodes_and_dispatches() {
-        // The object-only floor must not narrow the real object contract: the same values
-        // in object shape decode and produce a live config.
+    fn the_object_maps_null_url_and_the_exact_runtime() {
         let body =
             from_object_slice::<ProxyBody>(br#"{"proxy_url":null,"proxy_runtimes":["codex"]}"#)
                 .expect("object body decodes through the floor");
@@ -286,6 +332,6 @@ mod tests {
             .into_config()
             .expect("null url + one runtime is a valid config");
         assert!(config.proxy_url.is_none());
-        assert_eq!(config.proxy_runtimes.len(), 1);
+        assert_eq!(config.proxy_runtimes, vec![RuntimeKind::Codex]);
     }
 }

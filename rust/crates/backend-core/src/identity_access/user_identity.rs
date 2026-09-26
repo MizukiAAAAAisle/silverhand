@@ -711,8 +711,11 @@ mod tests {
             "alice smith jones"
         );
         // A local part that collapses to nothing falls back to "User".
-        let dots = EmailAddress::parse("a@x.io").unwrap();
-        assert_eq!(DisplayName::derived_default_from_email(&dots).as_str(), "a");
+        let separators = EmailAddress::parse("---@x.io").unwrap();
+        assert_eq!(
+            DisplayName::derived_default_from_email(&separators).as_str(),
+            "User"
+        );
     }
 
     // ---- the profile write seal + announce ----
@@ -782,7 +785,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_real_change_commits_bumps_updated_at_and_announces_once() {
+    async fn a_trustworthy_changed_fact_announces_once() {
         let writes = FakeWrites(UserProfileWrite::Committed {
             user: record("New Name", NOW),
             prior_display_name: "Old Name".to_owned(),
@@ -807,7 +810,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_no_op_patch_commits_without_bumping_and_never_announces() {
+    async fn a_no_op_fact_preserves_its_timestamp_and_never_announces() {
         // The adapter skipped the write: the row still carries the OLD updated_at
         // (NOW - 100), and the before-image equals the committed display.
         let writes = FakeWrites(UserProfileWrite::Committed {

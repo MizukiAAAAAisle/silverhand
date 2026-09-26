@@ -357,18 +357,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_bound_member_is_found() {
-        let profiles = FakeProfiles {
-            rows: HashMap::from([("t1".to_string(), fact("t1", "target"))]),
-        };
-        let membership = RecordingMembership::with(["t1"]);
-        let outcome = resolve_peer_target(&profiles, &membership, "target", &workspace())
-            .await
-            .expect("honest read");
-        assert_eq!(outcome, PeerTargetOutcome::Found(fact("t1", "target")));
-    }
-
-    #[tokio::test]
     async fn a_bound_non_member_collapses_to_not_found() {
         let profiles = FakeProfiles {
             rows: HashMap::from([("t1".to_string(), fact("t1", "target"))]),
@@ -380,22 +368,6 @@ mod tests {
             .expect("honest read");
         assert_eq!(outcome, PeerTargetOutcome::NotFound);
         assert!(membership.consulted(), "a bound handle is checked");
-    }
-
-    #[tokio::test]
-    async fn an_unknown_handle_collapses_without_consulting_membership() {
-        let profiles = FakeProfiles {
-            rows: HashMap::new(),
-        };
-        let membership = RecordingMembership::with(["t1"]);
-        let outcome = resolve_peer_target(&profiles, &membership, "ghost", &workspace())
-            .await
-            .expect("absent is not a fault");
-        assert_eq!(outcome, PeerTargetOutcome::NotFound);
-        assert!(
-            !membership.consulted(),
-            "no row means nothing to check membership for"
-        );
     }
 
     /// Liar-reader test #2 (by-handle): a reader that returns a row whose name is

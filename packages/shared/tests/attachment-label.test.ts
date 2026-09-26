@@ -1,22 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  AttachmentLabelSchema,
-  normalizeAttachmentRefs,
-  resolveAttachmentLabels,
-} from '../src/api/index.js';
-
-describe('normalizeAttachmentRefs', () => {
-  it('normalizes bare id strings and {id,label} refs to one shape', () => {
-    expect(
-      normalizeAttachmentRefs(['a', { id: 'b', label: 'Image #1' }, { id: 'c' }]),
-    ).toEqual([{ id: 'a' }, { id: 'b', label: 'Image #1' }, { id: 'c' }]);
-  });
-
-  it('returns [] for null/undefined', () => {
-    expect(normalizeAttachmentRefs(undefined)).toEqual([]);
-    expect(normalizeAttachmentRefs(null)).toEqual([]);
-  });
-});
+import { AttachmentLabelSchema, resolveAttachmentLabels } from '../src/api/index.js';
 
 describe('resolveAttachmentLabels', () => {
   it('derives positional Image #N / File #N per kind when no label stored', () => {
@@ -79,9 +62,9 @@ describe('resolveAttachmentLabels', () => {
   });
 
   it('treats a blank label as absent', () => {
-    expect(
-      resolveAttachmentLabels([{ content_type: 'image/png', label: '  ' }]),
-    ).toEqual(['Image #1']);
+    expect(resolveAttachmentLabels([{ content_type: 'image/png', label: '  ' }])).toEqual([
+      'Image #1',
+    ]);
   });
 });
 

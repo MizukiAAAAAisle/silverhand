@@ -1,11 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import {
-  mkdtempSync,
-  rmSync,
-  existsSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -98,25 +92,27 @@ describe('indexAgentWorkspaces', () => {
     expect(r.unresolved).toEqual([agentHome]);
   });
 
-  it('reports a non-traversable (000) agent-home dir as unresolved (same cwd predicate)', async () => {
-    // B2 falsifier: an existing-but-non-enterable L1 dir must be reported
-    // unusable, matching what a spawn could actually chdir into.
-    if (process.getuid?.() === 0) return; // root bypasses perms — skip
-    const agentHome = agentHomeWorkspaceId('aid_x');
-    const dir = agentHomeDir('aid_x');
-    mkdirSync(dir, { recursive: true });
-    chmodSync(dir, 0o000);
-    try {
-      const r = await indexAgentWorkspaces(
-        { agent_id: 'aid_x', workspace_ids: [agentHome] },
-        { agentHomeRootDir },
-      );
-      expect(r.entries).toEqual([]);
-      expect(r.unresolved).toEqual([agentHome]);
-    } finally {
-      chmodSync(dir, 0o755);
-    }
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    'reports a non-traversable (000) agent-home dir as unresolved (same cwd predicate)',
+    async () => {
+      // B2 falsifier: an existing-but-non-enterable L1 dir must be reported
+      // unusable, matching what a spawn could actually chdir into.
+      const agentHome = agentHomeWorkspaceId('aid_x');
+      const dir = agentHomeDir('aid_x');
+      mkdirSync(dir, { recursive: true });
+      chmodSync(dir, 0o000);
+      try {
+        const r = await indexAgentWorkspaces(
+          { agent_id: 'aid_x', workspace_ids: [agentHome] },
+          { agentHomeRootDir },
+        );
+        expect(r.entries).toEqual([]);
+        expect(r.unresolved).toEqual([agentHome]);
+      } finally {
+        chmodSync(dir, 0o755);
+      }
+    },
+  );
 
   it('resolves a materialized regular workspace to its agent-centric bundle dir', async () => {
     // relocation-v1 §7 task 4: `agent_dir` is a CWD-existence fact
@@ -158,7 +154,7 @@ describe('indexAgentWorkspaces', () => {
       },
       { agentHomeRootDir },
     );
-    expect(r.entries.map(e => e.workspace_id)).toEqual([agentHome, 'ws_ok']);
+    expect(r.entries.map((e) => e.workspace_id)).toEqual([agentHome, 'ws_ok']);
     expect(r.unresolved).toEqual(['ws_missing']);
   });
 
@@ -186,27 +182,29 @@ describe('indexAgentWorkspaces', () => {
     expect(r.unresolved).toEqual(['../../escape']);
   });
 
-  it('reports a non-traversable (000) bundle dir as unresolved, matching what a spawn could enter', async () => {
-    // Cindy 2026-08-04 nail 1: `agent_dir` must use the SAME cwd-usable
-    // predicate as the pre-spawn cwd-ensure (`bundleCwdUsable`: directory +
-    // process-enterable via X_OK), NOT bare existence. A dir that exists but the
-    // process cannot enter must be reported UNUSABLE, else list would advertise
-    // a cwd the spawn then chokes on.
-    if (process.getuid?.() === 0) return; // root bypasses perms — skip
-    const dir = bundleDir('aid_x', 'ws_locked');
-    mkdirSync(dir, { recursive: true });
-    chmodSync(dir, 0o000);
-    try {
-      const r = await indexAgentWorkspaces(
-        { agent_id: 'aid_x', workspace_ids: ['ws_locked'] },
-        { agentHomeRootDir },
-      );
-      expect(r.entries).toEqual([]);
-      expect(r.unresolved).toEqual(['ws_locked']);
-    } finally {
-      chmodSync(dir, 0o755);
-    }
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    'reports a non-traversable (000) bundle dir as unresolved, matching what a spawn could enter',
+    async () => {
+      // Cindy 2026-08-04 nail 1: `agent_dir` must use the SAME cwd-usable
+      // predicate as the pre-spawn cwd-ensure (`bundleCwdUsable`: directory +
+      // process-enterable via X_OK), NOT bare existence. A dir that exists but the
+      // process cannot enter must be reported UNUSABLE, else list would advertise
+      // a cwd the spawn then chokes on.
+      const dir = bundleDir('aid_x', 'ws_locked');
+      mkdirSync(dir, { recursive: true });
+      chmodSync(dir, 0o000);
+      try {
+        const r = await indexAgentWorkspaces(
+          { agent_id: 'aid_x', workspace_ids: ['ws_locked'] },
+          { agentHomeRootDir },
+        );
+        expect(r.entries).toEqual([]);
+        expect(r.unresolved).toEqual(['ws_locked']);
+      } finally {
+        chmodSync(dir, 0o755);
+      }
+    },
+  );
 });
 
 // M1 (shiki + Cindy 2026-08-04): the memory-availability predicate must judge
@@ -245,6 +243,7 @@ describe('seedAgentL2', () => {
   }
 
   it('seeds MEMORY.md + notes/ but NEVER system_prompt.md (L1-only)', async () => {
+    expect(existsSync(l2DirFor('ws_1'))).toBe(false);
     const r = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
       { agentHomeRootDir },
@@ -262,18 +261,6 @@ describe('seedAgentL2', () => {
       'user-preferences.md',
       'work-log.md',
     ]);
-  });
-
-  it('seeds a never-provisioned regular id (seeding IS establishment, no registry gate)', async () => {
-    // relocation-v1 §7 task 4: there is no prior provision step — a member
-    // agent's first spawn seeds the coordinate directly. This is the primary
-    // forward-path behavior change from the registry model.
-    const r = await seedAgentL2(
-      { agent_id: AGENT_ID, workspace_id: 'ws_fresh', template_choice: 'default' },
-      { agentHomeRootDir },
-    );
-    expect(r).toEqual({ ok: true, seeded: true, l2_present: true });
-    expect(existsSync(join(l2DirFor('ws_fresh'), 'MEMORY.md'))).toBe(true);
   });
 
   it('is idempotent: re-seed reports seeded=false and preserves edited content', async () => {
@@ -309,7 +296,7 @@ describe('seedAgentL2', () => {
         template_choice: 'default',
       },
       { agentHomeRootDir },
-    ).catch(e => e);
+    ).catch((e) => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
     expect((err as AgentL2SeedError).code).toBe('internal_error');
     // No spurious bundle dir was created for the agent-home id.
@@ -320,7 +307,7 @@ describe('seedAgentL2', () => {
     const err = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'minimal' },
       { agentHomeRootDir },
-    ).catch(e => e);
+    ).catch((e) => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
     expect((err as AgentL2SeedError).code).toBe('unsupported_template');
     // Template is validated before any path is touched → no L2 dir created.
@@ -335,30 +322,32 @@ describe('seedAgentL2', () => {
     const err = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: '../../escape', template_choice: 'default' },
       { agentHomeRootDir },
-    ).catch(e => e);
+    ).catch((e) => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
     expect((err as AgentL2SeedError).code).toBe('registry_unavailable');
   });
 
-  it('fails closed with fs_unavailable on a HARD fs write error', async () => {
-    // chmod 000 on the agent home dir makes the l2Dir mkdir (of its
-    // `workspaces/<id>` child) throw EACCES — a hard write error must surface
-    // as the typed fs_unavailable (fail-closed), never a silent success.
-    if (process.getuid?.() === 0) return; // root bypasses perms — skip
-    const agentHomeDir = join(agentHomeRootDir, AGENT_ID);
-    mkdirSync(agentHomeDir, { recursive: true });
-    chmodSync(agentHomeDir, 0o000);
-    try {
-      const err = await seedAgentL2(
-        { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-        { agentHomeRootDir },
-      ).catch(e => e);
-      expect(err).toBeInstanceOf(AgentL2SeedError);
-      expect((err as AgentL2SeedError).code).toBe('fs_unavailable');
-    } finally {
-      chmodSync(agentHomeDir, 0o755);
-    }
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    'fails closed with fs_unavailable on a HARD fs write error',
+    async () => {
+      // chmod 000 on the agent home dir makes the l2Dir mkdir (of its
+      // `workspaces/<id>` child) throw EACCES — a hard write error must surface
+      // as the typed fs_unavailable (fail-closed), never a silent success.
+      const agentHomeDir = join(agentHomeRootDir, AGENT_ID);
+      mkdirSync(agentHomeDir, { recursive: true });
+      chmodSync(agentHomeDir, 0o000);
+      try {
+        const err = await seedAgentL2(
+          { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
+          { agentHomeRootDir },
+        ).catch((e) => e);
+        expect(err).toBeInstanceOf(AgentL2SeedError);
+        expect((err as AgentL2SeedError).code).toBe('fs_unavailable');
+      } finally {
+        chmodSync(agentHomeDir, 0o755);
+      }
+    },
+  );
 });
 
 describe('purgeAgentFiles', () => {
@@ -399,21 +388,23 @@ describe('purgeAgentFiles', () => {
     expect(r).toEqual({ ok: true, purged_count: 0 });
   });
 
-  it('fails closed with partial_purge on a HARD fs removal error', async () => {
-    // chmod 000 on the agent home makes the recursive rm throw EACCES — a hard
-    // error must surface as the typed partial_purge (fail-closed), never a
-    // silent success.
-    if (process.getuid?.() === 0) return; // root bypasses perms — skip
-    seedDir(l1Dir());
-    chmodSync(l1Dir(), 0o000);
-    try {
-      const err = await purgeAgentFiles({ agent_id: AGENT_ID }, { agentHomeRootDir }).catch(
-        e => e,
-      );
-      expect(err).toBeInstanceOf(AgentFilesPurgeError);
-      expect((err as AgentFilesPurgeError).code).toBe('partial_purge');
-    } finally {
-      chmodSync(l1Dir(), 0o755);
-    }
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    'fails closed with partial_purge on a HARD fs removal error',
+    async () => {
+      // chmod 000 on the agent home makes the recursive rm throw EACCES — a hard
+      // error must surface as the typed partial_purge (fail-closed), never a
+      // silent success.
+      seedDir(l1Dir());
+      chmodSync(l1Dir(), 0o000);
+      try {
+        const err = await purgeAgentFiles({ agent_id: AGENT_ID }, { agentHomeRootDir }).catch(
+          (e) => e,
+        );
+        expect(err).toBeInstanceOf(AgentFilesPurgeError);
+        expect((err as AgentFilesPurgeError).code).toBe('partial_purge');
+      } finally {
+        chmodSync(l1Dir(), 0o755);
+      }
+    },
+  );
 });

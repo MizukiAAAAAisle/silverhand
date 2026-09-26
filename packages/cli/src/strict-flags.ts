@@ -43,17 +43,14 @@ export interface StrictFlagOptions {
  * so agents (and the platform prompt) can rely on `--json` without each
  * command having to redeclare it.
  */
-export const GLOBAL_NOOP_FLAGS: ReadonlySet<string> = new Set([
-  'json',
-]);
+export const GLOBAL_NOOP_FLAGS: ReadonlySet<string> = new Set(['json']);
 
 /** Removed process-wide flags. Kept only as refusal entries so every command
  * reports the same migration error instead of an edit-distance-dependent typo. */
 export const GLOBAL_REMOVED_FLAGS: Readonly<Record<string, RemovedFlagSpec>> = {
   'route-conversation-id': {
     replacement: 'none',
-    hint:
-      'the runtime bearer selects its session scope and the agent-global route needs no conversation anchor',
+    hint: 'the runtime bearer selects its session scope and the agent-global route needs no conversation anchor',
   },
 };
 
@@ -68,10 +65,7 @@ export const GLOBAL_REMOVED_FLAGS: Readonly<Record<string, RemovedFlagSpec>> = {
  *       throws `validation_error` with `subkind: 'unknown_flag'` and
  *       `details: { flag, suggestion?, other_unknown? }` so the trace
  *       sink can group typos by their canonical close-match. */
-export function assertKnownFlags(
-  observed: Record<string, unknown>,
-  opts: StrictFlagOptions,
-): void {
+export function assertKnownFlags(observed: Record<string, unknown>, opts: StrictFlagOptions): void {
   // (1) removed-flag check — actionable migration hint takes priority.
   const removedFlags = { ...GLOBAL_REMOVED_FLAGS, ...opts.removedFlags };
   if (Object.keys(removedFlags).length > 0) {
@@ -95,7 +89,7 @@ export function assertKnownFlags(
     ...Object.keys(removedFlags),
     ...GLOBAL_NOOP_FLAGS,
   ]);
-  const unknown = Object.keys(observed).filter(k => !known.has(k));
+  const unknown = Object.keys(observed).filter((k) => !known.has(k));
   if (unknown.length === 0) return;
   const flag = unknown[0]!;
   const suggestion = closestFlag(flag, known);
@@ -104,7 +98,10 @@ export function assertKnownFlags(
     : `run \`silverhand ${opts.noun} ${opts.verb} --help\` for accepted flags`;
   const tail =
     unknown.length > 1
-      ? ` (also unrecognized: ${unknown.slice(1).map(f => `--${f}`).join(', ')})`
+      ? ` (also unrecognized: ${unknown
+          .slice(1)
+          .map((f) => `--${f}`)
+          .join(', ')})`
       : '';
   throw new CliError({
     code: 'validation_error',
@@ -120,7 +117,7 @@ export function assertKnownFlags(
 }
 
 /** Return the closest known flag name within edit distance ≤ 2, or null. */
-export function closestFlag(input: string, known: ReadonlySet<string>): string | null {
+function closestFlag(input: string, known: ReadonlySet<string>): string | null {
   let best: { name: string; distance: number } | null = null;
   for (const candidate of known) {
     const d = levenshtein(input, candidate);
@@ -133,7 +130,7 @@ export function closestFlag(input: string, known: ReadonlySet<string>): string |
 
 /** Iterative Levenshtein distance. Two-row variant — O(min(a.length, b.length))
  *  memory. Plenty fast for flag-name comparison. */
-export function levenshtein(a: string, b: string): number {
+function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;

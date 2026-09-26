@@ -88,23 +88,46 @@ mod tests {
                 "description":"desc","template_choice":"default"
             })
         );
-        assert!(
-            decode_result(&json!({
-                "ok":true,"agent_dir":"/a","agent_home_workspace_path":"/a","materialized_at":1
+        for timestamp in [1, 9_007_199_254_740_991] {
+            let receipt = decode_result(&json!({
+                "ok":true,"agent_dir":"/opaque/agent-a",
+                "agent_home_workspace_path":"/opaque/agent-a","materialized_at":timestamp
             }))
-            .is_some()
-        );
-        assert!(
-            decode_result(&json!({
-                "ok":true,"agent_dir":"/a","agent_home_workspace_path":"/b","materialized_at":1
-            }))
-            .is_none()
-        );
+            .expect("a positive wire-safe acknowledgement");
+            assert_eq!(receipt.agent_dir(), "/opaque/agent-a");
+            assert_eq!(receipt.agent_home_workspace_path(), "/opaque/agent-a");
+            assert_eq!(receipt.materialized_at(), timestamp);
+        }
+        for bad in [
+            json!(null),
+            json!({"ok":false,"agent_dir":"/a","agent_home_workspace_path":"/a","materialized_at":1}),
+            json!({"ok":true,"agent_dir":"/a","agent_home_workspace_path":"/b","materialized_at":1}),
+            json!({"ok":true,"agent_dir":"","agent_home_workspace_path":"","materialized_at":1}),
+            json!({"ok":true,"agent_dir":"/a","agent_home_workspace_path":"/a","materialized_at":0}),
+            json!({"ok":true,"agent_dir":"/a","agent_home_workspace_path":"/a","materialized_at":-1}),
+            json!({"ok":true,"agent_dir":"/a","agent_home_workspace_path":"/a","materialized_at":1.5}),
+            json!({"ok":true,"agent_dir":"/a","agent_home_workspace_path":"/a","materialized_at":9_007_199_254_740_992_i64}),
+            json!({"ok":true,"agent_dir":"/a","agent_home_workspace_path":"/a","materialized_at":1,"extra":true}),
+            json!({"ok":true,"agent_dir":"/a","materialized_at":1}),
+        ] {
+            assert!(
+                decode_result(&bad).is_none(),
+                "rejected acknowledgement: {bad}"
+            );
+        }
     }
 
     #[test]
     fn name_uses_javascript_utf16_length() {
-        assert!(encode(&target("😀".repeat(32))).is_ok());
-        assert!(encode(&target("😀".repeat(33))).is_err());
+        for (name, admitted) in [
+            (String::new(), false),
+            ("a".to_owned(), true),
+            ("a".repeat(64), true),
+            ("a".repeat(65), false),
+            ("😀".repeat(32), true),
+            ("😀".repeat(33), false),
+        ] {
+            assert_eq!(encode(&target(name)).is_ok(), admitted);
+        }
     }
 }

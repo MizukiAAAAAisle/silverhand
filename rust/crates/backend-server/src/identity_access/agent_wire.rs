@@ -211,7 +211,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
     use axum::body::to_bytes;
-    use serde_json::{Value, json};
+    use serde_json::json;
     use silverhand_backend_core::{
         foundation::identity::UserId, identity_access::agent_detail_read::AgentDetailProjection,
         identity_access::agent_lifecycle::MaterializationStatus,
@@ -267,83 +267,26 @@ mod tests {
     /// The resident closed-set gate: the projector emits EVERY wire field, spelled
     /// exactly, with the derived `host_label` (trimmed label wins) and the cache-busted
     /// `avatar_url` reading the just-stamped `updated_at`. A field dropped or renamed in
-    /// the projector fails this by an exact key-set comparison, not by review.
+    /// the projector fails this by an exact wire object comparison, not by review.
     #[tokio::test]
     async fn the_projector_emits_every_wire_field_including_the_derived_pair() {
         let dto = agent_dto(&facts("a1", "creator-1", full_projection()));
         let value = serde_json::to_value(&dto).unwrap();
 
-        let object = value.as_object().unwrap();
-        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
-        keys.sort_unstable();
         assert_eq!(
-            keys,
-            [
-                "avatar_url",
-                "created_at",
-                "created_by_user_id",
-                "deletion_started_at",
-                "description",
-                "display_name",
-                "fast_mode",
-                "host_id",
-                "host_label",
-                "id",
-                "materialization_failed_at",
-                "materialization_failed_code",
-                "materialization_status",
-                "model",
-                "name",
-                "reasoning_effort",
-                "runtime",
-                "session_scope",
-                "updated_at",
-            ],
-            "the wire DTO closed set drifted"
+            value,
+            json!({
+                "id": "a1", "name": "agent-one", "display_name": "Agent One",
+                "runtime": "codex", "model": "gpt-5.6-sol", "reasoning_effort": "high",
+                "fast_mode": true, "host_id": "h1", "host_label": "Host One",
+                "description": "a description", "session_scope": "agent",
+                "created_by_user_id": "creator-1",
+                "avatar_url": "/api/agents/a1/avatar?v=2000",
+                "materialization_status": "active", "materialization_failed_code": "boom",
+                "materialization_failed_at": 4321, "deletion_started_at": 9999,
+                "created_at": 1000, "updated_at": 2000
+            })
         );
-
-        // The four fields the resident gate is asked to prove, plus the cache-buster.
-        assert_eq!(value["runtime"], json!("codex"));
-        assert_eq!(value["host_id"], json!("h1"));
-        assert_eq!(value["materialization_status"], json!("active"));
-        assert_eq!(value["updated_at"], json!(2000));
-        assert_eq!(value["avatar_url"], json!("/api/agents/a1/avatar?v=2000"));
-        assert_eq!(value["id"], json!("a1"));
-        assert_eq!(value["created_by_user_id"], json!("creator-1"));
-        // The trimmed display label wins the host_label coalesce.
-        assert_eq!(value["host_label"], json!("Host One"));
-    }
-
-    /// Truthiness, not `!= null`: an empty avatar key and an empty host label both fall
-    /// through, and every absent optional column serializes as an explicit `null`.
-    #[tokio::test]
-    async fn absent_optionals_are_explicit_nulls_and_an_empty_avatar_key_is_no_url() {
-        let mut projection = full_projection();
-        projection.model = None;
-        projection.reasoning_effort = None;
-        projection.fast_mode = None;
-        projection.description = None;
-        projection.avatar_storage_key = Some(String::new());
-        projection.host_display_label = Some("   ".to_owned());
-        projection.host_name = None;
-        projection.materialization_failed_code = None;
-        projection.materialization_failed_at = None;
-        projection.deletion_started_at = None;
-
-        let value = serde_json::to_value(agent_dto(&facts("a2", "creator-1", projection))).unwrap();
-        assert_eq!(value["avatar_url"], Value::Null);
-        assert_eq!(value["host_label"], Value::Null);
-        for key in [
-            "model",
-            "reasoning_effort",
-            "fast_mode",
-            "description",
-            "materialization_failed_code",
-            "materialization_failed_at",
-            "deletion_started_at",
-        ] {
-            assert_eq!(value[key], Value::Null, "{key} should serialize as null");
-        }
     }
 
     /// The `host_label` coalesce trims against the ECMA-262 whitespace set, not Rust's

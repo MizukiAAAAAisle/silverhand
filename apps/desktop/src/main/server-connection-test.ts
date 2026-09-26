@@ -72,20 +72,6 @@ export type ProbeServerInfoResult =
   | { ok: false; kind: "network_failed"; message: string }
   | { ok: false; kind: "invalid_response"; message: string };
 
-/**
- * Minimal fetch surface. Production callers pass `globalThis.fetch`;
- * tests pass a fake.
- */
-export type FetcherFn = (
-  input: string,
-  init?: { signal?: AbortSignal },
-) => Promise<{
-  ok: boolean;
-  status: number;
-  statusText: string;
-  text(): Promise<string>;
-}>;
-
 export interface ProbeServerInfoOptions {
   /** Raw URL the user typed. Trimmed by the caller; this helper does
    *  not normalize whitespace. */
@@ -93,24 +79,6 @@ export interface ProbeServerInfoOptions {
   /** Caller-side policy bit. The classifier needs it to decide whether
    *  to admit non-loopback http URLs. */
   allowInsecureRemote: boolean;
-  /** Fetch implementation. Defaults to `globalThis.fetch`. */
-  fetcher?: FetcherFn;
-  /** Caller-supplied abort signal — e.g. a future "cancel test" button.
-   *  Combined with the internal timeout signal via
-   *  `AbortSignal`-style chaining; whichever fires first wins. */
-  signal?: AbortSignal;
-  /**
-   * Timeout in milliseconds for the entire fetch round-trip. Default
-   * {@link DEFAULT_PROBE_TIMEOUT_MS} (Cindy D4.a Commit 2 review):
-   * a black-hole network would otherwise leave the Wizard stuck in
-   * "submitting" until the OS-level TCP timeout (minutes) fires. Pass
-   * `null` to disable the timeout (used by some tests).
-   *
-   * On timeout the result is `{ kind: 'network_failed' }` with a
-   * timeout-specific message so the UI can distinguish "took too long"
-   * from generic ECONNREFUSED.
-   */
-  timeoutMs?: number | null;
 }
 
 /**
@@ -119,7 +87,7 @@ export interface ProbeServerInfoOptions {
  * stretch to seconds) without leaving the wizard stuck on a black-hole
  * network for minutes.
  */
-export const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
 
 /**
  * Compose `<url>/api/server/info` without losing query / fragment
@@ -163,47 +131,17 @@ export async function probeServerInfo(
       message: classification.message,
     };
   }
-  const fetcher = opts.fetcher ?? (globalThis.fetch as FetcherFn);
   const url = serverInfoUrl(classification.url);
-  // Timeout + caller-signal composition (Cindy D4.a Commit 2 review
-  // fixup): we MUST own the timeout in main so a black-hole network
-  // does not leave the Wizard stuck for the OS-level TCP timeout. The
-  // internal `AbortController` races against any caller-supplied
-  // signal; whichever fires first aborts the fetch. We track WHICH
-  // source triggered the abort so the error message is honest about
-  // the cause (timeout vs caller cancel vs network), and we always
-  // clear the timer and detach the caller listener via `finally` so
-  // there are no lingering timers / listeners after a fast response.
-  const timeoutMs = opts.timeoutMs === undefined ? DEFAULT_PROBE_TIMEOUT_MS : opts.timeoutMs;
+  // Bound the connection/header wait; body parsing is handled below.
   const controller = new AbortController();
-  // Mutable cell so TypeScript does NOT narrow based on the visible
-  // synchronous assignments — the `setTimeout` closure writes
-  // `value = 'timeout'` asynchronously which TS can't track through
-  // control flow, and a plain `let abortedBy` would get narrowed away
-  // by the time we read it after `await`.
-  const abortedBy: { value: "timeout" | "caller" | null } = { value: null };
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  const onCallerAbort = (): void => {
-    if (abortedBy.value === null) abortedBy.value = "caller";
+  let timedOut = false;
+  const timeoutHandle = setTimeout(() => {
+    timedOut = true;
     controller.abort();
-  };
-  if (opts.signal) {
-    if (opts.signal.aborted) {
-      abortedBy.value = "caller";
-      controller.abort();
-    } else {
-      opts.signal.addEventListener("abort", onCallerAbort, { once: true });
-    }
-  }
-  if (timeoutMs !== null && abortedBy.value === null) {
-    timeoutHandle = setTimeout(() => {
-      if (abortedBy.value === null) abortedBy.value = "timeout";
-      controller.abort();
-    }, timeoutMs);
-  }
-  let res: Awaited<ReturnType<FetcherFn>>;
+  }, DEFAULT_PROBE_TIMEOUT_MS);
+  let res: Response;
   try {
-    res = await fetcher(url, { signal: controller.signal });
+    res = await fetch(url, { signal: controller.signal });
   } catch (err) {
     const tls = classifyTlsError(err);
     if (tls !== null) {
@@ -214,28 +152,11 @@ export async function probeServerInfo(
         message: describeTlsCodeShort(tls),
       };
     }
-    // Honest abort attribution: a timeout-induced AbortError gets a
-    // dedicated message so the wizard can render "took too long"
-    // copy; a caller-induced one says "canceled"; anything else falls
-    // through to the underlying error message. We deliberately do NOT
-    // mint a separate `kind` for timeout (Cindy review: AbortError
-    // stays under `network_failed`, only the message differentiates)
-    // — the renderer keys i18n off the discriminator, and proliferating
-    // arms for what's structurally the same failure (no HTTP
-    // round-trip completed) would make the UI surface noisier without
-    // adding remediation value.
-    if (abortedBy.value === "timeout") {
+    if (timedOut) {
       return {
         ok: false,
         kind: "network_failed",
-        message: `Request to ${url} timed out after ${timeoutMs} ms.`,
-      };
-    }
-    if (abortedBy.value === "caller") {
-      return {
-        ok: false,
-        kind: "network_failed",
-        message: "Connection test canceled.",
+        message: `Request to ${url} timed out after ${DEFAULT_PROBE_TIMEOUT_MS} ms.`,
       };
     }
     return {
@@ -244,10 +165,7 @@ export async function probeServerInfo(
       message: err instanceof Error ? err.message : String(err),
     };
   } finally {
-    if (timeoutHandle !== null) clearTimeout(timeoutHandle);
-    if (opts.signal) {
-      opts.signal.removeEventListener("abort", onCallerAbort);
-    }
+    clearTimeout(timeoutHandle);
   }
   if (!res.ok) {
     const bodyText = await safeReadText(res);

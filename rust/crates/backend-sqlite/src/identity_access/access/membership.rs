@@ -909,7 +909,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn creator_replace_set_is_atomic_and_an_unrelated_member_cannot_mutate_it() {
+    async fn creator_can_replace_the_set_but_an_unrelated_member_cannot_mutate_it() {
         let (_dir, path) = fixture().await;
         let store = SqliteAccessStore::open(&path).await.unwrap();
         assert_eq!(

@@ -13,12 +13,9 @@ import type {
 import { isResolvedAgentStartOptions } from './runtime-start-resolve.js';
 import { readMemoryNotesCatalog } from './memory-notes-catalog.js';
 
-export const MEMORY_INJECT_CAP_BYTES = 16 * 1024;
+const MEMORY_INJECT_CAP_BYTES = 16 * 1024;
 
-export async function readFileWithCap(
-  path: string,
-  capBytes: number,
-): Promise<InjectedFileContent> {
+async function readFileWithCap(path: string, capBytes: number): Promise<InjectedFileContent> {
   let buf: Buffer;
   try {
     buf = await readFile(path);
@@ -116,7 +113,7 @@ export async function buildPromptContextFromRuntimeStartOptions(
   };
 }
 
-export function buildWorkspaceMemoryIndexFromRuntimeStartOptions(
+function buildWorkspaceMemoryIndexFromRuntimeStartOptions(
   options: ResolvedStartOptions,
 ): WorkspaceMemoryIndexEntry[] {
   if (isResolvedAgentStartOptions(options)) return [];

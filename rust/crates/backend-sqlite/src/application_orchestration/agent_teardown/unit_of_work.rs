@@ -90,7 +90,6 @@ mod tests {
     use std::{path::PathBuf, time::Duration};
 
     use silverhand_backend_core::{
-        application_orchestration::teardown::facts::AgentTeardownCapture,
         foundation::identity::{AgentId, HostId},
         host_runtime::runtime_credential::RuntimeScope,
         host_runtime::runtime_event::RuntimeObservedStatus,
@@ -305,15 +304,11 @@ mod tests {
          VALUES ('w-reg', 'a1', 1)",
     ];
 
-    /// The one durable committed teardown the capture gates read. `capture_agent`
-    /// (facts.rs) is the single helper all THREE write paths consume — this axis
-    /// (`teardown.rs`), the computer cascade (`cascade.rs`), and the
-    /// deletion-completion path (`intent.rs`) — so pinning its output on this
-    /// single-agent commit locks the capture code every path shares. Hands back the
-    /// owned capture so each gate below asserts exactly one of its four halves; stub
-    /// any half to `Vec::new()`/`None`/`0` and only that half's gate turns RED.
-    async fn capture_from_committed_teardown(dir: &TempDir) -> AgentTeardownCapture {
-        let path = seed_schema(dir, "capture.db", &CAPTURE_FIXTURE).await;
+    // One real commit preserves all four halves of the shared capture projection.
+    #[tokio::test]
+    async fn the_committed_capture_preserves_seats_blobs_roster_and_memberships() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = seed_schema(&dir, "capture.db", &CAPTURE_FIXTURE).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
         let commit = store
@@ -330,17 +325,7 @@ mod tests {
         let AgentTeardownCommit::Committed(torn) = commit else {
             panic!("an eligible active agent commits its teardown");
         };
-        torn.capture().clone()
-    }
-
-    /// Half 1 — every RAW seat is captured, running or not, with its exact scope,
-    /// status and generation. Asserting the idle seat as well locks the adapter out
-    /// of a running-only filter; asserting the exact status and generation locks it
-    /// out of deriving a status or resetting the generation the row carried.
-    #[tokio::test]
-    async fn the_committed_capture_carries_every_raw_seat() {
-        let dir = tempfile::tempdir().unwrap();
-        let capture = capture_from_committed_teardown(&dir).await;
+        let capture = torn.capture();
 
         assert_eq!(capture.runtime_sessions.len(), 2);
 
@@ -367,20 +352,8 @@ mod tests {
         ));
         assert_eq!(active.status, RuntimeObservedStatus::Active);
         assert_eq!(active.generation.as_i64(), 1);
-    }
 
-    /// Half 2 — the blob sweep spans the WHOLE ordered channel set, not just its
-    /// head, and captures each blob's FULL durable coordinate. Blobs live only on
-    /// the two channels the ordering puts after the head, so a sweep that stopped
-    /// at the first channel would capture nothing; the two carry distinct storage
-    /// backends, so dropping or crossing the `storage` half — which the post-commit
-    /// sweeper needs to route to the right backend — turns this RED even though the
-    /// keys still match.
-    #[tokio::test]
-    async fn the_committed_capture_sweeps_blobs_across_every_home_channel() {
-        let dir = tempfile::tempdir().unwrap();
-        let capture = capture_from_committed_teardown(&dir).await;
-
+        // Both full blob coordinates come from channels beyond the roster head.
         let mut pairs: Vec<(&str, &str)> = capture
             .dm_blob_refs
             .iter()
@@ -388,32 +361,12 @@ mod tests {
             .collect();
         pairs.sort_unstable();
         assert_eq!(pairs, [("s-dm", "k-dm"), ("s-general", "k-general")]);
-    }
 
-    /// Half 3 — the summary handle is the roster ordering's HEAD, not the
-    /// earliest-created row. The three channels are created in the reverse of the
-    /// priority (onboarding last), so a plain created_at order would surface
-    /// `ch-general` and this turns RED.
-    #[tokio::test]
-    async fn the_committed_capture_picks_the_dm_channel_by_the_roster_ordering() {
-        let dir = tempfile::tempdir().unwrap();
-        let capture = capture_from_committed_teardown(&dir).await;
-
+        // Onboarding wins despite being created last; home ownership is not membership.
         assert_eq!(
             capture.dm_channel_id.as_ref().map(|id| id.as_str()),
             Some("ch-onboarding")
         );
-    }
-
-    /// Half 4 — the workspace count is the agent's REGULAR memberships, exact and
-    /// without its owned home. The agent owns a home and is a member of one regular
-    /// workspace; the schema forbids a home from being a membership row, so the
-    /// count is regular-only and the exact 1 shows a miscount.
-    #[tokio::test]
-    async fn the_committed_capture_counts_regular_memberships_without_the_home() {
-        let dir = tempfile::tempdir().unwrap();
-        let capture = capture_from_committed_teardown(&dir).await;
-
         assert_eq!(capture.regular_workspace_count, 1);
     }
 }

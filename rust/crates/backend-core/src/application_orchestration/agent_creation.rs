@@ -1508,24 +1508,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn omitted_model_on_qoder_persists_the_forced_default() {
-        let mut harness = Harness::default();
-        harness.provisioning = FakeProvision {
-            scope: "agent",
-            lost: false,
-        };
-        let mut input = base_input();
-        input.runtime = RuntimeKind::Qoder;
-        input.session_scope = Some(AgentSessionScope::Agent);
-        input.model = None;
-        harness.run(input, false).await.unwrap();
-        let captured = harness
-            .materialization
-            .captured_model
-            .lock()
-            .unwrap()
-            .clone();
-        assert_eq!(captured, Some(Some("Ultimate".to_owned())));
+    async fn create_model_normalization_reaches_the_reserve() {
+        // BOM is ECMAScript whitespace; NEL is not. Exercise normalization through
+        // the create use case and observe what its reserve port receives.
+        for (runtime, model, expected) in [
+            (RuntimeKind::Qoder, None, Some("Ultimate")),
+            (RuntimeKind::Qoder, Some("\u{feff}"), Some("Ultimate")),
+            (RuntimeKind::Qoder, Some("\u{0085}"), Some("\u{0085}")),
+            (RuntimeKind::Codex, Some("\u{feff}"), None),
+            (RuntimeKind::Codex, Some("gpt-5.6-sol"), Some("gpt-5.6-sol")),
+        ] {
+            let mut harness = Harness::default();
+            harness.provisioning = FakeProvision {
+                scope: "agent",
+                lost: false,
+            };
+            let mut input = base_input();
+            input.runtime = runtime;
+            input.session_scope = Some(AgentSessionScope::Agent);
+            input.model = model.map(str::to_owned);
+            harness.run(input, false).await.unwrap();
+            assert_eq!(
+                *harness.materialization.captured_model.lock().unwrap(),
+                Some(expected.map(str::to_owned)),
+                "runtime {runtime:?}, model {model:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1536,14 +1544,19 @@ mod tests {
             lost: true,
         };
         // The winner left an active agent-scoped reservation (echo needs no graph read).
-        harness.materialization.existing = Some(existing_row("active", "agent"));
+        harness.materialization.lost_winner = Some(existing_row("active", "agent"));
         let mut input = base_input();
         input.session_scope = Some(AgentSessionScope::Agent);
         let outcome = harness.run(input, false).await.unwrap();
         let CreateAgentOutcome::Echo(echo) = outcome else {
             panic!("expected Echo after a lost race, got {outcome:?}");
         };
+        assert!(harness.materialization.reserve_called.load(Relaxed));
+        assert_eq!(harness.materialization.find_calls.load(Relaxed), 2);
+        assert_eq!(echo.agent_id.as_str(), "agent-existing");
+        assert_eq!(echo.coordinates.agent_home_workspace_id, None);
         assert_eq!(echo.coordinates.dm_channel_id, None);
+        assert_eq!(echo.coordinates.onboarding_message_id, None);
     }
 
     // ---- Placement ------------------------------------------------------------
@@ -1688,7 +1701,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_materialize_transport_fault_is_a_safe_500_and_leaves_the_row_pending() {
+    async fn a_materialize_transport_fault_does_not_stamp_failed() {
         let mut harness = Harness::default();
         harness.materialize = FakeMaterialize::online(MaterializeScript::Transport);
         let fault = harness.run(base_input(), false).await.unwrap_err();
@@ -1702,10 +1715,10 @@ mod tests {
     // ---- Idempotent dispatch --------------------------------------------------
 
     #[tokio::test]
-    async fn active_agent_scope_echoes_without_a_graph_read() {
+    async fn active_agent_scope_echoes_all_null_coordinates() {
         let mut harness = Harness::default();
         harness.materialization.existing = Some(existing_row("active", "agent"));
-        // Graph is empty; an agent-scope echo must not touch it.
+        // No graph exists for the agent-scoped response coordinates.
         let mut input = base_input();
         input.session_scope = Some(AgentSessionScope::Agent);
         let outcome = harness.run(input, false).await.unwrap();
@@ -1714,6 +1727,7 @@ mod tests {
         };
         assert_eq!(echo.coordinates.agent_home_workspace_id, None);
         assert_eq!(echo.coordinates.dm_channel_id, None);
+        assert_eq!(echo.coordinates.onboarding_message_id, None);
     }
 
     #[tokio::test]
@@ -1734,19 +1748,34 @@ mod tests {
         );
         assert_eq!(
             echo.coordinates.agent_home_workspace_id,
-            Some(home_workspace_id_for(
-                &AgentId::parse("agent-existing").unwrap()
-            ))
+            Some(WorkspaceId::parse("wsah_agent-existing").unwrap())
+        );
+        assert_eq!(
+            echo.coordinates.onboarding_message_id,
+            Some(MessageId::parse("msg-echo").unwrap())
         );
     }
 
     #[tokio::test]
-    async fn active_conversation_scope_with_a_missing_dm_is_a_corrupt_graph_fault() {
-        let mut harness = Harness::default();
-        harness.materialization.existing = Some(existing_row("active", "conversation"));
-        harness.graph = FakeGraph::default(); // no dm channel
-        let fault = harness.run(base_input(), false).await.unwrap_err();
-        assert!(matches!(fault, CreateAgentFault::CorruptGraph { .. }));
+    async fn active_conversation_scope_requires_both_graph_coordinates() {
+        for (dm, reason) in [
+            (
+                None,
+                "active conversation-scoped agent has no home DM channel",
+            ),
+            (
+                Some("dm-echo"),
+                "active conversation-scoped agent's home DM has no onboarding message",
+            ),
+        ] {
+            let mut harness = Harness::default();
+            harness.materialization.existing = Some(existing_row("active", "conversation"));
+            harness.graph.dm_channel = dm.map(|id| ConversationId::parse(id).unwrap());
+            let fault = harness.run(base_input(), false).await.unwrap_err();
+            assert!(
+                matches!(fault, CreateAgentFault::CorruptGraph { reason: actual } if actual == reason)
+            );
+        }
     }
 
     #[tokio::test]
@@ -1777,7 +1806,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_metadata_mismatch_reports_the_first_differing_field() {
+    async fn a_runtime_metadata_mismatch_is_reported() {
         let mut harness = Harness::default();
         harness.materialization.existing = Some(existing_row("active", "conversation"));
         let mut input = base_input();
@@ -1882,35 +1911,6 @@ mod tests {
         assert!(
             matches!(fault, CreateAgentFault::Materialization(_)),
             "an incoherent failed witness must fault at seal, not default an empty code"
-        );
-    }
-
-    // ---- Model default --------------------------------------------------------
-
-    #[test]
-    fn model_default_uses_ecmascript_trim_not_str_trim() {
-        // A lone U+FEFF is ECMAScript-blank → falls back to the runtime default; a lone
-        // U+0085 (NEL) is outside that set → kept verbatim, matching `String.prototype.trim`.
-        assert_eq!(
-            normalize_model(RuntimeKind::Qoder, Some("\u{feff}".to_owned())),
-            Some("Ultimate".to_owned())
-        );
-        assert_eq!(
-            normalize_model(RuntimeKind::Qoder, Some("\u{0085}".to_owned())),
-            Some("\u{0085}".to_owned())
-        );
-        // Absent or empty falls back; a runtime with no default stays None.
-        assert_eq!(
-            normalize_model(RuntimeKind::Qoder, None),
-            Some("Ultimate".to_owned())
-        );
-        assert_eq!(
-            normalize_model(RuntimeKind::Codex, Some("\u{feff}".to_owned())),
-            None
-        );
-        assert_eq!(
-            normalize_model(RuntimeKind::Codex, Some("gpt-5.6-sol".to_owned())),
-            Some("gpt-5.6-sol".to_owned())
         );
     }
 }

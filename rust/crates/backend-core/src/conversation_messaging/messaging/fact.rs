@@ -386,6 +386,14 @@ impl ThreadListEntry {
     ///
     /// let entry = ThreadListEntry {
     ///     root_id: todo!(),
+    ///     root_author: None,
+    ///     root_preview: String::new(),
+    ///     root_created_at_ms: 0,
+    ///     root_seq: todo!(),
+    ///     reply_count: 0,
+    ///     last_reply_at_ms: 0,
+    ///     last_reply_message_id: todo!(),
+    ///     repliers: Vec::new(),
     ///     replier_total: 0,
     /// };
     /// ```
@@ -632,68 +640,30 @@ impl MessageCreatedFact {
 
 #[cfg(test)]
 mod tests {
-    use super::{THREAD_PREVIEW_MAX_UTF16, thread_root_preview};
-
-    /// UTF-16 length, the unit the wire contract measures a preview in.
-    fn utf16_len(s: &str) -> usize {
-        s.chars().map(char::len_utf16).sum()
-    }
+    use super::thread_root_preview;
 
     #[test]
-    fn a_preview_shorter_than_the_limit_is_returned_whole() {
-        let content = "a".repeat(THREAD_PREVIEW_MAX_UTF16 - 1);
-        let preview = thread_root_preview(&content);
-        assert_eq!(preview, content);
-        assert_eq!(utf16_len(&preview), THREAD_PREVIEW_MAX_UTF16 - 1);
-    }
-
-    #[test]
-    fn a_preview_exactly_at_the_limit_is_returned_whole() {
-        let content = "a".repeat(THREAD_PREVIEW_MAX_UTF16);
-        let preview = thread_root_preview(&content);
-        assert_eq!(preview, content);
-        assert_eq!(utf16_len(&preview), THREAD_PREVIEW_MAX_UTF16);
-    }
-
-    #[test]
-    fn a_preview_one_past_the_limit_keeps_the_first_limit_units() {
-        let content = "a".repeat(THREAD_PREVIEW_MAX_UTF16 + 1);
-        let preview = thread_root_preview(&content);
-        assert_eq!(preview, "a".repeat(THREAD_PREVIEW_MAX_UTF16));
-        assert_eq!(utf16_len(&preview), THREAD_PREVIEW_MAX_UTF16);
-    }
-
-    #[test]
-    fn a_bmp_char_on_the_limit_boundary_is_kept_whole() {
-        // 159 ASCII + one 3-byte BMP scalar (1 UTF-16 unit) == exactly 160 units.
-        let mut content = "a".repeat(THREAD_PREVIEW_MAX_UTF16 - 1);
-        content.push('世');
-        let preview = thread_root_preview(&content);
-        assert_eq!(preview, content);
-        assert_eq!(utf16_len(&preview), THREAD_PREVIEW_MAX_UTF16);
-    }
-
-    #[test]
-    fn an_astral_scalar_straddling_the_limit_stops_before_it() {
-        // 159 ASCII fills to unit 159; the next scalar '😀' is 2 UTF-16 units, so a
-        // UTF-16 slice(0,160) would cut it in half and keep a lone high surrogate.
-        // UTF-8 cannot spell that, so this stops at the scalar boundary: 159 units,
-        // the astral scalar dropped whole rather than split.
-        let mut content = "a".repeat(THREAD_PREVIEW_MAX_UTF16 - 1);
-        content.push('😀');
-        let preview = thread_root_preview(&content);
-        assert_eq!(preview, "a".repeat(THREAD_PREVIEW_MAX_UTF16 - 1));
-        assert_eq!(utf16_len(&preview), THREAD_PREVIEW_MAX_UTF16 - 1);
-    }
-
-    #[test]
-    fn an_astral_scalar_fully_inside_the_limit_is_kept_whole() {
-        // 158 ASCII + '😀' (2 units) == exactly 160 units: fits, kept whole.
-        let mut content = "a".repeat(THREAD_PREVIEW_MAX_UTF16 - 2);
-        content.push('😀');
-        let preview = thread_root_preview(&content);
-        assert_eq!(preview, content);
-        assert_eq!(utf16_len(&preview), THREAD_PREVIEW_MAX_UTF16);
+    fn previews_obey_the_160_utf16_unit_wire_limit_without_splitting_scalars() {
+        for (content, expected) in [
+            ("a".repeat(159), "a".repeat(159)),
+            ("a".repeat(160), "a".repeat(160)),
+            ("a".repeat(161), "a".repeat(160)),
+            (
+                format!("{}世", "a".repeat(159)),
+                format!("{}世", "a".repeat(159)),
+            ),
+            (format!("{}😀", "a".repeat(159)), "a".repeat(159)),
+            (
+                format!("{}😀", "a".repeat(158)),
+                format!("{}😀", "a".repeat(158)),
+            ),
+        ] {
+            assert_eq!(
+                thread_root_preview(&content),
+                expected,
+                "input: {content:?}"
+            );
+        }
     }
 
     #[test]

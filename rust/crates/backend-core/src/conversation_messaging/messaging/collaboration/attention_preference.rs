@@ -292,7 +292,9 @@ mod tests {
             _: &impl ChannelAttentionCommit,
         ) -> Result<(), AttentionPreferenceEffectFailure> {
             self.0.lock().unwrap().push("badge");
-            Ok(())
+            Err(AttentionPreferenceEffectFailure::from_source(
+                io::Error::other("badge"),
+            ))
         }
         async fn workspace_preference_changed(
             &self,
@@ -317,6 +319,6 @@ mod tests {
         };
         let first = super::channel_effects(&effects, &committed).await;
         assert_eq!(effects.0.into_inner().unwrap(), ["preference", "badge"]);
-        assert!(first.is_some());
+        assert_eq!(first.unwrap().source().unwrap().to_string(), "hub");
     }
 }

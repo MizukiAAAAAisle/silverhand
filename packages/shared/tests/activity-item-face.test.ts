@@ -4,7 +4,6 @@ import {
   ActivityLocationSchema,
   AgentRuntimeParticipationSchema,
 } from '../src/api/index.js';
-import { ConversationPlacementKindSchema } from '../src/db/schema.js';
 
 /**
  * The Activity face answers row-1 identity by PLACEMENT and never by roster
@@ -63,9 +62,7 @@ describe('ActivityItemDto keys identity on placement, never on roster (#task:207
   ];
 
   it('publishes exactly this key set', () => {
-    expect(Object.keys(ActivityItemDtoSchema.shape).sort()).toEqual(
-      [...ACTIVITY_ITEM_KEYS].sort(),
-    );
+    expect(Object.keys(ActivityItemDtoSchema.shape).sort()).toEqual([...ACTIVITY_ITEM_KEYS].sort());
   });
 
   // The two arms' key sets, exhaustively — the point of the union is that neither
@@ -118,8 +115,7 @@ describe('ActivityItemDto keys identity on placement, never on roster (#task:207
       ActivityLocationSchema.safeParse({ kind: 'workspace_channel', title: '#g' }).success,
     ).toBe(false);
     expect(
-      ActivityLocationSchema.safeParse({ kind: 'workspace_channel', workspace_id: 'w' })
-        .success,
+      ActivityLocationSchema.safeParse({ kind: 'workspace_channel', workspace_id: 'w' }).success,
     ).toBe(false);
     expect(ActivityLocationSchema.safeParse({ kind: 'direct_pair' }).success).toBe(false);
     // And the discriminant itself is closed: a third placement word is not a
@@ -139,8 +135,29 @@ describe('ActivityItemDto keys identity on placement, never on roster (#task:207
   // in its OWN vocabulary (`workspace_channel`, the #task:1373 conclusion) rather
   // than by re-exporting the raw placement enum. The asymmetry is the rule.
   it('keeps the placement word on the face that genuinely admits every placement', () => {
-    expect(AgentRuntimeParticipationSchema.shape.conversation_placement_kind).toBe(
-      ConversationPlacementKindSchema,
-    );
+    const participation = {
+      conversation_id: 'conversation-1',
+      workspace_id: null,
+      workspace_name: null,
+      conversation_roster_policy: 'fixed',
+      channel_id: 'conversation-1',
+      channel_title: '',
+      closed_at: null,
+    };
+    for (const placement of ['workspace', 'direct_pair']) {
+      expect(
+        AgentRuntimeParticipationSchema.parse({
+          ...participation,
+          conversation_placement_kind: placement,
+        }).conversation_placement_kind,
+      ).toBe(placement);
+    }
+    expect(AgentRuntimeParticipationSchema.safeParse(participation).success).toBe(false);
+    expect(
+      AgentRuntimeParticipationSchema.safeParse({
+        ...participation,
+        conversation_placement_kind: 'private',
+      }).success,
+    ).toBe(false);
   });
 });

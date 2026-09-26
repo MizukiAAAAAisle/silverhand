@@ -290,20 +290,32 @@ mod numeric_tests {
             WorkspaceUnreadTotal,
         },
         conversation_messaging::messaging::{MessageId, MessageSeq},
-        foundation::{
-            identity::{ConversationId, UserId, WorkspaceId},
-            wire_number::JsSafeInteger,
-        },
+        foundation::identity::{ConversationId, UserId, WorkspaceId},
     };
 
     #[test]
     fn actual_success_envelopes_keep_safe_max_and_reject_max_plus_one() {
         let workspace = WorkspaceId::parse("w").unwrap();
         let viewer = UserId::parse("v").unwrap();
-        for (count, seq, expected) in [
-            (JsSafeInteger::MAX, JsSafeInteger::MAX, StatusCode::OK),
-            (JsSafeInteger::MAX + 1, 1, StatusCode::INTERNAL_SERVER_ERROR),
-            (1, JsSafeInteger::MAX + 1, StatusCode::INTERNAL_SERVER_ERROR),
+        for (count, seq, expected, summary_expected) in [
+            (
+                9_007_199_254_740_991,
+                9_007_199_254_740_991,
+                StatusCode::OK,
+                StatusCode::OK,
+            ),
+            (
+                9_007_199_254_740_992,
+                1,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                1,
+                9_007_199_254_740_992,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::OK,
+            ),
         ] {
             let conversation = ConversationId::parse("c").unwrap();
             let unread = UnreadRollup::projected(
@@ -343,21 +355,14 @@ mod numeric_tests {
             .unwrap()
             .bind(&viewer)
             .unwrap();
-            assert_eq!(
-                summary_success(&summary).status(),
-                if count <= JsSafeInteger::MAX {
-                    StatusCode::OK
-                } else {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-            );
+            assert_eq!(summary_success(&summary).status(), summary_expected);
         }
         let rows = ["c1", "c2"]
             .into_iter()
             .map(|id| {
                 let conversation = ConversationId::parse(id).unwrap();
                 let UnreadRollup::Unread(unread) = UnreadRollup::projected(
-                    UnreadCount::new(JsSafeInteger::MAX).unwrap(),
+                    UnreadCount::new(9_007_199_254_740_991).unwrap(),
                     Some(LatestUnreadPointer::projected(
                         conversation.clone(),
                         MessageId::parse(id).unwrap(),

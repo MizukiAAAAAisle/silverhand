@@ -333,7 +333,7 @@ async fn empty_persisted_daemon_fails_current_verify_and_finalize_with_the_same_
     .unwrap();
     connection.close().await.unwrap();
 
-    assert_corruption_crosses_every_entrypoint(
+    assert_corruption_crosses_current_verify_and_finalize(
         &store,
         "persisted daemon instance id is invalid: daemon instance id must not be empty",
     )
@@ -341,7 +341,7 @@ async fn empty_persisted_daemon_fails_current_verify_and_finalize_with_the_same_
 }
 
 #[tokio::test]
-async fn invalid_persisted_generation_fails_every_entrypoint_with_the_same_chain() {
+async fn invalid_persisted_generation_fails_current_verify_and_finalize_with_the_same_chain() {
     let (_directory, path, store) = fixture().await;
     let mut connection = open(&path).await;
     sqlx::query("DROP TRIGGER agent_runtime_slots_generation_monotonic")
@@ -367,7 +367,7 @@ async fn invalid_persisted_generation_fails_every_entrypoint_with_the_same_chain
     .unwrap();
     connection.close().await.unwrap();
 
-    assert_corruption_crosses_every_entrypoint(
+    assert_corruption_crosses_current_verify_and_finalize(
         &store,
         "persisted runtime generation is invalid: runtime generation must be nonnegative",
     )
@@ -388,7 +388,7 @@ async fn real_driver_failure_reaches_the_verifier_entrypoint() {
     assert!(error_chain(&failure).contains("no such table: agent_runtime_slots"));
 }
 
-async fn assert_corruption_crosses_every_entrypoint(
+async fn assert_corruption_crosses_current_verify_and_finalize(
     store: &SqliteRuntimeCustodyStore,
     expected_chain: &str,
 ) {

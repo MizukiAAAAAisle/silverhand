@@ -37,13 +37,7 @@
  * `supervisor.test.ts`; this file's job is the wire itself.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-} from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -76,8 +70,8 @@ const FORBIDDEN_LOG_KEYS = [
 
 function readDaemonLogs(logDir: string): string {
   if (!existsSync(logDir)) return '';
-  const files = readdirSync(logDir).filter(f => f.startsWith('daemon-'));
-  return files.map(f => readFileSync(join(logDir, f), 'utf-8')).join('\n');
+  const files = readdirSync(logDir).filter((f) => f.startsWith('daemon-'));
+  return files.map((f) => readFileSync(join(logDir, f), 'utf-8')).join('\n');
 }
 
 describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2`)', () => {
@@ -86,15 +80,19 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
   afterEach(async () => {
     while (cleanup.length) {
       const fn = cleanup.pop();
-      try { await fn?.(); } catch { /* ignore */ }
+      try {
+        await fn?.();
+      } catch {
+        /* ignore */
+      }
     }
   });
 
   it('entry.ts wires a real supervisor — runtime_status returns success, not "no supervisor wired"', async () => {
-    if (!existsSync(TSX_BIN)) {
-      // tsx not installed locally — skip rather than fail the suite.
-      return;
-    }
+    expect(
+      existsSync(TSX_BIN),
+      'Install the declared tsx dev dependency before running the daemon entry smoke',
+    ).toBe(true);
     const dir = mkdtempSync(join(tmpdir(), 'silverhand-host-entry-wire-'));
     cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
     const socketPath = join(dir, 'daemon.sock');
@@ -126,6 +124,9 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
       readyTimeoutMs: 10_000,
     });
     cleanup.push(() => handle!.kill());
+    expect(handle.pid).toBeGreaterThan(0);
+    expect(handle.socketPath).toBe(socketPath);
+    expect(existsSync(pidFilePath)).toBe(true);
 
     const client = new HostClient({ socketPath });
     cleanup.push(() => client.close());
@@ -145,16 +146,16 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
     // surface while wiring the supervisor).
     const pong = await client.ping();
     expect(pong.pong).toBe(true);
+    expect(pong.daemon_pid).toBe(handle.pid);
 
     // The identity file materialized at the EXPLICIT forwarded path —
     // not beside the runtime-pid root, not under the sandbox home.
     expect(existsSync(join(dir, 'run', 'identity.json'))).toBe(true);
-    expect(
-      existsSync(join(homeDir, '.silverhand', 'daemon', 'identity.json')),
-    ).toBe(false);
+    expect(existsSync(join(homeDir, '.silverhand', 'daemon', 'identity.json'))).toBe(false);
 
     await client.close();
     await handle.kill({ gracefulMs: 2_000 });
+    expect(existsSync(pidFilePath)).toBe(false);
 
     // Log contract: no payload/env/stdout/stderr/chunk
     // keys anywhere in the daemon JSONL written during this boot.

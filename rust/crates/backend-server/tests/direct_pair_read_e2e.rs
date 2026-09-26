@@ -84,8 +84,8 @@ async fn fixture() -> Fixture {
          ('session-1', 'user-1', 'OXoqnFv14szsOMJZa2grsb0F_m5OzqbBDPQnVf8iVAM', 1, 9500, NULL, NULL, NULL)",
         "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'Host', 'local', 1)",
         "INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id, \
-         created_at, updated_at) VALUES \
-         ('agent-1', 'agent', 'Agent One', 'codex', 'host-1', 'user-1', 1, 11)",
+         created_at, updated_at, session_scope) VALUES \
+         ('agent-1', 'agent', 'Agent One', 'codex', 'host-1', 'user-1', 1, 11, 'agent')",
         "INSERT INTO conversations (id, placement_kind, roster_policy, title, status, \
          endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, created_at, updated_at) \
          VALUES ('pair-agent', 'direct_pair', 'fixed', '', 'open', 'agent', 'agent-1', 'human', \

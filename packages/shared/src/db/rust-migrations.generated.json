@@ -18,13 +18,13 @@
     }
   ],
   "inputs": {
-    "packages/shared/src/address-segment.ts": "38dd219b20b1d0cd95d97c48548ad105fc6a295e0f7909cecfdaee085c993de2",
+    "packages/shared/src/address-segment.ts": "b390da6ce72d44549151d367247bf2f8e5a2aa0c7e07da25be321d1bf4110abc",
     "packages/shared/src/conversation-title-audit.ts": "36d75a99f6b29e7f0302739a368fe6ecb26be4fb5c067a00b7cec93eac2bbce0",
     "packages/shared/src/conversation-title.ts": "74e08fa0290476e633508b05958d9be88a412c0ae468e29a9b60bebb9b43a3db",
     "packages/shared/src/db/baseline-schema.ts": "7e5b7e9a0aca9b79fa433dca341d68ef4f761c5a545069c6005a4519851130e6",
     "packages/shared/src/db/migration-contracts/task-title-v96.ts": "98b0881301cb959962489178aefca16aa4228c786f03b0b849a654d58504d583",
     "packages/shared/src/db/migrations.ts": "94605bd2ae6b9e1d04950bef6e479bbf2d0c1f2803bab3d558800239ed1bec4c",
-    "packages/shared/src/db/schema-epochs.ts": "15ff3ff355212f4ac0e08f5f7930efb3c521ffd8b72783b635216fa8208c095e",
+    "packages/shared/src/db/schema-epochs.ts": "96037ea3491a2ddc82400e74c6b4334f9c9cd96ec41a5a9dc5b71ed446fb44ce",
     "packages/shared/src/display-name-charset.ts": "13ad82b9e92e562014322c569df15476a8ef5d7863f541f79207a5403d542410",
     "packages/shared/src/unicode-case-fold.ts": "b5cb75d46582dc93b640434ad78fe8f0a741e5e1aa183adbb27368ce2aceb120",
     "packages/shared/src/unicode-name-charset.ts": "bbcda81d89d738fdfe6a9ff0dd4dad633a79a84cd8f82e203753910196967879",

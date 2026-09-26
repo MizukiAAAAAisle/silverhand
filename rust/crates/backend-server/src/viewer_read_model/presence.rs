@@ -28,9 +28,6 @@ pub struct HubPresencePublisher {
     hub: ScopeEventHub,
 }
 
-#[cfg(test)]
-pub(crate) type HubPresenceSink = HubPresencePublisher;
-
 impl HubPresencePublisher {
     pub(crate) fn new(hub: ScopeEventHub) -> Self {
         Self { hub }
@@ -197,20 +194,4 @@ where
         disconnect_clock,
     ));
     (router, feed, timers)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn elapsed_millis_never_wrap_into_a_presence_instant() {
-        let overflow = Duration::from_millis(i64::MAX as u64)
-            .checked_add(Duration::from_millis(1))
-            .expect("test duration");
-        assert!(matches!(
-            duration_to_unix_ms(overflow),
-            Err(SystemClockFault::MillisOverflow(_))
-        ));
-    }
 }

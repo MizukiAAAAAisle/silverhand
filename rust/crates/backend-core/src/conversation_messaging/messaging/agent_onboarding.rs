@@ -496,30 +496,6 @@ mod tests {
     }
 
     #[test]
-    fn the_direct_line_body_names_both_parties_with_the_canonical_form() {
-        let body = render_direct_line_body(&handle("Alice"), &handle("shiki"));
-
-        assert_eq!(
-            body,
-            "You (<silverhand://agent/Alice>) have just been created as an agent-scoped agent: one \
-             session of you serves every conversation you are in, and this stream is your direct \
-             line with the person who created you (<silverhand://human/shiki>) — they are the only \
-             other participant here.\nSend one short greeting in THIS conversation: say hi by name, \
-             state your current global role briefly (or say it is not defined yet), and ask what \
-             role they would like you to play.\nWrite global identity / role / working-style \
-             guidance to your L1 `system_prompt.md` once they answer; it applies in every \
-             conversation and takes effect on your next spawn. Do not mention internal file paths \
-             to the user unless they ask."
-        );
-    }
-
-    #[test]
-    fn the_body_is_three_logical_lines() {
-        let body = render_direct_line_body(&handle("Alice"), &handle("shiki"));
-        assert_eq!(body.lines().count(), 3);
-    }
-
-    #[test]
     fn the_intent_renders_the_body_and_pins_the_onboarding_subtype() {
         let intent = OnboardingSystemMessage::agent_direct_line(
             ConversationId::parse("pair-1").unwrap(),
@@ -533,7 +509,15 @@ mod tests {
         assert_eq!(intent.id().as_str(), "msg-1");
         assert_eq!(
             intent.content(),
-            render_direct_line_body(&handle("Alice"), &handle("shiki"))
+            "You (<silverhand://agent/Alice>) have just been created as an agent-scoped agent: one \
+             session of you serves every conversation you are in, and this stream is your direct \
+             line with the person who created you (<silverhand://human/shiki>) — they are the only \
+             other participant here.\nSend one short greeting in THIS conversation: say hi by name, \
+             state your current global role briefly (or say it is not defined yet), and ask what \
+             role they would like you to play.\nWrite global identity / role / working-style \
+             guidance to your L1 `system_prompt.md` once they answer; it applies in every \
+             conversation and takes effect on your next spawn. Do not mention internal file paths \
+             to the user unless they ask."
         );
         assert_eq!(intent.created_at_ms(), 42);
     }
@@ -651,10 +635,15 @@ mod tests {
     }
 
     #[test]
-    fn the_dm_body_names_only_the_agent_and_pins_the_three_files() {
-        let body = render_dm_body(&handle("Alice"));
+    fn the_dm_intent_renders_the_dm_body_and_seals_against_it() {
+        let intent = OnboardingSystemMessage::conversation_dm(
+            ConversationId::parse("dm-1").unwrap(),
+            MessageId::parse("msg-9").unwrap(),
+            &handle("Alice"),
+            7,
+        );
         assert_eq!(
-            body,
+            intent.content(),
             "You (<silverhand://agent/Alice>) are now in your personal DM with the user.\nYour \
              role contract lives at L1 `system_prompt.md`, this computer's authority on who you \
              are; it applies in every workspace on this computer, and edits take effect on the \
@@ -666,22 +655,10 @@ mod tests {
              from the codebase, task board, and channel/thread history. Do not mention internal \
              file paths to the user unless they ask."
         );
-        assert_eq!(body.lines().count(), 3);
-    }
-
-    #[test]
-    fn the_dm_intent_renders_the_dm_body_and_seals_against_it() {
-        let intent = OnboardingSystemMessage::conversation_dm(
-            ConversationId::parse("dm-1").unwrap(),
-            MessageId::parse("msg-9").unwrap(),
-            &handle("Alice"),
-            7,
-        );
-        assert_eq!(intent.content(), render_dm_body(&handle("Alice")));
         let mut witness = faithful_witness();
         witness.id = "msg-9".to_owned();
         witness.conversation = "dm-1".to_owned();
-        witness.content = render_dm_body(&handle("Alice"));
+        witness.content = intent.content().to_owned();
         witness.created_at_ms = 7;
         assert!(intent.seal_written(witness).is_ok());
     }
@@ -705,11 +682,11 @@ mod tests {
     #[test]
     fn the_shape_recognizer_accepts_only_a_system_onboarding_row() {
         let onboarding = OnboardingMetadataDigest {
-            subtype: Some(ONBOARDING_SUBTYPE.to_owned()),
+            subtype: Some("onboarding".to_owned()),
             has_extra_keys: false,
         };
         // The genuine shape: a system message whose metadata is exactly the onboarding subtype.
-        assert!(recognize_onboarding_shape(ONBOARDING_FROM_KIND, &onboarding).is_ok());
+        assert!(recognize_onboarding_shape("system", &onboarding).is_ok());
         // An ordinary agent/user message in the same line is refused, so the read-time door
         // cannot be tricked into enqueuing arbitrary same-conversation traffic.
         assert!(recognize_onboarding_shape("agent", &onboarding).is_err());
@@ -720,13 +697,13 @@ mod tests {
                 subtype,
                 has_extra_keys: false,
             };
-            assert!(recognize_onboarding_shape(ONBOARDING_FROM_KIND, &digest).is_err());
+            assert!(recognize_onboarding_shape("system", &digest).is_err());
         }
         // The onboarding subtype plus any other key is not the exact onboarding shape.
         let with_extra = OnboardingMetadataDigest {
-            subtype: Some(ONBOARDING_SUBTYPE.to_owned()),
+            subtype: Some("onboarding".to_owned()),
             has_extra_keys: true,
         };
-        assert!(recognize_onboarding_shape(ONBOARDING_FROM_KIND, &with_extra).is_err());
+        assert!(recognize_onboarding_shape("system", &with_extra).is_err());
     }
 }

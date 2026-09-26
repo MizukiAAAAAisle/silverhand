@@ -154,6 +154,9 @@ mod tests {
                  VALUES ('c1', 'w1', 'workspace', 'open', 'chan', 'chan', 'active', 1, 1)",
                 "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) \
                  VALUES ('c1', 'a-conv', 1)",
+                "UPDATE agent_runtime_slots SET observed_status='active', generation=1 WHERE agent_id='a-agent'",
+                "UPDATE agent_runtime_slots SET observed_status='starting', generation=1 WHERE agent_id='a-conv'",
+                "UPDATE agent_runtime_slots SET generation=2 WHERE agent_id='a-conv'",
             ],
         )
         .await;
@@ -172,6 +175,11 @@ mod tests {
             .expect("agent present");
         assert_eq!(snapshot.source, agent("a-agent"));
         assert_eq!(snapshot.host, host("h-good"));
+        assert_eq!(
+            snapshot.sessions[0].status,
+            silverhand_backend_core::host_runtime::runtime_event::RuntimeObservedStatus::Active
+        );
+        assert_eq!(snapshot.sessions[0].generation.as_i64(), 1);
         assert!(matches!(
             snapshot.sessions.as_slice(),
             [session] if matches!(
@@ -187,6 +195,11 @@ mod tests {
             .expect("agent present");
         assert_eq!(conversation.source, agent("a-conv"));
         assert_eq!(conversation.host, host("h-good"));
+        assert_eq!(
+            conversation.sessions[0].status,
+            silverhand_backend_core::host_runtime::runtime_event::RuntimeObservedStatus::Starting
+        );
+        assert_eq!(conversation.sessions[0].generation.as_i64(), 2);
         assert!(matches!(
             conversation.sessions.as_slice(),
             [session] if matches!(
@@ -195,13 +208,6 @@ mod tests {
                     if agent == &self::agent("a-conv") && source.as_str() == "c1"
             )
         ));
-    }
-
-    #[tokio::test]
-    async fn a_bulk_stop_snapshot_is_absent_for_an_unknown_agent() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = seed_read_fixture(&dir).await;
-
         let snapshot = store
             .read_bulk_stop_snapshot(&agent("nope"))
             .await

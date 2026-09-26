@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  assertKnownFlags,
-  closestFlag,
-  GLOBAL_NOOP_FLAGS,
-  GLOBAL_REMOVED_FLAGS,
-  levenshtein,
-} from '../src/strict-flags.js';
+import { assertKnownFlags, GLOBAL_NOOP_FLAGS, GLOBAL_REMOVED_FLAGS } from '../src/strict-flags.js';
 import { CliError } from '../src/errors.js';
 
 describe('strict flag validation', () => {
@@ -94,10 +88,7 @@ describe('strict flag validation', () => {
 
   it('treats commands with empty flag lists as accepting nothing', () => {
     expect(() =>
-      assertKnownFlags(
-        { foo: 'a' },
-        { noun: 'workspace', verb: 'list', flags: [] },
-      ),
+      assertKnownFlags({ foo: 'a' }, { noun: 'workspace', verb: 'list', flags: [] }),
     ).toThrow(/unknown flag --foo/);
   });
 
@@ -108,16 +99,10 @@ describe('strict flag validation', () => {
     // declares NO flags at all.
     expect(GLOBAL_NOOP_FLAGS.has('json')).toBe(true);
     expect(() =>
-      assertKnownFlags(
-        { json: true },
-        { noun: 'task', verb: 'list', flags: ['task-number'] },
-      ),
+      assertKnownFlags({ json: true }, { noun: 'task', verb: 'list', flags: ['task-number'] }),
     ).not.toThrow();
     expect(() =>
-      assertKnownFlags(
-        { json: true },
-        { noun: 'workspace', verb: 'list', flags: [] },
-      ),
+      assertKnownFlags({ json: true }, { noun: 'workspace', verb: 'list', flags: [] }),
     ).not.toThrow();
   });
 });
@@ -130,13 +115,15 @@ describe('removed-flag handling', () => {
         { 'route-conversation-id': 'Conversation0001' },
         { noun: 'workspace', verb: 'list', flags: [] },
       ),
-    ).toThrowError(expect.objectContaining({
-      subkind: 'flag_removed',
-      details: {
-        flag: 'route-conversation-id',
-        replacement: 'none',
-      },
-    }));
+    ).toThrowError(
+      expect.objectContaining({
+        subkind: 'flag_removed',
+        details: {
+          flag: 'route-conversation-id',
+          replacement: 'none',
+        },
+      }),
+    );
   });
 
   it('throws flag_removed with replacement and hint when a removed flag is supplied', () => {
@@ -222,74 +209,25 @@ describe('removed-flag handling', () => {
       suggestion: 'task-number',
     });
   });
-
-  it('treats removedFlags as known so they do NOT also trip unknown-flag', () => {
-    // If `removedFlags` weren't merged into the known set, supplying
-    // a removed flag together with another removed flag would fall
-    // through to "unknown" for the second one. We verify both branches
-    // are protected: only the first removed flag throws (loop break).
-    let caught: unknown;
-    try {
-      assertKnownFlags(
-        { content: 'a', 'another-old-flag': 'b' },
-        {
-          noun: 'message',
-          verb: 'send',
-          flags: ['target'],
-          removedFlags: {
-            content: { replacement: 'stdin', hint: 'use stdin' },
-            'another-old-flag': {
-              replacement: 'something',
-              hint: 'use something',
-            },
-          },
-        },
-      );
-    } catch (err) {
-      caught = err;
-    }
-    const e = caught as CliError;
-    expect(e.subkind).toBe('flag_removed');
-  });
 });
 
-describe('closestFlag (Levenshtein-bounded suggester)', () => {
-  it('returns the closest candidate within edit distance 2', () => {
-    const known = new Set(['task-number', 'status', 'limit']);
-    expect(closestFlag('task-numbers', known)).toBe('task-number');
-    expect(closestFlag('limt', known)).toBe('limit');
-  });
-
-  it('returns null when nothing is within distance 2', () => {
-    const known = new Set(['task-number', 'status']);
-    expect(closestFlag('verbose', known)).toBeNull();
-  });
-
-  it('prefers the smaller-distance candidate on ties', () => {
-    const known = new Set(['attachment', 'attachment-id']);
-    // `attachmen` is distance 1 from `attachment`, distance 4 from
-    // `attachment-id` — should pick the closer.
-    expect(closestFlag('attachmen', known)).toBe('attachment');
-  });
-});
-
-describe('levenshtein', () => {
-  it('returns 0 for identical strings', () => {
-    expect(levenshtein('abc', 'abc')).toBe(0);
-  });
-
-  it('returns the longer length when one side is empty', () => {
-    expect(levenshtein('', 'abcd')).toBe(4);
-    expect(levenshtein('abcd', '')).toBe(4);
-  });
-
-  it('counts a single insertion / deletion / substitution as 1', () => {
-    expect(levenshtein('cat', 'cats')).toBe(1);
-    expect(levenshtein('cats', 'cat')).toBe(1);
-    expect(levenshtein('cat', 'bat')).toBe(1);
-  });
-
-  it('handles the canonical kitten→sitting example', () => {
-    expect(levenshtein('kitten', 'sitting')).toBe(3);
+describe('unknown flag suggestions through validation', () => {
+  it.each([
+    ['insertion', 'cats', ['cat'], 'cat'],
+    ['deletion', 'cat', ['cats'], 'cats'],
+    ['substitution', 'bat', ['cat'], 'cat'],
+    ['distance two', 'cxx', ['cat'], 'cat'],
+    ['distance three', 'xxx', ['cat'], undefined],
+    ['nearest candidate, not first match', 'attachmen', ['attachm', 'attachment'], 'attachment'],
+  ] as const)('%s', (_label, input, flags, suggestion) => {
+    expect(() =>
+      assertKnownFlags({ [input]: true }, { noun: 'task', verb: 'list', flags }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'validation_error',
+        subkind: 'unknown_flag',
+        details: { flag: input, ...(suggestion ? { suggestion } : {}) },
+      }),
+    );
   });
 });

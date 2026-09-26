@@ -783,14 +783,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_observed_status_round_trips_through_its_persisted_token() {
-        for status in [
-            RuntimeObservedStatus::Idle,
-            RuntimeObservedStatus::Starting,
-            RuntimeObservedStatus::Active,
-            RuntimeObservedStatus::Crashed,
+    fn observed_status_uses_the_exact_persisted_tokens_in_both_directions() {
+        for (status, token) in [
+            (RuntimeObservedStatus::Idle, "idle"),
+            (RuntimeObservedStatus::Starting, "starting"),
+            (RuntimeObservedStatus::Active, "active"),
+            (RuntimeObservedStatus::Crashed, "crashed"),
         ] {
-            assert_eq!(RuntimeObservedStatus::parse(status.as_str()), Ok(status));
+            assert_eq!(status.as_str(), token);
+            assert_eq!(RuntimeObservedStatus::parse(token), Ok(status));
         }
     }
 

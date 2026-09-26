@@ -4,19 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { SilverhandCliLauncher } from './spawn-prep.js';
 
-const FALLBACK_SILVERHAND_COMMAND = 'silverhand';
-
 export type { SilverhandCliLauncher } from './spawn-prep.js';
-
-export function isFallbackSilverhandCliLauncher(
-  launcher: SilverhandCliLauncher,
-): boolean {
-  return (
-    launcher.command === FALLBACK_SILVERHAND_COMMAND &&
-    launcher.args.length === 0 &&
-    Object.keys(launcher.env ?? {}).length === 0
-  );
-}
 
 export function chooseSilverhandCliLauncher(args: {
   serverLauncher: SilverhandCliLauncher | null;
@@ -29,14 +17,14 @@ export function chooseSilverhandCliLauncher(args: {
   );
 }
 
-export function resolveLocalSilverhandCliLauncher(input: {
-  entryUrl?: string;
-  execPath?: string;
-  exists?: (path: string) => boolean;
-} = {}): SilverhandCliLauncher | null {
+export function resolveLocalSilverhandCliLauncher(
+  input: {
+    entryUrl?: string;
+    execPath?: string;
+  } = {},
+): SilverhandCliLauncher | null {
   const entryUrl = input.entryUrl ?? import.meta.url;
   const hostExecPath = input.execPath ?? process.execPath;
-  const exists = input.exists ?? existsSync;
   const entryDir = dirname(fileURLToPath(entryUrl));
   const candidates: Array<{ entry: string; env?: Record<string, string> }> = [
     // NPM package layout:
@@ -54,7 +42,7 @@ export function resolveLocalSilverhandCliLauncher(input: {
     },
   ];
 
-  const candidate = candidates.find(item => exists(item.entry));
+  const candidate = candidates.find((item) => existsSync(item.entry));
   if (!candidate) return null;
 
   return {

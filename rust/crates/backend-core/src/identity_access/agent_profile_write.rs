@@ -926,6 +926,7 @@ mod tests {
             &RequiredEdit::Set("New Name".to_owned())
         );
         assert_eq!(admitted.description(), &FieldEdit::Clear);
+        assert_eq!(admitted.model(), &FieldEdit::Set("gpt-5.6-sol".to_owned()));
         assert_eq!(
             admitted.reasoning_effort(),
             &FieldEdit::Set("ultra".to_owned())
@@ -1105,7 +1106,18 @@ mod tests {
         };
         let writes = FakeWrites(AgentProfileRowWrite::Committed {
             before: before(RuntimeKind::Claude),
-            row: committed_row(NOW),
+            // Match every requested/untouched column, so only the illegal effort
+            // rejects this fact; an unrelated seal mismatch must not mask a bypass.
+            row: CommittedAgentRow {
+                id: agent(),
+                display_name: "Old Name".to_owned(),
+                description: None,
+                model: None,
+                reasoning_effort: Some("high".to_owned()),
+                fast_mode: None,
+                avatar: AgentAvatarRow::Absent,
+                updated_at: NOW,
+            },
         });
         let sink = FakeSink::new(false);
         let result =

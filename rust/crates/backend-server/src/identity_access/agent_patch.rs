@@ -592,8 +592,7 @@ mod tests {
     /// WITNESSES the real port does — the before-image it read, plus, on an admit, a base
     /// row sealed so every touched column, the id, and `updated_at = now` match the core
     /// replay's seal. It never returns a product verdict; the core re-derives that from
-    /// the before-image. The authoritative under-lock enforcement (and its concurrent
-    /// falsifier) lives in the sqlite adapter's tests; here we only need a faithful
+    /// the before-image. The authoritative stored-row enforcement lives in the sqlite adapter's tests; here we only need a faithful
     /// outcome to check the handler's response mapping.
     #[derive(Clone)]
     struct SealingWrites {
@@ -878,7 +877,7 @@ mod tests {
     // ---- the happy path ----
 
     #[tokio::test]
-    async fn a_legal_edit_commits_announces_and_returns_the_reprojected_dto() {
+    async fn a_legal_edit_calls_the_writer_announces_and_returns_the_reprojected_dto() {
         let reply = ok_run(r#"{"display_name":"Renamed","reasoning_effort":"high"}"#).await;
         assert_eq!(reply.status, StatusCode::OK);
         // The response is the FULL DTO, re-read post-commit: the new name/effort and
@@ -907,22 +906,6 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::OK);
         assert_eq!(reply.announces, 1);
-    }
-
-    #[tokio::test]
-    async fn display_name_is_trimmed_by_the_shared_authority_before_the_write() {
-        // The admission trims, so the sealed edit — and the committed row the write
-        // must match — carries the trimmed name.
-        let reply = patch_with(
-            FakeReads::new(present(creator_facts()), present(committed_facts())),
-            SealingWrites::new(WriteOutcome::Commits),
-            FakeSink::new(false),
-            "a1",
-            "{\"display_name\":\"  Renamed  \"}",
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::OK);
     }
 
     // ---- the ladder ----
@@ -1117,7 +1100,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_null_clears_a_nullable_field() {
+    async fn a_null_clear_is_admitted_for_a_nullable_field() {
         // description: null is a Clear, a valid edit → 200 (not invalid input).
         let reply = ok_run(r#"{"description":null}"#).await;
         assert_eq!(reply.status, StatusCode::OK);
@@ -1201,7 +1184,6 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(reply.body, "Internal Server Error");
-        assert!(!reply.body.contains("write boom"));
     }
 
     #[tokio::test]

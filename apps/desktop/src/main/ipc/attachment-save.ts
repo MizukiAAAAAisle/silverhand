@@ -66,8 +66,8 @@ export async function handleAttachmentSave(
 
 /** Strip path separators and control chars, cap length. The user's
  *  final destination path is decided by the save dialog; this is only
- *  the pre-filled default. Exported for direct testing. */
-export function sanitizeAttachmentFilename(raw: string): string {
+ *  the pre-filled default. */
+function sanitizeAttachmentFilename(raw: string): string {
   return raw
     .replace(/[\\/]/g, "_")
     .replace(/[\x00-\x1f]+/g, "")

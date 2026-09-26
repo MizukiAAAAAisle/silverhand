@@ -152,22 +152,14 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     }
 
     #[tokio::test]
-    async fn a_computer_with_no_agents_is_an_empty_roster() {
+    async fn an_empty_or_absent_computer_has_an_empty_roster() {
         let (_dir, adapter) = open_seeded().await;
-        let agents = adapter
-            .agent_ids_on_computer(&HostId::parse("host-empty").unwrap())
-            .await
-            .unwrap();
-        assert!(agents.is_empty());
-    }
-
-    #[tokio::test]
-    async fn an_absent_computer_is_an_empty_roster_not_an_error() {
-        let (_dir, adapter) = open_seeded().await;
-        let agents = adapter
-            .agent_ids_on_computer(&HostId::parse("host-missing").unwrap())
-            .await
-            .unwrap();
-        assert!(agents.is_empty());
+        for computer in ["host-empty", "host-missing"] {
+            let agents = adapter
+                .agent_ids_on_computer(&HostId::parse(computer).unwrap())
+                .await
+                .unwrap();
+            assert!(agents.is_empty(), "{computer}");
+        }
     }
 }

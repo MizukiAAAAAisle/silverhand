@@ -4,8 +4,8 @@
 //! production `workspaces::router` over the SQLite `SqliteWorkspaceColdRead`
 //! adapter — to prove three properties the driver-free unit tests cannot:
 //!
-//!   * a valid human session yields the same shared envelope the parity gate
-//!     ratifies, and the cold read runs exactly once;
+//!   * a valid human session yields the literal expected workspace envelope,
+//!     and the cold read runs exactly once;
 //!   * every authentication refusal (no bearer, unknown / revoked / expired
 //!     session) is a 401 that NEVER reaches the cold read — the product answer is
 //!     not computed for an unauthenticated caller;
@@ -14,8 +14,8 @@
 //!     or token-hash in it, and EXACTLY ONE operator ERROR event carrying the
 //!     complete source chain (#task:2190 P1-6).
 //!
-//! The seed is the SAME shared fixture the parity gate replays, so the authorized
-//! body here is the ratified envelope byte-for-byte; only the auth row is added.
+//! The historical seed is shared with enrollment and startup fixtures; only
+//! the auth row is added here. This is the wire/SQLite envelope's primary owner.
 
 use std::sync::{
     Arc,
@@ -53,7 +53,7 @@ mod log_capture;
 
 use log_capture::LogBuffer;
 
-/// The one shared seed the parity gate replays; here it is joined by the auth row.
+/// Shared historical workspace seed, joined here by the auth row.
 const SEED_SQL: &str =
     include_str!("../../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql");
 const EXPECTED_ENVELOPE: &str = include_str!("fixtures/workspace-cold-read-envelope.json");
@@ -266,8 +266,6 @@ async fn authentication_store_failure_is_safe_and_never_enters_the_cold_read() {
     assert!(response.1.starts_with("text/plain"));
     assert_eq!(response.2, "Internal Server Error");
     assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
-    assert!(!response.2.contains(TOKEN));
-    assert!(!response.2.contains(TOKEN_HASH));
 
     let errors = logs
         .events()
@@ -312,8 +310,6 @@ async fn read_failure_is_one_safe_500_with_the_complete_source_chain() {
     assert_eq!(response.2, "Internal Server Error");
     // The authenticated caller DID reach the cold read; it is the read that failed.
     assert_eq!(fixture.calls.load(Ordering::SeqCst), 1);
-    assert!(!response.2.contains(TOKEN));
-    assert!(!response.2.contains(TOKEN_HASH));
 
     let errors = logs
         .events()

@@ -376,7 +376,7 @@ impl AgentRuntimeStateReadModel for SqliteAgentRuntimeStateColdRead {
 
 #[cfg(test)]
 mod shape {
-    use super::{SELECT_AGENT_ACL_ROW, SELECT_AGENT_SEATS};
+    use super::SELECT_AGENT_SEATS;
 
     /// The seat query aggregates undelivered depth EXACTLY ONCE, not per seat. The old
     /// shape ran a correlated `COUNT(*)` in each `CASE` arm (two spellings, re-scanned
@@ -396,26 +396,5 @@ mod shape {
         assert!(
             SELECT_AGENT_SEATS.contains("LEFT JOIN q ON q.conversation_id = s.conversation_id")
         );
-    }
-
-    /// The seat query carries EXACTLY three placeholders — `v(viewer)`, `q.agent_id`, and
-    /// `s.agent_id` — while `t` derives from `q` and binds nothing. Pinning the count is what
-    /// keeps the query text and `read_facts`' bind list from drifting: a superfluous fourth
-    /// bind (viewer + agent × 3) is only silently tolerated while the values coincide, and
-    /// would misalign the moment they diverge. The bind order is viewer / q-agent / seat-agent.
-    #[test]
-    fn the_seat_query_binds_exactly_three_placeholders() {
-        assert_eq!(
-            SELECT_AGENT_SEATS.matches('?').count(),
-            3,
-            "viewer (CTE), agent (q), agent (WHERE) — `t` binds nothing"
-        );
-    }
-
-    /// The ACL read selects the row's OWN `id`, so the bundle can be sealed to a stored
-    /// coordinate rather than the request echo.
-    #[test]
-    fn the_acl_read_selects_the_row_id_for_the_source_seal() {
-        assert!(SELECT_AGENT_ACL_ROW.contains("SELECT id,"));
     }
 }

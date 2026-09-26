@@ -307,6 +307,10 @@ fn internal_error() -> Response {
 }
 
 #[cfg(test)]
+#[path = "../../tests/support/log_capture.rs"]
+mod log_capture;
+
+#[cfg(test)]
 mod tests {
     use std::{
         collections::VecDeque,
@@ -335,6 +339,7 @@ mod tests {
         identity_access::agents::runtime::RuntimeKind,
     };
     use tower::ServiceExt;
+    use tracing::instrument::WithSubscriber;
 
     use super::*;
 
@@ -409,8 +414,9 @@ mod tests {
     impl AgentDetailReadModel for FakeReads {
         async fn read_agent_detail(
             &self,
-            _agent: &AgentId,
+            agent: &AgentId,
         ) -> Result<Option<AgentDetailFacts>, PersistenceFailure> {
+            assert_eq!(agent.as_str(), "a1");
             self.detail_calls.fetch_add(1, SeqCst);
             match &self.detail {
                 DetailOutcome::Present(facts) => Ok(Some(facts.as_ref().clone())),
@@ -425,8 +431,9 @@ mod tests {
     impl AgentBulkStopReadPort for FakeReads {
         async fn read_bulk_stop_snapshot(
             &self,
-            _agent_id: &AgentId,
+            agent_id: &AgentId,
         ) -> Result<Option<AgentBulkStopSnapshot>, PersistenceFailure> {
+            assert_eq!(agent_id.as_str(), "a1");
             self.snapshot_calls.fetch_add(1, SeqCst);
             match &self.snapshot {
                 SnapshotOutcome::Present(snapshot) => Ok(Some(snapshot.clone())),
@@ -550,6 +557,7 @@ mod tests {
         detail_reads: usize,
         snapshot_reads: usize,
         stops: usize,
+        logs: Vec<Value>,
     }
 
     async fn stop_with(
@@ -566,8 +574,16 @@ mod tests {
         if with_principal {
             request = request.extension(user("viewer-1"));
         }
+        let logs = log_capture::LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .without_time()
+            .with_target(false)
+            .with_writer(logs.clone())
+            .finish();
         let response = router(reads.clone(), reads, stops)
             .oneshot(request.body(Body::empty()).unwrap())
+            .with_subscriber(subscriber)
             .await
             .unwrap();
         let status = response.status();
@@ -578,6 +594,7 @@ mod tests {
             detail_reads: detail_calls.load(SeqCst),
             snapshot_reads: snapshot_calls.load(SeqCst),
             stops: stop_calls.load(SeqCst),
+            logs: logs.events(),
         }
     }
 
@@ -603,23 +620,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_absent_row_is_the_anti_enumeration_404_and_never_stops() {
-        let reply = stop_with(
-            FakeReads::new(DetailOutcome::Absent, snapshot(vec![])),
-            FakeStops::scripted(vec![]),
-            "a1",
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND);
-        assert_eq!(parsed(&reply.body), json!({ "error": "agent not found" }));
-        assert_eq!(reply.snapshot_reads, 0);
-        assert_eq!(reply.stops, 0);
-    }
-
-    #[tokio::test]
-    async fn a_viewer_who_cannot_see_it_is_the_same_404() {
-        let facts = AgentDetailFacts::from_source(
+    async fn absent_invisible_and_non_active_agents_are_one_404_before_the_snapshot() {
+        let invisible = AgentDetailFacts::from_source(
             agent("a1"),
             user("someone-else"),
             [],
@@ -627,20 +629,7 @@ mod tests {
             MaterializationStatus::Active,
             projection(),
         );
-        let reply = stop_with(
-            FakeReads::new(present_detail(facts), snapshot(vec![])),
-            FakeStops::scripted(vec![]),
-            "a1",
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND);
-        assert_eq!(reply.stops, 0);
-    }
-
-    #[tokio::test]
-    async fn a_non_active_stage_is_the_same_404() {
-        let facts = AgentDetailFacts::from_source(
+        let failed = AgentDetailFacts::from_source(
             agent("a1"),
             user("viewer-1"),
             [],
@@ -648,15 +637,23 @@ mod tests {
             MaterializationStatus::Failed,
             projection(),
         );
-        let reply = stop_with(
-            FakeReads::new(present_detail(facts), snapshot(vec![])),
-            FakeStops::scripted(vec![]),
-            "a1",
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND);
-        assert_eq!(reply.stops, 0);
+        for detail in [
+            DetailOutcome::Absent,
+            present_detail(invisible),
+            present_detail(failed),
+        ] {
+            let reply = stop_with(
+                FakeReads::new(detail, snapshot(vec![])),
+                FakeStops::scripted(vec![]),
+                "a1",
+                true,
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::NOT_FOUND);
+            assert_eq!(parsed(&reply.body), json!({ "error": "agent not found" }));
+            assert_eq!(reply.snapshot_reads, 0);
+            assert_eq!(reply.stops, 0);
+        }
     }
 
     #[tokio::test]
@@ -679,6 +676,7 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::FORBIDDEN);
         assert_eq!(parsed(&reply.body), json!({ "error": "forbidden" }));
+        assert_eq!(reply.snapshot_reads, 0);
         assert_eq!(reply.stops, 0);
     }
 
@@ -758,20 +756,22 @@ mod tests {
         assert_eq!(reply.stops, 2);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn a_partial_success_stays_a_200_with_the_fulfilled_count() {
-        // ok + refused: at least one fulfilled ⇒ 200 {stopped:1}.
+        // Success plus both failure kinds: preserve wire count and operator residue.
         let reply = stop_with(
             FakeReads::new(
                 present_detail(creator_facts()),
                 snapshot(vec![
                     conversation_seat("a1", "c1", RuntimeObservedStatus::Active, 1),
                     conversation_seat("a1", "c2", RuntimeObservedStatus::Active, 2),
+                    conversation_seat("a1", "c3", RuntimeObservedStatus::Active, 3),
                 ]),
             ),
             FakeStops::scripted(vec![
                 StopScript::Ok,
                 StopScript::Refused(ScopeRuntimeStopRefusal::HostRevoked),
+                StopScript::Faulted("transport exploded"),
             ]),
             "a1",
             true,
@@ -779,81 +779,82 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::OK);
         assert_eq!(parsed(&reply.body), json!({ "stopped": 1 }));
+        assert_eq!(reply.stops, 3);
+        let failures = reply
+            .logs
+            .into_iter()
+            .filter(|event| event["level"] == "ERROR")
+            .map(|event| {
+                let fields = &event["fields"];
+                assert_eq!(fields["message"], "agent-stop: a runtime seat did not stop");
+                json!([
+                    fields["agent_id"],
+                    fields["conversation_id"],
+                    fields["generation"],
+                    fields["cause"]
+                ])
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            failures,
+            [
+                json!(["a1", "c2", 2, "host_revoked"]),
+                json!(["a1", "c3", 3, "transport exploded"])
+            ]
+        );
     }
 
     #[tokio::test]
     async fn all_failed_with_a_refusal_first_maps_through_the_canonical_placement_mapper() {
-        // Every seat failed; the first is a HostRevoked refusal ⇒ 409 host_revoked.
-        let reply = stop_with(
-            FakeReads::new(
-                present_detail(creator_facts()),
-                snapshot(vec![
-                    conversation_seat("a1", "c1", RuntimeObservedStatus::Active, 1),
-                    conversation_seat("a1", "c2", RuntimeObservedStatus::Active, 2),
-                ]),
-            ),
-            FakeStops::scripted(vec![
-                StopScript::Refused(ScopeRuntimeStopRefusal::HostRevoked),
-                StopScript::Faulted("later"),
-            ]),
-            "a1",
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::CONFLICT);
-        assert_eq!(
-            parsed(&reply.body),
-            json!({ "error": "daemon host has been revoked", "code": "host_revoked" })
-        );
-    }
-
-    #[tokio::test]
-    async fn all_failed_host_missing_refusal_is_a_404_through_the_mapper() {
-        let reply = stop_with(
-            FakeReads::new(
-                present_detail(creator_facts()),
-                snapshot(vec![conversation_seat(
-                    "a1",
-                    "c1",
-                    RuntimeObservedStatus::Active,
-                    1,
-                )]),
-            ),
-            FakeStops::scripted(vec![StopScript::Refused(
+        for (refusal, status, code, message) in [
+            (
                 ScopeRuntimeStopRefusal::HostMissing,
-            )]),
-            "a1",
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND);
-        assert_eq!(
-            parsed(&reply.body),
-            json!({ "error": "daemon host was not found", "code": "host_missing" })
-        );
-    }
-
-    #[tokio::test]
-    async fn all_failed_attach_pending_is_a_503_through_the_mapper() {
-        let reply = stop_with(
-            FakeReads::new(
-                present_detail(creator_facts()),
-                snapshot(vec![conversation_seat(
-                    "a1",
-                    "c1",
-                    RuntimeObservedStatus::Active,
-                    1,
-                )]),
+                StatusCode::NOT_FOUND,
+                "host_missing",
+                "daemon host was not found",
             ),
-            FakeStops::scripted(vec![StopScript::Refused(
+            (
+                ScopeRuntimeStopRefusal::HostPendingAttach,
+                StatusCode::CONFLICT,
+                "host_pending_attach",
+                "daemon host is pending attachment",
+            ),
+            (
+                ScopeRuntimeStopRefusal::HostRevoked,
+                StatusCode::CONFLICT,
+                "host_revoked",
+                "daemon host has been revoked",
+            ),
+            (
                 ScopeRuntimeStopRefusal::HostAttachPending,
-            )]),
-            "a1",
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(parsed(&reply.body)["code"], "host_attach_pending");
+                StatusCode::SERVICE_UNAVAILABLE,
+                "host_attach_pending",
+                "daemon host is not currently attached; retry in a moment",
+            ),
+        ] {
+            let reply = stop_with(
+                FakeReads::new(
+                    present_detail(creator_facts()),
+                    snapshot(vec![
+                        conversation_seat("a1", "c1", RuntimeObservedStatus::Active, 1),
+                        conversation_seat("a1", "c2", RuntimeObservedStatus::Active, 2),
+                    ]),
+                ),
+                FakeStops::scripted(vec![
+                    StopScript::Refused(refusal),
+                    StopScript::Faulted("later"),
+                ]),
+                "a1",
+                true,
+            )
+            .await;
+            assert_eq!(reply.status, status);
+            assert_eq!(
+                parsed(&reply.body),
+                json!({ "error": message, "code": code })
+            );
+            assert_eq!(reply.stops, 2);
+        }
     }
 
     #[tokio::test]

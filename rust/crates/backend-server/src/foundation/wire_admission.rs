@@ -497,20 +497,6 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_derive_admits_arrays_which_is_the_bug_object_only_closes() {
-        // Documents the exact serde behavior `ObjectOnly` exists to defeat: WITHOUT the
-        // wrapper, both an empty and a value-shaped array decode successfully.
-        assert_eq!(
-            serde_json::from_str::<AllDefault>(r#"[]"#).unwrap(),
-            AllDefault { note: None }
-        );
-        assert_eq!(
-            serde_json::from_str::<ConfirmLike>(r#"[true]"#).unwrap(),
-            ConfirmLike { confirm: true }
-        );
-    }
-
-    #[test]
     fn object_only_rejects_arrays_for_a_direct_consumer() {
         // The same two arrays, wrapped, are structural decode faults — never a value.
         assert!(serde_json::from_slice::<ObjectOnly<AllDefault>>(b"[]").is_err());

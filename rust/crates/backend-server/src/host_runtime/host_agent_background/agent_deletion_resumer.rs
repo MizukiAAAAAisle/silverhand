@@ -373,31 +373,15 @@ where
 {
     /// Assemble the worker over production authorities with the default retry ladder.
     pub fn new(lifecycle: L, binder: B, residue: R) -> Self {
-        Self::with_retry_delays(
-            lifecycle,
-            binder,
-            residue,
-            DEFAULT_RETRY_DELAYS_MS
-                .into_iter()
-                .map(Duration::from_millis)
-                .collect(),
-        )
-    }
-
-    /// As [`new`](Self::new), with an explicit ladder — the seam the paused-time tests
-    /// drive.
-    pub fn with_retry_delays(
-        lifecycle: L,
-        binder: B,
-        residue: R,
-        retry_delays: Vec<Duration>,
-    ) -> Self {
         Self {
             tracked: Arc::new(Mutex::new(Tracked::default())),
             lifecycle,
             binder,
             residue,
-            retry_delays: retry_delays.into(),
+            retry_delays: DEFAULT_RETRY_DELAYS_MS
+                .into_iter()
+                .map(Duration::from_millis)
+                .collect(),
         }
     }
 
@@ -1087,17 +1071,12 @@ mod tests {
         let lifecycle = FakeLifecycle::new(pending, complete);
         let daemon = FakeDaemon::default();
         daemon.set_fail(fail);
-        let resumer = AgentDeletionResumer::with_retry_delays(
+        let resumer = AgentDeletionResumer::new(
             lifecycle.clone(),
             FakeBinder {
                 daemon: daemon.clone(),
             },
             FakeResidue::default(),
-            vec![
-                Duration::from_millis(1_000),
-                Duration::from_millis(5_000),
-                Duration::from_millis(30_000),
-            ],
         );
         Harness {
             resumer,
@@ -1164,7 +1143,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_failed_purge_never_reaches_the_commit_and_arms_the_ladder() {
+    async fn a_failed_purge_never_reaches_the_commit() {
         let h = build(vec![], CompleteDeletion::Gone, true);
         h.daemon.attach("h1", "conn-1");
         let attempt = attempt(&h.lifecycle, "a1").await;
@@ -1195,7 +1174,9 @@ mod tests {
 
         // Let the first armed timer register its sleep before the clock moves.
         settle().await;
-        for (advance_ms, expected_calls) in [(999, 1), (1, 2), (5_000, 3), (30_000, 4)] {
+        for (advance_ms, expected_calls) in
+            [(999, 1), (1, 2), (4_999, 2), (1, 3), (29_999, 3), (1, 4)]
+        {
             tokio::time::advance(Duration::from_millis(advance_ms)).await;
             settle().await;
             assert_eq!(h.daemon.attempts(), expected_calls);
@@ -1235,16 +1216,27 @@ mod tests {
         h.daemon.attach("h1", "conn-1");
         let attempt = attempt(&h.lifecycle, "a1").await;
 
-        // Two ready signals plus a request all name the same agent; only one commit runs.
-        h.resumer.on_host_ready(&host("h1"), "conn-1");
-        let outcome = h.resumer.try_now(attempt).await;
+        // Hold the first purge so the duplicate is guaranteed to overlap its owner.
+        h.daemon.arm_gate();
+        let worker = h.resumer.clone();
+        let first_attempt = attempt.clone();
+        let first = tokio::spawn(async move { worker.try_now(first_attempt).await });
+        settle().await;
+        assert_eq!(h.daemon.attempts(), 1);
+        assert_eq!(h.lifecycle.completes.load(SeqCst), 0);
+        assert_eq!(
+            h.resumer.try_now(attempt).await,
+            DeletionRunOutcome::AlreadyRunning
+        );
         h.resumer.on_host_ready(&host("h1"), "conn-1");
         settle().await;
-
-        assert!(matches!(
-            outcome,
-            DeletionRunOutcome::Completed | DeletionRunOutcome::AlreadyRunning
-        ));
+        assert_eq!(
+            h.daemon.attempts(),
+            1,
+            "no second purge while the first is held"
+        );
+        h.daemon.release_gate();
+        assert_eq!(first.await.unwrap(), DeletionRunOutcome::Completed);
         assert_eq!(
             h.lifecycle.completes.load(SeqCst),
             1,
@@ -1273,13 +1265,12 @@ mod tests {
         let h = build(vec![], torn_down("a1", "h1"), false);
         h.daemon.attach("h1", "conn-1");
         let residue = FakeResidue::default();
-        let resumer = AgentDeletionResumer::with_retry_delays(
+        let resumer = AgentDeletionResumer::new(
             h.lifecycle.clone(),
             FakeBinder {
                 daemon: h.daemon.clone(),
             },
             residue.clone(),
-            vec![Duration::from_millis(1_000)],
         );
         let attempt = attempt(&h.lifecycle, "a1").await;
         assert_eq!(
@@ -1309,7 +1300,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_transient_completion_fault_recovers_when_the_next_attempt_succeeds() {
+    async fn a_transient_purge_fault_recovers_on_the_next_attempt() {
         let h = build(vec![], CompleteDeletion::Gone, false);
         h.daemon.attach("h1", "conn-1");
         let attempt = attempt(&h.lifecycle, "a1").await;

@@ -31,23 +31,22 @@ describe('shared profile MCP projection authority', () => {
     const before = JSON.stringify(config);
     expect(projectProfileMcpForRuntime(config, 'grok')).toEqual({
       kind: 'acp',
-      servers: toAcpMcpServers(config, 'profile'),
+      servers: [
+        {
+          name: 'silverhand_profile__local',
+          command: 'fixture',
+          args: ['--test'],
+          env: [{ name: 'TOKEN', value: 'fixture-value' }],
+        },
+        {
+          name: 'silverhand_profile__http',
+          type: 'http',
+          url: 'http://localhost/mcp',
+          headers: [{ name: 'Authorization', value: 'fixture-value' }],
+        },
+        { name: 'silverhand_profile__sse', type: 'sse', url: 'http://localhost/sse', headers: [] },
+      ],
     });
-    expect(toAcpMcpServers(config, 'profile')).toEqual([
-      {
-        name: 'silverhand_profile__local',
-        command: 'fixture',
-        args: ['--test'],
-        env: [{ name: 'TOKEN', value: 'fixture-value' }],
-      },
-      {
-        name: 'silverhand_profile__http',
-        type: 'http',
-        url: 'http://localhost/mcp',
-        headers: [{ name: 'Authorization', value: 'fixture-value' }],
-      },
-      { name: 'silverhand_profile__sse', type: 'sse', url: 'http://localhost/sse', headers: [] },
-    ]);
     expect(JSON.stringify(config)).toBe(before);
     expect(toAcpMcpServers({ mcpServers: {} }, 'profile')).toEqual([]);
   });

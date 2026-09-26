@@ -948,7 +948,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shared_numeric_corpus_is_admitted_as_a_whole_batch_before_every_downstream_port() {
+    async fn shared_numeric_corpus_is_admitted_before_downstream_ports() {
         let fixture: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../../packages/shared/tests/fixtures/task-schedule-wire-canonicalization.json"
@@ -1074,7 +1074,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_by_id_agent_slot_batch_claims_each_id() {
+    async fn a_by_id_agent_slot_claims_one_id() {
         let (app, counts) = app(
             agent_slot(),
             DoorSpec::default(),
@@ -1192,7 +1192,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn task_done_and_closed_map_per_entry() {
+    async fn task_closed_maps_per_entry() {
         let (app, _c) = app(
             agent_slot(),
             DoorSpec::default(),

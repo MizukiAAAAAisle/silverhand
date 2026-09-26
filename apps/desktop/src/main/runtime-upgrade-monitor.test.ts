@@ -34,7 +34,6 @@ describe("runtime upgrade monitor (#task:1763)", () => {
     await flush();
     expect(probe).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledTimes(1);
-    expect(m.isLatched()).toBe(true);
     // Latched: further suspects are inert on both arms.
     m.onRestResponse(426, UPGRADE_BODY);
     m.onAdvertisement(tooOldAdvertisement());
@@ -50,15 +49,15 @@ describe("runtime upgrade monitor (#task:1763)", () => {
     m.onAdvertisement(tooOldAdvertisement());
     expect(notify).toHaveBeenCalledTimes(1);
     expect(probe).not.toHaveBeenCalled();
-    expect(m.isLatched()).toBe(true);
     // compatible or pre-epoch advertisements never promote
-    const m2 = createRuntimeUpgradeMonitor({ probe, notify: vi.fn() });
+    const quietNotify = vi.fn();
+    const m2 = createRuntimeUpgradeMonitor({ probe, notify: quietNotify });
     m2.onAdvertisement(compatibleAdvertisement());
     m2.onAdvertisement(undefined);
-    expect(m2.isLatched()).toBe(false);
+    expect(quietNotify).not.toHaveBeenCalled();
   });
 
-  it("unrelated signals never probe: non-426 status, malformed body, foreign 426 body, WS non-426", async () => {
+  it("unrelated signals never probe: non-426 status, malformed body, foreign 426 body", async () => {
     const probe = vi.fn(async () => tooOldAdvertisement());
     const notify = vi.fn();
     const m = createRuntimeUpgradeMonitor({ probe, notify });
@@ -67,13 +66,12 @@ describe("runtime upgrade monitor (#task:1763)", () => {
     m.onRestResponse(0, undefined);
     m.onRestResponse(426, undefined);
     m.onRestResponse(426, "not json");
-    m.onRestResponse(426, JSON.stringify({ error: "something_else" }));
+    m.onRestResponse(426, JSON.stringify({ ...JSON.parse(UPGRADE_BODY), error: "something_else" }));
     // a business route could theoretically return 426 with a foreign shape
-    m.onRestResponse(426, JSON.stringify({ error: "upgrade_required", reason: "other" }));
+    m.onRestResponse(426, JSON.stringify({ ...JSON.parse(UPGRADE_BODY), reason: "other" }));
     await flush();
     expect(probe).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
-    expect(m.isLatched()).toBe(false);
   });
 
   it("a spoofed 426 against a compatible server probes but does NOT notify", async () => {
@@ -84,7 +82,6 @@ describe("runtime upgrade monitor (#task:1763)", () => {
     await flush();
     expect(probe).toHaveBeenCalledTimes(1);
     expect(notify).not.toHaveBeenCalled();
-    expect(m.isLatched()).toBe(false);
   });
 
   it("probe failure is inert (unreachable != upgrade) and the next suspect re-probes", async () => {
@@ -128,9 +125,7 @@ describe("runtime upgrade monitor (#task:1763)", () => {
     const m = createRuntimeUpgradeMonitor({ probe, notify });
     m.onRestResponse(426, UPGRADE_BODY);
     await flush();
-    expect(m.isLatched()).toBe(true);
     m.reset();
-    expect(m.isLatched()).toBe(false);
     m.onAdvertisement(tooOldAdvertisement());
     await flush();
     expect(notify).toHaveBeenCalledTimes(2);

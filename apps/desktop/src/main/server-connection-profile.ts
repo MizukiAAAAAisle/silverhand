@@ -44,13 +44,7 @@ const noopLogger: ProfileStorageLogger = {
  */
 export interface ProfileStorageOptions {
   profilePath: string;
-  /** `Date.now`-style clock seam. Defaults to `Date.now`. */
-  now?: () => number;
   logger?: ProfileStorageLogger;
-}
-
-function resolveNow(opts: ProfileStorageOptions): () => number {
-  return opts.now ?? (() => Date.now());
 }
 
 function resolveLogger(opts: ProfileStorageOptions): ProfileStorageLogger {
@@ -160,7 +154,7 @@ export function writeServerConnectionProfile(
   opts: ProfileStorageOptions & { serverUrl: string },
 ): WriteProfileResult {
   const logger = resolveLogger(opts);
-  const now = resolveNow(opts)();
+  const now = Date.now();
   const path = opts.profilePath;
 
   // Preserve `created_at` across overwrites AND advance `version` as a

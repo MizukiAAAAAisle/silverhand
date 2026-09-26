@@ -1,11 +1,7 @@
 // AUTO-SPLIT from the former monolithic api/dto.ts (#task:963).
 // Bounded context: attachment. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
-import {
-  AttachmentCreatorKindSchema,
-  FromKindSchema,
-  StorageKindSchema,
-} from '../db/schema.js';
+import { AttachmentCreatorKindSchema, FromKindSchema, StorageKindSchema } from '../db/schema.js';
 import { MessageSeqSchema } from '../seq.js';
 import { MessageAuthorDtoSchema } from './message-author.js';
 
@@ -82,10 +78,7 @@ export function isImageAttachment(contentType: string): boolean {
 
 /** The single generator of the label form — composer, resolver fallback, and
  *  tests build labels through this so they never drift from the pattern. */
-export function formatAttachmentLabel(
-  kind: AttachmentLabelKind,
-  ordinal: number,
-): string {
+export function formatAttachmentLabel(kind: AttachmentLabelKind, ordinal: number): string {
   return `${kind} #${ordinal}`;
 }
 
@@ -150,29 +143,12 @@ export const ATTACHMENT_CHANGED_EVENT = 'attachment_changed';
  *  handle; `label` is the compose-time display identity when the sender has
  *  one (the composer), omitted by bare-id callers (agent CLI / daemon). The
  *  wire accepts either a bare id string or this object (see
- *  `MessageAttachmentIdsInputSchema`); both normalize to this shape at the
- *  route boundary via `normalizeAttachmentRefs`. */
+ *  `MessageAttachmentIdsInputSchema`); the server normalizes both at admission. */
 export const AttachmentRefInputSchema = z.object({
   id: z.string().min(1),
   label: AttachmentLabelSchema.optional(),
 });
 export type AttachmentRefInput = z.infer<typeof AttachmentRefInputSchema>;
-
-/** Normalize a wire attachment list (mixed bare ids / {id,label} refs) into a
- *  uniform ref list. The union lives only at the wire edge; internal code sees
- *  one shape. */
-export function normalizeAttachmentRefs(
-  input: ReadonlyArray<string | AttachmentRefInput> | null | undefined,
-): AttachmentRefInput[] {
-  if (!input) return [];
-  return input.map(entry =>
-    typeof entry === 'string'
-      ? { id: entry }
-      : entry.label !== undefined
-        ? { id: entry.id, label: entry.label }
-        : { id: entry.id },
-  );
-}
 
 /** Effective display label for each attachment, aligned to the input order.
  *  A valid stored label is emitted verbatim (never renumbered); the rest get a
@@ -190,7 +166,7 @@ export function resolveAttachmentLabels(
     Image: new Set(),
     File: new Set(),
   };
-  const stored = attachments.map(a => {
+  const stored = attachments.map((a) => {
     const parsed = parseAttachmentLabel(a.label);
     if (parsed) used[parsed.kind].add(parsed.ordinal);
     return parsed;
@@ -277,9 +253,7 @@ export const AttachmentListItemSourceSchema = z.object({
    *  panel rows are `appeared_at DESC`. */
   appeared_at: z.number(),
 });
-export type AttachmentListItemSource = z.infer<
-  typeof AttachmentListItemSourceSchema
->;
+export type AttachmentListItemSource = z.infer<typeof AttachmentListItemSourceSchema>;
 
 export const AttachmentListItemSchema = z.object({
   attachment: AttachmentDtoSchema,

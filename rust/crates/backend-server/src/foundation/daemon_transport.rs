@@ -1096,16 +1096,10 @@ impl Error for HostDataPlaneFailure {}
 /// raw round trip remains crate-private so route schemas stay in typed adapters.
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::application_orchestration::daemon_delivery::{HostDataPlaneRequest, HostDataPlaneCommandKind};
+/// use silverhand_backend_server::application_orchestration::daemon_delivery::HostDataPlaneRequest;
 ///
 /// fn forge() -> HostDataPlaneRequest {
-///     HostDataPlaneRequest {
-///         host: silverhand_backend_core::foundation::identity::HostId::parse("host-1").unwrap(),
-///         expected_instance: silverhand_backend_core::foundation::identity::DaemonInstanceId::parse("i").unwrap(),
-///         kind: HostDataPlaneCommandKind::RuntimeCatalog,
-///         params: serde_json::json!({ "force": true }),
-///         timeout: std::time::Duration::from_secs(1),
-///     }
+///     unreachable!()
 /// }
 /// ```
 ///
@@ -3546,288 +3540,70 @@ mod tests {
     }
 
     #[test]
-    fn refusal_codes_are_admitted_per_kind_and_never_invented() {
+    fn refusal_families_admit_exact_literal_codes_and_strict_error_objects() {
+        let families: [(CapabilityRefusalAdmission, &[&str]); 9] = [
+            (command::rejects_every_capability_refusal, &[]),
+            (crate::host_runtime::runtime_control::admits_runtime_refusal,
+                &["agent_deleting", "workspace_not_provisioned", "workspace_bundle_missing", "registry_unavailable"]),
+            (crate::host_runtime::agent_materialize::admits_agent_materialize_refusal,
+                &["agent_deleting", "fs_quota_exceeded", "fs_unavailable", "agent_dir_collision", "unsupported_template", "unsupported_runtime"]),
+            (crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
+                &["fs_unavailable"]),
+            (crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal,
+                &["fs_unavailable", "invalid_config", "agent_deleting"]),
+            (crate::identity_access::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
+                &["fs_unavailable", "agent_deleting"]),
+            (crate::workspace_data_plane::admits_workspace_fs_refusal,
+                &["fs_unavailable", "registry_unavailable", "forbidden_path", "not_found"]),
+            (crate::identity_access::agent_workspace_index_probe::admits_agent_workspace_index_refusal,
+                &["registry_unavailable"]),
+            (crate::host_runtime::cascade_effects::admits_agent_files_purge_refusal,
+                &["quiesce_failed", "partial_purge"]),
+        ];
+        let capability_universe = families
+            .iter()
+            .flat_map(|(_, codes)| codes.iter().copied())
+            .chain(["banana"])
+            .collect::<std::collections::BTreeSet<_>>();
         let error = |code: &str| json!({ "code": code, "message": "why" });
-        for admission in [
-            command::rejects_every_capability_refusal as CapabilityRefusalAdmission,
-            crate::host_runtime::runtime_control::admits_runtime_refusal,
-            crate::host_runtime::agent_materialize::admits_agent_materialize_refusal,
-            crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
-            crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal,
-            crate::identity_access::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
-            crate::workspace_data_plane::admits_workspace_fs_refusal,
-            crate::host_runtime::cascade_effects::admits_agent_files_purge_refusal,
+        for (admission, expected) in families {
+            for (raw, code) in [
+                ("unknown_intent", DaemonRefusalCode::UnknownIntent),
+                ("invalid_params", DaemonRefusalCode::InvalidParams),
+                ("internal_error", DaemonRefusalCode::InternalError),
+                ("shutting_down", DaemonRefusalCode::ShuttingDown),
+                ("request_too_large", DaemonRefusalCode::RequestTooLarge),
+            ] {
+                assert_eq!(
+                    CommandRefusal::decode(admission, &error(raw)),
+                    Some(CommandRefusal::Response(code))
+                );
+            }
+            for raw in &capability_universe {
+                let decoded = CommandRefusal::decode(admission, &error(raw));
+                if expected.contains(raw) {
+                    let Some(CommandRefusal::Capability(refusal)) = decoded else {
+                        panic!("legitimate capability code rejected: {raw}");
+                    };
+                    assert_eq!(refusal.code(), *raw);
+                    assert_eq!(refusal.message(), "why");
+                } else {
+                    assert_eq!(decoded, None, "foreign code admitted: {raw}");
+                }
+            }
+        }
+        for malformed in [
+            json!({"code":"internal_error"}),
+            json!({"code":"internal_error", "message":7}),
+            json!({"code":"internal_error", "message":"why", "extra":true}),
+            json!("why"),
         ] {
             assert_eq!(
-                CommandRefusal::decode(admission, &error("shutting_down")),
-                Some(CommandRefusal::Response(DaemonRefusalCode::ShuttingDown))
-            );
-            assert_eq!(CommandRefusal::decode(admission, &error("banana")), None);
-        }
-        assert_eq!(
-            [
-                "unknown_intent",
-                "invalid_params",
-                "internal_error",
-                "shutting_down",
-                "request_too_large",
-            ]
-            .into_iter()
-            .filter_map(|code| CommandRefusal::decode(
-                command::rejects_every_capability_refusal,
-                &error(code),
-            ))
-            .count(),
-            5
-        );
-        for code in [
-            "agent_deleting",
-            "workspace_not_provisioned",
-            "workspace_bundle_missing",
-            "registry_unavailable",
-        ] {
-            assert!(
                 CommandRefusal::decode(
                     crate::host_runtime::runtime_control::admits_runtime_refusal,
-                    &error(code),
-                )
-                .is_some()
-            );
-            assert_eq!(
-                CommandRefusal::decode(command::rejects_every_capability_refusal, &error(code)),
-                None
-            );
-        }
-        assert!(matches!(
-            CommandRefusal::decode(
-                crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
-                &error("fs_unavailable"),
-            ),
-            Some(CommandRefusal::Capability(_))
-        ));
-        assert_eq!(
-            CommandRefusal::decode(
-                crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
-                &error("agent_deleting"),
-            ),
-            None
-        );
-        for (admission, code) in [
-            (
-                crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal
-                    as CapabilityRefusalAdmission,
-                "invalid_config",
-            ),
-            (
-                crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal,
-                "agent_deleting",
-            ),
-            (
-                crate::identity_access::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
-                "agent_deleting",
-            ),
-            (
-                crate::identity_access::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
-                "fs_unavailable",
-            ),
-        ] {
-            assert!(matches!(
-                CommandRefusal::decode(admission, &error(code)),
-                Some(CommandRefusal::Capability(_))
-            ));
-        }
-        assert_eq!(
-            CommandRefusal::decode(
-                crate::identity_access::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
-                &error("invalid_config"),
-            ),
-            None
-        );
-        for code in [
-            "agent_deleting",
-            "fs_quota_exceeded",
-            "fs_unavailable",
-            "agent_dir_collision",
-            "unsupported_template",
-            "unsupported_runtime",
-        ] {
-            assert!(matches!(
-                CommandRefusal::decode(
-                    crate::host_runtime::agent_materialize::admits_agent_materialize_refusal,
-                    &error(code),
+                    &malformed
                 ),
-                Some(CommandRefusal::Capability(_))
-            ));
-            assert_eq!(
-                CommandRefusal::decode(command::rejects_every_capability_refusal, &error(code)),
                 None
-            );
-        }
-        assert_eq!(
-            CommandRefusal::decode(
-                crate::host_runtime::runtime_control::admits_runtime_refusal,
-                &json!({ "code": "internal_error" }),
-            ),
-            None
-        );
-        assert_eq!(
-            CommandRefusal::decode(
-                crate::host_runtime::runtime_control::admits_runtime_refusal,
-                &json!({ "code": "internal_error", "message": 7 })
-            ),
-            None
-        );
-        assert_eq!(
-            CommandRefusal::decode(
-                crate::host_runtime::runtime_control::admits_runtime_refusal,
-                &json!({ "code": "internal_error", "message": "why", "extra": true })
-            ),
-            None
-        );
-        assert_eq!(
-            CommandRefusal::decode(
-                crate::host_runtime::runtime_control::admits_runtime_refusal,
-                &json!("why"),
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn refusal_matrix_is_exact_for_all_eighteen_issued_kinds() {
-        use std::collections::BTreeSet;
-
-        let empty: &[&str] = &[];
-        let matrix: [(IssuedDaemonCommandKind, CapabilityRefusalAdmission, &[&str]); 18] = [
-            (
-                IssuedDaemonCommandKind::AgentFilesPurge,
-                crate::host_runtime::cascade_effects::admits_agent_files_purge_refusal,
-                &crate::host_runtime::cascade_effects::AGENT_FILES_PURGE_CAPABILITY_CODES,
-            ),
-            (
-                IssuedDaemonCommandKind::AgentMaterialize,
-                crate::host_runtime::agent_materialize::admits_agent_materialize_refusal,
-                &crate::host_runtime::agent_materialize::AGENT_MATERIALIZE_CAPABILITY_CODES,
-            ),
-            (
-                IssuedDaemonCommandKind::AgentProfileMcpRead,
-                crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
-                &crate::identity_access::agent_profile_mcp_data_plane::PROFILE_MCP_READ_CAPABILITY_CODES,
-            ),
-            (
-                IssuedDaemonCommandKind::AgentProfileMcpWrite,
-                crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal,
-                &crate::identity_access::agent_profile_mcp_data_plane::PROFILE_MCP_WRITE_CAPABILITY_CODES,
-            ),
-            (
-                // The agent-workspace-index dispatch (#2341 list-workspaces daemon
-                // probe) admits the `registry_unavailable` capability refusal (#7);
-                // any other code stays foreign and fails closed.
-                IssuedDaemonCommandKind::AgentWorkspaceIndex,
-                crate::identity_access::agent_workspace_index_probe::admits_agent_workspace_index_refusal,
-                &crate::identity_access::agent_workspace_index_probe::AGENT_WORKSPACE_INDEX_CAPABILITY_CODES,
-            ),
-            (
-                IssuedDaemonCommandKind::AgentWorkspaceFileRead,
-                crate::workspace_data_plane::admits_workspace_fs_refusal,
-                &crate::workspace_data_plane::WORKSPACE_FS_CAPABILITY_CODES,
-            ),
-            (
-                IssuedDaemonCommandKind::AgentWorkspaceTree,
-                crate::workspace_data_plane::admits_workspace_fs_refusal,
-                &crate::workspace_data_plane::WORKSPACE_FS_CAPABILITY_CODES,
-            ),
-            (
-                IssuedDaemonCommandKind::HostStatus,
-                command::rejects_every_capability_refusal,
-                empty,
-            ),
-            (
-                IssuedDaemonCommandKind::McpProbe,
-                crate::identity_access::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
-                &crate::identity_access::agent_profile_mcp_data_plane::MCP_PROBE_CAPABILITY_CODES,
-            ),
-            (
-                IssuedDaemonCommandKind::ProxyConfigGet,
-                command::rejects_every_capability_refusal,
-                empty,
-            ),
-            (
-                IssuedDaemonCommandKind::ProxyConfigSet,
-                command::rejects_every_capability_refusal,
-                empty,
-            ),
-            (
-                IssuedDaemonCommandKind::RotateToken,
-                command::rejects_every_capability_refusal,
-                empty,
-            ),
-            (
-                IssuedDaemonCommandKind::RuntimeCatalog,
-                command::rejects_every_capability_refusal,
-                empty,
-            ),
-            (
-                IssuedDaemonCommandKind::RuntimeClearSession,
-                command::rejects_every_capability_refusal,
-                empty,
-            ),
-            (
-                IssuedDaemonCommandKind::RuntimeDeliver,
-                crate::host_runtime::runtime_control::admits_runtime_refusal,
-                &crate::host_runtime::runtime_control::RUNTIME_CAPABILITY_CODES,
-            ),
-            (
-                IssuedDaemonCommandKind::RuntimeStart,
-                crate::host_runtime::runtime_control::admits_runtime_refusal,
-                &crate::host_runtime::runtime_control::RUNTIME_CAPABILITY_CODES,
-            ),
-            (
-                IssuedDaemonCommandKind::RuntimeStatus,
-                command::rejects_every_capability_refusal,
-                empty,
-            ),
-            (
-                IssuedDaemonCommandKind::RuntimeStop,
-                command::rejects_every_capability_refusal,
-                empty,
-            ),
-        ];
-        assert_eq!(
-            matrix
-                .iter()
-                .map(|(kind, _, _)| *kind)
-                .collect::<BTreeSet<_>>(),
-            IssuedDaemonCommandKind::ALL.into_iter().collect(),
-        );
-
-        let capability_universe: BTreeSet<&str> = matrix
-            .iter()
-            .flat_map(|(_, _, codes)| codes.iter().copied())
-            .collect();
-        let error = |code: &str| json!({ "code": code, "message": "why" });
-        for (kind, admission, expected_codes) in matrix {
-            for generic in DaemonRefusalCode::ALL_WIRE {
-                assert!(matches!(
-                    CommandRefusal::decode(admission, &error(generic)),
-                    Some(CommandRefusal::Response(_))
-                ));
-            }
-            let actual: BTreeSet<&str> = capability_universe
-                .iter()
-                .copied()
-                .filter(|code| {
-                    matches!(
-                        CommandRefusal::decode(admission, &error(code)),
-                        Some(CommandRefusal::Capability(_))
-                    )
-                })
-                .collect();
-            assert_eq!(
-                actual,
-                expected_codes.iter().copied().collect(),
-                "capability refusal matrix drifted for {}",
-                kind.as_wire(),
             );
         }
     }
@@ -3861,62 +3637,6 @@ mod tests {
             HostDataPlaneFailure::from_dispatch(CommandDispatchError::InvalidResponse),
             HostDataPlaneFailure::ProtocolCorruption
         ));
-    }
-
-    #[test]
-    fn the_workspace_fs_family_admits_its_four_codes_on_both_reads_and_nothing_else() {
-        let error = |code: &str| json!({ "code": code, "message": "why" });
-        // Both wire kinds share ONE fault vocabulary, so each admits all four codes.
-        for _kind in ["agent_workspace_tree", "agent_workspace_file_read"] {
-            for code in [
-                "fs_unavailable",
-                "registry_unavailable",
-                "forbidden_path",
-                "not_found",
-            ] {
-                assert!(
-                    matches!(
-                        CommandRefusal::decode(
-                            crate::workspace_data_plane::admits_workspace_fs_refusal,
-                            &error(code),
-                        ),
-                        Some(CommandRefusal::Capability(_))
-                    ),
-                    "workspace reads must admit {code}"
-                );
-            }
-            // A code from a sibling family is not this family's language.
-            assert_eq!(
-                CommandRefusal::decode(
-                    crate::workspace_data_plane::admits_workspace_fs_refusal,
-                    &error("agent_deleting"),
-                ),
-                None
-            );
-            assert_eq!(
-                CommandRefusal::decode(
-                    crate::workspace_data_plane::admits_workspace_fs_refusal,
-                    &error("invalid_config"),
-                ),
-                None
-            );
-        }
-        // A response-level code still outranks the operation vocabulary, and a
-        // workspace-fs code offered to a kind that does not speak it is not admitted.
-        assert!(matches!(
-            CommandRefusal::decode(
-                crate::workspace_data_plane::admits_workspace_fs_refusal,
-                &error("internal_error"),
-            ),
-            Some(CommandRefusal::Response(DaemonRefusalCode::InternalError))
-        ));
-        assert_eq!(
-            CommandRefusal::decode(
-                crate::host_runtime::runtime_control::admits_runtime_refusal,
-                &error("forbidden_path"),
-            ),
-            None
-        );
     }
 
     #[test]
@@ -3961,7 +3681,6 @@ mod tests {
     fn every_issued_word_is_admitted_on_the_response_epoch() {
         for kind in IssuedDaemonCommandKind::ALL {
             let wire = kind.as_wire();
-            assert_eq!(IssuedDaemonCommandKind::from_wire(wire), Some(kind));
             assert!(valid_command_response_envelope(&json!({
                 "id": "r1",
                 "kind": wire,
@@ -5086,7 +4805,7 @@ mod tests {
     }
 
     #[test]
-    fn anything_but_a_clean_success_is_a_refusal_that_keeps_the_reason() {
+    fn false_or_absent_rotated_preserves_the_daemon_refusal_reason() {
         assert_eq!(
             parse_rotation_ack(&json!({ "rotated": false, "reason": "daemon_busy" })),
             Some(DaemonRotationAck::Refused {

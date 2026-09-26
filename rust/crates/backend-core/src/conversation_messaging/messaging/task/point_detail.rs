@@ -8,8 +8,7 @@ use crate::foundation::persistence::PersistenceFailure;
 
 use super::{
     BoardKey, LastEditor, ReadViewer, TaskAggregate, TaskDisplaySidecars, TaskParticipationReads,
-    TaskReadAddress, TaskReadCapability, TaskReadRequest, TaskSummarySource, read_visible_task,
-    read_visible_task_on,
+    TaskReadAddress, TaskReadCapability, TaskReadRequest, TaskSummarySource, read_visible_task_on,
 };
 
 pub trait TaskConversationBoardRead: Send + Sync + 'static {
@@ -173,54 +172,6 @@ impl VisibleTaskPoint {
             nav: &self.nav,
         })
     }
-}
-
-pub async fn authorize_task_point<P, C>(
-    request: &TaskReadRequest,
-    candidate: TaskPointCandidate,
-    participation: &mut P,
-    capability: &mut C,
-) -> Result<Option<VisibleTaskPoint>, PersistenceFailure>
-where
-    P: TaskParticipationReads,
-    C: TaskReadCapability,
-{
-    let TaskPointCandidate {
-        task,
-        display,
-        editor,
-        source_ref,
-        created_event_ref,
-    } = candidate;
-    let Some(visible) = read_visible_task(request, task, participation, capability).await? else {
-        return Ok(None);
-    };
-    let (viewer, task) = visible.into_parts();
-    let chosen = if task.source_message().is_some() {
-        source_ref.map(TaskNavigation::Source)
-    } else {
-        created_event_ref.map(TaskNavigation::CreatedEvent)
-    };
-    let nav = match chosen {
-        Some(TaskNavigation::Source(reference))
-            if can_read_ref(&viewer, &reference, participation).await? =>
-        {
-            TaskNavigation::Source(reference)
-        }
-        Some(TaskNavigation::CreatedEvent(reference))
-            if can_read_ref(&viewer, &reference, participation).await? =>
-        {
-            TaskNavigation::CreatedEvent(reference)
-        }
-        _ => TaskNavigation::Unavailable,
-    };
-    Ok(Some(VisibleTaskPoint {
-        viewer,
-        task,
-        display,
-        editor,
-        nav,
-    }))
 }
 
 pub async fn authorize_task_point_on<A>(
@@ -397,12 +348,10 @@ mod tests {
             actor: TaskReadActor::User(UserId::parse("user-1").unwrap()),
         };
         let mut participation = Authority;
-        let mut capability = Authority;
-        let visible = authorize_task_point(
+        let visible = authorize_task_point_on(
             &request,
             candidate(true, None, Some(message("created-1"))),
             &mut participation,
-            &mut capability,
         )
         .await
         .unwrap()
@@ -422,12 +371,10 @@ mod tests {
             actor: TaskReadActor::User(UserId::parse("user-1").unwrap()),
         };
         let mut participation = Authority;
-        let mut capability = Authority;
-        let visible = authorize_task_point(
+        let visible = authorize_task_point_on(
             &request,
             candidate(false, None, Some(message("created-1"))),
             &mut participation,
-            &mut capability,
         )
         .await
         .unwrap()

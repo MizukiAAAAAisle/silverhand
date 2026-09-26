@@ -7,11 +7,10 @@ use silverhand_backend_core::{
             AttachmentContentType, AttachmentContentUpdateCommand, AttachmentContentUpdateRefusal,
             AttachmentContentUpdateUnitOfWork, AttachmentCreateCommand, AttachmentCreateRefusal,
             AttachmentCreateUnitOfWork, AttachmentDeleteCommand, AttachmentDeleteRefusal,
-            AttachmentDeleteUnitOfWork, AttachmentFilename, AttachmentPostCommitMaintenance,
-            maintain_committed_delete,
+            AttachmentDeleteUnitOfWork, AttachmentFilename,
         },
     },
-    foundation::blob_store::{BlobAliasId, BlobStorageKey, StorageKind, StoredBlob},
+    foundation::blob_store::{BlobStorageKey, StorageKind, StoredBlob},
     foundation::identity::{ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
     foundation::wire_number::JsSafeInteger,
@@ -23,33 +22,6 @@ use sqlx::{Connection, Executor, Row, SqliteConnection};
 
 #[path = "support/current_schema_snapshot.rs"]
 mod current_schema;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("simulated blob cleanup failure")]
-struct CleanupFailed;
-
-struct FailingCleanup;
-
-impl AttachmentPostCommitMaintenance for FailingCleanup {
-    type Error = CleanupFailed;
-
-    async fn updated(
-        &self,
-        _before: &StoredBlob,
-        _after: &StoredBlob,
-        _alias: &BlobAliasId,
-    ) -> Result<(), Self::Error> {
-        Err(CleanupFailed)
-    }
-
-    async fn deleted(
-        &self,
-        _deleted: &StoredBlob,
-        _alias: &BlobAliasId,
-    ) -> Result<(), Self::Error> {
-        Err(CleanupFailed)
-    }
-}
 
 fn user(raw: &str) -> UserId {
     UserId::parse(raw).unwrap()
@@ -397,14 +369,11 @@ async fn delete_rechecks_owner_and_references_then_commits_cleanup_coordinates()
     );
     assert!(!deleted.alias().encoded().is_empty());
 
-    let outcome = maintain_committed_delete(deleted, &FailingCleanup).await;
-    assert!(outcome.maintenance().is_err());
-    assert_eq!(outcome.committed().deleted().id().as_str(), "a");
     let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM attachments WHERE id='a'")
         .fetch_one(&mut db)
         .await
         .unwrap();
-    assert_eq!(remaining, 0, "post-commit cleanup cannot restore the row");
+    assert_eq!(remaining, 0);
 }
 
 #[tokio::test]

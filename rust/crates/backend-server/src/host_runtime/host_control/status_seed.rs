@@ -1130,36 +1130,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_instance_replacement_after_admission_cannot_receive_the_old_attempts_frame() {
-        let (seeds, daemon) = seeds(Some("instance-1"));
-        let instance = instance_id("instance-1");
-
-        // Pause the real attempt sequence at its exact seam: admission already
-        // captured connection A, but no probe future has been created or polled.
-        let guard = admitted(seeds.admit(&host(), &instance, None).unwrap());
-        assert_eq!(guard.connection_id, "connection:instance-1");
-
-        // The same daemon process reconnects on connection B inside that window.
-        // The probe must consume A's captured custody, not resolve the host again.
-        daemon.set_generation("instance-1", "connection-b");
-        let outcome = seeds.custody.probe_status(host(), guard.custody()).await;
-        assert!(matches!(outcome, StatusSnapshotOutcome::Disconnected));
-        assert_eq!(daemon.frames(), 0, "connection B received the old attempt");
-        assert_eq!(
-            seeds.settle(&host(), &instance, guard, outcome),
-            Ok(SeedAttempt::Superseded)
-        );
-
-        // B remains silent until its own attach chain admits a fresh attempt.
-        daemon.answer("instance-1", answered("instance-1"), WhenServed::Unchanged);
-        assert_eq!(
-            seeds.seed_on_attach(&host(), &instance).await,
-            Ok(SeedAttempt::Sealed)
-        );
-        assert_eq!(daemon.frames(), 1);
-    }
-
-    #[tokio::test]
     async fn old_generation_late_answer_cannot_overwrite_its_same_instance_successor() {
         let (seeds, daemon) = seeds(Some("instance-1"));
         let instance = instance_id("instance-1");

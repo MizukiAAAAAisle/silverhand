@@ -4,13 +4,8 @@
 import { constants } from 'node:fs';
 import { access, mkdir, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import {
-  type AttachmentLocateDto,
-} from '@silverhand/shared';
-import {
-  defaultAppRoot,
-  resolveDesktopAppPaths,
-} from '@silverhand/shared/app-data-layout';
+import { type AttachmentLocateDto } from '@silverhand/shared';
+import { defaultAppRoot, resolveDesktopAppPaths } from '@silverhand/shared/app-data-layout';
 import { CliError } from '../errors.js';
 import { flagString } from '../parse.js';
 import { requireTargetFlag } from '../target-flag.js';
@@ -193,11 +188,13 @@ function shouldTrustLocalPath(serverUrl: string): boolean {
   try {
     const { hostname } = new URL(serverUrl);
     const normalized = hostname.toLowerCase();
-    return normalized === 'localhost'
-      || normalized === '::1'
-      || normalized === '[::1]'
-      || normalized === '0:0:0:0:0:0:0:1'
-      || normalized.startsWith('127.');
+    return (
+      normalized === 'localhost' ||
+      normalized === '::1' ||
+      normalized === '[::1]' ||
+      normalized === '0:0:0:0:0:0:0:1' ||
+      normalized.startsWith('127.')
+    );
   } catch {
     return false;
   }
@@ -210,25 +207,16 @@ async function writeAttachmentCache(input: {
   buffer: Buffer;
 }): Promise<string> {
   const dir = join(
-    attachmentCacheRoot(),
+    resolveDesktopAppPaths(defaultAppRoot()).attachmentsCache,
     safeSegment(input.agentId),
     safeSegment(input.attachmentId),
   );
   await mkdir(dir, { recursive: true });
   const filePath = join(dir, safeFilename(input.filename));
-  const tmpPath = join(
-    dir,
-    `.${safeSegment(input.attachmentId)}.${process.pid}.${Date.now()}.tmp`,
-  );
+  const tmpPath = join(dir, `.${safeSegment(input.attachmentId)}.${process.pid}.${Date.now()}.tmp`);
   await writeFile(tmpPath, input.buffer, { mode: 0o600 });
   await rename(tmpPath, filePath);
   return filePath;
-}
-
-export function attachmentCacheRoot(env: Record<string, string | undefined> = process.env): string {
-  // #task:1603 — the ONE unified SILVERHAND_DIR contract (trim; blank =
-  // unset); the historical CLI-local trim is now the shared semantics.
-  return resolveDesktopAppPaths(defaultAppRoot(env)).attachmentsCache;
 }
 
 function safeSegment(value: string): string {

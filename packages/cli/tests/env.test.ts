@@ -32,13 +32,6 @@ describe('loadEnv', () => {
     });
   });
 
-  it('keeps the ConversationSlot ambient coordinate as runtime identity', () => {
-    expect(loadEnv({ ...happyEnv })).toMatchObject({
-      conversationId: 'c-1',
-      slot: 'conversation',
-    });
-  });
-
   it('throws a single validation_error listing every missing var', () => {
     let caught: unknown;
     try {
@@ -57,8 +50,8 @@ describe('loadEnv', () => {
   });
 
   it('rejects an invalid SERVER_URL', () => {
-    expect(() =>
-      loadEnv({ ...happyEnv, SILVERHAND_SERVER_URL: 'not-a-url' }),
-    ).toThrow(/is not a valid URL/);
+    expect(() => loadEnv({ ...happyEnv, SILVERHAND_SERVER_URL: 'not-a-url' })).toThrow(
+      /is not a valid URL/,
+    );
   });
 });

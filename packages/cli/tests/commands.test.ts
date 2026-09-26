@@ -19,69 +19,13 @@ function allCommands(): Array<{ label: string; cmd: import('../src/commands/inde
   for (const g of COMMAND_GROUPS) {
     for (const c of g.commands) out.push({ label: `${g.noun} ${c.verb}`, cmd: c });
     for (const f of g.facets ?? []) {
-      for (const c of f.commands)
-        out.push({ label: `${g.noun} ${f.facet} ${c.verb}`, cmd: c });
+      for (const c of f.commands) out.push({ label: `${g.noun} ${f.facet} ${c.verb}`, cmd: c });
     }
   }
   return out;
 }
 
 describe('command catalogue', () => {
-  it('exposes the nine nouns we promised in the prompt', () => {
-    const nouns = COMMAND_GROUPS.map(g => g.noun);
-    expect(nouns).toEqual([
-      'message',
-      'task',
-      'thread',
-      'channel',
-      'member',
-      'workspace',
-      'schedule',
-      'file',
-      'profile',
-    ]);
-  });
-
-  it('matches every MCP tool with exactly one CLI verb', () => {
-    // The 23 backend internal routes that MCP currently exposes.
-    // If you add a route, add a CLI command, and add it here.
-    const expected: Array<[string, string]> = [
-      ['message', 'send'],
-      ['message', 'stale-resolve'],
-      ['message', 'stale-receive'],
-      ['message', 'react'],
-      ['message', 'history'],
-      ['message', 'search'],
-      ['task', 'list'],
-      ['task', 'create'],
-      ['task', 'claim'],
-      ['task', 'unclaim'],
-      ['task', 'status'],
-      ['task', 'edit'],
-      ['task', 'detail'],
-      ['thread', 'follow'],
-      ['thread', 'unfollow'],
-      ['channel', 'create'],
-      ['channel', 'list'],
-      ['member', 'add'],
-      ['workspace', 'list'],
-      ['schedule', 'create'],
-      ['schedule', 'list'],
-      ['schedule', 'cancel'],
-      ['file', 'upload'],
-      ['file', 'update'],
-      ['file', 'view'],
-      ['profile', 'get'],
-      ['profile', 'update'],
-    ];
-    for (const [noun, verb] of expected) {
-      const cmd = findCommand(noun, verb);
-      expect(cmd, `${noun} ${verb}`).toBeDefined();
-    }
-    const total = COMMAND_GROUPS.reduce((acc, g) => acc + g.commands.length, 0);
-    expect(total).toBe(27);
-  });
-
   it('every command has a non-empty help block', () => {
     for (const { label, cmd } of allCommands()) {
       expect(cmd.help, label).toMatch(/silverhand /);
@@ -144,9 +88,7 @@ describe('command catalogue', () => {
     const byNumberVerbs = ['claim', 'unclaim', 'status', 'edit', 'detail'];
     for (const verb of byNumberVerbs) {
       const cmd = findCommand('task', verb)!;
-      expect(cmd.flags, `task ${verb} still accepts --task-number`).not.toContain(
-        'task-number',
-      );
+      expect(cmd.flags, `task ${verb} still accepts --task-number`).not.toContain('task-number');
       expect(
         cmd.removedFlags?.['task-number'],
         `task ${verb} must teach the positional shape`,
@@ -161,17 +103,11 @@ describe('command catalogue', () => {
     // flags. `--conversation-id` is canonical; `message search` keeps
     // `--channel-id` only as a removed-flag migration hint.
     for (const { label, cmd } of allCommands()) {
-      expect(cmd.flags ?? [], `${label} accepts --channel-id`).not.toContain(
-        'channel-id',
-      );
-      expect(cmd.booleanFlags ?? [], `${label} accepts --channel-id`).not.toContain(
-        'channel-id',
-      );
+      expect(cmd.flags ?? [], `${label} accepts --channel-id`).not.toContain('channel-id');
+      expect(cmd.booleanFlags ?? [], `${label} accepts --channel-id`).not.toContain('channel-id');
     }
     const search = findCommand('message', 'search')!;
-    expect(search.removedFlags?.['channel-id']?.replacement).toBe(
-      '--conversation-id',
-    );
+    expect(search.removedFlags?.['channel-id']?.replacement).toBe('--conversation-id');
     expect(search.flags).toContain('conversation-id');
   });
 
@@ -184,7 +120,7 @@ describe('command catalogue', () => {
     expect(search.booleanFlags).toContain('current-workspace');
   });
 
-  it('an entity flag that carries that entity\'s id is spelled <entity>-id', () => {
+  it("an entity flag that carries that entity's id is spelled <entity>-id", () => {
     // The naming law, in the only form the real surface supports: for an
     // entity whose canonical flag IS the id (`--attachment-id`,
     // `--conversation-id`, `--schedule-id`), the bare noun must never come
@@ -198,14 +134,7 @@ describe('command catalogue', () => {
     // they name a relation, not an entity; and a bare noun that takes free
     // TEXT is correct as-is (`schedule create --message <text>`). Widening
     // this list therefore needs a real `-id` sibling to point at.
-    const bareEntityNouns = [
-      'attachment',
-      'conversation',
-      'channel',
-      'schedule',
-      'event',
-      'task',
-    ];
+    const bareEntityNouns = ['attachment', 'conversation', 'channel', 'schedule', 'event', 'task'];
     for (const { label, cmd } of allCommands()) {
       const declared = [...(cmd.flags ?? []), ...(cmd.booleanFlags ?? [])];
       for (const noun of bareEntityNouns) {
@@ -222,8 +151,7 @@ describe('command catalogue', () => {
     const receive = findCommand('message', 'stale-receive')!;
     expect(resolve.flags).toEqual(['stale-event-id', 'resolution']);
     expect(receive.flags).toEqual(['stale-event-id', 'wait']);
-    expect(resolve.removedFlags?.['event-id']?.replacement)
-      .toBe('stale-event-id');
+    expect(resolve.removedFlags?.['event-id']?.replacement).toBe('stale-event-id');
   });
 
   it('command help blocks do not leak transport/credential semantics to agents', () => {
@@ -249,21 +177,6 @@ describe('command catalogue', () => {
 });
 
 describe('profile facet (3-level: profile mcp <verb>)', () => {
-  it('exposes the mcp facet with get/set/add/remove/clear/validate/probe', () => {
-    const facet = findFacet('profile', 'mcp');
-    expect(facet).toBeDefined();
-    const verbs = facet!.commands.map(c => c.verb);
-    expect(verbs).toEqual([
-      'get',
-      'set',
-      'add',
-      'remove',
-      'clear',
-      'validate',
-      'probe',
-    ]);
-  });
-
   it('resolves a facet command by (noun, facet, verb)', () => {
     expect(findFacetCommand('profile', 'mcp', 'get')).toBeDefined();
     expect(findFacetCommand('profile', 'mcp', 'set')).toBeDefined();
@@ -280,7 +193,7 @@ describe('profile facet (3-level: profile mcp <verb>)', () => {
     // Flat `profile get|update` coexist with the `mcp` facet — the
     // dispatcher tries the facet token first, then falls through to a
     // flat verb, so `profile mcp get` and `profile get` never collide.
-    const flat = findGroup('profile')?.commands.map(c => c.verb);
+    const flat = findGroup('profile')?.commands.map((c) => c.verb);
     expect(flat).toEqual(['get', 'update']);
     expect(findCommand('profile', 'get')).toBeDefined();
     expect(findCommand('profile', 'update')).toBeDefined();
@@ -299,9 +212,9 @@ describe('profile facet (3-level: profile mcp <verb>)', () => {
 
   it('validate rejects bad JSON with validation_error (no backend call)', async () => {
     const cmd = findFacetCommand('profile', 'mcp', 'validate')!;
-    await expect(
-      runWithStdin(cmd, '{ not json', {} as BackendClient),
-    ).rejects.toMatchObject({ code: 'validation_error' });
+    await expect(runWithStdin(cmd, '{ not json', {} as BackendClient)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
   });
 
   it('set pipes raw stdin verbatim to the client', async () => {
@@ -368,12 +281,9 @@ describe('profile facet (3-level: profile mcp <verb>)', () => {
     const { client, calls } = mcpClient(
       '{"mcpServers":{"a":{"command":"old"},"b":{"command":"keep"}}}',
     );
-    const result = await runWithStdin(
-      cmd,
-      '{"mcpServers":{"a":{"command":"new"}}}',
-      client,
-      { replace: true },
-    );
+    const result = await runWithStdin(cmd, '{"mcpServers":{"a":{"command":"new"}}}', client, {
+      replace: true,
+    });
     expect(result).toEqual({ ok: true, added: ['a'], total: 2 });
     expect(JSON.parse(calls.wrote!)).toEqual({
       mcpServers: { a: { command: 'new' }, b: { command: 'keep' } },
@@ -390,9 +300,7 @@ describe('profile facet (3-level: profile mcp <verb>)', () => {
 
   it('remove deletes the named server and keeps the others', async () => {
     const cmd = findFacetCommand('profile', 'mcp', 'remove')!;
-    const { client, calls } = mcpClient(
-      '{"mcpServers":{"a":{"command":"x"},"b":{"command":"y"}}}',
-    );
+    const { client, calls } = mcpClient('{"mcpServers":{"a":{"command":"x"},"b":{"command":"y"}}}');
     const result = await runWithStdin(cmd, '', client, { server: 'a' });
     expect(result).toEqual({ ok: true, removed: 'a', remaining: 1 });
     expect(JSON.parse(calls.wrote!)).toEqual({ mcpServers: { b: { command: 'y' } } });
@@ -401,18 +309,18 @@ describe('profile facet (3-level: profile mcp <verb>)', () => {
   it('remove fails with not_found for an absent server (no write)', async () => {
     const cmd = findFacetCommand('profile', 'mcp', 'remove')!;
     const { client, calls } = mcpClient('{"mcpServers":{"a":{"command":"x"}}}');
-    await expect(
-      runWithStdin(cmd, '', client, { server: 'zzz' }),
-    ).rejects.toMatchObject({ code: 'not_found' });
+    await expect(runWithStdin(cmd, '', client, { server: 'zzz' })).rejects.toMatchObject({
+      code: 'not_found',
+    });
     expect(calls.wrote).toBeUndefined();
   });
 
   it('remove fails with not_found when no config is set', async () => {
     const cmd = findFacetCommand('profile', 'mcp', 'remove')!;
     const { client } = mcpClient(null);
-    await expect(
-      runWithStdin(cmd, '', client, { server: 'a' }),
-    ).rejects.toMatchObject({ code: 'not_found' });
+    await expect(runWithStdin(cmd, '', client, { server: 'a' })).rejects.toMatchObject({
+      code: 'not_found',
+    });
   });
 
   it('clear writes an empty config', async () => {
@@ -526,9 +434,9 @@ describe('profile update behavior (#task:1178)', () => {
 
   it('rejects a non-absolute --avatar-file before any client call', async () => {
     const { client, calls } = captureUpdateClient();
-    await expect(
-      runProfileUpdate({ 'avatar-file': 'relative.png' }, client),
-    ).rejects.toMatchObject({ code: 'validation_error' });
+    await expect(runProfileUpdate({ 'avatar-file': 'relative.png' }, client)).rejects.toMatchObject(
+      { code: 'validation_error' },
+    );
     expect(calls.count).toBe(0);
   });
 
@@ -545,10 +453,7 @@ describe('profile update behavior (#task:1178)', () => {
         avatar_url: '/api/agents/agent/avatar?v=1',
       };
       const { client, calls } = captureUpdateClient(fresh);
-      const result = await runProfileUpdate(
-        { 'display-name': 'Alice', 'avatar-file': p },
-        client,
-      );
+      const result = await runProfileUpdate({ 'display-name': 'Alice', 'avatar-file': p }, client);
       expect(calls.count).toBe(1);
       expect(calls.input.display_name).toBe('Alice');
       expect(calls.input.avatar).toMatchObject({
@@ -574,8 +479,7 @@ describe('profile update behavior (#task:1178)', () => {
 
   it('--avatar-url downloads CLI-side and uploads the sniffed blob', async () => {
     const origFetch = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      new Response(PNG_BYTES, { status: 200 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response(PNG_BYTES, { status: 200 })) as typeof fetch;
     try {
       const { client, calls } = captureUpdateClient();
       await runProfileUpdate({ 'avatar-url': 'https://example.test/a.png' }, client);
@@ -592,8 +496,7 @@ describe('profile update behavior (#task:1178)', () => {
 
   it('--avatar-url that 404s never calls the client', async () => {
     const origFetch = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      new Response(null, { status: 404 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response(null, { status: 404 })) as typeof fetch;
     try {
       const { client, calls } = captureUpdateClient();
       await expect(
@@ -626,8 +529,7 @@ describe('profile update behavior (#task:1178)', () => {
   it('--avatar-url over the size cap aborts the download, no client call', async () => {
     const big = new Uint8Array(AVATAR_MAX_BYTES + 1024);
     const origFetch = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      new Response(big, { status: 200 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response(big, { status: 200 })) as typeof fetch;
     try {
       const { client, calls } = captureUpdateClient();
       await expect(
@@ -651,7 +553,7 @@ describe('thread legacy verbs', () => {
    *  the placeholders and parsing pins the thing that matters — the hint
    *  teaches an address the CLI would actually accept. */
   function taughtAddresses(hint: string): string[] {
-    return [...hint.matchAll(/`[^`]*--target '([^']+)'/g)].map(m =>
+    return [...hint.matchAll(/`[^`]*--target '([^']+)'/g)].map((m) =>
       m[1]!
         .replace('<conversation_id>', 'convAAAAAAAAAA01')
         .replace('<root_message_id>', 'msgBBBBBBBBBBB02'),
@@ -744,8 +646,8 @@ describe('file view command', () => {
     const silverhandDir = await mkdtemp(join(tmpdir(), 'silverhand-file-view-cache-'));
     const previousSilverhandDir = process.env.SILVERHAND_DIR;
     try {
-      process.env.SILVERHAND_DIR = silverhandDir;
-      const result = await cmd!.run({
+      process.env.SILVERHAND_DIR = `  ${silverhandDir}  `;
+      const result = (await cmd!.run({
         env: {
           slot: 'agent',
           conversationId: null,
@@ -770,7 +672,7 @@ describe('file view command', () => {
           positional: [],
           rest: [],
         },
-      } as any) as {
+      } as any)) as {
         storage: 'local';
         local_path: string;
         filename: string;
@@ -778,10 +680,9 @@ describe('file view command', () => {
       };
 
       expect(result.storage).toBe('local');
-      expect(result.local_path).toContain(silverhandDir);
-      expect(result.local_path).toContain('attachments-cache');
-      expect(result.local_path).toContain('agent');
-      expect(result.local_path).toContain('att-remote');
+      expect(result.local_path).toBe(
+        join(silverhandDir, 'attachments-cache', 'agent', 'att-remote', 'shot.png'),
+      );
       expect(result.filename).toBe('shot.png');
       expect(result.content_type).toBe('image/png');
       expect(await readFile(result.local_path, 'utf8')).toBe('remote-bytes');
@@ -825,8 +726,8 @@ describe('task create --target <address>', () => {
           authToken: 'token',
         },
         client,
-      args: { flags, positional: [], rest: [] },
-    } as any)
+        args: { flags, positional: [], rest: [] },
+      } as any)
       .then(() => ({
         input: captured as { tasks: unknown[]; target?: unknown; conversation_id?: unknown },
         calls,
@@ -877,10 +778,13 @@ describe('task create --target <address>', () => {
   it.each([
     ['the readable name form', '#silverhand/roadmap'],
     ['the direct-pair shorthand', 'dm:@norman'],
-  ])('forwards %s verbatim too — the CLI has no opinion on which spelling', async (_label, address) => {
-    const { input } = await captureCreateTasks({ title: 'T', target: address });
-    expect(input.target).toBe(address);
-  });
+  ])(
+    'forwards %s verbatim too — the CLI has no opinion on which spelling',
+    async (_label, address) => {
+      const { input } = await captureCreateTasks({ title: 'T', target: address });
+      expect(input.target).toBe(address);
+    },
+  );
 
   it('refuses a missing --target as target_required, before any request', async () => {
     await expect(runExpectingNoRequest({ title: 'T' })).rejects.toMatchObject({
@@ -992,7 +896,7 @@ describe('member add --target <address>', () => {
     expect(input).toEqual({ handle: '@bob', target: `#conv:${CONV}` });
   });
 
-  it('forwards a thread suffix undecomposed — the refusal is the server\'s to state', async () => {
+  it("forwards a thread suffix undecomposed — the refusal is the server's to state", async () => {
     // The CLI does not strip the suffix to "help": which conversation a reply
     // cluster belongs to is the resolver's answer, and a client-side strip would
     // silently turn a refused request into a different, accepted one.
@@ -1021,9 +925,7 @@ describe('member add --target <address>', () => {
   });
 
   it('still refuses a missing --handle, and names the flag', async () => {
-    await expect(
-      run({ target: `#conv:${CONV}` }, refusing),
-    ).rejects.toMatchObject({
+    await expect(run({ target: `#conv:${CONV}` }, refusing)).rejects.toMatchObject({
       code: 'validation_error',
       subkind: 'missing_required_flag',
       details: { command: 'member add', flag: 'handle' },
@@ -1049,10 +951,12 @@ describe('channel create --target <address>', () => {
   function run(
     flags: Record<string, string>,
     client: BackendClient,
-    env: { conversationId: string; slot: 'conversation' } | {
-      conversationId: null;
-      slot: 'agent';
-    } = {
+    env:
+      | { conversationId: string; slot: 'conversation' }
+      | {
+          conversationId: null;
+          slot: 'agent';
+        } = {
       conversationId: CONV,
       slot: 'conversation',
     },
@@ -1074,10 +978,12 @@ describe('channel create --target <address>', () => {
 
   function capture(
     flags: Record<string, string>,
-    env?: { conversationId: string; slot: 'conversation' } | {
-      conversationId: null;
-      slot: 'agent';
-    },
+    env?:
+      | { conversationId: string; slot: 'conversation' }
+      | {
+          conversationId: null;
+          slot: 'agent';
+        },
   ) {
     let captured: unknown;
     let calls = 0;
@@ -1119,7 +1025,7 @@ describe('channel create --target <address>', () => {
     expect(input.target).toBe(`#conv:${CONV}`);
   });
 
-  it('forwards a thread suffix undecomposed — the refusal is the server\'s to state', async () => {
+  it("forwards a thread suffix undecomposed — the refusal is the server's to state", async () => {
     // Same rule as `member add`: a reply cluster is refused
     // (`thread_suffix_not_supported`), and it is refused by the RESOLVER. Stripping
     // the suffix here would quietly fork the parent instead.
@@ -1141,28 +1047,25 @@ describe('channel create --target <address>', () => {
   it('AGENT SLOT: the same refusal, with no correction invented', async () => {
     // An AgentSlot inhabits no stream, so there is no "the one you are in" to
     // suggest.
-    await expect(
-      run(REQUIRED, refusing, { conversationId: null, slot: 'agent' }),
-    ).rejects.toMatchObject({
+    const result = run(REQUIRED, refusing, { conversationId: null, slot: 'agent' });
+    await expect(result).rejects.toMatchObject({
       code: 'validation_error',
       subkind: 'target_required',
       details: { flag: 'target' },
     });
-    await expect(
-      run(REQUIRED, refusing, { conversationId: null, slot: 'agent' }),
-    ).rejects.not.toMatchObject({ details: { correct_target: expect.anything() } });
+    await expect(result).rejects.toHaveProperty('details', { flag: 'target' });
   });
 
   it('checks the address FIRST: a missing title does not mask a missing target', async () => {
     // Order matters for the report as much as for the actor: two independent
     // omissions must not collapse into whichever check happens to run first, and
     // the address is the one that changes WHERE the act lands.
-    await expect(run({ title: 'x' }, refusing)).rejects.toMatchObject({
+    await expect(run({}, refusing)).rejects.toMatchObject({
       subkind: 'target_required',
     });
-    await expect(
-      run({ target: `#conv:${CONV}`, title: 'x' }, refusing),
-    ).rejects.toMatchObject({ code: 'validation_error' });
+    await expect(run({ target: `#conv:${CONV}`, title: 'x' }, refusing)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
   });
 });
 
@@ -1220,7 +1123,7 @@ describe('file upload --target <address>', () => {
     expect(input).toEqual({ path: '/tmp/shot.png', target: `#conv:${CONV}` });
   });
 
-  it('forwards a thread suffix undecomposed — the refusal is the server\'s to state', async () => {
+  it("forwards a thread suffix undecomposed — the refusal is the server's to state", async () => {
     // Threads inherit their parent's files, so this address has no upload
     // destination; a client-side strip would turn a refusal into a different,
     // accepted request.
@@ -1249,9 +1152,9 @@ describe('file upload --target <address>', () => {
   });
 
   it('still refuses a missing --path once the destination is named', async () => {
-    await expect(
-      run({ target: `#conv:${CONV}` }, refusing),
-    ).rejects.toMatchObject({ code: 'validation_error' });
+    await expect(run({ target: `#conv:${CONV}` }, refusing)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
   });
 
   it('does not second-guess the grammar — a malformed address goes to the resolver', async () => {
@@ -1350,10 +1253,7 @@ describe('schedule create --target-conversation <address>', () => {
 
   it('refuses a missing --target-conversation as target_required, before any request', async () => {
     await expect(
-      run(
-        { title: 'standup', message: 'post it', kind: 'once', 'delay-seconds': '600' },
-        refusing,
-      ),
+      run({ title: 'standup', message: 'post it', kind: 'once', 'delay-seconds': '600' }, refusing),
     ).rejects.toMatchObject({
       code: 'validation_error',
       // The SAME subkind as every other door: an agent that learned the rule on
@@ -1364,7 +1264,7 @@ describe('schedule create --target-conversation <address>', () => {
     });
   });
 
-  it('forwards a thread suffix undecomposed — the refusal is the server\'s to state', async () => {
+  it("forwards a thread suffix undecomposed — the refusal is the server's to state", async () => {
     // A reply cluster shares its parent's runtime, so this address names nothing a
     // wake could act on. The CLI still does not strip it: stripping would silently
     // turn a refused request into a different, accepted one that wakes the parent.

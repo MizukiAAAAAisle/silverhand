@@ -596,8 +596,7 @@ mod tests {
 
     /// A scope reader that returns pre-seeded facts for the id it is asked about.
     /// By default it stamps the exact triple it was asked for (workspace, viewer,
-    /// agent) so the route's source-bind passes; `stamp_viewer`/`stamp_agent`
-    /// override one coordinate to forge a bundle read for the wrong principal.
+    /// agent) so the route's source-bind passes; overrides forge a different coordinate.
     #[derive(Clone)]
     struct FakeScope {
         present: bool,
@@ -605,6 +604,7 @@ mod tests {
         human_is_member: bool,
         agent_is_member: bool,
         fails: bool,
+        stamp_workspace: Option<WorkspaceId>,
         stamp_viewer: Option<UserId>,
         stamp_agent: Option<AgentId>,
     }
@@ -617,6 +617,7 @@ mod tests {
                 human_is_member: true,
                 agent_is_member: true,
                 fails: false,
+                stamp_workspace: None,
                 stamp_viewer: None,
                 stamp_agent: None,
             }
@@ -636,7 +637,9 @@ mod tests {
                 )));
             }
             Ok(AgentWorkspaceScopeFacts::new(
-                workspace.clone(),
+                self.stamp_workspace
+                    .clone()
+                    .unwrap_or_else(|| workspace.clone()),
                 self.stamp_viewer.clone().unwrap_or_else(|| viewer.clone()),
                 self.stamp_agent.clone().unwrap_or_else(|| agent.clone()),
                 self.present,
@@ -1097,43 +1100,32 @@ mod tests {
     // ---- source-binding the scope bundle to the request triple (P0) ----
 
     #[tokio::test]
-    async fn a_scope_bundle_stamped_for_another_viewer_is_a_safe_500() {
-        // The reader answered for a DIFFERENT viewer than the request: even though
-        // every membership edge would authorize, the triple drift is a resolver
-        // defect that fails closed before any daemon round trip.
-        let reply = run(
-            present(facts("a1", OWNER, HOST)),
+    async fn each_scope_coordinate_is_bound_before_dispatch() {
+        for scope in [
+            FakeScope {
+                stamp_workspace: Some(WorkspaceId::parse("ws-other").unwrap()),
+                ..FakeScope::authorizing()
+            },
             FakeScope {
                 stamp_viewer: Some(user("someone-else")),
                 ..FakeScope::authorizing()
             },
-            FakeDataPlane::ok(Answer::Tree(sample_tree())),
-            "/api/agents/a1/workspace/tree?workspace_id=ws-7",
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(reply.dispatch_calls, 0);
-    }
-
-    #[tokio::test]
-    async fn a_scope_bundle_stamped_for_another_agent_is_a_safe_500() {
-        // The reader answered for a DIFFERENT subject agent than the request: the
-        // agent-membership edge (and the home-owner comparison) was read for the
-        // wrong agent, so the bundle is rejected before dispatch.
-        let reply = run(
-            present(facts("a1", OWNER, HOST)),
             FakeScope {
                 stamp_agent: Some(agent("a2")),
                 ..FakeScope::authorizing()
             },
-            FakeDataPlane::ok(Answer::Tree(sample_tree())),
-            "/api/agents/a1/workspace/tree?workspace_id=ws-7",
-            true,
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(reply.dispatch_calls, 0);
+        ] {
+            let reply = run(
+                present(facts("a1", OWNER, HOST)),
+                scope,
+                FakeDataPlane::ok(Answer::Tree(sample_tree())),
+                "/api/agents/a1/workspace/tree?workspace_id=ws-7",
+                true,
+            )
+            .await;
+            assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(reply.dispatch_calls, 0);
+        }
     }
 
     // ---- deferred query parse: duplicates + form decode (P1) ----

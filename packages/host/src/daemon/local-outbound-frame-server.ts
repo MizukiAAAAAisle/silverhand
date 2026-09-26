@@ -64,10 +64,7 @@ import {
   unixSocketFrameWriter,
   type OutboundWriteBufferOptions,
 } from './outbound-write-buffer.js';
-import {
-  resolveDesktopAppPaths,
-  defaultAppRoot,
-} from '@silverhand/shared/app-data-layout';
+import { resolveDesktopAppPaths, defaultAppRoot } from '@silverhand/shared/app-data-layout';
 import { resolveDeliveryOwner } from './supervisor-contract.js';
 
 /**
@@ -79,8 +76,7 @@ export function deriveLocalOutboundFrameSocketPath(home = homedir()): string {
   // #task:1598/#task:1603 — delegate to the shared app-data path
   // authority; env-AWARE since the v2 cutover (contract §8). The `home`
   // seam keeps the historical test signature.
-  return resolveDesktopAppPaths(defaultAppRoot(process.env, () => home))
-    .run.outboundSocket;
+  return resolveDesktopAppPaths(defaultAppRoot(process.env, () => home)).run.outboundSocket;
 }
 
 export interface LocalOutboundFrameServerOptions {
@@ -163,7 +159,7 @@ export class LocalOutboundFrameServer {
       ...DEFAULT_OUTBOUND_WRITE_BUFFER,
       ...(opts.writeBuffer ?? {}),
     };
-    this.server = new Server(socket => this.handleConnection(socket));
+    this.server = new Server((socket) => this.handleConnection(socket));
   }
 
   /** Bind the socket. Resolves once listening; tightens mode to 0o600. */
@@ -199,14 +195,11 @@ export class LocalOutboundFrameServer {
         'local outbound: failed to chmod socket; peers may have wider access than intended',
       );
     }
-    this.logger.info(
-      { socketPath: this.socketPath },
-      'local outbound frame socket listening',
-    );
+    this.logger.info({ socketPath: this.socketPath }, 'local outbound frame socket listening');
   }
 
   async stop(): Promise<void> {
-    await new Promise<void>(resolve => {
+    await new Promise<void>((resolve) => {
       this.server.close(() => resolve());
       for (const socket of this.liveSockets) {
         socket.end();
@@ -219,14 +212,7 @@ export class LocalOutboundFrameServer {
         /* unlink failure on shutdown is not fatal */
       }
     }
-    this.logger.info(
-      { socketPath: this.socketPath },
-      'local outbound frame socket closed',
-    );
-  }
-
-  liveConnectionCount(): number {
-    return this.liveSockets.size;
+    this.logger.info({ socketPath: this.socketPath }, 'local outbound frame socket closed');
   }
 
   /**
@@ -311,15 +297,11 @@ export class LocalOutboundFrameServer {
     // fresh connection down rather than leaving it un-hydrated.
     if (this.readyEvent) {
       const ready = this.readyEvent();
-      this.sendEventToSocket(
-        socket,
-        toOutboundEventFrame(ready),
-        eventMetadata(ready),
-      );
+      this.sendEventToSocket(socket, toOutboundEventFrame(ready), eventMetadata(ready));
     }
     let buffer = '';
     socket.setEncoding('utf8');
-    socket.on('data', chunk => {
+    socket.on('data', (chunk) => {
       const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
       const { frames, leftover, overflow } = splitNdjson(buffer, text);
       buffer = leftover;
@@ -341,7 +323,7 @@ export class LocalOutboundFrameServer {
         if (!this.handleLine(socket, line) || socket.destroyed) break;
       }
     });
-    socket.on('error', err => {
+    socket.on('error', (err) => {
       this.logger.warn(
         { err: err.message, code: (err as NodeJS.ErrnoException).code },
         'local outbound: connection error',
@@ -441,7 +423,7 @@ export class LocalOutboundFrameServer {
         action: 'frame_invalid',
         err: anyFrame.success ? 'wrong_direction_or_type' : 'schema_mismatch',
         issue_count: command.error.errors.length,
-        issue_paths: command.error.errors.map(e => e.path.join('.')),
+        issue_paths: command.error.errors.map((e) => e.path.join('.')),
       },
       'local outbound: invalid inbound frame; closing connection',
     );
@@ -473,10 +455,7 @@ export class LocalOutboundFrameServer {
       // rather than guess a sentinel that close cleanup could never
       // reclaim — the catch below maps it to internal_error and
       // dispatchCommand is never called under a bad owner.
-      const owner = resolveDeliveryOwner(
-        this.socketOwners.get(socket),
-        'local_outbound',
-      );
+      const owner = resolveDeliveryOwner(this.socketOwners.get(socket), 'local_outbound');
       const dispatched = await this.dispatchCommand(command, { owner });
       const mapped = toOutboundCommandResponse(command, dispatched);
       response = mapped.frame;

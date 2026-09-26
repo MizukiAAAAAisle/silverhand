@@ -190,7 +190,9 @@ mod tests {
         let now = chrono::DateTime::parse_from_rfc3339("2026-09-09T13:00:00+08:00")
             .unwrap()
             .timestamp_millis();
-        let start = calendar(now, 7).unwrap().start_ms().unwrap();
+        let start = chrono::DateTime::parse_from_rfc3339("2026-09-03T00:00:00+08:00")
+            .unwrap()
+            .timestamp_millis();
         for index in 0..28 {
             sqlx::query(
                 "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES (?,?,?,0,0)",

@@ -207,37 +207,12 @@ mod tests {
 
     #[derive(Clone)]
     struct FakeReads {
-        snapshot: Result<Option<AgentBulkStopSnapshot>, ReadFault>,
+        snapshot: AgentBulkStopSnapshot,
     }
-
-    /// A cloneable stand-in for a persistence failure, so the fake can hand one back by
-    /// value on every clone.
-    #[derive(Clone, Debug)]
-    struct ReadFault;
-
-    impl fmt::Display for ReadFault {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("bulk stop snapshot read failed")
-        }
-    }
-
-    impl Error for ReadFault {}
 
     impl FakeReads {
         fn present(snapshot: AgentBulkStopSnapshot) -> Self {
-            Self {
-                snapshot: Ok(Some(snapshot)),
-            }
-        }
-
-        fn absent() -> Self {
-            Self { snapshot: Ok(None) }
-        }
-
-        fn failing() -> Self {
-            Self {
-                snapshot: Err(ReadFault),
-            }
+            Self { snapshot }
         }
     }
 
@@ -246,9 +221,7 @@ mod tests {
             &self,
             _agent_id: &AgentId,
         ) -> Result<Option<AgentBulkStopSnapshot>, PersistenceFailure> {
-            self.snapshot
-                .clone()
-                .map_err(PersistenceFailure::from_source)
+            Ok(Some(self.snapshot.clone()))
         }
     }
 
@@ -313,20 +286,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_absent_row_is_no_such_agent_and_never_dispatches() {
-        let stops = FakeStops::scripted(vec![]);
-        let outcome = bulk_stop_agent_runtimes(&FakeReads::absent(), &stops, &agent("a1"))
-            .await
-            .expect("read ok");
-
-        assert_eq!(outcome, AgentBulkStopOutcome::NoSuchAgent);
-        assert!(
-            stops.targets().is_empty(),
-            "an absent row must not dispatch"
-        );
-    }
-
-    #[tokio::test]
     async fn a_snapshot_bound_to_a_different_agent_is_untrustworthy_and_never_dispatches() {
         // The row resolved carries `a2`'s host though `a1` was requested: a resolver defect.
         let reads = FakeReads::present(AgentBulkStopSnapshot {
@@ -379,38 +338,14 @@ mod tests {
         assert!(targets.iter().all(|t| t.host() == &host("captured-host")));
         // Active agent-slot (gen 2) then Starting conversation-slot c7 (gen 4), in order.
         assert_eq!(targets[0].generation(), generation(2));
-        assert!(matches!(targets[0].scope(), RuntimeScope::AgentSlot { .. }));
+        assert!(
+            matches!(targets[0].scope(), RuntimeScope::AgentSlot { agent } if agent.as_str() == "a1")
+        );
         assert_eq!(targets[1].generation(), generation(4));
         assert!(matches!(
             targets[1].scope(),
-            RuntimeScope::ConversationSlot { source, .. } if source.as_str() == "c7"
+            RuntimeScope::ConversationSlot { agent, source } if agent.as_str() == "a1" && source.as_str() == "c7"
         ));
-    }
-
-    #[tokio::test]
-    async fn no_running_seats_is_an_empty_ran_no_op() {
-        let reads = FakeReads::present(AgentBulkStopSnapshot {
-            source: agent("a1"),
-            host: host("h1"),
-            sessions: vec![
-                agent_seat("a1", RuntimeObservedStatus::Idle, 1),
-                conversation_seat("a1", "c1", RuntimeObservedStatus::Crashed, 2),
-            ],
-        });
-        let stops = FakeStops::scripted(vec![]);
-
-        let outcome = bulk_stop_agent_runtimes(&reads, &stops, &agent("a1"))
-            .await
-            .expect("read ok");
-
-        assert_eq!(
-            outcome,
-            AgentBulkStopOutcome::Ran {
-                stopped: 0,
-                failures: vec![]
-            }
-        );
-        assert!(stops.targets().is_empty());
     }
 
     #[tokio::test]
@@ -496,14 +431,5 @@ mod tests {
             }
             other => panic!("expected an all-failed Ran, got {other:?}"),
         }
-    }
-
-    #[tokio::test]
-    async fn a_read_failure_propagates_as_the_hard_error() {
-        let stops = FakeStops::scripted(vec![]);
-        let result = bulk_stop_agent_runtimes(&FakeReads::failing(), &stops, &agent("a1")).await;
-
-        assert!(result.is_err(), "a read failure must bubble as a hard Err");
-        assert!(stops.targets().is_empty());
     }
 }

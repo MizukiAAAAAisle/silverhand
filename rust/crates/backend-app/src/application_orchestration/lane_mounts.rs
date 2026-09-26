@@ -1902,7 +1902,7 @@ mod tests {
 
     /// A runtime stop that records every `(conversation, agent)` it is asked to stop
     /// and fails for one configured seat — proving a single failed leg is observable
-    /// and does not abort the remaining seats/blobs/viewers.
+    /// and does not abort the remaining seats or blob sweep.
     #[derive(Clone)]
     struct RecordingStop {
         stopped: Arc<std::sync::Mutex<Vec<(String, String)>>>,
@@ -2044,7 +2044,6 @@ mod tests {
         };
 
         aftermath.terminalize_and_sweep(&plan).await;
-        aftermath.announce_removed(&plan).await;
 
         // #44/#2: the run-state projection was asked to close EVERY captured workspace
         // conversation — including conv-c which has NO routed seat (roster gone) — not
@@ -2237,9 +2236,67 @@ mod tests {
     #[tokio::test]
     async fn channel_fork_aftermath_delivers_context_to_actor_prompt_to_others_and_starts_all() {
         use silverhand_backend_server::conversation_messaging::messaging::collaboration::agent_create_channel::ChannelForkAftermath;
+        use tokio::sync::oneshot;
+
+        // These gates suspend real dependency futures after entry. Only the actual
+        // aftermath can advance to the next phase; the test never supplies its order.
+        #[derive(Clone)]
+        struct GatedDelivery {
+            recorded: RecordingDelivery,
+            context: Arc<std::sync::Mutex<Option<oneshot::Receiver<()>>>>,
+            prompt: Arc<std::sync::Mutex<Option<oneshot::Receiver<()>>>>,
+        }
+        impl LiveConversationRuntimeDelivery for GatedDelivery {
+            async fn deliver_to_live_recipient(
+                &self,
+                conversation: &ConversationId,
+                agent: &AgentId,
+                message: &MessageId,
+            ) -> Result<(), EffectFailure> {
+                self.recorded
+                    .deliver_to_live_recipient(conversation, agent, message)
+                    .await?;
+                let gate = if message.as_str() == "msg-context" {
+                    self.context.lock().unwrap().take()
+                } else {
+                    self.prompt.lock().unwrap().take()
+                };
+                if let Some(gate) = gate {
+                    gate.await.unwrap();
+                }
+                Ok(())
+            }
+        }
+        struct GatedStart {
+            recorded: RecordingStart,
+            last: std::sync::Mutex<Option<oneshot::Receiver<()>>>,
+        }
+        impl silverhand_backend_core::conversation_messaging::messaging::post_commit::RuntimeStart
+            for GatedStart
+        {
+            async fn start(
+                &self,
+                conversation: &ConversationId,
+                agent: &AgentId,
+            ) -> Result<(), EffectFailure> {
+                self.recorded.start(conversation, agent).await?;
+                let gate = if agent.as_str() == "agent-c" {
+                    self.last.lock().unwrap().take()
+                } else {
+                    None
+                };
+                if let Some(gate) = gate {
+                    gate.await.unwrap();
+                }
+                Ok(())
+            }
+        }
 
         let delivery = RecordingDelivery::default();
         let start = RecordingStart::default();
+        let (release_context, context) = oneshot::channel();
+        let (release_prompt, prompt) = oneshot::channel();
+        let (release_start, last) = oneshot::channel();
         let hub = ScopeEventHub::production().unwrap();
         // Live roster is unchanged from the committed set across both reads.
         let roster = RecordingAgents::with(vec![
@@ -2248,14 +2305,40 @@ mod tests {
         ]);
         let aftermath = ProductionChannelForkAftermath::new(
             hub,
-            delivery.clone(),
-            start.clone(),
+            GatedDelivery {
+                recorded: delivery.clone(),
+                context: Arc::new(std::sync::Mutex::new(Some(context))),
+                prompt: Arc::new(std::sync::Mutex::new(Some(prompt))),
+            },
+            GatedStart {
+                recorded: start.clone(),
+                last: std::sync::Mutex::new(Some(last)),
+            },
             roster.clone(),
         );
 
         let committed = committed_fork("conv-chan", "agent-actor", &["agent-b", "agent-c"]);
         let workspace = WorkspaceId::parse("ws-1").unwrap();
-        aftermath.channel_forked(&workspace, &committed).await;
+        let pending = aftermath.channel_forked(&workspace, &committed);
+        tokio::pin!(pending);
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        assert_eq!(delivery.calls.lock().unwrap().len(), 1);
+        assert!(roster.reads.lock().unwrap().is_empty());
+        assert!(start.starts.lock().unwrap().is_empty());
+
+        release_context.send(()).unwrap();
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        assert_eq!(delivery.calls.lock().unwrap().len(), 2);
+        assert_eq!(roster.reads.lock().unwrap().len(), 1);
+        assert!(start.starts.lock().unwrap().is_empty());
+
+        release_prompt.send(()).unwrap();
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        assert_eq!(delivery.calls.lock().unwrap().len(), 3);
+        assert_eq!(roster.reads.lock().unwrap().len(), 2);
+        assert_eq!(start.starts.lock().unwrap().len(), 3);
+        release_start.send(()).unwrap();
+        pending.await;
 
         // The live roster was read exactly TWICE (once for the prompt audience after
         // the context deliver, once for the start audience after the prompt) — the two

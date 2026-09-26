@@ -807,7 +807,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clearing_an_absent_avatar_is_a_no_op_with_no_write_delete_or_announce() {
+    async fn clearing_an_absent_avatar_is_a_no_op_with_no_delete_or_announce() {
         let writes = FakeWrites::Row(AgentProfileRowWrite::Unchanged {
             before: before(AgentAvatarRow::Absent),
         });

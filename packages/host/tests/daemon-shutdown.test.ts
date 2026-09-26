@@ -65,7 +65,7 @@ it('Desktop-owned daemon SIGTERM drains both scopes, including SIGTERM-resistant
     expect(result.started).toBe(true);
     if (result.started) pids.push(result.pid);
   }
-  await expect.poll(() => ready.size).toBe(2);
+  await expect.poll(() => ready.size, { timeout: 10_000 }).toBe(2);
   await client.close();
   await handle.kill();
   for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow();

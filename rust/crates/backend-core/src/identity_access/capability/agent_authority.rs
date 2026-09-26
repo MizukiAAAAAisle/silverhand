@@ -155,17 +155,33 @@ mod tests {
     }
 
     #[test]
-    fn the_files_face_is_the_same_rule_under_its_own_name() {
+    fn the_files_face_admits_only_the_creator_or_agent_itself() {
         let agent = created_by("owner");
-        for (principal, subject) in [
-            (Principal::human(user("owner")), agent_id("a1")),
-            (Principal::human(user("stranger")), agent_id("a1")),
-            (Principal::agent(agent_id("a1")), agent_id("a1")),
-            (Principal::agent(agent_id("a1")), agent_id("a2")),
+        for (principal, subject, expected) in [
+            (
+                Principal::human(user("owner")),
+                agent_id("a1"),
+                Decision::Allow,
+            ),
+            (
+                Principal::human(user("stranger")),
+                agent_id("a1"),
+                Decision::Denied(AuthorityRefused::NotTheCreator),
+            ),
+            (
+                Principal::agent(agent_id("a1")),
+                agent_id("a1"),
+                Decision::Allow,
+            ),
+            (
+                Principal::agent(agent_id("a1")),
+                agent_id("a2"),
+                Decision::Denied(AuthorityRefused::NotItself),
+            ),
         ] {
             assert_eq!(
                 can_view_agent_files(&principal, &subject, Some(&agent)),
-                can_edit_agent(&principal, &subject, Some(&agent))
+                expected
             );
         }
     }

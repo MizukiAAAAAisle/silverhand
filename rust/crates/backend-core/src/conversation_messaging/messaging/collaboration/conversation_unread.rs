@@ -292,7 +292,14 @@ mod tests {
             .clone()
             .bind(&ConversationId::parse("c").unwrap())
             .unwrap();
-        assert_eq!(bound.threads()[0].root().as_str(), "a");
+        assert_eq!(
+            bound
+                .threads()
+                .iter()
+                .map(|thread| thread.root().as_str())
+                .collect::<Vec<_>>(),
+            ["a", "z"]
+        );
         assert!(
             value
                 .bind(&ConversationId::parse("other").unwrap())

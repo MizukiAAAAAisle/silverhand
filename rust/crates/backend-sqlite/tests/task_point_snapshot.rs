@@ -1,7 +1,6 @@
-//! Real SQLite proof for the three task point/detail faces. Each call enters the
-//! connection-bound `TaskAuthorizedPointRead` and returns only an authorized
-//! projection; revoking a viewer before a new call cannot leave task content from
-//! an earlier candidate read visible.
+//! Real SQLite permission revocation through three task point/detail request forms.
+//! Each succeeds before revocation and returns no authorized task afterward;
+//! this sequential scenario does not exercise an in-flight snapshot interleave.
 
 use silverhand_backend_core::conversation_messaging::messaging::task::{
     AgentRead, TaskAuthorizedPointRead, TaskId, TaskNumber, TaskReadActor, TaskReadAddress,
@@ -53,7 +52,7 @@ fn agent_global_by_id() -> TaskReadActor {
 }
 
 #[tokio::test]
-async fn all_three_point_faces_bind_candidate_permission_and_projection_to_one_read_authority() {
+async fn human_by_id_and_by_number_and_agent_reads_observe_permission_revocation() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("tasks.sqlite");
     let mut db = current_schema::create_current_schema(&path).await;
@@ -81,7 +80,7 @@ async fn all_three_point_faces_bind_candidate_permission_and_projection_to_one_r
             .await
             .unwrap()
             .is_some(),
-        "public by-id succeeds through the snapshot authority"
+        "human by-id succeeds before revocation"
     );
     assert!(
         store
@@ -93,7 +92,7 @@ async fn all_three_point_faces_bind_candidate_permission_and_projection_to_one_r
             .await
             .unwrap()
             .is_some(),
-        "public by-number resolves its board inside the same snapshot"
+        "human by-number succeeds before revocation"
     );
     assert!(
         store
@@ -101,7 +100,7 @@ async fn all_three_point_faces_bind_candidate_permission_and_projection_to_one_r
             .await
             .unwrap()
             .is_some(),
-        "internal detail succeeds through the same snapshot authority"
+        "agent by-id succeeds before revocation"
     );
 
     let mut writer = SqliteConnection::connect(&format!("sqlite://{}", path.display()))

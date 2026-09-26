@@ -332,6 +332,6 @@ mod tests {
     fn ttl_cannot_disable_expiry() {
         assert!(SessionTtl::from_millis(0).is_err());
         assert!(SessionTtl::from_millis(-1).is_err());
-        assert_eq!(SessionTtl::default().as_millis(), DEFAULT_SESSION_TTL_MS);
+        assert_eq!(SessionTtl::default().as_millis(), 30 * 24 * 60 * 60 * 1_000);
     }
 }

@@ -1,104 +1,93 @@
-import { describe, expect, it } from "vitest";
-import {
-  fetchServerInfoWithRetry,
-  type ServerInfoFetcher,
-  type SleepFn,
-} from "../fetch-server-info.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fetchServerInfoWithRetry } from "../fetch-server-info.js";
 
-function response(
-  status: number,
-  body: unknown,
-  statusText = status === 200 ? "OK" : "Bad Gateway",
-): Awaited<ReturnType<ServerInfoFetcher>> {
-  return {
-    ok: status >= 200 && status < 300,
+const url = "https://example.test/api/server/info";
+function response(status: number, body: unknown, statusText = "Bad Gateway"): Response {
+  return new Response(typeof body === "string" ? body : JSON.stringify(body), {
     status,
     statusText,
-    async text() {
-      return typeof body === "string" ? body : JSON.stringify(body);
-    },
-  };
+  });
 }
 
 describe("fetchServerInfoWithRetry", () => {
-  it("returns server info without sleeping on the first successful attempt", async () => {
-    const sleeps: number[] = [];
-    const result = await fetchServerInfoWithRetry({
-      url: "https://example.test/api/server/info",
-      fetcher: async () => response(200, { signup_enabled: false }),
-      sleep: async (ms) => {
-        sleeps.push(ms);
-      },
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns server info without retrying the first successful attempt", async () => {
+    const fetcher = vi.fn().mockResolvedValue(response(200, { signup_enabled: false }));
+    await expect(fetchServerInfoWithRetry({ url, fetcher })).resolves.toEqual({
+      signup_enabled: false,
     });
-
-    expect(result).toEqual({ signup_enabled: false });
-    expect(sleeps).toEqual([]);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith(url, undefined);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("silently retries transient fetch failures before surfacing boot gate", async () => {
-    const sleeps: number[] = [];
-    let attempts = 0;
-    const result = await fetchServerInfoWithRetry({
-      url: "https://example.test/api/server/info",
-      retryDelaysMs: [10, 20],
-      fetcher: async () => {
-        attempts += 1;
-        if (attempts < 3) throw new TypeError("fetch failed");
-        return response(200, { signup_enabled: true });
-      },
-      sleep: async (ms) => {
-        sleeps.push(ms);
-      },
-    });
-
-    expect(result).toEqual({ signup_enabled: true });
-    expect(attempts).toBe(3);
-    expect(sleeps).toEqual([10, 20]);
+  it("retries fetch failures after the actual boot delays, without fetching early", async () => {
+    const fetcher = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue(response(200, { signup_enabled: true }));
+    const result = fetchServerInfoWithRetry({ url, fetcher });
+    await vi.advanceTimersByTimeAsync(249);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(749);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toEqual({ signup_enabled: true });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("retries transient non-2xx responses and throws the final raw error", async () => {
-    const sleeps: number[] = [];
-    const statuses = [502, 503, 404];
-    const fetcher: ServerInfoFetcher = async () => {
-      const status = statuses.shift();
-      if (status === undefined) throw new Error("unexpected extra attempt");
-      return response(status, `upstream ${status}`, status === 404 ? "Not Found" : "Bad Gateway");
-    };
-
-    await expect(
-      fetchServerInfoWithRetry({
-        url: "https://example.test/api/server/info",
-        retryDelaysMs: [10, 20],
-        fetcher,
-        sleep: async (ms) => {
-          sleeps.push(ms);
-        },
-      }),
-    ).rejects.toThrow("404 Not Found: upstream 404");
-
-    expect(statuses).toEqual([]);
-    expect(sleeps).toEqual([10, 20]);
+  it.each([
+    { name: "boot retry budget", retryDelaysMs: undefined, attempts: 3 },
+    { name: "periodic single probe", retryDelaysMs: [], attempts: 1 },
+  ])("surfaces the final HTTP error for $name", async ({ retryDelaysMs, attempts }) => {
+    const fetcher = vi
+      .fn()
+      .mockImplementation(() => response(503, "upstream unavailable", "Unavailable"));
+    const result = fetchServerInfoWithRetry({ url, fetcher, retryDelaysMs });
+    const rejected = expect(result).rejects.toThrow("503 Unavailable: upstream unavailable");
+    await vi.runAllTimersAsync();
+    await rejected;
+    expect(fetcher).toHaveBeenCalledTimes(attempts);
   });
 
-  it("does not retry a 2xx response that is not Silverhand server info", async () => {
-    const sleeps: number[] = [];
-    let attempts = 0;
-    const sleep: SleepFn = async (ms) => {
-      sleeps.push(ms);
-    };
+  it.each([{ unexpected: "shape" }, "<html>not JSON</html>"])(
+    "does not retry a successful HTTP response that is not server info: %j",
+    async (body) => {
+      const fetcher = vi.fn().mockResolvedValue(response(200, body));
+      await expect(fetchServerInfoWithRetry({ url, fetcher })).rejects.toThrow(
+        "invalid server info response",
+      );
+      await vi.runAllTimersAsync();
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    },
+  );
 
-    await expect(
-      fetchServerInfoWithRetry({
-        url: "https://example.test/api/server/info",
-        fetcher: async () => {
-          attempts += 1;
-          return response(200, { unexpected: "shape" });
-        },
-        sleep,
-      }),
-    ).rejects.toThrow("invalid server info response");
-
-    expect(attempts).toBe(1);
-    expect(sleeps).toEqual([]);
-  });
+  it.each(["before request", "during retry"] as const)(
+    "cancels %s without another fetch",
+    async (when) => {
+      const controller = new AbortController();
+      const fetcher = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+      if (when === "before request") controller.abort();
+      const result = fetchServerInfoWithRetry({ url, fetcher, signal: controller.signal });
+      const rejected = expect(result).rejects.toThrow(/aborted/);
+      if (when === "during retry") {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fetcher).toHaveBeenCalledExactlyOnceWith(url, { signal: controller.signal });
+        controller.abort();
+      }
+      // Cancellation must settle before the retry clock advances.
+      await rejected;
+      await vi.runAllTimersAsync();
+      expect(fetcher).toHaveBeenCalledTimes(when === "before request" ? 0 : 1);
+    },
+  );
 });

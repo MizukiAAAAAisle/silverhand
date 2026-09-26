@@ -1,9 +1,8 @@
 //! Composed proof for the Rust `GET /api/agents` list vertical (#task:2195, batch 5).
 //!
-//! The per-branch matrix — order, the narrow/decide split, the stage flags, the
-//! scope filter, the missing-principal fault — is pinned by the unit tests of the
-//! layers this composes: `capability::agent_view`, `agent_list_read::visible_agents`,
-//! and the route's own `tests` against a fake read model. What no unit test can show
+//! This suite owns wire DTOs, creation order, ownership filtering and empty results.
+//! The SQLite visibility matrix covers ACL/stage combinations; route unit tests
+//! retain query parsing and injected source/principal faults. What no unit test can show
 //! is that those layers WIRE UP end to end: that the real SQLite
 //! `SqliteAgentListColdRead` — its `creator UNION relation` candidate SQL on one
 //! deferred snapshot, its strict per-row decode, its shared detail projection — feeds
@@ -50,7 +49,7 @@ const SEED: &str = "\
     INSERT INTO agents (id, name, runtime, model, host_id, description, created_at, updated_at, \
       display_name, reasoning_effort, fast_mode, created_by_user_id, \
       avatar_storage_key, avatar_content_type, materialization_status) \
-    VALUES ('a1', 'agent-one', 'qoder', 'opus', 'h1', 'the first agent', 1000, 2000, \
+    VALUES ('a1', 'agent-one', 'qoder', 'opus', 'h1', 'the first agent', 3000, 4000, \
       'Agent One', 'high', 1, 'u-viewer', 'blob-key', 'image/png', 'active'); \
     INSERT INTO agents (id, name, runtime, model, host_id, description, created_at, updated_at, \
       display_name, reasoning_effort, fast_mode, created_by_user_id, session_scope, \
@@ -112,13 +111,13 @@ fn agent_one() -> Value {
         "description": "the first agent",
         "session_scope": "conversation",
         "created_by_user_id": "u-viewer",
-        "avatar_url": "/api/agents/a1/avatar?v=2000",
+        "avatar_url": "/api/agents/a1/avatar?v=4000",
         "materialization_status": "active",
         "materialization_failed_code": null,
         "materialization_failed_at": null,
         "deletion_started_at": null,
-        "created_at": 1000,
-        "updated_at": 2000
+        "created_at": 3000,
+        "updated_at": 4000
     })
 }
 
@@ -149,11 +148,11 @@ fn agent_two() -> Value {
 
 #[tokio::test]
 async fn the_default_view_lists_reachable_agents_in_created_at_order() {
-    // a1 is the viewer's own (created_at 1000); a2 is reached through the shared
-    // workspace (created_at 2000). Both are full DTOs, a1 first, wrapped in `agents`.
+    // a1 is the viewer's own (created_at 3000); a2 is reached through the shared
+    // workspace (created_at 2000). Creation order opposes insertion and id order: a2 must come first.
     let (status, body) = run("u-viewer", "").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({ "agents": [agent_one(), agent_two()] }));
+    assert_eq!(body, json!({ "agents": [agent_two(), agent_one()] }));
 }
 
 #[tokio::test]

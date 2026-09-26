@@ -139,7 +139,8 @@ mod tests {
         seed(
             &path,
             "INSERT INTO users (id, name, display_name, created_at, updated_at, last_seen_at) VALUES \
-             ('viewer-1', 'one', 'One', 100, 100, NULL)",
+             ('viewer-1', 'one', 'One', 100, 100, NULL), \
+             ('viewer-other', 'other', 'Other', 200, 200, 42)",
         )
         .await;
 
@@ -155,6 +156,7 @@ mod tests {
             stored_last_seen(&path, "viewer-1").await,
             Some(1_700_000_000_123)
         );
+        assert_eq!(stored_last_seen(&path, "viewer-other").await, Some(42));
     }
 
     #[tokio::test]

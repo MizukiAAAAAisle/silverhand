@@ -484,13 +484,17 @@ mod tests {
             &self,
             _password: &str,
         ) -> Result<PreparedPasswordCredential, PasswordHashError> {
-            Err(PasswordHashError::for_test())
+            Err(PasswordHashError::offload_join_failed(
+                std::io::Error::other("test KDF failure"),
+            ))
         }
         async fn verify(&self, _phc: &str, _password: &str) -> Result<bool, PasswordHashError> {
             Ok(false)
         }
         async fn verify_dummy(&self, _password: &str) -> Result<(), PasswordHashError> {
-            Err(PasswordHashError::for_test())
+            Err(PasswordHashError::offload_join_failed(
+                std::io::Error::other("test KDF failure"),
+            ))
         }
     }
 
@@ -670,68 +674,82 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signup_reports_handle_taken_before_touching_the_email() {
-        let handles = FakeHandles(true);
-        let emails = FakeEmails(true); // even though the email is also taken…
-        let hasher = FakeHasher::new(true);
-        let registration = FakeRegistration(HumanRegistration::Registered { user: record("u1") });
-        let mint = FakeMint;
-        let issue = RecordingIssue {
-            issued: Arc::new(Mutex::new(Vec::new())),
-        };
-        let sink = FakeSink(Arc::new(AtomicUsize::new(0)));
-
-        let outcome = sign_up(
-            signup_ports(
-                &handles,
-                &emails,
-                &hasher,
-                &registration,
-                &mint,
-                &issue,
-                &sink,
-            ),
-            signup_command(),
-            NOW,
-        )
-        .await
-        .unwrap();
-
-        assert!(matches!(outcome, Signup::HandleTaken)); // …the handle answer wins
-        assert!(issue.issued.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn signup_pays_the_hash_before_the_handle_probe() {
-        // The hash runs unconditionally: even a taken-handle request that never
-        // reaches the DB has paid one hash (proven here by the flow succeeding
-        // through the hasher fake, which is the sole cost seam).
-        let handles = FakeHandles(true);
-        let emails = FakeEmails(false);
-        let hasher = FakeHasher::new(true);
-        let registration = FakeRegistration(HumanRegistration::HandleConflict);
-        let mint = FakeMint;
-        let issue = RecordingIssue {
-            issued: Arc::new(Mutex::new(Vec::new())),
-        };
-        let sink = FakeSink(Arc::new(AtomicUsize::new(0)));
-
-        let outcome = sign_up(
-            signup_ports(
-                &handles,
-                &emails,
-                &hasher,
-                &registration,
-                &mint,
-                &issue,
-                &sink,
-            ),
-            signup_command(),
-            NOW,
-        )
-        .await
-        .unwrap();
-        assert!(matches!(outcome, Signup::HandleTaken));
+    async fn signup_hashes_before_identity_probes_and_stops_at_a_taken_handle() {
+        #[derive(Clone)]
+        struct Probes {
+            taken: bool,
+            trace: Arc<Mutex<Vec<&'static str>>>,
+        }
+        impl PasswordHasher for Probes {
+            async fn hash(
+                &self,
+                password: &str,
+            ) -> Result<PreparedPasswordCredential, PasswordHashError> {
+                let credential = FakeHasher::new(true).hash(password).await?;
+                self.trace.lock().unwrap().push("hash completed");
+                Ok(credential)
+            }
+            async fn verify(&self, _: &str, _: &str) -> Result<bool, PasswordHashError> {
+                panic!("signup must not verify");
+            }
+            async fn verify_dummy(&self, _: &str) -> Result<(), PasswordHashError> {
+                panic!("signup must not dummy-verify");
+            }
+        }
+        impl HandleNamespaceRead for Probes {
+            async fn is_handle_taken(
+                &self,
+                _: &ParticipantHandle,
+            ) -> Result<bool, PersistenceFailure> {
+                self.trace.lock().unwrap().push("handle");
+                Ok(self.taken)
+            }
+        }
+        impl UserEmailLookup for Probes {
+            async fn find_by_email(&self, _: &str) -> Result<Option<UserId>, PersistenceFailure> {
+                self.trace.lock().unwrap().push("email");
+                Ok(Some(UserId::parse("existing").unwrap()))
+            }
+        }
+        for taken in [true, false] {
+            let probes = Probes {
+                taken,
+                trace: Arc::new(Mutex::new(Vec::new())),
+            };
+            let issue = RecordingIssue {
+                issued: Arc::new(Mutex::new(Vec::new())),
+            };
+            let sink = FakeSink(Arc::new(AtomicUsize::new(0)));
+            let outcome = sign_up(
+                SignupPorts {
+                    handles: &probes,
+                    emails: &probes,
+                    hasher: &probes,
+                    registration: &FakeRegistration(HumanRegistration::Registered {
+                        user: record("u1"),
+                    }),
+                    mint: &FakeMint,
+                    sessions: &issue,
+                    user_changed: &sink,
+                },
+                signup_command(),
+                NOW,
+            )
+            .await
+            .unwrap();
+            if taken {
+                assert!(matches!(outcome, Signup::HandleTaken));
+                assert_eq!(*probes.trace.lock().unwrap(), ["hash completed", "handle"]);
+            } else {
+                assert!(matches!(outcome, Signup::AuthFailed));
+                assert_eq!(
+                    *probes.trace.lock().unwrap(),
+                    ["hash completed", "handle", "email"]
+                );
+            }
+            assert!(issue.issued.lock().unwrap().is_empty());
+            assert_eq!(sink.0.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[tokio::test]

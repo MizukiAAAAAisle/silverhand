@@ -291,11 +291,13 @@ async fn the_system_principal_may_enroll_without_a_role_row() {
     let sink = CountingSink::default();
 
     // System holds no workspace_users row; the rule admits it without one.
-    let (member, _announce) = enroll(&store, &sink, Principal::System, TARGET)
+    let (member, announce) = enroll(&store, &sink, Principal::System, TARGET)
         .await
         .unwrap()
         .into_parts();
 
+    assert!(matches!(announce, ViewerAnnounce::Delivered));
+    assert_eq!(sink.announces.load(Ordering::SeqCst), 1);
     assert_eq!(member.role, WorkspaceRole::Member);
     let mut probe = open_probe(&path).await;
     assert!(stored_membership(&mut probe, TARGET).await.is_some());

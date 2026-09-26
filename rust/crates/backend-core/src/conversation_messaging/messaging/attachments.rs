@@ -280,10 +280,9 @@ mod tests {
             mismatch,
             AttachmentRefusal::LabelKindMismatch { .. }
         ));
-        assert_eq!(
-            accepted[0].label.unwrap(),
-            AttachmentLabel::parse("File #2").unwrap()
-        );
+        let label = accepted[0].label.unwrap();
+        assert_eq!(label.kind(), AttachmentLabelKind::File);
+        assert_eq!(label.ordinal(), 2);
     }
 
     #[test]
@@ -336,18 +335,13 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0], snapshots[1]);
-        assert_eq!(snapshots[0].filename, "note.txt");
-        assert_eq!(snapshots[0].size, 12);
-    }
-
-    #[test]
-    fn an_attachment_refusal_names_the_reference_it_rejected() {
-        let refusal = AttachmentRefusal::OutsideChannel {
-            attachment_id: AttachmentId::parse("att-1").unwrap(),
+        let expected = AttachmentSnapshot {
+            id: AttachmentId::parse("att-1").unwrap(),
+            filename: "note.txt".to_owned(),
+            size: 12,
+            content_type: "image/png".to_owned(),
+            label: None,
         };
-
-        assert_eq!(refusal.attachment_id().as_str(), "att-1");
+        assert_eq!(snapshots, vec![expected.clone(), expected]);
     }
 }

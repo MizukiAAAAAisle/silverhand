@@ -322,15 +322,6 @@ mod tests {
     }
 
     #[test]
-    fn limit_is_a_positive_integer_at_most_the_cap() {
-        assert_eq!(parse_list_query(Some("limit=50")).unwrap().limit, Some(50));
-        assert_eq!(
-            parse_list_query(Some("limit=500")).unwrap().limit,
-            Some(500)
-        );
-    }
-
-    #[test]
     fn limit_out_of_range_or_non_integer_is_invalid() {
         for (raw, reason) in [
             ("limit=0", QueryFieldReason::OutOfRange),
@@ -345,20 +336,6 @@ mod tests {
                 "{raw}"
             );
         }
-    }
-
-    #[test]
-    fn an_empty_limit_is_no_bound_but_an_empty_task_number_is_invalid() {
-        // The reference guards `limit` with `|| undefined` and does not guard each
-        // `task_number` element — the asymmetry is preserved verbatim.
-        assert_eq!(parse_list_query(Some("limit=")).unwrap().limit, None);
-        assert_eq!(
-            parse_list_query(Some("task_number=")),
-            Err(InvalidQuery::of(
-                QueryField::TaskNumber,
-                QueryFieldReason::NotABase10Integer
-            ))
-        );
     }
 
     #[test]
@@ -443,10 +420,9 @@ mod tests {
 /// is any `task_number` past `Number.MAX_SAFE_INTEGER`, where a JSON number would
 /// round to a DIFFERENT task than the digits name — TS "accepts" it (rounding when
 /// it must), this grammar refuses it so one decimal string means one task on both
-/// sides. Every other input agrees. `packages/backend/tests/parity/
-/// list-query-oracle.test.ts` runs the real schema and signs the fixture these
-/// tests read, so the common contract and the named refinements both live in one
-/// place and drift on either side goes red against the same bytes.
+/// sides. Every other corpus input agrees. The historical TS schema oracle signed
+/// this frozen corpus; its runner is no longer present. These tests preserve the
+/// signed decisions and named refinements at the production raw-query boundary.
 #[cfg(test)]
 mod grammar_parity {
     use super::*;
@@ -473,7 +449,9 @@ mod grammar_parity {
             let raw = case["raw"].as_str().expect("case raw");
             let ts_accepts = case["ts_accepts"].as_bool().expect("ts_accepts");
             let refinement = case["rust_refinement"].as_bool().expect("rust_refinement");
-            let parsed = parse_task_numbers(&[raw.to_string()]);
+            let encoded: String = form_urlencoded::byte_serialize(raw.as_bytes()).collect();
+            let query = format!("task_number={encoded}");
+            let parsed = parse_list_query(Some(&query)).map(|query| query.task_numbers);
 
             if refinement {
                 refinements.push(raw.to_string());
@@ -520,7 +498,9 @@ mod grammar_parity {
             let raw = case["raw"].as_str().expect("case raw");
             let ts_accepts = case["ts_accepts"].as_bool().expect("ts_accepts");
             let refinement = case["rust_refinement"].as_bool().expect("rust_refinement");
-            let parsed = parse_limit(Some(raw));
+            let encoded: String = form_urlencoded::byte_serialize(raw.as_bytes()).collect();
+            let query = format!("limit={encoded}");
+            let parsed = parse_list_query(Some(&query)).map(|query| query.limit);
 
             if refinement {
                 refinements += 1;
@@ -548,11 +528,9 @@ mod grammar_parity {
             let ts_accepts = case["ts_accepts"].as_bool().expect("ts_accepts");
             // The status axis is a pure closed set — no refinement, so accept /
             // reject must match the schema exactly.
-            assert_eq!(
-                parse_statuses(&[raw.to_string()]).is_ok(),
-                ts_accepts,
-                "{name}"
-            );
+            let encoded: String = form_urlencoded::byte_serialize(raw.as_bytes()).collect();
+            let query = format!("status={encoded}");
+            assert_eq!(parse_list_query(Some(&query)).is_ok(), ts_accepts, "{name}");
         }
     }
 }

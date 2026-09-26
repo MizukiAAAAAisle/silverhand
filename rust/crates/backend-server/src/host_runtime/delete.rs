@@ -806,7 +806,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_missing_or_foreign_computer_is_one_byte_identical_404() {
+    async fn a_missing_or_foreign_computer_has_the_same_404_payload() {
         let refused = json!({ "error": "host not found", "error_code": "host_not_found" });
         for ownership in [Ownership::Absent, Ownership::Foreign] {
             let world = World(Arc::new(Mutex::new(WorldState {
@@ -980,7 +980,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_missing_principal_reads_nothing_and_fails_closed() {
+    async fn a_missing_principal_fails_closed_before_the_cascade() {
         let world = World::admitting(None);
         let reply = delete_request(&world, COMPUTER, false, "{}").await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);

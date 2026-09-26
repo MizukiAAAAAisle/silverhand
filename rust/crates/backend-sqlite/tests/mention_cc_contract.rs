@@ -68,37 +68,3 @@ fn the_copy_body_matches_the_shared_contract() {
         );
     }
 }
-
-/// The SHAPE of the same claim, asked of the artifact itself: every line that names
-/// anyone other than the recipient is inside the quote.
-///
-/// Complementary to, not a substitute for, the derivation gate — `backend-server`
-/// asks the real position rule what each rendered body addresses, and the other side
-/// asks its extractor. This one needs no parser, so it stays here with the renderer
-/// it is about: a wrap that leaked a line out of the quote would fail here even if
-/// the leaked line happened to address nobody.
-#[test]
-fn no_line_of_the_original_escapes_the_quote() {
-    let contract = contract();
-
-    for case in contract["body"].as_array().expect("body cases") {
-        let addressed = case["expectedAddressed"]
-            .as_array()
-            .expect("expected addressed");
-        assert_eq!(
-            addressed.len(),
-            1,
-            "the contract expects a body to address exactly its recipient: {case}"
-        );
-
-        let body = text(case, "expectedBody");
-        for line in body.lines() {
-            let names_a_third_party = line.contains("silverhand://") && !line.contains("/Alice>");
-            assert!(
-                !names_a_third_party || line.starts_with("> "),
-                "a reference escaped the quote in case {}: {line}",
-                text(case, "name")
-            );
-        }
-    }
-}

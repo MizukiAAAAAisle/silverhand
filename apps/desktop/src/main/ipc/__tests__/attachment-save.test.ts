@@ -1,160 +1,103 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  handleAttachmentSave,
-  sanitizeAttachmentFilename,
-  type AttachmentSaveDeps,
-} from "../attachment-save";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
+import { handleAttachmentSave } from "../attachment-save";
 
-function makeDeps(overrides: Partial<AttachmentSaveDeps> = {}): {
-  deps: AttachmentSaveDeps;
-  showSaveDialog: ReturnType<typeof vi.fn>;
-  writeFile: ReturnType<typeof vi.fn>;
-} {
-  const showSaveDialog = vi.fn(async () => ({ canceled: true }) as const);
-  const writeFile = vi.fn(async () => {});
-  const deps: AttachmentSaveDeps = {
-    showSaveDialog: overrides.showSaveDialog ?? showSaveDialog,
-    writeFile: overrides.writeFile ?? writeFile,
-  };
-  return { deps, showSaveDialog, writeFile };
-}
-
-describe("sanitizeAttachmentFilename", () => {
-  it("preserves ordinary filenames verbatim (extension + case)", () => {
-    expect(sanitizeAttachmentFilename("Report Q3.PDF")).toBe("Report Q3.PDF");
-    expect(sanitizeAttachmentFilename("日志-2026.log")).toBe("日志-2026.log");
-  });
-
-  it("replaces path separators with underscores so the pre-fill is a bare name", () => {
-    expect(sanitizeAttachmentFilename("foo/bar.txt")).toBe("foo_bar.txt");
-    expect(sanitizeAttachmentFilename("a\\b\\c.zip")).toBe("a_b_c.zip");
-  });
-
-  it("strips control characters", () => {
-    expect(sanitizeAttachmentFilename("a\x00b\x1fc.txt")).toBe("abc.txt");
-  });
-
-  it("caps at 255 chars", () => {
-    const long = "x".repeat(400) + ".log";
-    expect(sanitizeAttachmentFilename(long).length).toBe(255);
-  });
-
-  it("returns empty string when input is only unsafe/blank chars — caller must fail closed", () => {
-    expect(sanitizeAttachmentFilename("   ")).toBe("");
-    expect(sanitizeAttachmentFilename("\x00\x01\x02")).toBe("");
-  });
+const parent = process.env.SILVERHAND_DIR;
+if (!parent) throw new Error("isolated SILVERHAND_DIR required");
+let root: string;
+beforeEach(async () => {
+  await fs.mkdir(parent, { recursive: true });
+  root = await fs.mkdtemp(join(parent, "attachment-save-"));
+});
+afterEach(async () => {
+  await fs.rm(root, { recursive: true, force: true });
 });
 
-describe("handleAttachmentSave — input validation", () => {
-  it("rejects missing filename before opening the dialog", async () => {
-    const { deps, showSaveDialog } = makeDeps();
-    const result = await handleAttachmentSave({ bytes: new Uint8Array([1, 2, 3]) }, deps);
-    expect(result).toEqual({ ok: false, reason: "invalid_filename" });
-    expect(showSaveDialog).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-Uint8Array/Buffer payload", async () => {
-    const { deps, showSaveDialog } = makeDeps();
-    const result = await handleAttachmentSave(
-      { filename: "x.txt", bytes: "not bytes" as unknown as Uint8Array },
-      deps,
-    );
-    expect(result).toEqual({ ok: false, reason: "invalid_payload" });
-    expect(showSaveDialog).not.toHaveBeenCalled();
-  });
-
-  it("rejects empty payload", async () => {
-    const { deps, showSaveDialog } = makeDeps();
-    const result = await handleAttachmentSave(
-      { filename: "x.txt", bytes: new Uint8Array(0) },
-      deps,
-    );
-    expect(result).toEqual({ ok: false, reason: "empty_payload" });
-    expect(showSaveDialog).not.toHaveBeenCalled();
-  });
-
-  it("rejects filename that sanitizes to empty", async () => {
-    const { deps, showSaveDialog } = makeDeps();
-    const result = await handleAttachmentSave(
-      { filename: "   \x00\x01", bytes: new Uint8Array([1]) },
-      deps,
-    );
-    expect(result).toEqual({ ok: false, reason: "invalid_filename" });
-    expect(showSaveDialog).not.toHaveBeenCalled();
-  });
-});
-
-describe("handleAttachmentSave — dialog flow", () => {
-  it("cancel branch: no write, returns { canceled: true } (caller treats as silent)", async () => {
-    const showSaveDialog = vi.fn(async () => ({ canceled: true }) as const);
+describe("attachment save IPC trust boundary", () => {
+  it.each([
+    ["Report Q3.PDF", "Report Q3.PDF"],
+    ["日志-2026.log", "日志-2026.log"],
+    ["foo/bar.txt", "foo_bar.txt"],
+    ["a\\b\\c.zip", "a_b_c.zip"],
+    ["a\x00b\x1fc.txt", "abc.txt"],
+    ["x".repeat(400) + ".log", "x".repeat(255)],
+  ])("offers a bare safe filename for %s, not a path from renderer", async (filename, expected) => {
+    const showSaveDialog = vi.fn(async () => ({ canceled: true }));
     const writeFile = vi.fn(async () => {});
-    const result = await handleAttachmentSave(
-      { filename: "a.log", bytes: new Uint8Array([1, 2]) },
-      { showSaveDialog, writeFile },
+    expect(
+      await handleAttachmentSave(
+        { filename, bytes: Buffer.from([1]) },
+        { showSaveDialog, writeFile },
+      ),
+    ).toEqual({ ok: false, canceled: true });
+    expect(showSaveDialog).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ defaultPath: expected }),
     );
-    expect(result).toEqual({ ok: false, canceled: true });
     expect(writeFile).not.toHaveBeenCalled();
   });
 
-  it("dialog returns no filePath (edge case: canceled=false but no path): still cancel", async () => {
-    const showSaveDialog = vi.fn(async () => ({ canceled: false }));
+  it.each([
+    { filename: undefined, bytes: new Uint8Array([1]), reason: "invalid_filename" },
+    { filename: "x.txt", bytes: "not bytes", reason: "invalid_payload" },
+    { filename: "x.txt", bytes: new Uint8Array(), reason: "empty_payload" },
+    { filename: "   ", bytes: new Uint8Array([1]), reason: "invalid_filename" },
+    { filename: "\x00\x01", bytes: new Uint8Array([1]), reason: "invalid_filename" },
+  ])("rejects $reason before selection/write", async ({ filename, bytes, reason }) => {
+    const showSaveDialog = vi.fn(async () => ({ canceled: false, filePath: "/should-not-write" }));
     const writeFile = vi.fn(async () => {});
-    const result = await handleAttachmentSave(
-      { filename: "a.log", bytes: new Uint8Array([1, 2]) },
-      { showSaveDialog, writeFile },
-    );
-    expect(result).toEqual({ ok: false, canceled: true });
-    expect(writeFile).not.toHaveBeenCalled();
-  });
-
-  it("pre-fills the sanitized filename as defaultPath — original name preserved", async () => {
-    const showSaveDialog = vi.fn(async () => ({ canceled: true }) as const);
-    await handleAttachmentSave(
-      { filename: "quarterly report.pdf", bytes: new Uint8Array([1]) },
-      { showSaveDialog, writeFile: async () => {} },
-    );
-    expect(showSaveDialog).toHaveBeenCalledWith({
-      title: "Save attachment",
-      defaultPath: "quarterly report.pdf",
-    });
-  });
-
-  it("writes the user-selected path (not the pre-fill) on success", async () => {
-    // Falsifier: an implementation that wrote to `defaultPath` instead
-    // of the dialog's returned `filePath` would silently ignore where
-    // the user chose to save.
-    const showSaveDialog = vi.fn(async () => ({
-      canceled: false,
-      filePath: "/Users/x/Desktop/renamed.pdf",
-    }));
-    const writeFile = vi.fn(async () => {});
-    const bytes = new Uint8Array([1, 2, 3, 4]);
-    const result = await handleAttachmentSave(
-      { filename: "quarterly report.pdf", bytes },
-      { showSaveDialog, writeFile },
-    );
-    expect(result).toEqual({
-      ok: true,
-      path: "/Users/x/Desktop/renamed.pdf",
-    });
-    expect(writeFile).toHaveBeenCalledWith("/Users/x/Desktop/renamed.pdf", Buffer.from(bytes));
-  });
-
-  it('write failure surfaces as { ok: false, reason: "write_failed:..." }', async () => {
-    const showSaveDialog = vi.fn(async () => ({
-      canceled: false,
-      filePath: "/protected/path.pdf",
-    }));
-    const writeFile = vi.fn(async () => {
-      throw new Error("EACCES: permission denied");
-    });
-    const result = await handleAttachmentSave(
-      { filename: "x.pdf", bytes: new Uint8Array([1]) },
-      { showSaveDialog, writeFile },
-    );
-    expect(result).toEqual({
+    expect(await handleAttachmentSave({ filename, bytes }, { showSaveDialog, writeFile })).toEqual({
       ok: false,
-      reason: "write_failed:EACCES: permission denied",
+      reason,
     });
+    expect(showSaveDialog).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it.each([{ canceled: true, filePath: "/must-not-write" }, { canceled: false }])(
+    "does not write cancelled/missing selection %j",
+    async (selection) => {
+      const writeFile = vi.fn(async () => {});
+      expect(
+        await handleAttachmentSave(
+          { filename: "suggested.txt", bytes: Buffer.from([1]) },
+          { showSaveDialog: async () => selection, writeFile },
+        ),
+      ).toEqual({ ok: false, canceled: true });
+      expect(writeFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([Buffer.from([1, 2, 3]), new Uint8Array([4, 5, 6])])(
+    "writes bytes to the selected destination, never the renderer suggestion",
+    async (bytes) => {
+      const chosen = join(root, "renamed.pdf");
+      const suggested = join(root, "suggested.pdf");
+      const result = await handleAttachmentSave(
+        { filename: suggested, bytes },
+        {
+          showSaveDialog: async () => ({ canceled: false, filePath: chosen }),
+          writeFile: fs.writeFile,
+        },
+      );
+      expect(result).toEqual({ ok: true, path: chosen });
+      expect([...(await fs.readFile(chosen))]).toEqual([...bytes]);
+      expect(await fs.readdir(root)).toEqual(["renamed.pdf"]);
+    },
+  );
+
+  it("reports a real destination write failure", async () => {
+    const result = await handleAttachmentSave(
+      { filename: join(root, "suggested.pdf"), bytes: Buffer.from([1]) },
+      {
+        showSaveDialog: async () => ({ canceled: false, filePath: root }),
+        writeFile: fs.writeFile,
+      },
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/^write_failed:.*EISDIR/s),
+    });
+    expect(await fs.readdir(root)).toEqual([]);
   });
 });

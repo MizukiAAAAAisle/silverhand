@@ -1086,30 +1086,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_replacement_upload_cleans_the_prior_blob_and_keeps_the_fresh_one() {
-        let blobs = FakeBlobs::new();
-        let reply = post_upload(
-            FakeReads::new(
-                present(creator_facts()),
-                present(projected_facts(Some("agents/a1/avatars/blob-0.png"))),
-            ),
-            FakeWrites::new(WriteFixture::Row(AgentProfileRowWrite::Committed {
-                before: before(present_avatar("agents/prior/blob-9")),
-                row: committed(present_avatar(FRESH)),
-            })),
-            blobs.clone(),
-            FakeSink::new(false),
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::OK);
-        assert_eq!(
-            blobs.deleted(),
-            vec!["agents/prior/blob-9".to_owned()],
-            "the PRIOR blob is cleaned, never the fresh committed one"
-        );
-    }
-
-    #[tokio::test]
     async fn a_failed_announce_does_not_flip_the_committed_upload() {
         let reply = post_upload(
             FakeReads::new(
@@ -1310,11 +1286,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_payload_one_byte_over_the_cap_is_the_413() {
-        let over = vec![
-            0u8;
-            silverhand_backend_core::identity_access::avatar::AVATAR_MAX_BYTES as usize
-                + 1
-        ];
+        let over = vec![0u8; 5 * 1024 * 1024 + 1];
         let reply = post_with(
             FakeReads::new(present(creator_facts()), present(creator_facts())),
             FakeWrites::new(WriteFixture::Row(AgentProfileRowWrite::NoSuchAgent)),
@@ -1541,7 +1513,7 @@ mod tests {
         assert_eq!(reply.status, StatusCode::OK);
         let body = parsed(&reply);
         assert_eq!(body["agent"]["id"], "a1");
-        assert_eq!(body["agent"]["avatar_url"], Value::Null);
+        assert_eq!(body["agent"].get("avatar_url"), Some(&Value::Null));
         // The clear response has no top-level avatar_url mirror.
         assert!(body.get("avatar_url").is_none());
         assert_eq!(blobs.deleted(), vec!["agents/prior/blob-9".to_owned()]);

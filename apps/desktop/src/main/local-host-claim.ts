@@ -91,7 +91,7 @@ export function removeDaemonHostConfig(daemonConfigPath: string): void {
   }
 }
 
-export function defaultClaimLabel(machineName: string): string | null {
+function defaultClaimLabel(machineName: string): string | null {
   const fitted = machineName.trim().slice(0, HOST_DISPLAY_LABEL_MAX_LENGTH).trim();
   return fitted.length > 0 ? fitted : null;
 }
@@ -124,7 +124,7 @@ export function buildHostClaimInput(input: {
  *  bare strings like `not-a-path`). Callers that need to reject
  *  non-relative input (e.g. {@link assertApiProxyPath}) must run a
  *  raw check on the original string FIRST. */
-export function pathnameOf(rawPath: string): string {
+function pathnameOf(rawPath: string): string {
   try {
     return new URL(rawPath, "http://silverhand.local").pathname;
   } catch {
@@ -153,20 +153,13 @@ export function pathnameOf(rawPath: string): string {
  *  the raw input would let `/api/hosts/<id>/rotate-token?x=1` slip
  *  past, and the renderer could then receive cleartext `host_token`
  *  bytes via the generic proxy. */
-export function isMainManagedHostPath(path: string): boolean {
+function isMainManagedHostPath(path: string): boolean {
   const pathname = pathnameOf(path);
   if (pathname === apiPaths.hostClaimOrCreate) return true;
   if (pathname.startsWith("/api/hosts/") && pathname.endsWith("/rotate-token")) return true;
   if (pathname.startsWith("/api/hosts/") && pathname.endsWith("/revoke")) return true;
   return false;
 }
-
-/** @deprecated Stage B.4 superseded by {@link isMainManagedHostPath}.
- *  The old guard only covered `claim-or-create`; the new name covers
- *  the full main-managed surface (claim + rotate + revoke). Kept as
- *  a re-export so external callers don't break, but new code should
- *  reference {@link isMainManagedHostPath} directly. */
-export const isTokenBearingHostClaimPath = isMainManagedHostPath;
 
 /** Gate applied to every renderer-issued `backend:request` /
  *  `backend:upload` proxy call. Two layers:

@@ -41,11 +41,6 @@ export function markRequestAttempted(): void {
   requestAttempted = true;
 }
 
-/** Test-only: reset the module-level state. */
-export function resetTraceStateForTesting(): void {
-  requestAttempted = false;
-}
-
 /** Returns `true` if any HTTP call against the backend was attempted
  *  during this CLI process. */
 export function wasRequestAttempted(): boolean {
@@ -112,7 +107,7 @@ export async function reportPreflightFailure(payload: CliTraceInput): Promise<vo
  * The result is capped at 500 chars so we never blow past the schema
  * limit. If the input is empty/undefined, returns it unchanged.
  */
-export function sanitizeTraceErrorMessage(input: string): string {
+function sanitizeTraceErrorMessage(input: string): string {
   let s = input;
 
   // Absolute paths (POSIX `/...`, Windows `C:\...`). Hit these BEFORE

@@ -316,8 +316,8 @@ pub fn truncate_utf16_scalar_safe(compact: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CanonicalName, MAX_NAME_CODE_POINTS, NameCanonicalizationIssue, canonicalize_name,
-        name_character_is_forbidden, name_is_nfc,
+        CanonicalName, NameCanonicalizationIssue, canonicalize_name, name_character_is_forbidden,
+        name_is_nfc,
     };
 
     #[test]
@@ -337,12 +337,10 @@ mod tests {
 
     #[test]
     fn the_envelope_caps_at_128_before_the_forbidden_scan() {
-        assert!(canonicalize_name(&"a".repeat(MAX_NAME_CODE_POINTS)).is_ok());
+        assert!(canonicalize_name(&"a".repeat(128)).is_ok());
         assert_eq!(
-            canonicalize_name(&"a".repeat(MAX_NAME_CODE_POINTS + 1)),
-            Err(NameCanonicalizationIssue::TooLong {
-                code_points: MAX_NAME_CODE_POINTS + 1
-            })
+            canonicalize_name(&"a".repeat(129)),
+            Err(NameCanonicalizationIssue::TooLong { code_points: 129 })
         );
 
         // Over the 128 envelope AND carrying a forbidden joiner: the cap wins,
@@ -383,6 +381,7 @@ mod tests {
         assert!(!name_character_is_forbidden('#'));
         assert!(name_character_is_forbidden('\u{200D}'));
         assert!(name_character_is_forbidden('\u{FE0F}'));
+        assert!(name_character_is_forbidden('\u{1F3FB}'));
         assert!(name_is_nfc("Å"));
         assert!(!name_is_nfc("A\u{030A}"));
     }

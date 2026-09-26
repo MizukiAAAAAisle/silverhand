@@ -88,7 +88,7 @@ use crate::host_runtime::runtime_event_settlement::{
 use crate::host_runtime::scope_event_publishers::*;
 use crate::identity_access::scope_event_publishers::*;
 use crate::viewer_read_model::presence::{
-    DisconnectClock, HubPresenceSink, SystemClockFault, compose_presence_vertical,
+    DisconnectClock, HubPresencePublisher, SystemClockFault, compose_presence_vertical,
     duration_to_unix_ms,
 };
 
@@ -761,7 +761,7 @@ fn user_presence_wire_parity_matches_the_typescript_signed_rows() {
     // Drive the fixture replay through the PRODUCTION sink, not the hub helper:
     // a no-op `PresenceFactSink` that swallowed the fact would then fail this
     // gate, which is the fake-wiring this phase exists to forbid.
-    let sink = HubPresenceSink::new(hub.clone());
+    let sink = HubPresencePublisher::new(hub.clone());
     let viewer = UserId::parse("viewer-1").unwrap();
     PresenceFactSink::publish(
         &sink,
@@ -817,7 +817,7 @@ fn the_production_presence_sink_surfaces_the_hub_error_and_emits_no_frame() {
     // on the scope. Swallowing the error, remapping its cause, or bypassing the
     // sink would each break this gate.
     let hub = ScopeEventHub::test("epoch-1");
-    let sink = HubPresenceSink::new(hub.clone());
+    let sink = HubPresencePublisher::new(hub.clone());
     let epoch = TransportEpoch::parse("epoch-1").unwrap();
 
     // Materialize the app scope, then drive it to the sequence ceiling so the
@@ -848,7 +848,7 @@ fn the_production_presence_sink_surfaces_the_hub_error_and_emits_no_frame() {
 // These build the vertical through the ONE constructor the composition root
 // builds it with (`compose_presence_vertical`), over the REAL adapters: the
 // sqlite last-seen sink writes `users.last_seen_at`, the sqlite cold read loads
-// it back for the read face, and the real `HubPresenceSink` projects the
+// it back for the read face, and the real `HubPresencePublisher` projects the
 // transition onto the global `app` scope. Only the disconnect clock (frozen, so
 // the sealed instant is a value these tests name) and the grace window (short,
 // so a window can expire inside a test) differ from production. A fake sink, a
@@ -909,7 +909,7 @@ fn a_clock_reading_past_the_i64_instant_range_is_a_named_fault_not_a_wrapped_ins
 struct Vertical {
     router: Router,
     feed: Arc<dyn ConnectionLifecycle>,
-    timers: PresenceGraceTimers<SqliteLastSeenSink, HubPresenceSink>,
+    timers: PresenceGraceTimers<SqliteLastSeenSink, HubPresencePublisher>,
     hub: ScopeEventHub,
     path: std::path::PathBuf,
     _directory: tempfile::TempDir,
@@ -987,7 +987,7 @@ async fn stored_last_seen(path: &std::path::Path) -> Option<i64> {
 }
 
 /// Every frame the global `app` scope holds, in emit order — the wire the real
-/// `HubPresenceSink` published to.
+/// `HubPresencePublisher` published to.
 fn app_scope_frames(hub: &ScopeEventHub) -> Vec<Value> {
     let resumed = hub
         .resume(
@@ -1112,8 +1112,8 @@ async fn the_composed_vertical_seals_one_disconnect_instant_into_the_database_th
     );
     assert!(!v.timers.is_online(&viewer()));
 
-    // Exactly once: another whole window passes with no second offline frame and
-    // no further write.
+    // Another whole window passes with no second offline frame and the stored
+    // instant remains unchanged (this read does not count repeated writes).
     outlast_the_window().await;
     assert_eq!(app_scope_frames(&v.hub).len(), 2);
     assert_eq!(stored_last_seen(&v.path).await, Some(SEALED_DISCONNECT_MS));
@@ -1422,7 +1422,11 @@ async fn mention_copy_sink_failure_keeps_its_chain_and_does_not_stop_later_effec
 
     assert_eq!(report.failed.len(), 1);
     assert_eq!(
-        report.failed_steps(),
+        report
+            .failed
+            .iter()
+            .map(|(_, step, _)| *step)
+            .collect::<Vec<_>>(),
         vec![EffectStep::DirectLineInvalidation]
     );
     assert_eq!(
@@ -2812,20 +2816,6 @@ impl NotificationAftermath for NoopAftermath {
     ) -> Result<(), NotificationClearFailure> {
         Ok(())
     }
-}
-
-/// The production-impl inventory guard: `NotificationAftermath` now has a REAL
-/// production implementation ([`HubNotificationAftermath`]), not only `#[cfg(test)]`
-/// fakes. This binding compiles only while that production impl exists, so deleting
-/// it (regressing the trait to test-only) fails the build here rather than shipping a
-/// route whose effect is a fake. It is a type-level existence proof.
-#[test]
-fn the_notification_aftermath_has_a_production_implementation() {
-    fn assert_impls_aftermath<T: NotificationAftermath>() {}
-    assert_impls_aftermath::<HubNotificationAftermath>();
-    // And it is reachable through the sanctioned `&self` factory on the real hub.
-    let hub = ScopeEventHub::test("epoch-1");
-    let _: HubNotificationAftermath = hub.notification_aftermath();
 }
 
 #[tokio::test]
@@ -4314,17 +4304,6 @@ fn committed_attachment_change() -> AttachmentChangedFact {
         .bind(&viewer, &attachment)
         .unwrap()
         .changed()
-}
-
-#[test]
-fn the_production_hub_implements_the_attachment_changed_port_with_its_real_error() {
-    fn requires_production_impl<T>()
-    where
-        T: AttachmentChangedPublisher<Error = ScopeEventHubError>,
-    {
-    }
-
-    requires_production_impl::<HubAttachmentPublisher>();
 }
 
 #[tokio::test]

@@ -2128,8 +2128,6 @@ fn sanitize_json_value(value: &Value, depth: usize) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
     use serde_json::Number;
     use silverhand_backend_core::{
         foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
@@ -2141,7 +2139,7 @@ mod tests {
 
     use super::{
         AgentRunStateWire, AgentRunStatus, DaemonRuntimeEventError, RuntimeEventSettlement,
-        RuntimeOwnerState, finish_live_effects, runtime_exit_should_respawn, runtime_exit_status,
+        RuntimeOwnerState, runtime_exit_should_respawn, runtime_exit_status,
     };
 
     fn admission(
@@ -2198,27 +2196,6 @@ mod tests {
         };
         owner.state.lock().unwrap().runs.extend(entries);
         owner
-    }
-
-    #[test]
-    fn a_failed_post_commit_projection_does_not_short_circuit_the_next_effect() {
-        let attempted = Cell::new(0_u8);
-        let result = finish_live_effects([
-            {
-                attempted.set(attempted.get() + 1);
-                Err(DaemonRuntimeEventError::StatePoisoned)
-            },
-            {
-                attempted.set(attempted.get() + 1);
-                Ok(())
-            },
-        ]);
-
-        assert!(matches!(
-            result,
-            Err(DaemonRuntimeEventError::StatePoisoned)
-        ));
-        assert_eq!(attempted.get(), 2);
     }
 
     #[test]

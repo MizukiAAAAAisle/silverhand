@@ -88,13 +88,15 @@ INSERT INTO messages (id, conversation_id, from_kind, content, seq, created_at) 
   ('m5','c-cv1','user','five',5,1), \
   ('m6','c-cv1','user','six',6,1), \
   ('m7','c-cv1','user','seven',7,1), \
-  ('m8','c-cv2','user','eight',8,1); \
+  ('m8','c-cv2','user','eight',8,1), \
+  ('m9','c-hidden','user','nine',9,1); \
 INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id, delivered_at, failed_at, created_at) \
   VALUES \
   ('c-ws','a-agentscope','m1',NULL,NULL,1), \
   ('c-ws','a-agentscope','m2',NULL,NULL,1), \
   ('c-arch','a-agentscope','m3',10,NULL,1), \
   ('c-hidden','a-agentscope','m4',NULL,20,1), \
+  ('c-hidden','a-agentscope','m9',NULL,NULL,1), \
   ('c-cv1','a-convscope','m5',NULL,NULL,1), \
   ('c-cv1','a-convscope','m6',NULL,NULL,1), \
   ('c-cv1','a-convscope','m7',30,NULL,1), \
@@ -148,31 +150,16 @@ async fn participations_are_redacted_and_ordered() {
         .map(|row| row.conversation.as_str())
         .collect();
     assert_eq!(ids, ["c-ws", "c-arch", "c-closed"]);
-}
 
-/// The visible list is the readable list minus ARCHIVED — not minus closed. `c-arch`
-/// (archived) drops; `c-closed` (closed but not archived) stays, ordered after the
-/// open channel.
-#[tokio::test]
-async fn visible_participations_drop_archived_not_closed() {
-    let (_dir, cold) = seeded().await;
-    let view = state(&cold, "a-agentscope", "u-member").await;
-
+    // Archived drops from the visible list; closed does not.
     let visible: Vec<&str> = view
         .visible_participations
         .iter()
         .map(|row| row.conversation.as_str())
         .collect();
     assert_eq!(visible, ["c-ws", "c-closed"]);
-}
 
-/// The workspace-arm redaction facts ride the row: `c-ws` carries its workspace id,
-/// name, placement and title verbatim.
-#[tokio::test]
-async fn participation_echoes_carry_the_workspace_facts() {
-    let (_dir, cold) = seeded().await;
-    let view = state(&cold, "a-agentscope", "u-member").await;
-
+    // Readable participation echoes the stored workspace fields.
     let row = view
         .participations
         .iter()
@@ -201,18 +188,30 @@ async fn the_direct_pair_arm_admits_only_its_endpoint() {
 }
 
 /// The agent-scope seat's queue depth is the agent-WIDE undelivered total across all
-/// conversations — not per-conversation and not viewer-redacted. Two undelivered rows
-/// count; a delivered row and a failed row (in a conversation the viewer cannot even
-/// read) are both excluded.
+/// conversations — not per-conversation and not viewer-redacted. Two visible pending
+/// rows and one hidden pending row count; delivered and failed rows remain excluded.
 #[tokio::test]
 async fn the_agent_seat_queue_is_the_agent_wide_undelivered_total() {
     let (_dir, cold) = seeded().await;
-    let view = state(&cold, "a-agentscope", "u-member").await;
+    let facts = cold
+        .read_agent_runtime_state(
+            &AgentId::parse("a-agentscope").unwrap(),
+            &UserId::parse("u-member").unwrap(),
+        )
+        .await
+        .unwrap()
+        .expect("agent present");
+    assert_eq!(facts.source(), &AgentId::parse("a-agentscope").unwrap());
+    assert_eq!(
+        facts.agent_scope_generation(),
+        Some(RuntimeGeneration::new(5).unwrap())
+    );
+    let view = facts.project(PresentationFocus::None);
 
     assert_eq!(view.seats.len(), 1);
     let seat = &view.seats[0];
     assert_eq!(seat.scope, RuntimeSeatScopeView::Agent);
-    assert_eq!(seat.queue_depth, 2);
+    assert_eq!(seat.queue_depth, 3);
     assert_eq!(seat.generation, RuntimeGeneration::new(5).unwrap());
     assert_eq!(seat.status, RuntimeObservedStatus::Active);
     assert_eq!(seat.pid, Some(999));
@@ -264,43 +263,6 @@ async fn per_conversation_queue_counts_do_not_bleed() {
     assert_eq!(
         depths,
         vec![("c-cv1".to_owned(), 2), ("c-cv2".to_owned(), 1)]
-    );
-}
-
-/// The bundle is SEALED to the id the agent ROW carries, decoded from the
-/// `agents.id` column the ACL read now selects — not the request echo. This is the
-/// witness the route's `facts.source()` guard needs: the seal coordinate is a stored
-/// fact, so a query that ever resolved a different row than the one asked for would
-/// surface a mismatched id here rather than silently projecting the wrong agent.
-#[tokio::test]
-async fn the_source_is_the_stored_row_coordinate() {
-    let (_dir, cold) = seeded().await;
-    let facts = cold
-        .read_agent_runtime_state(
-            &AgentId::parse("a-agentscope").unwrap(),
-            &UserId::parse("u-member").unwrap(),
-        )
-        .await
-        .unwrap()
-        .expect("agent present");
-    assert_eq!(facts.source(), &AgentId::parse("a-agentscope").unwrap());
-}
-
-/// The agent-scope generation the focus guard reads is the seat's stored generation.
-#[tokio::test]
-async fn the_agent_scope_generation_is_the_seat_generation() {
-    let (_dir, cold) = seeded().await;
-    let facts = cold
-        .read_agent_runtime_state(
-            &AgentId::parse("a-agentscope").unwrap(),
-            &UserId::parse("u-member").unwrap(),
-        )
-        .await
-        .unwrap()
-        .expect("agent present");
-    assert_eq!(
-        facts.agent_scope_generation(),
-        Some(RuntimeGeneration::new(5).unwrap())
     );
 }
 

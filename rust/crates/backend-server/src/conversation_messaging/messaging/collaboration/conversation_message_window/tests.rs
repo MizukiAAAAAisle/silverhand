@@ -249,20 +249,8 @@ async fn ordered_call(port: OrderingRead, uri: &str) -> (StatusCode, Value) {
 }
 
 #[tokio::test]
-async fn invalid_coordinates_do_not_read_and_valid_coordinates_use_snapshot_authority() {
+async fn invalid_coordinates_are_rejected_before_the_snapshot_read() {
     let reads = Arc::new(AtomicUsize::new(0));
-    let (status, body) = ordered_call(
-        OrderingRead {
-            admission: Err(MessageWindowRefusal::NotFound),
-            reads: reads.clone(),
-        },
-        "/api/channels/c/messages?before_seq=bad&after_seq=also-bad",
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["code"], "invalid_cursor");
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
-
     let (status, body) = ordered_call(
         OrderingRead {
             admission: Ok(()),

@@ -9,10 +9,7 @@ import {
   mayContainReference,
   parseReference,
 } from '../src/index.js';
-import {
-  extractMessageReferences,
-  isAutolink,
-} from '../src/reference-markdown.js';
+import { extractMessageReferences, isAutolink } from '../src/reference-markdown.js';
 
 /**
  * #task:2000 — the reference contract, tested along its two axes separately:
@@ -197,22 +194,17 @@ describe('reference delivery predicate', () => {
   it('deduplicates by principal, in first-occurrence order', () => {
     expect(
       extractMessageReferences(
-        '<silverhand://human/shiki> then <silverhand://agent/Alice> '
-          + 'then <silverhand://human/shiki> again',
+        '<silverhand://human/shiki> then <silverhand://agent/Alice> ' +
+          'then <silverhand://human/shiki> again',
       ),
-    ).toEqual([
-      { kind: 'human', handle: 'shiki' },
-      alice,
-    ]);
+    ).toEqual([{ kind: 'human', handle: 'shiki' }, alice]);
   });
 
   it('keeps kinds distinct for the same handle', () => {
     // A typed pointer that names the wrong kind is a wrong address, so the two
     // are different references even when one namespace guarantees one holder.
     expect(
-      extractMessageReferences(
-        '<silverhand://agent/shiki> <silverhand://human/shiki>',
-      ),
+      extractMessageReferences('<silverhand://agent/shiki> <silverhand://human/shiki>'),
     ).toEqual([
       { kind: 'agent', handle: 'shiki' },
       { kind: 'human', handle: 'shiki' },
@@ -223,15 +215,13 @@ describe('reference delivery predicate', () => {
     // The content cap admits thousands of container levels; a recursive walk
     // would overflow the stack on the send path.
     const depth = 2000;
-    expect(
-      extractMessageReferences(`${'> '.repeat(depth)}<silverhand://agent/Alice>`),
-    ).toEqual([]); // quoted, at any depth
-    expect(
-      extractMessageReferences(`${'- '.repeat(depth)}<silverhand://agent/Alice>`),
-    ).toEqual([alice]); // nested lists are still prose, at any depth
+    expect(extractMessageReferences(`${'> '.repeat(depth)}<silverhand://agent/Alice>`)).toEqual([]); // quoted, at any depth
+    expect(extractMessageReferences(`${'- '.repeat(depth)}<silverhand://agent/Alice>`)).toEqual([
+      alice,
+    ]); // nested lists are still prose, at any depth
   });
 
-  it('costs nothing for a body without the literal', () => {
+  it('returns no references for a body without the literal', () => {
     expect(extractMessageReferences('plain text @alice and `code`')).toEqual([]);
   });
 });
@@ -248,8 +238,10 @@ describe('reference delivery predicate', () => {
  * TRUE rather than treated as out of scope.
  */
 describe('isAutolink — the shared syntax layer', () => {
-  const span = (source: string, url: string, start = 0, end = source.length) =>
-    ({ url, position: { start: { offset: start }, end: { offset: end } } });
+  const span = (source: string, url: string, start = 0, end = source.length) => ({
+    url,
+    position: { start: { offset: start }, end: { offset: end } },
+  });
 
   /** The span `fromMarkdown` would give the autolink written in `source`. */
   const autoSpan = (source: string, url: string) => {
@@ -259,16 +251,12 @@ describe('isAutolink — the shared syntax layer', () => {
 
   it('accepts a node whose source slice is exactly `<url>`', () => {
     const source = 'cc <silverhand://agent/Alice> please';
-    expect(isAutolink(autoSpan(source, 'silverhand://agent/Alice'), source)).toBe(
-      true,
-    );
+    expect(isAutolink(autoSpan(source, 'silverhand://agent/Alice'), source)).toBe(true);
   });
 
   it('refuses a labelled link, whose slice carries a label', () => {
     const source = '[Alice](silverhand://agent/Alice)';
-    expect(isAutolink(span(source, 'silverhand://agent/Alice'), source)).toBe(
-      false,
-    );
+    expect(isAutolink(span(source, 'silverhand://agent/Alice'), source)).toBe(false);
   });
 
   it('refuses a node whose offsets are missing', () => {
@@ -287,31 +275,23 @@ describe('isAutolink — the shared syntax layer', () => {
   });
 
   it('refuses a node with no destination at all', () => {
-    expect(isAutolink(span('<x>', undefined as unknown as string), '<x>')).toBe(
-      false,
-    );
+    expect(isAutolink(span('<x>', undefined as unknown as string), '<x>')).toBe(false);
   });
 
   it('says nothing about the scheme or the grammar', () => {
     // Both TRUE: this function reports how the link was WRITTEN. The scheme test
     // and the strict destination parser are separate gates, held by each caller.
     const external = '<https://example.com>';
-    expect(isAutolink(span(external, 'https://example.com'), external)).toBe(
-      true,
-    );
+    expect(isAutolink(span(external, 'https://example.com'), external)).toBe(true);
     const malformed = '<silverhand://team/Alice>';
-    expect(isAutolink(span(malformed, 'silverhand://team/Alice'), malformed)).toBe(
-      true,
-    );
+    expect(isAutolink(span(malformed, 'silverhand://team/Alice'), malformed)).toBe(true);
   });
 
   it('says nothing about position, which each axis names for itself', () => {
     // Inside a blockquote: delivery refuses this position, the renderer chips it.
     // The disagreement is legitimate and lives in the callers, not here.
     const source = '> cc <silverhand://agent/Alice>';
-    expect(isAutolink(autoSpan(source, 'silverhand://agent/Alice'), source)).toBe(
-      true,
-    );
+    expect(isAutolink(autoSpan(source, 'silverhand://agent/Alice'), source)).toBe(true);
   });
 });
 
@@ -332,24 +312,16 @@ describe('a body that begins with a BOM still addresses the people it names', ()
   it('reads an autolink at the very start and one further in', () => {
     // Both positions, because the shift applies document-wide rather than only to
     // whatever sits against the prefix.
-    expect(extractMessageReferences(`${bom}<silverhand://agent/Alice>`)).toEqual([
-      alice,
-    ]);
+    expect(extractMessageReferences(`${bom}<silverhand://agent/Alice>`)).toEqual([alice]);
+    expect(extractMessageReferences(`${bom}hi <silverhand://agent/Alice>`)).toEqual([alice]);
     expect(
-      extractMessageReferences(`${bom}hi <silverhand://agent/Alice>`),
-    ).toEqual([alice]);
-    expect(
-      extractMessageReferences(
-        `${bom}first line\n\nsecond <silverhand://agent/Alice> here`,
-      ),
+      extractMessageReferences(`${bom}first line\n\nsecond <silverhand://agent/Alice> here`),
     ).toEqual([alice]);
   });
 
   it('reads every reference in the body, in the usual order', () => {
     expect(
-      extractMessageReferences(
-        `${bom}<silverhand://human/shiki> and <silverhand://agent/Alice>`,
-      ),
+      extractMessageReferences(`${bom}<silverhand://human/shiki> and <silverhand://agent/Alice>`),
     ).toEqual([{ kind: 'human', handle: 'shiki' }, alice]);
   });
 
@@ -372,12 +344,8 @@ describe('a body that begins with a BOM still addresses the people it names', ()
     // Opposite answers from the same four spaces. A coordinate rule that removed the
     // whole run would hand the parser `    <ref>` in both cases and lose the second
     // reference — which is why the run must stay in the body it was counted in.
-    expect(extractMessageReferences(`${bom}    <silverhand://agent/Alice>`)).toEqual(
-      [],
-    );
-    expect(
-      extractMessageReferences(`${bom}${bom}    <silverhand://agent/Alice>`),
-    ).toEqual([alice]);
+    expect(extractMessageReferences(`${bom}    <silverhand://agent/Alice>`)).toEqual([]);
+    expect(extractMessageReferences(`${bom}${bom}    <silverhand://agent/Alice>`)).toEqual([alice]);
   });
 
   it('keeps the position rules it always had', () => {
@@ -394,9 +362,7 @@ describe('a body that begins with a BOM still addresses the people it names', ()
 
   it('treats a BOM elsewhere as the content it already was', () => {
     // Nothing shifted for these, so nothing needed fixing — and nothing may change.
-    expect(extractMessageReferences(`hi ${bom}<silverhand://agent/Alice>`)).toEqual(
-      [alice],
-    );
+    expect(extractMessageReferences(`hi ${bom}<silverhand://agent/Alice>`)).toEqual([alice]);
     for (const invisible of ['\u200b', '\u00a0']) {
       expect(
         extractMessageReferences(`${invisible}<silverhand://agent/Alice>`),

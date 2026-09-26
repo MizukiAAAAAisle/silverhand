@@ -21,18 +21,6 @@ pub enum ReadHistoryAnchor {
     Around(String),
 }
 
-impl ReadHistoryAnchor {
-    /// The wire `anchor` discriminator string.
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Self::Head => "head",
-            Self::BeforeSeq(_) => "before_seq",
-            Self::AfterSeq(_) => "after_seq",
-            Self::Around(_) => "around_message_id",
-        }
-    }
-}
-
 /// The around split, mirroring the reference: `beforeCount = floor((limit-1)/2)`
 /// messages strictly before the anchor seq, then the anchor row, then the remaining
 /// budget after. Returned so the adapter issues exactly the reference's three reads.
@@ -154,17 +142,6 @@ mod tests {
     }
 
     #[test]
-    fn anchor_kinds_render_the_wire_discriminator() {
-        assert_eq!(ReadHistoryAnchor::Head.kind(), "head");
-        assert_eq!(ReadHistoryAnchor::BeforeSeq(5).kind(), "before_seq");
-        assert_eq!(ReadHistoryAnchor::AfterSeq(5).kind(), "after_seq");
-        assert_eq!(
-            ReadHistoryAnchor::Around("m".to_owned()).kind(),
-            "around_message_id"
-        );
-    }
-
-    #[test]
     fn snippet_uses_the_ecmascript_whitespace_set_not_rust_is_whitespace() {
         // U+FEFF is JS `\s` (collapses); U+0085 NEL is NOT JS `\s` (kept
         // verbatim). Rust's char::is_whitespace() would invert both.
@@ -192,12 +169,6 @@ mod tests {
         content.push('\u{1F600}'); // 😀 — units 159 (high) + 160 (low)
         content.push_str(&"b".repeat(20)); // push over the 160 cap
         let snip = snippet_for(&content);
-        assert!(
-            !snip.contains('\u{FFFD}'),
-            "no surrogate half is replaced with U+FFFD: {snip:?}"
-        );
-        // Ends with the ellipsis and the astral char was dropped whole (shrunk inward).
-        assert!(snip.ends_with('…'));
-        assert!(!snip.contains('\u{1F600}'));
+        assert_eq!(snip, format!("{}…", "a".repeat(158)));
     }
 }

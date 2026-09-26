@@ -877,52 +877,6 @@ mod tests {
         .unwrap()
     }
     #[test]
-    fn operation_specific_facts_have_positive_controls() {
-        let u = UserId::parse("u").unwrap();
-        let w = WorkspaceId::parse("w").unwrap();
-        assert!(
-            ActiveWorkspaceChannelDirectory::projected(
-                u.clone(),
-                w.clone(),
-                DirectoryWorkspaceKind::Regular,
-                vec![row(
-                    "u",
-                    "w",
-                    "a",
-                    DirectoryRoster::Open,
-                    None,
-                    1,
-                    true,
-                    ChannelVisibility::Private
-                )],
-                sort("u", "w", &["a"])
-            )
-            .unwrap()
-            .bind(&u, &w)
-            .is_ok()
-        );
-        assert!(
-            ArchivedWorkspaceChannelDirectory::projected(
-                u.clone(),
-                w.clone(),
-                DirectoryWorkspaceKind::Regular,
-                vec![row(
-                    "u",
-                    "w",
-                    "a",
-                    DirectoryRoster::Open,
-                    Some(2),
-                    1,
-                    true,
-                    ChannelVisibility::Private
-                )]
-            )
-            .unwrap()
-            .bind(&u, &w)
-            .is_ok()
-        );
-    }
-    #[test]
     fn only_active_regular_public_rows_may_widen() {
         let u = UserId::parse("u").unwrap();
         let w = WorkspaceId::parse("w").unwrap();
@@ -1199,10 +1153,10 @@ mod tests {
             Some(0)
         );
         assert_eq!(
-            ArchivedSince::from_ecmascript_number(ArchivedSince::MAX_SAFE_INTEGER as f64)
+            ArchivedSince::from_ecmascript_number(9_007_199_254_740_991.0)
                 .unwrap()
                 .persisted_value(),
-            Some(ArchivedSince::MAX_SAFE_INTEGER)
+            Some(9_007_199_254_740_991)
         );
         assert_eq!(
             ArchivedSince::from_ecmascript_number(9_007_199_254_740_992.0)
@@ -1216,7 +1170,5 @@ mod tests {
                 .unwrap()
                 .is_beyond_persisted_range()
         );
-        let absent: Option<ArchivedSince> = None;
-        assert!(absent.is_none());
     }
 }

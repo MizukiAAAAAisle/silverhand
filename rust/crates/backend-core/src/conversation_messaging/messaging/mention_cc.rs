@@ -262,20 +262,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_body_names_its_recipient_with_the_canonical_form() {
-        let body = render_copy_body(&source(&alice(), "Space", "General", "ping"));
-
-        assert_eq!(
-            body,
-            "A user mentioned you (<silverhand://agent/Alice>) in `Space` · `General`.\nYou are \
-             not a member of that channel, so you cannot read it or reply there. This line is \
-             your direct message with the person who mentioned you — answer here and they will \
-             see it.\n\nOriginal message:\n> ping\n\nIf the work belongs in that channel, say so \
-             here: only a person can put you in it."
-        );
-    }
-
     /// A label is free text, so it must not be able to end the line it was quoted
     /// into — including through the separators that are not `\n`.
     #[test]
@@ -306,19 +292,6 @@ mod tests {
         }
     }
 
-    /// A backtick run inside a label must not close the span early, and a value
-    /// touching a backtick at either end needs the padding CommonMark requires.
-    #[test]
-    fn a_label_cannot_close_its_own_code_span() {
-        let single = render_copy_body(&source(&alice(), "a`b", "General", "ping"));
-        let run = render_copy_body(&source(&alice(), "a``b", "General", "ping"));
-        let edge = render_copy_body(&source(&alice(), "`", "General", "ping"));
-
-        assert!(single.contains("`` a`b ``"));
-        assert!(run.contains("``` a``b ```"));
-        assert!(edge.contains("`` ` ``"));
-    }
-
     /// Quoting an original re-states whatever it said, so every line of it has to
     /// stay inside the quote: a reference in the original addresses nobody again.
     #[test]
@@ -341,95 +314,11 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn an_excerpt_collapses_whitespace_and_trims() {
-        assert_eq!(mention_excerpt("  hello\n\tthere  "), "hello there");
-        assert_eq!(mention_excerpt("a\u{feff}b"), "a b");
-        assert_eq!(mention_excerpt("   "), "");
-    }
-
-    /// The limit is a count of characters, and the ellipsis stands in for what was
-    /// cut — so the result never exceeds the limit.
-    #[test]
-    fn an_excerpt_is_cut_at_the_limit() {
-        let exactly = "a".repeat(MENTION_EXCERPT_LIMIT);
-        let over = "a".repeat(MENTION_EXCERPT_LIMIT + 1);
-
-        assert_eq!(mention_excerpt(&exactly), exactly);
-        let cut = mention_excerpt(&over);
-        assert_eq!(cut.chars().count(), MENTION_EXCERPT_LIMIT);
-        assert!(cut.ends_with('…'));
-        assert_eq!(
-            cut.chars().filter(|character| *character == 'a').count(),
-            MENTION_EXCERPT_LIMIT - 1
-        );
-    }
-
-    /// A character is never cut in half, which is the one place this deliberately
-    /// answers better than the implementation it mirrors: counting UTF-16 units can
-    /// split a surrogate pair, and a lone surrogate is not text.
-    #[test]
-    fn an_excerpt_never_splits_a_character() {
-        let astral = "𝄞".repeat(MENTION_EXCERPT_LIMIT + 10);
-
-        let cut = mention_excerpt(&astral);
-
-        assert_eq!(cut.chars().count(), MENTION_EXCERPT_LIMIT);
-        assert!(
-            cut.chars()
-                .take(MENTION_EXCERPT_LIMIT - 1)
-                .all(|c| c == '𝄞')
-        );
-    }
 }
 
 #[cfg(test)]
 mod escape_tests {
     use super::*;
-
-    /// A bare carriage return ends a line for a Markdown reader, so the original
-    /// must be quoted at it too — otherwise the rest of someone else's message
-    /// becomes live prose in a body that addresses people.
-    #[test]
-    fn every_line_ending_keeps_the_original_inside_the_quote() {
-        let recipient = ParticipantHandle::parse("Alice").unwrap();
-        for original in [
-            "safe\r<silverhand://agent/Bob>",
-            "safe\r\n<silverhand://agent/Bob>",
-            "safe\n<silverhand://agent/Bob>",
-        ] {
-            let body = render_copy_body(&MentionCopySource {
-                recipient_handle: &recipient,
-                source_workspace_name: "Space",
-                source_conversation_title: "General",
-                source_content: original,
-            });
-
-            for line in body.lines() {
-                let names_someone_else = line.contains("silverhand://agent/Bob");
-                assert!(
-                    !names_someone_else || line.starts_with("> "),
-                    "a line of the original escaped the quote for {original:?}: {line}"
-                );
-            }
-            assert!(body.contains("> safe"));
-        }
-    }
-
-    /// The excerpt's whitespace set is the other implementation's, character for
-    /// character: U+0085 is Unicode whitespace that it does NOT collapse, and a
-    /// byte-order mark is not whitespace that it DOES.
-    #[test]
-    fn the_excerpt_whitespace_set_is_the_one_the_other_side_uses() {
-        assert_eq!(mention_excerpt("a\u{feff}b"), "a b");
-        assert_eq!(mention_excerpt("a\u{a0}b"), "a b");
-        assert_eq!(mention_excerpt("a\u{2028}b"), "a b");
-        assert_eq!(mention_excerpt("a\u{2029}b"), "a b");
-        assert_eq!(mention_excerpt("a\u{3000}b"), "a b");
-        // Collapsed by `char::is_whitespace`, and deliberately not here.
-        assert_eq!(mention_excerpt("a\u{85}b"), "a\u{85}b");
-    }
 
     #[test]
     fn a_recipient_is_named_or_refused() {

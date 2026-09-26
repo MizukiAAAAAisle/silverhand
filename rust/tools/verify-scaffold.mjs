@@ -3,11 +3,14 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const rustRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const cargo = spawnSync(
-  'cargo',
-  ['metadata', '--locked', '--format-version', '1'],
-  { cwd: rustRoot, encoding: 'utf8' },
-);
+const cargo = spawnSync('cargo', ['metadata', '--locked', '--format-version', '1'], {
+  cwd: rustRoot,
+  encoding: 'utf8',
+  maxBuffer: 16 * 1024 * 1024,
+});
+if (cargo.error) {
+  throw cargo.error;
+}
 if (cargo.status !== 0) {
   process.stderr.write(cargo.stderr);
   process.exit(cargo.status ?? 1);
@@ -17,6 +20,8 @@ const metadata = JSON.parse(cargo.stdout);
 const names = [
   'silverhand-backend-app',
   'silverhand-backend-core',
+  'silverhand-backend-filesystem',
+  'silverhand-backend-observability',
   'silverhand-backend-server',
   'silverhand-backend-sqlite',
 ];
@@ -28,18 +33,23 @@ const workspaceNames = metadata.workspace_members
 assertEqual(workspaceNames, names, 'workspace members');
 assertInternalDependencies('silverhand-backend-app', null, [
   'silverhand-backend-core',
+  'silverhand-backend-filesystem',
+  'silverhand-backend-observability',
   'silverhand-backend-server',
   'silverhand-backend-sqlite',
 ]);
 assertInternalDependencies('silverhand-backend-core', null, []);
+assertInternalDependencies('silverhand-backend-filesystem', null, ['silverhand-backend-core']);
+assertInternalDependencies('silverhand-backend-observability', null, []);
 assertInternalDependencies('silverhand-backend-server', null, [
   'silverhand-backend-core',
+  'silverhand-backend-filesystem',
+  'silverhand-backend-observability',
 ]);
-assertInternalDependencies('silverhand-backend-server', 'dev', [
-  'silverhand-backend-sqlite',
-]);
+assertInternalDependencies('silverhand-backend-server', 'dev', ['silverhand-backend-sqlite']);
 assertInternalDependencies('silverhand-backend-sqlite', null, [
   'silverhand-backend-core',
+  'silverhand-backend-observability',
 ]);
 assertNormalDependenciesExclude('silverhand-backend-server', [
   'sqlx',
@@ -68,12 +78,18 @@ assertNormalDependencyClosureExcludes('silverhand-backend-server', [
   'libsqlite3-sys',
   'sqlx',
 ]);
-assertNormalDependencyClosureExcludes('silverhand-backend-core', [
-  'silverhand-backend-app',
-]);
-assertNormalDependencyClosureExcludes('silverhand-backend-sqlite', [
-  'silverhand-backend-app',
-]);
+assertNormalDependencyClosureExcludes('silverhand-backend-core', ['silverhand-backend-app']);
+assertNormalDependencyClosureExcludes('silverhand-backend-sqlite', ['silverhand-backend-app']);
+for (const adapter of ['silverhand-backend-filesystem', 'silverhand-backend-observability']) {
+  assertNormalDependencyClosureExcludes(adapter, [
+    'silverhand-backend-app',
+    'silverhand-backend-server',
+    'silverhand-backend-sqlite',
+    'axum',
+    'libsqlite3-sys',
+    'sqlx',
+  ]);
+}
 
 process.stdout.write('Rust scaffold dependency direction verified\n');
 

@@ -137,7 +137,7 @@ async fn production_router_matches_the_typescript_signed_closed_set() {
 }
 
 #[tokio::test]
-async fn all_three_surfaces_require_the_human_principal_before_product_work() {
+async fn all_three_surfaces_reject_a_missing_human_principal() {
     let (_dir, store) = store("workspace_member").await;
     for path in [
         "/api/workspaces/w/message-unread",
@@ -475,7 +475,7 @@ async fn returned_pointer_identity_requires_utf8_and_preserves_nul() {
         let body: Value =
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
-        if path == "/api/workspaces/w/message-unread" {
+        if path != "/api/message-unread-summary" {
             assert_eq!(body["latest_by_conversation"]["c"]["message_id"], "a\0b");
             assert_eq!(
                 body["latest_by_conversation"]["c"]["seq"],
@@ -533,7 +533,7 @@ async fn aggregate_rollups_keep_sparse_ordinals_and_conversation_identity() {
 }
 
 #[tokio::test]
-async fn publication_combines_only_same_snapshot_counts_and_keeps_tier_rules() {
+async fn publication_combines_workspace_counts_and_keeps_tier_rules() {
     use silverhand_backend_core::conversation_messaging::messaging::unread::{
         UnreadAudience, UnreadReadModel,
     };

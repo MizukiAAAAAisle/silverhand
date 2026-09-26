@@ -35,8 +35,6 @@ fn main() {
     assert_eq!(steps.first().copied(), Some(baseline));
     assert_eq!(steps.last().copied(), Some(current));
     assert!(steps.windows(2).all(|pair| pair[0] < pair[1]));
-    println!("cargo:rustc-env=SILVERHAND_BASELINE_MIGRATION_STEP={baseline}");
-    println!("cargo:rustc-env=SILVERHAND_CURRENT_MIGRATION_STEP={current}");
     println!(
         "cargo:rustc-env=SILVERHAND_MIGRATION_STEPS={}",
         steps

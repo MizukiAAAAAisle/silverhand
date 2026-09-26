@@ -526,7 +526,16 @@ async fn strict_middleware_injects_the_exact_typed_principal_before_product_code
     )
     .await;
     assert_eq!(response.status, StatusCode::OK);
-    assert_eq!(response.json()["source"], Value::Null);
+    assert_eq!(
+        response.json(),
+        json!({
+            "agent": GLOBAL_AGENT,
+            "source": null,
+            "target": null,
+            "generation": 1,
+            "daemon": "daemon-agent",
+        })
+    );
 
     for (aid, authorization, legacy, expected) in [
         (
@@ -975,7 +984,14 @@ async fn unknown_token_skips_custody_but_known_token_surfaces_one_safe_driver_er
     let calls = Calls(Arc::new(AtomicUsize::new(0)));
     let app = app(fixture.authority, calls.clone());
 
-    let malformed_aid = request(&app, "%FF", Some("Basic invalid"), None, None).await;
+    let malformed_aid = request(
+        &app,
+        "%FF",
+        Some(&format!("Bearer {}", issued.bearer)),
+        None,
+        None,
+    )
+    .await;
     assert_eq!(malformed_aid.status, StatusCode::UNAUTHORIZED);
     assert!(logs.error_events().is_empty());
 

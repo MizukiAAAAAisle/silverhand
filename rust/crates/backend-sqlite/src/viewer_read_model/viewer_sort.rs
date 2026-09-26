@@ -808,7 +808,7 @@ INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, titl
     }
 
     #[tokio::test]
-    async fn star_then_reorder_resolve_membership_under_the_lock_and_echo_the_committed_state() {
+    async fn touch_then_reorder_echoes_persisted_dense_ranks_and_manual_mode() {
         let (_dir, sort, pool) = open_seeded().await;
         // Touch conv-a: reaches the live group, stamps last_accessed_at, echoes state.
         let committed = sort
@@ -968,9 +968,9 @@ INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, titl
     }
 
     #[tokio::test]
-    async fn the_reserved_writer_clock_drives_the_write_and_post_image() {
-        // A held fixed clock proves the timestamp is a single reserved-writer
-        // sample: the committed row's stamp is exactly the value the writer read.
+    async fn the_configured_clock_value_is_persisted_and_echoed() {
+        // The committed row and post-image carry the configured clock value.
+        // A fixed clock does not prove when or how often it was sampled.
         let (_dir, mut sort, pool) = open_seeded().await;
         sort.clock = SortClock::Fixed(1_234_567);
         let committed = sort
@@ -991,7 +991,7 @@ INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, titl
             .find(|e| e.entity_id == "conv-a")
             .and_then(|e| e.last_accessed_at);
         assert_eq!(echoed, Some(1_234_567));
-        // And the committed row does too — one sample drove both.
+        // And the committed row carries the same value.
         let stored: Option<i64> = sqlx::query_scalar(
             "SELECT last_accessed_at FROM user_sort_entry WHERE list_key='channels:ws-1' AND entity_id='conv-a'",
         )
@@ -1002,10 +1002,10 @@ INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, titl
     }
 
     #[tokio::test]
-    async fn unstar_drops_the_favorites_rank_orphan_in_the_same_transaction() {
+    async fn unstar_clears_the_home_stamp_and_removes_the_favorites_rank() {
         let (_dir, sort, pool) = open_seeded().await;
         // Star conv-a, then seed a favorites rank orphan, then unstar: the unstar
-        // clears starred_at AND drops the favorites orphan, all in one tx.
+        // clears starred_at AND drops the favorites orphan.
         sort.apply_sort_mutation(
             &user("user-1"),
             &channels("ws-1"),

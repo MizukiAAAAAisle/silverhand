@@ -31,6 +31,33 @@ describe('identity search wire contract', () => {
       runtime: null,
     };
     const base = body();
+    for (const [count, total, truncated] of [
+      [1, 1, false],
+      [20, 21, true],
+    ] as const) {
+      const valid = {
+        ...base,
+        identities: {
+          ...base.identities,
+          humans: {
+            results: Array.from({ length: count }, (_, i) => ({ ...row, id: `human-${i}` })),
+            total,
+            truncated,
+          },
+          agents: {
+            results: Array.from({ length: count }, (_, i) => ({
+              ...row,
+              kind: 'agent',
+              runtime: 'codex',
+              id: `agent-${i}`,
+            })),
+            total,
+            truncated,
+          },
+        },
+      };
+      expect(SearchWithIdentitiesDtoSchema.parse(valid)).toMatchObject(valid);
+    }
     for (const category of [
       { results: [row], total: 0, truncated: false },
       { results: [row], total: 1, truncated: true },

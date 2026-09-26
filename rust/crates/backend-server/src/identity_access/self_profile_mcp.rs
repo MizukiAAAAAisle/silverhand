@@ -301,7 +301,7 @@ mod tests {
     impl AgentProfileMcpDataPlane for FakeDataPlane {
         async fn read_config(&self, agent: &AgentId) -> Result<Option<String>, McpDataPlaneFault> {
             self.record(agent);
-            clone_result(&self.inner.read.lock().unwrap())
+            self.inner.read.lock().unwrap().clone()
         }
 
         async fn write_config(
@@ -311,10 +311,7 @@ mod tests {
         ) -> Result<McpBytesWritten, McpDataPlaneFault> {
             self.record(agent);
             *self.inner.wrote_raw.lock().unwrap() = Some(raw.to_string());
-            match &*self.inner.write.lock().unwrap() {
-                Ok(bytes) => Ok(*bytes),
-                Err(fault) => Err(clone_fault(fault)),
-            }
+            self.inner.write.lock().unwrap().clone()
         }
 
         async fn probe(
@@ -325,47 +322,7 @@ mod tests {
             self.record(agent);
             *self.inner.probed_command.lock().unwrap() =
                 Some((command.server_name.clone(), command.include_tools));
-            match &*self.inner.probe.lock().unwrap() {
-                Ok(outcome) => Ok(clone_outcome(outcome)),
-                Err(fault) => Err(clone_fault(fault)),
-            }
-        }
-    }
-
-    fn clone_result(
-        result: &Result<Option<String>, McpDataPlaneFault>,
-    ) -> Result<Option<String>, McpDataPlaneFault> {
-        match result {
-            Ok(value) => Ok(value.clone()),
-            Err(fault) => Err(clone_fault(fault)),
-        }
-    }
-
-    fn clone_fault(fault: &McpDataPlaneFault) -> McpDataPlaneFault {
-        McpDataPlaneFault {
-            code: fault.code,
-            message: fault.message.clone(),
-        }
-    }
-
-    fn clone_outcome(outcome: &McpProbeOutcome) -> McpProbeOutcome {
-        McpProbeOutcome {
-            ok: outcome.ok,
-            phase: outcome.phase,
-            message: outcome.message.clone(),
-            server_info: outcome.server_info.as_ref().map(|info| McpProbeServerInfo {
-                name: info.name.clone(),
-                version: info.version.clone(),
-            }),
-            tools: outcome.tools.as_ref().map(|tools| {
-                tools
-                    .iter()
-                    .map(|tool| McpProbeTool {
-                        name: tool.name.clone(),
-                        description: tool.description.clone(),
-                    })
-                    .collect()
-            }),
+            self.inner.probe.lock().unwrap().clone()
         }
     }
 

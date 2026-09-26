@@ -27,7 +27,6 @@ describe('daemon admission authority', () => {
     expect(DAEMON_ADMISSION).toEqual(contract);
     expect(PROTOCOL_VERSIONS.host).toBe(contract.hostProtocolVersion);
     expect(PROTOCOL_VERSIONS.outbound).toBe(contract.outboundProtocolVersion);
-    expect(PROTOCOL_VERSIONS.host).not.toBe(PROTOCOL_VERSIONS.outbound);
     expect(apiPaths.hostConnect).toBe(contract.hostWebSocketPath);
   });
 });

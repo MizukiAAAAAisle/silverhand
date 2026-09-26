@@ -14,13 +14,10 @@ import {
   RuntimeStopParamsSchema,
   RuntimeStopResultSchema,
   RuntimeDeliverRefusedResultSchema,
+  RuntimeDeliverResultSchema,
   type IntentName,
 } from '../src/protocol.js';
-import {
-  schemaForFixture,
-  wireFixtures,
-  type WireFixture,
-} from './fixtures/wire/wire-fixtures.js';
+import { schemaForFixture, wireFixtures, type WireFixture } from './fixtures/wire/wire-fixtures.js';
 
 /**
  * Wire-contract acceptance suite. The fixtures committed under
@@ -113,9 +110,7 @@ describe('wire contract — every fixture is JSON + schema valid', () => {
       if (inner !== undefined) {
         if (fixture.kind.kind === 'request') {
           // RequestFrame.params
-          const innerResult = inner.safeParse(
-            (parsed as { params: unknown }).params,
-          );
+          const innerResult = inner.safeParse((parsed as { params: unknown }).params);
           expect(
             innerResult.success,
             innerResult.success
@@ -129,9 +124,7 @@ describe('wire contract — every fixture is JSON + schema valid', () => {
         } else if (fixture.kind.kind === 'response_success') {
           // ResponseFrame success arm carries `.result`. response_error
           // fixtures don't have an inner schema (kind.kind === 'response_error').
-          const innerResult = inner.safeParse(
-            (parsed as { result: unknown }).result,
-          );
+          const innerResult = inner.safeParse((parsed as { result: unknown }).result);
           expect(
             innerResult.success,
             innerResult.success
@@ -145,9 +138,7 @@ describe('wire contract — every fixture is JSON + schema valid', () => {
         } else if (fixture.kind.kind === 'response_error_typed') {
           // Per-intent typed error arm carries `.error`. The inner
           // schema is the intent's `error` entry (Cindy D2 P2-1).
-          const innerResult = inner.safeParse(
-            (parsed as { error: unknown }).error,
-          );
+          const innerResult = inner.safeParse((parsed as { error: unknown }).error);
           expect(
             innerResult.success,
             innerResult.success
@@ -169,9 +160,7 @@ describe('wire contract — every fixture is JSON + schema valid', () => {
       expect(reParsed).toEqual(parsed);
 
       // (5) Size cap.
-      expect(Buffer.byteLength(fixture.frame, 'utf8')).toBeLessThanOrEqual(
-        MAX_FRAME_BYTES,
-      );
+      expect(Buffer.byteLength(fixture.frame, 'utf8')).toBeLessThanOrEqual(MAX_FRAME_BYTES);
     });
   }
 });
@@ -199,7 +188,7 @@ describe('wire contract — fixture catalogue invariants', () => {
       'env',
     ];
     const runtimeStartFixtures = wireFixtures.filter(
-      f => f.kind.kind === 'request' && f.kind.intent === 'runtime_start',
+      (f) => f.kind.kind === 'request' && f.kind.intent === 'runtime_start',
     );
     expect(runtimeStartFixtures.length).toBeGreaterThan(0);
     for (const fixture of runtimeStartFixtures) {
@@ -218,30 +207,23 @@ describe('wire contract — fixture catalogue invariants', () => {
   it('every intent has at least one request fixture', () => {
     const missing: IntentName[] = [];
     for (const intent of ALL_INTENTS) {
-      const has = wireFixtures.some(
-        (f) => f.kind.kind === 'request' && f.kind.intent === intent,
-      );
+      const has = wireFixtures.some((f) => f.kind.kind === 'request' && f.kind.intent === intent);
       if (!has) missing.push(intent);
     }
-    expect(
-      missing,
-      `intents missing a request fixture: ${missing.join(', ')}`,
-    ).toEqual([]);
+    expect(missing, `intents missing a request fixture: ${missing.join(', ')}`).toEqual([]);
   });
 
   it('every intent has at least one response_success fixture', () => {
     const missing: IntentName[] = [];
     for (const intent of ALL_INTENTS) {
       const has = wireFixtures.some(
-        (f) =>
-          f.kind.kind === 'response_success' && f.kind.intent === intent,
+        (f) => f.kind.kind === 'response_success' && f.kind.intent === intent,
       );
       if (!has) missing.push(intent);
     }
-    expect(
-      missing,
-      `intents missing a response_success fixture: ${missing.join(', ')}`,
-    ).toEqual([]);
+    expect(missing, `intents missing a response_success fixture: ${missing.join(', ')}`).toEqual(
+      [],
+    );
   });
 
   it('every ResponseError code has at least one fixture', () => {
@@ -261,10 +243,7 @@ describe('wire contract — fixture catalogue invariants', () => {
       });
       if (!has) missing.push(code);
     }
-    expect(
-      missing,
-      `error codes missing a fixture: ${missing.join(', ')}`,
-    ).toEqual([]);
+    expect(missing, `error codes missing a fixture: ${missing.join(', ')}`).toEqual([]);
   });
 
   it('every EventFrame discriminator arm has at least one fixture', () => {
@@ -277,10 +256,7 @@ describe('wire contract — fixture catalogue invariants', () => {
       });
       if (!has) missing.push(name);
     }
-    expect(
-      missing,
-      `event arms missing a fixture: ${missing.join(', ')}`,
-    ).toEqual([]);
+    expect(missing, `event arms missing a fixture: ${missing.join(', ')}`).toEqual([]);
   });
 
   it('each ParsedEvent kind has a runtime_parsed_event fixture', () => {
@@ -297,17 +273,11 @@ describe('wire contract — fixture catalogue invariants', () => {
           event?: string;
           parsed?: { kind?: string };
         };
-        return (
-          parsed.event === 'runtime_parsed_event' &&
-          parsed.parsed?.kind === kind
-        );
+        return parsed.event === 'runtime_parsed_event' && parsed.parsed?.kind === kind;
       });
       if (!has) missing.push(kind);
     }
-    expect(
-      missing,
-      `ParsedEvent kinds missing a fixture: ${missing.join(', ')}`,
-    ).toEqual([]);
+    expect(missing, `ParsedEvent kinds missing a fixture: ${missing.join(', ')}`).toEqual([]);
   });
 
   it('AnyFrameSchema accepts every non-typed fixture frame', () => {
@@ -323,10 +293,7 @@ describe('wire contract — fixture catalogue invariants', () => {
       const parsed = JSON.parse(f.frame);
       if (!AnyFrameSchema.safeParse(parsed).success) failures.push(f.name);
     }
-    expect(
-      failures,
-      `AnyFrameSchema rejected: ${failures.join(', ')}`,
-    ).toEqual([]);
+    expect(failures, `AnyFrameSchema rejected: ${failures.join(', ')}`).toEqual([]);
   });
 
   it('LooseAnyFrameSchema accepts every fixture frame (including typed-error)', () => {
@@ -339,10 +306,7 @@ describe('wire contract — fixture catalogue invariants', () => {
       const parsed = JSON.parse(f.frame);
       if (!LooseAnyFrameSchema.safeParse(parsed).success) failures.push(f.name);
     }
-    expect(
-      failures,
-      `LooseAnyFrameSchema rejected: ${failures.join(', ')}`,
-    ).toEqual([]);
+    expect(failures, `LooseAnyFrameSchema rejected: ${failures.join(', ')}`).toEqual([]);
   });
 
   it('every typed intent has a fixture for each of its typed error codes', () => {
@@ -357,7 +321,7 @@ describe('wire contract — fixture catalogue invariants', () => {
     const missing: string[] = [];
     for (const intent of ALL_INTENTS) {
       for (const code of intentTypedErrorCodes(intent)) {
-        const has = wireFixtures.some(f => {
+        const has = wireFixtures.some((f) => {
           if (f.kind.kind !== 'response_error_typed') return false;
           if (f.kind.intent !== intent) return false;
           const parsed = JSON.parse(f.frame) as { error?: { code?: string } };
@@ -366,10 +330,9 @@ describe('wire contract — fixture catalogue invariants', () => {
         if (!has) missing.push(`${intent}:${code}`);
       }
     }
-    expect(
-      missing,
-      `typed intents missing a typed-error fixture: ${missing.join(', ')}`,
-    ).toEqual([]);
+    expect(missing, `typed intents missing a typed-error fixture: ${missing.join(', ')}`).toEqual(
+      [],
+    );
   });
 
   it('every response_error_typed fixture targets an intent with a declared error schema', () => {
@@ -407,33 +370,23 @@ describe('wire contract — fixture catalogue invariants', () => {
   // arm in protocol.ts immediately fails the matching catalogue test.
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const unwrapEffects = (schema: any): any =>
-    schema?._def?.schema ?? schema;
+  const unwrapEffects = (schema: any): any => schema?._def?.schema ?? schema;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const literalValue = (schema: any): unknown => schema?._def?.value;
 
   it('runtime_start.result covers every `started` arm (success/cooldown)', () => {
-    const arms = RuntimeStartResultSchema.options.map((o) =>
-      String(literalValue(o.shape.started)),
-    );
+    const arms = RuntimeStartResultSchema.options.map((o) => String(literalValue(o.shape.started)));
     const missing = arms.filter(
       (arm) =>
         !wireFixtures.some((f) => {
-          if (
-            f.kind.kind !== 'response_success' ||
-            f.kind.intent !== 'runtime_start'
-          )
-            return false;
+          if (f.kind.kind !== 'response_success' || f.kind.intent !== 'runtime_start') return false;
           const parsed = JSON.parse(f.frame) as {
             result?: { started?: boolean };
           };
           return String(parsed.result?.started) === arm;
         }),
     );
-    expect(
-      missing,
-      `runtime_start result arms missing fixture: ${missing.join(', ')}`,
-    ).toEqual([]);
+    expect(missing, `runtime_start result arms missing fixture: ${missing.join(', ')}`).toEqual([]);
   });
 
   it('runtime_stop.params has a hard-mode fixture (mode narrowed to literal since #task:1558)', () => {
@@ -441,8 +394,7 @@ describe('wire contract — fixture catalogue invariants', () => {
     const mode = String(literalValue(inner.shape.mode));
     expect(mode).toBe('hard');
     const covered = wireFixtures.some((f) => {
-      if (f.kind.kind !== 'request' || f.kind.intent !== 'runtime_stop')
-        return false;
+      if (f.kind.kind !== 'request' || f.kind.intent !== 'runtime_stop') return false;
       const parsed = JSON.parse(f.frame) as { params?: { mode?: string } };
       return parsed.params?.mode === mode;
     });
@@ -454,30 +406,27 @@ describe('wire contract — fixture catalogue invariants', () => {
     const mode = String(literalValue(inner.shape.mode));
     expect(mode).toBe('hard');
     const covered = wireFixtures.some((f) => {
-      if (
-        f.kind.kind !== 'response_success' ||
-        f.kind.intent !== 'runtime_stop'
-      )
-        return false;
+      if (f.kind.kind !== 'response_success' || f.kind.intent !== 'runtime_stop') return false;
       const parsed = JSON.parse(f.frame) as { result?: { mode?: string } };
       return parsed.result?.mode === mode;
     });
     expect(covered, 'runtime_stop hard result fixture missing').toBe(true);
   });
 
-  it('runtime_deliver.result covers every `disposition` arm (spawning/admitted/refused)', () => {
-    // #task:1417 Stage 2c — `runtime_deliver` is the sole delivery command
-    // (absorbed the retired `runtime_wake` coverage). The outer result is a
-    // z.union([spawning, admitted, refusedUnion]); a new top-level
-    // disposition must land a fixture or this fails.
-    const dispositions = ['spawning', 'admitted', 'refused'];
+  it('runtime_deliver.result covers every disposition, including nested refusal arms', () => {
+    const dispositions = [
+      ...new Set(
+        RuntimeDeliverResultSchema.options.flatMap((option) =>
+          'options' in option
+            ? option.options.map((arm) => arm.shape.disposition.value)
+            : [option.shape.disposition.value],
+        ),
+      ),
+    ];
     const missing = dispositions.filter(
       (disposition) =>
         !wireFixtures.some((f) => {
-          if (
-            f.kind.kind !== 'response_success' ||
-            f.kind.intent !== 'runtime_deliver'
-          )
+          if (f.kind.kind !== 'response_success' || f.kind.intent !== 'runtime_deliver')
             return false;
           const parsed = JSON.parse(f.frame) as {
             result?: { disposition?: string };
@@ -502,18 +451,12 @@ describe('wire contract — fixture catalogue invariants', () => {
     const missing = reasons.filter(
       (reason) =>
         !wireFixtures.some((f) => {
-          if (
-            f.kind.kind !== 'response_success' ||
-            f.kind.intent !== 'runtime_deliver'
-          )
+          if (f.kind.kind !== 'response_success' || f.kind.intent !== 'runtime_deliver')
             return false;
           const parsed = JSON.parse(f.frame) as {
             result?: { disposition?: string; reason?: string };
           };
-          return (
-            parsed.result?.disposition === 'refused' &&
-            parsed.result?.reason === reason
-          );
+          return parsed.result?.disposition === 'refused' && parsed.result?.reason === reason;
         }),
     );
     expect(
@@ -539,10 +482,7 @@ describe('wire contract — fixture catalogue invariants', () => {
     const missing = arms.filter(
       (arm) =>
         !wireFixtures.some((f) => {
-          if (
-            f.kind.kind !== 'response_success' ||
-            f.kind.intent !== 'host_outbound_reload'
-          )
+          if (f.kind.kind !== 'response_success' || f.kind.intent !== 'host_outbound_reload')
             return false;
           const parsed = JSON.parse(f.frame) as {
             result?: { reloaded?: boolean };
@@ -552,9 +492,7 @@ describe('wire contract — fixture catalogue invariants', () => {
     );
     expect(
       missing,
-      `host_outbound_reload reloaded arms missing fixture: ${missing.join(
-        ', ',
-      )}`,
+      `host_outbound_reload reloaded arms missing fixture: ${missing.join(', ')}`,
     ).toEqual([]);
   });
 
@@ -565,29 +503,23 @@ describe('wire contract — fixture catalogue invariants', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (o: any) => literalValue(o.shape.reloaded) === true,
     );
-    const actions: readonly string[] = (successArm as { shape: { action: { options: readonly string[] } } }).shape.action.options;
+    const actions: readonly string[] = (
+      successArm as { shape: { action: { options: readonly string[] } } }
+    ).shape.action.options;
     const missing = actions.filter(
       (action) =>
         !wireFixtures.some((f) => {
-          if (
-            f.kind.kind !== 'response_success' ||
-            f.kind.intent !== 'host_outbound_reload'
-          )
+          if (f.kind.kind !== 'response_success' || f.kind.intent !== 'host_outbound_reload')
             return false;
           const parsed = JSON.parse(f.frame) as {
             result?: { reloaded?: boolean; action?: string };
           };
-          return (
-            parsed.result?.reloaded === true &&
-            parsed.result?.action === action
-          );
+          return parsed.result?.reloaded === true && parsed.result?.action === action;
         }),
     );
     expect(
       missing,
-      `host_outbound_reload success actions missing fixture: ${missing.join(
-        ', ',
-      )}`,
+      `host_outbound_reload success actions missing fixture: ${missing.join(', ')}`,
     ).toEqual([]);
   });
 
@@ -602,24 +534,17 @@ describe('wire contract — fixture catalogue invariants', () => {
     const missing = reasons.filter(
       (reason) =>
         !wireFixtures.some((f) => {
-          if (
-            f.kind.kind !== 'response_success' ||
-            f.kind.intent !== 'host_outbound_reload'
-          )
+          if (f.kind.kind !== 'response_success' || f.kind.intent !== 'host_outbound_reload')
             return false;
           const parsed = JSON.parse(f.frame) as {
             result?: { reloaded?: boolean; reason?: string };
           };
-          return (
-            parsed.result?.reloaded === false && parsed.result?.reason === reason
-          );
+          return parsed.result?.reloaded === false && parsed.result?.reason === reason;
         }),
     );
     expect(
       missing,
-      `host_outbound_reload failure reasons missing fixture: ${missing.join(
-        ', ',
-      )}`,
+      `host_outbound_reload failure reasons missing fixture: ${missing.join(', ')}`,
     ).toEqual([]);
   });
 });

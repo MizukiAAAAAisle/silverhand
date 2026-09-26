@@ -42,8 +42,3 @@ export function desktopClientInfoHeaderValue(
   }
   return cachedHeaderValue;
 }
-
-/** Test-only: reset the per-process memo. */
-export function resetDesktopClientInfoHeaderCacheForTest(): void {
-  cachedHeaderValue = undefined;
-}

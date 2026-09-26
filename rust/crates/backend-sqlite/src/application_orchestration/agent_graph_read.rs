@@ -140,37 +140,33 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut seed = base();
         seed.push(seed_agent("a1"));
-        seed.push(seed_home_workspace("wsah_a1", "a1"));
+        seed.push(seed_agent("other"));
+        seed.push(seed_agent("empty"));
+        // Ownership is stored, not inferred from a wsah_<agent> naming convention.
+        seed.push(seed_home_workspace("home-one", "a1"));
+        seed.push(seed_home_workspace("home-other", "other"));
+        seed.push(seed_home_workspace("home-empty", "empty"));
+        seed.push(seed_conversation("foreign", "home-other", "Onboarding", 0));
         // A non-onboarding fixed channel that must NOT be picked.
-        seed.push(seed_conversation("dm-a1", "wsah_a1", "dm-a1", 5));
-        seed.push(seed_conversation(
-            "onb-a1",
-            "wsah_a1",
-            ONBOARDING_DM_TITLE,
-            3,
-        ));
+        seed.push(seed_conversation("dm-a1", "home-one", "dm-a1", 1));
+        seed.push("INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, \
+                   title, title_key, status, created_at, updated_at) VALUES \
+                   ('open-onb', 'home-one', 'workspace', 'open', 'Onboarding', 'open-onb', 'idle', 2, 1)".into());
+        seed.push(seed_conversation("onb-a1", "home-one", "Onboarding", 3));
+        seed.push(seed_conversation("later-onb", "home-one", "Onboarding", 4));
         let store = open(&dir, "home-dm.db", &seed).await;
 
-        let dm = store
-            .find_home_dm_channel(&AgentId::parse("a1").unwrap())
-            .await
-            .unwrap();
-        assert_eq!(dm, Some(ConversationId::parse("onb-a1").unwrap()));
-    }
-
-    #[tokio::test]
-    async fn a_missing_home_dm_is_none_not_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut seed = base();
-        seed.push(seed_agent("a1"));
-        seed.push(seed_home_workspace("wsah_a1", "a1"));
-        let store = open(&dir, "no-dm.db", &seed).await;
-
-        let dm = store
-            .find_home_dm_channel(&AgentId::parse("a1").unwrap())
-            .await
-            .unwrap();
-        assert_eq!(dm, None);
+        for (id, expected) in [("a1", Some("onb-a1")), ("empty", None)] {
+            let dm = store
+                .find_home_dm_channel(&AgentId::parse(id).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                dm,
+                expected.map(|id| ConversationId::parse(id).unwrap()),
+                "{id}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -179,42 +175,25 @@ mod tests {
         let mut seed = base();
         seed.push(seed_agent("a1"));
         seed.push(seed_home_workspace("wsah_a1", "a1"));
-        seed.push(seed_conversation(
-            "onb-a1",
-            "wsah_a1",
-            ONBOARDING_DM_TITLE,
-            3,
-        ));
-        // Insert the later message first: order must come from seq, not row order.
-        seed.push(seed_message("msg-2", "onb-a1", 2, 20));
-        seed.push(seed_message("msg-1", "onb-a1", 1, 10));
+        seed.push(seed_conversation("onb-a1", "wsah_a1", "Onboarding", 3));
+        seed.push(seed_conversation("empty", "wsah_a1", "Empty", 4));
+        seed.push(seed_conversation("other", "wsah_a1", "Other", 5));
+        seed.push(seed_message("foreign", "other", 1, 1));
+        // Insertion and timestamp order disagree with the authoritative sequence.
+        seed.push(seed_message("msg-2", "onb-a1", 2, 10));
+        seed.push(seed_message("msg-1", "onb-a1", 1, 20));
         let store = open(&dir, "first-msg.db", &seed).await;
 
-        let msg = store
-            .find_first_onboarding_message(&ConversationId::parse("onb-a1").unwrap())
-            .await
-            .unwrap();
-        assert_eq!(msg, Some(MessageId::parse("msg-1").unwrap()));
-    }
-
-    #[tokio::test]
-    async fn an_empty_conversation_is_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut seed = base();
-        seed.push(seed_agent("a1"));
-        seed.push(seed_home_workspace("wsah_a1", "a1"));
-        seed.push(seed_conversation(
-            "onb-a1",
-            "wsah_a1",
-            ONBOARDING_DM_TITLE,
-            3,
-        ));
-        let store = open(&dir, "empty-msg.db", &seed).await;
-
-        let msg = store
-            .find_first_onboarding_message(&ConversationId::parse("onb-a1").unwrap())
-            .await
-            .unwrap();
-        assert_eq!(msg, None);
+        for (id, expected) in [("onb-a1", Some("msg-1")), ("empty", None)] {
+            let msg = store
+                .find_first_onboarding_message(&ConversationId::parse(id).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                msg,
+                expected.map(|id| MessageId::parse(id).unwrap()),
+                "{id}"
+            );
+        }
     }
 }

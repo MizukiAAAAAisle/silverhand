@@ -1329,6 +1329,8 @@ mod tests {
             &self,
             target: &RuntimeStartTarget,
         ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error> {
+            assert_eq!(target.actor().as_str(), "user-1");
+            assert_eq!(target.agent().as_str(), "agent-1");
             self.started
                 .lock()
                 .unwrap()
@@ -1351,6 +1353,8 @@ mod tests {
             &self,
             target: &RuntimeSeatTarget,
         ) -> Result<Result<ClearSessionOutcome, ClearSessionProviderRefusal>, Self::Error> {
+            assert_eq!(target.actor().as_str(), "user-1");
+            assert_eq!(target.agent().as_str(), "agent-1");
             self.cleared.lock().unwrap().push(target.scope().clone());
             let script = self
                 .clears
@@ -1704,7 +1708,7 @@ mod tests {
     // ─────────────────────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn concurrent_transition_loses_the_lock_race() {
+    async fn an_in_progress_transition_refuses_before_reading_seats() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
             reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
@@ -1856,7 +1860,23 @@ mod tests {
 
         // Every live-or-resumable seat cleared; the dead one skipped.
         assert_eq!(committed.cleared_sessions, 3);
-        assert_eq!(harness.control.cleared().len(), 3);
+        assert_eq!(
+            harness.control.cleared(),
+            vec![
+                RuntimeScope::ConversationSlot {
+                    agent: agent("agent-1"),
+                    source: conv("c-active")
+                },
+                RuntimeScope::ConversationSlot {
+                    agent: agent("agent-1"),
+                    source: conv("c-starting")
+                },
+                RuntimeScope::ConversationSlot {
+                    agent: agent("agent-1"),
+                    source: conv("c-resumable")
+                },
+            ]
+        );
         assert_eq!(harness.transitions.completes(), 1);
         assert_eq!(harness.transitions.aborts(), 0);
         assert_eq!(*harness.facts.reclaims.lock().unwrap(), 1);
@@ -1877,61 +1897,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_single_clear_failure_aborts_without_committing_and_restores_old_runtime() {
-        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
-        let seats = vec![
-            conv_seat("c-a", RuntimeObservedStatus::Active, true),
-            conv_seat("c-b", RuntimeObservedStatus::Active, true),
-        ];
-        let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
-            probe: Probe::available(),
-            coordination: Coordination::default(),
-            transitions: Transitions::committing(),
-            facts: TransitionFacts::with_seats(seats),
-            custody: Custody::absent(),
-            focus: Focus::unused(),
-            // First clear succeeds, second refuses: still both attempted (no short-circuit).
-            control: Control::scripting(vec![ClearScript::Ok, ClearScript::Refuse]),
-        };
-        assert_eq!(
-            harness.run(&req).await,
-            Err(SwitchAgentRuntimeError::SessionClearFailed)
-        );
-        assert_eq!(
-            harness.control.cleared().len(),
-            2,
-            "all seats attempted, no short-circuit"
-        );
-        assert_eq!(harness.transitions.completes(), 0, "never committed");
-        assert_eq!(harness.transitions.aborts(), 1, "lock aborted");
-        // Both live-before conversations restored under the OLD runtime, best-effort.
-        assert_eq!(harness.control.started(), vec![conv("c-a"), conv("c-b")]);
-    }
-
-    #[tokio::test]
-    async fn a_transport_error_on_clear_also_aborts() {
-        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
-        let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
-            probe: Probe::available(),
-            coordination: Coordination::default(),
-            transitions: Transitions::committing(),
-            facts: TransitionFacts::with_seats(vec![conv_seat(
-                "c-a",
-                RuntimeObservedStatus::Active,
-                true,
-            )]),
-            custody: Custody::absent(),
-            focus: Focus::unused(),
-            control: Control::scripting(vec![ClearScript::Transport]),
-        };
-        assert_eq!(
-            harness.run(&req).await,
-            Err(SwitchAgentRuntimeError::SessionClearFailed)
-        );
-        assert_eq!(harness.transitions.completes(), 0);
-        assert_eq!(harness.transitions.aborts(), 1);
+    async fn clear_failures_attempt_every_seat_abort_and_restore_without_announcing() {
+        for failure in [ClearScript::Refuse, ClearScript::Transport] {
+            let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
+            let harness = Harness {
+                reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
+                probe: Probe::available(),
+                coordination: Coordination::default(),
+                transitions: Transitions::committing(),
+                facts: TransitionFacts::with_seats(vec![
+                    conv_seat("c-a", RuntimeObservedStatus::Active, true),
+                    conv_seat("c-b", RuntimeObservedStatus::Active, true),
+                ]),
+                custody: Custody::absent(),
+                focus: Focus::unused(),
+                // Fail first so an early return cannot masquerade as attempting every seat.
+                control: Control::scripting(vec![failure, ClearScript::Ok]),
+            };
+            let sink = ChangedSink::ok();
+            assert_eq!(
+                harness.run_with_changed(&req, &sink).await,
+                Err(SwitchAgentRuntimeError::SessionClearFailed)
+            );
+            assert_eq!(
+                harness.control.cleared(),
+                vec![
+                    RuntimeScope::ConversationSlot {
+                        agent: agent("agent-1"),
+                        source: conv("c-a")
+                    },
+                    RuntimeScope::ConversationSlot {
+                        agent: agent("agent-1"),
+                        source: conv("c-b")
+                    },
+                ]
+            );
+            assert_eq!(harness.transitions.completes(), 0);
+            assert_eq!(harness.transitions.aborts(), 1);
+            assert_eq!(harness.control.started(), vec![conv("c-a"), conv("c-b")]);
+            assert!(sink.announced().is_empty(), "no commit, no hint");
+        }
     }
 
     #[tokio::test]
@@ -1954,10 +1959,12 @@ mod tests {
             focus: Focus::unused(),
             control: Control::new(),
         };
+        let sink = ChangedSink::ok();
         assert_eq!(
-            harness.run(&req).await,
+            harness.run_with_changed(&req, &sink).await,
             Err(SwitchAgentRuntimeError::TransitionLost)
         );
+        assert!(sink.announced().is_empty(), "no commit, no hint");
         assert_eq!(
             harness.control.cleared().len(),
             1,
@@ -1995,6 +2002,12 @@ mod tests {
         };
         let committed = harness.run(&req).await.expect("commit");
         assert_eq!(committed.cleared_sessions, 1);
+        assert_eq!(
+            harness.control.cleared(),
+            vec![RuntimeScope::AgentSlot {
+                agent: agent("agent-1")
+            }]
+        );
         assert_eq!(
             harness.control.started(),
             vec![conv("oldest")],
@@ -2058,10 +2071,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_scope_focus_that_expires_between_custody_and_focus_reads_degrades_to_none() {
-        // Interleaving gate: `current` sees a live AgentSlot principal, but between that read
-        // and the focus port's re-check the slot exits/finalizes, so the port answers `None`.
-        // The clear + commit proceed with ZERO error and nothing is restarted at a successor.
+    async fn absent_focus_after_current_custody_read_degrades_to_no_restart() {
+        // The fake supplies current custody followed by no focus. The saga must keep
+        // clearing and committing without inventing a restart origin.
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
             reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
@@ -2383,65 +2395,6 @@ mod tests {
             sink.announced(),
             vec![agent(AGENT)],
             "exactly one hint, keyed on the committed agent id"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_lost_commit_announces_no_agent_changed() {
-        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
-        let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
-            probe: Probe::available(),
-            coordination: Coordination::default(),
-            transitions: Transitions::new(
-                BeginTransitionRecord::Locked(lock_row()),
-                CompleteTransitionRecord::Lost,
-            ),
-            facts: TransitionFacts::with_seats(vec![conv_seat(
-                "c-a",
-                RuntimeObservedStatus::Active,
-                true,
-            )]),
-            custody: Custody::absent(),
-            focus: Focus::unused(),
-            control: Control::new(),
-        };
-        let sink = ChangedSink::ok();
-        assert_eq!(
-            harness.run_with_changed(&req, &sink).await,
-            Err(SwitchAgentRuntimeError::TransitionLost)
-        );
-        assert!(
-            sink.announced().is_empty(),
-            "no commit, no hint — the row belongs to whoever owns the lock now"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_pre_commit_clear_failure_announces_no_agent_changed() {
-        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
-        let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
-            probe: Probe::available(),
-            coordination: Coordination::default(),
-            transitions: Transitions::committing(),
-            facts: TransitionFacts::with_seats(vec![conv_seat(
-                "c-a",
-                RuntimeObservedStatus::Active,
-                true,
-            )]),
-            custody: Custody::absent(),
-            focus: Focus::unused(),
-            control: Control::scripting(vec![ClearScript::Refuse]),
-        };
-        let sink = ChangedSink::ok();
-        assert_eq!(
-            harness.run_with_changed(&req, &sink).await,
-            Err(SwitchAgentRuntimeError::SessionClearFailed)
-        );
-        assert!(
-            sink.announced().is_empty(),
-            "aborted before commit — nothing changed, so no hint"
         );
     }
 

@@ -2,7 +2,6 @@ import { promises as fs } from "node:fs";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "@silverhand/shared";
 import { EmbeddedBackendOwner } from "../embedded-backend-owner.js";
@@ -17,7 +16,6 @@ import {
   writeServerConfig,
 } from "../config.js";
 import {
-  DEFAULT_TIMINGS,
   startEmbeddedRustBackend,
   type EmbeddedRustBackendHandle,
 } from "../embedded-rust-backend.js";
@@ -36,6 +34,7 @@ describe("embedded ownership and durable config integration", () => {
   const originalRoot = process.env.SILVERHAND_DIR;
   let root: string | undefined;
   afterEach(async () => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     if (root) await fs.rm(root, { recursive: true, force: true });
     root = undefined;
@@ -43,7 +42,9 @@ describe("embedded ownership and durable config integration", () => {
     else process.env.SILVERHAND_DIR = originalRoot;
   });
   async function seed(): Promise<ServerConfig> {
-    root = await fs.mkdtemp(join(tmpdir(), "main-owner-"));
+    if (!originalRoot) throw new Error("isolated SILVERHAND_DIR required");
+    await fs.mkdir(originalRoot, { recursive: true });
+    root = await fs.mkdtemp(join(originalRoot, "main-owner-"));
     process.env.SILVERHAND_DIR = root;
     const config: ServerConfig = {
       mode: "embedded",
@@ -94,6 +95,7 @@ describe("embedded ownership and durable config integration", () => {
   );
 
   it("shutdown waits for SIGKILL and token cleanup of a startup child ignoring SIGTERM", async () => {
+    vi.useFakeTimers();
     const owner = new EmbeddedBackendOwner();
     const spawned = deferred();
     let tokenCleaned = false;
@@ -140,17 +142,17 @@ describe("embedded ownership and durable config integration", () => {
             },
             probeReadyz: async () => false,
             probeServerInfoEpoch: async () => null,
-            clock: {
-              now: Date.now,
-              sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-            },
           },
-          { ...DEFAULT_TIMINGS, shutdownGraceMs: 30 },
         ),
       )
       .catch((error) => error);
     await spawned.promise;
-    await owner.shutdown();
+    const quitting = owner.shutdown();
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(child.signals).toEqual(["SIGTERM"]);
+    expect(tokenCleaned).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await quitting;
     expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
     expect(child.signalCode).toBe("SIGKILL");
     expect(tokenCleaned).toBe(true);

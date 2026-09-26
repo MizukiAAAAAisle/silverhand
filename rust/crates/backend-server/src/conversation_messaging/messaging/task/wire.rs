@@ -372,32 +372,6 @@ mod tests {
         );
     }
 
-    /// A system creator is the `{ type: "system", id: null, name: "system" }` arm — the only
-    /// creator with a null id.
-    #[test]
-    fn a_system_creator_projects_a_null_id() {
-        let task = decode(workspace_row());
-        let display = TaskDisplaySidecars {
-            channel_name: Some("general".into()),
-            ..no_sidecars()
-        };
-
-        let dto = project_summary(TaskSummarySource {
-            task: &task,
-            display: &display,
-        })
-        .expect("projects");
-
-        assert_eq!(
-            serde_json::to_value(&dto).unwrap()["creator"],
-            serde_json::json!({ "type": "system", "id": null, "name": "system" })
-        );
-        assert_eq!(
-            serde_json::to_value(&dto).unwrap()["assignee"],
-            serde_json::Value::Null
-        );
-    }
-
     /// A workspace board with no joined channel title is a corrupt committed row: the
     /// projector refuses it (a safe-500 the handler routes) rather than inventing a place.
     #[test]

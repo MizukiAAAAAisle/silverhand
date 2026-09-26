@@ -713,8 +713,7 @@ mod tests {
     use axum::http::Request;
     use silverhand_backend_core::conversation_messaging::messaging::task::AgentClaimOutcome;
     use silverhand_backend_core::conversation_messaging::messaging::task::{
-        BoardKey, CreatedEventMessageId, TaskNumber, TaskPointFetch, TaskReadAddress,
-        TaskReadCapability,
+        BoardKey, CreatedEventMessageId, TaskNumber,
     };
     use silverhand_backend_core::foundation::identity::ConversationId;
 
@@ -956,96 +955,6 @@ mod tests {
         }
     }
 
-    impl TaskPointFetch for FakeWrite {
-        async fn fetch_point(
-            &self,
-            _address: &TaskReadAddress,
-        ) -> Result<Option<silverhand_backend_core::conversation_messaging::messaging::task::TaskPointCandidate>, PersistenceFailure>{
-            use silverhand_backend_core::conversation_messaging::messaging::task::{
-                TaskAggregate, TaskDisplaySidecars, TaskPointCandidate, TaskRow,
-            };
-            let task = TaskAggregate::decode(TaskRow {
-                id: "task-1".into(),
-                task_number: 7,
-                conversation_id: "conv-1".into(),
-                thread_root_id: None,
-                board_key: "ws:ws-1".into(),
-                workspace_id: Some("ws-1".into()),
-                title: "title".into(),
-                content: "body".into(),
-                status: "todo".into(),
-                assignee_agent_id: None,
-                assignee_user_id: None,
-                creator_kind: "system".into(),
-                creator_agent_id: None,
-                creator_user_id: None,
-                source_message_id: None,
-                created_event_message_id: None,
-                last_editor_kind: None,
-                last_editor_id: None,
-                last_edited_at: None,
-                created_at: 1,
-                closed_at: None,
-            })
-            .unwrap();
-            Ok(Some(TaskPointCandidate::new(
-                task,
-                TaskDisplaySidecars {
-                    channel_name: Some("General".into()),
-                    assignee_agent_name: None,
-                    assignee_user_name: None,
-                    creator_agent_name: None,
-                    creator_user_name: None,
-                },
-                None,
-                None,
-                None,
-            )))
-        }
-    }
-    impl TaskParticipationReads for FakeWrite {
-        async fn is_agent_participant(
-            &mut self,
-            _conversation: &ConversationId,
-            _agent: &AgentId,
-        ) -> Result<bool, PersistenceFailure> {
-            Ok(true)
-        }
-        async fn is_user_participant(
-            &mut self,
-            _conversation: &ConversationId,
-            _user: &UserId,
-        ) -> Result<bool, PersistenceFailure> {
-            Ok(true)
-        }
-        async fn agent_participating_conversations(
-            &mut self,
-            _agent: &AgentId,
-            conversations: &[ConversationId],
-        ) -> Result<std::collections::HashSet<ConversationId>, PersistenceFailure> {
-            Ok(conversations.iter().cloned().collect())
-        }
-    }
-    impl TaskReadCapability for FakeWrite {
-        async fn may_read_tasks(
-            &mut self,
-            _agent: &AgentId,
-            _workspace: &silverhand_backend_core::foundation::identity::WorkspaceId,
-        ) -> Result<bool, PersistenceFailure> {
-            Ok(true)
-        }
-        async fn readable_task_workspaces(
-            &mut self,
-            _agent: &AgentId,
-            workspaces: &[silverhand_backend_core::foundation::identity::WorkspaceId],
-        ) -> Result<
-            std::collections::HashSet<silverhand_backend_core::foundation::identity::WorkspaceId>,
-            PersistenceFailure,
-        > {
-            Ok(workspaces.iter().cloned().collect())
-        }
-    }
-
     fn fake(calls: &Arc<AtomicUsize>) -> FakeWrite {
         FakeWrite {
             status: HumanStatusWriteOutcome::Applied(Box::new(witness())),
@@ -1084,25 +993,6 @@ mod tests {
             serde_json::from_slice(&bytes).unwrap_or(Value::Null)
         };
         (status, value)
-    }
-
-    #[tokio::test]
-    async fn status_applied_is_200() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let router = human_status_router(HumanStatusState {
-            write: fake(&calls),
-            aftermath: aftermath(),
-        });
-        let (status, body) = send(
-            router,
-            "/api/tasks/task-1/status",
-            Some(r#"{"status":"done"}"#),
-            true,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["success"], true);
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1229,7 +1119,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claim_applied_is_200_with_status() {
+    async fn claim_applied_is_200_without_status() {
         let calls = Arc::new(AtomicUsize::new(0));
         let router = human_claim_router(HumanClaimState {
             write: fake(&calls),

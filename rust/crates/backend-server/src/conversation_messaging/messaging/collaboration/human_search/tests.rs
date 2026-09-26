@@ -121,37 +121,6 @@ async fn call(app: Router, uri: &str, authenticated: bool) -> (StatusCode, Value
 }
 
 #[tokio::test]
-async fn defaults_and_refinements_are_admitted_before_the_read() {
-    let (app, calls) = app(Mode::Happy);
-    let (status, body) = call(app.clone(), "/api/search?q=%20needle%20", true).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        body,
-        json!({
-            "query": {"q":"needle","stream":"all","order":"recency_desc","limit":80},
-            "results": [],
-            "total": 0,
-            "truncated": false,
-        })
-    );
-
-    for (uri, path) in [
-        ("/api/search?q=x&stream=mainline", "stream"),
-        (
-            "/api/search?q=x&conversation_id=c&stream=thread",
-            "thread_root_id",
-        ),
-        ("/api/search?q=x&order=seq_asc", "order"),
-        ("/api/search?q=x&user_id=u&agent_id=a", "user_id"),
-    ] {
-        let (status, body) = call(app.clone(), uri, true).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
-        assert!(body["error"]["fieldErrors"][path].is_array(), "{uri}");
-    }
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-}
-
-#[tokio::test]
 async fn authentication_and_bound_page_are_hard_wire_gates() {
     let (happy, calls) = app(Mode::Happy);
     let (status, body) = call(happy, "/api/search?q=needle", false).await;

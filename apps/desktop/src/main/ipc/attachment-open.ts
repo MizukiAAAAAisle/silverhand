@@ -11,7 +11,7 @@ export type AttachmentOpenResult = { ok: true } | { ok: false; reason: string };
 // later open overwrite an unrelated attachment.
 const ATTACHMENT_ID = /^[A-Za-z0-9_-]+$/;
 
-export interface ScratchTarget {
+interface ScratchTarget {
   dir: string;
   fullPath: string;
 }
@@ -32,7 +32,7 @@ export interface ScratchTarget {
  * Services can open safely (`isSafeOpenExtension` — a `.command` / `.pkg`
  * would run, not view).
  */
-export function resolveAttachmentScratchTarget(
+function resolveAttachmentScratchTarget(
   attachmentId: unknown,
   filename: unknown,
 ): { ok: true; target: ScratchTarget } | { ok: false; reason: string } {

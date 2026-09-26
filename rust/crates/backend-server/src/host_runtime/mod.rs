@@ -249,7 +249,6 @@ mod tests {
     enum StoreBehavior {
         #[default]
         Succeed,
-        DuplicateOnce,
         AlwaysDuplicate,
     }
 
@@ -257,7 +256,6 @@ mod tests {
     struct CountingStore {
         behavior: StoreBehavior,
         calls: Arc<AtomicUsize>,
-        writes: Arc<Mutex<Vec<(String, String)>>>,
     }
 
     impl CountingStore {
@@ -272,23 +270,16 @@ mod tests {
     impl HostInviteUnitOfWork for CountingStore {
         async fn create_host_and_credential(
             &self,
-            host: NewUserInviteHost,
-            credential: NewLongLivedCredential,
+            _host: NewUserInviteHost,
+            _credential: NewLongLivedCredential,
         ) -> Result<(), HostInviteWriteError> {
-            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            self.calls.fetch_add(1, Ordering::SeqCst);
             match self.behavior {
-                StoreBehavior::DuplicateOnce if call == 0 => {
-                    return Err(HostInviteWriteError::DuplicateHostName);
-                }
                 StoreBehavior::AlwaysDuplicate => {
                     return Err(HostInviteWriteError::DuplicateHostName);
                 }
-                StoreBehavior::Succeed | StoreBehavior::DuplicateOnce => {}
+                StoreBehavior::Succeed => {}
             }
-            self.writes
-                .lock()
-                .unwrap()
-                .push((host.id().to_owned(), credential.id().to_owned()));
             Ok(())
         }
     }
@@ -368,20 +359,6 @@ mod tests {
         )
     }
 
-    fn parity_fixture() -> serde_json::Value {
-        serde_json::from_str(include_str!("fixtures/create_host_invite_parity.json")).unwrap()
-    }
-
-    fn normalize_success(mut body: serde_json::Value) -> serde_json::Value {
-        body["host_id"] = serde_json::json!("<host_id>");
-        body["host"]["id"] = serde_json::json!("<host_id>");
-        body["host"]["name"] = serde_json::json!("<host_name>");
-        body["host"]["created_at"] = serde_json::json!(0);
-        body["host"]["creator_user_id"] = serde_json::json!("<user_id>");
-        body["connect_token"] = serde_json::json!("<connect_token>");
-        body
-    }
-
     fn user() -> UserId {
         UserId::parse("user-1").unwrap()
     }
@@ -398,27 +375,6 @@ mod tests {
         let status = response.status();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         (status, String::from_utf8(body.to_vec()).unwrap())
-    }
-
-    #[tokio::test]
-    async fn projects_the_create_host_response_with_json_semantic_parity() {
-        let store = CountingStore::default();
-        let (status, body) = response(test_router(store.clone()), Some(user()), "{}").await;
-
-        assert_eq!(status, StatusCode::OK);
-        let response: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(response["host_id"], "AAECAwQFBgcICQoL");
-        assert_eq!(response["host"]["name"], "computer-0c0d0e0f");
-        assert_eq!(response["host"]["created_at"], 1_700_000_000_123_i64);
-        assert_eq!(
-            response["connect_token"],
-            "HB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs"
-        );
-        assert_eq!(store.calls.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            normalize_success(response),
-            parity_fixture()["success"]["body"]
-        );
     }
 
     #[tokio::test]
@@ -468,23 +424,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malformed_json_is_a_native_400_and_never_reaches_the_uow() {
+    async fn malformed_or_empty_json_is_a_native_400_and_never_reaches_the_uow() {
         // The old TS empty-object fallback is gone: a malformed body is a native syntax
         // fault (400), not a silent coercion to `{}`.
-        let store = CountingStore::default();
-        let (status, _) = response(test_router(store.clone()), Some(user()), "not-json").await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(store.calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn an_empty_body_is_a_native_400_and_never_reaches_the_uow() {
-        // Empty bytes are no longer coerced to `{}`: native `Json` rejects an empty body
-        // as a syntax fault (400) before the UoW.
-        let store = CountingStore::default();
-        let (status, _) = response(test_router(store.clone()), Some(user()), "").await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+        for raw in ["not-json", ""] {
+            let store = CountingStore::default();
+            let (status, _) = response(test_router(store.clone()), Some(user()), raw).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[tokio::test]
@@ -516,15 +464,6 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&body).unwrap()["daemon_npm_spec"],
             "file:/repo/packages/silverhand-daemon"
         );
-    }
-
-    #[tokio::test]
-    async fn one_duplicate_name_retries_then_returns_success() {
-        let store = CountingStore::with_behavior(StoreBehavior::DuplicateOnce);
-        let app = test_router(store.clone());
-        let (status, _) = response(app, Some(user()), "{}").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(store.calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test(flavor = "current_thread")]

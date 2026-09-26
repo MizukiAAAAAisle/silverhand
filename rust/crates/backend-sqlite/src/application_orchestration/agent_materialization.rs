@@ -995,6 +995,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = seed_schema(&dir, "reserve.db", &base_seed()).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
+        assert!(
+            find_idempotent_reservation(&store, &user("u1"), &idem("nope"))
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         let ReserveOutcome::Reserved(reserved) = reserve_agent(&store, &input("a1", "idem-1"), 42)
             .await
@@ -1022,6 +1028,14 @@ mod tests {
         assert_eq!(hit.name(), "a1");
         assert_eq!(hit.host_id(), &HostId::parse("h1").unwrap());
         assert_eq!(hit.session_scope(), AgentSessionScope::Conversation);
+        for (creator, key) in [("u1", "nope"), ("u2", "idem-1")] {
+            assert!(
+                find_idempotent_reservation(&store, &user(creator), &idem(key))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     #[tokio::test]
@@ -1058,10 +1072,10 @@ mod tests {
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
         // A different id but the same handle `a1` trips the `name` unique constraint.
+        let mut candidate = input("different", "fresh-key");
+        candidate.name = ParticipantHandle::parse("a1").unwrap();
         assert_eq!(
-            reserve_agent(&store, &input("a1", "fresh-key"), 42)
-                .await
-                .unwrap(),
+            reserve_agent(&store, &candidate, 42).await.unwrap(),
             ReserveOutcome::ConstraintConflict
         );
     }
@@ -1070,6 +1084,9 @@ mod tests {
     async fn reserve_reports_a_duplicate_idempotency_key_as_a_constraint_conflict() {
         let dir = tempfile::tempdir().unwrap();
         let mut seed = base_seed();
+        seed.push(
+            "INSERT INTO users (id,name,display_name,created_at,updated_at) VALUES ('u2','u2','Second user',1,1)".to_owned(),
+        );
         seed.push(seed_agent(
             "existing",
             "pending_materialization",
@@ -1086,6 +1103,12 @@ mod tests {
                 .unwrap(),
             ReserveOutcome::ConstraintConflict
         );
+        let mut other_creator = input("a3", "idem-1");
+        other_creator.created_by_user_id = user("u2");
+        assert!(matches!(
+            reserve_agent(&store, &other_creator, 42).await.unwrap(),
+            ReserveOutcome::Reserved(_)
+        ));
     }
 
     #[tokio::test]
@@ -1227,6 +1250,12 @@ mod tests {
             Some("k-new"),
         ));
         seed.push(seed_agent("old-active", "active", 5, Some("k-active")));
+        seed.push(seed_agent(
+            "at-cutoff",
+            "pending_materialization",
+            25,
+            Some("k-cutoff"),
+        ));
         seed.push(seed_agent("old-failed", "failed", 5, Some("k-failed")));
         let path = seed_schema(&dir, "stale.db", &seed).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
@@ -1236,6 +1265,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(swept, vec![agent("old-pending")]);
+        let boundary = find_idempotent_reservation(&store, &user("u1"), &idem("k-cutoff"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            boundary.materialization_status(),
+            MaterializationStatus::PendingMaterialization
+        );
 
         // The new pending row is untouched.
         let new_hit = find_idempotent_reservation(&store, &user("u1"), &idem("k-new"))
@@ -1258,22 +1295,9 @@ mod tests {
         );
         assert_eq!(
             old_hit.materialization_failed_code(),
-            Some(STALE_MATERIALIZATION_FAILED_CODE)
+            Some("backend_crash_during_materialize")
         );
         assert_eq!(old_hit.materialization_failed_at(), Some(25));
-    }
-
-    #[tokio::test]
-    async fn lookup_returns_none_for_an_absent_pair() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = seed_schema(&dir, "lookup-miss.db", &base_seed()).await;
-        let store = SqliteHostAgentStore::open(&path).await.unwrap();
-        assert!(
-            find_idempotent_reservation(&store, &user("u1"), &idem("nope"))
-                .await
-                .unwrap()
-                .is_none()
-        );
     }
 
     /// A pending agent-scoped row of the given id, seeded with the given create timestamp so
@@ -1496,7 +1520,7 @@ mod tests {
         );
 
         // The whole transaction rolled back — had the flip stuck as `active`, the compensating
-        // fail (guarded to pending|failed) would have been Lost and the status stayed `active`.
+        // fail (guarded to pending only) would have been Lost and the status stayed `active`.
         // Its landing as `failed` with the dependent code proves rollback AND compensation.
         let status: String =
             sqlx::query_scalar("SELECT materialization_status FROM agents WHERE id = 'a1'")

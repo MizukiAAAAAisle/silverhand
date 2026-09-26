@@ -770,10 +770,22 @@ mod tests {
 
     #[tokio::test]
     async fn lost_claim_reads_no_clock_delivers_nothing_and_never_settles() {
+        struct UnreachableClock;
+        impl Clock for UnreachableClock {
+            fn now(&self) -> i64 {
+                panic!("a lost claim must not read the fire clock");
+            }
+        }
         let rec = Recorder::claim_lost();
-        let out = run(&rec, &SteppingCron { step_ms: 1 }, 5_000)
-            .await
-            .unwrap();
+        let out = process_one(
+            &rec,
+            &rec,
+            &UnreachableClock,
+            &SteppingCron { step_ms: 1 },
+            &candidate(),
+        )
+        .await
+        .unwrap();
         assert_eq!(out, ProcessOutcome::ClaimLost);
         // The ONLY call is the claim attempt: no deliver, no settle.
         assert_eq!(rec.calls(), vec![Call::Claim]);

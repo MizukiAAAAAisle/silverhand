@@ -32,13 +32,7 @@
  *     vs recoverable boundary — see Cindy D2 pre-gate #3).
  */
 
-import {
-  linkSync,
-  mkdirSync,
-  readdirSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { linkSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { access, stat } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -54,11 +48,7 @@ import {
   type AgentHomeTemplate,
   getAgentHomeTemplate,
 } from './template.js';
-import {
-  compareSentinel,
-  readSentinel,
-  writeSentinelAtomic,
-} from './sentinel.js';
+import { compareSentinel, readSentinel, writeSentinelAtomic } from './sentinel.js';
 import { DaemonTypedError } from '../typed-error.js';
 import { assertSafeWorkspaceIdSegment } from '../workspace-path-authority.js';
 
@@ -99,20 +89,6 @@ export interface MaterializeAgentDeps {
   agentHomeRootDir: string;
   /** Override `Date.now()` so tests can pin `materialized_at`. */
   now?: () => number;
-  /**
-   * Test-only hook fired AFTER the §4.6 empty-dir check passes
-   * and BEFORE `seedTemplate` runs. Production code MUST NOT
-   * pass this — it exists solely so the race-window pin
-   * (Cindy D2 round-2 P1) can simulate a foreign writer that
-   * sneaks a NON-COLLIDING file into `agent_dir` between the
-   * empty-dir check and the seed. Without this hook the test
-   * cannot exercise the post-seed expected-tree verification
-   * path because there is no natural pause point inside the
-   * synchronous handler. The post-seed scan inside
-   * `materializeAgent` is what actually closes the bug; this
-   * hook only provides the test surface.
-   */
-  afterEmptyDirCheck?: (agentDir: string) => void | Promise<void>;
 }
 
 /**
@@ -334,13 +310,8 @@ export async function materializeAgent(
   // window: we re-walk `agent_dir` after seeding and BEFORE
   // writing the sentinel, and refuse to claim the directory
   // if anything outside the template's expected path set is
-  // present. The `afterEmptyDirCheck` hook above lets the
-  // race-window pin actually exercise this path; production
-  // code never passes the hook.
+  // present.
   try {
-    if (deps.afterEmptyDirCheck !== undefined) {
-      await deps.afterEmptyDirCheck(agentDir);
-    }
     seedTemplate(agentDir, template);
     verifyExpectedTree(agentDir, template);
     const materializedAt = now();
@@ -403,10 +374,7 @@ function seedTemplate(agentDir: string, template: AgentHomeTemplate): void {
  *   `finally` arm before this scan runs, so they cannot appear
  *   here under any path.
  */
-function verifyExpectedTree(
-  agentDir: string,
-  template: AgentHomeTemplate,
-): void {
+function verifyExpectedTree(agentDir: string, template: AgentHomeTemplate): void {
   const expected = new Set<string>();
   for (const dir of template.dirs) expected.add(dir);
   for (const file of template.files) expected.add(file.relPath);
@@ -433,9 +401,7 @@ function verifyExpectedTree(
  */
 function walkRelative(root: string): string[] {
   const out: string[] = [];
-  const stack: { absDir: string; relDir: string }[] = [
-    { absDir: root, relDir: '' },
-  ];
+  const stack: { absDir: string; relDir: string }[] = [{ absDir: root, relDir: '' }];
   while (stack.length > 0) {
     const { absDir, relDir } = stack.pop()!;
     const entries = readdirSync(absDir, { withFileTypes: true });
@@ -506,23 +472,14 @@ function classifyFsError(err: unknown, context: string): AgentMaterializeError {
   }
   switch (err.code) {
     case 'ENOSPC':
-      return new AgentMaterializeError(
-        'fs_quota_exceeded',
-        `${context}: ${err.message}`,
-      );
+      return new AgentMaterializeError('fs_quota_exceeded', `${context}: ${err.message}`);
     case 'EDQUOT':
       // POSIX disk-quota exceeded — semantically a quota error.
-      return new AgentMaterializeError(
-        'fs_quota_exceeded',
-        `${context}: ${err.message}`,
-      );
+      return new AgentMaterializeError('fs_quota_exceeded', `${context}: ${err.message}`);
     case 'EACCES':
     case 'EPERM':
     case 'EROFS':
-      return new AgentMaterializeError(
-        'fs_unavailable',
-        `${context}: ${err.message}`,
-      );
+      return new AgentMaterializeError('fs_unavailable', `${context}: ${err.message}`);
     case 'EEXIST':
       // Reachable in practice under concurrent materialize attempts
       // (Cindy D2 P1-3): seed + sentinel writes use `linkSync` for
@@ -530,15 +487,9 @@ function classifyFsError(err: unknown, context: string): AgentMaterializeError {
       // file was placed there by a racing writer. Treating that as
       // `agent_dir_collision` lets the loser retry — the next call
       // sees the winner's valid sentinel and returns idempotent ok.
-      return new AgentMaterializeError(
-        'agent_dir_collision',
-        `${context}: ${err.message}`,
-      );
+      return new AgentMaterializeError('agent_dir_collision', `${context}: ${err.message}`);
     default:
-      return new AgentMaterializeError(
-        'internal_error',
-        `${context}: ${err.message}`,
-      );
+      return new AgentMaterializeError('internal_error', `${context}: ${err.message}`);
   }
 }
 

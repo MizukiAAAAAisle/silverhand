@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   configureRendererBackendNetwork,
-  DESKTOP_BACKEND_NETWORK_POLICY,
   fetchBackendWithNetworkPolicy,
 } from "../renderer-backend-network.js";
 
@@ -13,7 +12,6 @@ describe("configureRendererBackendNetwork", () => {
       "https://silverhand.example.test/readyz",
     );
 
-    expect(DESKTOP_BACKEND_NETWORK_POLICY).toEqual({ proxyMode: "direct" });
     expect(fetchImpl).toHaveBeenCalledWith("https://silverhand.example.test/readyz", undefined);
     expect(response.status).toBe(204);
   });
@@ -38,7 +36,7 @@ describe("configureRendererBackendNetwork", () => {
       resolvedProxy: "DIRECT",
     });
     expect(setProxy).toHaveBeenCalledWith({
-      mode: DESKTOP_BACKEND_NETWORK_POLICY.proxyMode,
+      mode: "direct",
     });
     expect(resolveProxy).toHaveBeenCalledWith("https://silverhand.example.test");
     expect(calls).toEqual(["set", "resolve"]);

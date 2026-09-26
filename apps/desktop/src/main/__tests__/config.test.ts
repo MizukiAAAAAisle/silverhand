@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { resolveDesktopAppPaths } from "@silverhand/shared/app-data-layout";
 import {
@@ -11,76 +11,40 @@ import {
   writeServerConfig,
 } from "../config.js";
 
-describe("desktop server config", () => {
-  const originalSilverhandDir = process.env.SILVERHAND_DIR;
-  let tmp: string | null = null;
+const fixtureParent = process.env.SILVERHAND_DIR;
+if (!fixtureParent) throw new Error("config tests require an isolated SILVERHAND_DIR");
 
+describe("desktop config storage", () => {
+  let root: string;
+  beforeEach(() => {
+    mkdirSync(fixtureParent, { recursive: true });
+    root = mkdtempSync(join(fixtureParent, "config-"));
+    vi.stubEnv("SILVERHAND_DIR", root);
+  });
   afterEach(() => {
-    if (tmp) rmSync(tmp, { recursive: true, force: true });
-    tmp = null;
-    if (originalSilverhandDir === undefined) delete process.env.SILVERHAND_DIR;
-    else process.env.SILVERHAND_DIR = originalSilverhandDir;
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
   });
 
-  it("creates new server-config.json without the retired auth_token field", async () => {
-    tmp = mkdtempSync(join(tmpdir(), "silverhand-config-"));
-    process.env.SILVERHAND_DIR = tmp;
-
+  it("creates new embedded config without retired credentials", async () => {
     const config = await loadOrCreateServerConfig();
     expect(config.auth_token).toBeUndefined();
-
-    const raw = readConfig(tmp);
-    expect(raw).not.toHaveProperty("auth_token");
-    expect(raw).toMatchObject({
-      mode: "embedded",
-      url: "http://127.0.0.1:0",
-      refresh_token: null,
-    });
-  });
-
-  it("reads old auth_token configs but omits the field on rewrite", async () => {
-    tmp = mkdtempSync(join(tmpdir(), "silverhand-config-"));
-    process.env.SILVERHAND_DIR = tmp;
-    mkdirSync(dirname(configPath(tmp)), { recursive: true });
-    writeFileSync(
-      configPath(tmp),
-      JSON.stringify({
-        mode: "embedded",
-        url: "http://127.0.0.1:0",
-        auth_token: "a".repeat(32),
-        refresh_token: null,
-        child_sessions: {
-          max_concurrent_per_parent: null,
-          spawn_cooldown_seconds: null,
-          max_depth: 1,
-        },
-      }),
-      { mode: 0o600 },
+    const raw = JSON.parse(
+      readFileSync(resolveDesktopAppPaths(root).embeddedServer.serverConfig, "utf8"),
     );
-
-    const config = await loadOrCreateServerConfig();
-    expect(config.auth_token).toBe("a".repeat(32));
-
-    await writeServerConfig(config);
-    const raw = readConfig(tmp);
     expect(raw).not.toHaveProperty("auth_token");
+    expect(raw).toMatchObject({ mode: "embedded", url: "http://127.0.0.1:0", refresh_token: null });
   });
 
-  it("never persists the generated event_ws_allowed_origins allowlist", async () => {
-    // #task:1428 P1: the embedded allowlist is a per-boot GENERATED value (the
-    // current finalized loopback origin, re-seeded fresh by startBackend), not a
-    // durable setting. Persisting it would let a stale origin from an earlier
-    // port survive into the next boot — trusting a loopback the app no longer
-    // listens on. So writeServerConfig must strip it even when the in-memory
-    // config carries one.
-    tmp = mkdtempSync(join(tmpdir(), "silverhand-config-"));
-    process.env.SILVERHAND_DIR = tmp;
-    mkdirSync(dirname(configPath(tmp)), { recursive: true });
+  it("reads legacy fields but strips retired credentials and generated origins on rewrite", async () => {
+    const path = resolveDesktopAppPaths(root).embeddedServer.serverConfig;
+    mkdirSync(dirname(path), { recursive: true });
     writeFileSync(
-      configPath(tmp),
+      path,
       JSON.stringify({
         mode: "embedded",
         url: "http://127.0.0.1:4321",
+        auth_token: "a".repeat(32),
         refresh_token: null,
         event_ws_allowed_origins: ["http://127.0.0.1:1111"],
         child_sessions: {
@@ -91,61 +55,35 @@ describe("desktop server config", () => {
       }),
       { mode: 0o600 },
     );
-
-    // The read path still accepts an old file that carries the field...
     const config = await loadOrCreateServerConfig();
+    expect(config.auth_token).toBe("a".repeat(32));
     expect(config.event_ws_allowed_origins).toEqual(["http://127.0.0.1:1111"]);
-
-    // ...but a rewrite drops it, so the stale origin can't accumulate on disk.
     await writeServerConfig(config);
-    const raw = readConfig(tmp);
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    expect(raw).not.toHaveProperty("auth_token");
     expect(raw).not.toHaveProperty("event_ws_allowed_origins");
+    expect(raw).toMatchObject({
+      mode: "embedded",
+      url: "http://127.0.0.1:4321",
+      refresh_token: null,
+      child_sessions: { max_depth: 1 },
+    });
   });
 
-  it("derives isolated Electron userData under the silverhand root", () => {
-    tmp = mkdtempSync(join(tmpdir(), "silverhand-config-"));
-    expect(electronUserDataPath(tmp)).toBe(join(tmp, "desktop", "electron-user-data"));
+  it("places Electron userData beneath the configured root", () => {
+    expect(electronUserDataPath()).toBe(join(root, "desktop", "electron-user-data"));
   });
 });
 
-function readConfig(dir: string): Record<string, unknown> {
-  return JSON.parse(readFileSync(configPath(dir), "utf8")) as Record<string, unknown>;
-}
-
-function configPath(dir: string): string {
-  return resolveDesktopAppPaths(dir).embeddedServer.serverConfig;
-}
-
-describe("silverhandDir — the ONE unified SILVERHAND_DIR contract (#task:1603)", () => {
-  const original = process.env.SILVERHAND_DIR;
-  afterEach(() => {
-    if (original === undefined) delete process.env.SILVERHAND_DIR;
-    else process.env.SILVERHAND_DIR = original;
-  });
-
-  it("unset/empty/whitespace fall back to ~/.silverhand; a padded value is trimmed; explicit is used as-is", () => {
-    delete process.env.SILVERHAND_DIR;
-    expect(silverhandDir().endsWith("/.silverhand")).toBe(true);
-    process.env.SILVERHAND_DIR = "";
-    expect(silverhandDir().endsWith("/.silverhand")).toBe(true);
-    // Unified trim contract (shiki 2026-07-24): blank after trim = unset.
-    process.env.SILVERHAND_DIR = "   ";
-    expect(silverhandDir().endsWith("/.silverhand")).toBe(true);
-    process.env.SILVERHAND_DIR = " /x/y ";
-    expect(silverhandDir()).toBe("/x/y");
-    process.env.SILVERHAND_DIR = "/x/y";
-    expect(silverhandDir()).toBe("/x/y");
-  });
-
-  it("the Electron userData redirect gate takes the SAME arm as the root for unset/empty/whitespace vs explicit (Cindy P1)", () => {
-    for (const variant of [undefined, "", "   "] as const) {
-      if (variant === undefined) delete process.env.SILVERHAND_DIR;
-      else process.env.SILVERHAND_DIR = variant;
-      expect(shouldRedirectElectronUserData(), `env=${JSON.stringify(variant)}`).toBe(false);
-    }
-    for (const variant of ["/x/y", " /x/y "] as const) {
-      process.env.SILVERHAND_DIR = variant;
-      expect(shouldRedirectElectronUserData(), `env=${JSON.stringify(variant)}`).toBe(true);
-    }
-  });
+describe("Desktop root and Electron redirect policy", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it.each([undefined, "", "   ", "/x/y", " /x/y "])(
+    "handles SILVERHAND_DIR=%s without touching disk",
+    (value) => {
+      vi.stubEnv("SILVERHAND_DIR", value);
+      const configured = value !== undefined && value.trim() !== "";
+      expect(silverhandDir()).toBe(configured ? "/x/y" : join(homedir(), ".silverhand"));
+      expect(shouldRedirectElectronUserData()).toBe(configured);
+    },
+  );
 });

@@ -328,6 +328,8 @@ mod tests {
             RuntimeKind::Opencode,
             RuntimeKind::Cursor,
             RuntimeKind::Gemini,
+            RuntimeKind::Pi,
+            RuntimeKind::Grok,
         ] {
             assert_eq!(runtime_default_model(kind), None, "{kind:?}");
         }
@@ -342,6 +344,8 @@ mod tests {
             RuntimeKind::Opencode,
             RuntimeKind::Cursor,
             RuntimeKind::Gemini,
+            RuntimeKind::Pi,
+            RuntimeKind::Grok,
         ] {
             assert!(!runtime_supports_fast_mode(kind), "{kind:?}");
         }

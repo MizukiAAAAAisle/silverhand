@@ -32,9 +32,9 @@ import goldenSnapshot from './api-barrel-export-snapshot.json' with { type: 'jso
  * the barrel.
  */
 describe('api barrel export drift (#task:963)', () => {
-  it('re-exports exactly the same runtime value set as before the split', () => {
+  it('re-exports exactly the published runtime value ledger', () => {
     const liveKeys = Object.keys(api)
-      .filter(k => typeof (api as Record<string, unknown>)[k] !== 'undefined')
+      .filter((k) => typeof (api as Record<string, unknown>)[k] !== 'undefined')
       .sort();
     // Object.keys on a namespace also surfaces re-export *values* only;
     // pure `type` exports are not present. Compare against the golden set.

@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { apiPaths } from './api/paths.js';
 import { BACKEND_ADMISSION } from './backend-admission.generated.js';
 import { PROTOCOL_VERSIONS } from './protocol-versions.js';
 
@@ -66,25 +65,7 @@ export const DESKTOP_SERVER_API_EPOCH = PROTOCOL_VERSIONS.desktopApi;
  * Sent by the desktop main process on every backend REST request and the
  * event-WS upgrade.
  */
-export const DESKTOP_API_EPOCH_HEADER =
-  BACKEND_ADMISSION.desktopApiEpochHeader;
-
-/**
- * Parse the dedicated epoch header at the server boundary. Never throws.
- * Absent/empty → 0 (pre-epoch legacy generation). Repeated header or a
- * non-canonical value (anything but a small non-negative decimal integer)
- * also → 0: a malformed sender is not distinguishable from a pre-epoch one
- * for ADMISSION purposes (both fail closed once the minimum rises); the
- * observability distribution keeps its own buckets via client-info status.
- */
-export function parseDesktopApiEpochHeader(
-  raw: string | string[] | undefined,
-): number {
-  if (raw === undefined || Array.isArray(raw)) return 0;
-  const trimmed = raw.trim();
-  if (!/^\d{1,9}$/.test(trimmed)) return 0;
-  return Number.parseInt(trimmed, 10);
-}
+export const DESKTOP_API_EPOCH_HEADER = BACKEND_ADMISSION.desktopApiEpochHeader;
 
 /**
  * Lowest client epoch this server build admits on the desktop surface.
@@ -123,14 +104,9 @@ export const DesktopApiAdvertisementSchema = z.object({
   current_epoch: z.number().int().nonnegative(),
   minimum_client_epoch: z.number().int().nonnegative(),
 });
-export type DesktopApiAdvertisement = z.infer<
-  typeof DesktopApiAdvertisementSchema
->;
+export type DesktopApiAdvertisement = z.infer<typeof DesktopApiAdvertisementSchema>;
 
-export type DesktopServerApiCompatibility =
-  | 'compatible'
-  | 'client_too_old'
-  | 'server_too_old';
+export type DesktopServerApiCompatibility = 'compatible' | 'client_too_old' | 'server_too_old';
 
 /**
  * Pure range comparison used by BOTH sides. A missing epoch on either side is
@@ -168,38 +144,3 @@ export const UpgradeRequiredBodySchema = z.object({
 export type UpgradeRequiredBody = z.infer<typeof UpgradeRequiredBodySchema>;
 
 export const UPGRADE_REQUIRED_HTTP_STATUS = 426;
-
-/**
- * REST paths on the `/api/*` surface exempt from epoch admission.
- *
- * Surface-scoping proof, in layers:
- *   1. `/internal/*` (agent CLI), `/auth/*`, `/readyz` are outside the
- *      `/api/*` mount — structurally untouched.
- *   2. The public bearer middleware runs BEFORE epoch admission with an
- *      allowlist of exactly health/serverInfo/hostConnectTokenResolve, so
- *      every request that reaches the epoch check either is on this exempt
- *      list or carries an authenticated USER session — i.e. it is the
- *      desktop surface (or a user-credentialed script accepting desktop
- *      semantics). "Missing epoch" therefore only ever classifies the
- *      desktop generation, never the CLI or daemon.
- *   3. The daemon's surfaces are exempt by name:
- *      - hostConnectTokenResolve: daemon bootstrap REST call;
- *      - hostConnect: daemon outbound WS upgrade — HTTP upgrades never
- *        enter the Hono middleware chain at all, so this entry is a
- *        DEFENSIVE pin against a future mount/transport change, not a
- *        currently-reachable path.
- *
- * Everything an incompatible client needs to DISCOVER that it is
- * incompatible stays exempt: health (probes), serverInfo (the
- * advertisement an old desktop reads to render its upgrade gate).
- */
-export const DESKTOP_API_EPOCH_EXEMPT_PATHS = [
-  apiPaths.health,
-  apiPaths.serverInfo,
-  apiPaths.hostConnectTokenResolve,
-  apiPaths.hostConnect,
-] as const;
-
-export function isDesktopApiEpochExemptPath(path: string): boolean {
-  return (DESKTOP_API_EPOCH_EXEMPT_PATHS as readonly string[]).includes(path);
-}

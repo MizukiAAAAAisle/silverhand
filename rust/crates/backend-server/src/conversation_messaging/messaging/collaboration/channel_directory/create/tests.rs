@@ -256,90 +256,20 @@ async fn production_admission_takes_the_native_structural_axis_and_drops_raw_bef
 }
 
 #[tokio::test]
-async fn refusal_closed_set_renders_the_typescript_route_contract() {
-    let cases = [
-        (
-            HumanChannelCreateRefusal::WorkspaceNotFound,
-            StatusCode::NOT_FOUND,
-            json!({"error":"workspace not found"}),
-        ),
-        (
-            HumanChannelCreateRefusal::Forbidden,
-            StatusCode::FORBIDDEN,
-            json!({"error":"forbidden"}),
-        ),
-        (
-            HumanChannelCreateRefusal::AgentHomePublic,
-            StatusCode::BAD_REQUEST,
-            json!({"error":"agent_home DM channels cannot be public"}),
-        ),
-        (
-            HumanChannelCreateRefusal::AgentHomeExplicitMembers,
-            StatusCode::BAD_REQUEST,
-            json!({"error":"agent_home channels always use the home owner/current user as members"}),
-        ),
-        (
-            HumanChannelCreateRefusal::AgentHomeOwnerNotFound,
-            StatusCode::NOT_FOUND,
-            json!({"error":"agent_home owner not found"}),
-        ),
-        (
-            HumanChannelCreateRefusal::AgentNotFound("a".into()),
-            StatusCode::BAD_REQUEST,
-            json!({"error":"agent a not found","code":"agent_not_found"}),
-        ),
-        (
-            HumanChannelCreateRefusal::AgentNotWorkspaceMember("a".into()),
-            StatusCode::BAD_REQUEST,
-            json!({"error":"agent a is not a member of this workspace","code":"agent_not_workspace_member"}),
-        ),
-        (
-            HumanChannelCreateRefusal::UserNotWorkspaceMember("u".into()),
-            StatusCode::BAD_REQUEST,
-            json!({"error":"user u is not a human member of this workspace","code":"user_not_workspace_member"}),
-        ),
-        (
-            HumanChannelCreateRefusal::TitleTaken,
-            StatusCode::CONFLICT,
-            json!({"error":"a channel titled General already exists in this workspace","code":"conversation_title_taken"}),
-        ),
-    ];
-    for (reason, expected_status, expected_body) in cases {
-        let (app, _) = fixture_app(Outcome::Refuse(reason), Effects::default());
-        let (status, body) = call(
-            app,
-            "/api/workspaces/workspace-1/channels",
-            r#"{"title":"General"}"#,
-            false,
-        )
-        .await;
-        assert_eq!(status, expected_status);
-        assert_eq!(body, expected_body);
-    }
-}
-
-#[tokio::test]
-async fn success_is_201_and_publication_failure_never_skips_audit_or_changes_wire() {
-    for fail in [false, true] {
-        let effects = Effects {
-            events: Arc::new(Mutex::new(vec![])),
-            fail,
-        };
-        let (app, _) = fixture_app(Outcome::Commit(Box::new(committed())), effects.clone());
-        let (status, body) = call(
-            app,
-            "/api/workspaces/workspace-1/channels",
-            r#"{"title":"General"}"#,
-            false,
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED);
-        assert_eq!(body["channel"]["id"], "created");
-        assert_eq!(body["channel"]["title"], "General");
-        assert_eq!(body["channel"]["visibility"], "private");
-        assert_eq!(*effects.events.lock().unwrap(), ["publish", "audit"]);
-        assert!(!body.to_string().contains("publish-driver-detail"));
-    }
+async fn missing_agent_home_owner_refusal_preserves_its_wire_contract() {
+    let (app, _) = fixture_app(
+        Outcome::Refuse(HumanChannelCreateRefusal::AgentHomeOwnerNotFound),
+        Effects::default(),
+    );
+    let (status, body) = call(
+        app,
+        "/api/workspaces/workspace-1/channels",
+        r#"{"title":"General"}"#,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, json!({"error":"agent_home owner not found"}));
 }
 
 #[tokio::test]
@@ -491,8 +421,6 @@ fn normalize_success(mut body: Value) -> Value {
         return body;
     };
     channel.insert("id".into(), json!("created"));
-    channel.insert("created_at".into(), json!(77));
-    channel.insert("updated_at".into(), json!(77));
     body
 }
 
@@ -643,6 +571,9 @@ async fn committed_publication_failure_is_logged_once_with_its_source_and_still_
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["channel"]["id"], "created");
+    assert_eq!(body["channel"]["title"], "General");
+    assert_eq!(body["channel"]["visibility"], "private");
     assert!(!body.to_string().contains("publish-driver-detail"));
     assert_eq!(*effects.events.lock().unwrap(), ["publish", "audit"]);
     let events = logs.events();

@@ -525,6 +525,22 @@ async fn lease_expiry_disconnect_and_settlement_are_owner_scoped() {
     let ClaimPendingInbox::Claimed(first) = first else {
         panic!("first owner must claim")
     };
+    assert_eq!(
+        fixture
+            .delivery
+            .claim_pending(
+                "host-1".into(),
+                principal.clone(),
+                conversation.clone(),
+                owner("owner-too-early"),
+                149,
+                50,
+                &NoReferences,
+            )
+            .await
+            .unwrap(),
+        ClaimPendingInbox::Empty
+    );
     let second = fixture
         .delivery
         .claim_pending(
@@ -532,7 +548,7 @@ async fn lease_expiry_disconnect_and_settlement_are_owner_scoped() {
             principal.clone(),
             conversation.clone(),
             owner("owner-2"),
-            151,
+            150,
             50,
             &NoReferences,
         )
@@ -1524,6 +1540,16 @@ async fn tool_refinement_never_rewrites_previous_generation_or_legacy_rows() {
             current_id
         );
     }
+    let current_payload: String =
+        sqlx::query_scalar("SELECT payload FROM conversation_events WHERE id=?")
+            .bind(current_id)
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&current_payload).unwrap()["input"],
+        serde_json::json!({ "command": "current only" })
+    );
     assert!(refine(old.clone()).await.unwrap().is_none());
     assert!(record(old).await.unwrap().is_none());
     for id in [old_id, legacy_id] {

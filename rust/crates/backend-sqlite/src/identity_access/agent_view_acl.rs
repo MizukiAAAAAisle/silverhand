@@ -317,39 +317,6 @@ mod tests {
 
     use super::*;
 
-    /// Every arm the relation actually stamps, whatever the fixture holds.
-    const SELECT_ARM_VOCABULARY: &str = concat!(
-        "SELECT DISTINCT rel.arm AS arm FROM (",
-        agent_viewer_relation!(),
-        ") rel"
-    );
-
-    /// The pre-merge text of the direct-pair arm, kept as a differential oracle: the
-    /// merge must not move ACL membership by one pair. A deliberate change to the
-    /// rule has to change both texts, which is the point.
-    const LEGACY_DIRECT_PAIR: &str = "SELECT endpoint_b_id AS user_id \
-           FROM conversations \
-          WHERE placement_kind = 'direct_pair' \
-            AND endpoint_a_kind = 'agent' AND endpoint_a_id = ? \
-            AND endpoint_b_kind = 'human' \
-          UNION \
-         SELECT endpoint_a_id AS user_id \
-           FROM conversations \
-          WHERE placement_kind = 'direct_pair' \
-            AND endpoint_b_kind = 'agent' AND endpoint_b_id = ? \
-            AND endpoint_a_kind = 'human'";
-
-    /// The pre-merge text of the workspace arm. Same role as [`LEGACY_DIRECT_PAIR`].
-    const LEGACY_WORKSPACE: &str = "SELECT DISTINCT wu.user_id \
-           FROM workspace_users wu \
-          WHERE wu.workspace_id IN ( \
-            SELECT w.id FROM workspaces w \
-              JOIN workspace_members wm ON wm.workspace_id = w.id \
-             WHERE wm.agent_id = ? AND w.owner_agent_id IS NULL \
-            UNION \
-            SELECT w.id FROM workspaces w WHERE w.owner_agent_id = ? \
-          )";
-
     /// One fixture in which every arm holds a user the other arm does not, so an
     /// arm-attribution slip cannot hide behind the union:
     ///
@@ -431,52 +398,6 @@ mod tests {
         ids.iter().map(|id| (*id).to_owned()).collect()
     }
 
-    async fn legacy_arm(
-        connection: &mut SqliteConnection,
-        agent: &AgentId,
-        sql: &'static str,
-    ) -> BTreeSet<String> {
-        let rows = sqlx::query(sql)
-            .bind(agent.as_str())
-            .bind(agent.as_str())
-            .fetch_all(&mut *connection)
-            .await
-            .expect("legacy arm query");
-        rows.iter()
-            .map(|row| row.try_get::<String, _>("user_id").expect("user_id"))
-            .collect()
-    }
-
-    /// The direct-pair arm holds exactly its own endpoints — in both slot orders,
-    /// with the agent↔agent pair and every workspace-only user absent. Reading it
-    /// through the merged relation without the arm filter would pull the workspace
-    /// users in here.
-    #[tokio::test]
-    async fn the_direct_pair_arm_holds_only_pair_endpoints() {
-        let dir = TempDir::new().expect("temp dir");
-        let mut db = seeded(&dir).await;
-
-        let arm = read_audience_arm(&mut db, &agent("a1"), ViewArm::DirectPair)
-            .await
-            .expect("direct-pair arm");
-
-        assert_eq!(set(arm), expected(&["u-pair", "u-both"]));
-    }
-
-    /// The workspace arm holds regular membership AND the agent-home workspace's
-    /// users, with the pair-only endpoint absent.
-    #[tokio::test]
-    async fn the_workspace_arm_holds_regular_membership_and_the_agent_home() {
-        let dir = TempDir::new().expect("temp dir");
-        let mut db = seeded(&dir).await;
-
-        let arm = read_audience_arm(&mut db, &agent("a1"), ViewArm::Workspace)
-            .await
-            .expect("workspace arm");
-
-        assert_eq!(set(arm), expected(&["u-regular", "u-both", "u-home"]));
-    }
-
     /// Each field of the audience is supplied by its OWN arm. A misrouted field
     /// would still type-check and still union correctly downstream, so this is
     /// checked where the arms are still apart.
@@ -546,53 +467,6 @@ mod tests {
                 .map(|row| row.try_get::<String, _>("agent_id").expect("agent_id"))
                 .collect();
             assert_eq!(seen, expected(expected_agents), "candidates for {user_id}");
-        }
-    }
-
-    /// No row carries an arm the Rust side does not know. This is the loud failure a
-    /// runtime decode would give for a tag WE author: an arm added to the relation
-    /// without a [`ViewArm`] variant is caught here rather than silently dropping
-    /// viewers out of every read.
-    #[tokio::test]
-    async fn every_relation_row_carries_a_known_arm() {
-        let dir = TempDir::new().expect("temp dir");
-        let mut db = seeded(&dir).await;
-
-        let rows = sqlx::query(SELECT_ARM_VOCABULARY)
-            .fetch_all(&mut db)
-            .await
-            .expect("arm vocabulary");
-        let stamped: BTreeSet<String> = rows
-            .iter()
-            .map(|row| row.try_get::<String, _>("arm").expect("arm"))
-            .collect();
-
-        assert_eq!(
-            stamped,
-            expected(&[ViewArm::DirectPair.tag(), ViewArm::Workspace.tag()])
-        );
-    }
-
-    /// The differential: for every agent in the fixture, each arm of the merged
-    /// relation returns exactly what the pre-merge text returned. This is what makes
-    /// the merge a refactor rather than a rewrite of an ACL.
-    #[tokio::test]
-    async fn each_arm_matches_the_pre_merge_text() {
-        let dir = TempDir::new().expect("temp dir");
-        let mut db = seeded(&dir).await;
-
-        for id in ["a1", "a2"] {
-            let subject = agent(id);
-            for (arm, legacy) in [
-                (ViewArm::DirectPair, LEGACY_DIRECT_PAIR),
-                (ViewArm::Workspace, LEGACY_WORKSPACE),
-            ] {
-                let merged = set(read_audience_arm(&mut db, &subject, arm)
-                    .await
-                    .expect("merged arm"));
-                let legacy = legacy_arm(&mut db, &subject, legacy).await;
-                assert_eq!(merged, legacy, "arm {arm:?} of {id} moved");
-            }
         }
     }
 

@@ -178,17 +178,67 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn issued_words_are_unique_and_round_trip() {
+    fn issued_words_have_exact_wire_spellings_and_are_unique() {
         let words: HashSet<_> = IssuedDaemonCommandKind::ALL
             .iter()
             .map(|kind| kind.as_wire())
             .collect();
         assert_eq!(words.len(), IssuedDaemonCommandKind::ALL.len());
-        for kind in IssuedDaemonCommandKind::ALL {
-            assert_eq!(
-                IssuedDaemonCommandKind::from_wire(kind.as_wire()),
-                Some(kind)
-            );
+        for (kind, wire) in [
+            (
+                IssuedDaemonCommandKind::AgentFilesPurge,
+                "agent_files_purge",
+            ),
+            (
+                IssuedDaemonCommandKind::AgentMaterialize,
+                "agent_materialize",
+            ),
+            (
+                IssuedDaemonCommandKind::AgentProfileMcpRead,
+                "agent_profile_mcp_read",
+            ),
+            (
+                IssuedDaemonCommandKind::AgentProfileMcpWrite,
+                "agent_profile_mcp_write",
+            ),
+            (
+                IssuedDaemonCommandKind::AgentWorkspaceFileRead,
+                "agent_workspace_file_read",
+            ),
+            (
+                IssuedDaemonCommandKind::AgentWorkspaceIndex,
+                "agent_workspace_index",
+            ),
+            (
+                IssuedDaemonCommandKind::AgentWorkspaceTree,
+                "agent_workspace_tree",
+            ),
+            (IssuedDaemonCommandKind::HostStatus, "host_status"),
+            (IssuedDaemonCommandKind::McpProbe, "mcp_probe"),
+            (
+                IssuedDaemonCommandKind::ProxyConfigGet,
+                "host_proxy_config_get",
+            ),
+            (
+                IssuedDaemonCommandKind::ProxyConfigSet,
+                "host_proxy_config_set",
+            ),
+            (IssuedDaemonCommandKind::RotateToken, "rotate_token"),
+            (
+                IssuedDaemonCommandKind::RuntimeCatalog,
+                "host_runtime_catalog",
+            ),
+            (
+                IssuedDaemonCommandKind::RuntimeClearSession,
+                "runtime_clear_session",
+            ),
+            (IssuedDaemonCommandKind::RuntimeDeliver, "runtime_deliver"),
+            (IssuedDaemonCommandKind::RuntimeStart, "runtime_start"),
+            (IssuedDaemonCommandKind::RuntimeStatus, "runtime_status"),
+            (IssuedDaemonCommandKind::RuntimeStop, "runtime_stop"),
+        ] {
+            assert_eq!(kind.as_wire(), wire);
+            assert_eq!(IssuedDaemonCommandKind::from_wire(wire), Some(kind));
         }
         assert_eq!(IssuedDaemonCommandKind::from_wire("daemon_restart"), None);
     }

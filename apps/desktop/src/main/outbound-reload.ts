@@ -1,17 +1,8 @@
-import type {
-  ClassifyServerUrlOptions,
-  DaemonHostConfig,
-  ServerUrlClassification,
-  ServerUrlRejectionReason,
-} from "@silverhand/shared";
+import { classifyServerUrl } from "@silverhand/shared";
+import type { DaemonHostConfig, ServerUrlRejectionReason } from "@silverhand/shared";
 import type { OutboundAttachmentSnapshot } from "./outbound-attach.js";
 import type { HostOutboundReloadFailureReason, HostOutboundReloadResult } from "@silverhand/host";
-import {
-  startAttachWatchdog,
-  type AttachWatchdogDeps,
-  type AttachWatchdogOutcome,
-  type ExpectedAttachWindow,
-} from "./outbound-attach.js";
+import { startAttachWatchdog, type ExpectedAttachWindow } from "./outbound-attach.js";
 
 /**
  * Outcome the IPC handler returns to the renderer. Four success
@@ -106,20 +97,7 @@ export type GetHostAttachmentFn = (hostId: string) => OutboundAttachmentSnapshot
  */
 export type HostOutboundReloadFn = () => Promise<HostOutboundReloadResult>;
 
-/**
- * URL classifier binding — `classifyServerUrl` from
- * `@silverhand/shared`. Pulled as a dep so tests can swap in a
- * fixed-response fake; production callers always pass the real
- * function.
- */
-export type ClassifyServerUrlFn = (
-  input: string,
-  options?: ClassifyServerUrlOptions,
-) => ServerUrlClassification;
-
 export interface PerformOutboundReloadDeps {
-  /** D3.c-1 shared classifier, defense-in-depth on raw input. */
-  classifyServerUrl: ClassifyServerUrlFn;
   /**
    * Explicit caller-side opt-in for non-loopback http:// remote URLs.
    * This is a client/package policy bit, not profile state; production
@@ -150,20 +128,6 @@ export interface PerformOutboundReloadDeps {
    */
   currentHostToken: () => string | null;
   currentProfileVersion?: () => number | undefined;
-  /**
-   * Test seam for `startAttachWatchdog`. Production passes
-   * `startAttachWatchdog` from `outbound-attach.ts`; tests supply a
-   * fake that resolves deterministically.
-   */
-  startWatchdog?: (
-    window: ExpectedAttachWindow,
-    watchdogDeps: AttachWatchdogDeps,
-  ) => { promise: Promise<AttachWatchdogOutcome>; abort(): void };
-  /** Test clock; defaults to `Date.now`. */
-  now?: () => number;
-  /** Watchdog tuning. Defaults match `outbound-attach.ts` (250ms / 10s). */
-  watchdogPollIntervalMs?: number;
-  watchdogTimeoutMs?: number;
 }
 
 export interface PerformOutboundReloadInput {
@@ -180,12 +144,10 @@ export async function performOutboundReload(
   input: PerformOutboundReloadInput,
   deps: PerformOutboundReloadDeps,
 ): Promise<OutboundReloadOutcome> {
-  const now = deps.now ?? (() => Date.now());
-
   // 1. Classify raw input. Anchor 1: defense-in-depth on the V1
   //    loopback policy. The renderer also validates, but main MUST
   //    NOT trust renderer-sent values for security-bearing fields.
-  const classified = deps.classifyServerUrl(input.serverUrl, {
+  const classified = classifyServerUrl(input.serverUrl, {
     allowInsecureRemote: deps.allowInsecureRemote === true,
   });
   if (!classified.ok) {
@@ -234,7 +196,7 @@ export async function performOutboundReload(
   //    expectAttachSince` branch is well-defined for ANY observed
   //    attachment that this save could have caused. Mirrors
   //    `captureAttachWindow` in `index.ts` for the attach path.
-  const expectAttachSince = now();
+  const expectAttachSince = Date.now();
   const prevAttachment = deps.getAttachment ? deps.getAttachment(hostId) : null;
   const previousConnectionId = prevAttachment?.connectionId ?? null;
 
@@ -341,12 +303,8 @@ export async function performOutboundReload(
     previousConnectionId,
     expectAttachSince,
   };
-  const startWatchdog = deps.startWatchdog ?? startAttachWatchdog;
-  const watchdog = startWatchdog(window, {
+  const watchdog = startAttachWatchdog(window, {
     getAttachment: (id) => (deps.getAttachment ? deps.getAttachment(id) : null),
-    pollIntervalMs: deps.watchdogPollIntervalMs,
-    timeoutMs: deps.watchdogTimeoutMs,
-    now,
   });
   const outcome = await watchdog.promise;
   if (outcome.ok) {

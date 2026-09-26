@@ -1,37 +1,8 @@
 /**
- * System message subtype registry — single source of truth.
- *
- * Rows in the `messages` table with `from_kind = 'system'` carry an
- * optional `metadata.subtype` tag that identifies what kind of system
- * event they represent. Both producers (every `MessageRepo.insertForConversation`
- * call with `fromKind: 'system'`) and renderers (the `systemMessageRenderers`
- * registry in apps/desktop) read from the constants below.
- *
- * # Adding a new subtype
- *
- * 1. Add the literal to `SYSTEM_SUBTYPES` (or extend `TASK_MUTATION_KINDS`
- *    if it's a new task-mutation kind).
- * 2. Producer call sites pass it through `systemSubtype('your_new_name')`
- *    or `taskSystemSubtype(kind)` — both helpers narrow the argument to
- *    the literal union, so the drift test can grep call sites and
- *    statically derive the producer set.
- * 3. The renderer registry is typed `Record<SystemSubtype, …>` — `tsc`
- *    rejects missing keys, so the new subtype must be wired up before
- *    the build passes.
- * 4. The drift test cross-checks producer call sites against
- *    `SYSTEM_SUBTYPES`; a literal in producer code with no constant entry
- *    (or vice versa) fails CI.
- *
- * # Subtype resolution
- *
- * `resolveSubtype()` returns one of two states:
- *  - `current`: live subtype; the renderer registry is authoritative.
- *  - `unknown`: missing metadata (null/undefined) or string in neither set.
- *    Renderer falls back to generic narration.
- *
- * `unknown` is a first-class fallback state, NOT a renderer error. Retired
- * subtype rows are expected to be migrated away before deleting their registry
- * entry; if one resurfaces afterwards it should be visible as unknown drift.
+ * System-message subtype vocabulary and defensive metadata readers.
+ * Rust owns message production; these schemas decode persisted/wire metadata.
+ * The Desktop registry uses Record<SystemSubtype, ...> for exhaustive dispatch.
+ * Unknown or retired subtypes degrade to generic narration.
  */
 import { z } from 'zod';
 import { TaskAssigneeDtoSchema } from './api/task.js';
@@ -55,22 +26,9 @@ export const SYSTEM_SUBTYPES = [
   'task_status',
   'task_edit',
 ] as const;
-export type SystemSubtype = typeof SYSTEM_SUBTYPES[number];
+export type SystemSubtype = (typeof SYSTEM_SUBTYPES)[number];
 
-/** Task mutation kinds — drives `taskSystemSubtype(kind)` → `task_${kind}`.
- *  `edit` is a definition change (title/content), distinct from the mutations
- *  that touch the task's workflow or ownership (claim/unclaim/status): its event
- *  exists so an agent building to the task's spec learns the definition changed
- *  and re-reads `task detail`. Note `claim`/`unclaim` can move the workflow only
- *  for an agent actor — the same kinds are pure ownership writes when a human
- *  performs them (see `TaskSystemMetadataSchema`). */
-export const TASK_MUTATION_KINDS = ['create', 'claim', 'unclaim', 'status', 'edit'] as const;
-export type TaskMutationKind = typeof TASK_MUTATION_KINDS[number];
-
-/** Task subtypes — must match `\`task_${TaskMutationKind}\`` exactly
- *  (compile-time exhaustive check below). Listed explicitly to preserve
- *  tuple precision; `.map()` over `TASK_MUTATION_KINDS` would degrade to
- *  `readonly string[]`. */
+/** Task lifecycle subtypes accepted by the metadata readers. */
 export const TASK_SUBTYPES = [
   'task_create',
   'task_claim',
@@ -78,78 +36,24 @@ export const TASK_SUBTYPES = [
   'task_status',
   'task_edit',
 ] as const;
-export type TaskSubtype = typeof TASK_SUBTYPES[number];
-
-/** Compile-time exhaustiveness: TaskSubtype must equal
- *  `\`task_${TaskMutationKind}\`` in both directions. Adding a kind without
- *  the matching subtype literal — or a subtype literal without the kind —
- *  breaks typecheck via this assertion. Pure type-level (no runtime
- *  emit, no `noUnusedLocals` warning). */
-type Assert<T extends true> = T;
-type _IsExactTaskSubtype =
-  Exclude<`task_${TaskMutationKind}`, TaskSubtype> extends never
-    ? Exclude<TaskSubtype, `task_${TaskMutationKind}`> extends never
-      ? true
-      : false
-    : false;
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-type _TaskSubtypeExhaustive = Assert<_IsExactTaskSubtype>;
-
-/**
- * Identity helper for non-task subtypes. Forces TypeScript to narrow the
- * argument to `SystemSubtype` at the call site, giving the drift test a
- * single grep pattern (`systemSubtype('name')`) to enumerate producers.
- *
- * Producers should write `systemSubtype('mention_cc')` instead of bare
- * string literals so the drift test can find them.
- */
-export function systemSubtype(name: SystemSubtype): SystemSubtype {
-  return name;
-}
-
-/**
- * Maps a `TaskMutationKind` to its `TaskSubtype` literal. Used by
- * task-service.ts when inserting task lifecycle system messages —
- * the helper is the single source of the `task_${kind}` template,
- * so the drift test can scan `taskSystemSubtype(...)` arguments and
- * statically derive the four task subtype names.
- */
-export function taskSystemSubtype(kind: TaskMutationKind): TaskSubtype {
-  return `task_${kind}` as TaskSubtype;
-}
+export type TaskSubtype = (typeof TASK_SUBTYPES)[number];
 
 /** Subtype resolution result. `current` rows are renderer registry's
  *  responsibility; `unknown` rows fall through to generic narration and are
  *  observable as drift / malformed / migrated-away history. */
-export type SubtypeResolution =
-  | { kind: 'current'; subtype: SystemSubtype }
-  | { kind: 'unknown' };
+export type SubtypeResolution = { kind: 'current'; subtype: SystemSubtype } | { kind: 'unknown' };
 
 /**
  * Resolve a raw subtype string (or null/undefined) to one of two states.
  * Renderers consume this — they switch on `resolution.kind` first, then
  * dispatch on `resolution.subtype` only in the `current` branch.
  */
-export function resolveSubtype(
-  raw: string | null | undefined,
-): SubtypeResolution {
+export function resolveSubtype(raw: string | null | undefined): SubtypeResolution {
   if (raw == null) return { kind: 'unknown' };
   if ((SYSTEM_SUBTYPES as readonly string[]).includes(raw)) {
     return { kind: 'current', subtype: raw as SystemSubtype };
   }
   return { kind: 'unknown' };
-}
-
-/**
- * Pull `metadata.subtype` from a message metadata object and resolve it.
- * Convenience for renderer call sites that have the raw metadata dict.
- */
-export function readSubtype(
-  metadata: Record<string, unknown> | null | undefined,
-): SubtypeResolution {
-  if (!metadata) return { kind: 'unknown' };
-  const v = metadata['subtype'];
-  return resolveSubtype(typeof v === 'string' ? v : null);
 }
 
 // ── Per-subtype metadata schemas ─────────────────────────────────────
@@ -199,9 +103,7 @@ export const ConversationMemberAddedMetadataSchema = z.object({
   subtype: z.literal('conversation_member_added'),
   ...conversationMemberChangeFields,
 });
-export type ConversationMemberAddedMetadata = z.infer<
-  typeof ConversationMemberAddedMetadataSchema
->;
+export type ConversationMemberAddedMetadata = z.infer<typeof ConversationMemberAddedMetadataSchema>;
 
 export const ConversationMemberRemovedMetadataSchema = z.object({
   subtype: z.literal('conversation_member_removed'),
@@ -214,10 +116,10 @@ export type ConversationMemberRemovedMetadata = z.infer<
 /** Union of the two member-change events. The frontend renders both with
  *  one row component (icon + verb + preposition keyed off `subtype`), so a
  *  single reader that keeps the discriminator is what it consumes. */
-export const ConversationMemberChangeMetadataSchema = z.discriminatedUnion(
-  'subtype',
-  [ConversationMemberAddedMetadataSchema, ConversationMemberRemovedMetadataSchema],
-);
+export const ConversationMemberChangeMetadataSchema = z.discriminatedUnion('subtype', [
+  ConversationMemberAddedMetadataSchema,
+  ConversationMemberRemovedMetadataSchema,
+]);
 export type ConversationMemberChangeMetadata = z.infer<
   typeof ConversationMemberChangeMetadataSchema
 >;

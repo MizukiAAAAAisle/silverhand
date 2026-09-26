@@ -317,17 +317,21 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct RecordingSink {
-        announces: Arc<AtomicUsize>,
+        targets: Arc<std::sync::Mutex<Vec<(String, String, WorkspaceRole)>>>,
     }
 
     impl ViewerWorkspacesChangedSink for RecordingSink {
         async fn viewer_added_to_workspace(
             &self,
-            _user_id: &UserId,
-            _workspace_id: &WorkspaceId,
-            _role: WorkspaceRole,
+            user_id: &UserId,
+            workspace_id: &WorkspaceId,
+            role: WorkspaceRole,
         ) -> Result<(), ViewerAnnounceFailure> {
-            self.announces.fetch_add(1, Ordering::SeqCst);
+            self.targets.lock().unwrap().push((
+                user_id.as_str().to_owned(),
+                workspace_id.as_str().to_owned(),
+                role,
+            ));
             Ok(())
         }
     }
@@ -455,9 +459,8 @@ mod tests {
         assert_eq!(member.role, WorkspaceRole::Member);
         assert!(matches!(announce, ViewerAnnounce::Delivered));
         assert_eq!(
-            sink.announces.load(Ordering::SeqCst),
-            1,
-            "a genuine create announces exactly once"
+            *sink.targets.lock().unwrap(),
+            vec![("invitee".to_owned(), "ws".to_owned(), WorkspaceRole::Member)]
         );
     }
 
@@ -491,7 +494,7 @@ mod tests {
             "nothing was created, so no announce was owed — not a delivered one"
         );
         assert_eq!(
-            sink.announces.load(Ordering::SeqCst),
+            sink.targets.lock().unwrap().len(),
             0,
             "a re-enrollment announces nothing"
         );

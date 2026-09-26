@@ -1,15 +1,29 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, chmodSync, readdirSync } from 'node:fs';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+  chmodSync,
+  readdirSync,
+  linkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   AGENT_HOME_SENTINEL_FILENAME,
   AGENT_HOME_TEMPLATE_VERSION,
-  AgentMaterializeError,
   materializeAgent,
   readSentinel,
   resolveAgentDir,
 } from '../../src/daemon/agent-materialize/index.js';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, linkSync: vi.fn(actual.linkSync) };
+});
 
 /**
  * D4.d D2 handler tests. The handler is the §4.6 decision tree;
@@ -35,6 +49,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.mocked(linkSync).mockReset();
   // Restore writable mode in case a test flipped it; rmSync ignores
   // the perms but trying to clean up cleanly keeps CI output sane.
   try {
@@ -79,17 +94,10 @@ describe('materializeAgent — §4.6 decision tree', () => {
     expect(existsSync(join(agentDir, 'notes/user-preferences.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'notes/project.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'notes/work-log.md'))).toBe(true);
-    const onboardingGuide = readFileSync(
-      join(agentDir, 'notes/onboarding-guide.md'),
-      'utf8',
-    );
-    expect(onboardingGuide).toContain(
-      'The daemon-resolved L1 `system_prompt.md` path',
-    );
+    const onboardingGuide = readFileSync(join(agentDir, 'notes/onboarding-guide.md'), 'utf8');
+    expect(onboardingGuide).toContain('The daemon-resolved L1 `system_prompt.md` path');
     expect(onboardingGuide).not.toContain('~/.silverhand');
-    expect(
-      readFileSync(join(agentDir, 'notes/user-preferences.md'), 'utf8'),
-    ).toMatch(
+    expect(readFileSync(join(agentDir, 'notes/user-preferences.md'), 'utf8')).toMatch(
       /^---\nname: user-preferences\ndescription: [^\n]+\nmetadata:\n  category: user\n---\n/u,
     );
 
@@ -129,7 +137,7 @@ describe('materializeAgent — §4.6 decision tree', () => {
 
   it.each(['agent_id', 'template_choice'] as const)(
     'sentinel mismatch on %s → agent_dir_collision',
-    async field => {
+    async (field) => {
       // First materialize with the canonical params.
       await materializeAgent(baseParams(), { agentHomeRootDir });
       const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
@@ -205,10 +213,7 @@ describe('materializeAgent — §4.6 decision tree', () => {
   it('sentinel JSON corrupt → agent_dir_collision (fail-closed)', async () => {
     const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
     mkdirSync(agentDir, { recursive: true });
-    writeFileSync(
-      join(agentDir, AGENT_HOME_SENTINEL_FILENAME),
-      'this is not json {{{',
-    );
+    writeFileSync(join(agentDir, AGENT_HOME_SENTINEL_FILENAME), 'this is not json {{{');
 
     await expect(materializeAgent(baseParams(), { agentHomeRootDir })).rejects.toMatchObject({
       name: 'AgentMaterializeError',
@@ -277,16 +282,6 @@ describe('materializeAgent — §4.6 decision tree', () => {
     }
   });
 
-  it('exports AgentMaterializeError as a typed class', () => {
-    // Sanity pin so a future refactor that turns the class into a
-    // plain object stops with a typecheck rather than silently
-    // breaking the dispatcher's `instanceof` detection.
-    const err = new AgentMaterializeError('agent_dir_collision', 'x');
-    expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(AgentMaterializeError);
-    expect(err.code).toBe('agent_dir_collision');
-  });
-
   // Cindy D2 P1-2: the path-equality invariant must live in the
   // schema, not just in a comment. A handler that returned a
   // diverging pair would otherwise pass result validation and ship
@@ -295,9 +290,7 @@ describe('materializeAgent — §4.6 decision tree', () => {
   // handler call (handler always sets both to `agentDir`), so the
   // pin lives at the schema level.
   it('AgentMaterializeResultSchema rejects mismatched agent_dir / agent_home_workspace_path', async () => {
-    const { AgentMaterializeResultSchema } = await import(
-      '../../src/protocol.js'
-    );
+    const { AgentMaterializeResultSchema } = await import('../../src/protocol.js');
     const parsed = AgentMaterializeResultSchema.safeParse({
       ok: true,
       agent_dir: '/home/x/.silverhand/agents/aid_a',
@@ -308,97 +301,35 @@ describe('materializeAgent — §4.6 decision tree', () => {
     if (parsed.success) return;
     expect(
       parsed.error.errors.some(
-        e =>
-          e.path.includes('agent_home_workspace_path') &&
-          /must equal agent_dir/.test(e.message),
+        (e) =>
+          e.path.includes('agent_home_workspace_path') && /must equal agent_dir/.test(e.message),
       ),
     ).toBe(true);
   });
 
-  // Cindy D2 round-2 P1: the §4.6 empty-dir collision check only
-  // catches foreign content ALREADY present when `readdirSync(agentDir)`
-  // runs — it short-circuits before `seedTemplate` / `linkSync` (that
-  // case is covered above by 'foreign content in dir (no sentinel)').
-  // The actual race-window bug she identified is:
-  //
-  //   1. empty-dir check passes (dir really is empty)
-  //   2. <interleave> foreign writer drops a non-colliding file
-  //      with a name that is NOT in the template (e.g. `marker`)
-  //   3. seedTemplate runs — `linkSync` on every template file
-  //      succeeds (foreign name doesn't conflict with any target)
-  //   4. handler writes sentinel — daemon now formally adopts a
-  //      directory containing foreign content
-  //
-  // The new `afterEmptyDirCheck` hook simulates that race by
-  // dropping the foreign file at the exact point step 2 would
-  // occur. The post-seed `verifyExpectedTree` scan must catch
-  // it and refuse to write the sentinel.
-  it('non-colliding foreign content dropped after empty-dir check → agent_dir_collision (post-seed scan catches it, sentinel NOT written)', async () => {
-    const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
+  it.each(['foreign-marker', 'notes/foreign-note.md'])(
+    'refuses foreign content added during seeding: %s',
+    async (foreignPath) => {
+      const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
+      const { linkSync: realLink } = await vi.importActual<typeof import('node:fs')>('node:fs');
+      vi.mocked(linkSync).mockImplementationOnce((existingPath, newPath) => {
+        realLink(existingPath, newPath);
+        // Simulate an external writer after the empty check and first real
+        // seed publication, without replacing the handler or its outcome.
+        writeFileSync(join(agentDir, foreignPath), 'race-winner content');
+      });
 
-    await expect(
-      materializeAgent(baseParams(), {
-        agentHomeRootDir,
-        afterEmptyDirCheck: dir => {
-          // Race winner drops a file the template doesn't own.
-          // `notes/` is created by seedTemplate (in step 3) so we
-          // drop the file at the root with a name that won't
-          // collide with any template target.
-          mkdirSync(dir, { recursive: true });
-          writeFileSync(join(dir, 'foreign-marker'), 'race-winner content');
-        },
-      }),
-    ).rejects.toMatchObject({
-      name: 'AgentMaterializeError',
-      code: 'agent_dir_collision',
-      message: expect.stringContaining('post-seed expected-tree scan'),
-    });
+      await expect(materializeAgent(baseParams(), { agentHomeRootDir })).rejects.toMatchObject({
+        name: 'AgentMaterializeError',
+        code: 'agent_dir_collision',
+        message: expect.stringContaining(foreignPath),
+      });
 
-    // Sentinel was NOT written — that's the load-bearing pin.
-    // A retry will see foreign content via the §4.6 empty-dir
-    // branch and collision identically; we never adopt an
-    // unknown dir.
-    expect(existsSync(join(agentDir, AGENT_HOME_SENTINEL_FILENAME))).toBe(false);
-    // Foreign content untouched.
-    expect(readFileSync(join(agentDir, 'foreign-marker'), 'utf8')).toBe(
-      'race-winner content',
-    );
-  });
-
-  // Cindy D2 round-2 P1: same race window but inside a nested
-  // directory the template DOES create (`notes/`). Pins that the
-  // `verifyExpectedTree` walk descends into template-declared
-  // subdirs rather than only checking the top level.
-  it('non-colliding foreign content dropped into template subdir → agent_dir_collision (nested scan catches it)', async () => {
-    const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
-
-    await expect(
-      materializeAgent(baseParams(), {
-        agentHomeRootDir,
-        afterEmptyDirCheck: dir => {
-          // Pre-create notes/ so we can drop a foreign file inside it
-          // BEFORE seedTemplate runs. The template will then write
-          // its own notes/* files via linkSync (no collision because
-          // the foreign file has a unique name) and we need the
-          // post-seed scan to catch the foreign nested entry.
-          mkdirSync(join(dir, 'notes'), { recursive: true });
-          writeFileSync(
-            join(dir, 'notes/foreign-note.md'),
-            'race-winner content',
-          );
-        },
-      }),
-    ).rejects.toMatchObject({
-      name: 'AgentMaterializeError',
-      code: 'agent_dir_collision',
-      message: expect.stringContaining('notes/foreign-note.md'),
-    });
-
-    expect(existsSync(join(agentDir, AGENT_HOME_SENTINEL_FILENAME))).toBe(false);
-    expect(readFileSync(join(agentDir, 'notes/foreign-note.md'), 'utf8')).toBe(
-      'race-winner content',
-    );
-  });
+      expect(existsSync(join(agentDir, 'system_prompt.md'))).toBe(true);
+      expect(existsSync(join(agentDir, AGENT_HOME_SENTINEL_FILENAME))).toBe(false);
+      expect(readFileSync(join(agentDir, foreignPath), 'utf8')).toBe('race-winner content');
+    },
+  );
 });
 
 describe('readSentinel — schema sanity', () => {

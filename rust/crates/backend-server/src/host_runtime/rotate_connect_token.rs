@@ -523,7 +523,7 @@ mod tests {
 
     /// An absent row and a foreign one render the SAME `404` and never reach the write.
     #[tokio::test]
-    async fn an_absent_or_foreign_computer_is_one_byte_identical_404() {
+    async fn an_absent_or_foreign_computer_is_one_json_404() {
         let refused = json!({ "error": "host not found", "error_code": "host_not_found" });
         for read in [
             ReadOutcome::Absent,
@@ -577,7 +577,7 @@ mod tests {
 
     /// A revoke landing under the write is the in-lock verdict's `409 host_revoked`.
     #[tokio::test]
-    async fn a_revoke_under_the_write_is_the_in_lock_409() {
+    async fn a_revoked_credential_issue_verdict_maps_to_409() {
         let (reply, harness) = rotate_owned(
             ReadOutcome::Present(user_managed("h1", REQUESTER)),
             WriteOutcome::Refused(CredentialIssueRefusal::HostRevoked),

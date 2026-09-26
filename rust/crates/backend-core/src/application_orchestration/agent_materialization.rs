@@ -2113,22 +2113,24 @@ mod tests {
 
     #[tokio::test]
     async fn reopen_rejects_an_uncleared_failure() {
-        let port = ScriptedWrite {
-            reopen: Some(Some(MaterializationFlipRow {
-                agent_id: agent("a1"),
-                materialization_status: "pending_materialization".to_string(),
-                materialization_failed_code: Some("stale".to_string()),
-                materialization_failed_at: None,
-                updated_at: 20,
-            })),
-            ..Default::default()
-        };
-        assert!(matches!(
-            reopen_failed_materialization(&port, &agent("a1"), 20)
-                .await
-                .unwrap_err(),
-            MaterializationFault::FlipWitnessMismatch { .. }
-        ));
+        for (code, stamp) in [(Some("stale"), None), (None, Some(9))] {
+            let port = ScriptedWrite {
+                reopen: Some(Some(MaterializationFlipRow {
+                    agent_id: agent("a1"),
+                    materialization_status: "pending_materialization".to_string(),
+                    materialization_failed_code: code.map(str::to_owned),
+                    materialization_failed_at: stamp,
+                    updated_at: 20,
+                })),
+                ..Default::default()
+            };
+            assert!(matches!(
+                reopen_failed_materialization(&port, &agent("a1"), 20)
+                    .await
+                    .unwrap_err(),
+                MaterializationFault::FlipWitnessMismatch { .. }
+            ));
+        }
     }
 
     #[tokio::test]
@@ -2153,7 +2155,7 @@ mod tests {
                     agent_id: agent("a1"),
                     materialization_status: "failed".to_string(),
                     materialization_failed_code: Some(
-                        STALE_MATERIALIZATION_FAILED_CODE.to_string(),
+                        "backend_crash_during_materialize".to_string(),
                     ),
                     materialization_failed_at: Some(30),
                     updated_at: 31,
@@ -2162,7 +2164,7 @@ mod tests {
                     agent_id: agent("a2"),
                     materialization_status: "failed".to_string(),
                     materialization_failed_code: Some(
-                        STALE_MATERIALIZATION_FAILED_CODE.to_string(),
+                        "backend_crash_during_materialize".to_string(),
                     ),
                     materialization_failed_at: Some(30),
                     updated_at: 31,
@@ -2301,25 +2303,6 @@ mod tests {
                 head_latest_seq: 1,
             })
             .unwrap()
-    }
-
-    #[test]
-    fn provisioned_seal_mints_from_sealed_sub_facts() {
-        let activated = ActivatedAgent::seal(&agent("a1"), 7, faithful_activation_row(7)).unwrap();
-        let line = ConversationId::parse("pair-1").unwrap();
-        let onboarding = onboarding_written_on(&line, "msg-1");
-
-        let provisioned =
-            AgentArmProvisioned::seal(&activated, line.clone(), true, onboarding).unwrap();
-        // The ids ride the sealed facts, never a parameter: the agent from the activation, the
-        // message from the onboarding write, the line from the opened pair.
-        assert_eq!(provisioned.agent_id(), &agent("a1"));
-        assert_eq!(provisioned.direct_line(), &line);
-        assert_eq!(
-            provisioned.onboarding_message_id(),
-            &crate::conversation_messaging::messaging::MessageId::parse("msg-1").unwrap()
-        );
-        assert!(provisioned.pair_created());
     }
 
     #[test]
@@ -2805,7 +2788,6 @@ mod tests {
         // The DM is a fresh INSERT, so the row the transaction wrote MUST be the requested
         // candidate. A different id — even a well-formed one, in the right workspace — is refused.
         let mut graph = faithful_conversation_graph(99);
-        let home = home_workspace_id_for(&agent("a1"));
         graph.dm_channel.id = "dm-elsewhere".to_string();
         let intent = OnboardingSystemMessage::conversation_dm(
             ConversationId::parse("dm-elsewhere").unwrap(),
@@ -2816,7 +2798,6 @@ mod tests {
         graph.onboarding = faithful_onboarding_witness(&intent);
         graph.agent_on_dm.conversation_id = "dm-elsewhere".to_string();
         graph.creator_on_dm.conversation_id = "dm-elsewhere".to_string();
-        let _ = home; // home id is unchanged; only the DM id drifts.
         assert!(matches!(
             provision(RawProvisionOutcome::Conversation(Box::new(graph)))
                 .await
@@ -2885,7 +2866,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_rolled_back_provision_compensates_only_a_still_pending_row() {
+    async fn rolled_back_provision_preserves_the_error_for_both_compensation_outcomes() {
         // The port faulted (its transaction rolled back). The use case drives the pending-only
         // compensation and surfaces the original dependent-write cause as a persistence fault.
         // Direction 1 — the row is still pending, so the compensating fail stamps it.

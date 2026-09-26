@@ -56,7 +56,12 @@ mod tests {
         // carried on the result rather than flipping the already-committed clear.
         assert_eq!(*effects.0.lock().unwrap(), 1);
         assert_eq!(result.committed().marked(), 2);
-        assert!(result.first_failure().is_some());
+        assert_eq!(
+            std::error::Error::source(result.first_failure().unwrap())
+                .unwrap()
+                .to_string(),
+            "boom"
+        );
     }
 
     struct Unchanged;

@@ -730,13 +730,16 @@ INSERT INTO users (id, name, display_name, email, avatar_storage_key, avatar_con
     #[tokio::test]
     async fn list_returns_every_user_ordered_by_created_at() {
         let (_dir, store) = open_seeded().await;
+        sqlx::query("UPDATE users SET created_at = CASE id WHEN 'user-3' THEN 1 WHEN 'user-1' THEN 2 ELSE 3 END")
+            .execute(&store.pool)
+            .await
+            .unwrap();
         let records = store.list().await.unwrap();
-        // All three seeded users, in created_at ASC order (ties broken by insert
-        // order under a stable sort — the seed shares created_at 10 for 1 and 2).
+        // Creation order deliberately differs from both insertion and identifier order.
         let ids: Vec<_> = records.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, ["user-1", "user-2", "user-3"]);
+        assert_eq!(ids, ["user-3", "user-1", "user-2"]);
         // The directory read folds avatar keys exactly as the self-profile read.
-        assert_eq!(records[2].avatar, Some(AvatarRevision::at(250)));
+        assert_eq!(records[0].avatar, Some(AvatarRevision::at(250)));
     }
 
     #[tokio::test]

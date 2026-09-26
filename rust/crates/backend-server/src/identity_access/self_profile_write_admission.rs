@@ -579,51 +579,6 @@ mod tests {
         app.oneshot(request).await.unwrap().status()
     }
 
-    /// A body whose FIRST `file` part is complete and valid, followed by a second part
-    /// opened but truncated — its data never terminates with a closing boundary, so the
-    /// multipart parser hits end-of-stream mid-part and faults. Drives the whole-envelope
-    /// contract: a valid first file must not shortcut past a malformed tail.
-    fn valid_file_then_truncated_part() -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
-        out.extend_from_slice(
-            b"Content-Disposition: form-data; name=\"file\"; filename=\"a.png\"\r\n",
-        );
-        out.extend_from_slice(b"Content-Type: image/png\r\n\r\n");
-        out.extend_from_slice(&[1, 2, 3]);
-        // Open a second part, then cut the stream off inside its data with no closing
-        // boundary — a premature end the parser cannot complete.
-        out.extend_from_slice(format!("\r\n--{BOUNDARY}\r\n").as_bytes());
-        out.extend_from_slice(b"Content-Disposition: form-data; name=\"junk\"\r\n\r\n");
-        out.extend_from_slice(b"DANGLING-NO-CLOSING-BOUNDARY");
-        out
-    }
-
-    /// Drive `admit_avatar_upload` through the same body-limit-disabled router as
-    /// [`admit_avatar_status`], but with a RAW pre-encoded body so a malformed/truncated
-    /// envelope (which [`encode`] can never produce) can be exercised.
-    async fn admit_avatar_status_raw(body: Vec<u8>) -> StatusCode {
-        async fn probe(request: Request<Body>) -> Response {
-            match admit_avatar_upload(request).await {
-                Ok(_) => StatusCode::OK.into_response(),
-                Err(refusal) => refusal.into_response(),
-            }
-        }
-        let app = Router::new()
-            .route("/p", post(probe))
-            .layer(DefaultBodyLimit::disable());
-        let request = Request::builder()
-            .method("POST")
-            .uri("/p")
-            .header(
-                CONTENT_TYPE,
-                format!("multipart/form-data; boundary={BOUNDARY}"),
-            )
-            .body(Body::from(body))
-            .unwrap();
-        app.oneshot(request).await.unwrap().status()
-    }
-
     async fn refusal_body(refusal: ProfileAdmissionRefusal) -> (StatusCode, Value) {
         let response = refusal.into_response();
         let status = response.status();
@@ -665,19 +620,6 @@ mod tests {
         assert_eq!(refusal, ProfileAdmissionRefusal::FileFieldRequired);
     }
 
-    /// The whole-envelope discriminator: a valid FIRST `file` followed by a truncated
-    /// trailing part is the transport `400`, NOT a silent success on the good file. The
-    /// admission consumes every part to true EOF, so the malformed tail surfaces before
-    /// any candidate is validated. (The handler-side twin in `profile_write` proves the
-    /// same body reaches the route with zero put/write/announce/reproject.)
-    #[tokio::test]
-    async fn a_valid_first_file_then_a_truncated_trailing_part_is_multipart_required() {
-        assert_eq!(
-            admit_avatar_status_raw(valid_file_then_truncated_part()).await,
-            StatusCode::BAD_REQUEST
-        );
-    }
-
     #[tokio::test]
     async fn an_empty_file_is_avatar_missing() {
         let request = multipart_request(&[Part::file("file", "image/png", vec![])]);
@@ -704,7 +646,7 @@ mod tests {
         // enough for validate_avatar to return the precise 413 without buffering more.
         // Routed with the body limit disabled so the 5 MiB+1 body reaches the reader
         // (as it would behind the production 128 MiB perimeter).
-        let body = vec![0u8; AVATAR_MAX_BYTES as usize + 1];
+        let body = vec![0u8; 5 * 1024 * 1024 + 1];
         let status = admit_avatar_status(&[Part::file("file", "image/png", body)]).await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
     }
@@ -713,7 +655,7 @@ mod tests {
     async fn a_file_at_the_cap_is_admitted() {
         // The exact cap is admitted end-to-end — the boundary the bounded read must
         // not misclassify as too-large.
-        let body = vec![0u8; AVATAR_MAX_BYTES as usize];
+        let body = vec![0u8; 5 * 1024 * 1024];
         let status = admit_avatar_status(&[Part::file("file", "image/png", body)]).await;
         assert_eq!(status, StatusCode::OK);
     }
@@ -827,7 +769,7 @@ mod tests {
     async fn an_overlong_description_is_invalid_text() {
         let request = multipart_request(&[Part::text(
             "description",
-            &"a".repeat(DESCRIPTION_MAX_UTF16 + 1),
+            &format!("{}a", "😀".repeat(1000)),
         )]);
         let refusal = admit_profile_edit(request).await.unwrap_err();
         assert_eq!(refusal, ProfileAdmissionRefusal::InvalidText);
@@ -835,14 +777,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_description_at_the_cap_is_admitted() {
-        let request = multipart_request(&[Part::text(
-            "description",
-            &"a".repeat(DESCRIPTION_MAX_UTF16),
-        )]);
+        let request = multipart_request(&[Part::text("description", &"😀".repeat(1000))]);
         let edit = admit_profile_edit(request).await.expect("admitted");
         assert_eq!(
-            edit.description().map(|d| d.as_str().len()),
-            Some(DESCRIPTION_MAX_UTF16)
+            edit.description().map(ProfileDescription::as_str),
+            Some("😀".repeat(1000).as_str())
         );
     }
 

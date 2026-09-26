@@ -16,8 +16,8 @@
 //!
 //! That compare does NOT, on its own, catch an edge wired to the wrong `request` column
 //! (a subquery projecting the right coordinate but filtering on another) — the coordinate
-//! would still match. The `shape` test below pins that wiring directly, so the edge →
-//! coordinate mapping is guarded where it actually lives.
+//! would still match. The real-SQL workspace_data_plane_scope tests vary the requested
+//! viewer and agent independently to guard the resulting membership decisions.
 //!
 //! It still decides nothing: which edge counts (home-owner identity vs the explicit
 //! `workspace_members` edge) is the pure resolver's choice, so no role or membership
@@ -183,56 +183,5 @@ impl AgentWorkspaceScopeRead for SqliteWorkspaceScopeStore {
             human_is_member != 0,
             agent_is_workspace_member != 0,
         ))
-    }
-}
-
-#[cfg(test)]
-mod shape {
-    use super::READ_SCOPE_FACTS;
-
-    /// The load-bearing property of this reader is entirely in the SQL SHAPE, and a
-    /// behavioral test cannot see it: a param-clone reader (or one whose edge keys the
-    /// wrong request column) returns the same rows for the fixtures we can seed. So we
-    /// pin the shape directly. This guard goes red on exactly the regressions the route
-    /// guard cannot catch on its own — a placeholder bound out of order, a coordinate
-    /// dropped from the projection, or an edge wired to the wrong `request` column.
-    #[test]
-    fn each_placeholder_maps_to_its_coordinate_and_each_edge_binds_its_own() {
-        // Each numbered placeholder appears exactly once, mapped to its coordinate —
-        // pinning that `?1`/`?2`/`?3` (bound workspace/viewer/agent, in that order) are
-        // the workspace/viewer/agent columns, not swapped.
-        assert_eq!(READ_SCOPE_FACTS.matches("?1").count(), 1);
-        assert_eq!(READ_SCOPE_FACTS.matches("?2").count(), 1);
-        assert_eq!(READ_SCOPE_FACTS.matches("?3").count(), 1);
-        assert!(READ_SCOPE_FACTS.contains("?1 AS workspace_id"));
-        assert!(READ_SCOPE_FACTS.contains("?2 AS viewer_id"));
-        assert!(READ_SCOPE_FACTS.contains("?3 AS agent_id"));
-
-        // All three request coordinates are projected back for the facts to decode.
-        assert!(READ_SCOPE_FACTS.contains("request.workspace_id AS requested_workspace_id"));
-        assert!(READ_SCOPE_FACTS.contains("request.viewer_id AS read_viewer_id"));
-        assert!(READ_SCOPE_FACTS.contains("request.agent_id AS read_agent_id"));
-
-        // Each membership edge binds its own two request coordinates by the EXACT
-        // predicate pair — not merely "mentions these two". A `contains`/`not-contains`
-        // check would still pass if the two columns were swapped (e.g.
-        // `wu.workspace_id = request.viewer_id AND wu.user_id = request.workspace_id`),
-        // which is precisely the edge→coordinate mis-wire this guard exists to catch, so
-        // we pin the full predicates. The third coordinate must not appear in either
-        // segment (whitespace normalized to match the current SQL).
-        let workspace_users = READ_SCOPE_FACTS
-            .find("workspace_users")
-            .expect("human edge present");
-        let workspace_members = READ_SCOPE_FACTS
-            .find("workspace_members")
-            .expect("agent edge present");
-        let human_edge = &READ_SCOPE_FACTS[workspace_users..workspace_members];
-        let agent_edge = &READ_SCOPE_FACTS[workspace_members..];
-        assert!(human_edge.contains("wu.workspace_id = request.workspace_id"));
-        assert!(human_edge.contains("wu.user_id = request.viewer_id"));
-        assert!(!human_edge.contains("request.agent_id"));
-        assert!(agent_edge.contains("wm.workspace_id = request.workspace_id"));
-        assert!(agent_edge.contains("wm.agent_id = request.agent_id"));
-        assert!(!agent_edge.contains("request.viewer_id"));
     }
 }

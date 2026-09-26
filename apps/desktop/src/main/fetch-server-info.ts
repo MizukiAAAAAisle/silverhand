@@ -10,14 +10,11 @@ export type ServerInfoFetcher = (
   text(): Promise<string>;
 }>;
 
-export type SleepFn = (ms: number) => Promise<void>;
-
-export const SERVER_INFO_RETRY_DELAYS_MS = [250, 750] as const;
+const SERVER_INFO_RETRY_DELAYS_MS = [250, 750] as const;
 
 export interface FetchServerInfoWithRetryOptions {
   url: string;
   fetcher?: ServerInfoFetcher;
-  sleep?: SleepFn;
   retryDelaysMs?: readonly number[];
   signal?: AbortSignal;
 }
@@ -34,7 +31,7 @@ function parseJson(text: string): unknown {
   }
 }
 
-const defaultSleep: SleepFn = (ms) =>
+const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
@@ -66,7 +63,6 @@ export async function fetchServerInfoWithRetry(
   opts: FetchServerInfoWithRetryOptions,
 ): Promise<ServerInfo> {
   const fetcher = opts.fetcher ?? (globalThis.fetch as ServerInfoFetcher);
-  const sleep = opts.sleep ?? defaultSleep;
   const retryDelaysMs = opts.retryDelaysMs ?? SERVER_INFO_RETRY_DELAYS_MS;
 
   for (let attempt = 0; ; attempt += 1) {

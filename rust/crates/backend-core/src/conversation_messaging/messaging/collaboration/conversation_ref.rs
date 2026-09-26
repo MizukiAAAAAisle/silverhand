@@ -149,29 +149,4 @@ mod tests {
         }
         assert!(ConversationRosterPolicy::parse("public").is_err());
     }
-
-    #[test]
-    fn returned_identity_must_bind_to_the_request_before_projection() {
-        let value = WorkspaceConversationRef::projected(
-            ConversationId::parse("c").unwrap(),
-            ConversationRosterPolicy::Open,
-            "General".to_owned(),
-            WorkspaceId::parse("w").unwrap(),
-            None,
-            Some(7),
-        );
-        let bound = value
-            .clone()
-            .bind(&ConversationId::parse("c").unwrap())
-            .unwrap();
-        assert_eq!(bound.conversation().as_str(), "c");
-        assert_eq!(bound.workspace().as_str(), "w");
-        assert_eq!(bound.roster().as_str(), "open");
-        assert_eq!(bound.archived_at(), Some(7));
-        assert!(
-            value
-                .bind(&ConversationId::parse("other").unwrap())
-                .is_err()
-        );
-    }
 }

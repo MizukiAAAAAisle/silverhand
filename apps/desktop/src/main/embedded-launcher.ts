@@ -13,7 +13,6 @@ import {
 import { fetchServerInfoWithRetry } from "./fetch-server-info.js";
 import { prepareEmbeddedStartup } from "./embedded-startup-preparation.js";
 import {
-  productionSidecarDeps,
   resolveBackendSidecarManifestPath,
   verifySidecar,
   type VerifiedSidecar,
@@ -52,14 +51,14 @@ export async function resolveAndVerifyEmbeddedSidecar(location: {
   resourcesPath: string;
   appPath: string;
 }): Promise<VerifiedSidecar> {
-  return verifySidecar(resolveBackendSidecarManifestPath(location), productionSidecarDeps());
+  return verifySidecar(resolveBackendSidecarManifestPath(location));
 }
 
 /**
  * The production dependency set for the launcher: the real child spawn (stdout PIPED for
  * the startup frame; stderr inherited), an HTTP `/readyz` probe + `/api/server/info` epoch
  * probe (both AbortSignal-cancelable), a random per-spawn generation, best-effort token
- * removal, a real clock, and the desktop logger.
+ * removal and the desktop logger.
  */
 function productionEmbeddedRustBackendDeps(
   logger: SeamLogger | undefined,
@@ -102,13 +101,6 @@ function productionEmbeddedRustBackendDeps(
     removeBootstrapToken: async (path) => {
       await fsRm(path, { force: true });
       await fsRm(`${path}.tmp`, { force: true });
-    },
-    clock: {
-      now: () => Date.now(),
-      sleep: (ms) =>
-        new Promise((resolve) => {
-          setTimeout(resolve, ms);
-        }),
     },
     logger,
   };

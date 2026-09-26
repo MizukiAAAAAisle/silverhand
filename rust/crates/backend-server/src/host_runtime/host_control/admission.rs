@@ -274,10 +274,10 @@ mod tests {
             RefusalNews::Changed
         );
         // A reconnect loop: same disagreement, new dialer and new timestamp.
+        let mut reconnect = mismatch("connection-2", 1);
+        reconnect.observed_at += 1;
         assert_eq!(
-            admission
-                .record("host-1", mismatch("connection-2", 1))
-                .unwrap(),
+            admission.record("host-1", reconnect).unwrap(),
             RefusalNews::SameUnresolvedFact
         );
         // The machine was upgraded to a build that is still incompatible.
@@ -294,6 +294,13 @@ mod tests {
             admission
                 .record("host-1", mismatch("connection-4", 3))
                 .unwrap(),
+            RefusalNews::Changed
+        );
+        // Only the server's expected version changes here.
+        let mut upgraded_server = mismatch("connection-5", 3);
+        upgraded_server.expected_protocol_version = 4;
+        assert_eq!(
+            admission.record("host-1", upgraded_server).unwrap(),
             RefusalNews::Changed
         );
     }

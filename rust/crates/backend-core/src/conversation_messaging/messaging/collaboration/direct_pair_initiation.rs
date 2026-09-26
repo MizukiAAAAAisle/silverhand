@@ -546,7 +546,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_failure_does_not_compensate_the_committed_announced_pair() {
+    async fn send_failure_preserves_source_after_pair_open() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut mint = Mint {
             created: true,

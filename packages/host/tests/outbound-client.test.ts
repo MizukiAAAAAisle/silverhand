@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -11,23 +11,14 @@ import {
   HOST_WS_CLOSE_REASON_DISCONNECTED,
   HOST_WS_CLOSE_REASON_REVOKED,
 } from '@silverhand/shared';
-import {
-  KNOWN_CAPABILITIES_V1,
-  type EventFrame,
-} from '../src/protocol.js';
-import {
-  OUTBOUND_PROTOCOL_VERSION,
-  encodeOutboundFrame,
-} from '../src/outbound-protocol.js';
+import { KNOWN_CAPABILITIES_V1, type EventFrame } from '../src/protocol.js';
+import { OUTBOUND_PROTOCOL_VERSION, encodeOutboundFrame } from '../src/outbound-protocol.js';
 import {
   OutboundDaemonClient,
   hostConnectWebSocketUrl,
   type OutboundDaemonClientOptions,
 } from '../src/daemon/outbound-client.js';
-import {
-  createDaemonLogControl,
-  type DaemonLogger,
-} from '../src/daemon/logger.js';
+import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 
 const cleanup: Array<() => Promise<void> | void> = [];
 
@@ -90,9 +81,9 @@ describe('outbound daemon websocket client', () => {
     expect(() => hostConnectWebSocketUrl('http://user@localhost:1234')).toThrow(
       /invalid_server_url:malformed_url/,
     );
-    expect(() =>
-      hostConnectWebSocketUrl('http://api.example.com@localhost:1234'),
-    ).toThrow(/invalid_server_url:malformed_url/);
+    expect(() => hostConnectWebSocketUrl('http://api.example.com@localhost:1234')).toThrow(
+      /invalid_server_url:malformed_url/,
+    );
   });
 
   it('reconnects with backoff after server shutdown without replaying a queue', async () => {
@@ -109,33 +100,33 @@ describe('outbound daemon websocket client', () => {
 
     const firstClose = await server.waitForCloseCount(1);
     await waitFor(() => !client.state().connected);
-    expect(client.sendEvent({
-      event: 'runtime_state',
-      runtime_scope: {
-        kind: 'conversation',
+    expect(
+      client.sendEvent({
+        event: 'runtime_state',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
         conversation_id: 'c1',
         agent_id: 'a1',
-      },
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      runtime_generation: 1,
-      state: {
-        runId: 'r1',
-        agentId: 'a1',
-        conversationId: 'c1',
-        status: 'thinking',
-        startedAt: 1700000000000,
-        updatedAt: 1700000000001,
-        lastActivityAt: 1700000000001,
-      },
-      ts: 1700000000999,
-    })).toBe('failed');
+        runtime_generation: 1,
+        state: {
+          runId: 'r1',
+          agentId: 'a1',
+          conversationId: 'c1',
+          status: 'thinking',
+          startedAt: 1700000000000,
+          updatedAt: 1700000000001,
+          lastActivityAt: 1700000000001,
+        },
+        ts: 1700000000999,
+      }),
+    ).toBe('failed');
     const second = await server.waitForConnectionCount(2);
     expect(second.openedAt - firstClose.closedAt).toBeGreaterThanOrEqual(50);
     await delay(20);
-    expect(
-      server.frames.some(({ frame }) => frame.kind === 'runtime_state'),
-    ).toBe(false);
+    expect(server.frames.some(({ frame }) => frame.kind === 'runtime_state')).toBe(false);
     expect(logger.entries).toContainEqual(
       expect.objectContaining({
         level: 'info',
@@ -238,7 +229,7 @@ describe('outbound daemon websocket client', () => {
     'UpDaTe_ReQuIrEd',
     'HOST_REVOKED',
     'HOST_DISCONNECTED',
-  ])('suppresses reconnect after %s terminal close until config changes', async reason => {
+  ])('suppresses reconnect after %s terminal close until config changes', async (reason) => {
     const server = await FakeOutboundServer.start();
     cleanup.push(() => server.close());
     const { client, logger, dir } = startClient(server.url, {
@@ -248,10 +239,7 @@ describe('outbound daemon websocket client', () => {
     cleanup.push(() => client.stop('test_done'));
 
     const first = await server.waitForConnectionCount(1);
-    setTimeout(
-      () => first.ws.close(1002, reason),
-      5,
-    );
+    setTimeout(() => first.ws.close(1002, reason), 5);
 
     await server.waitForCloseCount(1);
     await delay(50);
@@ -307,8 +295,8 @@ describe('outbound daemon websocket client', () => {
     expect(client.state().reconnectAttempt).toBe(2);
     expect(
       logger.entries
-        .filter(entry => entry.action === 'reconnect_scheduled')
-        .map(entry => entry.attempt),
+        .filter((entry) => entry.action === 'reconnect_scheduled')
+        .map((entry) => entry.attempt),
     ).toEqual([1, 2]);
   });
 
@@ -382,17 +370,17 @@ describe('outbound daemon websocket client', () => {
     cleanup.push(() => client.stop('test_done'));
 
     const first = await server.waitForConnectionCount(1);
-    first.ws.send(encodeOutboundFrame({
-      direction: 'server_to_daemon',
-      type: 'heartbeat',
-      kind: 'ping',
-      ts: 1700000000000,
-    }));
+    first.ws.send(
+      encodeOutboundFrame({
+        direction: 'server_to_daemon',
+        type: 'heartbeat',
+        kind: 'ping',
+        ts: 1700000000000,
+      }),
+    );
 
     await expect(
-      server.waitForFrame(frame =>
-        frame.type === 'heartbeat' && frame.kind === 'pong',
-      ),
+      server.waitForFrame((frame) => frame.type === 'heartbeat' && frame.kind === 'pong'),
     ).resolves.toMatchObject({
       direction: 'daemon_to_server',
       type: 'heartbeat',
@@ -401,35 +389,69 @@ describe('outbound daemon websocket client', () => {
     });
   });
 
-  it.each([1024 * 1024, 4 * 1024 * 1024])('refuses oversized requests before dispatch at %s bytes', async bytes => {
-    const server = await FakeOutboundServer.start();
-    cleanup.push(() => server.close());
-    const dispatchCommand = vi.fn(async command => ({ id: command.id, result: {} }));
-    const { client } = startClient(server.url, { dispatchCommand });
-    cleanup.push(() => client.stop('test_done'));
-    const first = await server.waitForConnectionCount(1);
-    first.ws.send(JSON.stringify({ direction: 'server_to_daemon', type: 'command', id: 'oversize', kind: 'agent_workspace_file_read', params: { agent_id: 'agent', path: 'x'.repeat(bytes) } }));
-    await server.waitForCloseCount(1);
-    expect(dispatchCommand).not.toHaveBeenCalled();
-    expect(server.closes[0]!.code).toBe(bytes === 1024 * 1024 ? 1002 : 1009);
-  });
+  it.each([1024 * 1024, 4 * 1024 * 1024])(
+    'refuses oversized requests before dispatch at %s bytes',
+    async (bytes) => {
+      const server = await FakeOutboundServer.start();
+      cleanup.push(() => server.close());
+      const dispatchCommand = vi.fn(async (command) => ({ id: command.id, result: {} }));
+      const { client } = startClient(server.url, { dispatchCommand });
+      cleanup.push(() => client.stop('test_done'));
+      const first = await server.waitForConnectionCount(1);
+      first.ws.send(
+        JSON.stringify({
+          direction: 'server_to_daemon',
+          type: 'command',
+          id: 'oversize',
+          kind: 'agent_workspace_file_read',
+          params: { agent_id: 'agent', path: 'x'.repeat(bytes) },
+        }),
+      );
+      await server.waitForCloseCount(1);
+      expect(dispatchCommand).not.toHaveBeenCalled();
+      expect(server.closes[0]!.code).toBe(bytes === 1024 * 1024 ? 1002 : 1009);
+    },
+  );
 
   it('sends a complete worst-escaped workspace preview over the real WebSocket', async () => {
     const server = await FakeOutboundServer.start();
     cleanup.push(() => server.close());
-    const result = { ok: true, file: { path: 'MEMORY.md', content: '\u0001'.repeat(512 * 1024), size: 512 * 1024, mtime: 1, truncated: false } };
-    const { client } = startClient(server.url, { dispatchCommand: async command => ({ id: command.id, result }) });
+    const result = {
+      ok: true,
+      file: {
+        path: 'MEMORY.md',
+        content: '\u0001'.repeat(512 * 1024),
+        size: 512 * 1024,
+        mtime: 1,
+        truncated: false,
+      },
+    };
+    const { client } = startClient(server.url, {
+      dispatchCommand: async (command) => ({ id: command.id, result }),
+    });
     cleanup.push(() => client.stop('test_done'));
     const first = await server.waitForConnectionCount(1);
-    first.ws.send(encodeOutboundFrame({ direction: 'server_to_daemon', type: 'command', id: 'large-read', kind: 'agent_workspace_file_read', params: { agent_id: 'agent', path: 'MEMORY.md' } }));
-    expect(await server.waitForFrame(frame => frame.type === 'command_response' && frame.id === 'large-read')).toMatchObject({ result });
+    first.ws.send(
+      encodeOutboundFrame({
+        direction: 'server_to_daemon',
+        type: 'command',
+        id: 'large-read',
+        kind: 'agent_workspace_file_read',
+        params: { agent_id: 'agent', path: 'MEMORY.md' },
+      }),
+    );
+    expect(
+      await server.waitForFrame(
+        (frame) => frame.type === 'command_response' && frame.id === 'large-read',
+      ),
+    ).toMatchObject({ result });
   });
 
   it('dispatches server command frames and returns correlated responses', async () => {
     const server = await FakeOutboundServer.start();
     cleanup.push(() => server.close());
     const { client } = startClient(server.url, {
-      dispatchCommand: async command => ({
+      dispatchCommand: async (command) => ({
         id: command.id,
         result: { runtimes: [] },
       }),
@@ -437,18 +459,18 @@ describe('outbound daemon websocket client', () => {
     cleanup.push(() => client.stop('test_done'));
 
     const first = await server.waitForConnectionCount(1);
-    first.ws.send(encodeOutboundFrame({
-      direction: 'server_to_daemon',
-      type: 'command',
-      id: 'cmd-1',
-      kind: 'runtime_status',
-      params: {},
-    }));
+    first.ws.send(
+      encodeOutboundFrame({
+        direction: 'server_to_daemon',
+        type: 'command',
+        id: 'cmd-1',
+        kind: 'runtime_status',
+        params: {},
+      }),
+    );
 
     await expect(
-      server.waitForFrame(frame =>
-        frame.type === 'command_response' && frame.id === 'cmd-1',
-      ),
+      server.waitForFrame((frame) => frame.type === 'command_response' && frame.id === 'cmd-1'),
     ).resolves.toMatchObject({
       direction: 'daemon_to_server',
       type: 'command_response',
@@ -462,7 +484,7 @@ describe('outbound daemon websocket client', () => {
     const server = await FakeOutboundServer.start();
     cleanup.push(() => server.close());
     const { client, logger } = startClient(server.url, {
-      dispatchCommand: async command => ({
+      dispatchCommand: async (command) => ({
         id: command.id,
         result: {
           os: 'macOS 15.0',
@@ -477,16 +499,18 @@ describe('outbound daemon websocket client', () => {
     cleanup.push(() => client.stop('test_done'));
 
     const first = await server.waitForConnectionCount(1);
-    first.ws.send(encodeOutboundFrame({
-      direction: 'server_to_daemon',
-      type: 'command',
-      id: 'status-1',
-      kind: 'host_status',
-      params: {},
-    }));
+    first.ws.send(
+      encodeOutboundFrame({
+        direction: 'server_to_daemon',
+        type: 'command',
+        id: 'status-1',
+        kind: 'host_status',
+        params: {},
+      }),
+    );
 
-    await server.waitForFrame(frame =>
-      frame.type === 'command_response' && frame.id === 'status-1',
+    await server.waitForFrame(
+      (frame) => frame.type === 'command_response' && frame.id === 'status-1',
     );
 
     expect(logger.entries).toContainEqual(
@@ -517,23 +541,23 @@ describe('outbound daemon websocket client', () => {
 
     const first = await server.waitForConnectionCount(1);
     expect(first.request.headers.authorization).toBe('Bearer host-token');
-    first.ws.send(encodeOutboundFrame({
-      direction: 'server_to_daemon',
-      type: 'command',
-      id: 'rotate-1',
-      kind: 'rotate_token',
-      params: {
-        host_id: 'host-1',
-        host_token: 'new-host-token',
-        issued_at: now,
-        grace_until: now + 60_000,
-      },
-    }));
+    first.ws.send(
+      encodeOutboundFrame({
+        direction: 'server_to_daemon',
+        type: 'command',
+        id: 'rotate-1',
+        kind: 'rotate_token',
+        params: {
+          host_id: 'host-1',
+          host_token: 'new-host-token',
+          issued_at: now,
+          grace_until: now + 60_000,
+        },
+      }),
+    );
 
     await expect(
-      server.waitForFrame(frame =>
-        frame.type === 'command_response' && frame.id === 'rotate-1',
-      ),
+      server.waitForFrame((frame) => frame.type === 'command_response' && frame.id === 'rotate-1'),
     ).resolves.toMatchObject({
       direction: 'daemon_to_server',
       type: 'command_response',
@@ -563,54 +587,60 @@ describe('outbound daemon websocket client', () => {
     expect(second.request.headers.authorization).toBe('Bearer new-host-token');
   });
 
-  it('nacks rotate_token write failure without switching reconnect token', async () => {
-    const server = await FakeOutboundServer.start();
-    cleanup.push(() => server.close());
-    const { client, dir } = startClient(server.url, {
-      writeHostConfig: () => {
-        throw new Error('EACCES');
-      },
-      backoff: { minDelayMs: 10, maxDelayMs: 10, factor: 2, jitterRatio: 0 },
-    });
-    cleanup.push(() => client.stop('test_done'));
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'nacks rotate_token write failure without switching reconnect token',
+    async () => {
+      const server = await FakeOutboundServer.start();
+      cleanup.push(() => server.close());
+      const { client, dir } = startClient(server.url, {
+        backoff: { minDelayMs: 10, maxDelayMs: 10, factor: 2, jitterRatio: 0 },
+      });
+      cleanup.push(() => client.stop('test_done'));
 
-    const first = await server.waitForConnectionCount(1);
-    first.ws.send(encodeOutboundFrame({
-      direction: 'server_to_daemon',
-      type: 'command',
-      id: 'rotate-fail',
-      kind: 'rotate_token',
-      params: {
-        host_id: 'host-1',
-        host_token: 'new-host-token',
-        issued_at: 1_700_000_000_000,
-        grace_until: 1_700_000_060_000,
-      },
-    }));
+      const first = await server.waitForConnectionCount(1);
+      const originalConfig = readFileSync(join(dir, DAEMON_HOST_CONFIG_FILENAME), 'utf8');
+      chmodSync(dir, 0o500);
+      cleanup.push(() => chmodSync(dir, 0o700));
+      first.ws.send(
+        encodeOutboundFrame({
+          direction: 'server_to_daemon',
+          type: 'command',
+          id: 'rotate-fail',
+          kind: 'rotate_token',
+          params: {
+            host_id: 'host-1',
+            host_token: 'new-host-token',
+            issued_at: 1_700_000_000_000,
+            grace_until: 1_700_000_060_000,
+          },
+        }),
+      );
 
-    await expect(
-      server.waitForFrame(frame =>
-        frame.type === 'command_response' && frame.id === 'rotate-fail',
-      ),
-    ).resolves.toMatchObject({
-      direction: 'daemon_to_server',
-      type: 'command_response',
-      id: 'rotate-fail',
-      kind: 'rotate_token',
-      result: {
-        rotated: false,
-        reason: 'write_failed',
-        message: 'EACCES',
-      },
-    });
-    expect(readConfig(dir)).toMatchObject({
-      host_token: 'host-token',
-    });
+      await expect(
+        server.waitForFrame(
+          (frame) => frame.type === 'command_response' && frame.id === 'rotate-fail',
+        ),
+      ).resolves.toMatchObject({
+        direction: 'daemon_to_server',
+        type: 'command_response',
+        id: 'rotate-fail',
+        kind: 'rotate_token',
+        result: {
+          rotated: false,
+          reason: 'write_failed',
+          message: expect.stringContaining('EACCES'),
+        },
+      });
+      expect(readConfig(dir)).toMatchObject({
+        host_token: 'host-token',
+      });
+      expect(readFileSync(join(dir, DAEMON_HOST_CONFIG_FILENAME), 'utf8')).toBe(originalConfig);
 
-    first.ws.close(1001, 'force_reconnect');
-    const second = await server.waitForConnectionCount(2);
-    expect(second.request.headers.authorization).toBe('Bearer host-token');
-  });
+      first.ws.close(1001, 'force_reconnect');
+      const second = await server.waitForConnectionCount(2);
+      expect(second.request.headers.authorization).toBe('Bearer host-token');
+    },
+  );
 
   it('drops runtime_output on bounded-buffer pressure without closing', async () => {
     const server = await FakeOutboundServer.start();
@@ -621,7 +651,7 @@ describe('outbound daemon websocket client', () => {
     cleanup.push(() => client.stop('test_done'));
 
     const first = await server.waitForConnectionCount(1);
-    await server.waitForFrame(frame => frame.type === 'event' && frame.kind === 'ready');
+    await server.waitForFrame((frame) => frame.type === 'event' && frame.kind === 'ready');
 
     const result = client.sendEvent({
       event: 'runtime_output',
@@ -663,7 +693,7 @@ describe('outbound daemon websocket client', () => {
     cleanup.push(() => client.stop('test_done'));
 
     await server.waitForConnectionCount(1);
-    await server.waitForFrame(frame => frame.type === 'event' && frame.kind === 'ready');
+    await server.waitForFrame((frame) => frame.type === 'event' && frame.kind === 'ready');
 
     const result = client.sendEvent({
       event: 'runtime_state',
@@ -736,22 +766,24 @@ describe('outbound daemon websocket client', () => {
         dispatchedOwner = ctx.owner;
         return { id: command.id, result: { runtimes: [] } };
       },
-      cleanupDeferredForOwner: owner => cleaned.push(owner),
+      cleanupDeferredForOwner: (owner) => cleaned.push(owner),
       // Do not reconnect — we want a single clean close observation.
       backoff: { minDelayMs: 100_000, maxDelayMs: 100_000, factor: 1, jitterRatio: 0 },
     });
     cleanup.push(() => client.stop('test_done'));
 
     const first = await server.waitForConnectionCount(1);
-    first.ws.send(encodeOutboundFrame({
-      direction: 'server_to_daemon',
-      type: 'command',
-      id: 'cmd-owner',
-      kind: 'runtime_status',
-      params: {},
-    }));
+    first.ws.send(
+      encodeOutboundFrame({
+        direction: 'server_to_daemon',
+        type: 'command',
+        id: 'cmd-owner',
+        kind: 'runtime_status',
+        params: {},
+      }),
+    );
     await server.waitForFrame(
-      frame => frame.type === 'command_response' && frame.id === 'cmd-owner',
+      (frame) => frame.type === 'command_response' && frame.id === 'cmd-owner',
     );
     expect(dispatchedOwner).toMatch(/^outbound:/);
 
@@ -811,9 +843,10 @@ function testReadyEvent(): Extract<EventFrame, { event: 'ready' }> {
 }
 
 function readConfig(dir: string): Record<string, unknown> {
-  return JSON.parse(
-    readFileSync(join(dir, DAEMON_HOST_CONFIG_FILENAME), 'utf8'),
-  ) as Record<string, unknown>;
+  return JSON.parse(readFileSync(join(dir, DAEMON_HOST_CONFIG_FILENAME), 'utf8')) as Record<
+    string,
+    unknown
+  >;
 }
 
 class CapturingDaemonLogger implements DaemonLogger {
@@ -879,16 +912,12 @@ class FakeOutboundServer {
       server: httpServer,
       path: apiPaths.hostConnect,
     });
-    await new Promise<void>(resolve => httpServer.listen(0, '127.0.0.1', resolve));
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
     const port = (httpServer.address() as AddressInfo).port;
-    const server = new FakeOutboundServer(
-      `http://127.0.0.1:${port}`,
-      httpServer,
-      wss,
-    );
+    const server = new FakeOutboundServer(`http://127.0.0.1:${port}`, httpServer, wss);
     wss.on('connection', (ws, request) => {
       server.connections.push({ ws, request, openedAt: Date.now() });
-      ws.on('message', data => {
+      ws.on('message', (data) => {
         const frame = parseFrame(data);
         if (frame) server.frames.push({ ws, frame });
       });
@@ -909,8 +938,8 @@ class FakeOutboundServer {
         connection.ws.terminate();
       }
     }
-    await new Promise<void>(resolve => this.wss.close(() => resolve()));
-    await new Promise<void>(resolve => this.httpServer.close(() => resolve()));
+    await new Promise<void>((resolve) => this.wss.close(() => resolve()));
+    await new Promise<void>((resolve) => this.httpServer.close(() => resolve()));
   }
 
   async waitForConnectionCount(count: number): Promise<FakeConnection> {
@@ -931,18 +960,12 @@ class FakeOutboundServer {
   }
 }
 
-function pingsFor(
-  server: FakeOutboundServer,
-  ws: WebSocket,
-): Array<Record<string, unknown>> {
+function pingsFor(server: FakeOutboundServer, ws: WebSocket): Array<Record<string, unknown>> {
   return server.frames
     .filter(
-      entry =>
-        entry.ws === ws &&
-        entry.frame.type === 'heartbeat' &&
-        entry.frame.kind === 'ping',
+      (entry) => entry.ws === ws && entry.frame.type === 'heartbeat' && entry.frame.kind === 'ping',
     )
-    .map(entry => entry.frame);
+    .map((entry) => entry.frame);
 }
 
 async function waitForPing(
@@ -981,5 +1004,5 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

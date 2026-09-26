@@ -24,29 +24,6 @@ use crate::foundation::persistence::PersistenceFailure;
 use crate::identity_access::workspace_name::CanonicalWorkspaceName;
 use std::future::Future;
 
-/// The creation verdict decided before the durable write. Mirrors the reference
-/// `createWorkspace` refusal set: a free name and fully-owned agents reach the
-/// write; otherwise one of the two doors refuses.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum WorkspaceCreationVerdict {
-    /// The proposed name is already held by a regular workspace — `409`.
-    NameTaken,
-    /// One or more member agents are not owned by the creator — `403`, carrying
-    /// the offending agent ids (the reference `agent_ids` body).
-    AgentNotOwned { agent_ids: Vec<AgentId> },
-    /// The name is free and every member agent is owned — perform the write.
-    Admissible,
-}
-
-/// The committed result of a successful create: the new workspace's coordinates
-/// and its Onboarding channel, for the `201` body projection. The full
-/// `ViewerWorkspaceDto` is read back from the committed row by the adapter.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CreatedWorkspace {
-    pub workspace: WorkspaceId,
-    pub onboarding_channel: ConversationId,
-}
-
 /// One member agent's onboarding post-commit effect target, captured from the
 /// committed saga so the composition can deliver + start each agent's runtime.
 /// The reference awaits `deliverMessage` (critical) then fires `start`
@@ -113,17 +90,6 @@ pub struct OnboardingChannelCommitted {
     pub status: String,
     pub created_at: i64,
     pub updated_at: i64,
-}
-
-/// The committed outcome of the durable workspace + members insert. The final
-/// name-collision authority is IN the writer transaction (the partial unique index
-/// on the regular-workspace name key), so a concurrent create that lost the race is
-/// a typed `NameTaken` here — never a generic 500 — and its transaction wrote
-/// nothing (no workspace, no members).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum WorkspaceInsertOutcome {
-    Created(CreatedWorkspaceFace),
-    NameTaken,
 }
 
 /// The whole synchronous durable-setup request the writer linearizes into ONE
@@ -297,27 +263,4 @@ pub struct AgentOnboardingIntent {
     pub recipient_handle: crate::conversation_messaging::messaging::ParticipantHandle,
     pub others:
         Vec<crate::conversation_messaging::messaging::agent_onboarding::WorkspaceOnboardingPeer>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn verdict_variants_are_distinct() {
-        // A light guard that the verdict set stays a closed, comparable enum the
-        // route maps to 409 / 403 / write.
-        assert_ne!(
-            WorkspaceCreationVerdict::NameTaken,
-            WorkspaceCreationVerdict::Admissible
-        );
-        assert_eq!(
-            WorkspaceCreationVerdict::AgentNotOwned {
-                agent_ids: vec![AgentId::parse("a").unwrap()]
-            },
-            WorkspaceCreationVerdict::AgentNotOwned {
-                agent_ids: vec![AgentId::parse("a").unwrap()]
-            }
-        );
-    }
 }

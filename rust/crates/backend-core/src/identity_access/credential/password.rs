@@ -116,13 +116,6 @@ impl PasswordHashError {
     {
         Self::from_source(source)
     }
-
-    /// A test-only fault value, so a fake KDF in another module can prove the
-    /// dummy-verify failure path propagates rather than silently no-ops.
-    #[cfg(test)]
-    pub(crate) fn for_test() -> Self {
-        Self::message("test-induced password hash failure")
-    }
 }
 
 /// A hasher authority was asked to calibrate against an empty candidate ladder.
@@ -471,6 +464,31 @@ fn cost_is_at_least(candidate: &Argon2idCost, baseline: &Argon2idCost) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct RecordingMeasurer(Arc<AtomicUsize>);
+
+    impl CostMeasurer for RecordingMeasurer {
+        fn measure_millis(&self, cost: &Argon2idCost) -> u64 {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            (cost.memory_cost_kib as u64 / 1024) * 10
+        }
+    }
+
+    struct RecordingEntropy(Arc<Mutex<Vec<usize>>>);
+
+    impl EntropySource for RecordingEntropy {
+        type Error = std::convert::Infallible;
+
+        fn fill(&self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            self.0.lock().unwrap().push(destination.len());
+            destination.fill(0);
+            Ok(())
+        }
+    }
 
     /// A deterministic measurer: each candidate's measured time is a pure
     /// function of its memory cost, so calibration is reproducible with no
@@ -528,23 +546,32 @@ mod tests {
     #[test]
     fn calibration_selects_the_first_candidate_meeting_target_and_is_shared() {
         // 19 MiB -> 190ms, 38 -> 380ms: target 250 first met at the 2x rung.
+        let measurements = Arc::new(AtomicUsize::new(0));
         let hasher = Argon2idPasswordHasher::with_measurer(
             ZeroEntropy,
-            LinearMeasurer { millis_per_mib: 10 },
+            RecordingMeasurer(measurements.clone()),
             ladder(),
-            TARGET_HASH_MILLIS,
+            250,
         )
         .unwrap();
-        let params = hasher.params();
-        assert_eq!(params.cost.memory_cost_kib, FLOOR_MEMORY_COST_KIB * 2);
-        assert_eq!(params.cost.time_cost, FLOOR_TIME_COST);
-        assert_eq!(params.cost.output_len, OUTPUT_LEN);
-        assert_eq!(params.calibration.target_millis, TARGET_HASH_MILLIS);
+        let params = hasher.hash("first password").unwrap().params;
+        assert_eq!(params.cost.memory_cost_kib, 38 * 1024);
+        assert_eq!(params.cost.time_cost, 2);
+        assert_eq!(params.cost.output_len, 32);
+        assert_eq!(params.calibration.target_millis, 250);
         assert_eq!(params.calibration.measured_millis, 380);
         assert_eq!(params.calibration.candidate_count, 2);
+        assert_eq!(measurements.load(Ordering::SeqCst), 2);
 
-        // A clone shares the calibrated cell — same params, no recalibration.
-        assert_eq!(hasher.clone().params(), params);
+        assert_eq!(
+            hasher.clone().hash("second password").unwrap().params,
+            params
+        );
+        assert_eq!(
+            measurements.load(Ordering::SeqCst),
+            2,
+            "clone must not recalibrate"
+        );
     }
 
     #[test]
@@ -555,13 +582,25 @@ mod tests {
             LinearMeasurer {
                 millis_per_mib: 100,
             },
-            ladder(),
+            vec![Argon2idCost {
+                memory_cost_kib: 1,
+                time_cost: 1,
+                parallelism: 0,
+                output_len: 1,
+            }],
             TARGET_HASH_MILLIS,
         )
         .unwrap();
-        let params = hasher.params();
-        assert!(params.cost.memory_cost_kib >= FLOOR_MEMORY_COST_KIB);
-        assert!(params.cost.time_cost >= FLOOR_TIME_COST);
+        let params = hasher.hash("floor password").unwrap().params;
+        assert_eq!(
+            params.cost,
+            Argon2idCost {
+                memory_cost_kib: 19 * 1024,
+                time_cost: 2,
+                parallelism: 1,
+                output_len: 32,
+            }
+        );
     }
 
     #[test]
@@ -609,17 +648,21 @@ mod tests {
     }
 
     #[test]
-    fn verify_dummy_runs_without_a_stored_credential() {
+    fn verify_dummy_creates_one_secret_and_salt_shared_by_clones() {
+        let draws = Arc::new(Mutex::new(Vec::new()));
         let hasher = Argon2idPasswordHasher::with_measurer(
-            ZeroEntropy,
-            LinearMeasurer { millis_per_mib: 0 },
+            RecordingEntropy(draws.clone()),
+            LinearMeasurer {
+                millis_per_mib: 100,
+            },
             ladder(),
             TARGET_HASH_MILLIS,
         )
         .unwrap();
-        // Its only observable effect is spending hash cost; with sound entropy
-        // and KDF it succeeds rather than silently no-opping.
         hasher.verify_dummy("some password").unwrap();
+        assert_eq!(*draws.lock().unwrap(), vec![32, 16]);
+        hasher.clone().verify_dummy("another password").unwrap();
+        assert_eq!(*draws.lock().unwrap(), vec![32, 16]);
     }
 
     #[test]

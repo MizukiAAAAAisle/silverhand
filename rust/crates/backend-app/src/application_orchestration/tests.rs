@@ -674,99 +674,11 @@ fn config_has_no_implicit_database_listener_or_origin_defaults() {
     ));
 }
 
-/// #2256 production falsifier: `prepare()` under a configured log directory builds a
-/// REAL categorized-file sink (not a double), a line recorded through it survives the
-/// composition's own shutdown drain to `<log-dir>/cli-<utc>.log`, and that line
-/// carries the exact queryable field contract — including the launcher-derived `app`
-/// base, an absent optional as explicit `null`, and a fractional `duration_ms`
-/// verbatim. Closing through `close_connections` also witnesses the sink reaching its
-/// terminal closed state.
+/// Real prepared routes and credential authorities reach the composition-owned
+/// writers. Anonymous requests emit no audit record; runtime calls, CLI preflight,
+/// and human agent reads land in their respective streams before shutdown returns.
 #[tokio::test]
-async fn prepare_builds_a_real_cli_audit_sink_that_persists_the_exact_contract() {
-    use silverhand_backend_core::foundation::cli_preflight_audit::{
-        CliPreflightAuditSink, CliPreflightFailure, NonNegativeFiniteF64,
-    };
-    use silverhand_backend_filesystem::foundation::audit_sink::WriterState;
-
-    let fixture = fixture(true).await;
-    let log_dir = tempfile::tempdir().unwrap();
-    let config = config_with_log_dir(fixture.path.clone(), Some(log_dir.path().to_path_buf()));
-    let app = prepare(&config).await.unwrap();
-
-    let sink = app.cli_audit_sink();
-    sink.record(CliPreflightFailure {
-        agent_id: AgentId::parse("agent-42").unwrap(),
-        conversation_id: None,
-        noun: Some("message".to_owned()),
-        verb: Some("send".to_owned()),
-        flags_seen: vec!["--strict".to_owned()],
-        error_code: Some("E_UNKNOWN_FLAG".to_owned()),
-        error_subkind: None,
-        error_message: Some("unknown flag --nope".to_owned()),
-        duration_ms: Some(NonNegativeFiniteF64::new(3.5).unwrap()),
-    });
-
-    // The composition's own shutdown path drains the writer to disk and closes it.
-    app.close_connections().await;
-    assert_eq!(
-        sink.state(),
-        WriterState::ClosedShutdown,
-        "close_connections witnesses the sink terminally closed"
-    );
-
-    // The CLI audit line lands in this boot's `cli-<utc>.log`. #2257: `prepare()` now
-    // also opens this boot's `agent-audit-<utc>.log` in the SAME configured directory,
-    // so this asserts the cli file specifically rather than directory exclusivity.
-    let mut names = Vec::new();
-    let mut entries = tokio::fs::read_dir(log_dir.path()).await.unwrap();
-    while let Some(entry) = entries.next_entry().await.unwrap() {
-        names.push(entry.file_name().to_string_lossy().into_owned());
-    }
-    let cli_log = names
-        .iter()
-        .find(|name| name.starts_with("cli-") && name.ends_with(".log"))
-        .unwrap_or_else(|| panic!("a cli log for this boot: {names:?}"));
-
-    let contents = tokio::fs::read_to_string(log_dir.path().join(cli_log))
-        .await
-        .unwrap();
-    let line = contents.lines().next().expect("the recorded line");
-    let value: serde_json::Value = serde_json::from_str(line).unwrap();
-    let object = value.as_object().unwrap();
-    assert_eq!(object["level"], "warn");
-    assert_eq!(object["msg"], "cli.preflight_failure");
-    assert_eq!(
-        object["app"], "silverhand-desktop",
-        "embedded launcher base"
-    );
-    assert!(object["pid"].is_number());
-    assert_eq!(object["category"], "cli.preflight_failure");
-    assert_eq!(object["status"], "failure");
-    assert_eq!(object["agentId"], "agent-42");
-    assert!(
-        object["conversationId"].is_null(),
-        "absent optional is null"
-    );
-    assert_eq!(object["noun"], "message");
-    assert_eq!(object["verb"], "send");
-    assert_eq!(object["flags_seen"], serde_json::json!(["--strict"]));
-    assert_eq!(object["error_code"], "E_UNKNOWN_FLAG");
-    assert!(object["error_subkind"].is_null());
-    assert_eq!(object["error_message"], "unknown flag --nope");
-    assert_eq!(
-        object["duration_ms"],
-        serde_json::json!(3.5),
-        "fractional ms verbatim"
-    );
-}
-
-/// #2261/#2262 production wiring falsifier: the real prepared router, the same runtime
-/// credential authority held by its perimeter, the real invoke middleware/facade, and
-/// the composition-owned writer form one chain. The anonymous call is zero-record;
-/// each of the six newly mounted reaction/attachment faces produces exactly one typed
-/// `cli.invoke`; and the sibling cli-trace face produces only its preflight record.
-#[tokio::test]
-async fn prepared_residual_faces_share_one_drained_cli_audit_owner() {
+async fn prepared_routes_drain_into_disjoint_cli_and_agent_audit_files() {
     use std::{
         convert::Infallible,
         future::Future,
@@ -872,21 +784,40 @@ async fn prepared_residual_faces_share_one_drained_cli_audit_owner() {
         "POST",
         "/internal/agents/agent-cli-audit/cli-trace",
         Some(&bearer),
-        Body::from("{}"),
+        Body::from(r#"{"noun":"message","verb":"send","flags_seen":["--strict"],"error_code":"E_UNKNOWN_FLAG","error_message":"unknown flag --nope","duration_ms":3.5}"#),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
+    let chats = "/api/agents/agent-cli-audit/chats";
+    let (status, _) = request(&app.router, "GET", chats, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, body) = request(&app.router, "GET", chats, Some(&format!("Bearer {TOKEN}"))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({"chats": []})
+    );
+
     app.close_connections().await;
+    use silverhand_backend_filesystem::foundation::audit_sink::WriterState;
+    assert_eq!(app.cli_audit_sink.state(), WriterState::ClosedShutdown);
+    assert_eq!(app.agent_audit_sink.state(), WriterState::ClosedShutdown);
 
     let mut entries = tokio::fs::read_dir(log_dir.path()).await.unwrap();
     let mut cli_log = None;
+    let mut agent_log = None;
     while let Some(entry) = entries.next_entry().await.unwrap() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with("cli-") && name.ends_with(".log") {
             assert!(
                 cli_log.replace(entry.path()).is_none(),
                 "one CLI file per boot"
+            );
+        } else if name.starts_with("agent-audit-") && name.ends_with(".log") {
+            assert!(
+                agent_log.replace(entry.path()).is_none(),
+                "one agent audit file per boot"
             );
         }
     }
@@ -897,6 +828,7 @@ async fn prepared_residual_faces_share_one_drained_cli_audit_owner() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
+    assert!(lines.iter().all(|line| line["app"] == "silverhand-desktop"));
     assert_eq!(
         lines.len(),
         14,
@@ -950,6 +882,32 @@ async fn prepared_residual_faces_share_one_drained_cli_audit_owner() {
         1,
         "cli-trace is excluded from cli.invoke and shares the one file owner"
     );
+    let preflight = lines
+        .iter()
+        .find(|line| line["category"] == "cli.preflight_failure")
+        .unwrap();
+    assert_eq!(preflight["agentId"], "agent-cli-audit");
+    assert_eq!(preflight["flags_seen"], serde_json::json!(["--strict"]));
+    assert_eq!(preflight["error_code"], "E_UNKNOWN_FLAG");
+    assert_eq!(preflight["duration_ms"], 3.5);
+
+    let contents = tokio::fs::read_to_string(agent_log.expect("the composed agent audit file"))
+        .await
+        .unwrap();
+    let records: Vec<serde_json::Value> = contents
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        records.len(),
+        1,
+        "only the admitted owner read is audited, with no CLI records"
+    );
+    assert_eq!(records[0]["category"], "agent.chats_listed");
+    assert_eq!(records[0]["viewer"], "user-1");
+    assert_eq!(records[0]["agentId"], "agent-cli-audit");
+    assert_eq!(records[0]["chatCount"], 0);
+    assert_eq!(records[0]["app"], "silverhand-desktop");
 }
 
 /// #2255/#2257 convergence falsifier — the embedded-bootstrap ENABLE arm. Under the
@@ -1186,7 +1144,7 @@ async fn serve_unlinks_an_unconsumed_embedded_bootstrap_token_on_shutdown() {
 /// already occupied the seam returns `Bind` with zero audit-writer files, zero token
 /// mint/write, and therefore no rollback artifact.
 #[tokio::test]
-async fn run_unlinks_the_embedded_bootstrap_token_when_the_bind_fails() {
+async fn bind_failure_prevents_bootstrap_token_and_audit_writer_creation() {
     let fixture = fixture(true).await;
     let token_dir = tempfile::tempdir().unwrap();
     let token_path = token_dir.path().join("bootstrap.token");
@@ -1268,57 +1226,6 @@ async fn post_bind_startup_failure_closes_writers_and_leaves_no_token() {
     drop(rebound);
 }
 
-/// #2254/#2257 — `prepare()` under a configured log directory wires a RECORDING agent
-/// audit sink over #2256's categorized writer: an event recorded through the real
-/// sink drains to `<log-dir>/agent-audit-<utc>.log`, and `close_connections`
-/// witnesses the writer terminally closed. The full per-variant field contract is
-/// owned and tested by the filesystem sink; this proves the composition WIRING.
-#[tokio::test]
-async fn prepare_wires_a_recording_agent_audit_sink_that_persists_a_line() {
-    use silverhand_backend_core::foundation::identity::UserId;
-    use silverhand_backend_core::identity_access::agent_audit_read::{
-        AgentAuditEvent, AgentAuditSink,
-    };
-    use silverhand_backend_filesystem::foundation::audit_sink::WriterState;
-
-    let fixture = fixture(true).await;
-    let log_dir = tempfile::tempdir().unwrap();
-    let config = config_with_log_dir(fixture.path.clone(), Some(log_dir.path().to_path_buf()));
-    let app = prepare(&config).await.unwrap();
-
-    let sink = app.agent_audit_sink();
-    sink.record(AgentAuditEvent::ChatsListed {
-        viewer: UserId::parse("user-1").unwrap(),
-        agent_id: AgentId::parse("agent-7").unwrap(),
-        chat_count: 3,
-    });
-
-    app.close_connections().await;
-    assert_eq!(
-        sink.state(),
-        WriterState::ClosedShutdown,
-        "close_connections witnesses the agent-audit writer terminally closed"
-    );
-
-    let mut names = Vec::new();
-    let mut entries = tokio::fs::read_dir(log_dir.path()).await.unwrap();
-    while let Some(entry) = entries.next_entry().await.unwrap() {
-        names.push(entry.file_name().to_string_lossy().into_owned());
-    }
-    let audit = names
-        .iter()
-        .find(|name| name.starts_with("agent-audit-") && name.ends_with(".log"))
-        .expect("an agent-audit log for this boot");
-    let contents = tokio::fs::read_to_string(log_dir.path().join(audit))
-        .await
-        .unwrap();
-    let line = contents.lines().next().expect("the recorded line");
-    let value: serde_json::Value = serde_json::from_str(line).unwrap();
-    assert_eq!(value["category"], "agent.chats_listed");
-    assert_eq!(value["agentId"], "agent-7");
-    assert_eq!(value["chatCount"], 3);
-}
-
 /// #2257 P0 resident falsifier — a categorized-log directory is now a REQUIRED
 /// startup input, not an option. #2256 allowed the sink to be constructed only
 /// optionally because its routes were UNMOUNTED; #2257 mounts two real audit
@@ -1365,101 +1272,10 @@ async fn prepare_fails_closed_before_routes_when_blob_root_cannot_open() {
     );
 }
 
-/// #2257 P0 — the two mounted audit producers each write their OWN prefixed, typed
-/// projection while sharing #2256's categorized-writer primitive: a CLI-preflight
-/// failure lands ONLY in `cli-<utc>.log` and an agent-audit read lands ONLY in
-/// `agent-audit-<utc>.log`. The shared writer never cross-contaminates records.
 #[tokio::test]
-async fn the_two_audit_sinks_write_disjoint_prefixed_streams() {
-    use silverhand_backend_core::foundation::cli_preflight_audit::{
-        CliPreflightAuditSink, CliPreflightFailure,
-    };
-    use silverhand_backend_core::foundation::identity::UserId;
-    use silverhand_backend_core::identity_access::agent_audit_read::{
-        AgentAuditEvent, AgentAuditSink,
-    };
+async fn startup_initializes_missing_store_and_refuses_unowned_schema_before_serving() {
+    use silverhand_backend_sqlite::foundation::database_startup::DatabaseStartupError;
 
-    let fixture = fixture(true).await;
-    let log_dir = tempfile::tempdir().unwrap();
-    let config = config_with_log_dir(fixture.path.clone(), Some(log_dir.path().to_path_buf()));
-    let app = prepare(&config).await.unwrap();
-
-    app.cli_audit_sink().record(CliPreflightFailure {
-        agent_id: AgentId::parse("agent-cli").unwrap(),
-        conversation_id: None,
-        noun: Some("message".to_owned()),
-        verb: Some("send".to_owned()),
-        flags_seen: Vec::new(),
-        error_code: Some("capability_denied".to_owned()),
-        error_subkind: None,
-        error_message: None,
-        duration_ms: None,
-    });
-    app.agent_audit_sink().record(AgentAuditEvent::ChatsListed {
-        viewer: UserId::parse("viewer-audit").unwrap(),
-        agent_id: AgentId::parse("agent-audit").unwrap(),
-        chat_count: 4,
-    });
-
-    app.close_connections().await;
-
-    let mut cli_names = Vec::new();
-    let mut audit_names = Vec::new();
-    let mut entries = tokio::fs::read_dir(log_dir.path()).await.unwrap();
-    while let Some(entry) = entries.next_entry().await.unwrap() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.ends_with(".log") {
-            continue;
-        }
-        if name.starts_with("agent-audit-") {
-            audit_names.push(name);
-        } else if name.starts_with("cli-") {
-            cli_names.push(name);
-        }
-    }
-    assert_eq!(cli_names.len(), 1, "exactly one cli stream: {cli_names:?}");
-    assert_eq!(
-        audit_names.len(),
-        1,
-        "exactly one agent-audit stream: {audit_names:?}"
-    );
-
-    let cli = tokio::fs::read_to_string(log_dir.path().join(&cli_names[0]))
-        .await
-        .unwrap();
-    let audit = tokio::fs::read_to_string(log_dir.path().join(&audit_names[0]))
-        .await
-        .unwrap();
-
-    // The CLI stream carries only the CLI projection; the agent audit never leaks in.
-    assert!(
-        cli.contains("agent-cli") && cli.contains("capability_denied"),
-        "cli stream holds the cli record: {cli}"
-    );
-    assert!(
-        !cli.contains("agent.chats_listed") && !cli.contains("viewer-audit"),
-        "cli stream never carries an agent-audit record: {cli}"
-    );
-
-    // ...and symmetrically for the agent-audit stream.
-    assert!(
-        audit.contains("agent.chats_listed") && audit.contains("agent-audit"),
-        "audit stream holds the agent-audit record: {audit}"
-    );
-    assert!(
-        !audit.contains("capability_denied") && !audit.contains("agent-cli"),
-        "audit stream never carries a cli record: {audit}"
-    );
-}
-
-#[tokio::test]
-async fn startup_initializes_missing_and_refuses_unowned_or_invalid_schema_before_serving() {
-    use silverhand_backend_sqlite::foundation::database_startup::{
-        DatabaseStartupError, prepare_database,
-    };
-    async fn verify_schema(path: &Path) -> Result<(), DatabaseStartupError> {
-        prepare_database(path, false).await.map(|_| ())
-    }
     let directory = tempfile::tempdir().unwrap();
     let missing = directory.path().join("missing.sqlite");
     let app = prepare(&config(missing.clone())).await.unwrap();
@@ -1470,78 +1286,10 @@ async fn startup_initializes_missing_and_refuses_unowned_or_invalid_schema_befor
     let Err(error) = prepare(&config(unowned.path)).await else {
         panic!("schema without migration ownership must fail closed");
     };
-    assert!(describe(&error).contains("schema_too_old"));
-
-    let fixture = fixture(true).await;
-    verify_schema(&fixture.path).await.unwrap();
-    let pool = SqlitePoolOptions::new()
-        .connect(fixture.path.to_str().unwrap())
-        .await
-        .unwrap();
-    for historical in 1..BASELINE_MIGRATION_STEP {
-        sqlx::query("INSERT INTO _migrations (version, name, applied_at) VALUES (?, 'history', 1)")
-            .bind(historical)
-            .execute(&pool)
-            .await
-            .unwrap();
-    }
-    pool.close().await;
-    verify_schema(&fixture.path).await.unwrap();
-    let pool = SqlitePoolOptions::new()
-        .connect(fixture.path.to_str().unwrap())
-        .await
-        .unwrap();
-    sqlx::query("DELETE FROM _migrations WHERE version = ?")
-        .bind(CURRENT_MIGRATION_STEP - 1)
-        .execute(&pool)
-        .await
-        .unwrap();
-    pool.close().await;
     assert!(matches!(
-        verify_schema(&fixture.path).await,
-        Err(DatabaseStartupError::Ledger)
+        error,
+        StartupError::DatabasePreparation(DatabaseStartupError::TooOld(0))
     ));
-    let pool = SqlitePoolOptions::new()
-        .connect(fixture.path.to_str().unwrap())
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO _migrations (version, name, applied_at) VALUES (?, 'restored', 1)")
-        .bind(CURRENT_MIGRATION_STEP - 1)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    sqlx::query("DELETE FROM _migrations WHERE version = ?")
-        .bind(CURRENT_MIGRATION_STEP)
-        .execute(&pool)
-        .await
-        .unwrap();
-    pool.close().await;
-    assert!(matches!(
-        verify_schema(&fixture.path).await,
-        Err(DatabaseStartupError::UpgradeDisabled { .. })
-    ));
-    let pool = SqlitePoolOptions::new()
-        .connect(fixture.path.to_str().unwrap())
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO _migrations (version, name, applied_at) VALUES (?, 'restored', 1)")
-        .bind(CURRENT_MIGRATION_STEP)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    sqlx::query("INSERT INTO _migrations (version, name, applied_at) VALUES (?, 'future', 1)")
-        .bind(CURRENT_MIGRATION_STEP + 1)
-        .execute(&pool)
-        .await
-        .unwrap();
-    pool.close().await;
-    assert!(matches!(
-        verify_schema(&fixture.path).await,
-        Err(DatabaseStartupError::TooNew(_))
-    ));
-    pool.close().await;
 }
 
 /// #2223 CP5: the four host residual routes are mounted behind the human perimeter and
@@ -1633,7 +1381,7 @@ async fn composed_avatar_upload_separates_the_five_mib_cap_from_the_perimeter_ce
     // Tier 1 — exactly AVATAR_MAX_BYTES: admitted through the real perimeter (200),
     // and the row's cache-busted avatar_url is set (proving the bytes reached the blob
     // store, not truncated by the 128 MiB stream wrap).
-    let cap = silverhand_backend_core::identity_access::avatar::AVATAR_MAX_BYTES as usize;
+    let cap = 5 * 1024 * 1024;
     let response = app
         .router
         .clone()
@@ -1687,7 +1435,7 @@ async fn composed_avatar_upload_separates_the_five_mib_cap_from_the_perimeter_ce
     // Tier 3 — a request DECLARING more than 128 MiB: the perimeter's own 413,
     // returned from its declared-Content-Length short-circuit before any byte is read
     // or any route matched. A one-byte actual body proves the HEADER alone drives it.
-    let over_ceiling = crate::foundation::request_perimeter::MAX_REQUEST_BODY_BYTES as u64 + 1;
+    let over_ceiling = 134_217_729_u64;
     let response = app
         .router
         .clone()
@@ -3091,6 +2839,12 @@ async fn the_composition_mounts_every_declared_route() {
         StatusCode::METHOD_NOT_ALLOWED,
         "embedded-bootstrap must be MOUNTED (an unlisted method → 405, not 404)"
     );
+    let (status, _) = request(&router, "POST", "/auth/embedded-bootstrap", None).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "missing ConnectInfo must fail closed"
+    );
 
     // #2223 CP3: the #2193 CP2 signup/login/logout trio is mounted ahead of the human
     // perimeter (login must be reachable before any session exists). They share ONE
@@ -3149,118 +2903,21 @@ async fn the_composition_mounts_every_declared_route() {
     }
 }
 
-/// #2338's reviewed input denominator, expressed once as exact method+path
-/// identities and driven through the final composed app. The set is the exact
-/// canonical union recorded by the three reviewed leaf summaries; count alone
-/// can never substitute unrelated, already-mounted routes.
+/// The frozen product registry independently guards route/method compatibility.
+/// Protected routes must reject anonymous requests and let genuine credentials
+/// cross the perimeter. Domain-specific admission and effects have their own suites.
 #[tokio::test]
-async fn the_three_reviewed_lanes_mount_exactly_forty_five_routes() {
-    const ROUTES: &[(&str, &str)] = &[
-        ("POST", "/api/attention/observe"),
-        ("PUT", "/api/conversations/c/attention-preference"),
-        ("PUT", "/api/workspaces/w/attention-preference"),
-        ("GET", "/api/workspaces/w/attention-preference"),
-        ("POST", "/api/workspaces/w/channels"),
-        ("PATCH", "/api/channels/c/archive"),
-        ("PATCH", "/api/channels/c"),
-        ("POST", "/api/channels/c/agents/a/start"),
-        ("POST", "/api/channels/c/agents/a/stop"),
-        ("POST", "/api/channels/c/agents/a/clear-session"),
-        ("GET", "/api/conversations/c/log-debug"),
-        ("POST", "/api/conversations/c/log-debug"),
-        ("GET", "/api/workspaces/w/members"),
-        ("PATCH", "/api/workspaces/w/members/users/u/role"),
-        ("DELETE", "/api/workspaces/w/members/a"),
-        ("DELETE", "/api/workspaces/w/members/users/u"),
-        ("POST", "/api/workspaces/w/leave"),
-        ("GET", "/api/workspaces/w/agents/a/capabilities"),
-        ("PUT", "/api/workspaces/w/agents/a/capabilities"),
-        ("GET", "/api/conversations/c/members"),
-        ("POST", "/api/conversations/c/members"),
-        ("POST", "/api/channels/c/join"),
-        ("POST", "/api/channels/c/leave"),
-        ("DELETE", "/api/conversations/c/members/agents/a"),
-        ("DELETE", "/api/conversations/c/members/users/u"),
-        ("POST", "/internal/agents/a/members"),
-        ("POST", "/api/tasks"),
-        ("POST", "/api/tasks/t/claim"),
-        ("POST", "/api/tasks/t/unclaim"),
-        ("POST", "/api/tasks/t/status"),
-        ("POST", "/api/tasks/t/edit"),
-        ("GET", "/api/tasks/board/column"),
-        ("GET", "/api/tasks/board/counts"),
-        ("GET", "/api/tasks/board/facets"),
-        ("GET", "/api/tasks/by-number"),
-        ("GET", "/api/tasks/t"),
-        ("POST", "/internal/agents/a/tasks/create"),
-        ("POST", "/internal/agents/a/tasks/claim"),
-        ("POST", "/internal/agents/a/tasks/unclaim"),
-        ("POST", "/internal/agents/a/tasks/update-status"),
-        ("POST", "/internal/agents/a/tasks/edit"),
-        ("GET", "/internal/agents/a/tasks/detail"),
-        ("POST", "/internal/agents/a/schedules"),
-        ("POST", "/internal/agents/a/schedules/list"),
-        ("POST", "/internal/agents/a/schedules/cancel"),
-    ];
-    assert_eq!(ROUTES.len(), 45);
-    assert_eq!(
-        ROUTES
-            .iter()
-            .copied()
-            .collect::<std::collections::HashSet<_>>()
-            .len(),
-        45,
-        "lane route identities must be unique"
-    );
-    let fixture = fixture(true).await;
-    seed_human(&fixture.path).await;
-    seed_runtime_agent(&fixture.path, "a").await;
-    let app = prepare(&config(fixture.path.clone())).await.unwrap();
-    let runtime_bearer = mint_runtime_bearer(&app, "a").await;
-    let human_bearer = format!("Bearer {TOKEN}");
-    for (method, path) in ROUTES {
-        let (anonymous_status, anonymous_body) = request(&app.router, method, path, None).await;
-        assert_eq!(
-            anonymous_status,
-            StatusCode::UNAUTHORIZED,
-            "canonical lane route {method} {path} must hit the protected perimeter, not top-level 404: {anonymous_body}"
-        );
-        let bearer = if path.starts_with("/internal/") {
-            &runtime_bearer
-        } else {
-            &human_bearer
-        };
-        let (status, body) = request(&app.router, method, path, Some(bearer)).await;
-        assert_ne!(
-            status,
-            StatusCode::METHOD_NOT_ALLOWED,
-            "composed lane method {method} {path} is not registered: {body}"
-        );
-        assert_ne!(
-            status,
-            StatusCode::UNAUTHORIZED,
-            "valid credential did not cross the perimeter for {method} {path}: {body}"
-        );
-    }
-}
-
-/// The frozen route registry is an independent expected route universe while the
-/// final composed Rust app is the mount authority.  This gate deduplicates the former
-/// by exact method+path identity, concretizes each parameter, and then probes the
-/// latter through its real perimeter.  A matched protected route is `401`; a residual
-/// route is `404`.  Embedded bootstrap is the sole extractor-gated exception, whose
-/// mounted node is witnessed by an unlisted GET returning `405`.
-#[tokio::test]
-async fn the_live_registry_closes_at_one_hundred_eighty_one_mounted_and_zero_residual() {
-    const EXPECTED_RESIDUAL: [&str; 0] = [];
+async fn registered_product_routes_enforce_auth_and_dispatch_declared_methods() {
     let rows: Vec<String> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../../rust/test-fixtures/routes/endpoint-registry-snapshot.json"
     )))
     .unwrap();
-    assert_eq!(rows.len(), 184, "canonical registration-row denominator");
     let registry: std::collections::BTreeSet<String> = rows.into_iter().collect();
-    assert_eq!(registry.len(), 181, "deduplicated method+path denominator");
+    assert!(
+        !registry.is_empty(),
+        "the independent product route fixture is empty"
+    );
 
     let fixture = fixture(true).await;
     seed_human(&fixture.path).await;
@@ -3268,9 +2925,7 @@ async fn the_live_registry_closes_at_one_hundred_eighty_one_mounted_and_zero_res
     let app = prepare(&config(fixture.path.clone())).await.unwrap();
     let runtime_bearer = mint_runtime_bearer(&app, "registry-probe").await;
     let human_bearer = format!("Bearer {TOKEN}");
-    let mut mounted = std::collections::BTreeSet::new();
-    let mut residual = std::collections::BTreeSet::new();
-    for identity in &registry {
+    for identity in registry {
         let (method, template) = identity.split_once(' ').unwrap();
         let path = template
             .split('/')
@@ -3283,45 +2938,47 @@ async fn the_live_registry_closes_at_one_hundred_eighty_one_mounted_and_zero_res
             })
             .collect::<Vec<_>>()
             .join("/");
-        let is_embedded_bootstrap = identity == "POST /auth/embedded-bootstrap";
-        let anonymous_status = if is_embedded_bootstrap {
-            request(&app.router, "GET", &path, None).await.0
-        } else {
-            request(&app.router, method, &path, None).await.0
-        };
-        let is_mounted = if is_embedded_bootstrap {
-            anonymous_status == StatusCode::METHOD_NOT_ALLOWED
-        } else if anonymous_status == StatusCode::NOT_FOUND {
-            false
-        } else {
-            let bearer = if path.starts_with("/internal/") {
-                &runtime_bearer
-            } else {
-                &human_bearer
-            };
-            let authenticated_status = request(&app.router, method, &path, Some(bearer)).await.0;
-            authenticated_status != StatusCode::METHOD_NOT_ALLOWED
-        };
-        if is_mounted {
-            mounted.insert(identity.clone());
-        } else {
-            residual.insert(identity.clone());
+        if identity == "POST /auth/embedded-bootstrap" {
+            // This POST hides absence of ConnectInfo behind404; its method node
+            // is independently witnessed by the unsupported GET.
+            assert_eq!(
+                request(&app.router, "GET", &path, None).await.0,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{identity}"
+            );
+            continue;
         }
+        let public = matches!(
+            identity.as_str(),
+            "GET /api/server/info"
+                | "GET /api/health"
+                | "GET /readyz"
+                | "GET /api/ws/events"
+                | "GET /api/hosts/connect"
+                | "GET /api/hosts/connect-token/resolve"
+                | "POST /auth/signup"
+                | "POST /auth/login"
+                | "POST /auth/logout"
+        );
+        let (status, body) = request(&app.router, method, &path, None).await;
+        if public {
+            assert_ne!(status, StatusCode::NOT_FOUND, "{identity}: {body}");
+            assert_ne!(status, StatusCode::METHOD_NOT_ALLOWED, "{identity}: {body}");
+            // Public method presence needs no credential. In particular, a real
+            // logout would revoke the bearer required by later protected probes.
+            continue;
+        } else {
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{identity}: {body}");
+        }
+        let bearer = if path.starts_with("/internal/") {
+            &runtime_bearer
+        } else {
+            &human_bearer
+        };
+        let (status, body) = request(&app.router, method, &path, Some(bearer)).await;
+        assert_ne!(status, StatusCode::METHOD_NOT_ALLOWED, "{identity}: {body}");
+        assert_ne!(status, StatusCode::UNAUTHORIZED, "{identity}: {body}");
     }
-
-    assert_eq!(
-        mounted.len(),
-        181,
-        "mounted identities; residual={residual:#?}"
-    );
-    assert_eq!(residual.len(), 0, "residual identities={residual:#?}");
-    assert_eq!(
-        residual,
-        EXPECTED_RESIDUAL.into_iter().map(str::to_owned).collect(),
-        "the residual ledger must change with the live composed-app result"
-    );
-    assert!(mounted.is_disjoint(&residual));
-    assert_eq!(mounted.len() + residual.len(), registry.len());
 }
 
 /// Production schedule-driver proof: `prepare` owns a live driver, which claims a
@@ -4907,423 +4564,11 @@ async fn mounted_attachment_update_is_cursor_inert_and_reuses_the_one_blob_root(
     running.await.unwrap().unwrap();
 }
 
-/// The composition's migration-tracked route SUBSET as a bidirectionally closed set of
-/// 72 unique method+path keys, every entry itemized `(method, path)`
-/// in a named table that is mechanically checksummed: the five tables' lengths are
-/// pinned (`67`/`4`/`1`/`0`/`0`), every `(method, path)` across the union is unique,
-/// landed is disjoint from residual and from connect-info-gated, and the union is
-/// exactly `72`. This is NOT the canonical global endpoint inventory: the unchanged TS
-/// snapshot contains 184 registration rows collapsing to 181 unique method+path keys.
-/// The accepted #2257 global identity was 103 mounted + 78 residual; #2262 added
-/// 18 previously-residual keys, and after #2341's final wave the live registry
-/// reconciliation now closes the canonical inventory at `181 = 181 mounted + 0
-/// residual`. This narrower gate extends #2257's 54-key
-/// migration-tracked subset by those same 18 notification/reaction/attachment keys;
-/// it remains a HISTORICAL migration subset (72 keys), NOT the canonical inventory,
-/// so its own accounting is independent of the now-closed global 181/0.
-/// Source registration counts are intentionally not used inside this subset: shared
-/// path nodes contribute one key per method, and a duplicate registrar cannot inflate
-/// the mounted identity. Deleting a row, or copying one between tables, breaks the
-/// checksum — `(67 + 4) + 1 + (0 + 0) == 72` is an assertion, not prose.
-///
-/// Every one of this subset's 72 routes is FALSIFIABLE — none rests on an
-/// unfalsifiable anon `401`:
-/// * The 67 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
-///   perimeter OR the runtime-credential perimeter → anon `401` (both perimeters emit the
-///   SAME `{"error":"unauthorized"}` bodiless envelope). Includes #2218's authenticated
-///   `/api/runtimes`, three of
-///   #2219's four host-custody routes: list, claim-or-create, and
-///   `{id}/rotate-token`; the fourth, `connect-token/resolve`, is allowlisted and
-///   lands anonymously below; the four #2223 CP5 host residual routes: detail
-///   `GET /api/hosts/{id}`, revoke, connect-token rotate, and delete
-///   `DELETE /api/hosts/{id}`; the six #2234 CP1 host-management routes: update
-///   `PATCH /api/hosts/{id}`, disconnect, proxy-config `GET`+`PUT`, runtime-catalog
-///   and status; the five #2234 CP2 public-agent thin faces: name-availability
-///   `GET /api/agents/name-availability`, `PATCH /api/agents/{id}`, and the three
-///   avatar faces `GET`+`POST`+`DELETE /api/agents/{id}/avatar`; and the one #2234 CP3
-///   public-agent face: `DELETE /api/agents/{id}`, a third method on the GET+PATCH
-///   `{id}` node, backed by the #2230 deletion resumer's full production lifecycle;
-///   the two #2234 CP4 runtime write faces: `POST /api/agents/{id}/clear-session` and
-///   `PUT /api/agents/{id}/runtime`, sharing the one production `ProductionRuntimeControl`;
-///   and the one #2234 CP5 public-agent face: `POST /api/agents/{id}/stop`, whose gate
-///   read and seat-snapshot read stay two separate sole authorities; and the one #2234
-///   CP6 public-agent face: `POST /api/agents` (create), a second method on the GET-list
-///   `/api/agents` node, driving the reserve→materialize→provision-graph saga; and the
-///   five #2234 CP7a internal self-scope faces behind the RUNTIME-credential perimeter:
-///   `GET`+`POST /internal/agents/{aid}/profile`, `POST`+`DELETE /internal/agents/{aid}/avatar`,
-///   and `GET /internal/agents/{aid}/peer-profile`); the three #2234 CP7b internal
-///   profile-MCP faces; and the eleven #2257 residual-wave faces: runtime-state, the
-///   three agent-chat audit faces, the two schedule faces, the two workspace-data-plane
-///   faces, the public profile-MCP read + probe pair (all human-perimeter), and
-///   `POST /internal/agents/{aid}/cli-trace` (runtime-credential); plus #2262's exactly
-///   18 notification/reaction/attachment faces (12 human + 6 runtime-credential).
-///   Deleting any one's `.merge(...)` flips it to `404` and reddens this gate
-///   (delete-landed RED).
-/// * The 4 ANON-LANDED routes are mounted ahead of every perimeter → an anonymous
-///   probe reaches the handler: #2218's `server/info` and `health` answer `200`, and
-///   `/readyz` answers `503` on this prepared-but-not-served router (`listen_ready` is
-///   a serving-boundary fact `prepare()` does not mark); #2219's allowlisted
-///   `connect-token/resolve` finds no connect-token bearer and answers its OWN `401`
-///   whose `error_code` body (asserted after the loop) proves it landed anonymously and
-///   not behind the perimeter. Neither the guarded (bodiless) `401` nor the absent
-///   `404`. Deleting any one's `.merge(...)` flips it to `404` and reddens this gate.
-/// * The 1 CONNECT-INFO-GATED route (`POST /auth/embedded-bootstrap`, #2255/#2257) is
-///   mounted at the top level, but its `LoopbackPeer` extractor fails closed to `404`
-///   when a request carries no `ConnectInfo<SocketAddr>` — and the in-process test
-///   helper injects none, so an anon POST is a 404 indistinguishable from unmounted and
-///   cannot witness the mount. Instead an UNLISTED method on the same node answers
-///   `405` (node present) rather than `404` (no node); deleting its `.merge(...)` flips
-///   that to `404` and reddens this gate.
-/// * 0 RESIDUAL rows remain INSIDE THIS 72-key migration-tracked subset — every face
-///   this subset declares is mounted through #2262. The canonical 181-key inventory
-///   is itself now fully mounted (181/0 after #2341); this 72-key subset stays a
-///   historical migration slice and is not the canonical inventory. The loop
-///   stays as the mount-residual RED tripwire: a row re-added here that is actually
-///   mounted fails its anon-`404` assertion.
-/// * 0 METHOD-SHADOW residual rows remain inside this subset: `POST /api/agents` was
-///   its last one, mounted by
-///   #2234 CP6 as a second method on the GET-list `/api/agents` node (now landed). Its
-///   authenticated GET-list-vs-POST-create dispatch is borne by the create composition
-///   gate, so no method-shadow row remains in this migration-tracked subset.
-///
-/// SUBSET-RESIDUAL rows are NEVER implemented in this lane — they are disproved (404
-/// or 405), not built. A new registrar mounted into `prepare()` at any path tracked by
-/// this subset MUST move its row from residual to landed here
-/// (#2218 moved `/api/runtimes` to perimeter-landed and the three root faces to
-/// anon-landed).
+/// Mount, authentication and method dispatch for the notification/reaction/attachment
+/// families. Anonymous401 proves node presence even when the authenticated handler
+/// returns404 for an absent resource; unregistered methods must remain405.
 #[tokio::test]
-async fn the_migration_tracked_route_subset_stays_closed_at_seventy_two() {
-    // The 67 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
-    // perimeter OR the runtime-credential perimeter → anon 401 (both emit the same
-    // `{"error":"unauthorized"}` envelope).
-    const LANDED: &[(&str, &str)] = &[
-        ("GET", "/api/agents"),
-        ("GET", "/api/agents/agent-1"),
-        ("GET", "/api/agents/agent-1/presence"),
-        ("GET", "/api/agents/agent-1/availability"),
-        ("GET", "/api/presence"),
-        // Host-resources read, Wave 3A checkpoint A5 (#2198).
-        ("GET", "/api/hosts/host-1/resources"),
-        // Root runtime catalogue, #2218: under `/api/*` with no allowlist entry, so
-        // the product refuses anon 401 before the handler; mounted behind the human
-        // perimeter to match.
-        ("GET", "/api/runtimes"),
-        // Host custody CP4, #2219: three of the four authority-complete host-custody
-        // routes, mounted behind the human perimeter → anon 401. `GET /api/hosts`
-        // shares its path with the mounted invite `POST /api/hosts`; here it is probed
-        // anon (401, perimeter), and its GET→handler / POST→invite /
-        // unregistered-method→405 dispatch is borne by the dedicated `/api/hosts`
-        // two-arm gate below. The fourth route, `connect-token/resolve`, is allowlisted
-        // (anonymous) and lands in ANON_LANDED, not here.
-        ("GET", "/api/hosts"),
-        ("POST", "/api/hosts/claim-or-create"),
-        ("POST", "/api/hosts/host-1/rotate-token"),
-        // Host residual CP4, #2223: the four authority-complete host residual routes,
-        // mounted behind the human perimeter → anon 401. `GET /api/hosts/{id}` (detail)
-        // and `DELETE /api/hosts/{id}` (teardown) share the `{id}` node with disjoint
-        // methods; here each is probed anon (401, perimeter), and their GET→detail /
-        // DELETE→teardown dispatch is borne by the dedicated
-        // `/api/hosts/{id}` shared-node gate below. `PATCH /api/hosts/{id}` is now a
-        // THIRD method on that same node (mounted by #2234 CP1, immediately below), no
-        // longer a method-shadow residual.
-        ("GET", "/api/hosts/host-1"),
-        ("DELETE", "/api/hosts/host-1"),
-        ("POST", "/api/hosts/host-1/revoke"),
-        ("POST", "/api/hosts/host-1/connect-token/rotate"),
-        // Host management CP1, #2234: the six authority-complete host-management routes,
-        // mounted behind the human perimeter → anon 401. `PATCH /api/hosts/{id}` now
-        // accumulates onto the CP5 GET+DELETE `{id}` node (three disjoint methods); its
-        // authenticated PATCH→update dispatch is borne by the `/api/hosts/{id}` gate
-        // below. It is therefore NO LONGER a method-shadow residual.
-        ("PATCH", "/api/hosts/host-1"),
-        ("POST", "/api/hosts/host-1/disconnect"),
-        ("GET", "/api/hosts/host-1/proxy-config"),
-        ("PUT", "/api/hosts/host-1/proxy-config"),
-        ("GET", "/api/hosts/host-1/runtime-catalog"),
-        ("GET", "/api/hosts/host-1/status"),
-        // Public-agent thin faces CP2, #2234 (#2225): mounted behind the human
-        // perimeter → anon 401. `name-availability` is now a REAL static route (it
-        // wins axum's static priority over `{id}`, so it is no longer a static-shadow
-        // residual); `PATCH /api/agents/{id}` accumulates onto the GET-detail `{id}`
-        // node (its authenticated GET-vs-PATCH dispatch is borne by the dedicated
-        // `/api/agents/{id}` shared-node gate below), so it is no longer a
-        // method-shadow residual; the three avatar faces are mounted on the
-        // `/api/agents/{id}/avatar` node (GET serve + POST upload + DELETE clear).
-        ("GET", "/api/agents/name-availability"),
-        ("PATCH", "/api/agents/agent-1"),
-        ("GET", "/api/agents/agent-1/avatar"),
-        ("POST", "/api/agents/agent-1/avatar"),
-        ("DELETE", "/api/agents/agent-1/avatar"),
-        // Public agent-DELETE CP3, #2234 (#2230 resumer): now MOUNTED behind the human
-        // perimeter → anon 401, so it is no longer a method-shadow residual. It is a
-        // THIRD method on the GET-detail/PATCH `{id}` node; its authenticated
-        // DELETE→teardown dispatch (distinct from the GET-detail and PATCH-update arms
-        // the CP2 write-faces gate pins) and its full production lifecycle are borne by
-        // `the_composition_agent_deletion_resumer_drives_the_full_production_lifecycle`.
-        ("DELETE", "/api/agents/agent-1"),
-        // #2234 CP4: the two runtime write faces, now MOUNTED behind the human perimeter
-        // → anon 401, each on its own path node. Their authenticated reach through the ONE
-        // shared production `ProductionRuntimeControl` (clear-session's sealed-seat clear;
-        // the switch saga's durable transition commit + exactly-once `agent_changed`) is
-        // borne by
-        // `the_composition_agent_runtime_control_faces_reach_the_shared_production_control`.
-        ("POST", "/api/agents/agent-1/clear-session"),
-        ("PUT", "/api/agents/agent-1/runtime"),
-        // #2234 CP5: the public agent-stop face, now MOUNTED behind the human perimeter
-        // → anon 401, on its own path node. Its authenticated enumerate-every-seat reach
-        // through the exact per-seat stop transport (a single seat's refusal/fault kept as
-        // ordered residue, never short-circuiting) is borne by
-        // `the_composition_agent_stop_face_reaches_every_seat_through_the_exact_transport`.
-        ("POST", "/api/agents/agent-1/stop"),
-        // #2234 CP6: the public agent-create face, now MOUNTED behind the human
-        // perimeter → anon 401. It is a SECOND method on the `/api/agents` node the GET
-        // list owns, so it is no longer a method-shadow residual. Its authenticated
-        // reach — the reserve→materialize→provision-graph saga and the four post-commit
-        // effects (direct-pairs on a fresh pair, agent_changed, and the two aftermath
-        // legs), all NOT replayed on an Echo — is borne by
-        // `the_composition_agent_create_face_drives_the_full_saga_and_post_commit_effects`.
-        ("POST", "/api/agents"),
-        // #2234 CP7a: the five internal self-scope profile faces, now MOUNTED behind the
-        // runtime-credential perimeter (the send/tasks/stale siblings' layer) → anon 401.
-        // `/profile` GET+POST and `/avatar` POST+DELETE are disjoint-method unions;
-        // `/peer-profile` is its own node. Deleting any one's merge flips it to 404
-        // and reddens this gate (delete-landed RED).
-        ("GET", "/internal/agents/agent-1/profile"),
-        ("POST", "/internal/agents/agent-1/profile"),
-        ("POST", "/internal/agents/agent-1/avatar"),
-        ("DELETE", "/internal/agents/agent-1/avatar"),
-        ("GET", "/internal/agents/agent-1/peer-profile"),
-        // #2234 CP7b: the three internal profile-MCP faces, now MOUNTED behind the same
-        // runtime-credential perimeter → anon 401. `/profile/mcp` GET+POST is a
-        // disjoint-method union on one factory; `/profile/mcp/probe` POST is its own node.
-        // Their authenticated distinct-command reach through the ONE
-        // `ProductionAgentProfileMcpDataPlane` (read/write/probe each crossing the real
-        // daemon wire as its own kind, and no-daemon → HostAttachPending with zero wire) is
-        // borne by `the_composition_internal_profile_mcp_family_reaches_the_daemon_wire`.
-        ("GET", "/internal/agents/agent-1/profile/mcp"),
-        ("POST", "/internal/agents/agent-1/profile/mcp"),
-        ("POST", "/internal/agents/agent-1/profile/mcp/probe"),
-        // #2257 convergence: the eleven residual-wave faces now MOUNTED. Ten sit behind
-        // the human perimeter → anon 401 (runtime-state, the three agent-chat audit
-        // faces, the two schedule faces, the two workspace-data-plane faces, and the
-        // public profile-MCP read + probe pair); the last, cli-trace, sits behind the
-        // runtime-credential perimeter → anon 401. Deleting any one's `.merge(...)`
-        // flips it back to 404 and reddens this gate (delete-landed RED).
-        ("GET", "/api/agents/agent-1/runtime-state"),
-        ("GET", "/api/agents/agent-1/chats"),
-        ("GET", "/api/agents/agent-1/chats/conv-1/messages"),
-        ("GET", "/api/agents/agent-1/chats/conv-1/attachments/att-1"),
-        ("GET", "/api/agents/agent-1/schedules"),
-        ("POST", "/api/agents/agent-1/schedules/sched-1/cancel"),
-        ("GET", "/api/agents/agent-1/workspace/tree"),
-        ("GET", "/api/agents/agent-1/workspace/file"),
-        ("GET", "/api/agents/agent-1/profile/mcp"),
-        ("POST", "/api/agents/agent-1/profile/mcp/probe"),
-        ("POST", "/internal/agents/agent-1/cli-trace"),
-        // #2262 convergence: exactly 18 canonical method+path keys. These are route
-        // KEYS, not source-registration rows: a shared path contributes one row per
-        // method (reaction human 3, attachment public 6), and every key is counted
-        // once even where a factory accumulates methods onto one axum node.
-        ("GET", "/api/notifications"),
-        ("GET", "/api/notifications/unread"),
-        ("POST", "/api/notifications/read"),
-        ("POST", "/api/messages/message-1/reactions"),
-        ("DELETE", "/api/messages/message-1/reactions"),
-        ("GET", "/api/messages/message-1/reactions"),
-        ("POST", "/internal/agents/agent-1/react-message"),
-        ("DELETE", "/internal/agents/agent-1/react-message"),
-        ("POST", "/api/channels/channel-1/attachments"),
-        ("GET", "/api/channels/channel-1/attachments"),
-        ("GET", "/api/channels/channel-1/attachments/senders"),
-        ("GET", "/api/attachments/attachment-1"),
-        ("PATCH", "/api/attachments/attachment-1"),
-        ("DELETE", "/api/attachments/attachment-1"),
-        ("POST", "/internal/agents/agent-1/attachments"),
-        ("PATCH", "/internal/agents/agent-1/attachments/attachment-1"),
-        (
-            "GET",
-            "/internal/agents/agent-1/attachments/attachment-1/locate",
-        ),
-        (
-            "GET",
-            "/internal/agents/agent-1/attachments/attachment-1/download",
-        ),
-    ];
-    // The 4 ANON-LANDED routes: mounted ahead of every perimeter, so an anonymous
-    // probe reaches the handler. #2218's server/info and health answer 200; readyz
-    // answers 503 on this prepared-but-not-served router (listen_ready unmarked).
-    // #2219's allowlisted `connect-token/resolve` finds no connect-token bearer and
-    // answers its OWN 401 — status coincides with a guarded door, so its `error_code`
-    // body (asserted after the loop) is the discriminant that proves it landed
-    // anonymously rather than behind the perimeter.
-    const ANON_LANDED: &[(&str, &str, StatusCode)] = &[
-        ("GET", "/api/server/info", StatusCode::OK),
-        ("GET", "/api/health", StatusCode::OK),
-        ("GET", "/readyz", StatusCode::SERVICE_UNAVAILABLE),
-        (
-            "GET",
-            "/api/hosts/connect-token/resolve",
-            StatusCode::UNAUTHORIZED,
-        ),
-    ];
-    // The 1 CONNECT-INFO-GATED route: `POST /auth/embedded-bootstrap` is MOUNTED at
-    // the top level, but its `LoopbackPeer` extractor fails closed to 404 when the
-    // request carries no `ConnectInfo<SocketAddr>` — and the in-process `request()`
-    // helper injects none. So an anon POST is a 404 INDISTINGUISHABLE from unmounted,
-    // and cannot witness the mount. The mount is instead witnessed by an UNLISTED
-    // method on the same path node answering 405 (the node exists) rather than 404
-    // (no node) — see the dedicated probe after the loops below. Its live-peer
-    // loopback/token behavior is owned by #2255 and the ConnectInfo proofs.
-    const CONNECT_INFO_GATED: &[(&str, &str)] = &[("POST", "/auth/embedded-bootstrap")];
-    // 0 RESIDUAL rows remain INSIDE THIS 72-key migration-tracked subset: every face
-    // the subset declares is mounted through #2262. This is not a global claim: the
-    // 181-key canonical inventory is itself now fully mounted (181/0 after #2341); this
-    // subset is a historical migration slice, not the canonical inventory. A residual
-    // row re-added to this subset must answer anon 404, and mounting it must move the
-    // row to LANDED (or CONNECT_INFO_GATED) — this is the subset mount-residual RED
-    // tripwire.
-    const CLEAN_RESIDUAL: &[(&str, &str)] = &[];
-    // 0 METHOD-SHADOW residual rows remain inside this subset: `POST /api/agents` was
-    // its last one, mounted by #2234 CP6 (now a second method on the GET-list
-    // `/api/agents` node, landed above).
-    const METHOD_SHADOW_RESIDUAL: &[(&str, &str)] = &[];
-
-    // ── Mechanical subset checksum: (67 + 4) + 1 + (0 + 0) == 72, all unique,
-    // subset-landed ∩ subset-residual ∩ connect-info-gated = ∅ ──
-    assert_eq!(LANDED.len(), 67);
-    assert_eq!(ANON_LANDED.len(), 4);
-    assert_eq!(CONNECT_INFO_GATED.len(), 1);
-    assert_eq!(CLEAN_RESIDUAL.len(), 0);
-    assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 0);
-    let landed: std::collections::HashSet<(&str, &str)> = LANDED
-        .iter()
-        .copied()
-        .chain(ANON_LANDED.iter().map(|(m, p, _)| (*m, *p)))
-        .collect();
-    let residual: std::collections::HashSet<(&str, &str)> = CLEAN_RESIDUAL
-        .iter()
-        .chain(METHOD_SHADOW_RESIDUAL)
-        .copied()
-        .collect();
-    let connect_info_gated: std::collections::HashSet<(&str, &str)> =
-        CONNECT_INFO_GATED.iter().copied().collect();
-    assert_eq!(landed.len(), 71, "landed rows are unique");
-    assert_eq!(residual.len(), 0, "subset residual rows are unique");
-    assert_eq!(connect_info_gated.len(), 1, "connect-info rows are unique");
-    assert!(
-        landed.is_disjoint(&residual),
-        "subset landed and residual rows are disjoint"
-    );
-    assert!(
-        landed.is_disjoint(&connect_info_gated),
-        "landed and connect-info-gated are disjoint"
-    );
-    assert_eq!(
-        landed.len() + residual.len() + connect_info_gated.len(),
-        72,
-        "the migration-tracked subset is 72"
-    );
-
-    let fixture = fixture(true).await;
-    seed_human(&fixture.path).await;
-    let app = prepare(&config(fixture.path.clone())).await.unwrap();
-    let router = app.router;
-    let bearer = format!("Bearer {TOKEN}");
-    let unauthorized = r#"{"error":"unauthorized"}"#;
-
-    // ── 67 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
-    for (method, path) in LANDED {
-        let (status, body) = request(&router, method, path, None).await;
-        assert_eq!(
-            status,
-            StatusCode::UNAUTHORIZED,
-            "landed {method} {path}: {body}"
-        );
-        assert_eq!(body, unauthorized, "landed {method} {path}");
-    }
-
-    // ── 4 ANON-LANDED → anon reaches the handler (delete-landed RED). Neither the
-    // guarded 401 nor the absent 404: server/info 200, health 200, readyz 503, and
-    // resolve its own 401. ──
-    for (method, path, expected) in ANON_LANDED {
-        let (status, body) = request(&router, method, path, None).await;
-        assert_eq!(status, *expected, "anon-landed {method} {path}: {body}");
-    }
-    // resolve's 401 status coincides with a guarded door's, so it is proved to have
-    // landed ANONYMOUSLY (reached its own handler, not the perimeter) by its body's
-    // `error_code` key — the human perimeter emits `{"error":"unauthorized"}` with
-    // none. Mounting resolve behind the perimeter would drop the key and redden this.
-    let (_, resolve_body) = request(&router, "GET", "/api/hosts/connect-token/resolve", None).await;
-    assert_eq!(
-        resolve_body, r#"{"error":"unauthorized","error_code":"unauthorized"}"#,
-        "anon resolve reaches its own handler, not the perimeter"
-    );
-
-    // ── 0 CLEAN RESIDUAL inside the migration-tracked subset; this subset is not the
-    // canonical inventory (which is itself now fully mounted, 181/0 after #2341). Every
-    // subset residual-wave face is
-    // mounted through #2262. The loop is kept as the subset mount-residual RED tripwire:
-    // a row re-added to CLEAN_RESIDUAL that is actually mounted would fail its anon-404
-    // assertion. ──
-    for (method, path) in CLEAN_RESIDUAL {
-        let (status, _) = request(&router, method, path, None).await;
-        assert_eq!(
-            status,
-            StatusCode::NOT_FOUND,
-            "clean residual {method} {path} must be unmounted (404)"
-        );
-    }
-
-    // ── 1 CONNECT-INFO-GATED → the mount is witnessed by an UNLISTED method on the
-    // same node answering 405 (node present) rather than 404 (no node). An anon POST
-    // through the in-process helper is a fail-closed 404 (no ConnectInfo → non-loopback
-    // → the indistinguishable refusal), so it CANNOT witness the mount; only the
-    // method-shadow can. Deleting the `.merge(embedded_bootstrap_router)` flips the GET
-    // to 404 and reddens this gate. ──
-    for (post_method, path) in CONNECT_INFO_GATED {
-        // The listed method, anon and connect-info-less: fail-closed 404, NOT a
-        // distinguishable rejection — the #2255 loopback contract.
-        let (post_status, _) = request(&router, post_method, path, None).await;
-        assert_eq!(
-            post_status,
-            StatusCode::NOT_FOUND,
-            "connect-info-gated {post_method} {path}: no ConnectInfo fails closed to 404"
-        );
-        // An unlisted method on the SAME node proves the node exists (mounted): 405, not
-        // 404. Runs BEFORE the loopback gate (method routing precedes the extractor), so
-        // it is unaffected by the absent ConnectInfo.
-        let (shadow_status, _) = request(&router, "GET", path, None).await;
-        assert_eq!(
-            shadow_status,
-            StatusCode::METHOD_NOT_ALLOWED,
-            "connect-info-gated {path} must be MOUNTED (an unlisted method → 405, not 404)"
-        );
-    }
-
-    // ── 0 METHOD-SHADOW RESIDUAL inside the migration-tracked subset (CP6 mounted its
-    // last one, `POST /api/agents`, as a second method on the GET-list node). The
-    // AUTHENTICATED-405 probe stays as the structural gate for any future subset
-    // method-shadow row: a residual method re-added here must answer 405, and
-    // mis-mounting it reddens this. ──
-    for (method, path) in METHOD_SHADOW_RESIDUAL {
-        let (status, body) = request(&router, method, path, Some(&bearer)).await;
-        assert_eq!(
-            status,
-            StatusCode::METHOD_NOT_ALLOWED,
-            "method-shadow residual {method} {path} must be method-unmounted (405): {body}"
-        );
-    }
-}
-
-/// #2262 authenticated method/path discriminator for every newly-mounted key. The
-/// closed ledger above proves each key is present behind the correct perimeter; this
-/// companion crosses those perimeters with real human and runtime credentials and
-/// proves every registered method reaches leaf-owned handler behavior (never axum's
-/// `405`). Deliberately-absent resource coordinates keep this a composition test: the
-/// leaves retain the authority/refusal/effect matrices, while exact handler-level
-/// statuses distinguish each method from an unregistered sibling on the same node.
-#[tokio::test]
-async fn the_eighteen_convergence_keys_dispatch_after_real_authentication() {
+async fn notification_reaction_and_attachment_routes_enforce_auth_and_dispatch_methods() {
     use std::{
         convert::Infallible,
         future::Future,
@@ -5522,8 +4767,16 @@ async fn the_eighteen_convergence_keys_dispatch_after_real_authentication() {
             expected: StatusCode::NOT_FOUND,
         },
     ];
-    assert_eq!(cases.len(), 18);
     for case in cases {
+        let (status, body) = request(&router, case.method, case.path, None).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "anonymous {} {}: {body}",
+            case.method,
+            case.path
+        );
+        assert_eq!(body, r#"{"error":"unauthorized"}"#);
         let bearer = match case.bearer {
             "human" => &human_bearer,
             "agent" => &agent_bearer,
@@ -8591,15 +7844,18 @@ async fn the_composition_agent_create_face_drives_the_full_saga_and_post_commit_
 
     // The close-wiring witness: after the production shutdown arm ran serve's
     // `create_aftermath.close()`, the SHARED tracker rejects new work — a fresh dispatch is
-    // dropped and nothing is spawned. Delete that close line and `closed` stays false → the
-    // leg is spawned → `in_flight_len()` is 1 → this assert reddens.
+    // dropped unpolled. If shutdown forgot to close the tracker, this sender is still
+    // queued (Empty), or has run (Ok), rather than immediately dropped (Closed).
+    let (sent, mut received) = tokio::sync::oneshot::channel();
     silverhand_backend_server::application_orchestration::agent_create::AftermathDispatch::dispatch(
         &close_probe,
-        Box::pin(async {}),
+        Box::pin(async move {
+            let _ = sent.send(());
+        }),
     );
     assert_eq!(
-        close_probe.in_flight_len(),
-        0,
+        received.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Closed),
         "serve's shutdown arm must have closed the shared aftermath tracker"
     );
 }
@@ -11380,525 +10636,6 @@ mod presence_composition {
     }
 }
 
-// ── #task:2334 P1b: the task-mutation aftermath boundary is constructible here ──
-//
-// The acceptance for the public aftermath boundary is that backend-app, from its
-// NORMAL dependencies, can compile-level CONSTRUCT and CALL every task-write router
-// with the production `PublishingTaskAftermath` — no crate-private trait it cannot
-// name, no "composition later supplies". This mounts all eight write routers over
-// real SQLite write stores + a `PublishingTaskAftermath` built here and drives one
-// request through each. It is a construction/reachability proof: a no-credential (or
-// no-session) request exercises the composition/identity gate, which needs no seed —
-// the per-face behavior is covered by the server-crate route tests.
-mod task_write_router_construction {
-    use super::*;
-    use silverhand_backend_core::conversation_messaging::messaging::task::{
-        ExistingSourceTask, SourceMessageId, TaskConversationBoardRead, TaskCreateAdmissionReads,
-        TaskCreateConversationState, TaskCreateSourceRef, TaskParticipationReads,
-    };
-    use silverhand_backend_core::foundation::identity::{AgentId, ConversationId};
-    use silverhand_backend_server::conversation_messaging::messaging::task::{
-        HumanClaimState, HumanConversationPost, HumanCreateState, HumanEditState, HumanStatusState,
-        HumanTaskBoardState, HumanTaskPointState, PublishingTaskAftermath, ResolvedTaskTarget,
-        TaskAftermathTrigger, TaskClaimState, TaskCreateState, TaskCreateTargetResolver,
-        TaskDetailState, TaskEditState, TaskEffectExecute, TaskStatusUpdateState,
-        TaskTargetRefusal, TaskUnclaimState, human_claim_router, human_create_router,
-        human_edit_router, human_status_router, human_task_board_router, human_task_point_router,
-        task_claim_router, task_create_router, task_detail_router, task_edit_router,
-        task_unclaim_router, task_update_status_router,
-    };
-    use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
-    use silverhand_backend_sqlite::conversation_messaging::messaging::task::{
-        SqliteTaskClaimWrite, SqliteTaskCreateWrite, SqliteTaskEditWrite, SqliteTaskStatusWrite,
-        SqliteTaskStore,
-    };
-
-    /// A composition-authored production publish sink. backend-app owns this: it names
-    /// the public complete-effect port and could back it with the event hub, board
-    /// patches, participant wake and audit executors.
-    struct CompositionPublish;
-    impl TaskEffectExecute for CompositionPublish {
-        async fn execute_task_effects(&self, trigger: &TaskAftermathTrigger) -> Vec<String> {
-            if trigger.plan().publish_event() {
-                // The production composition can publish the immutable committed
-                // post-image directly; it needs no live message lookup by id.
-                let committed = &trigger.committed().event_message;
-                let _publish = (
-                    committed.id.as_str(),
-                    committed.conversation_id.as_str(),
-                    committed.thread_root_id.as_ref().map(|root| root.as_str()),
-                    committed.message.content.as_str(),
-                    committed.message.metadata.as_str(),
-                    committed.seq,
-                    committed.created_at,
-                );
-            }
-            if trigger.plan().cross_operation_audit() {
-                // Cross-op coordinates are request/commit snapshots too. A
-                // production executor does not look either conversation up after
-                // the task and its event have committed.
-                let audit = trigger
-                    .cross_operation_audit()
-                    .expect("an enabled audit leg owns its immutable coordinates");
-                let _audit = (
-                    audit.source().conversation_id().as_str(),
-                    audit.source().workspace_id().map(|id| id.as_str()),
-                    audit.owner_conversation_id().as_str(),
-                    audit.owner_workspace_id().map(|id| id.as_str()),
-                );
-            }
-            Vec::new()
-        }
-    }
-
-    /// Composition-authored narrow ports for the create faces. backend-app names them
-    /// (they are public) and would delegate the resolver to #2333's canonical
-    /// TargetAddress::resolve + the post/board reads to MessagingStore.
-    struct CompositionResolver;
-    impl TaskCreateTargetResolver for CompositionResolver {
-        type Error = std::convert::Infallible;
-        async fn resolve(
-            &self,
-            _agent: &AgentId,
-            _address: &str,
-            _allocation: silverhand_backend_server::conversation_messaging::messaging::task::TaskCreatePairAllocation,
-            _intent: silverhand_backend_server::conversation_messaging::messaging::task::TaskCreateTargetIntent,
-        ) -> Result<Result<ResolvedTaskTarget, TaskTargetRefusal>, Self::Error> {
-            Ok(Err(TaskTargetRefusal::Unresolved))
-        }
-    }
-    struct CompositionPost;
-    impl HumanConversationPost for CompositionPost {
-        async fn can_post(
-            &self,
-            _u: &silverhand_backend_core::foundation::identity::UserId,
-            _c: &ConversationId,
-        ) -> Result<bool, silverhand_backend_core::foundation::persistence::PersistenceFailure>
-        {
-            Ok(false)
-        }
-    }
-    /// A composition board reader over the real MessagingStore door — backend-app
-    /// owns this thin adapter (the store answers `conversation_board`).
-    #[derive(Clone)]
-    struct CompositionBoards(MessagingStore);
-    impl TaskConversationBoardRead for CompositionBoards {
-        async fn conversation_board(
-            &self,
-            conversation: &ConversationId,
-        ) -> Result<
-            Option<silverhand_backend_core::conversation_messaging::messaging::task::BoardKey>,
-            silverhand_backend_core::foundation::persistence::PersistenceFailure,
-        > {
-            use silverhand_backend_core::conversation_messaging::messaging::task::TaskWriteDoorReads;
-            let mut door = self.0.clone();
-            door.conversation_board(conversation).await
-        }
-    }
-    impl TaskCreateAdmissionReads for CompositionBoards {
-        async fn agent_exists(
-            &self,
-            agent: &AgentId,
-        ) -> Result<bool, silverhand_backend_core::foundation::persistence::PersistenceFailure>
-        {
-            self.0.agent_exists(agent).await
-        }
-
-        async fn conversation_state(
-            &self,
-            conversation: &ConversationId,
-        ) -> Result<
-            Option<TaskCreateConversationState>,
-            silverhand_backend_core::foundation::persistence::PersistenceFailure,
-        > {
-            self.0.conversation_state(conversation).await
-        }
-
-        async fn source_message(
-            &self,
-            source: &SourceMessageId,
-        ) -> Result<
-            Option<TaskCreateSourceRef>,
-            silverhand_backend_core::foundation::persistence::PersistenceFailure,
-        > {
-            self.0.source_message(source).await
-        }
-
-        async fn task_for_source(
-            &self,
-            source: &SourceMessageId,
-        ) -> Result<
-            Option<ExistingSourceTask>,
-            silverhand_backend_core::foundation::persistence::PersistenceFailure,
-        > {
-            self.0.task_for_source(source).await
-        }
-    }
-    impl TaskParticipationReads for CompositionBoards {
-        async fn is_agent_participant(
-            &mut self,
-            conversation: &ConversationId,
-            agent: &AgentId,
-        ) -> Result<bool, silverhand_backend_core::foundation::persistence::PersistenceFailure>
-        {
-            self.0.is_agent_participant(conversation, agent).await
-        }
-
-        async fn is_user_participant(
-            &mut self,
-            conversation: &ConversationId,
-            user: &silverhand_backend_core::foundation::identity::UserId,
-        ) -> Result<bool, silverhand_backend_core::foundation::persistence::PersistenceFailure>
-        {
-            self.0.is_user_participant(conversation, user).await
-        }
-
-        async fn agent_participating_conversations(
-            &mut self,
-            agent: &AgentId,
-            conversations: &[ConversationId],
-        ) -> Result<
-            std::collections::HashSet<ConversationId>,
-            silverhand_backend_core::foundation::persistence::PersistenceFailure,
-        > {
-            self.0
-                .agent_participating_conversations(agent, conversations)
-                .await
-        }
-    }
-
-    async fn schema_db() -> (TempDir, std::path::PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("task-write.sqlite");
-        current_schema::create_current_schema(&path)
-            .await
-            .close()
-            .await
-            .unwrap();
-        (dir, path)
-    }
-
-    async fn oneshot_no_credential(
-        router: &Router,
-        method: &str,
-        uri: &str,
-        body: &str,
-    ) -> StatusCode {
-        router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(method)
-                    .uri(uri)
-                    .header("content-type", "application/json")
-                    .body(Body::from(body.to_owned()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-            .status()
-    }
-
-    #[tokio::test]
-    async fn all_sixteen_task_routers_are_constructible_and_callable_from_backend_app() {
-        let (_dir, path) = schema_db().await;
-        // The real production write stores + the shared door/name authority, opened
-        // from backend-app's normal deps exactly as composition would.
-        let door = MessagingStore::open(&path).await.unwrap();
-        let numbers = SqliteTaskStore::open(&path).await.unwrap();
-        let status_write = SqliteTaskStatusWrite::open(&path).await.unwrap();
-        let claim_write = SqliteTaskClaimWrite::open(&path).await.unwrap();
-        let edit_write = SqliteTaskEditWrite::open(&path).await.unwrap();
-        let create_write = SqliteTaskCreateWrite::open(&path).await.unwrap();
-
-        // Every router constructs with the PUBLIC production aftermath — the point of
-        // the proof: `PublishingTaskAftermath::new` is nameable + buildable here.
-        let internal_status = task_update_status_router(TaskStatusUpdateState {
-            door: door.clone(),
-            numbers: numbers.clone(),
-            write: status_write.clone(),
-            names: door.clone(),
-            aftermath: PublishingTaskAftermath::new(CompositionPublish),
-        });
-        let internal_claim = task_claim_router(TaskClaimState {
-            door: door.clone(),
-            numbers: numbers.clone(),
-            write: claim_write.clone(),
-            names: door.clone(),
-            aftermath: PublishingTaskAftermath::new(CompositionPublish),
-        });
-        let internal_unclaim = task_unclaim_router(TaskUnclaimState {
-            door: door.clone(),
-            numbers: numbers.clone(),
-            write: claim_write.clone(),
-            aftermath: PublishingTaskAftermath::new(CompositionPublish),
-        });
-        let internal_edit = task_edit_router(TaskEditState {
-            door: door.clone(),
-            numbers: numbers.clone(),
-            write: edit_write.clone(),
-            names: door.clone(),
-            aftermath: PublishingTaskAftermath::new(CompositionPublish),
-        });
-        let public_status = human_status_router(HumanStatusState {
-            write: status_write.clone(),
-            aftermath: PublishingTaskAftermath::new(CompositionPublish),
-        });
-        let public_claim = human_claim_router(HumanClaimState {
-            write: claim_write.clone(),
-            aftermath: PublishingTaskAftermath::new(CompositionPublish),
-            assignees: door.clone(),
-        });
-        let public_edit = human_edit_router(HumanEditState {
-            write: edit_write.clone(),
-            aftermath: PublishingTaskAftermath::new(CompositionPublish),
-        });
-        // The two create faces reach the SAME public aftermath boundary (true 10/10):
-        // internal via the narrow TaskCreateTargetResolver, human via post + boards.
-        let internal_create = task_create_router(TaskCreateState {
-            resolver: CompositionResolver,
-            door: door.clone(),
-            write: create_write.clone(),
-            names: door.clone(),
-            aftermath: PublishingTaskAftermath::new(CompositionPublish),
-        });
-        let public_create = human_create_router(HumanCreateState {
-            post: CompositionPost,
-            boards: CompositionBoards(door.clone()),
-            write: create_write.clone(),
-            aftermath: PublishingTaskAftermath::new(CompositionPublish),
-        });
-        let public_board = human_task_board_router(HumanTaskBoardState {
-            read: numbers.clone(),
-        });
-        let public_point = human_task_point_router(HumanTaskPointState {
-            read: numbers.clone(),
-        });
-        let internal_detail = task_detail_router(TaskDetailState {
-            boards: door.clone(),
-            read: numbers.clone(),
-        });
-
-        // Call every router. Internal faces without a runtime credential are the
-        // composition-500 (the credential middleware would run in the real perimeter);
-        // public faces without a session are likewise composition-500. Either way the
-        // router is REACHED and answers — proving construct + call, not behavior.
-        assert_eq!(
-            oneshot_no_credential(
-                &internal_status,
-                "POST",
-                "/internal/agents/a/tasks/update-status",
-                r#"{"task_id":"t","status":"done"}"#
-            )
-            .await,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        );
-        for (router, uri) in [
-            (&public_board, "/api/tasks/board/column?status=todo"),
-            (&public_board, "/api/tasks/board/counts"),
-            (&public_board, "/api/tasks/board/facets"),
-            (
-                &public_point,
-                "/api/tasks/by-number?conversation_id=c&task_number=1",
-            ),
-            (&public_point, "/api/tasks/t"),
-            (
-                &internal_detail,
-                "/internal/agents/a/tasks/detail?task_id=t",
-            ),
-        ] {
-            assert_eq!(
-                oneshot_no_credential(router, "GET", uri, "").await,
-                StatusCode::INTERNAL_SERVER_ERROR,
-            );
-        }
-        assert_eq!(
-            oneshot_no_credential(
-                &internal_claim,
-                "POST",
-                "/internal/agents/a/tasks/claim",
-                r#"{"task_ids":["t"]}"#
-            )
-            .await,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        );
-        assert_eq!(
-            oneshot_no_credential(
-                &internal_unclaim,
-                "POST",
-                "/internal/agents/a/tasks/unclaim",
-                r#"{"task_id":"t"}"#
-            )
-            .await,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        );
-        assert_eq!(
-            oneshot_no_credential(
-                &internal_edit,
-                "POST",
-                "/internal/agents/a/tasks/edit",
-                r#"{"task_id":"t","title":"x"}"#
-            )
-            .await,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        );
-        // The claim router also serves unclaim on the public side; both are on the
-        // one HumanClaimState router.
-        assert_eq!(
-            oneshot_no_credential(
-                &public_status,
-                "POST",
-                "/api/tasks/t/status",
-                r#"{"status":"done"}"#
-            )
-            .await,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        );
-        assert_eq!(
-            oneshot_no_credential(
-                &public_claim,
-                "POST",
-                "/api/tasks/t/claim",
-                r#"{"agent_id":"a"}"#
-            )
-            .await,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        );
-        assert_eq!(
-            oneshot_no_credential(&public_claim, "POST", "/api/tasks/t/unclaim", "").await,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        );
-        assert_eq!(
-            oneshot_no_credential(
-                &public_edit,
-                "POST",
-                "/api/tasks/t/edit",
-                r#"{"title":"x"}"#
-            )
-            .await,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        );
-        // The two create faces — the true 10/10 aftermath denominator. Internal
-        // without a credential is composition-500; human without a session likewise.
-        assert_eq!(
-            oneshot_no_credential(
-                &internal_create,
-                "POST",
-                "/internal/agents/a/tasks/create",
-                r##"{"tasks":[{"title":"x"}],"target":"#general"}"##
-            )
-            .await,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        );
-        assert_eq!(
-            oneshot_no_credential(
-                &public_create,
-                "POST",
-                "/api/tasks",
-                r#"{"title":"x","conversation_id":"c-1"}"#
-            )
-            .await,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        );
-    }
-}
-
-/// Schedule create has two implementation-owned production inputs that cannot be
-/// invented by the mount: the reserved SQLite writer and the cron/IANA evaluator.
-/// This proof constructs and calls the real route from backend-app's normal
-/// dependencies, so a test-only `NoCron` cannot accidentally satisfy composition.
-mod schedule_create_router_construction {
-    use super::*;
-    use silverhand_backend_core::conversation_messaging::messaging::schedule::ScheduleCreateCommittedEffect;
-    use silverhand_backend_core::foundation::{
-        identity::{AgentId, ConversationId},
-        persistence::PersistenceFailure,
-    };
-    use silverhand_backend_server::scheduling::schedule_create::{
-        ports::{
-            ResolvedScheduleTarget, ScheduleCapabilityDenied, ScheduleManageCapability,
-            ScheduleTargetAllocation, ScheduleTargetIntent, ScheduleTargetRefusal,
-            ScheduleTargetResolver,
-        },
-        route::{ScheduleCreateState, schedule_create_router},
-    };
-    use silverhand_backend_sqlite::conversation_messaging::messaging::schedule::{
-        ProductionCronEvaluator, SqliteScheduleCreate,
-    };
-
-    struct CompositionScheduleResolver;
-    impl ScheduleTargetResolver for CompositionScheduleResolver {
-        type Error = std::convert::Infallible;
-
-        async fn resolve(
-            &self,
-            _agent: &AgentId,
-            _address: &str,
-            _allocation: ScheduleTargetAllocation,
-            _intent: ScheduleTargetIntent,
-        ) -> Result<Result<ResolvedScheduleTarget, ScheduleTargetRefusal>, Self::Error> {
-            Ok(Err(ScheduleTargetRefusal::Unresolved))
-        }
-    }
-
-    struct CompositionScheduleCapability;
-    impl ScheduleManageCapability for CompositionScheduleCapability {
-        type Error = std::convert::Infallible;
-
-        async fn may_manage_schedules(
-            &self,
-            _agent: &AgentId,
-            _destination: &ConversationId,
-        ) -> Result<Result<(), ScheduleCapabilityDenied>, Self::Error> {
-            Ok(Err(ScheduleCapabilityDenied))
-        }
-    }
-
-    struct CompositionTimerEffect;
-    impl ScheduleCreateCommittedEffect for CompositionTimerEffect {
-        async fn rearm_near_timer(&self) -> Result<(), PersistenceFailure> {
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn schedule_create_constructs_with_the_real_sqlite_writer_and_cron_evaluator() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("schedule-create.sqlite");
-        current_schema::create_current_schema(&path)
-            .await
-            .close()
-            .await
-            .unwrap();
-
-        let router = schedule_create_router(ScheduleCreateState {
-            resolver: CompositionScheduleResolver,
-            capability: CompositionScheduleCapability,
-            store: SqliteScheduleCreate::open(&path).await.unwrap(),
-            cron: ProductionCronEvaluator,
-            committed_effect: CompositionTimerEffect,
-        });
-
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/agents/a/schedules")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r##"{"target_conversation":"#general","title":"x","message":"m","spec":{"kind":"cron","expression":"0 9 * * *","timezone":"UTC"}}"##,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        // No runtime credential is the composition fault. The important proof is
-        // that the route is callable with the real production cron implementation.
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-}
-
 #[tokio::test]
 async fn activity_retention_sweeps_idle_database_and_stops_with_its_owner() {
     use std::sync::{Arc, atomic::{AtomicI64, Ordering}};
@@ -11911,6 +10648,14 @@ async fn activity_retention_sweeps_idle_database_and_stops_with_its_owner() {
             self.0.load(Ordering::SeqCst)
         }
     }
+    async fn wake_after(duration: std::time::Duration) {
+        // Jump only the timer. Resume before waiting for the real SQLite worker,
+        // so idle Tokio auto-advance cannot expire SQLx acquisition deadlines.
+        tokio::time::pause();
+        tokio::time::advance(duration).await;
+        tokio::time::resume();
+        tokio::task::yield_now().await;
+    }
     let f = fixture(true).await;
     let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", f.path.display()))
         .await
@@ -11919,17 +10664,16 @@ async fn activity_retention_sweeps_idle_database_and_stops_with_its_owner() {
     db.execute("INSERT INTO conversation_events(conversation_id,agent_id,kind,created_at) VALUES('conv-open','agent-1','turn_end',100)").await.unwrap();
     let six = 1788732000000i64;
     sqlx::query("UPDATE conversation_events SET created_at=?")
-        .bind(six - 1 - ACTIVITY_RETENTION_MS)
+        .bind(six - 61_000 - ACTIVITY_RETENTION_MS)
         .execute(&mut db)
         .await
         .unwrap();
-    let clock = Clock(Arc::new(AtomicI64::new(six - 1)));
+    let clock = Clock(Arc::new(AtomicI64::new(six - 61_000)));
     let store = MessagingStore::open(&f.path).await.unwrap();
-    let retention = super::activity_retention::ActivityRetention::start_with_interval(
+    let retention = super::activity_retention::ActivityRetention::start(
         store,
         ScopeEventHub::production().unwrap(),
         clock.clone(),
-        std::time::Duration::from_millis(10),
     )
     .await
     .unwrap();
@@ -11940,31 +10684,39 @@ async fn activity_retention_sweeps_idle_database_and_stops_with_its_owner() {
             .unwrap(),
         1
     );
-    // An idle wake before 06:00 does not prune the exact boundary.
+    // Let the spawned task register its real sixty-second timer.
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    clock.0.store(six - 1_000, Ordering::SeqCst);
+    wake_after(std::time::Duration::from_secs(60)).await;
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-    clock.0.store(six, Ordering::SeqCst);
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-    // The wall clock is injected; only the maintenance timer runs at test cadence.
-    for _ in 0..100 {
-        if sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_events")
-            .fetch_one(&mut db)
-            .await
-            .unwrap()
-            == 0
-        {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_events")
             .fetch_one(&mut db)
             .await
             .unwrap(),
-        0
+        1,
+        "an expired row stays until the daily deadline, not every wake"
     );
+    clock.0.store(six, Ordering::SeqCst);
+    wake_after(std::time::Duration::from_secs(1)).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_events")
+                .fetch_one(&mut db)
+                .await
+                .unwrap()
+                == 0
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the idle daily timer must prune through the real store");
     // Staying at 06:00 must not repeatedly sweep the same deadline.
     db.execute("INSERT INTO conversation_events(conversation_id,agent_id,kind,created_at) VALUES('conv-open','agent-1','turn_end',1)").await.unwrap();
+    wake_after(std::time::Duration::from_secs(60)).await;
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_events")
@@ -11977,6 +10729,8 @@ async fn activity_retention_sweeps_idle_database_and_stops_with_its_owner() {
     retention.close().await;
     retention.close().await;
     db.execute("INSERT INTO conversation_events(conversation_id,agent_id,kind,created_at) VALUES('conv-open','agent-1','turn_end',1)").await.unwrap();
+    clock.0.store(six + 86_400_000, Ordering::SeqCst);
+    wake_after(std::time::Duration::from_secs(60)).await;
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_events")

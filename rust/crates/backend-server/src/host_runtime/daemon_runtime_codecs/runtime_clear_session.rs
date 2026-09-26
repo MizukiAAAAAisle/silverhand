@@ -66,13 +66,22 @@ mod tests {
             encode(&agent, RuntimeGeneration::new(1).unwrap()).unwrap()["runtime_scope"],
             json!({"kind":"agent","agent_id":"agent-a"})
         );
-        assert_eq!(decode_result(&json!({"cleared":true})), Some(true));
-        assert_eq!(decode_result(&json!({"cleared":true,"extra":0})), None);
+        for (result, expected) in [
+            (json!({"cleared":true}), Some(true)),
+            (json!({"cleared":false}), Some(false)),
+            (json!({"cleared":true,"extra":0}), None),
+            (json!({}), None),
+            (json!({"cleared":null}), None),
+            (json!({"cleared":1}), None),
+            (json!(null), None),
+        ] {
+            assert_eq!(decode_result(&result), expected, "{result}");
+        }
     }
 
     #[test]
-    fn generation_admission_precedes_transport() {
-        for invalid in [0, JsSafeInteger::MAX + 1] {
+    fn generation_admission_is_positive_and_javascript_exact() {
+        for invalid in [0, 9_007_199_254_740_992] {
             assert!(
                 encode(
                     &RuntimeScope::AgentSlot {
@@ -83,5 +92,15 @@ mod tests {
                 .is_err()
             );
         }
+        assert_eq!(
+            encode(
+                &RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap()
+                },
+                RuntimeGeneration::new(9_007_199_254_740_991).unwrap(),
+            )
+            .unwrap()["runtime_generation"],
+            json!(9_007_199_254_740_991_i64)
+        );
     }
 }

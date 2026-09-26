@@ -143,7 +143,6 @@ fn optional_string(object: &Map<String, Value>, key: &str) -> Option<Option<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::foundation::wire_number::JsSafeInteger;
 
     fn agent() -> AgentId {
         AgentId::parse("agent-a").unwrap()
@@ -157,7 +156,6 @@ mod tests {
             encode_write(&agent(), raw),
             json!({ "agent_id": "agent-a", "raw": raw })
         );
-        assert_eq!(encode_write(&agent(), raw)["raw"].as_str(), Some(raw));
         assert_eq!(
             encode_probe(
                 &agent(),
@@ -184,15 +182,15 @@ mod tests {
         assert!(decode_read(&json!({ "ok": true, "raw": null, "extra": 1 })).is_none());
 
         assert_eq!(
-            decode_write(&json!({ "ok": true, "bytes_written": JsSafeInteger::MAX }))
+            decode_write(&json!({ "ok": true, "bytes_written": 9_007_199_254_740_991_i64 }))
                 .unwrap()
                 .get(),
-            JsSafeInteger::MAX
+            9_007_199_254_740_991
         );
         for invalid in [
             json!({ "ok": true, "bytes_written": -1 }),
             json!({ "ok": true, "bytes_written": 1.5 }),
-            json!({ "ok": true, "bytes_written": JsSafeInteger::MAX + 1 }),
+            json!({ "ok": true, "bytes_written": 9_007_199_254_740_992_i64 }),
         ] {
             assert!(decode_write(&invalid).is_none(), "{invalid}");
         }
@@ -210,11 +208,27 @@ mod tests {
             ]
         }))
         .unwrap();
-        assert!(decoded.ok);
-        assert_eq!(decoded.phase, McpProbePhase::Tools);
         assert_eq!(
-            decoded.tools.unwrap()[1].description.as_deref(),
-            Some("writes")
+            decoded,
+            McpProbeOutcome {
+                ok: true,
+                phase: McpProbePhase::Tools,
+                message: None,
+                server_info: Some(McpProbeServerInfo {
+                    name: Some("srv".to_owned()),
+                    version: Some("1".to_owned()),
+                }),
+                tools: Some(vec![
+                    McpProbeTool {
+                        name: "read".to_owned(),
+                        description: None
+                    },
+                    McpProbeTool {
+                        name: "write".to_owned(),
+                        description: Some("writes".to_owned())
+                    },
+                ]),
+            }
         );
 
         for invalid in [

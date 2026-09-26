@@ -8,8 +8,7 @@
 //!
 //!  * source-binding — the fact carries the row's own `id` (a peer read will bind
 //!    by handle, so the returned id must be the target's real id) and `name` as a
-//!    committed source witness; a corrupt empty stored id fails closed as a read
-//!    error, never a silent coercion.
+//!    committed source witness.
 //!  * the avatar fold — `avatar_storage_key` + `updated_at` collapse to
 //!    `Option<AvatarRevision>` by truthiness (empty/NULL → none), carrying this
 //!    row's own `updated_at` as the cache-buster and never the storage locator.
@@ -102,7 +101,7 @@ async fn a_present_row_projects_the_narrow_fact_from_its_own_columns() {
 }
 
 #[tokio::test]
-async fn the_fact_id_and_name_come_from_the_row_not_the_query() {
+async fn distinct_rows_keep_their_own_name_and_avatar_revision() {
     // Two rows with distinct updated_at and names. Reading each returns its OWN id,
     // name and cache-buster — so the fact is bound to the row the adapter returned,
     // the invariant a by-handle peer read will rely on.

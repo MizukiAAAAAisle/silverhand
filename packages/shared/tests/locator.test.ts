@@ -40,10 +40,7 @@ import {
   requireAddressableId,
   type Locator,
 } from '../src/index.js';
-import {
-  extractMessageReferences,
-  rewriteShorthandReferences,
-} from '../src/reference-markdown.js';
+import { extractMessageReferences, rewriteShorthandReferences } from '../src/reference-markdown.js';
 
 const WS = 'silverhand://workspace';
 const DM = 'silverhand://dm';
@@ -231,18 +228,6 @@ describe('locator names carry a fold key, never an id (#task:2119)', () => {
     expect(upper.workspace.name).toBe('SILVERHAND');
     expect(formatLocator(upper)).toBe(`${WS}/SILVERHAND`);
   });
-
-  it('a renamed-then-reused name is INDISTINGUISHABLE, which is the accepted risk', () => {
-    // Nothing in a parsed locator identifies an object: two identical hrefs written
-    // years apart parse to equal values, so if the name moved to a different
-    // workspace in between, resolution silently follows the name. shiki priced this
-    // (2026-08-21) and took it; a test pins it so a future reader sees it was a
-    // decision and not an oversight.
-    const before = parseLocator(`${WS}/atelier`);
-    const after = parseLocator(`${WS}/atelier`);
-    expect(before).toEqual(after);
-    expect(JSON.stringify(before)).not.toContain('id');
-  });
 });
 
 describe('DirectPair endpoints are an unordered pair (#task:2119)', () => {
@@ -269,10 +254,7 @@ describe('DirectPair endpoints are an unordered pair (#task:2119)', () => {
     // so the DB's order for this same pair may be the other one — and nothing
     // depends on the two agreeing.
     const locator = parseLocator(`${DM}/alice/Bob`)!;
-    expect(locator.kind === 'direct_pair' ? locator.endpoints : null).toEqual([
-      'Bob',
-      'alice',
-    ]);
+    expect(locator.kind === 'direct_pair' ? locator.endpoints : null).toEqual(['Bob', 'alice']);
   });
 
   it('keeps the thread leaf attached under either order', () => {
@@ -289,7 +271,7 @@ describe('DirectPair endpoints are an unordered pair (#task:2119)', () => {
  */
 describe('locators and references are disjoint (#task:2119)', () => {
   it('shares no root word', () => {
-    const overlap = LOCATOR_ROOTS.filter(root =>
+    const overlap = LOCATOR_ROOTS.filter((root) =>
       (REFERENCE_KINDS as readonly string[]).includes(root),
     );
     expect(overlap).toEqual([]);
@@ -325,9 +307,9 @@ describe('locators and references are disjoint (#task:2119)', () => {
     expect(extractMessageReferences(body)).toEqual([]);
     // A real reference in the same body still addresses, so the emptiness above is
     // about the locators and not about the extractor being broken.
-    expect(
-      extractMessageReferences(`${body}\n\n<silverhand://agent/Alice>`),
-    ).toEqual([{ kind: 'agent', handle: 'Alice' }]);
+    expect(extractMessageReferences(`${body}\n\n<silverhand://agent/Alice>`)).toEqual([
+      { kind: 'agent', handle: 'Alice' },
+    ]);
   });
 });
 
@@ -335,10 +317,8 @@ describe('locators and references are disjoint (#task:2119)', () => {
  * Item 4 of the ticket: the bytes a person or an agent typed are the bytes that get
  * stored, and copying a locator out of a body yields a locator.
  *
- * Nothing here is new behaviour — it falls out of the composer rewriter refusing to
- * touch link subtrees — but it is exactly the property the DM arm would violate
- * loudest (`dm/Cindy/shiki` contains two resolvable handles), so it is pinned rather
- * than argued.
+ * Include a real shorthand so these cases exercise rewriting, not the no-@ fast
+ * path. Names inside the locator are not participant shorthand.
  */
 describe('locator bytes survive the send path unchanged (#task:2119)', () => {
   // Resolves EVERYTHING, so a rewrite that could happen, would.
@@ -351,22 +331,12 @@ describe('locator bytes survive the send path unchanged (#task:2119)', () => {
     `and the workspace root <${WS}/silverhand>`,
   ];
 
-  for (const body of BODIES) {
-    it(`leaves ${JSON.stringify(body)} byte-identical`, () => {
-      expect(rewriteShorthandReferences(body, resolveAll)).toBe(body);
-      // Still parses after the round trip through the send path — the point of
-      // asserting bytes rather than just "looks the same".
-      const destination = body.slice(body.indexOf('<') + 1, body.indexOf('>'));
-      expect(parseLocator(destination)).not.toBeNull();
-    });
-  }
-
-  it('still rewrites a genuine shorthand in the same body', () => {
-    // The control: the rewriter is live here, so the untouched locators above are
-    // about position policy and not about a disabled code path.
-    expect(
-      rewriteShorthandReferences(`@Norman see <${DM}/Cindy/shiki>`, resolveAll),
-    ).toBe(`<silverhand://agent/Norman> see <${DM}/Cindy/shiki>`);
+  it('preserves every locator carrier while rewriting a genuine shorthand', () => {
+    for (const body of BODIES) {
+      expect(rewriteShorthandReferences(`@Norman ${body}`, resolveAll)).toBe(
+        `<silverhand://agent/Norman> ${body}`,
+      );
+    }
   });
 });
 
@@ -384,9 +354,9 @@ describe('a non-canonical Locator is unconstructible (#task:2119)', () => {
   it('normalizes at the constructor, so a reversed pair cannot reach the formatter', () => {
     const endpoints = fixedLocatorEndpoints('shiki', 'Cindy');
     expect(endpoints).toEqual(['Cindy', 'shiki']);
-    expect(
-      formatLocator({ kind: 'direct_pair', endpoints, threadRootId: null }),
-    ).toBe(`${DM}/Cindy/shiki`);
+    expect(formatLocator({ kind: 'direct_pair', endpoints, threadRootId: null })).toBe(
+      `${DM}/Cindy/shiki`,
+    );
   });
 
   const REFUSED_PAIRS: readonly (readonly [string, string, string])[] = [

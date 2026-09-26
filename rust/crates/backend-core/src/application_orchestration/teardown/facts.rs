@@ -133,19 +133,4 @@ mod tests {
             RuntimeObservedStatus::Crashed
         )));
     }
-
-    #[test]
-    fn a_seat_reads_its_source_from_the_scope_rather_than_a_second_field() {
-        let conversation = ConversationId::parse("c1").expect("conversation id");
-        let seat = AgentRuntimeSessionFacts {
-            scope: RuntimeScope::ConversationSlot {
-                agent: AgentId::parse("a1").expect("agent id"),
-                source: conversation.clone(),
-            },
-            status: RuntimeObservedStatus::Active,
-            generation: RuntimeGeneration::new(1).expect("generation"),
-        };
-        assert_eq!(seat.scope.source(), Some(&conversation));
-        assert_eq!(session(RuntimeObservedStatus::Active).scope.source(), None);
-    }
 }

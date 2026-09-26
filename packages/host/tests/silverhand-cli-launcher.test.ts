@@ -6,29 +6,10 @@ import { pathToFileURL } from 'node:url';
 
 import {
   chooseSilverhandCliLauncher,
-  isFallbackSilverhandCliLauncher,
   resolveLocalSilverhandCliLauncher,
 } from '../src/daemon/silverhand-cli-launcher.js';
 
 describe('daemon silverhand CLI launcher', () => {
-  it('detects only the backend fallback launcher', () => {
-    expect(
-      isFallbackSilverhandCliLauncher({ command: 'silverhand', args: [] }),
-    ).toBe(true);
-    expect(
-      isFallbackSilverhandCliLauncher({
-        command: 'silverhand',
-        args: ['--help'],
-      }),
-    ).toBe(false);
-    expect(
-      isFallbackSilverhandCliLauncher({
-        command: 'node',
-        args: ['cli.js'],
-      }),
-    ).toBe(false);
-  });
-
   it('prefers the daemon-local launcher over server-supplied launchers', () => {
     const local = {
       command: '/Electron',

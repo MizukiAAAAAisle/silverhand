@@ -243,10 +243,6 @@ function canUseRuntimeDetectionCache(options: RuntimeDetectionOptions): boolean 
   );
 }
 
-export function clearRuntimeDetectionCacheForTests(): void {
-  runtimeDetectionCache = null;
-}
-
 async function collectPathDirs(options: RuntimeDetectionOptions): Promise<string[]> {
   const platform = options.platform ?? process.platform;
   const home = options.homeDir ?? homedir();

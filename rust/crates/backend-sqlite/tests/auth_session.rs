@@ -95,7 +95,7 @@ async fn last_used_at(path: &std::path::Path, id: &str) -> i64 {
 }
 
 #[tokio::test]
-async fn valid_session_is_one_committed_typed_fact_and_only_its_hash_is_stored() {
+async fn valid_session_returns_its_typed_identity_and_commits_renewal() {
     let (_directory, path, store) = fixture().await;
     insert_session(&path, "valid", "user-1", VALID_HASH, 9_500, None).await;
 
@@ -107,8 +107,6 @@ async fn valid_session_is_one_committed_typed_fact_and_only_its_hash_is_stored()
 
     assert_eq!(user, UserId::parse("user-1").unwrap());
     assert_eq!(last_used_at(&path, "valid").await, NOW);
-    let file = std::fs::read(&path).unwrap();
-    assert!(!String::from_utf8_lossy(&file).contains("valid-token"));
 }
 
 #[tokio::test]

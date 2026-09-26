@@ -48,13 +48,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_stage_round_trips_through_its_persisted_token() {
-        for status in [
-            MaterializationStatus::PendingMaterialization,
-            MaterializationStatus::Active,
-            MaterializationStatus::Failed,
+    fn every_stage_uses_its_stable_persisted_token() {
+        for (status, token) in [
+            (
+                MaterializationStatus::PendingMaterialization,
+                "pending_materialization",
+            ),
+            (MaterializationStatus::Active, "active"),
+            (MaterializationStatus::Failed, "failed"),
         ] {
-            assert_eq!(MaterializationStatus::parse(status.as_str()), Ok(status));
+            assert_eq!(status.as_str(), token);
+            assert_eq!(MaterializationStatus::parse(token), Ok(status));
         }
     }
 

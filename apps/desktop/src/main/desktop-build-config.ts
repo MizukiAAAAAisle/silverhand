@@ -22,7 +22,6 @@ export interface ResolveEffectiveBootProfileInput {
   packagedDefaultServerUrl: string;
   allowInsecureRemote: boolean;
   remoteOnly: boolean;
-  now?: () => number;
 }
 
 export function resolveEffectiveBootProfile(
@@ -69,7 +68,7 @@ export function resolveEffectiveBootProfile(
     source: "packaged_default",
     profileView: {
       server_url: classification.url.origin,
-      updated_at: (input.now ?? Date.now)(),
+      updated_at: Date.now(),
     },
     warning: null,
   };

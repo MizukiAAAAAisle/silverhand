@@ -21,7 +21,7 @@
 // sender authentication, timeout fail-close, and outcome gating — with zero
 // Electron imports so the security/race contract is unit-testable. `index.ts`
 // injects the real `webContents.send` / `app.hide()` / `setTimeout` behind the
-// `CloseTarget` + `Scheduler` + `sendToBackground` seams.
+// `CloseTarget` + `sendToBackground` seams.
 //
 // Wire channels (`shortcut:contextual-close` / `shortcut:contextual-close-result`,
 // positional args) + `ContextualCloseOutcome` are the main↔renderer contract —
@@ -47,15 +47,9 @@ export interface CloseTarget {
   sendRequest(reqId: string): void;
 }
 
-/** Timer seam so tests can drive the fail-closed timeout deterministically. */
-export interface Scheduler {
-  set(fn: () => void, ms: number): unknown;
-  clear(token: unknown): void;
-}
-
 interface PendingRequest {
   readonly target: CloseTarget;
-  readonly timer: unknown;
+  readonly timer: ReturnType<typeof setTimeout>;
 }
 
 export class ContextualCloseCoordinator {
@@ -63,7 +57,6 @@ export class ContextualCloseCoordinator {
   readonly #pending = new Map<string, PendingRequest>();
 
   constructor(
-    private readonly scheduler: Scheduler,
     private readonly timeoutMs: number,
     /** App-level "send to background" (macOS Hide). Called at most once per
      *  press, only on a validated `background-app` outcome. */
@@ -79,10 +72,11 @@ export class ContextualCloseCoordinator {
   begin(target: CloseTarget): void {
     if (target.isDestroyed()) return;
     const reqId = `close-${++this.#seq}`;
-    const timer = this.scheduler.set(() => {
+    const timer = setTimeout(() => {
       // Fail closed: renderer never answered → drop, do NOT background.
       this.#pending.delete(reqId);
     }, this.timeoutMs);
+    timer.unref?.();
     this.#pending.set(reqId, { target, timer });
     try {
       target.sendRequest(reqId);
@@ -93,7 +87,7 @@ export class ContextualCloseCoordinator {
       // swallow — nothing should happen, and no stale entry should sit until
       // the timeout. "Renderer unavailable" covers this, not just a missing
       // reply.
-      this.scheduler.clear(timer);
+      clearTimeout(timer);
       this.#pending.delete(reqId);
     }
   }
@@ -110,14 +104,9 @@ export class ContextualCloseCoordinator {
     if (senderWebContentsId !== pending.target.webContentsId) return; // wrong sender
     // A matched reqId is consumed regardless of outcome: cancel the timer and
     // drop it so a replay can't re-trigger.
-    this.scheduler.clear(pending.timer);
+    clearTimeout(pending.timer);
     this.#pending.delete(reqId);
     if (outcome !== BACKGROUND_APP) return; // closed-panel / junk → no-op
     this.sendToBackground();
-  }
-
-  /** Test/introspection aid: how many presses are awaiting a reply. */
-  get pendingCount(): number {
-    return this.#pending.size;
   }
 }

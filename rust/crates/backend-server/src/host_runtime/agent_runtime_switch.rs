@@ -1107,60 +1107,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_absent_row_is_the_anti_enumeration_404() {
-        let (status, body, _) = run(
-            FakeReads::new(ReadOutcome::Absent),
-            absent_snap(),
-            "a1",
-            valid_body(),
-            true,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(parsed(&body), json!({ "error": "agent not found" }));
-    }
-
-    #[tokio::test]
-    async fn a_viewer_who_cannot_see_it_is_the_same_404() {
-        let facts = AgentDetailFacts::from_source(
-            agent("a1"),
-            user("someone-else"),
-            [],
-            [],
-            MaterializationStatus::Active,
-            codex_projection(),
-        );
-        let (status, body, _) = run(
-            FakeReads::new(present(facts)),
-            absent_snap(),
-            "a1",
-            valid_body(),
-            true,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(parsed(&body), json!({ "error": "agent not found" }));
-    }
-
-    #[tokio::test]
-    async fn a_non_active_stage_is_the_same_404() {
-        let facts = AgentDetailFacts::from_source(
-            agent("a1"),
-            user("viewer-1"),
-            [],
-            [],
-            MaterializationStatus::Failed,
-            codex_projection(),
-        );
-        let (status, _, _) = run(
-            FakeReads::new(present(facts)),
-            absent_snap(),
-            "a1",
-            valid_body(),
-            true,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
+    async fn absent_invisible_and_non_active_rows_share_the_anti_enumeration_404() {
+        for outcome in [
+            ReadOutcome::Absent,
+            present(AgentDetailFacts::from_source(
+                agent("a1"),
+                user("someone-else"),
+                [],
+                [],
+                MaterializationStatus::Active,
+                codex_projection(),
+            )),
+            present(AgentDetailFacts::from_source(
+                agent("a1"),
+                user("viewer-1"),
+                [],
+                [],
+                MaterializationStatus::Failed,
+                codex_projection(),
+            )),
+        ] {
+            let (status, body, reads) = run(
+                FakeReads::new(outcome),
+                absent_snap(),
+                "a1",
+                valid_body(),
+                true,
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(parsed(&body), json!({ "error": "agent not found" }));
+            assert_eq!(reads, 1);
+        }
     }
 
     #[tokio::test]
@@ -1262,6 +1240,10 @@ mod tests {
             r#"["claude",null,null,null]"#,
             "{}",                     // no keys — every required key missing
             r#"{"runtime":"codex"}"#, // model/reasoning_effort/fast_mode keys missing
+            r#"{"model":null,"reasoning_effort":null,"fast_mode":null}"#,
+            r#"{"runtime":"codex","reasoning_effort":null,"fast_mode":null}"#,
+            r#"{"runtime":"codex","model":null,"fast_mode":null}"#,
+            r#"{"runtime":"codex","model":null,"reasoning_effort":null}"#,
             r#"{"runtime":"codex","model":null,"reasoning_effort":null,"fast_mode":null,"x":1}"#, // deny_unknown_fields
             r#"{"runtime":"codex","model":5,"reasoning_effort":null,"fast_mode":null}"#, // model wrong type
             r#"{"runtime":"codex","model":null,"reasoning_effort":5,"fast_mode":null}"#, // token wrong type
@@ -1294,6 +1276,7 @@ mod tests {
             r#"{"runtime":"bogus","model":null,"reasoning_effort":null,"fast_mode":null}"#, // bad enum
             r#"{"runtime":"codex","model":"   ","reasoning_effort":null,"fast_mode":null}"#, // trims empty
             r#"{"runtime":"codex","model":null,"reasoning_effort":"BAD","fast_mode":null}"#, // token regex
+            r#"{"runtime":"claude","model":null,"reasoning_effort":"high","fast_mode":null}"#, // valid shape, wrong runtime allowlist
             r#"{"runtime":"claude","model":null,"reasoning_effort":null,"fast_mode":true}"#, // fast-mode refine
         ] {
             let (status, text, reads) = run(
@@ -1342,7 +1325,7 @@ mod tests {
     // ===================================================================
 
     #[tokio::test]
-    async fn an_agent_the_saga_cannot_read_is_the_typed_agent_not_found_409_shape() {
+    async fn an_agent_the_saga_cannot_read_is_the_typed_agent_not_found_404_shape() {
         // Ladder passes on the ACL read; the saga's own snapshot read finds nothing → the
         // typed `{error,code}` envelope, distinct from the ladder's bare `agent not found`.
         let (status, body, _) = run(
@@ -1413,26 +1396,6 @@ mod tests {
         assert_eq!(config.runtime, RuntimeKind::Claude);
         assert_eq!(config.model, None);
         assert_eq!(config.fast_mode, None);
-    }
-
-    #[test]
-    fn a_missing_tuning_key_fails_to_decode_rather_than_defaulting() {
-        // The three tuning keys are REQUIRED (RequiredNullable, no `#[serde(default)]`), so a
-        // body that omits one is a native decode fault — it never silently becomes `null`.
-        assert!(
-            serde_json::from_str::<SwitchBodyRaw>(r#"{"runtime":"codex"}"#).is_err(),
-            "an absent tuning key must be a decode fault, not a default"
-        );
-        // And the decode error is the native missing-field rejection, not a coerced value.
-        let err = serde_json::from_str::<SwitchBodyRaw>(r#"{"runtime":"codex"}"#).unwrap_err();
-        assert!(err.to_string().contains("missing field"), "got: {err}");
-    }
-
-    #[test]
-    fn an_explicit_null_tuning_key_decodes_to_the_domain_default() {
-        // A present `null` is distinct from a missing key: it decodes to the `Null` arm and
-        // maps to the domain's `None` (the target driver's default).
-        let config = admit(valid_body()).expect("valid");
         assert_eq!(config.reasoning_effort, None);
     }
 
@@ -1461,16 +1424,6 @@ mod tests {
     #[tokio::test]
     async fn each_product_arm_maps_to_its_status_and_coded_body() {
         let cases = [
-            (
-                SwitchAgentRuntimeError::AgentNotFound,
-                StatusCode::NOT_FOUND,
-                json!({ "error": "agent a1 does not exist", "code": "agent_not_found" }),
-            ),
-            (
-                SwitchAgentRuntimeError::RuntimeUnchanged,
-                StatusCode::CONFLICT,
-                json!({ "error": "agent already uses runtime 'claude'", "code": "runtime_unchanged" }),
-            ),
             (
                 SwitchAgentRuntimeError::RuntimeNotSelectable,
                 StatusCode::BAD_REQUEST,
@@ -1562,7 +1515,7 @@ mod tests {
     // ===================================================================
 
     #[tokio::test]
-    async fn the_success_body_is_the_full_dto_plus_effect_tallies() {
+    async fn serialized_response_carries_identity_runtime_and_effect_tallies() {
         // The Ok arm shapes `{ agent, cleared_sessions, restarted_conversations,
         // restart_failures }`; `resume_read_faults` is deliberately NOT a wire field.
         let Ok(dto) =

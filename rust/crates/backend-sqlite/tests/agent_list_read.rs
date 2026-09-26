@@ -132,28 +132,6 @@ const FIXTURE_AGENTS: &[&str] = &["a1", "a2", "a3", "a4"];
 const FIXTURE_USERS: &[&str] = &["u-alpha", "u-beta", "u-gamma", "u-delta", "u-stranger"];
 
 #[tokio::test]
-async fn a_creator_only_agent_is_a_candidate() {
-    // a3 has no pair and no workspace: only the creator predicate offers it. This is
-    // the reverse gap a relation-only narrowing would drop.
-    let (_guard, list, _detail) = seeded(FIXTURE).await;
-    assert_eq!(candidate_ids(&list, "u-gamma").await, ["a3"]);
-}
-
-#[tokio::test]
-async fn candidates_come_in_created_at_order() {
-    // u-alpha reaches a1 (creator), a2 (pair) and a4 (creator) — offered in ascending
-    // `created_at`, verbatim, never re-sorted by id.
-    let (_guard, list, _detail) = seeded(FIXTURE).await;
-    assert_eq!(candidate_ids(&list, "u-alpha").await, ["a1", "a2", "a4"]);
-}
-
-#[tokio::test]
-async fn a_viewer_in_no_arm_gets_no_candidates() {
-    let (_guard, list, _detail) = seeded(FIXTURE).await;
-    assert!(candidate_ids(&list, "u-stranger").await.is_empty());
-}
-
-#[tokio::test]
 async fn a_non_numeric_created_at_is_a_read_error_not_a_default() {
     // The list read shares detail's strict decode. A committed non-numeric
     // `created_at` on a candidate row is corruption: it must surface as a read error

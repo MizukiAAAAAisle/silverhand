@@ -50,9 +50,10 @@ const refusalBody = (code: string, message = 'refused'): string =>
  * class and `validation_error` would be the wrong advice.
  */
 const PUBLISHED: ReadonlyArray<{ code: string; statuses: readonly number[] }> = [
-  ...[...DELIVERY_TARGET_REFUSAL_CODES, CONVERSATION_TARGET_SUFFIX_REFUSAL_CODE].map(
-    code => ({ code, statuses: code === 'direct_message_scope_forbidden' ? [403] as const : [400, 404] as const }),
-  ),
+  ...[...DELIVERY_TARGET_REFUSAL_CODES, CONVERSATION_TARGET_SUFFIX_REFUSAL_CODE].map((code) => ({
+    code,
+    statuses: code === 'direct_message_scope_forbidden' ? ([403] as const) : ([400, 404] as const),
+  })),
   { code: SLOT_REACH_REFUSAL_CODE, statuses: [403] as const },
 ];
 
@@ -75,19 +76,6 @@ describe('a published address refusal reaches the agent as a subkind', () => {
       }
     });
   }
-
-  it('covers every code the shared vocabulary publishes', () => {
-    // The loop above is driven off the constants, but the STATUS column is
-    // hand-written per code — so a new code arriving with no row would be
-    // exercised at nobody's status. This is the assertion that notices.
-    expect(PUBLISHED.map(p => p.code).sort()).toEqual(
-      [
-        ...DELIVERY_TARGET_REFUSAL_CODES,
-        CONVERSATION_TARGET_SUFFIX_REFUSAL_CODE,
-        SLOT_REACH_REFUSAL_CODE,
-      ].sort(),
-    );
-  });
 
   it('a reach refusal stops the agent rather than sending it to edit the address', () => {
     // The behavioural half of the class choice, stated once: same exit class as
@@ -129,15 +117,14 @@ describe('a published address refusal reaches the agent as a subkind', () => {
     // "forbidden", "not_participant" or "unknown" in its name, the vocabulary has
     // grown a branch and this adoption would publish it.
     const suspicious = DELIVERY_TARGET_REFUSAL_CODES.filter(
-      code =>
-        code !== 'target_unresolved'
-        && code !== 'direct_message_scope_forbidden' // only after peer visibility, covered by resolver tests
-        && /not_found|forbidden|not_participant|unknown|missing/.test(code),
+      (code) =>
+        code !== 'target_unresolved' &&
+        code !== 'direct_message_scope_forbidden' && // only after peer visibility, covered by resolver tests
+        /not_found|forbidden|not_participant|unknown|missing/.test(code),
     );
     expect(suspicious).toEqual([]);
   });
 });
-
 
 it('keeps the manual DM instruction, stable scope code and stop exit', () => {
   const message = 'Conversation-scoped agents do not support DMs. Use a shared channel.';

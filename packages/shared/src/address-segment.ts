@@ -83,7 +83,7 @@ const SPACE_SEPARATOR_RANGES: readonly (readonly [number, number])[] = [
  *  character, three for U+3000. The ONE spelling of an escape. */
 function percentEncode(character: string): string {
   return [...encoder.encode(character)]
-    .map(byte => `%${byte.toString(16).toUpperCase().padStart(2, '0')}`)
+    .map((byte) => `%${byte.toString(16).toUpperCase().padStart(2, '0')}`)
     .join('');
 }
 
@@ -103,7 +103,7 @@ function buildEscapes(extra: readonly string[]): ReadonlyMap<string, string> {
         return characters;
       }),
       ...extra,
-    ].map(character => [character, percentEncode(character)]),
+    ].map((character) => [character, percentEncode(character)]),
   );
 }
 
@@ -116,9 +116,6 @@ function buildEscapes(extra: readonly string[]): ReadonlyMap<string, string> {
  * spellings decode to the same name, just not in the other carrier.
  */
 export interface SegmentCodec {
-  /** The characters this carrier escapes. Exposed for tests and for docs that
-   *  must enumerate it; the codec itself never consults anything else. */
-  readonly escaped: ReadonlySet<string>;
   /**
    * Escape one segment. Total: every string has exactly one encoding.
    *
@@ -154,14 +151,9 @@ function buildSegmentCodec(extra: readonly string[]): SegmentCodec {
   /** Escape lengths are 3 (ASCII), 6 or 9 (a 3-byte space separator) characters, so
    *  the decoder tries the longest first. Derived, so adding a member to the set
    *  cannot leave the decoder scanning too short a window. */
-  const maxEscapeLength = Math.max(
-    ...[...escapes.values()].map(escape => escape.length),
-  );
+  const maxEscapeLength = Math.max(...[...escapes.values()].map((escape) => escape.length));
 
-  function matchEscape(
-    segment: string,
-    index: number,
-  ): { raw: string; length: number } | null {
+  function matchEscape(segment: string, index: number): { raw: string; length: number } | null {
     for (let length = maxEscapeLength; length >= 3; length -= 3) {
       const raw = unescapes.get(segment.slice(index, index + length));
       if (raw !== undefined) return { raw, length };
@@ -170,7 +162,6 @@ function buildSegmentCodec(extra: readonly string[]): SegmentCodec {
   }
 
   return {
-    escaped: new Set(escapes.keys()),
     encode(value) {
       let out = '';
       for (const character of value) out += escapes.get(character) ?? character;
@@ -238,12 +229,7 @@ export const TARGET_SEGMENT_CODEC: SegmentCodec = buildSegmentCodec([]);
  * no such limit and no `#conv:<id>` fallback to degrade to, so the only bound on a
  * locator is the name length caps it is built from.
  */
-export const URI_SEGMENT_CODEC: SegmentCodec = buildSegmentCodec([
-  '<',
-  '>',
-  '#',
-  '?',
-]);
+export const URI_SEGMENT_CODEC: SegmentCodec = buildSegmentCodec(['<', '>', '#', '?']);
 
 /**
  * Total budget for a whole formatted address token — scheme, workspace segment,

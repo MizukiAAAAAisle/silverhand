@@ -52,9 +52,8 @@ pub struct WorkspaceFace {
 /// `canViewWorkspace` reduces to `isWorkspaceMember`), so the returned set is
 /// the viewer's `workspace_users` membership, already ordered by the published
 /// key `(owner_agent_id IS NULL first), updated_at DESC`. The port takes
-/// `&mut self` because it reads through a caller-held snapshot: the workspace
-/// set and the viewer's sort state must be sampled from ONE database snapshot,
-/// so neither context opens a transaction of its own.
+/// `&mut self` because it reads through a caller-held snapshot. Sidebar sort
+/// state is separate and is not part of this workspace-identity contract.
 pub trait WorkspaceFaceReadPort {
     fn visible_workspaces(
         &mut self,

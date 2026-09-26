@@ -46,7 +46,7 @@ async fn remote_ready_without_daemon_and_real_runtime_event_reaches_authenticate
             let (mut viewer, _) = connect_async(viewer_request).await.unwrap();
             assert_eq!(next_socket_json(&mut viewer).await["type"], "authenticated");
             viewer.send(ClientMessage::Text(serde_json::json!({
-                "type":"subscribe", "scope":format!("conversation-side:{CONVERSATION_ID}")
+                "type":"subscribe", "scope":"agent:agent-1"
             }).to_string().into())).await.unwrap();
             assert_eq!(next_socket_json(&mut viewer).await["type"], "subscribed");
 
@@ -101,16 +101,16 @@ async fn remote_ready_without_daemon_and_real_runtime_event_reaches_authenticate
             }).to_string().into())).await.unwrap();
             let projected = loop {
                 let frame = next_socket_json(&mut viewer).await;
-                if frame["kind"] == "conversation_activity" { break frame; }
+                if frame["kind"] == "agent_stream_activity" { break frame; }
             };
-            assert_eq!(projected["scope"], format!("conversation-side:{CONVERSATION_ID}"));
+            assert_eq!(projected["scope"], "agent:agent-1");
             let durable: String = sqlx::query_scalar("SELECT payload FROM conversation_events WHERE conversation_id=? AND agent_id='agent-1' AND kind='thinking'")
                 .bind(CONVERSATION_ID).fetch_one(&pool).await.unwrap();
             let durable_payload: serde_json::Value = serde_json::from_str(&durable).unwrap();
             assert_eq!(durable_payload, serde_json::json!({"text":"remote fanout proof"}));
             assert_eq!(projected["type"], "event");
             assert_eq!(projected["payload"]["agent_id"], "agent-1");
-            assert_eq!(projected["payload"]["conversation_id"], CONVERSATION_ID);
+            assert!(projected["payload"].get("conversation_id").is_none());
             assert_eq!(projected["payload"]["kind"], "thinking");
             assert_eq!(projected["payload"]["created_at"], 101);
             assert_eq!(projected["payload"]["payload"], durable_payload);

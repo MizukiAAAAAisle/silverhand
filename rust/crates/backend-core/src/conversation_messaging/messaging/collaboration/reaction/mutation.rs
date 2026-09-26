@@ -130,13 +130,6 @@ impl ReactionMutation {
             ReactionEmojiCandidate::Invalid(error) => Err(*error),
         }
     }
-    #[cfg(test)]
-    fn retained_emoji_bytes(&self) -> usize {
-        match &self.emoji {
-            ReactionEmojiCandidate::Validated(emoji) => emoji.as_str().len(),
-            ReactionEmojiCandidate::Invalid(_) => 0,
-        }
-    }
     pub fn change(&self) -> ReactionChange {
         self.change
     }
@@ -362,7 +355,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_oversized_agent_emoji_is_reduced_to_a_bounded_verdict_before_the_store() {
+    fn an_oversized_agent_emoji_retains_the_deferred_error_verdict() {
         let raw = "x".repeat(1024 * 1024);
         let verdict = ReactionEmoji::parse(&raw);
         assert!(verdict.is_err());
@@ -375,7 +368,6 @@ mod tests {
             1,
         );
         drop(raw);
-        assert_eq!(mutation.retained_emoji_bytes(), 0);
         assert_eq!(
             mutation.validate_emoji(),
             Err(InvalidReactionEmoji::TooLong)

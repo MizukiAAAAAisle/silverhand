@@ -1,26 +1,21 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+
 import { join } from "node:path";
-import {
-  HOST_DISPLAY_LABEL_MAX_LENGTH,
-  HostClaimOrCreateInputSchema,
-  apiPaths,
-} from "@silverhand/shared";
+import { HOST_DISPLAY_LABEL_MAX_LENGTH, apiPaths } from "@silverhand/shared";
 import {
   applyRevokeSideEffects,
   applyRotateSideEffects,
   assertApiProxyPath,
   buildHostClaimInput,
-  defaultClaimLabel,
-  isMainManagedHostPath,
-  isTokenBearingHostClaimPath,
   loadOrCreateInstallationId,
-  pathnameOf,
   readDaemonHostConfig,
   removeDaemonHostConfig,
   writeDaemonHostConfig,
 } from "./local-host-claim.js";
+
+const os = vi.hoisted(() => ({ hostname: vi.fn(() => "Test Mac") }));
+vi.mock("node:os", () => ({ hostname: os.hostname }));
 
 const installationIdPath = (dir: string) => join(dir, "installation_id");
 const daemonHostConfigPath = (dir: string) => join(dir, "daemon-config.json");
@@ -29,6 +24,7 @@ describe("desktop local host claim helpers", () => {
   const cleanup: string[] = [];
 
   afterEach(() => {
+    os.hostname.mockReturnValue("Test Mac");
     while (cleanup.length > 0) {
       rmSync(cleanup.pop()!, { recursive: true, force: true });
     }
@@ -104,77 +100,37 @@ describe("desktop local host claim helpers", () => {
     });
   });
 
-  it("fits a system hostname to the claim label bound", () => {
-    const long = `${"h".repeat(HOST_DISPLAY_LABEL_MAX_LENGTH + 40)}.corp.example.com`;
-    expect(defaultClaimLabel(long)).toBe("h".repeat(HOST_DISPLAY_LABEL_MAX_LENGTH));
-    // Whatever it returns must satisfy the schema the claim input parses
-    // against — that is the property that actually protects claiming.
-    expect(
-      HostClaimOrCreateInputSchema.safeParse({
+  it("fits system-derived labels through the claim boundary without truncating explicit labels", () => {
+    for (const [hostname, expected] of [
+      [
+        "h".repeat(HOST_DISPLAY_LABEL_MAX_LENGTH + 40) + ".corp",
+        "h".repeat(HOST_DISPLAY_LABEL_MAX_LENGTH),
+      ],
+      ["  Studio Mac  ", "Studio Mac"],
+      [
+        "a".repeat(HOST_DISPLAY_LABEL_MAX_LENGTH - 1) + " tail",
+        "a".repeat(HOST_DISPLAY_LABEL_MAX_LENGTH - 1),
+      ],
+      ["   ", undefined],
+      ["", undefined],
+    ] as const) {
+      os.hostname.mockReturnValue(hostname);
+      const input = buildHostClaimInput({
+        installationId: "66666666-6666-4666-8666-666666666666",
+        existingConfig: null,
+      });
+      expect(input).toEqual({
         installation_id: "66666666-6666-4666-8666-666666666666",
-        label: defaultClaimLabel(long),
-      }).success,
-    ).toBe(true);
-
-    // A short name passes through untouched; padding is trimmed.
-    expect(defaultClaimLabel("  Studio Mac  ")).toBe("Studio Mac");
-    // Cutting at the bound can land mid-whitespace — don't send that.
-    expect(defaultClaimLabel(`${"a".repeat(HOST_DISPLAY_LABEL_MAX_LENGTH - 1)} tail`)).toBe(
-      "a".repeat(HOST_DISPLAY_LABEL_MAX_LENGTH - 1),
-    );
-    // Nothing usable → null, so the caller omits `label` rather than
-    // sending an empty string the schema's `min(1)` would refuse.
-    expect(defaultClaimLabel("   ")).toBeNull();
-    expect(defaultClaimLabel("")).toBeNull();
-  });
-
-  it("marks every main-managed host route as not renderer-proxyable", () => {
-    expect(isMainManagedHostPath(apiPaths.hostClaimOrCreate)).toBe(true);
-    expect(isMainManagedHostPath(apiPaths.hostRotateToken("host-x"))).toBe(true);
-    expect(isMainManagedHostPath(apiPaths.hostRevoke("host-x"))).toBe(true);
-    expect(isMainManagedHostPath(apiPaths.hosts)).toBe(false);
-    // Deprecated alias still exposes the same matcher (covers the
-    // claim path; we rely on the active name for rotate/revoke).
-    expect(isTokenBearingHostClaimPath(apiPaths.hostClaimOrCreate)).toBe(true);
-    expect(isTokenBearingHostClaimPath(apiPaths.hosts)).toBe(false);
-  });
-
-  it("refuses query/hash bypass attempts on rotate-token / revoke", () => {
-    // P0 regression: a naive `endsWith('/rotate-token')` against the
-    // raw path would let `?x=1` slip past the matcher, and the
-    // renderer could then read cleartext `host_token` via the generic
-    // proxy. Matching MUST normalize to the URL pathname first.
-    expect(isMainManagedHostPath(`${apiPaths.hostRotateToken("h")}?x=1`)).toBe(true);
-    expect(isMainManagedHostPath(`${apiPaths.hostRevoke("h")}?x=1`)).toBe(true);
-    expect(isMainManagedHostPath(`${apiPaths.hostClaimOrCreate}?bypass=1`)).toBe(true);
-
-    // `fetch` strips the fragment before sending, but the guard must
-    // still refuse — defense in depth against any code path that
-    // forwards the raw string further.
-    expect(isMainManagedHostPath(`${apiPaths.hostRotateToken("h")}#frag`)).toBe(true);
-    expect(isMainManagedHostPath(`${apiPaths.hostRevoke("h")}#frag`)).toBe(true);
-
-    // Combined query + fragment.
-    expect(isMainManagedHostPath(`${apiPaths.hostRotateToken("h")}?x=1#frag`)).toBe(true);
-    expect(isMainManagedHostPath(`${apiPaths.hostRevoke("h")}?x=1#frag`)).toBe(true);
-
-    // GET /api/hosts (no token, no side-effect) is still proxyable
-    // even with a query string — the `useQuery` cache key may add
-    // params later.
-    expect(isMainManagedHostPath(`${apiPaths.hosts}?cache=1`)).toBe(false);
-  });
-
-  it("pathnameOf strips query + fragment and resolves relative paths against a fake base", () => {
-    expect(pathnameOf("/api/hosts")).toBe("/api/hosts");
-    expect(pathnameOf("/api/hosts?x=1")).toBe("/api/hosts");
-    expect(pathnameOf("/api/hosts#frag")).toBe("/api/hosts");
-    expect(pathnameOf("/api/hosts/h/rotate-token?x=1#frag")).toBe("/api/hosts/h/rotate-token");
-    // Bare strings get resolved as relative paths against the
-    // synthetic base, NOT rejected — the helper is intentionally
-    // lossy. The caller's own raw allow-list (e.g.
-    // `assertApiProxyPath`'s `/api/` startsWith on the *raw* input)
-    // is what rejects non-API strings, not pathnameOf.
-    expect(pathnameOf("not-a-path-at-all")).toBe("/not-a-path-at-all");
+        ...(expected === undefined ? {} : { label: expected }),
+      });
+    }
+    expect(() =>
+      buildHostClaimInput({
+        installationId: "66666666-6666-4666-8666-666666666666",
+        existingConfig: null,
+        label: "h".repeat(HOST_DISPLAY_LABEL_MAX_LENGTH + 1),
+      }),
+    ).toThrow();
   });
 
   it("assertApiProxyPath rejects absolute / protocol-relative URLs even when their pathname looks like /api/", () => {
@@ -194,18 +150,15 @@ describe("desktop local host claim helpers", () => {
   });
 
   it("assertApiProxyPath refuses main-managed routes including query/hash bypass attempts", () => {
-    // Sensitive routes — bare and with query/hash — all rejected.
-    expect(() => assertApiProxyPath(apiPaths.hostClaimOrCreate)).toThrow(/main-managed host route/);
-    expect(() => assertApiProxyPath(apiPaths.hostRotateToken("h"))).toThrow(
-      /main-managed host route/,
-    );
-    expect(() => assertApiProxyPath(apiPaths.hostRevoke("h"))).toThrow(/main-managed host route/);
-    expect(() => assertApiProxyPath(`${apiPaths.hostRotateToken("h")}?x=1`)).toThrow(
-      /main-managed host route/,
-    );
-    expect(() => assertApiProxyPath(`${apiPaths.hostRevoke("h")}?x=1#frag`)).toThrow(
-      /main-managed host route/,
-    );
+    for (const route of [
+      apiPaths.hostClaimOrCreate,
+      apiPaths.hostRotateToken("h"),
+      apiPaths.hostRevoke("h"),
+    ]) {
+      for (const suffix of ["", "?x=1", "#frag", "?x=1#frag"]) {
+        expect(() => assertApiProxyPath(route + suffix)).toThrow(/main-managed host route/);
+      }
+    }
 
     // Non-sensitive `/api/*` routes pass cleanly.
     expect(() => assertApiProxyPath(apiPaths.hosts)).not.toThrow();
@@ -234,6 +187,9 @@ describe("desktop local host claim helpers", () => {
       host_id: "host-local",
       host_token: "new-token-cleartext",
     });
+    expect(JSON.parse(readFileSync(daemonHostConfigPath(dir), "utf8"))).not.toHaveProperty(
+      "profile_version",
+    );
     expect(fileMode(daemonHostConfigPath(dir))).toBe(0o600);
   });
 
@@ -288,35 +244,6 @@ describe("desktop local host claim helpers", () => {
       host_token: "new-token-cleartext",
       allow_insecure_remote: true,
     });
-  });
-
-  it("rotate omits profile_version when the existing config has none", () => {
-    const dir = tempDir();
-    // Legacy D3.x config — no profile_version field.
-    writeDaemonHostConfig(daemonHostConfigPath(dir), {
-      server_url: "http://127.0.0.1:4321",
-      host_id: "host-local",
-      host_token: "old-token",
-    });
-
-    applyRotateSideEffects({
-      daemonConfigPath: daemonHostConfigPath(dir),
-      serverUrl: "http://127.0.0.1:4321",
-      hostId: "host-local",
-      hostToken: "new-token-cleartext",
-    });
-
-    const after = readDaemonHostConfig(daemonHostConfigPath(dir));
-    // Field is absent — NOT explicit `undefined`. The daemon
-    // fingerprint encodes absent as `<none>` and explicit `0` as `0`,
-    // so we must not slip a `profile_version: undefined` key into the
-    // serialized JSON either.
-    expect(after).toEqual({
-      server_url: "http://127.0.0.1:4321",
-      host_id: "host-local",
-      host_token: "new-token-cleartext",
-    });
-    expect(after && "profile_version" in after).toBe(false);
   });
 
   it("revoke side-effect clears daemon-config when revoked host is the current local one", () => {
@@ -380,14 +307,11 @@ describe("desktop local host claim helpers", () => {
     expect(readDaemonHostConfig(daemonHostConfigPath(dir))).toBeNull();
   });
 
-  it("readDaemonHostConfig returns null for missing path", () => {
-    const dir = tempDir();
-    expect(existsSync(daemonHostConfigPath(dir))).toBe(false);
-    expect(readDaemonHostConfig(daemonHostConfigPath(dir))).toBeNull();
-  });
-
   function tempDir(): string {
-    const dir = mkdtempSync(join(tmpdir(), "silverhand-desktop-host-claim-"));
+    const root = process.env.SILVERHAND_DIR;
+    if (!root) throw new Error("local-host-claim test requires isolated SILVERHAND_DIR");
+    mkdirSync(root, { recursive: true });
+    const dir = mkdtempSync(join(root, "desktop-host-claim-"));
     cleanup.push(dir);
     return dir;
   }

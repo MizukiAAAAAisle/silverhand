@@ -163,17 +163,6 @@ pub enum DeleteComputerError {
     Teardown(#[from] TeardownFailure),
 }
 
-impl DeleteComputerError {
-    /// The refusal, when that is what this was. Lets a caller map a product answer
-    /// without matching on infrastructure.
-    pub fn refusal(&self) -> Option<&DeleteComputerRefusal> {
-        match self {
-            Self::Refused(refusal) => Some(refusal),
-            Self::Persistence(_) | Self::Teardown(_) => None,
-        }
-    }
-}
-
 /// Delete a user-managed computer together with everything rooted on it.
 #[derive(Clone)]
 pub struct DeleteComputer<R, U, E, D> {
@@ -664,13 +653,14 @@ mod tests {
     }
 
     async fn refusal(world: &World) -> DeleteComputerRefusal {
-        door(world)
+        let error = door(world)
             .execute(&user(OWNER), host(COMPUTER), CascadeConsent::Confirmed)
             .await
-            .expect_err("a refusal")
-            .refusal()
-            .expect("a product refusal")
-            .clone()
+            .expect_err("a refusal");
+        let DeleteComputerError::Refused(refusal) = error else {
+            panic!("expected a product refusal");
+        };
+        refusal
     }
 
     #[tokio::test]

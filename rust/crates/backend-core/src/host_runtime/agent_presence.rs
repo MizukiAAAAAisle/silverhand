@@ -93,13 +93,13 @@ mod tests {
     fn an_ordinary_stamp_yields_its_stamp_plus_the_window() {
         let instant = ActivityInstant::new(1_000).expect("an ordinary stamp is in range");
         assert_eq!(instant.get(), 1_000);
-        assert_eq!(instant.away_at(), 1_000 + AWAY_TTL_MS);
+        assert_eq!(instant.away_at(), 1_801_000);
     }
 
     #[test]
     fn the_epoch_is_the_low_boundary() {
         let instant = ActivityInstant::new(0).expect("zero is a legal stamp");
-        assert_eq!(instant.away_at(), AWAY_TTL_MS);
+        assert_eq!(instant.away_at(), 1_800_000);
     }
 
     /// The largest ACCEPTED stamp: its deadline lands exactly on the wire ceiling,
@@ -107,8 +107,9 @@ mod tests {
     /// stamp.
     #[test]
     fn the_max_acceptable_stamp_deadlines_exactly_on_the_wire_ceiling() {
-        let instant = ActivityInstant::new(ActivityInstant::MAX).expect("MAX is accepted");
-        assert_eq!(instant.away_at(), MAX_SAFE_INTEGER);
+        let instant =
+            ActivityInstant::new(9_007_199_252_940_991).expect("largest wire-safe deadline");
+        assert_eq!(instant.away_at(), 9_007_199_254_740_991);
     }
 
     #[test]
@@ -119,8 +120,8 @@ mod tests {
     #[test]
     fn a_stamp_beyond_the_wire_ceiling_is_refused() {
         assert_eq!(
-            ActivityInstant::new(MAX_SAFE_INTEGER + 1),
-            Err(ActivityInstantOutOfRange(MAX_SAFE_INTEGER + 1))
+            ActivityInstant::new(9_007_199_254_740_992),
+            Err(ActivityInstantOutOfRange(9_007_199_254_740_992))
         );
     }
 
@@ -129,11 +130,7 @@ mod tests {
     /// check on the raw stamp alone would accept it; the deadline bound refuses it.
     #[test]
     fn a_stamp_whose_deadline_would_overflow_is_refused_even_though_the_stamp_is_wire_safe() {
-        let just_over = ActivityInstant::MAX + 1;
-        assert!(
-            just_over <= MAX_SAFE_INTEGER,
-            "the raw stamp is itself wire-safe"
-        );
+        let just_over = 9_007_199_252_940_992;
         assert_eq!(
             ActivityInstant::new(just_over),
             Err(ActivityInstantOutOfRange(just_over))

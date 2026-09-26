@@ -43,7 +43,14 @@ describe('resolveMessageAuthor (#task:1791)', () => {
   it('system rows have no author (never a synthetic system tombstone)', () => {
     expect(
       resolveMessageAuthor(
-        { from_kind: 'system', from_agent_id: null, from_user_id: null, author_id: null, author_name: null, author_display_name: null },
+        {
+          from_kind: 'system',
+          from_agent_id: null,
+          from_user_id: null,
+          author_id: null,
+          author_name: null,
+          author_display_name: null,
+        },
         null,
       ),
     ).toBeNull();
@@ -61,9 +68,7 @@ describe('resolveMessageAuthor (#task:1791)', () => {
     });
     // active-user: no runtime, even if the live actor object carried a stray one
     // — the resolver forces `runtime: null` on the user arm.
-    expect(
-      resolveMessageAuthor(userRow(), live({ avatar_url: null })),
-    ).toEqual({
+    expect(resolveMessageAuthor(userRow(), live({ avatar_url: null }))).toEqual({
       kind: 'user',
       status: 'active',
       id: 'us-1',
@@ -107,14 +112,6 @@ describe('resolveMessageAuthor (#task:1791)', () => {
     expect(dto).not.toMatchObject({ display_name: 'Old Label' });
   });
 
-  it('failed-delete: an FK that is still intact stays active even when a snapshot exists (never prematurely deleted)', () => {
-    // A refused/rolled-back delete leaves from_*_id populated — the resolver must
-    // read that as "actor still exists" and return active, never guessing deleted
-    // just because a snapshot is present.
-    const dto = resolveMessageAuthor(agentRow(), live());
-    expect(dto).toMatchObject({ status: 'active', id: 'ag-1' });
-  });
-
   it('fail-closed: FK intact + a complete snapshot but NO live actor is unresolved, NEVER deleted', () => {
     // FK intact ⇒ referential integrity says the actor still exists, so a missing
     // liveActor is a loader/consistency fault, not a deletion. The resolver must
@@ -137,10 +134,7 @@ describe('resolveMessageAuthor (#task:1791)', () => {
   });
 
   it('deleted: FK nulled but a complete snapshot names the gone actor (avatar always null)', () => {
-    const dto = resolveMessageAuthor(
-      agentRow({ from_agent_id: null }),
-      null,
-    );
+    const dto = resolveMessageAuthor(agentRow({ from_agent_id: null }), null);
     expect(dto).toEqual({
       kind: 'agent',
       status: 'deleted',
@@ -174,7 +168,12 @@ describe('resolveMessageAuthor (#task:1791)', () => {
     // identity is unrecoverable, NOT that it was deleted, and id=null means two
     // such authors never collapse into one byline.
     const agent = resolveMessageAuthor(
-      agentRow({ from_agent_id: null, author_id: null, author_name: null, author_display_name: null }),
+      agentRow({
+        from_agent_id: null,
+        author_id: null,
+        author_name: null,
+        author_display_name: null,
+      }),
       null,
     );
     expect(agent).toEqual({
@@ -187,27 +186,44 @@ describe('resolveMessageAuthor (#task:1791)', () => {
     });
     // kind still discriminates "Unknown agent" vs "Unknown user".
     const user = resolveMessageAuthor(
-      userRow({ from_user_id: null, author_id: null, author_name: null, author_display_name: null }),
+      userRow({
+        from_user_id: null,
+        author_id: null,
+        author_name: null,
+        author_display_name: null,
+      }),
       null,
     );
     expect(user).toMatchObject({ kind: 'user', status: 'unresolved', id: null });
   });
 
-  it('a partial snapshot (id without name) cannot masquerade as deleted → unresolved', () => {
-    // The deleted arm requires BOTH author_id and author_name; a torn snapshot
-    // must not synthesize a half-named "deleted" author.
-    const dto = resolveMessageAuthor(
-      agentRow({ from_agent_id: null, author_name: null, author_display_name: null }),
-      null,
-    );
-    expect(dto).toMatchObject({ status: 'unresolved', id: null });
+  it('a snapshot missing either identity field cannot masquerade as deleted', () => {
+    for (const missing of ['author_id', 'author_name'] as const) {
+      const dto = resolveMessageAuthor(agentRow({ from_agent_id: null, [missing]: null }), null);
+      expect(dto, missing).toEqual({
+        kind: 'agent',
+        status: 'unresolved',
+        id: null,
+        name: null,
+        display_name: null,
+        avatar_url: null,
+      });
+    }
   });
 
   it('every non-null result satisfies the discriminated-union schema', () => {
     const cases: Array<[MessageAuthorRow, MessageAuthorLiveActor | null]> = [
       [agentRow(), live()],
       [agentRow({ from_agent_id: null }), null],
-      [agentRow({ from_agent_id: null, author_id: null, author_name: null, author_display_name: null }), null],
+      [
+        agentRow({
+          from_agent_id: null,
+          author_id: null,
+          author_name: null,
+          author_display_name: null,
+        }),
+        null,
+      ],
       [userRow(), live({ avatar_url: null })],
       [userRow({ from_user_id: null }), null],
     ];

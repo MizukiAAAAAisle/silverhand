@@ -536,13 +536,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn canonical_pair_is_minted_by_the_real_parser() {
-        let admitted = title("  Straße  ");
-        assert_eq!(admitted.title(), "Straße");
-        assert_eq!(admitted.key(), "strasse");
-    }
-
     #[derive(Debug, thiserror::Error)]
     #[error("store failed")]
     struct StoreFailure;

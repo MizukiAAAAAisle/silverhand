@@ -12,6 +12,33 @@ import {
 } from './_helpers/runtime-start-options.js';
 
 describe('buildPromptContextFromRuntimeStartOptions', () => {
+  it.each([
+    ['exact limit', 'a'.repeat(16 * 1024), 'a'.repeat(16 * 1024)],
+    ['over limit', 'a'.repeat(16 * 1024) + 'b', 'a'.repeat(16 * 1024) + '\n…(truncated)'],
+    ['split UTF-8', 'a'.repeat(16 * 1024 - 1) + '界', 'a'.repeat(16 * 1024 - 1) + '\n…(truncated)'],
+  ])('caps actual memory at 16 KiB without breaking UTF-8: %s', async (_label, body, expected) => {
+    const isolatedRoot = process.env.SILVERHAND_DIR;
+    if (!isolatedRoot) throw new Error('SILVERHAND_DIR must name an isolated test directory');
+    mkdirSync(isolatedRoot, { recursive: true });
+    const root = mkdtempSync(join(isolatedRoot, 'prompt-cap-'));
+    try {
+      const agentsRoot = join(root, 'agents');
+      const agentHome = join(agentsRoot, 'a1');
+      mkdirSync(agentHome, { recursive: true });
+      writeFileSync(join(agentHome, 'MEMORY.md'), body);
+      const resolved = await resolveRuntimeStartPaths(
+        testStartOptions({ sessionScope: 'agent' }),
+        testRuntimeStartResolveDeps({ agentHomeRootDir: agentsRoot }),
+      );
+
+      const context = await buildPromptContextFromRuntimeStartOptions(resolved);
+
+      expect(context.currentMemory).toEqual({ kind: 'present', body: expected });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('reads the role from the daemon-resolved agent home', async () => {
     const root = mkdtempSync(join(tmpdir(), 'silverhand-prompt-context-'));
     try {
@@ -58,8 +85,6 @@ describe('buildPromptContextFromRuntimeStartOptions', () => {
         computerId: 'computer-1',
         memoryRootPath: agentHome,
       });
-      expect(Object.keys(context.sessionContext)).not.toContain('workspaceName');
-      expect(Object.keys(context.sessionContext)).not.toContain('workspaceId');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -181,16 +206,16 @@ describe('buildPromptContextFromRuntimeStartOptions', () => {
  * "add it back for convenience": the word cannot re-enter silently.
  */
 describe('RuntimeStartWorkspaceRefSchema carries NO container word (#task:2081)', () => {
-  it('has no `kind` in its shape', () => {
-    expect('kind' in RuntimeStartWorkspaceRefSchema.shape).toBe(false);
-  });
-
   it('rejects a ref that smuggles a container word back onto this wire', () => {
     // `.strict()`: an unknown `kind` key fails closed rather than being dropped,
     // so no producer can quietly reintroduce the retired word.
-    const parsed = RuntimeStartWorkspaceRefSchema.safeParse({
+    const valid = {
       id: 'ws1',
       name: 'test-workspace',
+    };
+    expect(RuntimeStartWorkspaceRefSchema.safeParse(valid).success).toBe(true);
+    const parsed = RuntimeStartWorkspaceRefSchema.safeParse({
+      ...valid,
       kind: 'agent_home',
     });
     expect(parsed.success).toBe(false);

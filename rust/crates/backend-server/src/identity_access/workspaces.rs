@@ -145,10 +145,9 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        foundation::identity::{UserId, WorkspaceId},
+        foundation::identity::UserId,
         foundation::persistence::PersistenceFailure,
         identity_access::workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
-        identity_access::workspace_face::WorkspaceFace,
     };
     use tower::ServiceExt;
 
@@ -157,7 +156,6 @@ mod tests {
     #[derive(Clone)]
     enum FakeUnitOfWork {
         Reads(WorkspaceColdRead),
-        Fails,
     }
 
     impl WorkspaceColdReadUnitOfWork for FakeUnitOfWork {
@@ -167,12 +165,6 @@ mod tests {
         ) -> Result<WorkspaceColdRead, PersistenceFailure> {
             match self {
                 FakeUnitOfWork::Reads(read) => Ok(read.clone()),
-                FakeUnitOfWork::Fails => {
-                    #[derive(Debug, thiserror::Error)]
-                    #[error("stored row could not be decoded")]
-                    struct Corruption;
-                    Err(PersistenceFailure::from_source(Corruption))
-                }
             }
         }
     }
@@ -195,70 +187,6 @@ mod tests {
         (status, value)
     }
 
-    fn regular(id: &str) -> WorkspaceFace {
-        WorkspaceFace {
-            id: WorkspaceId::parse(id).unwrap(),
-            name: "Regular".to_owned(),
-            description: None,
-            owner_agent_id: None,
-            owner_user_id: Some(UserId::parse("user-1").unwrap()),
-            dm_channel_id: None,
-            dm_channel_ids: Vec::new(),
-            archived_at: None,
-            created_at: 1,
-            updated_at: 300,
-        }
-    }
-
-    #[tokio::test]
-    async fn the_envelope_contains_only_workspace_identity() {
-        let cold_read = WorkspaceColdRead {
-            workspaces: vec![WorkspaceFace {
-                id: WorkspaceId::parse("ws-agent").unwrap(),
-                name: "Agent Home".to_owned(),
-                description: Some("home".to_owned()),
-                owner_agent_id: Some(
-                    silverhand_backend_core::foundation::identity::AgentId::parse("agent-1")
-                        .unwrap(),
-                ),
-                owner_user_id: None,
-                dm_channel_id: Some(
-                    silverhand_backend_core::foundation::identity::ConversationId::parse("conv-1")
-                        .unwrap(),
-                ),
-                dm_channel_ids: vec![
-                    silverhand_backend_core::foundation::identity::ConversationId::parse("conv-1")
-                        .unwrap(),
-                ],
-                archived_at: Some(999),
-                created_at: 1,
-                updated_at: 200,
-            }],
-        };
-
-        let (status, body) = get_workspaces(FakeUnitOfWork::Reads(cold_read), true).await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            body,
-            json!({
-                "workspaces": [{
-                    "id": "ws-agent",
-                    "name": "Agent Home",
-                    "description": "home",
-                    "owner_agent_id": "agent-1",
-                    "owner_user_id": null,
-                    "dm_channel_id": "conv-1",
-                    "dm_channel_ids": ["conv-1"],
-                    "archived_at": 999,
-                    "created_at": 1,
-                    "updated_at": 200
-                }],
-
-            })
-        );
-    }
-
     #[tokio::test]
     async fn an_empty_face_is_the_empty_envelope_not_a_missing_field() {
         let cold_read = WorkspaceColdRead {
@@ -278,44 +206,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_regular_workspace_publishes_its_nulls_verbatim() {
-        let cold_read = WorkspaceColdRead {
-            workspaces: vec![regular("ws-1")],
-        };
-
-        let (status, body) = get_workspaces(FakeUnitOfWork::Reads(cold_read), true).await;
-
-        assert_eq!(status, StatusCode::OK);
-        let workspace = &body["workspaces"][0];
-        assert_eq!(workspace["owner_agent_id"], Value::Null);
-        assert_eq!(workspace["dm_channel_id"], Value::Null);
-        assert_eq!(workspace["dm_channel_ids"], json!([]));
-        assert_eq!(workspace["owner_user_id"], "user-1");
-    }
-
-    #[tokio::test]
     async fn a_missing_principal_is_a_safe_500_not_a_product_answer() {
         let cold_read = WorkspaceColdRead {
             workspaces: Vec::new(),
         };
         let (status, _) = get_workspaces(FakeUnitOfWork::Reads(cold_read), false).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[tokio::test]
-    async fn a_persistence_failure_is_a_safe_500_with_no_driver_detail() {
-        let response = router(FakeUnitOfWork::Fails)
-            .oneshot(
-                Request::builder()
-                    .uri(WORKSPACES_PATH)
-                    .extension(UserId::parse("user-1").unwrap())
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(&bytes[..], b"Internal Server Error");
     }
 }

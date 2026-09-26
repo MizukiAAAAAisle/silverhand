@@ -620,7 +620,7 @@ INSERT INTO agents (id, name, display_name, runtime, avatar_storage_key, avatar_
     }
 
     #[tokio::test]
-    async fn a_stale_legal_effort_is_re_rejected_against_the_locked_runtime_and_writes_nothing() {
+    async fn an_effort_is_rejected_after_an_earlier_model_change_and_writes_nothing() {
         let (_dir, adapter) = open_seeded().await;
 
         let a = admit_and_apply(
@@ -643,7 +643,8 @@ INSERT INTO agents (id, name, display_name, runtime, avatar_storage_key, avatar_
         assert_eq!(effort_a.as_deref(), Some("high"));
         assert_eq!(updated_a, 500);
 
-        // The stale-admitted attacker: `ultra` was legal against `sol`.
+        // `ultra` was legal against the original `sol` state. These sequential
+        // calls prove re-reading current values, not concurrent lock scheduling.
         let b = admit_and_apply(
             &adapter,
             &agent("agent-3"),

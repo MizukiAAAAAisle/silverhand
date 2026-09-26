@@ -215,22 +215,7 @@ export {
   type LocalOutboundFrameServerOptions,
 } from './daemon/local-outbound-frame-server.js';
 /**
- * D4.d D6 — re-export the daemon-side typed materialize error so
- * e2e tests that inject a deterministic typed-error fault via
- * `runDaemon`'s `testHooks.agentMaterializeFaultInjector` can
- * construct the typed instance the dispatcher narrows to a wire
- * `error.code` (per `dispatcher.ts` line 328); without a public
- * export, the only way to land on that branch would be to reach
- * into the internal subtree, which the
- * `dependency-guard-agent-materialize.test.ts` tripwire blocks
- * for backend code.
- *
- * Boundary: this export does NOT re-expose `materializeAgent`,
- * `getAgentHomeTemplate`, or any other implementation detail of
- * the agent-home subtree — only the throwable error class that's
- * part of the daemon ↔ embedder/test contract. Cindy D6-2 P1-1
- * (`d4IID_Nnn1VShRa5`): the only test-facing surface on
- * `RunDaemonOptions` is the narrow `testHooks` namespace; there
- * is no embedder-facing handler-replacement option.
+ * Typed materialization failure exposed by the host package. The
+ * filesystem handler and template implementation remain daemon-owned.
  */
 export { AgentMaterializeError } from './daemon/agent-materialize/index.js';

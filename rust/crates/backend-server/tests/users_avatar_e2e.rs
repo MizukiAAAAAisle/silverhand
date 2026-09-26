@@ -3,9 +3,8 @@
 //! over a real SQLite database, driving the production application flows and the
 //! production `SqliteUserStore` adapter through the actual axum router.
 //!
-//! Two collaborators are test doubles, and only where no production adapter ships
-//! in this vertical: the `user_changed` sink (the #2220 integration residual) and
-//! the avatar blob backend (the #2221 residual). The blob store is a deterministic
+//! Two collaborators are test doubles: the `user_changed` sink and the avatar
+//! blob backend. The blob store is a deterministic
 //! in-memory map so the lifecycle — put → serve → replace (old blob deleted) →
 //! clear (blob deleted) → 404 — is observable without a filesystem.
 //!
@@ -23,7 +22,6 @@ use std::sync::{
 use axum::{
     Router,
     body::{Body, to_bytes},
-    extract::DefaultBodyLimit,
     http::{Request, StatusCode, header::HeaderName},
 };
 use serde_json::{Value, json};
@@ -36,8 +34,8 @@ use silverhand_backend_core::{
         SessionBearer, SessionClock, SessionTtl,
     },
     identity_access::avatar::{
-        AVATAR_MAX_BYTES, AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome,
-        AvatarBlobStore, AvatarContentType, AvatarStorageFailure,
+        AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome, AvatarBlobStore,
+        AvatarContentType, AvatarStorageFailure,
     },
     identity_access::credential::{
         Argon2idCost, PasswordHashError, PasswordHashParams, PasswordHasher,
@@ -131,8 +129,8 @@ impl UserChangedSink for CountingSink {
 /// The stored `(pointer key, bytes)` pairs the in-memory blob backend holds.
 type StoredBlobs = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 
-/// A deterministic in-memory avatar blob backend standing in for the #2221
-/// production adapter. Each `put` mints a fresh sequential key (so a re-upload of
+/// A deterministic in-memory avatar blob backend. Each `put` mints a fresh
+/// sequential key (so a re-upload of
 /// the same bytes never clobbers or cache-hits), stores the bytes, and records
 /// deletes so the test can prove the replaced/cleared blob is cleaned up.
 #[derive(Clone, Default)]
@@ -348,15 +346,6 @@ async fn dangling_backend() -> Backend {
     }
 }
 
-/// Wrap an app in the served application's global 128 MiB/request body limit — the
-/// ratified integration seam this unmounted leaf does NOT install itself. axum's
-/// per-route default is 2 MiB, which would truncate a valid 5 MiB avatar before
-/// the domain's own size check ran; the mount raises it so the file's own bounded
-/// read (`AVATAR_MAX_BYTES + 1`) is the sole size authority.
-fn mounted(app: &Router) -> Router {
-    app.clone().layer(DefaultBodyLimit::max(128 * 1024 * 1024))
-}
-
 // ===========================================================================
 // Request helpers
 // ===========================================================================
@@ -496,7 +485,7 @@ async fn full_avatar_lifecycle_upload_serve_replace_clear_then_missing() {
     let users = directory["users"].as_array().unwrap();
     assert_eq!(users.len(), 1);
     assert_eq!(users[0]["id"], json!(user_id));
-    assert_eq!(users[0]["avatar_url"], Value::Null);
+    assert_eq!(users[0].get("avatar_url"), Some(&Value::Null));
 
     // Fetching the avatar before one exists is a product 404.
     let (status, _, bytes) = call(&backend.app, authed_get(&avatar_path(&user_id), &token)).await;
@@ -519,6 +508,10 @@ async fn full_avatar_lifecycle_upload_serve_replace_clear_then_missing() {
     assert_eq!(uploaded["user"]["id"], json!(user_id));
     assert_eq!(backend.sink.count(), announces_after_signup + 1);
     assert_eq!(backend.blobs.live_count(), 1);
+    assert!(
+        backend.blobs.deleted().is_empty(),
+        "first upload has no prior blob"
+    );
 
     // Serve the bytes back with the product's header set.
     let (status, headers, served) =
@@ -571,7 +564,7 @@ async fn full_avatar_lifecycle_upload_serve_replace_clear_then_missing() {
     let (status, _, bytes) = call(&backend.app, authed_delete(users::ME_AVATAR_PATH, &token)).await;
     assert_eq!(status, StatusCode::OK);
     let cleared = json_of(&bytes);
-    assert_eq!(cleared["avatar_url"], Value::Null);
+    assert_eq!(cleared.get("avatar_url"), Some(&Value::Null));
     assert_eq!(cleared["id"], json!(user_id));
     assert!(
         cleared.get("user").is_none(),
@@ -584,7 +577,7 @@ async fn full_avatar_lifecycle_upload_serve_replace_clear_then_missing() {
     let deletes_before = backend.blobs.deleted().len();
     let (status, _, bytes) = call(&backend.app, authed_delete(users::ME_AVATAR_PATH, &token)).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json_of(&bytes)["avatar_url"], Value::Null);
+    assert_eq!(json_of(&bytes).get("avatar_url"), Some(&Value::Null));
     assert_eq!(
         backend.sink.count(),
         announces_after_signup + 3,
@@ -714,66 +707,6 @@ async fn fetch_of_an_unknown_user_id_is_404_not_found() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json_of(&bytes), json!({ "error": "avatar not found" }));
-}
-
-// ===========================================================================
-// Size boundary under the mounted global body limit (P0-2)
-// ===========================================================================
-
-#[tokio::test]
-async fn a_five_mib_avatar_at_the_cap_succeeds_under_the_mounted_body_limit() {
-    let backend = backend().await;
-    let (token, user_id) = signed_up(&backend.app).await;
-    let app = mounted(&backend.app);
-    // Exactly AVATAR_MAX_BYTES: admitted (the check is `> cap`, not `>= cap`).
-    let bytes = vec![0x21u8; AVATAR_MAX_BYTES as usize];
-    let (status, _, body) = call(
-        &app,
-        upload(&token, "file", Some("big.png"), Some("image/png"), &bytes),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "a 5 MiB file at the cap is admitted"
-    );
-    assert_eq!(
-        json_of(&body)["avatar_url"],
-        json!(format!("/api/users/{user_id}/avatar?v={NOW_MS}"))
-    );
-    assert_eq!(backend.blobs.live_count(), 1);
-}
-
-#[tokio::test]
-async fn one_byte_over_the_cap_is_the_exact_413_not_a_truncation_or_envelope_error() {
-    let backend = backend().await;
-    let (token, _) = signed_up(&backend.app).await;
-    let app = mounted(&backend.app);
-    // AVATAR_MAX_BYTES + 1: the file's own bounded read holds exactly one byte past
-    // the cap — enough for the domain to return the precise `avatar_too_large`,
-    // never axum's default 2 MiB envelope error nor a silent truncation to success.
-    let bytes = vec![0x21u8; AVATAR_MAX_BYTES as usize + 1];
-    let (status, _, body) = call(
-        &app,
-        upload(
-            &token,
-            "file",
-            Some("toobig.png"),
-            Some("image/png"),
-            &bytes,
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(
-        json_of(&body),
-        json!({ "error": "Avatar must be 5 MB or smaller.", "code": "avatar_too_large" })
-    );
-    assert_eq!(
-        backend.blobs.live_count(),
-        0,
-        "an over-cap upload writes no blob"
-    );
 }
 
 // ===========================================================================

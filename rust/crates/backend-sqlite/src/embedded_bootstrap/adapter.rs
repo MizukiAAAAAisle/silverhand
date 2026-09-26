@@ -429,6 +429,7 @@ INSERT INTO conversations \
         assert_eq!(user.display_name, "Local User");
         assert_eq!(user.email, None);
         assert!(user.avatar.is_none());
+        assert_eq!((user.created_at, user.updated_at), (500, 500));
 
         let mut db = reopen(&path).await;
         let pending: bool =
@@ -471,7 +472,8 @@ INSERT INTO conversations \
                VALUES ('solo', 'solo', 'Solo', 'solo@example.com', 1, 1);",
         )
         .await;
-        let entropy = ScriptedEntropy::new(vec![1; 32]);
+        // Selection must not draw entropy even if the source would fail immediately.
+        let entropy = ScriptedEntropy::new(vec![]);
         let store = SqliteEmbeddedBootstrap::open_with_entropy(&path, entropy)
             .await
             .unwrap();
@@ -485,11 +487,15 @@ INSERT INTO conversations \
 
         // No membership/ownership was written by the select.
         let mut db = reopen(&path).await;
-        let ws_members: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace_users")
-            .fetch_one(&mut db)
-            .await
-            .unwrap();
-        assert_eq!(ws_members, 0);
+        let backfills: (i64, i64, i64) = sqlx::query_as(
+            "SELECT (SELECT COUNT(*) FROM workspace_users),
+                    (SELECT COUNT(*) FROM workspaces WHERE owner_user_id IS NOT NULL),
+                    (SELECT COUNT(*) FROM conversation_users)",
+        )
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+        assert_eq!(backfills, (0, 0, 0));
     }
 
     #[tokio::test]
@@ -501,7 +507,8 @@ INSERT INTO conversations \
                VALUES ('b', 'bb', 'B', 1, 1);",
         )
         .await;
-        let entropy = ScriptedEntropy::new(vec![1; 32]);
+        // Ambiguity is a product refusal independent of entropy availability.
+        let entropy = ScriptedEntropy::new(vec![]);
         let store = SqliteEmbeddedBootstrap::open_with_entropy(&path, entropy)
             .await
             .unwrap();
@@ -509,11 +516,15 @@ INSERT INTO conversations \
         let choice = store.choose_or_create(500).await.unwrap();
         assert!(matches!(choice, BootstrapChoice::Conflict));
         let mut db = reopen(&path).await;
-        let ws_members: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace_users")
-            .fetch_one(&mut db)
-            .await
-            .unwrap();
-        assert_eq!(ws_members, 0);
+        let backfills: (i64, i64, i64) = sqlx::query_as(
+            "SELECT (SELECT COUNT(*) FROM workspace_users),
+                    (SELECT COUNT(*) FROM workspaces WHERE owner_user_id IS NOT NULL),
+                    (SELECT COUNT(*) FROM conversation_users)",
+        )
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+        assert_eq!(backfills, (0, 0, 0));
     }
 
     #[tokio::test]
@@ -564,46 +575,6 @@ INSERT INTO conversations \
             .await
             .unwrap();
         assert_eq!(user_count, 1, "never two users");
-    }
-
-    #[tokio::test]
-    async fn a_one_user_select_is_independent_of_entropy() {
-        // Entropy that fails on the first byte drawn. A select must never draw it, so
-        // an unrelated RNG fault cannot turn a 1-user Selected into a 500.
-        let (_dir, path) = seed_db(
-            "INSERT INTO users (id, name, display_name, created_at, updated_at) \
-               VALUES ('solo', 'solo', 'Solo', 1, 1);",
-        )
-        .await;
-        let store = SqliteEmbeddedBootstrap::open_with_entropy(&path, ScriptedEntropy::new(vec![]))
-            .await
-            .unwrap();
-
-        let choice = store.choose_or_create(500).await.unwrap();
-        let BootstrapChoice::Selected { user } = choice else {
-            panic!("expected Selected despite failing entropy, got {choice:?}");
-        };
-        assert_eq!(user.id.as_str(), "solo");
-    }
-
-    #[tokio::test]
-    async fn a_many_user_conflict_is_independent_of_entropy() {
-        let (_dir, path) = seed_db(
-            "INSERT INTO users (id, name, display_name, created_at, updated_at) \
-               VALUES ('a', 'aa', 'A', 1, 1); \
-             INSERT INTO users (id, name, display_name, created_at, updated_at) \
-               VALUES ('b', 'bb', 'B', 1, 1);",
-        )
-        .await;
-        let store = SqliteEmbeddedBootstrap::open_with_entropy(&path, ScriptedEntropy::new(vec![]))
-            .await
-            .unwrap();
-
-        let choice = store.choose_or_create(500).await.unwrap();
-        assert!(
-            matches!(choice, BootstrapChoice::Conflict),
-            "expected Conflict despite failing entropy, got {choice:?}"
-        );
     }
 
     #[tokio::test]

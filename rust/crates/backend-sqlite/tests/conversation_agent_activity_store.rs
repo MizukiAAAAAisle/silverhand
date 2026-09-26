@@ -349,16 +349,24 @@ async fn agent_stream_uses_existing_viewer_arms_without_channel_slicing_and_rech
     assert_eq!(count, 4);
     use sqlx::Row;
     let plan=sqlx::query("EXPLAIN QUERY PLAN SELECT id FROM conversation_events WHERE agent_id='stream' ORDER BY id DESC LIMIT 3").fetch_all(&mut db).await.unwrap();
-    assert!(plan.iter().any(|row| {
-        row.get::<String, _>("detail")
-            .contains("idx_conversation_events_stream")
-    }));
+    let details: Vec<String> = plan.iter().map(|row| row.get("detail")).collect();
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("SEARCH conversation_events")
+                && detail.contains("agent_id=?")),
+        "{details:?}"
+    );
+    assert!(
+        !details.iter().any(|detail| detail.contains("TEMP B-TREE")),
+        "{details:?}"
+    );
 }
 
 #[tokio::test]
 async fn retention_seven_day_boundary_shared_stream_and_expired_page_cursor() {
     use silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_agent_activity::{
-        ACTIVITY_RETENTION_MS, ActivityBefore, ActivityEventId, AgentActivityReadPort,
+        ActivityBefore, ActivityEventId, AgentActivityReadPort,
     };
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("retention.sqlite");
@@ -366,7 +374,7 @@ async fn retention_seven_day_boundary_shared_stream_and_expired_page_cursor() {
     let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
         .await
         .unwrap();
-    let now = ACTIVITY_RETENTION_MS + 100;
+    let now = 604_800_000 + 100; // Seven days, independent of the production retention constant.
     // Deliberately non-monotone timestamps: retention is time-based, not an id cutoff.
     db.execute("UPDATE conversation_events SET created_at=CASE id WHEN 1 THEN 100 WHEN 2 THEN 99 WHEN 3 THEN 101 ELSE 99 END").await.unwrap();
     db.execute("INSERT INTO agents(id,name,runtime,host_id,created_by_user_id,session_scope,created_at,updated_at) VALUES ('stream','stream','codex','h','member','agent',1,1)").await.unwrap();

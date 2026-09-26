@@ -1,7 +1,7 @@
 //! Rust half of the cross-language GET /api/presence whole-wire parity gate
 //! (#task:2195, batch 1 P0-2).
 //!
-//! The SAME checked-in fixtures the TypeScript oracle replays
+//! The checked-in fixtures ratified by the now-retired TypeScript oracle
 //! (packages/backend/tests/presence-cold-read-parity.test.ts) are replayed here:
 //! one `seed.sql` executed verbatim against a fresh current-schema database, one
 //! `online.json` naming the present viewers, and one `expected.json` the wire body
@@ -11,11 +11,10 @@
 //! (snake_case, the lowercase closed enum, the online arm's suppressed `null`, the
 //! `(created_at, id)` order) is what gets compared.
 //!
-//! The TS side runs first as the oracle: the expected JSON is hand-authored but
-//! signed by the real TS authority before the Rust side is asked to match it, so
-//! this test is a pure differential against that ratified artifact — the two
-//! implementations cannot drift on discrimination, listed order, or per-viewer
-//! stamp suppression. The route is authenticated, so the request injects the
+//! The expected JSON was hand-authored and signed by the real TS authority
+//! during migration. Rust must preserve that frozen contract for discrimination,
+//! listed order, and per-viewer stamp suppression; no live TS oracle runs here.
+//! The route is authenticated, so the request injects the
 //! `UserId` extension the composition perimeter would attach; the auth-refusal body
 //! is the perimeter's (#task:2197), not this gate's.
 

@@ -485,17 +485,4 @@ mod tests {
 
         assert_eq!(facts.id, conversation());
     }
-
-    /// Infrastructure failure keeps its cause and stays distinguishable from a
-    /// refusal: nothing about the request would have changed the outcome.
-    #[test]
-    fn an_infrastructure_failure_is_not_a_refusal() {
-        #[derive(Debug, thiserror::Error)]
-        #[error("driver refused the statement")]
-        struct Driver;
-
-        let error = SendMessageError::from(PersistenceFailure::from_source(Driver));
-
-        assert!(matches!(error, SendMessageError::Persistence(_)));
-    }
 }

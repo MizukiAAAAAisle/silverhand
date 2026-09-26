@@ -348,14 +348,13 @@ mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
     use axum::http::Request as HttpRequest;
+    use silverhand_backend_core::conversation_messaging::messaging::collaboration::agent_search::AgentSearchScope;
     use silverhand_backend_core::conversation_messaging::messaging::collaboration::agent_search::{
         AgentSearchResult, ResolvedSearchScope,
     };
-    use silverhand_backend_core::conversation_messaging::messaging::collaboration::message_target_coordinates::{
-        ConversationPlacementKind, ConversationRosterPolicy, MessageTargetCoordinates,
+    use silverhand_backend_core::foundation::identity::{
+        AgentId, ConversationId, DaemonInstanceId,
     };
-    use silverhand_backend_core::conversation_messaging::messaging::collaboration::agent_search::AgentSearchScope;
-    use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, DaemonInstanceId};
     use silverhand_backend_core::host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeGeneration, RuntimeScope,
     };
@@ -476,18 +475,5 @@ mod tests {
             captured.lock().unwrap().is_none(),
             "read authority zero-reach on identity refusal"
         );
-    }
-
-    // Keep the coordinate types referenced so the wire projection stays covered.
-    #[allow(dead_code)]
-    fn _coords() -> MessageTargetCoordinates {
-        MessageTargetCoordinates {
-            conversation: ConversationId::parse("c").unwrap(),
-            placement_kind: ConversationPlacementKind::Workspace,
-            roster_policy: ConversationRosterPolicy::Open,
-            channel_id: ConversationId::parse("c").unwrap(),
-            workspace_id: None,
-            title: "t".to_owned(),
-        }
     }
 }

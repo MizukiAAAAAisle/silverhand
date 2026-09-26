@@ -569,7 +569,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn begin_refuses_each_precedence_arm() {
+    async fn begin_refuses_missing_deleting_and_already_transitioning_agents() {
         let dir = tempfile::tempdir().unwrap();
 
         let missing = seed_schema(&dir, "missing.db", &[USER, HOST]).await;
@@ -581,7 +581,7 @@ mod tests {
             BeginTransition::NotFound
         );
 
-        // A deletion marker answers before a transition would.
+        // A deletion marker refuses acquisition.
         let deleting = seed_schema(&dir, "deleting.db", &[USER, HOST, DELETING_A1]).await;
         let store = SqliteHostAgentStore::open(&deleting).await.unwrap();
         assert_eq!(

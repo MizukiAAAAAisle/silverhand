@@ -115,7 +115,7 @@ async fn exercise_invite(mode: &str) {
                 assert!(matches!(frame, ClientMessage::Close(_)));
                 let state = detail(&router, &bearer, host).await;
                 assert_eq!(state["status"], "pending");
-                assert!(state["activated_at"].is_null());
+                assert_eq!(state.get("activated_at"), Some(&serde_json::Value::Null));
                 return;
             }
             if mode == "cancel" {
@@ -136,12 +136,17 @@ async fn exercise_invite(mode: &str) {
                 )
                 .await;
                 assert_eq!(status, StatusCode::UNAUTHORIZED);
-                while let Some(frame) = socket.next().await {
-                    if let ClientMessage::Close(Some(close)) = frame.unwrap() {
-                        assert_eq!(close.reason, "host_revoked");
-                        break;
+                let close = loop {
+                    let frame = socket
+                        .next()
+                        .await
+                        .expect("revocation must send a terminal close before EOF")
+                        .unwrap();
+                    if let ClientMessage::Close(close) = frame {
+                        break close.expect("revocation close must carry its reason");
                     }
-                }
+                };
+                assert_eq!(close.reason, "host_revoked");
                 let activated: Option<i64> =
                     sqlx::query_scalar("SELECT activated_at FROM hosts WHERE id=?")
                         .bind(host)
@@ -161,14 +166,18 @@ async fn exercise_invite(mode: &str) {
                 assert_eq!(close.reason, "host_activation_failed");
                 let state = detail(&router, &bearer, host).await;
                 assert_eq!(state["status"], "pending");
-                assert!(state["connected_host_name"].is_null());
+                assert_eq!(
+                    state.get("connected_host_name"),
+                    Some(&serde_json::Value::Null)
+                );
                 return;
             }
             reply_host_status(&mut socket).await;
             let attached = detail(&router, &bearer, host).await;
             assert_eq!(attached["status"], "attached");
             assert!(attached["activated_at"].is_number());
-            assert!(attached["finalized_at"].is_null());
+            assert_eq!(attached.get("finalized_at"), Some(&serde_json::Value::Null));
+            assert_eq!(attached["connected_host_name"], "Test computer");
             let (status, body) = json_request_with_body(
                 &router,
                 "PATCH",
@@ -180,6 +189,7 @@ async fn exercise_invite(mode: &str) {
             assert_eq!(status, StatusCode::OK, "{body}");
             let active = detail(&router, &bearer, host).await;
             assert_eq!(active["status"], "active");
+            assert!(active["finalized_at"].is_number());
             let (_, listed) = request(&router, "GET", "/api/hosts", Some(&bearer)).await;
             assert!(
                 serde_json::from_str::<serde_json::Value>(&listed).unwrap()["hosts"]
@@ -192,7 +202,11 @@ async fn exercise_invite(mode: &str) {
             socket.close(None).await.unwrap();
             // Wait for registry cleanup, not an arbitrary delay, before redialing.
             loop {
-                if detail(&router, &bearer, host).await["connected_host_name"].is_null() {
+                let disconnected = detail(&router, &bearer, host).await;
+                let name = disconnected
+                    .get("connected_host_name")
+                    .expect("host detail must carry diagnostic liveness");
+                if name.is_null() {
                     break;
                 }
                 tokio::task::yield_now().await;

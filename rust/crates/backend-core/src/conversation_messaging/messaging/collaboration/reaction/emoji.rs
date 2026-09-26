@@ -83,6 +83,13 @@ mod tests {
         assert!(ReactionEmoji::parse("👨‍👩‍👧").is_ok());
         assert!(ReactionEmoji::parse("not-emoji").is_err());
         assert!(ReactionEmoji::parse("👍 👍").is_err());
-        assert!(ReactionEmoji::parse(&"👍".repeat(9)).is_err());
+        assert_eq!(
+            ReactionEmoji::parse(&"👍".repeat(8)).unwrap().as_str(),
+            "👍".repeat(8)
+        );
+        assert_eq!(
+            ReactionEmoji::parse(&"👍".repeat(9)),
+            Err(InvalidReactionEmoji::TooLong)
+        );
     }
 }

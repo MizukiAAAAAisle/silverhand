@@ -9,12 +9,13 @@
 //! model. What no unit test can show is that those layers WIRE UP end to end: that
 //! the real `SqliteHostResourcesColdRead` — its two statements on one deferred
 //! snapshot, both bound to the same id — feeds the real `host_resources::router`
-//! and yields the exact wire bytes.
+//! and yields the expected payload and JSON envelope.
 //!
 //! So this is a single LOAD-BEARING composition proof, not a differential and not a
 //! matrix: two vectors driven through the real stack against a fresh current-schema
 //! database — one admitted owner who must receive the full list, and one registered
-//! stranger whom the owner-scoped 404 must collapse to a byte-identical refusal. The
+//! stranger who receives the owner-scoped 404 payload. Byte equivalence across
+//! refusal cases is tested by the route and mounted composition keepers. The
 //! expected values are the TS route's (`routes/hosts.ts`, `read-model/
 //! host-resources.ts`), read at authoring; the Rust vertical is now their sole
 //! consumer.

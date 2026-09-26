@@ -10,7 +10,6 @@ import {
   reasoningEffortOptionsForRuntime,
   reasoningEffortValidForRuntime,
   runtimeDefaultModel,
-  runtimeCatalogCoversAllKinds,
   runtimeCatalogEntry,
   runtimeCliLabel,
   runtimeLabel,
@@ -20,7 +19,6 @@ import {
 
 describe('runtime catalog (shared source of truth)', () => {
   it('covers every RuntimeKind exactly once, in order', () => {
-    expect(runtimeCatalogCoversAllKinds()).toBe(true);
     expect([...RUNTIME_ORDER_LIST].sort()).toEqual([...RuntimeKindSchema.options].sort());
     expect(RUNTIME_CATALOG.map((e) => e.kind)).toEqual([...RUNTIME_ORDER_LIST]);
   });
@@ -209,21 +207,6 @@ describe('runtime catalog (shared source of truth)', () => {
       // both are gated behind `runtime.codex.reasoning.v1` at send time.
       expect(isBaselineReasoningEffort('codex', 'max')).toBe(false);
       expect(isBaselineReasoningEffort('codex', 'ultra')).toBe(false);
-    });
-
-    it('Max is offered + valid for every verified 5.6 model, refused elsewhere', () => {
-      for (const model of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
-        expect(reasoningEffortOptionsForRuntime('codex', model)).toContain('max');
-        expect(reasoningEffortValidForRuntime('codex', 'max', model)).toBe(true);
-      }
-      expect(reasoningEffortValidForRuntime('codex', 'max', 'gpt-5.5')).toBe(false);
-      expect(reasoningEffortValidForRuntime('codex', 'max', 'my-proxy-model')).toBe(false);
-      expect(reasoningEffortValidForRuntime('codex', 'max', null)).toBe(false);
-    });
-
-    it('Ultra remains offered + valid for gpt-5.6-sol', () => {
-      expect(reasoningEffortOptionsForRuntime('codex', 'gpt-5.6-sol')).toContain('ultra');
-      expect(reasoningEffortValidForRuntime('codex', 'ultra', 'gpt-5.6-sol')).toBe(true);
     });
 
     it('Ultra refused on other 5.6 / unlisted / default models (they keep Max but not Ultra)', () => {

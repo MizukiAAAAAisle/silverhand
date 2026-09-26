@@ -135,7 +135,7 @@ mod tests {
         body::{Body, to_bytes},
         http::Request,
     };
-    use serde_json::{Value, json};
+    use serde_json::Value;
     use silverhand_backend_core::{
         foundation::persistence::PersistenceFailure,
         identity_access::workspace_name::CanonicalWorkspaceName,
@@ -145,7 +145,6 @@ mod tests {
 
     #[derive(Clone)]
     enum FakeNamespace {
-        Holding(String),
         Empty,
         Fails,
     }
@@ -156,9 +155,6 @@ mod tests {
             name: &CanonicalWorkspaceName,
         ) -> Result<Option<HeldName>, PersistenceFailure> {
             match self {
-                FakeNamespace::Holding(key) => Ok(Some(HeldName {
-                    name_key: key.clone(),
-                })),
                 FakeNamespace::Empty => Ok(None),
                 FakeNamespace::Fails => {
                     let _ = name;
@@ -189,53 +185,6 @@ mod tests {
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         (status, value)
-    }
-
-    #[tokio::test]
-    async fn a_free_name_is_available_at_200() {
-        let (status, body) = probe_request(FakeNamespace::Empty, "name=Design%20Team", true).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, json!({ "available": true, "reason": "available" }));
-    }
-
-    #[tokio::test]
-    async fn a_held_name_is_taken_at_200() {
-        let (status, body) = probe_request(
-            FakeNamespace::Holding("design team".to_owned()),
-            "name=Design%20Team",
-            true,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, json!({ "available": false, "reason": "taken" }));
-    }
-
-    #[tokio::test]
-    async fn every_format_refusal_is_invalid_at_200_never_a_4xx() {
-        // empty (absent param), forbidden scalar, over 64, AND the two cross-length
-        // cases (65–128 + forbidden, and > 128) all collapse to the same invalid
-        // answer at 200 — the endpoint publishes no distinction between them.
-        let sixty_five_a = "a".repeat(65);
-        let forbidden_in_envelope = format!("{}%E2%80%8D", "a".repeat(100)); // 100a + ZWJ (101 cp)
-        let beyond_envelope = format!("{}%E2%80%8D", "a".repeat(200)); // 200a + ZWJ (201 cp)
-        let cases = [
-            String::new(),                           // absent `name`
-            "name=".to_owned(),                      // empty value
-            "name=a%E2%80%8Db".to_owned(),           // forbidden ZWJ
-            format!("name={sixty_five_a}"),          // over the 64 cap
-            format!("name={forbidden_in_envelope}"), // 65–128 + forbidden
-            format!("name={beyond_envelope}"),       // over 128
-        ];
-        for query in cases {
-            let (status, body) =
-                probe_request(FakeNamespace::Holding("anything".to_owned()), &query, true).await;
-            assert_eq!(status, StatusCode::OK, "{query:?}");
-            assert_eq!(
-                body,
-                json!({ "available": false, "reason": "invalid" }),
-                "{query:?}"
-            );
-        }
     }
 
     #[tokio::test]

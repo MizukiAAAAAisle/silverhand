@@ -7,8 +7,8 @@ import type {
 import { parseDocument } from 'yaml';
 import { z } from 'zod';
 
-export const MEMORY_NOTE_FRONTMATTER_READ_CAP_BYTES = 16 * 1024;
-export const MEMORY_NOTES_CATALOG_MAX_ENTRIES = 20;
+const MEMORY_NOTE_FRONTMATTER_READ_CAP_BYTES = 16 * 1024;
+const MEMORY_NOTES_CATALOG_MAX_ENTRIES = 20;
 
 const MemoryNoteFrontmatterSchema = z
   .object({

@@ -2,8 +2,8 @@
 //!
 //! Drives `SqliteTaskEditWrite::apply_edit`: a real change applies and stamps the
 //! `last_editor` triple; a same-value request is a NoOp with zero write; a
-//! non-participant is NotFound; a read-only direct pair is ConversationReadonly;
-//! and the human editor path shares the same gate + no-op guard. Edit has no
+//! non-participant is NotFound; and the human editor path stamps its own actor
+//! kind. Edit has no
 //! assignee gate — participation + read-only + the canonical no-op decision.
 
 use silverhand_backend_core::conversation_messaging::messaging::task::{
@@ -89,16 +89,14 @@ fn agent_editor() -> TaskEditor {
     TaskEditor::Agent(AgentId::parse(AGENT).unwrap())
 }
 
-/// The `task_edit` system messages in `conv-1`: `(content, metadata)` for each,
-/// so a test can assert the appended notice's shape (or its absence on a no-op).
-async fn task_edit_messages(path: &Path) -> Vec<(String, String)> {
+/// All messages in the seeded conversation, including unexpected kinds/subtypes.
+async fn conversation_messages(path: &Path) -> Vec<(String, String, String)> {
     let mut connection = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
         .await
         .unwrap();
     let rows = sqlx::query(
-        "SELECT content, metadata FROM messages \
-         WHERE conversation_id = 'conv-1' AND from_kind = 'system' \
-           AND json_extract(metadata, '$.subtype') = 'task_edit' \
+        "SELECT from_kind, content, metadata FROM messages \
+         WHERE conversation_id = 'conv-1' \
          ORDER BY seq",
     )
     .fetch_all(&mut connection)
@@ -107,36 +105,12 @@ async fn task_edit_messages(path: &Path) -> Vec<(String, String)> {
     rows.into_iter()
         .map(|row| {
             (
+                row.try_get::<String, _>("from_kind").unwrap(),
                 row.try_get::<String, _>("content").unwrap(),
                 row.try_get::<String, _>("metadata").unwrap(),
             )
         })
         .collect()
-}
-
-#[tokio::test]
-async fn a_real_title_change_applies_and_stamps_the_editor() {
-    let (_dir, path) = open_db().await;
-    let writer = SqliteTaskEditWrite::open(&path).await.unwrap();
-
-    let outcome = writer
-        .apply_edit(
-            &task_id(),
-            &agent_editor(),
-            Some(&AgentEventNames::new("agent-1", "Agent")),
-            Some(TaskTitle::parse("New title").unwrap()),
-            None,
-        )
-        .await
-        .unwrap();
-    assert!(matches!(outcome, TaskEditWriteOutcome::Applied(_)));
-
-    let (title, content, kind, id, edited_at) = read_edit(&path).await;
-    assert_eq!(title, "New title");
-    assert_eq!(content, "old body", "an unset field is left unchanged");
-    assert_eq!(kind.as_deref(), Some("agent"));
-    assert_eq!(id.as_deref(), Some(AGENT));
-    assert!(edited_at.is_some_and(|timestamp| timestamp > 1));
 }
 
 #[tokio::test]
@@ -160,32 +134,6 @@ async fn clearing_content_to_empty_is_a_real_change() {
         content, "",
         "empty content differs from the old body — a change"
     );
-}
-
-#[tokio::test]
-async fn a_same_value_request_is_a_noop_with_zero_write() {
-    let (_dir, path) = open_db().await;
-    let writer = SqliteTaskEditWrite::open(&path).await.unwrap();
-
-    // Title equal to the current value; content unset → no canonical change.
-    let outcome = writer
-        .apply_edit(
-            &task_id(),
-            &agent_editor(),
-            Some(&AgentEventNames::new("agent-1", "Agent")),
-            Some(TaskTitle::parse("Old title").unwrap()),
-            None,
-        )
-        .await
-        .unwrap();
-    assert!(matches!(outcome, TaskEditWriteOutcome::NoOp(_)));
-
-    let (title, content, kind, id, edited_at) = read_edit(&path).await;
-    assert_eq!(title, "Old title");
-    assert_eq!(content, "old body");
-    assert_eq!(kind, None, "no last_editor stamp on a no-op");
-    assert_eq!(id, None);
-    assert_eq!(edited_at, None);
 }
 
 #[tokio::test]
@@ -270,10 +218,8 @@ async fn a_human_editor_shares_the_gate_and_stamps_a_user_triple() {
 }
 
 #[tokio::test]
-async fn a_real_change_appends_a_task_edit_event_in_the_same_transaction() {
-    // Atomicity contract: the UPDATE and its `task_edit` notice commit
-    // together. The appended message carries the POST-change title, the actor
-    // pill (the resolved editor name), and the uniform metadata.
+async fn a_real_title_change_persists_the_row_editor_and_post_change_event() {
+    // The persisted row and notice carry the post-change title and editor.
     let (_dir, path) = open_db().await;
     let writer = SqliteTaskEditWrite::open(&path).await.unwrap();
 
@@ -289,9 +235,17 @@ async fn a_real_change_appends_a_task_edit_event_in_the_same_transaction() {
         .unwrap();
     assert!(matches!(outcome, TaskEditWriteOutcome::Applied(_)));
 
-    let events = task_edit_messages(&path).await;
+    let (title, body, kind, id, edited_at) = read_edit(&path).await;
+    assert_eq!(title, "New title");
+    assert_eq!(body, "old body", "an unset field is left unchanged");
+    assert_eq!(kind.as_deref(), Some("agent"));
+    assert_eq!(id.as_deref(), Some(AGENT));
+    assert!(edited_at.is_some_and(|timestamp| timestamp > 1));
+
+    let events = conversation_messages(&path).await;
     assert_eq!(events.len(), 1, "exactly one task_edit event appended");
-    let (content, metadata) = &events[0];
+    let (from_kind, content, metadata) = &events[0];
+    assert_eq!(from_kind, "system");
     // Post-change title + resolved actor label (agent → `@name`), task number 1.
     assert_eq!(content, "@alice edited task #1 \"New title\"");
     let value: serde_json::Value = serde_json::from_str(metadata).unwrap();
@@ -304,7 +258,7 @@ async fn a_real_change_appends_a_task_edit_event_in_the_same_transaction() {
 }
 
 #[tokio::test]
-async fn a_noop_appends_no_task_edit_event() {
+async fn a_same_value_request_preserves_the_row_and_appends_no_message() {
     // A same-value request writes nothing — no UPDATE, no last_editor stamp, and
     // crucially NO event (a notice would claim a change that did not happen).
     let (_dir, path) = open_db().await;
@@ -322,9 +276,15 @@ async fn a_noop_appends_no_task_edit_event() {
         .unwrap();
     assert!(matches!(outcome, TaskEditWriteOutcome::NoOp(_)));
     assert!(
-        task_edit_messages(&path).await.is_empty(),
-        "a no-op appends no event"
+        conversation_messages(&path).await.is_empty(),
+        "a no-op appends no message of any subtype"
     );
+    let (title, content, kind, id, edited_at) = read_edit(&path).await;
+    assert_eq!(title, "Old title");
+    assert_eq!(content, "old body");
+    assert_eq!(kind, None, "no last_editor stamp on a no-op");
+    assert_eq!(id, None);
+    assert_eq!(edited_at, None);
 }
 
 #[tokio::test]
