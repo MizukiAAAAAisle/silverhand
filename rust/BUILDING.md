@@ -19,7 +19,7 @@ and isolated smoke results. Old output directories are not cleared. The manifest
 records the source commit and tracked-dirty flag: use a clean source tree for
 release delivery, and do not edit sources while building.
 
-The verified ECS host (2026-09-06) is x86_64 Alibaba Cloud Linux 3 with glibc 2.32.
+The verified ECS host is x86_64 Cloud Linux 3 with glibc 2.32.
 Bullseye's glibc 2.31 provides a compatible build floor; bookworm's newer libc is
 not an interchangeable choice. The script checks the ELF architecture, required
 glibc symbols (at most 2.32), dependency resolution and actual startup on the
