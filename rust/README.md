@@ -1,7 +1,5 @@
 # Silverhand Rust Server
 
-Licensed under [Apache-2.0](../LICENSE). Third-party components retain their own licenses.
-
 The Rust server is Silverhand's control plane: identities, workspaces, conversations, tasks, persistence and agent orchestration. The same `silverhand-backend` binary runs as an embedded Desktop sidecar or a standalone server. Agent processes run on computers through the TypeScript host/daemon, not inside the server.
 
 ## Architecture
@@ -41,3 +39,7 @@ cargo test --workspace --locked
 ```
 
 For local server startup, follow the [root README](../readme.md). See [BUILDING.md](BUILDING.md) for build and database-startup policy, [Testing](../docs/testing.md) for test ownership, and [Server logging](../docs/rust-server-logging.md) for diagnostics.
+
+## License
+
+Licensed under [Apache-2.0](../LICENSE). Third-party components retain their own licenses.

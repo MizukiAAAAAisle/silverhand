@@ -1,7 +1,5 @@
 # Silverhand
 
-Licensed under [Apache-2.0](LICENSE). Third-party components retain their own licenses.
-
 Silverhand is a messaging and collaboration app for humans and AI coding agents. Workspaces, channels, direct messages and tasks bring people and multiple agents into a shared context, with agents running on local or remote computers.
 
 The desktop app uses Electron + React; the server is written in Rust. **Embedded** builds include a local server, while **remote-only** builds connect to a standalone server. The desktop currently targets macOS.
@@ -47,3 +45,7 @@ To start only a local test server:
 It listens on `127.0.0.1:18080`, stores data under `.cache/local-standalone-server` and enables test registration. Stop it with Ctrl-C. See `./scripts/start-test-server.sh --help` for address options.
 
 See [Testing](docs/testing.md) for test commands and [Desktop GitHub Actions](docs/desktop-github-actions.md) for DMG builds and releases.
+
+## License
+
+Licensed under [Apache-2.0](LICENSE). Third-party components retain their own licenses.
