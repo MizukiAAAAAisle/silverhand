@@ -91,7 +91,7 @@
 /* ── Non-themable layout constants ── */
 :root {
   --titlebar-height: 36px;
-  --nav-rail-width: 48px;
+  --nav-rail-width: 36px;
   --sidebar-width: 240px;
   --titlebar-sidebar-toggle-left: 78px;
   --titlebar-controls-safe-width: 138px;
@@ -474,6 +474,11 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
 
 /* Rail and sidebar navigation share selected text; their surfaces remain independent. */
 .nav-rail {
+  --bg-nav-hover: color-mix(
+    in srgb,
+    var(--nav-hover-base, var(--bg-nav-rail)),
+    var(--nav-hover-tint) var(--nav-hover-strength)
+  );
   background: var(--bg-nav-rail, transparent);
   box-shadow: var(--nav-rail-shadow, none);
   border-right: var(--nav-rail-border-width, 0px) solid var(--nav-rail-border-color, transparent);

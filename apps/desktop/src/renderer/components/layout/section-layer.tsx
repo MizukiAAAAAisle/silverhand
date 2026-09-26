@@ -35,10 +35,8 @@ import type { ReactNode } from "react";
  * the section's component instances (no remount, no lost scroll/state) across
  * the show↔hide flip.
  *
- * The `data-section-layer` hook is how `global.css` §App frame corners finds
- * the frame's right edge: this wrapper's `:last-child` IS the card sitting in
- * the app window's bottom-right corner, whichever section is mounted. Keep the
- * attribute if you touch this component.
+ * Frame-corner clipping belongs to the outer `data-section-sheet`, so the
+ * visible section's rightmost surface follows it without per-panel overrides.
  */
 export function SectionLayer({
   visible,

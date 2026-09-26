@@ -62,6 +62,9 @@
   --warning-surface: rgba(236, 178, 46, 0.15);
 
   /* Navigation and rows */
+  --bg-nav-rail: transparent;
+  --nav-hover-tint: white;
+  --nav-hover-strength: 6%;
   --bg-nav-hover: rgba(255, 255, 255, 0.06);
   --bg-nav-selected: rgba(255, 255, 255, 0.14);
   --bg-row-selected: var(--brand-primary);

@@ -2,18 +2,25 @@
 
 /* Hooks: Application frame */
 
-/* forza6 is otherwise square (poster language). The nav-rail's bottom-left and
-   each main panel's bottom-right are the only corners that meet the OS window's
-   rounded corners, so they alone round to sit concentric with the window curve
-   (≈ window radius − frame-padding). Every other corner stays square.
-   The split-pane animation shell shares the panel geometry so its background
-   cannot fill the curved corner. */
+/* Only the outer frame corners adapt to the OS window. Clip the content sheet
+   at its physical right edge so opening/closing a side pane transfers the corner
+   naturally; interior panels keep the shared theme radius. */
 [data-theme="forza6"] .nav-rail {
+  /* Dark frame navigation; keep the light sidebar's row tokens unchanged. */
+  --text-nav-rail: #a3a3a3;
+  --nav-hover-base: var(--bg-nav-selected);
+  --text-nav-rail-hover: var(--forza6-ink);
+  --border-nav-rail-hover: #8a8a8a;
+  --bg-nav-selected: var(--forza6-lime);
+  --text-nav-selected: var(--forza6-ink);
+  --border-nav-rail-selected: #4b5556;
+  --nav-rail-indicator-color: var(--forza6-lime);
+
   border-bottom-left-radius: 12px !important;
 }
-[data-theme="forza6"] [data-panel],
-[data-theme="forza6"] [data-pane-clip] {
+[data-theme="forza6"] [data-section-sheet] {
   border-bottom-right-radius: 12px;
+  overflow: clip;
 }
 
 [data-theme="forza6"] header[data-titlebar="app"] {

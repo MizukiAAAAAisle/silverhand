@@ -64,6 +64,10 @@
   --warning-surface: #fdf3e2;
 
   /* Navigation and rows */
+  /* Transparent rail preserves the app gradient; the mix becomes a tint overlay. */
+  --bg-nav-rail: transparent;
+  --nav-hover-tint: #1f1a12;
+  --nav-hover-strength: 6%;
   --bg-nav-hover: rgba(31, 26, 18, 0.06);
   --bg-nav-selected: var(--bg-selected);
   --bg-row-selected: var(--accent-soft);

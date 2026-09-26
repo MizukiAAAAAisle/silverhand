@@ -23,16 +23,18 @@
   /* Typography and motion */
   --chrome-label-tracking: 0.06em;
   --font-chrome-label: var(--font-display);
-  --font-display: "Rajdhani", "Impact", "Helvetica Neue Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-display:
+    "Rajdhani", "Impact", "Helvetica Neue Condensed", "Arial Narrow", system-ui, sans-serif;
   --font-mono: "Space Mono", ui-monospace, monospace;
-  --font-sans: "Space Grotesk", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+  --font-sans:
+    "Space Grotesk", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
     "PingFang SC", "Hiragino Sans GB", sans-serif;
 
   /* Application frame and panes */
-  --bg-app: var(--forza6-poster-teal);
+  --bg-app: #0a1314;
   --card-radius: 2px;
   --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
-  --frame-padding: 4px;
+  --frame-padding: 8px;
   --pane-gap: 4px;
   --splitter-hover-bg: rgba(10, 10, 10, 0.45);
 
@@ -78,6 +80,8 @@
   --warning-surface: #fdf3c2;
 
   /* Navigation and rows */
+  --nav-hover-tint: white;
+  --nav-hover-strength: 20%;
   --bg-nav-hover: var(--forza6-lime-pale);
   --bg-nav-selected: var(--forza6-lime);
   --bg-row-selected: var(--forza6-lime);
@@ -250,7 +254,7 @@
 }
 
 [data-theme="forza6"] {
-  --bg-nav-rail: var(--forza6-paper);
+  --bg-nav-rail: transparent;
 
   /* Primary CTA is forza6-only avocado green (its accent is pink); kept out of
    *  `:root` so other themes' CTA falls back to their own `--accent`. */

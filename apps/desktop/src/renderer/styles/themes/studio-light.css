@@ -64,6 +64,9 @@
   --warning-surface: #fdf0dc;
 
   /* Navigation and rows */
+  --bg-nav-rail: transparent;
+  --nav-hover-tint: #1f1a12;
+  --nav-hover-strength: 6%;
   --bg-nav-hover: rgba(31, 26, 18, 0.06);
   --bg-nav-selected: #fff;
   --bg-row-selected: var(--brand-primary);

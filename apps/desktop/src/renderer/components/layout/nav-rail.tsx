@@ -76,8 +76,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
   return (
     <nav
       aria-label="App sections"
-      className="nav-rail flex h-full w-(--nav-rail-width) shrink-0 flex-col items-center gap-1 py-2"
-      style={{ overflow: "hidden" }}
+      className="nav-rail flex h-full w-(--nav-rail-width) shrink-0 flex-col items-center gap-2"
     >
       <TooltipProvider>
         {ITEMS.map((item) => {
@@ -91,7 +90,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
                   aria-label={item.label}
                   aria-current={selected ? "page" : undefined}
                   onClick={() => onChange(item.id)}
-                  className="nav-rail__item flex size-9 items-center justify-center transition-colors"
+                  className="nav-rail__item flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors"
                 >
                   {item.icon}
                   {hasDot && (
@@ -119,7 +118,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
         aria-label="Settings"
         aria-current={settingsSelected ? "page" : undefined}
         onClick={() => onChange("settings")}
-        className="nav-rail__item mt-auto flex size-9 items-center justify-center transition-colors"
+        className="nav-rail__item mt-auto flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors"
       >
         <Settings className="size-4" />
       </button>
