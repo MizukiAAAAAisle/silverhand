@@ -1,4 +1,6 @@
 node_modules
+# Staged from the root license by the daemon prepack hook.
+packages/silverhand-daemon/LICENSE
 dist
 out
 .DS_Store

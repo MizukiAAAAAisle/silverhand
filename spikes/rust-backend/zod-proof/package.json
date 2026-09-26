@@ -1,4 +1,5 @@
 {
+  "license": "Apache-2.0",
   "name": "silverhand-rust-zod-proof",
   "private": true,
   "scripts": {

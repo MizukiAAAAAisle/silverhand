@@ -57,6 +57,8 @@ files:
 # Electron runtime is already in the package, so bundling a second (~60MB)
 # runtime was pure overhead. See docs/build-release.md.
 extraResources:
+  - from: ../../LICENSE
+    to: LICENSE
   - from: ../../packages/cli/dist/cli.js
     to: silverhand-cli/cli.mjs
   # PR-1 silverhand-daemon: Electron main spawns this bundle as a

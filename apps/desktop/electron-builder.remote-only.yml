@@ -44,6 +44,8 @@ files:
   - "!**/node_modules/**/test/**"
 
 extraResources:
+  - from: ../../LICENSE
+    to: LICENSE
   - from: ../../packages/cli/dist/cli.js
     to: silverhand-cli/cli.mjs
   - from: ../../packages/silverhand-daemon/dist/daemon.js
