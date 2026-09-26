@@ -12,7 +12,8 @@ import {
   presentCounterpart,
 } from "@/features/direct-pairs/counterpart-presentation";
 import { mergeDirectLineRows, type DirectLineRow } from "@/features/direct-pairs/direct-line-rows";
-import { channelRowBadge } from "@/features/attention/attention-mode";
+import { directRowBadge } from "../model/sidebar-row-badges";
+import { collapsedRevealRows } from "../model/home-grouping";
 import {
   ConversationRowLayout,
   SidebarSection,
@@ -57,11 +58,11 @@ export function DirectMessagesGroup(props: {
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(users);
 
-  // Collapsed section, open line: keep that one row, so collapsing never leaves
-  // the sidebar with no selection while the pane shows that conversation
-  // (`SidebarSection.collapsedContent`, app-layout.md §3). The draft row is the
-  // open pane just as much, so it survives collapsing the same way.
-  const selectedRow = rows.find((row) => row.selected);
+  const revealed = collapsedRevealRows(rows, {
+    pokeUnread: true,
+    isSelected: (row) => row.selected,
+    isLoud: (row) => directRowBadge(row.unread)?.tier === "loud",
+  });
 
   return (
     <SidebarSection
@@ -74,19 +75,17 @@ export function DirectMessagesGroup(props: {
       collapsible
       defaultExpanded
       persistId="direct-messages"
-      collapsedContent={
-        selectedRow ? (
-          <li>
-            <DirectMessageRow
-              row={selectedRow}
-              agentAvatarUrls={agentAvatarUrls}
-              humanAvatarUrls={humanAvatarUrls}
-              onSelectDirectPair={props.onSelectDirectPair}
-              onSelectDirectDraft={props.onSelectDirectDraft}
-            />
-          </li>
-        ) : null
-      }
+      collapsedContent={revealed.map((row) => (
+        <li key={row.key}>
+          <DirectMessageRow
+            row={row}
+            agentAvatarUrls={agentAvatarUrls}
+            humanAvatarUrls={humanAvatarUrls}
+            onSelectDirectPair={props.onSelectDirectPair}
+            onSelectDirectDraft={props.onSelectDirectDraft}
+          />
+        </li>
+      ))}
     >
       {rows.length === 0 ? <SidebarEmptyRow>No direct messages</SidebarEmptyRow> : null}
       {rows.map((row) => (
@@ -129,11 +128,7 @@ function DirectMessageRow({
   // name are already the ones the minted pair will wear.
   const counterpart = presentCounterpart(row.counterpart);
   // A draft has no unread state to have — it has no messages, by construction.
-  const badge = channelRowBadge({
-    effectiveMode: "all",
-    positionalUnread: row.unread,
-    directedUnread: 0,
-  });
+  const badge = directRowBadge(row.unread);
 
   return (
     <ConversationRowLayout

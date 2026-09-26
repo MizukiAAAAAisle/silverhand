@@ -1,19 +1,18 @@
 import { useMemo } from "react";
 import { Star } from "lucide-react";
-import type {
-  ChannelAttentionMode,
-  ChannelAttentionModeRowDto,
-  FavoriteRowDto,
-} from "@silverhand/shared";
+import type { ChannelAttentionModeRowDto, FavoriteRowDto } from "@silverhand/shared";
 import { useSortable } from "@dnd-kit/sortable";
 import { ChannelRow } from "./channel-row";
 import { AppContextMenu } from "@/components/menus/app-context-menu";
 import { ChannelRowMenuItems } from "./channel-row-menu-items";
 import { useFavorites, useUnstarFavorite } from "@/features/favorites/hooks";
 import { useAttentionModesAcrossWorkspaces } from "@/features/attention/hooks";
-import type { FavoritesWatchScope } from "@/features/chat-shell/model/home-grouping";
+import {
+  collapsedRevealRows,
+  type FavoritesWatchScope,
+} from "@/features/chat-shell/model/home-grouping";
 import { useArchiveChannel, useChannelDetail, useSetSortMode } from "@/features/workspaces/hooks";
-import { channelRowBadge } from "@/features/attention/attention-mode";
+import { favoriteRowBadge } from "../model/sidebar-row-badges";
 import { conversationSelectionTier } from "@/features/chat-shell/model/rail-selection";
 import { sortModeOf } from "@/lib/viewer-sort";
 import { SortModeMenu } from "@/components/layout/sort-mode-menu";
@@ -78,12 +77,12 @@ export function FavoritesGroup(props: {
   const ordered = orderedGroups[FAVORITES_GROUP];
   const mode = sortModeOf(viewerSort);
 
-  // Collapsed STARRED, open conversation starred: keep that one row (see
-  // `SidebarSection.collapsedContent`). Not the sortable wrapper — a single row has
-  // nothing to reorder — but the row itself is unchanged, menu included.
-  const selectedFavorite = props.selectedChannelId
-    ? ordered.find((i) => i.entity_id === props.selectedChannelId)
-    : undefined;
+  // Revealed rows keep the full-list order, but cannot reorder a partial set.
+  const revealed = collapsedRevealRows(ordered, {
+    pokeUnread: true,
+    isSelected: (item) => item.entity_id === props.selectedChannelId,
+    isLoud: (item) => favoriteRowBadge(item, byChannel.get(item.entity_id))?.tier === "loud",
+  });
 
   return (
     <SidebarSection
@@ -94,20 +93,18 @@ export function FavoritesGroup(props: {
       collapsible
       defaultExpanded
       persistId="starred"
-      collapsedContent={
-        selectedFavorite ? (
-          <li>
-            <FavoriteRow
-              item={selectedFavorite}
-              selectedChannelId={props.selectedChannelId}
-              attention={byChannel.get(selectedFavorite.entity_id)}
-              workspaceMuted={mutedByWorkspace.get(selectedFavorite.workspace_id)}
-              onSelectConversation={props.onSelectConversation}
-              onUnstar={() => unstar.mutate(selectedFavorite)}
-            />
-          </li>
-        ) : null
-      }
+      collapsedContent={revealed.map((item) => (
+        <li key={item.favorite_key}>
+          <FavoriteRow
+            item={item}
+            selectedChannelId={props.selectedChannelId}
+            attention={byChannel.get(item.entity_id)}
+            workspaceMuted={mutedByWorkspace.get(item.workspace_id)}
+            onSelectConversation={props.onSelectConversation}
+            onUnstar={() => unstar.mutate(item)}
+          />
+        </li>
+      ))}
       action={
         <SortModeMenu
           mode={mode}
@@ -189,22 +186,7 @@ function FavoriteRow({
   const isPrimary = conversationSelectionTier(item.entity_id, selectedChannelId) === "primary";
   const archive = useArchiveChannel(item.workspace_id);
 
-  // Byte-identical to the parent list's `ChannelRow`, which is the acceptance
-  // contract for the move. A `dm_channel` carries no tier row (the backend's
-  // `loudPositionalPredicate` makes it unconditionally loud, so its verdict IS
-  // `'all'`, and its agent-home parent cannot be muted at all — the attention
-  // suppressor early-returns on a non-regular workspace). For a real channel the
-  // batch row is the ONLY authority: a missing row propagates `undefined`, and the
-  // badge then renders nothing rather than fabricating the loudest tier. That also
-  // subsumes the parent list's `isMember` gate — the batch joins `conversation_users`,
-  // so a browse-only public row has no tier and therefore no badge.
-  const effectiveMode: ChannelAttentionMode | undefined =
-    item.roster_policy === "open" ? attention?.effective_mode : "all";
-  const badge = channelRowBadge({
-    effectiveMode,
-    positionalUnread: item.unread_count ?? 0,
-    directedUnread: attention?.directed_unread_count ?? 0,
-  });
+  const badge = favoriteRowBadge(item, attention);
   const isSilenced = attention?.mode === "mute";
 
   const row = (
