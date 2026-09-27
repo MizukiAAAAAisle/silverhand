@@ -234,6 +234,7 @@ export function useConversationShell({
       workspaceSidebarVisible,
 
       workspaces: read.workspaces,
+      workspacesLoading: read.workspacesLoading,
       agentsById,
 
       savedItems,

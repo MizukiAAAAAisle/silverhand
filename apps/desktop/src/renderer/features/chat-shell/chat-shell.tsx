@@ -109,6 +109,7 @@ export function ChatShell({
                   style={{ width: "var(--sidebar-width)" }}
                 >
                   <ChatSidebar
+                    workspacesLoading={model.workspacesLoading}
                     workspaces={workspaces.map((w) => ({
                       id: w.id,
                       name: w.name,

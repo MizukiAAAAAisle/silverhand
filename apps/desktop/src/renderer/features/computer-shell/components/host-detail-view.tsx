@@ -1,3 +1,4 @@
+import { ComputerStatusSkeleton, ProxySkeleton } from "./computer-skeletons";
 /**
  * `#task:808` slice 4 / `#task:809` polish — host detail / right pane.
  *
@@ -233,7 +234,7 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
       <div className="mx-auto flex w-full max-w-2xl flex-col px-6">
         {statusQuery.isLoading ? (
           <div className="py-6">
-            <SectionSkeleton label="Loading host status…" />
+            <ComputerStatusSkeleton />
           </div>
         ) : statusQuery.isError ? (
           <div className="py-6">
@@ -521,11 +522,7 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
 
   return (
     <>
-      <Button
-        variant="destructive-outline"
-        className="gap-2 w-full"
-        onClick={openConfirm}
-      >
+      <Button variant="destructive-outline" className="gap-2 w-full" onClick={openConfirm}>
         <ShieldOff className="size-3.5" />
         {computerCopy.revokeComputer}
       </Button>
@@ -550,11 +547,7 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
           </DialogHeader>
           {failed ? <p className="text-xs text-error">{computerCopy.revokeFailed}</p> : null}
           <DialogFooter>
-            <Button
-              variant="cancel"
-              onClick={() => setOpen(false)}
-              disabled={revoke.isPending}
-            >
+            <Button variant="cancel" onClick={() => setOpen(false)} disabled={revoke.isPending}>
               {computerCopy.cancel}
             </Button>
             <Button
@@ -647,11 +640,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
 
   return (
     <>
-      <Button
-        variant="destructive-outline"
-        className="gap-2 w-full"
-        onClick={openConfirm}
-      >
+      <Button variant="destructive-outline" className="gap-2 w-full" onClick={openConfirm}>
         <Trash2 className="size-3.5" />
         {computerCopy.deleteComputer}
       </Button>
@@ -673,11 +662,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                 <DialogDescription>{computerCopy.deletePendingBody}</DialogDescription>
               </DialogHeader>
               <DialogFooter>
-                <Button
-                  variant="cancel"
-                  onClick={() => setOpen(false)}
-                  disabled={del.isPending}
-                >
+                <Button variant="cancel" onClick={() => setOpen(false)} disabled={del.isPending}>
                   {computerCopy.cancel}
                 </Button>
                 <Button
@@ -729,11 +714,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                 <p className="text-xs text-error">{computerCopy.deleteFailed}</p>
               ) : null}
               <DialogFooter>
-                <Button
-                  variant="cancel"
-                  onClick={() => setOpen(false)}
-                  disabled={del.isPending}
-                >
+                <Button variant="cancel" onClick={() => setOpen(false)} disabled={del.isPending}>
                   {computerCopy.cancel}
                 </Button>
                 <Button
@@ -912,10 +893,7 @@ function ProxySection({
   return (
     <HostSection title={computerCopy.proxyTitle} collapsible defaultOpen={false}>
       {settingsLoading ? (
-        <div className="flex items-center gap-2 text-sm text-text-muted">
-          <Loader2 className="size-4 animate-spin" aria-hidden />
-          <span>Loading proxy settings…</span>
-        </div>
+        <ProxySkeleton />
       ) : query.isError ? (
         // config-or-throw: a raced `computer_offline` (went unreachable
         // between the availability gate and the GET landing) propagates as a
@@ -1058,7 +1036,12 @@ function ProxySection({
                 </span>
               ) : null}
             </div>
-            <Button type="submit" variant="primary" className="gap-2" disabled={saving || settingsLoading}>
+            <Button
+              type="submit"
+              variant="primary"
+              className="gap-2"
+              disabled={saving || settingsLoading}
+            >
               {saving ? (
                 <Loader2 className="size-3.5 animate-spin" />
               ) : (
@@ -1597,15 +1580,6 @@ function AgentStatusPip({ online }: { online: "online" | "offline" }): JSX.Eleme
 }
 
 /* ─── shared bits ───────────────────────────────────────────────── */
-
-function SectionSkeleton({ label }: { label: string }): JSX.Element {
-  return (
-    <div className="flex items-center gap-2 px-1 text-sm text-text-muted">
-      <Loader2 className="size-4 animate-spin" aria-hidden />
-      <span>{label}</span>
-    </div>
-  );
-}
 
 function Banner({ tone, children }: { tone: HostStatusTone; children: ReactNode }): JSX.Element {
   return (

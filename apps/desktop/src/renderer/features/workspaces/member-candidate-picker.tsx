@@ -1,3 +1,4 @@
+import { InlineLoading } from "@/components/layout/inline-loading";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Search } from "lucide-react";
 import { AgentAvatar } from "@/components/agent-avatar";
@@ -59,6 +60,7 @@ export function MemberCandidatePicker({
   mode,
   ariaLabel,
   emptyHint,
+  loading = false,
   disabled = false,
   rowsDisabled = false,
   autoFocus = false,
@@ -73,6 +75,7 @@ export function MemberCandidatePicker({
   ariaLabel: string;
   /** Shown when the viewer has no eligible candidates at all (no query). */
   emptyHint: string;
+  loading?: boolean;
   /** Disable the search input (floating: while an enrollment is in flight). */
   disabled?: boolean;
   /** Disable candidate rows (inline: while a pick is in flight, list stays up). */
@@ -169,9 +172,13 @@ export function MemberCandidatePicker({
   let flatIndex = -1;
   const rows =
     flat.length === 0 ? (
-      <div className="px-2 py-2 text-center text-xs italic text-text-muted">
-        {normalizedQuery ? "No matches" : emptyHint}
-      </div>
+      loading ? (
+        <InlineLoading label="Loading members" />
+      ) : (
+        <div className="px-2 py-2 text-center text-xs italic text-text-muted">
+          {normalizedQuery ? "No matches" : emptyHint}
+        </div>
+      )
     ) : (
       matched.map((group) => (
         <div key={group.label}>

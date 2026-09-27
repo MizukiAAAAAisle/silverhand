@@ -1,3 +1,4 @@
+import { SchedulesSkeleton } from "./agent-loading";
 import { useEffect, useMemo, useState } from "react";
 import { Ban, CalendarClock, Clock, RefreshCcw, Repeat, Timer } from "lucide-react";
 import dayjs from "dayjs";
@@ -63,7 +64,7 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
       ) : null}
 
       {query.isLoading ? (
-        <div className="text-sm text-text-muted">Loading…</div>
+        <SchedulesSkeleton />
       ) : rows.length === 0 ? (
         <div
           data-panel-card="placeholder"

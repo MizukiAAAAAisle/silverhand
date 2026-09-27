@@ -1,3 +1,4 @@
+import { TaskCardsSkeleton } from "./task-body-skeleton";
 import { taskChannelLabel } from "../model/task-place.js";
 import { useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Clock } from "lucide-react";
@@ -280,9 +281,9 @@ function KanbanColumn({
       {collapsed ? null : (
         <div ref={bodyRef} data-tasks-column-body className="min-h-0 flex-auto overflow-y-auto p-2">
           {isLoading ? (
-            <p className="px-2 py-3 text-center text-(length:--text-meta) text-text-muted">
-              Loading…
-            </p>
+            <div role="status" aria-label="Loading tasks">
+              <TaskCardsSkeleton />
+            </div>
           ) : isError ? (
             <p className="px-2 py-3 text-center text-(length:--text-meta) text-text-muted">
               Couldn’t load tasks

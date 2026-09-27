@@ -53,6 +53,7 @@ export interface ChatShellModel {
   workspaceSidebarPane: SidebarPane;
   workspaceSidebarVisible: boolean;
   workspaces: WorkspaceListItem[];
+  workspacesLoading: boolean;
   agentsById: Map<string, AgentDto>;
   savedItems: SavedMessageDto[] | undefined;
   attentionBadges: AttentionBadgeRollupDto | undefined;

@@ -1,3 +1,4 @@
+import { AccountSkeleton } from "./components/account-skeleton";
 import { ChangePasswordForm } from "./components/change-password-form";
 import { RangeInput } from "@/components/ui/range-input";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
@@ -388,11 +389,7 @@ function AccountPane(): JSX.Element {
   };
 
   if (viewer.isLoading) {
-    return (
-      <section className="flex min-w-0 flex-1 items-center justify-center py-10 text-xs text-text-muted">
-        Loading account…
-      </section>
-    );
+    return <AccountSkeleton />;
   }
   if (!dto) {
     return (

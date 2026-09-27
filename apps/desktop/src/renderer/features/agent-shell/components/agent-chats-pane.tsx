@@ -1,3 +1,4 @@
+import { AgentChatsSkeleton } from "./agent-loading";
 /**
  * The agent's conversations, flat and full width (#task:2040).
  *
@@ -146,7 +147,7 @@ export function AgentChatsPane({ agentId, onOpenChat }: AgentChatsPaneProps): JS
   const humanAvatarUrls = useUserAvatarObjectUrls(users);
 
   if (chatsQuery.isPending || !participationSettled) {
-    return <PaneNote>Loading chats…</PaneNote>;
+    return <AgentChatsSkeleton />;
   }
   if (chatsQuery.isError) {
     return <PaneNote>Couldn’t load this agent’s chats.</PaneNote>;
@@ -296,7 +297,7 @@ function describeChatRow(chat: AgentAuditChatSummary): {
  * Two shells, chosen by the verdict, because they are two different things: a way
  * in (a real `<button>` card) and a fact on the page (the same frame WITHOUT the
  * hover hook, muted, with the reason on hover). The frame-minus-hook spelling is
- * the shell's own documented one — `ListRowsSkeleton` uses it for the same reason,
+ * the shell's own documented one — loading skeletons use it for the same reason,
  * a card that must not answer the pointer.
  */
 function ChatRow({

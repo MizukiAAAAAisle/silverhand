@@ -1,3 +1,4 @@
+import { McpSkeleton } from "./agent-loading";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Check,
@@ -68,7 +69,7 @@ export function AgentMcpPane({ agentId, runtime }: AgentMcpPaneProps): JSX.Eleme
   const query = useAgentProfileMcp(agentId);
 
   if (query.isLoading) {
-    return <PaneMessage>Loading MCP config…</PaneMessage>;
+    return <McpSkeleton />;
   }
 
   // The raw config can carry secrets, so the backend hands it to the creator

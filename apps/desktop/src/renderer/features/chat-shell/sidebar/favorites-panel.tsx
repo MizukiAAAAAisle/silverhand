@@ -1,3 +1,5 @@
+import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
+import { SidebarReveal, SidebarRevealRow } from "@/components/layout/sidebar-reveal";
 import { useMemo } from "react";
 import { Star } from "lucide-react";
 import type { ChannelAttentionModeRowDto, FavoriteRowDto } from "@silverhand/shared";
@@ -41,7 +43,7 @@ export function FavoritesGroup(props: {
   /** Navigate to a starred conversation inside its parent workspace. */
   onSelectConversation: (workspaceId: string, conversationId: string) => void;
 }): JSX.Element | null {
-  const { data } = useFavorites(props.watchWorkspaceIds);
+  const { data, isLoading } = useFavorites(props.watchWorkspaceIds);
   const items = useMemo(() => data?.items ?? [], [data]);
   const viewerSort = data?.viewer_sort;
   const unstar = useUnstarFavorite();
@@ -93,18 +95,22 @@ export function FavoritesGroup(props: {
       collapsible
       defaultExpanded
       persistId="starred"
-      collapsedContent={revealed.map((item) => (
-        <li key={item.favorite_key}>
-          <FavoriteRow
-            item={item}
-            selectedChannelId={props.selectedChannelId}
-            attention={byChannel.get(item.entity_id)}
-            workspaceMuted={mutedByWorkspace.get(item.workspace_id)}
-            onSelectConversation={props.onSelectConversation}
-            onUnstar={() => unstar.mutate(item)}
-          />
-        </li>
-      ))}
+      collapsedContent={
+        <SidebarReveal>
+          {revealed.map((item) => (
+            <SidebarRevealRow key={item.favorite_key}>
+              <FavoriteRow
+                item={item}
+                selectedChannelId={props.selectedChannelId}
+                attention={byChannel.get(item.entity_id)}
+                workspaceMuted={mutedByWorkspace.get(item.workspace_id)}
+                onSelectConversation={props.onSelectConversation}
+                onUnstar={() => unstar.mutate(item)}
+              />
+            </SidebarRevealRow>
+          ))}
+        </SidebarReveal>
+      }
       action={
         <SortModeMenu
           mode={mode}
@@ -112,7 +118,15 @@ export function FavoritesGroup(props: {
         />
       }
     >
-      {ordered.length === 0 ? <SidebarEmptyRow>No starred conversations</SidebarEmptyRow> : null}
+      {ordered.length === 0 ? (
+        isLoading ? (
+          <li>
+            <SidebarRowsSkeleton label="Loading starred conversations" nested />
+          </li>
+        ) : (
+          <SidebarEmptyRow>No starred conversations</SidebarEmptyRow>
+        )
+      ) : null}
       <SortableGroup
         ids={ordered.map((i) => i.favorite_key)}
         onReorder={(o) => onReorder(FAVORITES_GROUP, o)}

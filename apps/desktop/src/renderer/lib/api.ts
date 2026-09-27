@@ -5,6 +5,10 @@ import type {
   BackendUploadFile,
 } from "../../preload/api";
 
+// for control the request delay in dev mode
+// Minimum duration in milliseconds; set to 0 to disable.
+const delay = 0;
+
 let cachedInfo: BackendInfo | null = null;
 
 /**
@@ -139,11 +143,19 @@ function assertOk(res: BackendProxyResponse): void {
 
 export async function api<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   throwIfAborted(init.signal);
-  const res = await window.silverhand.backendRequest({
+  const startedAt = performance.now();
+  const request = window.silverhand.backendRequest({
     path,
     method: init.method,
     headers: headersFromInit(init),
     bodyText: bodyTextFromInit(init),
+  });
+  const res = await request.finally(async () => {
+    const remaining = import.meta.env.DEV ? delay - (performance.now() - startedAt) : 0;
+    if (remaining > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, remaining));
+    }
+    throwIfAborted(init.signal);
   });
   throwIfAborted(init.signal);
   assertOk(res);

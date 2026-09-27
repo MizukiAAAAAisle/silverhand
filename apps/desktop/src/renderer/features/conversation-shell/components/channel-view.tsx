@@ -223,7 +223,7 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
       // conversation skeleton — same header/messages/composer shape the live
       // view will take — so the swap never jumps and we never flash the
       // "no channel" empty text during the 1-2s resolve.
-      return <ConversationViewSkeleton />;
+      return <ConversationViewSkeleton showTabs={props.viewTabsEnabled} />;
     }
     if (props.loadFailed) {
       // Resolved to a FAILURE, not to an absence: say so plainly. Re-entering

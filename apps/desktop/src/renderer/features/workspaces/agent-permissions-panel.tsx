@@ -1,3 +1,4 @@
+import { SkeletonBlock, SkeletonRegion } from "@/components/layout/skeleton";
 import { useState } from "react";
 import * as Select from "@radix-ui/react-select";
 import { AlertCircle, ChevronDown } from "lucide-react";
@@ -261,7 +262,31 @@ function AgentCapabilityEditor({
   };
 
   if (capsQuery.isLoading) {
-    return <div className="text-xs text-text-muted">Loading permissions…</div>;
+    return (
+      <SkeletonRegion
+        label="Loading permissions"
+        className="rounded-(--control-radius) border-(length:--control-border-width) border-border p-4"
+      >
+        <div className="columns-2 gap-x-6">
+          {GROUPS.map((group) => (
+            <div key={group.id} className="mb-4 break-inside-avoid space-y-1.5">
+              <div className="text-(length:--text-meta) font-semibold uppercase text-text-muted">
+                {group.label}
+              </div>
+              {group.items.map((item) => (
+                <div key={item.key} className="flex gap-2 px-1.5 py-1">
+                  <div className="w-3.5 shrink-0" />
+                  <div className="flex-1 space-y-1.5">
+                    <SkeletonBlock className="h-3 w-3/4" />
+                    <SkeletonBlock className="h-2.5 w-full" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </SkeletonRegion>
+    );
   }
   if (capsQuery.isError) {
     return (

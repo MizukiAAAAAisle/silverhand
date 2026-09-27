@@ -1,3 +1,5 @@
+import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
+import { SidebarReveal, SidebarRevealRow } from "@/components/layout/sidebar-reveal";
 import { useMemo } from "react";
 import { MessageSquare } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -6,7 +8,7 @@ import { useDraftCounterpart } from "@/features/direct-pairs/use-draft-counterpa
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { AuthorAvatarView, DeletedActorMarker } from "@/components/chat/author-avatar-view";
-import { useDirectPairs } from "@/features/direct-pairs/hooks";
+import { useDirectPairsList } from "@/features/direct-pairs/hooks";
 import {
   collectCounterpartAvatarSources,
   presentCounterpart,
@@ -32,7 +34,8 @@ export function DirectMessagesGroup(props: {
   /** Re-open the draft pane — the transient row's only action. */
   onSelectDirectDraft?: (target: DirectMessageTarget) => void;
 }): JSX.Element | null {
-  const pairs = useDirectPairs();
+  const pairsQuery = useDirectPairsList();
+  const pairs = useMemo(() => pairsQuery.data?.direct_pairs ?? [], [pairsQuery.data]);
   const target = props.draftTarget ?? null;
   const { counterpart } = useDraftCounterpart(target);
   const draft = useMemo(
@@ -75,19 +78,31 @@ export function DirectMessagesGroup(props: {
       collapsible
       defaultExpanded
       persistId="direct-messages"
-      collapsedContent={revealed.map((row) => (
-        <li key={row.key}>
-          <DirectMessageRow
-            row={row}
-            agentAvatarUrls={agentAvatarUrls}
-            humanAvatarUrls={humanAvatarUrls}
-            onSelectDirectPair={props.onSelectDirectPair}
-            onSelectDirectDraft={props.onSelectDirectDraft}
-          />
-        </li>
-      ))}
+      collapsedContent={
+        <SidebarReveal>
+          {revealed.map((row) => (
+            <SidebarRevealRow key={row.key}>
+              <DirectMessageRow
+                row={row}
+                agentAvatarUrls={agentAvatarUrls}
+                humanAvatarUrls={humanAvatarUrls}
+                onSelectDirectPair={props.onSelectDirectPair}
+                onSelectDirectDraft={props.onSelectDirectDraft}
+              />
+            </SidebarRevealRow>
+          ))}
+        </SidebarReveal>
+      }
     >
-      {rows.length === 0 ? <SidebarEmptyRow>No direct messages</SidebarEmptyRow> : null}
+      {rows.length === 0 ? (
+        pairsQuery.isLoading ? (
+          <li>
+            <SidebarRowsSkeleton label="Loading direct messages" nested />
+          </li>
+        ) : (
+          <SidebarEmptyRow>No direct messages</SidebarEmptyRow>
+        )
+      ) : null}
       {rows.map((row) => (
         <li key={row.key}>
           <DirectMessageRow

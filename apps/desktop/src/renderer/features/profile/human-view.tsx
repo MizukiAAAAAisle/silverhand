@@ -1,3 +1,4 @@
+import { ProfileSkeleton } from "./profile-skeleton";
 import { useNav } from "@/router";
 import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import { SidePanelHeader } from "@/components/layout/side-panel-header";
@@ -77,9 +78,13 @@ export function HumanView({
             <span className="text-sm text-text-muted">Profile</span>
           </SidePanelHeader>
         ) : null}
-        <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
-          {isLoading ? "Loading profile…" : "Profile unavailable."}
-        </div>
+        {isLoading ? (
+          <ProfileSkeleton />
+        ) : (
+          <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
+            Profile unavailable.
+          </div>
+        )}
       </main>
     );
   }

@@ -1,3 +1,4 @@
+import { DirectDraftSkeleton } from "./direct-draft-skeleton";
 import { getCurrentUserId } from "@/features/session/current-user";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
@@ -106,12 +107,8 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
 
   if (targetQuery.isLoading) {
     return (
-      <main
-        data-panel="chat"
-        className="flex h-full min-w-0 flex-1 items-center justify-center text-sm text-text-muted"
-        style={paneChrome}
-      >
-        Loading…
+      <main data-panel="chat" className="flex h-full min-w-0 flex-1 flex-col" style={paneChrome}>
+        <DirectDraftSkeleton />
       </main>
     );
   }

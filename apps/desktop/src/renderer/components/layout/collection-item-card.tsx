@@ -28,8 +28,8 @@
  * through `className` + `children`; everything else (handlers, `role`,
  * `tabIndex`, `type`, `aria-*`) spreads onto the rendered element.
  *
- * The skeleton (`ListRowsSkeleton`) mirrors `COLLECTION_CARD_CLASS` directly and
- * deliberately omits the hook — a loading placeholder must stay hover-inert.
+ * Loading skeletons mirror `COLLECTION_CARD_CLASS` directly and
+ * deliberately omit the hook — a loading placeholder must stay hover-inert.
  */
 
 import type { ComponentPropsWithoutRef, ElementType, ReactNode } from "react";

@@ -14,7 +14,11 @@ export function ConversationStage({
   storageKey: string;
 }) {
   if (!ready) {
-    return <ConversationViewSkeleton />;
+    return (
+      <ConversationViewSkeleton
+        showTabs={content.loadingTabs && !(content.secondary && fullscreen)}
+      />
+    );
   }
   if (content.secondary && fullscreen) {
     return content.secondary;

@@ -1,5 +1,6 @@
+import { CopyFeedbackIcon } from "./copy-feedback-icon";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, Code, Copy, Maximize2, Workflow, ZoomIn, ZoomOut } from "lucide-react";
+import { Code, Maximize2, Workflow, ZoomIn, ZoomOut } from "lucide-react";
 import { MermaidLightbox } from "./mermaid-lightbox";
 
 /**
@@ -390,7 +391,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
               title={copied ? "Copied" : "Copy source"}
               aria-label="Copy source"
             >
-              {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+              <CopyFeedbackIcon copied={copied} />
             </button>
           )}
         </div>

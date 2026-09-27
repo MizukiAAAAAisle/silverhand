@@ -1,3 +1,4 @@
+import { WorkspaceMembersSkeleton } from "./workspace-members-skeleton";
 import { useMemo, useState, type ReactNode } from "react";
 import { UserMinus } from "lucide-react";
 import type { AgentDto, WorkspaceRole } from "@silverhand/shared";
@@ -176,7 +177,7 @@ export function WorkspaceMembersPanel({
 
       <Section title={`MEMBERS ${members.length}`}>
         {membersLoading ? (
-          <Hint>Loading…</Hint>
+          <WorkspaceMembersSkeleton />
         ) : members.length === 0 ? (
           <Hint>No members yet</Hint>
         ) : (

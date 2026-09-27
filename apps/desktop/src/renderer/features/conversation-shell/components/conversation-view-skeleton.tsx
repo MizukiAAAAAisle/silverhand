@@ -1,53 +1,21 @@
-/**
- * Lightweight placeholder shown in the conversation slot while the heavy
- * ChannelView (composer, MemberStrip, avatar batch-fetch, Virtuoso init +
- * measure, and a pile of mount effects) is still deferred (#task:1170).
- *
- * WHY it exists: clicking a NavRail entry to enter chat updates the urgent
- * `appSection` immediately (rail highlight + the two cheap sidebars paint at
- * once), but the conversation pane's mount is gated on the deferred
- * `deferredSection` so its ~hundreds-of-ms commit-phase work stays off the
- * click critical path. This skeleton fills the slot during that gap so the
- * shell never shows an empty hole — and, crucially, never the previous
- * section's stale content (the skeleton is gated by destination, not
- * predecessor; see app.tsx). It is purely perceptual: the real mount work
- * still runs a beat later behind the already-painted shell.
- *
- * Deliberately data-free and cheap (no queries, no real rows, no avatar fetch,
- * one shared `animate-pulse`) — it must render in well under a frame. The shape
- * mirrors the real ChannelView 1:1 so the swap to the live view never jumps the
- * layout: same `<main>` shell (card radius/shadow + `bg-bg-base`), an `h-12`
- * header with a member-strip cluster, message rows using ChannelView's exact
- * `flex items-start gap-3 px-2 py-1.5` rhythm with `size-8` square avatars, and
- * a composer that reproduces the `border-t` footer + bordered shell. All bars
- * are neutral utility tokens (`bg-bg-elevated`) — a skeleton is chrome, never a
- * saturated status signal.
- */
-import { paneChrome } from "../../../components/layout/pane-chrome";
+import { paneChrome } from "@/components/layout/pane-chrome";
+import { SkeletonBlock } from "@/components/layout/skeleton";
+import { AVATAR_PX } from "@/components/avatar-scale";
 
-// Per-row recipe: author-label width + the body-line widths beneath it. Hand-
-// varied so the block reads as a conversation, not a stack of identical bars.
-const ROWS: ReadonlyArray<{ author: string; lines: readonly string[] }> = [
-  { author: "w-20", lines: ["w-[60%]", "w-[38%]"] },
-  { author: "w-28", lines: ["w-[74%]"] },
-  { author: "w-16", lines: ["w-[68%]", "w-[52%]", "w-[30%]"] },
-  { author: "w-24", lines: ["w-[46%]"] },
-  { author: "w-20", lines: ["w-[64%]", "w-[34%]"] },
-];
+// Stable examples, not inferred message data. Continuations preserve the avatar
+// column but omit repeated identity, as MessageItem does for grouped messages.
+const ROWS = [
+  { author: "w-24", lines: ["w-4/5", "w-3/5"], continuation: false },
+  { author: "w-24", lines: ["w-2/5"], continuation: true },
+  { author: "w-16", lines: ["w-3/4"], continuation: false },
+  { author: "w-28", lines: ["w-11/12", "w-4/5", "w-1/2"], continuation: false },
+  { author: "w-28", lines: ["w-2/3", "w-1/3"], continuation: true },
+  { author: "w-20", lines: ["w-1/2"], continuation: false },
+  { author: "w-24", lines: ["w-4/5", "w-3/5"], continuation: false },
+] as const;
 
-/**
- * The message-area pulse block on its own — one shared `animate-pulse` over a
- * few rows that reuse ChannelView's row geometry exactly (`flex items-start
- * gap-3 px-2 py-1.5`, `size-8` square avatar with `mt-0.5`, content capped at
- * `max-w-[85%]`). Extracted so every "a conversation's messages are loading"
- * state renders the SAME skeleton instead of an ad-hoc spinner / "加载中" text:
- * the full-pane `ConversationViewSkeleton` composes it under a header+composer,
- * while in-pane loaders (ChannelView message list, ThreadPanel root/cluster)
- * drop it straight into their already-rendered chrome.
- *
- * `className` controls how it fills its container — default `min-h-0 flex-1`
- * suits a flex-col parent; pass `absolute inset-0` for a `relative` box, etc.
- */
+/** MessageItem geometry, including its transparent frame and list's reading
+ * width. Pure presentation: no queries, random widths or virtual-list effects. */
 export function MessageRowsSkeleton({
   className = "min-h-0 flex-1",
 }: {
@@ -55,67 +23,104 @@ export function MessageRowsSkeleton({
 } = {}): JSX.Element {
   return (
     <div
-      className={`animate-pulse space-y-1 overflow-hidden px-4 py-3 ${className}`}
-      aria-hidden
+      role="status"
+      aria-label="Loading messages"
+      className={`overflow-hidden ${className}`}
       data-conversation-rows-skeleton
     >
-      {ROWS.map((row, i) => (
-        <div key={i} className="flex items-start gap-3 px-2 py-1.5">
-          <div className="mt-0.5 size-8 shrink-0 rounded-none bg-bg-elevated" />
-          <div className="min-w-0 max-w-[85%] flex-1">
-            {/* Author + time line — ChannelView uses `mb-1 text-xs` here. */}
-            <div className={`mb-2 h-2.5 rounded bg-bg-elevated ${row.author}`} />
-            <div className="space-y-1.5">
-              {row.lines.map((w, j) => (
-                <div key={j} className={`h-3.5 rounded bg-bg-elevated ${w}`} />
-              ))}
+      <div aria-hidden className="mx-auto max-w-300 px-4 py-2 motion-safe:animate-pulse">
+        {ROWS.map((row, index) => (
+          <div key={index} className="py-0.5">
+            <div
+              className={`flex items-start gap-3 border-2 border-transparent px-2 ${row.continuation ? "py-0.5" : "py-1.5"}`}
+            >
+              <div className="mt-0.5 shrink-0" style={{ width: AVATAR_PX.lg }}>
+                {!row.continuation ? (
+                  <div style={{ height: AVATAR_PX.lg }}>
+                    <SkeletonBlock className="size-full rounded-none" />
+                  </div>
+                ) : null}
+              </div>
+              <div className="min-w-0 w-full max-w-[85%]">
+                {!row.continuation ? (
+                  <div className="mb-1 flex h-4 items-center gap-2">
+                    <SkeletonBlock className={`h-2.5 ${row.author}`} />
+                    <SkeletonBlock className="h-2 w-10" />
+                  </div>
+                ) : null}
+                {row.lines.map((width, line) => (
+                  <div
+                    key={line}
+                    className="flex items-center"
+                    style={{
+                      height:
+                        "calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) + 8px)",
+                    }}
+                  >
+                    <div
+                      className={`${width} rounded bg-bg-elevated`}
+                      style={{
+                        height: "var(--appearance-markdown-font-size, var(--md-prose-size, 14px))",
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
 
-export function ConversationViewSkeleton(): JSX.Element {
+/** Deferred chat mount placeholder; chrome stays separate from the message
+ * loading state used by already-mounted channels and threads. */
+export function ConversationViewSkeleton({
+  showTabs = false,
+}: {
+  showTabs?: boolean;
+}): JSX.Element {
   return (
     <main
       data-panel="chat"
       className="flex h-full min-w-0 flex-1 flex-col overflow-hidden"
       style={paneChrome}
-      aria-hidden
       data-conversation-skeleton
     >
-      {/* Header — matches ChannelView's `h-12` titlebar so the message area
-       * below starts at the same Y as the real view. Title block on the left,
-       * a member-strip cluster (square `size-6` chips, mirroring MemberStrip)
-       * pushed right. */}
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
-        <div className="size-4 shrink-0 rounded-none bg-bg-elevated" />
-        <div className="h-3.5 w-36 rounded bg-bg-elevated" />
-        <div className="ml-auto flex items-center gap-0.75">
+      <header
+        aria-hidden
+        className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4"
+      >
+        <SkeletonBlock className="size-4" />
+        <SkeletonBlock className="h-3.5 w-36 max-w-[50%]" />
+        <div className="ml-auto flex gap-2">
           {[0, 1, 2].map((i) => (
-            <div key={i} className="size-6 shrink-0 rounded-none bg-bg-elevated" />
+            <SkeletonBlock key={i} className="size-4" />
           ))}
         </div>
       </header>
-
-      {/* Message area — the shared pulse-rows block (MessageRowsSkeleton),
-       * also reused by the in-pane loading states in ChannelView / ThreadPanel
-       * so every "messages loading" surface reads identically. */}
+      {showTabs ? (
+        <div
+          aria-hidden
+          className="flex h-(--conversation-tab-strip-height) shrink-0 items-center gap-4 border-b border-border-subtle px-2"
+        >
+          <SkeletonBlock className="h-3 w-12" />
+          <SkeletonBlock className="h-3 w-12" />
+        </div>
+      ) : null}
       <MessageRowsSkeleton />
-
-      {/* Composer — reproduces the `<form>` footer (`border-t … px-3 py-3`)
-       * wrapping the bordered shell (`rounded-md border`), with the
-       * `min-h-[60px]` input body and a footer button row (`size-7`). */}
-      <div className="shrink-0 border-t border-border-subtle bg-bg-primary px-3 py-3">
-        <div className="overflow-hidden rounded-md border border-border-subtle bg-bg-floating">
+      <div aria-hidden className="shrink-0 border-t border-border-subtle bg-bg-base px-3 py-3">
+        <div className="overflow-hidden rounded-(--control-radius) border border-border-subtle bg-bg-floating">
           <div className="min-h-15 px-3 py-2">
-            <div className="h-3.5 w-32 rounded bg-bg-elevated" />
+            <SkeletonBlock className="h-3 w-32" />
           </div>
           <div className="flex items-center justify-between px-2 py-1.5">
-            <div className="size-7 rounded-md bg-bg-elevated" />
-            <div className="h-7 w-16 rounded-md bg-bg-elevated" />
+            <div className="flex gap-2">
+              <SkeletonBlock className="size-4" />
+              <SkeletonBlock className="size-4" />
+            </div>
+            <div className="h-7 w-7" />
           </div>
         </div>
       </div>

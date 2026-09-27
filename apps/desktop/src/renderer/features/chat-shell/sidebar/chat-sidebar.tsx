@@ -1,3 +1,4 @@
+import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
 import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useMemo, type ReactNode } from "react";
 import { Archive, Bookmark, Plus, Search } from "lucide-react";
@@ -25,6 +26,7 @@ import { Sidebar } from "../../../components/layout/sidebar";
 
 interface ChatSidebarProps {
   workspaces: WorkspaceItem[];
+  workspacesLoading: boolean;
   /** Owner agents supply agent-space avatars. */
   agentsById?: ReadonlyMap<string, AgentDto>;
   /** The workspace the primary pane is in. Since #task:1889 it never highlights
@@ -190,6 +192,9 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                 </SortableSidebarBranch>
               ))}
             </SortableGroup>
+            {props.workspacesLoading && props.workspaces.length === 0 ? (
+              <SidebarRowsSkeleton label="Loading workspaces" />
+            ) : null}
           </nav>
           <div className="shrink-0 px-1 pb-1 pt-2">
             <Button

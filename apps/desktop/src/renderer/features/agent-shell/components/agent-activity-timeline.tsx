@@ -1,3 +1,4 @@
+import { AgentActivitySkeleton } from "./agent-loading";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   AlertTriangle,
@@ -184,7 +185,7 @@ function ActivityTimeline({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto px-5 py-3">
         {phase === "loading" ? (
-          <p className="py-8 text-center text-xs text-text-muted">Loading…</p>
+          <AgentActivitySkeleton />
         ) : phase === "error" ? (
           <p className="py-8 text-center text-xs text-text-muted">Couldn’t load activity.</p>
         ) : events.length === 0 ? (

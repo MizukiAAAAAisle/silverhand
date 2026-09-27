@@ -2,6 +2,10 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import "./profile-fact-band.css";
 
+/** Static frame shared with loading placeholders; interaction stays on live sections. */
+export const PROFILE_SECTION_FRAME_CLASS =
+  "rounded-[var(--profile-section-radius,var(--card-radius))] border-(length:--panel-border-width) border-border-subtle bg-bg-floating/50 p-3";
+
 export interface ProfileSectionProps {
   title: string;
   /** Rendered inline immediately after the title — for a small edit
@@ -48,7 +52,7 @@ export function ProfileSection({
       <div
         data-panel-card="profile-section"
         className={cn(
-          "border border-border-subtle bg-bg-floating/50 p-3",
+          PROFILE_SECTION_FRAME_CLASS,
           "transition-colors duration-150 hover:border-border",
         )}
       >

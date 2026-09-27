@@ -211,12 +211,9 @@ export function ConversationMemberSearch({
       rowsDisabled={addMember.isPending}
       autoFocus={autoFocus}
       ariaLabel="Add member"
+      loading={isLoading}
       emptyHint={
-        isLoading
-          ? "Loading…"
-          : canAddOthers
-            ? "Everyone is already in this conversation"
-            : "You have no agents left to add"
+        canAddOthers ? "Everyone is already in this conversation" : "You have no agents left to add"
       }
       footer={
         error ? (

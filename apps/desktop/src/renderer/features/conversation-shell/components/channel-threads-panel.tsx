@@ -1,3 +1,4 @@
+import { ThreadsSkeleton } from "./channel-list-skeletons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import { Clock, Loader2 } from "lucide-react";
@@ -235,9 +236,7 @@ export function ChannelThreadsContent({
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto py-2">
         {isLoading ? (
-          <div className="flex h-full items-center justify-center text-text-muted">
-            <Loader2 className="size-4 animate-spin" />
-          </div>
+          <ThreadsSkeleton />
         ) : isError ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
             <p className="text-sm text-text-primary">Couldn’t load threads</p>

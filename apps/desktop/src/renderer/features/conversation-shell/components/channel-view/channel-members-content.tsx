@@ -1,3 +1,4 @@
+import { MembersSkeleton } from "../channel-list-skeletons";
 /** Member roster and management content for channel settings.
  * Removal permission comes from the viewer-scoped server carrier; self-leave
  * retains its blocked reason. Row confirmations are local to the mounted roster.
@@ -380,7 +381,7 @@ export function ChannelMembersContent({
     <div className="conversation-surface flex flex-col gap-2">
       <div className="flex flex-col">
         {membersResult.status === "loading" ? (
-          <p className="px-1.5 py-3 text-center text-xs italic text-text-muted">Loading…</p>
+          <MembersSkeleton />
         ) : orderedHumans.length === 0 && agents.length === 0 ? (
           <p className="px-1.5 py-3 text-center text-xs italic text-text-muted">No matches</p>
         ) : (

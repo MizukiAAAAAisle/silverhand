@@ -25,7 +25,7 @@ import {
   parseSenderFilter,
   type SenderFilterValue,
 } from "@/components/ui/sender-filter-select";
-import { ListRowsSkeleton } from "../../components/layout/list-rows-skeleton";
+import { SearchResultsSkeleton } from "@/features/search/search-results-skeleton";
 import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 
 interface SearchPanelProps {
@@ -248,7 +248,7 @@ export function SearchPanel({
         {!hasIntent ? (
           <EmptyState icon={<SearchIcon className="size-5" />} text="Type to search" />
         ) : isLoading ? (
-          <ListRowsSkeleton withIcon />
+          <SearchResultsSkeleton />
         ) : results.length === 0 && identityCount === 0 ? (
           !isError ? (
             <EmptyState icon={<SearchIcon className="size-5" />} text="No matches" />

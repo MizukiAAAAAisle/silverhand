@@ -1,3 +1,4 @@
+import { ComputerRowsSkeleton } from "./components/computer-skeletons";
 import type { JSX } from "react";
 import { DirectorySidebar } from "@/components/layout/directory-shell";
 import { Monitor, Plus } from "lucide-react";
@@ -59,8 +60,12 @@ export function ComputerSidebarShell({
         }
       >
         {sorted.length === 0 ? (
-          <li className="px-2 py-1.5 text-xs text-text-muted">
-            {isLoading ? "Loading…" : "No computers yet."}
+          <li>
+            {isLoading ? (
+              <ComputerRowsSkeleton />
+            ) : (
+              <p className="px-2 py-1.5 text-xs text-text-muted">No computers yet.</p>
+            )}
           </li>
         ) : (
           sorted.map((host) => (

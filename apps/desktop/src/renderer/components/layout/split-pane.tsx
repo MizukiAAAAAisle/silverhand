@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { motion, useReducedMotion } from "motion/react";
 import { PANE_BG } from "./pane-chrome";
 import { SplitterTrack } from "./splitter-track";
 
@@ -25,8 +26,8 @@ interface SplitPaneProps {
 /** Width transition duration. Kept in sync with the CSS `transition`
  *  string on the left pane below. Two-stage mount uses it to time when
  *  the heavy `right` content lands. */
-const TRANSITION_MS = 220;
-const TRANSITION_CSS = "220ms cubic-bezier(0.4, 0, 0.2, 1)";
+const TRANSITION_MS = 180;
+const TRANSITION_CSS = "180ms cubic-bezier(0.4, 0, 0.2, 1)";
 
 /**
  * Vertical split pane (two panes side-by-side, draggable divider).
@@ -58,6 +59,14 @@ export function SplitPane({
   minRatio = 0.25,
   maxRatio = 0.75,
 }: SplitPaneProps): JSX.Element {
+  const reducedMotion = useReducedMotion();
+  const transitionMs = reducedMotion ? 0 : TRANSITION_MS;
+  const widthTransition = reducedMotion ? "none" : `width ${TRANSITION_CSS}`;
+  const animateEntrance = useRef(false);
+  useEffect(() => {
+    animateEntrance.current = true;
+  }, []);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const leftPaneRef = useRef<HTMLDivElement>(null);
   const dividerRef = useRef<HTMLDivElement>(null);
@@ -154,7 +163,7 @@ export function SplitPane({
           startTransition(() => {
             setContentMounted(true);
           });
-        }, TRANSITION_MS);
+        }, transitionMs);
       });
       return;
     }
@@ -171,8 +180,8 @@ export function SplitPane({
     closeTimerRef.current = window.setTimeout(() => {
       closeTimerRef.current = null;
       setShellOpen(false);
-    }, TRANSITION_MS);
-  }, [hasRight, clearOpenScheduled, clearCloseScheduled, setLeftWidthVar]);
+    }, transitionMs);
+  }, [hasRight, clearOpenScheduled, clearCloseScheduled, setLeftWidthVar, transitionMs]);
 
   // Cleanup pending timers + drag styles on unmount.
   useEffect(() => {
@@ -252,7 +261,7 @@ export function SplitPane({
       dividerRef.current?.removeAttribute("data-active");
       // Restore the width transition that onPointerDown suppressed.
       if (leftPaneRef.current) {
-        leftPaneRef.current.style.transition = `width ${TRANSITION_CSS}`;
+        leftPaneRef.current.style.transition = widthTransition;
       }
       flushRatio();
       const next = ratioRef.current;
@@ -263,7 +272,7 @@ export function SplitPane({
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     },
-    [flushRatio, persistRatio],
+    [flushRatio, persistRatio, widthTransition],
   );
 
   return (
@@ -287,7 +296,7 @@ export function SplitPane({
         // ripple a reflow through the message list.
         style={{
           width: "var(--split-left-width)",
-          transition: `width ${TRANSITION_CSS}`,
+          transition: widthTransition,
           contain: "layout paint",
         }}
         className="flex h-full min-w-0 overflow-hidden"
@@ -303,15 +312,27 @@ export function SplitPane({
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
           />
-          <div
+          <motion.div
+            initial={animateEntrance.current && !reducedMotion ? { opacity: 0, x: 8 } : false}
+            animate={{ opacity: hasRight ? 1 : 0, x: hasRight || reducedMotion ? 0 : 8 }}
+            transition={{ duration: reducedMotion ? 0 : 0.15, ease: "easeOut" }}
             // The shell remains painted while the content mounts/unmounts.
             // Share panel geometry so its background cannot square off the child.
             data-pane-clip="side"
             style={{ contain: "layout paint", background: PANE_BG }}
             className="flex h-full min-w-0 flex-1 overflow-hidden"
           >
-            {contentMounted ? right : null}
-          </div>
+            {contentMounted ? (
+              <motion.div
+                className="flex h-full min-h-0 min-w-0 flex-1"
+                initial={animateEntrance.current && !reducedMotion ? { opacity: 0 } : false}
+                animate={{ opacity: 1 }}
+                transition={{ duration: reducedMotion ? 0 : 0.06, ease: "easeOut" }}
+              >
+                {right}
+              </motion.div>
+            ) : null}
+          </motion.div>
         </>
       ) : null}
     </div>

@@ -1,3 +1,4 @@
+import { AttachmentsSkeleton } from "./channel-list-skeletons";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import dayjs from "dayjs";
@@ -280,9 +281,7 @@ export function ChannelAttachmentsContent({
 
       <div className="min-h-0 flex-1">
         {isLoading ? (
-          <div className="flex h-full items-center justify-center text-text-muted">
-            <Loader2 className="size-4 animate-spin" />
-          </div>
+          <AttachmentsSkeleton />
         ) : isError ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
             <p className="text-sm text-text-primary">Couldn’t load attachments</p>
@@ -559,7 +558,13 @@ function SenderFilterSelect({
             {isLoading && facets.length === 0 ? (
               // Distinct from a real empty set — a lazy fetch in flight must
               // not read as "this channel has no senders".
-              <div className="px-2 py-1.5 text-xs text-text-muted">Loading senders…</div>
+              <div
+                role="status"
+                className="flex items-center gap-2 px-2 py-1.5 text-xs text-text-muted"
+              >
+                <Loader2 aria-hidden className="size-3 motion-safe:animate-spin" />
+                Loading senders…
+              </div>
             ) : isError && facets.length === 0 ? (
               // Explicit failure, not false-empty; reopening the dropdown
               // retries (see onOpenChange).

@@ -1,3 +1,4 @@
+import { CopyFeedbackIcon } from "./copy-feedback-icon";
 import {
   type ComponentProps,
   memo,
@@ -11,7 +12,7 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { Check, ChevronDown, ChevronUp, Copy, Hash } from "lucide-react";
+import { ChevronDown, ChevronUp, Hash } from "lucide-react";
 import { rehypeHighlightTerm } from "./rehype-highlight-term";
 import type { AgentDto, UserDto } from "@silverhand/shared";
 import { ADDRESSABLE_ID_PATTERN } from "@silverhand/shared";
@@ -1009,7 +1010,7 @@ function CodeBlock({ children }: { children: React.ReactNode }): JSX.Element {
               confirmation on its own; the accessible name stays on
               `aria-label` (constant, so screen readers announce the action)
               while `title` carries the transient "Copied" state. */}
-          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+          <CopyFeedbackIcon copied={copied} />
         </button>
       </div>
       <pre ref={preRef}>{children}</pre>

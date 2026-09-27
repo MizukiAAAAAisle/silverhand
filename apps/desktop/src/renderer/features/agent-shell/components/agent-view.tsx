@@ -1,3 +1,5 @@
+import { AgentActivitySkeleton, SchedulesSkeleton, FileTreeSkeleton } from "./agent-loading";
+import { ProfileSkeleton } from "@/features/profile/profile-skeleton";
 import { sideAgentWorkspaceSource } from "../model/workspace-source";
 import "./agent-page.css";
 import { AgentPageLayout } from "./agent-page-layout";
@@ -164,9 +166,11 @@ export function AgentView({
           contextWorkspaceId={contextWorkspaceId}
           onOpenChat={onOpenChat}
         />
+      ) : agentQuery.isLoading ? (
+        <ProfileSkeleton agent />
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
-          {agentQuery.isLoading ? "Loading agent…" : "Agent not found."}
+          Agent not found.
         </div>
       )}
     </AgentPageLayout>
@@ -282,7 +286,7 @@ function AgentContextActivity({
     );
   }
   if (!runtimeState) {
-    return <p className="py-8 text-center text-xs text-text-muted">Loading…</p>;
+    return <AgentActivitySkeleton />;
   }
   // The activity endpoint requires participation; absence is not a network error.
   if (!runtimeState.participations.some((item) => item.conversation_id === conversationId)) {
@@ -336,9 +340,7 @@ export function focusAgentSideSection(agentId: string, section: AgentSideSection
 
 function AgentSchedulesPermissionState({ loading }: { loading: boolean }): JSX.Element {
   if (loading) {
-    return (
-      <div className="py-10 text-center text-sm text-text-muted">Loading schedule permissions…</div>
-    );
+    return <SchedulesSkeleton />;
   }
 
   return (
@@ -356,9 +358,7 @@ function AgentSchedulesPermissionState({ loading }: { loading: boolean }): JSX.E
 
 function AgentWorkspaceFilesPermissionState({ loading }: { loading: boolean }): JSX.Element {
   if (loading) {
-    return (
-      <div className="py-10 text-center text-sm text-text-muted">Loading file permissions…</div>
-    );
+    return <FileTreeSkeleton />;
   }
 
   return (

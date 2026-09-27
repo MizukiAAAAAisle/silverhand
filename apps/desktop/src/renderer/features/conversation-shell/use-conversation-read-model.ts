@@ -40,7 +40,7 @@ export function useConversationReadModel() {
     directConversationId,
   } = useRouteState();
 
-  const { data: workspaces = [] } = useWorkspaces();
+  const { data: workspaces = [], isLoading: workspacesLoading } = useWorkspaces();
 
   const visibleWorkspaceIds = useMemo(
     () => workspaces.map((workspace) => workspace.id),
@@ -253,6 +253,7 @@ export function useConversationReadModel() {
   );
   return {
     workspaces,
+    workspacesLoading,
     visibleWorkspaceIds,
     selectedWorkspace,
     workspaceNameById,

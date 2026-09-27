@@ -1,7 +1,11 @@
+import { InlineLoading } from "@/components/layout/inline-loading";
+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
 import { getCurrentUserId } from "@/features/session/current-user";
 import { createLogicalSend, type LogicalSend } from "@/features/channels/logical-send";
 import {
   Fragment,
+  forwardRef,
+  type ReactNode,
   useEffect,
   useMemo,
   useRef,
@@ -990,25 +994,32 @@ export function Composer({
         (dragOver ? "[outline:2px_solid_var(--border-focus)] -outline-offset-2" : "")
       }
     >
-      {pending.length > 0 ? (
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {pending.map((p) => (
-            <AttachmentChip
-              key={p.key}
-              item={p}
-              onRemove={() => removePending(p.key)}
-              onInsertLabel={
-                p.label && p.state !== "error" ? () => insertLabelAtCaret(p.label!) : undefined
-              }
-              onPreview={
-                p.previewUrl
-                  ? () => setPreviewing({ url: p.previewUrl!, alt: p.filename })
-                  : undefined
-              }
-            />
-          ))}
-        </div>
-      ) : null}
+      <AnimatePresence initial={false} key={draftKey}>
+        {pending.length > 0 ? (
+          <PendingAttachmentTray key="attachments">
+            <AnimatePresence initial={false} mode="popLayout" propagate>
+              {pending.map((p) => (
+                <PendingAttachmentMotion key={p.key}>
+                  <AttachmentChip
+                    item={p}
+                    onRemove={() => removePending(p.key)}
+                    onInsertLabel={
+                      p.label && p.state !== "error"
+                        ? () => insertLabelAtCaret(p.label!)
+                        : undefined
+                    }
+                    onPreview={
+                      p.previewUrl
+                        ? () => setPreviewing({ url: p.previewUrl!, alt: p.filename })
+                        : undefined
+                    }
+                  />
+                </PendingAttachmentMotion>
+              ))}
+            </AnimatePresence>
+          </PendingAttachmentTray>
+        ) : null}
+      </AnimatePresence>
       <div className="relative">
         {menuOpen && !dismissed ? (
           <PickerMenu
@@ -1157,6 +1168,50 @@ export function Composer({
     </form>
   );
 }
+
+function PendingAttachmentTray({ children }: { children: ReactNode }): JSX.Element {
+  const reducedMotion = useReducedMotion();
+  const present = useIsPresent();
+  return (
+    <motion.div
+      ref={(node) => node?.toggleAttribute("inert", !present)}
+      aria-hidden={!present || undefined}
+      initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+      animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
+      exit={{ height: 0, opacity: 0, overflow: "hidden" }}
+      transition={{ duration: reducedMotion ? 0 : 0.14, ease: "easeOut" }}
+    >
+      <div className="relative flex flex-wrap gap-1.5 pb-2">{children}</div>
+    </motion.div>
+  );
+}
+
+// Forward the DOM ref so popLayout can remove an exiting chip from flex flow.
+const PendingAttachmentMotion = forwardRef<HTMLDivElement, { children: ReactNode }>(
+  function PendingAttachmentMotion({ children }, ref): JSX.Element {
+    const present = useIsPresent();
+    const reducedMotion = useReducedMotion();
+    return (
+      <motion.div
+        ref={(node) => {
+          node?.toggleAttribute("inert", !present);
+          if (typeof ref === "function") ref(node);
+          else if (ref) ref.current = node;
+        }}
+        aria-hidden={!present || undefined}
+        className="min-w-0 max-w-70"
+        style={{ pointerEvents: present ? undefined : "none" }}
+        layout={reducedMotion ? false : "position"}
+        initial={{ opacity: 0, scale: reducedMotion ? 1 : 0.96 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: reducedMotion ? 1 : 0.96 }}
+        transition={{ duration: reducedMotion ? 0 : 0.14, ease: "easeOut" }}
+      >
+        {children}
+      </motion.div>
+    );
+  },
+);
 
 function AttachmentChip({
   item,
@@ -1799,11 +1854,8 @@ function PickerMenu({
         </div>
       ) : null}
       {channelStatus === "loading" ? (
-        <div
-          role="status"
-          className="border-t border-border-subtle px-3 py-1.5 text-(length:--text-meta) text-text-muted"
-        >
-          Loading channels…
+        <div className="border-t border-border-subtle">
+          <InlineLoading label="Loading channels" />
         </div>
       ) : channelStatus === "partial_error" ? (
         <div

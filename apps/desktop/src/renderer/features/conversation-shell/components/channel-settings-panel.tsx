@@ -1,6 +1,8 @@
+import { ChannelSettingsSkeleton } from "./channel-settings-skeleton";
 import { useChannelSettingsDetail } from "../use-channel-settings-detail";
 import { toast } from "sonner";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
 import { ArrowLeft, ChevronRight, Hash, Lock, Power, RefreshCw } from "lucide-react";
 import type { ChannelDetailResponse } from "@silverhand/shared";
 import { useNav } from "@/router";
@@ -114,7 +116,7 @@ export function ChannelSettingsPanel({
           </Button>
         </div>
       ) : !detail.data ? (
-        <p className="p-4 text-sm text-text-muted">Loading</p>
+        <ChannelSettingsSkeleton />
       ) : !detail.data.is_member ? (
         <p className="p-4 text-sm text-text-muted">
           Join this channel to manage its settings and members.
@@ -150,6 +152,7 @@ function SettingsBody({
   onArchived: (archived: boolean) => void;
   onLeft: (channel: ChannelDetailResponse["channel"]) => void;
 }): JSX.Element {
+  const reducedMotion = useReducedMotion();
   const { channel } = detail;
   const channelId = channel.id;
   const mounted = useRef(false);
@@ -222,100 +225,150 @@ function SettingsBody({
     roster.status === "resolved" ? `Members ${roster.members.length}` : "Members";
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="flex flex-col gap-8 p-4">
-        {membersPage ? (
-          <ChannelMembersPage
-            autoFocus={focusMemberSearch}
-            channelId={channelId}
-            workspaceId={openRoster && !closed ? channel.workspace_id : null}
-            agentRuntime={runtime}
-            agentAvatarUrls={avatarUrls}
-            onLeave={openRoster ? leaveChannel : undefined}
-            canLeave={detail.can_leave}
-            leaveBlockedReason={detail.leave_blocked_reason}
-            visibility={openRoster ? channel.visibility : undefined}
-            actions={
-              canManageAgents ? (
-                <div className="flex flex-col gap-2 pt-2">
-                  <Button
-                    variant="neutral"
-                    size="md"
-                    disabled={bulkPending}
-                    onClick={() => void bulkAction(true)}
-                  >
-                    <RefreshCw className="size-3.5" /> Restart
-                  </Button>
-                  <Button
-                    variant="neutral"
-                    size="md"
-                    disabled={bulkPending}
-                    onClick={() => void bulkAction(false)}
-                  >
-                    <Power className="size-3.5" /> Stop
-                  </Button>
-                </div>
-              ) : null
-            }
-          />
-        ) : (
-          <>
-            <section className="flex flex-col gap-3">
-              <button
-                type="button"
-                onClick={() => onOpenMembers(false)}
-                className="flex w-full items-center justify-between text-xs font-semibold uppercase tracking-wide text-text-secondary hover:text-text-primary focus-outline"
-              >
-                <span>{membersLabel}</span>
-                <ChevronRight className="size-4" />
-              </button>
-              <ChannelMembersPreview
-                members={roster.status === "resolved" ? roster.members : []}
-                avatarUrls={avatarUrls}
-                canAdd={openRoster && !closed && !!channel.workspace_id}
-                onOpen={() => onOpenMembers(false)}
-                onAdd={() => onOpenMembers(true)}
-              />
-            </section>
-            <ChannelSettingsDetails
-              notifications={
-                openRoster && channel.workspace_id ? (
-                  <ChannelNotificationSettings
-                    channelId={channelId}
-                    workspaceId={channel.workspace_id}
-                  />
-                ) : null
-              }
-              currentTitle={channel.title}
-              onRename={
-                !closed
-                  ? async (title) => {
-                      await rename.mutateAsync({ channelId, title });
-                    }
-                  : undefined
-              }
-              visibility={openRoster ? channel.visibility : undefined}
-              canUpdateVisibility={detail.can_update_visibility}
-              onSetVisibility={
-                openRoster
-                  ? async (next) => {
-                      await visibility.mutateAsync({ channelId, visibility: next });
-                    }
-                  : undefined
-              }
-              isArchived={channel.archived_at !== null}
-              onToggleArchive={async (archived) => {
-                await archive.mutateAsync({ channelId, archived });
-                onArchived(archived);
-              }}
-              archivePending={archive.isPending}
+    <AnimatePresence initial={false} mode="wait" custom={membersPage ? 1 : -1}>
+      <SettingsPageTransition
+        key={membersPage ? "members" : "overview"}
+        direction={membersPage ? 1 : -1}
+        reducedMotion={!!reducedMotion}
+      >
+        <div className="flex flex-col gap-8 p-4">
+          {membersPage ? (
+            <ChannelMembersPage
+              autoFocus={focusMemberSearch}
+              channelId={channelId}
+              workspaceId={openRoster && !closed ? channel.workspace_id : null}
+              agentRuntime={runtime}
+              agentAvatarUrls={avatarUrls}
               onLeave={openRoster ? leaveChannel : undefined}
               canLeave={detail.can_leave}
               leaveBlockedReason={detail.leave_blocked_reason}
+              visibility={openRoster ? channel.visibility : undefined}
+              actions={
+                canManageAgents ? (
+                  <div className="flex flex-col gap-2 pt-2">
+                    <Button
+                      variant="neutral"
+                      size="md"
+                      disabled={bulkPending}
+                      onClick={() => void bulkAction(true)}
+                    >
+                      <RefreshCw className="size-3.5" /> Restart
+                    </Button>
+                    <Button
+                      variant="neutral"
+                      size="md"
+                      disabled={bulkPending}
+                      onClick={() => void bulkAction(false)}
+                    >
+                      <Power className="size-3.5" /> Stop
+                    </Button>
+                  </div>
+                ) : null
+              }
             />
-          </>
-        )}
-      </div>
-    </div>
+          ) : (
+            <>
+              <section className="flex flex-col gap-3">
+                <button
+                  type="button"
+                  onClick={() => onOpenMembers(false)}
+                  className="flex w-full items-center justify-between text-xs font-semibold uppercase tracking-wide text-text-secondary hover:text-text-primary focus-outline"
+                >
+                  <span>{membersLabel}</span>
+                  <ChevronRight className="size-4" />
+                </button>
+                <ChannelMembersPreview
+                  members={roster.status === "resolved" ? roster.members : []}
+                  avatarUrls={avatarUrls}
+                  canAdd={openRoster && !closed && !!channel.workspace_id}
+                  onOpen={() => onOpenMembers(false)}
+                  onAdd={() => onOpenMembers(true)}
+                />
+              </section>
+              <ChannelSettingsDetails
+                notifications={
+                  openRoster && channel.workspace_id ? (
+                    <ChannelNotificationSettings
+                      channelId={channelId}
+                      workspaceId={channel.workspace_id}
+                    />
+                  ) : null
+                }
+                currentTitle={channel.title}
+                onRename={
+                  !closed
+                    ? async (title) => {
+                        await rename.mutateAsync({ channelId, title });
+                      }
+                    : undefined
+                }
+                visibility={openRoster ? channel.visibility : undefined}
+                canUpdateVisibility={detail.can_update_visibility}
+                onSetVisibility={
+                  openRoster
+                    ? async (next) => {
+                        await visibility.mutateAsync({ channelId, visibility: next });
+                      }
+                    : undefined
+                }
+                isArchived={channel.archived_at !== null}
+                onToggleArchive={async (archived) => {
+                  await archive.mutateAsync({ channelId, archived });
+                  onArchived(archived);
+                }}
+                archivePending={archive.isPending}
+                onLeave={openRoster ? leaveChannel : undefined}
+                canLeave={detail.can_leave}
+                leaveBlockedReason={detail.leave_blocked_reason}
+              />
+            </>
+          )}
+        </div>
+      </SettingsPageTransition>
+    </AnimatePresence>
+  );
+}
+
+/** An exiting page stays visible briefly, but must no longer accept input. */
+function SettingsPageTransition({
+  children,
+  direction,
+  reducedMotion,
+}: {
+  children: ReactNode;
+  direction: number;
+  reducedMotion: boolean;
+}): JSX.Element {
+  const isPresent = useIsPresent();
+
+  return (
+    <motion.div
+      ref={(node) => node?.toggleAttribute("inert", !isPresent)}
+      aria-hidden={!isPresent || undefined}
+      className="min-h-0 flex-1 overflow-y-auto"
+      style={{ pointerEvents: isPresent ? undefined : "none" }}
+      custom={direction}
+      variants={{
+        enter: (nextDirection: number) => ({
+          opacity: 0,
+          x: reducedMotion ? 0 : nextDirection * 8,
+        }),
+        visible: {
+          opacity: 1,
+          x: 0,
+          transition: { duration: reducedMotion ? 0 : 0.12, ease: "easeOut" },
+        },
+        exit: (nextDirection: number) => ({
+          opacity: 0,
+          x: reducedMotion ? 0 : nextDirection * -8,
+          transition: { duration: reducedMotion ? 0 : 0.06, ease: "easeIn" },
+        }),
+      }}
+      initial="enter"
+      animate="visible"
+      exit="exit"
+    >
+      {children}
+    </motion.div>
   );
 }

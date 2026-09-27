@@ -25,7 +25,7 @@ import {
   dateFilterSince,
   type DateFilterValue,
 } from "@/components/ui/date-filter-select";
-import { ListRowsSkeleton } from "../../components/layout/list-rows-skeleton";
+import { ArchivedListSkeleton } from "./archived-list-skeleton";
 import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 
 /** Archived-view filter selection. Lifted to App so it survives pane
@@ -171,7 +171,7 @@ export function ArchivedChannelsPanel({
         ) : null}
 
         {isLoading ? (
-          <ListRowsSkeleton withIcon />
+          <ArchivedListSkeleton />
         ) : channels.length > 0 ? (
           <section>
             <SectionLabel text="Channels" />

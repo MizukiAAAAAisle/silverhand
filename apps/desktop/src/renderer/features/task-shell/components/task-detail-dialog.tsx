@@ -1,5 +1,6 @@
+import { TaskBodySkeleton } from "./task-body-skeleton";
 import { useEffect, useState } from "react";
-import { ExternalLink, Loader2, Pencil } from "lucide-react";
+import { ExternalLink, Pencil } from "lucide-react";
 import type { TaskDetailDto } from "@silverhand/shared";
 import {
   Dialog,
@@ -281,13 +282,10 @@ function TaskDetailStatePanel({
 }): JSX.Element {
   if (failure === null) {
     return (
-      <div className="px-5 py-6">
+      <div>
         <DialogTitle className="sr-only">Task detail</DialogTitle>
         <DialogDescription className="sr-only">Loading task</DialogDescription>
-        <div className="flex items-center gap-2 text-sm text-text-muted">
-          <Loader2 className="size-4 animate-spin" aria-hidden />
-          Loading…
-        </div>
+        <TaskBodySkeleton />
       </div>
     );
   }

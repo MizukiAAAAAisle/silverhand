@@ -1,3 +1,4 @@
+import { AnimatePresence } from "motion/react";
 import * as Popover from "@radix-ui/react-popover";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentDto } from "@silverhand/shared";
@@ -138,15 +139,18 @@ export function WorkspaceBranch({
         />
       }
     >
-      {expanded || holdsSelection || wakeGate ? (
-        <WorkspaceChannels
-          workspaceId={workspace.id}
-          selectedChannelId={ctx.selected.channelId}
-          onSelectChannel={ctx.onSelectChannel}
-          collapsed={!expanded}
-          pokeUnread={wakeGate}
-        />
-      ) : null}
+      <AnimatePresence initial={false}>
+        {expanded || holdsSelection || wakeGate ? (
+          <WorkspaceChannels
+            key={workspace.id}
+            workspaceId={workspace.id}
+            selectedChannelId={ctx.selected.channelId}
+            onSelectChannel={ctx.onSelectChannel}
+            collapsed={!expanded}
+            pokeUnread={wakeGate}
+          />
+        ) : null}
+      </AnimatePresence>
     </SidebarBranchLayout>
   );
 }

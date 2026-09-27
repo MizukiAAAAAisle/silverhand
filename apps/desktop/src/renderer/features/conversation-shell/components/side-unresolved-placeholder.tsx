@@ -1,4 +1,5 @@
-import { Loader2, X } from "lucide-react";
+import { MessageRowsSkeleton } from "./conversation-view-skeleton";
+import { X } from "lucide-react";
 import { paneChrome } from "../../../components/layout/pane-chrome";
 
 export type SidePlaceholderStatus = "loading" | "unauthorized" | "not_found" | "unresolved";
@@ -89,12 +90,15 @@ export function SideUnresolvedPlaceholder({
           <X className="size-4" strokeWidth={1.8} />
         </button>
       </header>
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-text-muted">
-        {status === "loading" ? <Loader2 className="size-5 animate-spin text-text-faint" /> : null}
-        <p>{copy.body}</p>
-        <p className="font-mono text-xs text-text-faint">#conv:{shortId}</p>
-        {copy.hint ? <p className="text-xs text-text-faint">{copy.hint}</p> : null}
-      </div>
+      {status === "loading" ? (
+        <MessageRowsSkeleton />
+      ) : (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-text-muted">
+          <p>{copy.body}</p>
+          <p className="font-mono text-xs text-text-faint">#conv:{shortId}</p>
+          {copy.hint ? <p className="text-xs text-text-faint">{copy.hint}</p> : null}
+        </div>
+      )}
     </main>
   );
 }

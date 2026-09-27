@@ -1,3 +1,4 @@
+import { DocumentSkeleton } from "@/components/layout/document-skeleton";
 import { RangeInput } from "@/components/ui/range-input";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -244,7 +245,7 @@ function AttachmentTabBody({
   onPinch: (deltaY: number) => void;
 }): JSX.Element {
   if (state.status === "loading") {
-    return <TabStatus>Loading…</TabStatus>;
+    return <DocumentSkeleton label="Loading attachment preview" />;
   }
   if (state.status === "error") {
     return <TabStatus>{state.message}</TabStatus>;

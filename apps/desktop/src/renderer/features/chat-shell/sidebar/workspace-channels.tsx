@@ -1,4 +1,6 @@
-import { useMemo, type ReactNode } from "react";
+import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
+import { SidebarReveal, SidebarRevealRow } from "@/components/layout/sidebar-reveal";
+import { useMemo, useRef, type ReactNode } from "react";
 import {
   type ChannelAttentionMode,
   type ChannelAttentionModeRowDto,
@@ -96,7 +98,8 @@ export function WorkspaceChannels({
   pokeUnread = false,
   revealCaption,
 }: WorkspaceChannelsProps): JSX.Element {
-  const { data: items = [] } = useChannelsForWorkspace(workspaceId, true);
+  const mountedCollapsed = useRef(collapsed);
+  const { data: items = [], isLoading } = useChannelsForWorkspace(workspaceId, true);
   const { data: viewerSort } = useChannelSortState(workspaceId, true);
 
   const { data: attentionModes } = useWorkspaceAttentionModes(workspaceId);
@@ -152,28 +155,37 @@ export function WorkspaceChannels({
         channelNodeBadge(c, attentionByChannel.get(c.id), unreadByChannel[c.id] ?? 0)?.tier ===
         "loud",
     });
-    if (revealed.length === 0) return <></>;
     return (
       <>
-        {revealCaption}
-        {revealed.map((c) => (
-          <li key={c.id}>
-            <WorkspaceChannelRow
-              channel={c}
-              selected={c.id === selectedChannelId}
-              onClick={() => onSelectChannel(c.id, workspaceId)}
-              onStar={(channelId, starred) => starChannel.mutate({ channelId, starred })}
-              onArchive={(channelId, archived) =>
-                archiveChannel.mutate({ channelId, archived, workspaceId })
-              }
-              archivePending={archiveChannel.isPending}
-              unreadCount={unreadByChannel[c.id] ?? 0}
-              attention={attentionByChannel.get(c.id)}
-              workspaceMuted={workspaceMuted}
-            />
-          </li>
-        ))}
+        {revealed.length > 0 ? revealCaption : null}
+        <SidebarReveal initial={mountedCollapsed.current}>
+          {revealed.map((c) => (
+            <SidebarRevealRow key={c.id}>
+              <WorkspaceChannelRow
+                channel={c}
+                selected={c.id === selectedChannelId}
+                onClick={() => onSelectChannel(c.id, workspaceId)}
+                onStar={(channelId, starred) => starChannel.mutate({ channelId, starred })}
+                onArchive={(channelId, archived) =>
+                  archiveChannel.mutate({ channelId, archived, workspaceId })
+                }
+                archivePending={archiveChannel.isPending}
+                unreadCount={unreadByChannel[c.id] ?? 0}
+                attention={attentionByChannel.get(c.id)}
+                workspaceMuted={workspaceMuted}
+              />
+            </SidebarRevealRow>
+          ))}
+        </SidebarReveal>
       </>
+    );
+  }
+
+  if (isLoading && items.length === 0) {
+    return (
+      <li>
+        <SidebarRowsSkeleton label="Loading channels" nested />
+      </li>
     );
   }
 

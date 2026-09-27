@@ -1,3 +1,5 @@
+import { DocumentSkeleton } from "@/components/layout/document-skeleton";
+import { FileTreeSkeleton } from "./agent-loading";
 import { useEffect, useMemo, useState } from "react";
 import {
   ChevronRight,
@@ -278,7 +280,11 @@ function TreeColumn({
   onSelect: (path: string) => void;
 }): JSX.Element {
   if (treeQuery.isLoading) {
-    return <div className="px-3 py-3 text-xs text-text-muted">Loading…</div>;
+    return (
+      <div className="px-1 py-2">
+        <FileTreeSkeleton />
+      </div>
+    );
   }
   if (treeQuery.isError) {
     return <div className="px-3 py-3 text-xs text-error">Failed to load workspace files.</div>;
@@ -478,11 +484,7 @@ function WorkspaceFilePreview({
     );
   }
   if (fileQuery.isLoading) {
-    return (
-      <div className="flex h-full items-center justify-center text-xs text-text-muted">
-        Loading {leafName(path)}…
-      </div>
-    );
+    return <DocumentSkeleton label={`Loading ${leafName(path)}`} />;
   }
   if (fileQuery.isError) {
     return (

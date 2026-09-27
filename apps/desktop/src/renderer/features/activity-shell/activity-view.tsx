@@ -22,7 +22,7 @@ import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-ho
 import type { AgentAvatarSource } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useActivity, useClearActivityItem } from "@/features/attention/hooks";
 import { activityItemSource } from "@/features/attention/observe";
-import { ListRowsSkeleton } from "../../components/layout/list-rows-skeleton";
+import { ActivityListSkeleton } from "./activity-list-skeleton";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 
@@ -461,7 +461,7 @@ export function ActivityView({
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {isLoading ? (
-          <ListRowsSkeleton />
+          <ActivityListSkeleton />
         ) : isError ? (
           // Distinct from the empty state — a failed load must not read as an
           // empty queue.

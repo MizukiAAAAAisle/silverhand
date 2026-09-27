@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
 import { Brain, ChevronDown, ChevronUp, Hourglass, Layers, Loader2 } from "lucide-react";
 import type { AgentDto, AgentRunState } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
@@ -258,17 +259,6 @@ export function ComposerActivityHeader({
             <span className="min-w-0 flex-1" />
             <ChevronUp className="size-3 shrink-0 text-text-muted/60" />
           </button>
-          <div className="flex flex-col gap-0.5 px-1 pb-1.5">
-            {active.map((state) => (
-              <ActivityDetailRow
-                key={state.runId}
-                state={state}
-                agent={agentsById.get(state.agentId)}
-                avatarObjectUrl={agentAvatarUrls.get(state.agentId) ?? null}
-                onOpenActivity={openAgentActivity}
-              />
-            ))}
-          </div>
         </>
       ) : (
         <div
@@ -343,7 +333,49 @@ export function ComposerActivityHeader({
           <ChevronDown className="size-3 shrink-0 text-text-muted/60" />
         </div>
       )}
+      <AnimatePresence initial={false} key={conversationId}>
+        {expanded ? (
+          <ActivityDetailsTransition key="details">
+            <div className="flex flex-col gap-0.5 px-1 pb-1.5">
+              {active.map((state) => (
+                <ActivityDetailRow
+                  key={state.runId}
+                  state={state}
+                  agent={agentsById.get(state.agentId)}
+                  avatarObjectUrl={agentAvatarUrls.get(state.agentId) ?? null}
+                  onOpenActivity={openAgentActivity}
+                />
+              ))}
+            </div>
+          </ActivityDetailsTransition>
+        ) : null}
+      </AnimatePresence>
     </div>
+  );
+}
+
+/** Only disclosure changes animate; streaming text and timers update in place. */
+function ActivityDetailsTransition({ children }: { children: ReactNode }): JSX.Element {
+  const present = useIsPresent();
+  const reducedMotion = useReducedMotion();
+
+  return (
+    <motion.div
+      ref={(node) => node?.toggleAttribute("inert", !present)}
+      aria-hidden={!present || undefined}
+      style={{ pointerEvents: present ? undefined : "none" }}
+      initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+      animate={{
+        height: "auto",
+        opacity: 1,
+        overflow: "hidden",
+        transitionEnd: { overflow: "visible" },
+      }}
+      exit={{ height: 0, opacity: 0, overflow: "hidden" }}
+      transition={{ duration: reducedMotion ? 0 : 0.14, ease: "easeOut" }}
+    >
+      {children}
+    </motion.div>
   );
 }
 

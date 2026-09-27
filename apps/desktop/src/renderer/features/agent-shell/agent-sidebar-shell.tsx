@@ -1,3 +1,4 @@
+import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
 import { DirectorySidebar } from "@/components/layout/directory-shell";
 import { Monitor, Plus, User, Users } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
@@ -51,7 +52,7 @@ export function AgentSidebarShell({
   // option A). The narrowing is defined by the backend `?scope=owned` contract
   // — we pass the flag and never re-filter here, so "my agents" has one
   // definition shared with the CLI and every other consumer.
-  const { data: agents = [] } = useAgents({ scope: "owned" });
+  const { data: agents = [], isLoading: agentsLoading } = useAgents({ scope: "owned" });
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   // Rail groups agents by the computer they run on (`agent.host_id`). The
   // name comes from the host DTO via the shared resolver — never from `kind`
@@ -109,7 +110,7 @@ export function AgentSidebarShell({
       ? viewerQuery.data
       : null;
 
-  const { data: relatedUsers = [] } = useRelatedUsers(viewer?.id ?? null);
+  const { data: relatedUsers = [], isLoading: humansLoading } = useRelatedUsers(viewer?.id ?? null);
 
   const otherHumans = viewer ? relatedUsers.filter((u) => u.id !== viewer.id) : [];
   const otherAvatarUrls = useUserAvatarObjectUrls(otherHumans);
@@ -147,7 +148,11 @@ export function AgentSidebarShell({
           </Button>
         }
       >
-        {agents.length === 0 ? (
+        {agentsLoading && agents.length === 0 ? (
+          <li>
+            <SidebarRowsSkeleton label="Loading agents" members />
+          </li>
+        ) : agents.length === 0 ? (
           <li className="px-2 py-2 text-xs text-text-muted">No agents</li>
         ) : showGroups ? (
           agentGroups.map((group) => (
@@ -192,6 +197,11 @@ export function AgentSidebarShell({
             onClick={onSelectUser ? () => onSelectUser(viewer.id) : undefined}
           />
         ) : null}
+        {(viewerQuery.isLoading || humansLoading) && otherHumans.length === 0 ? (
+          <li>
+            <SidebarRowsSkeleton label="Loading humans" members />
+          </li>
+        ) : null}
         {visibleOtherHumans.map((u) => {
           const avatarObjectUrl = otherAvatarUrls.get(u.id) ?? null;
           return (
@@ -220,7 +230,7 @@ export function AgentSidebarShell({
             </button>
           </li>
         ) : null}
-        {!viewer && otherHumans.length === 0 ? (
+        {!viewerQuery.isLoading && !humansLoading && !viewer && otherHumans.length === 0 ? (
           <li className="px-2 py-2 text-xs text-text-muted">No humans</li>
         ) : null}
       </SidebarSection>
