@@ -1,0 +1,95 @@
+:root {
+  color-scheme: dark;
+}
+html,
+body {
+  margin: 0;
+  overscroll-behavior: none;
+}
+body {
+  background: #141619;
+  color: #eef0f3;
+  font-family: -apple-system, sans-serif;
+}
+.ios-server-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 420px;
+  margin: 15vh auto;
+  padding: 24px;
+}
+.ios-server-setup h1 {
+  font-size: 26px;
+}
+.ios-server-setup input,
+.ios-server-setup button {
+  border: 1px solid #555;
+  border-radius: 8px;
+  padding: 14px;
+  font: inherit;
+}
+.ios-server-setup button {
+  background: #e9eef5;
+  color: #16191e;
+}
+.ios-server-setup p {
+  color: #ffb4b4;
+  overflow-wrap: anywhere;
+}
+
+/* Minimum phone navigation: the existing sidebar toggle controls an overlay,
+   leaving the conversation usable instead of squeezing it beside a desktop rail. */
+@media (max-width: 640px) {
+  :root {
+    --titlebar-height: 44px;
+    --titlebar-sidebar-toggle-left: 8px;
+    --titlebar-controls-safe-width: 48px;
+  }
+  .h-screen {
+    height: 100dvh;
+  }
+  [data-titlebar='app'] > div:first-child {
+    width: 48px !important;
+  }
+  [data-titlebar='app'] > .pointer-events-none {
+    position: static;
+    flex: 1;
+    width: auto;
+    transform: none;
+    padding-right: 8px;
+  }
+  [data-titlebar='app'] button[aria-pressed] {
+    width: 36px;
+    height: 36px;
+  }
+  .sidebar-slot {
+    position: absolute;
+    z-index: 30;
+    top: var(--titlebar-height);
+    bottom: 0;
+    left: var(--nav-rail-width);
+    width: min(300px, calc(100vw - var(--nav-rail-width))) !important;
+    flex-basis: 0 !important;
+    margin-right: 0 !important;
+    background: var(--bg-primary);
+    box-shadow: 8px 0 20px #0003;
+  }
+  .sidebar-slot[aria-hidden='true'] {
+    display: none;
+  }
+  .sidebar-slot .sidebar-surface {
+    width: 100% !important;
+  }
+  .sidebar-slot + [role='separator'] {
+    display: none;
+  }
+  textarea {
+    font-size: 16px !important;
+  }
+}
+@media (max-width: 640px) {
+  [data-titlebar='app'] > .pointer-events-none {
+    translate: none;
+  }
+}
