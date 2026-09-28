@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   configureRendererBackendNetwork,
   fetchBackendWithNetworkPolicy,
-} from "../renderer-backend-network.js";
+} from "../client/renderer-backend-network.js";
 
 describe("configureRendererBackendNetwork", () => {
   it("routes REST fetch and Chromium from the same backend network policy", async () => {

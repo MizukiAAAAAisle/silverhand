@@ -9,7 +9,7 @@
 ## 1. 主题在代码里的位置
 
 ```
-apps/desktop/src/renderer/
+packages/app-ui/src/
 ├── styles/
 │   ├── global.css                  # 入口：@import tailwind + 各主题；@theme inline 暴露 var；非主题化常量（titlebar-height）；全局 element 样式
 │   └── themes/
@@ -445,9 +445,9 @@ Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `global
 - **一个组件的 mode/variant 分支替换了带 `data-*` hook 的 identity/control 原语** —— 凡主题靠 `data-*` hook 识别并 painting 的原语（channel `#` = `data-conversation-hash`、列表频道图标 = `data-channel-icon`、§3.6.1/§3.6.3 各 frame hook 等），任何 variant 都**必须复用同一段挂 hook 的 primitive**，只能控"是否展示 / 布局"，**不许**在分支里替换成裸 lucide / 新 DOM 形状或新造原语。换掉 primitive ⇒ 主题 selector 匹配不到 ⇒ 在有 sticker 配方的主题画成通用 glyph，且**只在那个主题暴露**（baseline 主题看不出）。这是"同组件不同 mode"最隐蔽的翻车点：同组件只保护共享 markup，管不了某 mode 自己新增/替换的元素。组件侧 header-variant 纪律见 `app-layout.md` §9。
 
 ## 8. 已有参考
-- `apps/desktop/src/renderer/styles/themes/studio-light.css`（冷中性 hairline 范式：accent = action/state、绿 = agent 身份、明度阶梯做层级）
-- `apps/desktop/src/renderer/styles/themes/slack-dark.css`（深色主题范式）
-- `apps/desktop/src/renderer/styles/themes/forza6.css` + `forza6-components.css`（loud-festival 范式；§12）
+- `packages/app-ui/src/styles/themes/studio-light.css`（冷中性 hairline 范式：accent = action/state、绿 = agent 身份、明度阶梯做层级）
+- `packages/app-ui/src/styles/themes/slack-dark.css`（深色主题范式）
+- `packages/app-ui/src/styles/themes/forza6.css` + `forza6-components.css`（loud-festival 范式；§12）
 
 ---
 
@@ -542,7 +542,7 @@ forza6 是首个走"token + component skin"两层的主题，不只是换色。�
 - TSX review 不会被主题词污染
 - 主题切换不需要改 React 树
 
-**canonical hook 清单以代码为准**：`rg -o 'data-[a-z-]+' apps/desktop/src/renderer/styles/themes/forza6-components.css | sort -u`。
+**canonical hook 清单以代码为准**：`rg -o 'data-[a-z-]+' packages/app-ui/src/styles/themes/forza6-components.css | sort -u`。
 
 **禁止用作 hook 的 attr**：
 - 任何 `aria-*`（a11y 是产品契约，不能被 CSS 私吞）

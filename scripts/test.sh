@@ -3,7 +3,7 @@
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
-PACKAGES=(shared host cli desktop)
+PACKAGES=(shared host cli client app-ui desktop)
 scope=all
 case "${1:-}" in
   --scope) scope="${2:?--scope requires a package}"; shift 2 ;;

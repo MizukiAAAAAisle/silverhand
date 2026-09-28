@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveEffectiveBootProfile } from "../desktop-build-config.js";
+import { resolveEffectiveBootProfile } from "../shell/desktop-build-config.js";
 
 beforeEach(() => {
   vi.useFakeTimers();

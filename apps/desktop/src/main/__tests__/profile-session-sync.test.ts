@@ -1,9 +1,10 @@
+import { SessionGeneration } from "@silverhand/client";
 import { describe, expect, it } from "vitest";
 import { apiPaths, type UserDto } from "@silverhand/shared";
 import {
   extractViewerUserFromProxyResponse,
   shouldClearPasswordSession,
-} from "../profile-session-sync";
+} from "../client/profile-session-sync";
 
 function userDto(overrides: Partial<UserDto> = {}): UserDto {
   return {
@@ -183,6 +184,8 @@ function mainSessionHarness() {
   };
   let bindingPresent = true;
   const context = vm.createContext({
+    switchingServer: false,
+    clientSessionGeneration: new SessionGeneration(),
     localHostClaim: { status: "claimed", hostId: "host-a" },
     userSessionToken: "session-a",
     userSessionUser: userDto({ name: "local" }),

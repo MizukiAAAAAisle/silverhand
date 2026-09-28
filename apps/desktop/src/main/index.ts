@@ -1,4 +1,20 @@
-import { desktopDaemonLauncher } from "./daemon-launcher";
+import type {
+  LocalHostProxyConfig as DesktopHostProxyConfig,
+  LocalHostProxyConfigResult as DesktopHostProxyConfigResult,
+  LocalHostMutationResult as DesktopHostMutationResult,
+  ProfileSaveWithTestResult,
+  LocalHostPartialApplyRetryResult as PartialApplyRetryResult,
+} from "@silverhand/client";
+import type {
+  ClientAuthState as DesktopAuthState,
+  ClientAuthResult as DesktopAuthResult,
+  BackendProxyRequest,
+  BackendProxyResponse,
+  BackendUploadRequest,
+} from "@silverhand/client";
+import { SessionGeneration } from "@silverhand/client";
+import { classifyMeFetchOutcome, type SessionValidationResult } from "@silverhand/client";
+import { desktopDaemonLauncher } from "./local-host/daemon-launcher";
 import {
   app,
   BrowserWindow,
@@ -50,24 +66,24 @@ import {
   type CategorizedLoggers,
   type FileLogger,
 } from "@silverhand/shared/node-file-logger";
-import { startDesktopEmbeddedBackend } from "./embedded-launcher.js";
+import { startDesktopEmbeddedBackend } from "./embedded/embedded-launcher.js";
 import type {
   EmbeddedRustBackendHandle,
   EmbeddedRustBackendTerminalReason,
-} from "./embedded-rust-backend.js";
+} from "./embedded/embedded-rust-backend.js";
 import {
   persistEmbeddedBackend,
   invalidateEmbeddedRuntime,
-} from "./embedded-backend-publication.js";
-import { EmbeddedBackendOwner } from "./embedded-backend-owner.js";
+} from "./embedded/embedded-backend-publication.js";
+import { EmbeddedBackendOwner } from "./embedded/embedded-backend-owner.js";
 const embeddedBackendOwner = new EmbeddedBackendOwner();
 import {
   DESKTOP_ALLOW_INSECURE_REMOTE,
   DESKTOP_REMOTE_ONLY,
   PACKAGED_DEFAULT_SERVER_URL,
 } from "../build-flags.js";
-import type { LocalHostWsAttachment } from "../backend-info-contract.js";
-import { describeLocalHostWsAttachment } from "./local-host-ws-attachment.js";
+import type { LocalHostWsAttachment } from "@silverhand/client";
+import { describeLocalHostWsAttachment } from "./local-host/local-host-ws-attachment.js";
 import {
   enableNodeSystemCa,
   HostClient,
@@ -75,8 +91,8 @@ import {
   spawnDaemonChild,
   type DaemonHandle,
 } from "@silverhand/host";
-import { describeStartupFailure } from "./startup-failure.js";
-import { showStartupFailureWindow } from "./startup-failure-window.js";
+import { describeStartupFailure } from "./shell/startup-failure.js";
+import { showStartupFailureWindow } from "./shell/startup-failure-window.js";
 import {
   electronUserDataPath,
   shouldRedirectElectronUserData,
@@ -85,20 +101,15 @@ import {
   writeServerConfig,
   invalidateEmbeddedServerUrl,
   desktopAppPaths,
-} from "./config.js";
-import { resolveEffectiveBootProfile } from "./desktop-build-config.js";
-import { desktopClientInfoHeaderValue } from "./client-info.js";
-import { createRuntimeUpgradeMonitor } from "./runtime-upgrade-monitor.js";
-import { resolveRendererEntry } from "./renderer-entry.js";
+} from "./shell/config.js";
+import { resolveEffectiveBootProfile } from "./shell/desktop-build-config.js";
+import { desktopClientInfoHeaderValue } from "./client/client-info.js";
+import { createRuntimeUpgradeMonitor } from "./client/runtime-upgrade-monitor.js";
+import { resolveRendererEntry } from "./shell/renderer-entry.js";
 import { createGuardedIpcRegistrar } from "./ipc/guarded-ipc.js";
-import { waitForDaemonGeneration } from "./daemon-generation-attach.js";
-import { applyFatalExitToClaim } from "./local-host-failure.js";
-import {
-  classifyMeFetchOutcome,
-  executeHydrate,
-  type HydrateOutcome,
-  type SessionValidationResult,
-} from "./auth-hydrate.js";
+import { waitForDaemonGeneration } from "./local-host/daemon-generation-attach.js";
+import { applyFatalExitToClaim } from "./local-host/local-host-failure.js";
+import { executeHydrate, type HydrateOutcome } from "./client/auth-hydrate.js";
 import {
   buildHostClaimInput,
   loadOrCreateInstallationId,
@@ -109,13 +120,13 @@ import {
   assertApiProxyPath,
   writeDaemonHostConfig,
   type LocalHostClaimStatus,
-} from "./local-host-claim.js";
-import { type ExpectedAttachWindow } from "./outbound-attach.js";
+} from "./local-host/local-host-claim.js";
+import { type ExpectedAttachWindow } from "./local-host/outbound-attach.js";
 import {
   performOutboundReload,
   bindAttachmentAccessor,
   type OutboundReloadOutcome,
-} from "./outbound-reload.js";
+} from "./local-host/outbound-reload.js";
 import {
   applyServerProfile,
   derivePartialApplyState,
@@ -123,44 +134,47 @@ import {
   type PartialApplyState,
   type ApplyServerProfileDeps,
   type ServerProfileApplyOutcome,
-} from "./server-profile-apply.js";
-import { gracefullyDetachOutbound } from "./outbound-detach.js";
+} from "./local-host/server-profile-apply.js";
+import { gracefullyDetachOutbound } from "./local-host/outbound-detach.js";
 import {
   clearServerConnectionProfile,
   readServerConnectionProfile,
   readServerConnectionProfileViewOrNull,
   writeServerConnectionProfile,
-} from "./server-connection-profile.js";
+} from "./client/server-connection-profile.js";
 import {
   clearPersistedDesktopSession,
   loadPersistedDesktopSessionToken,
   persistDesktopSessionToken,
-} from "./desktop-session-storage.js";
+} from "./client/desktop-session-storage.js";
 import {
   extractViewerUserFromProxyResponse,
   shouldClearPasswordSession,
-} from "./profile-session-sync.js";
+} from "./client/profile-session-sync.js";
 import {
   decideBackendBootMode,
   executeBackendStartup,
   planBackendStartup,
   ProfileUnusableError,
   RemoteOnlyServerProfileRequiredError,
-} from "./backend-boot-mode.js";
-import { buildRemoteBackendHandle, type RemoteBackendHandle } from "./remote-backend-handle.js";
-import { probeServerInfo, type ProbeServerInfoResult } from "./server-connection-test.js";
-import { fetchServerInfoWithRetry } from "./fetch-server-info.js";
+} from "./shell/backend-boot-mode.js";
+import {
+  buildRemoteBackendHandle,
+  type RemoteBackendHandle,
+} from "./client/remote-backend-handle.js";
+import { probeServerInfo, type ProbeServerInfoResult } from "./client/server-connection-test.js";
+import { fetchServerInfoWithRetry } from "./client/fetch-server-info.js";
 import { registerEventWsDiagnosticIpcHandler } from "./ipc/event-ws-diagnostics.js";
 import { registerSelectionExportIpcHandlers } from "./ipc/selection-export.js";
-import { ContextualCloseCoordinator, type CloseTarget } from "./contextual-close.js";
+import { ContextualCloseCoordinator, type CloseTarget } from "./shell/contextual-close.js";
 import {
   classifyOutboundProtocolCompatibility,
   type OutboundProtocolCompatibility,
-} from "./outbound-protocol-compatibility.js";
+} from "./local-host/outbound-protocol-compatibility.js";
 import {
   configureRendererBackendNetwork,
   fetchBackendWithNetworkPolicy,
-} from "./renderer-backend-network.js";
+} from "./client/renderer-backend-network.js";
 
 function backendFetch(input: string | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
@@ -180,25 +194,6 @@ type BackendHandle =
   | { readonly kind: "embedded"; readonly running: EmbeddedRustBackendHandle }
   | RemoteBackendHandle;
 
-type DesktopHostProxyConfig = HostProxyConfig;
-
-type DesktopHostProxyConfigResult =
-  | { ok: true; config: DesktopHostProxyConfig }
-  | {
-      ok: false;
-      code:
-        | "not_local_host"
-        | "unauthorized"
-        | "host_not_found"
-        | "host_not_active"
-        | "host_revoked"
-        | typeof HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE
-        | "daemon_unavailable"
-        | "daemon_error"
-        | "invalid_input";
-      message?: string;
-    };
-
 let backend: BackendHandle | null = null;
 let daemon: DaemonHandle | null = null;
 let hostClient: HostClient | null = null;
@@ -209,6 +204,8 @@ if (shouldRedirectElectronUserData()) {
 let logger: FileLogger | null = null;
 let loggers: CategorizedLoggers | null = null;
 let mainWindow: BrowserWindow | null = null;
+const clientSessionGeneration = new SessionGeneration();
+let switchingServer = false;
 let userSessionToken: string | null = null;
 let userSessionUser: UserDto | null = null;
 
@@ -258,59 +255,6 @@ interface RemoteDebuggingConfig {
 }
 
 const remoteDebugging = configureRemoteDebugging();
-
-type DesktopAuthState =
-  | { status: "authenticated"; signup_enabled: boolean; user: UserDto }
-  | { status: "unauthenticated"; signup_enabled: boolean }
-  | { status: "backend_unreachable"; server_url: string; message: string }
-  | {
-      status: "app_update_required";
-      server_api_epoch: number;
-      minimum_client_epoch: number;
-    }
-  | {
-      status: "server_update_required";
-      server_api_epoch: number;
-      desktop_api_epoch: number;
-    };
-
-interface BackendProxyRequest {
-  path: string;
-  method?: string;
-  headers?: Record<string, string>;
-  bodyText?: string;
-  responseType?: "text" | "arrayBuffer";
-}
-
-interface BackendProxyResponse {
-  status: number;
-  statusText: string;
-  headers: Record<string, string>;
-  bodyText?: string;
-  bodyBytes?: Uint8Array;
-}
-
-interface BackendUploadField {
-  name: string;
-  value: string;
-}
-
-interface BackendUploadFile {
-  fieldName: string;
-  filename: string;
-  contentType: string;
-  bytes: Uint8Array;
-}
-
-interface BackendUploadRequest {
-  path: string;
-  fields?: BackendUploadField[];
-  files: BackendUploadFile[];
-}
-
-type DesktopAuthResult =
-  | { ok: true; user: UserDto }
-  | { ok: false; status: number; statusText: string; bodyText: string };
 
 /**
  * Expose Electron's renderer targets over local-only CDP.
@@ -654,6 +598,7 @@ function reseatCachedUserSessionFromProxy(
 // Human-session expiry does not revoke the independent daemon binding.
 // Only an explicit user logout opts into removing the local binding file.
 async function clearUserSession(preserveHostBinding = true): Promise<void> {
+  clientSessionGeneration.invalidate();
   userSessionToken = null;
   userSessionUser = null;
 
@@ -664,13 +609,10 @@ async function clearUserSession(preserveHostBinding = true): Promise<void> {
 
   clearPersistedUserSession();
 
-  await syncEventWsSessionCookie(null);
-  if (preserveHostBinding) return;
-  try {
+  if (!preserveHostBinding) {
     removeDaemonHostConfig(desktopAppPaths().desktop.computerBinding);
-  } catch (err) {
-    logger?.warn({ err }, "failed to remove daemon host config");
   }
+  await syncEventWsSessionCookie(null);
 }
 
 async function clearUserSessionAfterUnauthorized(source: string): Promise<void> {
@@ -755,20 +697,28 @@ let hydrateInFlight: Promise<HydrateOutcome> | null = null;
 
 async function runHydrate(): Promise<HydrateOutcome> {
   if (hydrateInFlight) return hydrateInFlight;
-  hydrateInFlight = executeHydrate({
+  const isCurrent = clientSessionGeneration.capture();
+  const flight = executeHydrate({
     loadToken: loadPersistedUserSessionToken,
     validate: validateUserSessionToken,
-    store: storeUserSession,
-    clear: clearUserSession,
-    claim: claimLocalHostForUserSession,
+    store: async (token, user) => {
+      if (isCurrent()) await storeUserSession(token, user);
+    },
+    clear: async () => {
+      if (isCurrent()) await clearUserSession();
+    },
+    claim: async () => {
+      if (isCurrent()) await claimLocalHostForUserSession();
+    },
     log: {
       info: (obj, msg) => logger?.info(obj, msg),
       warn: (obj, msg) => logger?.warn(obj, msg),
     },
   }).finally(() => {
-    hydrateInFlight = null;
+    if (hydrateInFlight === flight) hydrateInFlight = null;
   });
-  return hydrateInFlight;
+  hydrateInFlight = flight;
+  return flight;
 }
 
 async function hydrateDesktopSession(): Promise<boolean> {
@@ -777,6 +727,12 @@ async function hydrateDesktopSession(): Promise<boolean> {
 }
 
 async function desktopAuthState(): Promise<DesktopAuthState> {
+  if (switchingServer)
+    return {
+      status: "backend_unreachable",
+      server_url: requireBackendUrl(),
+      message: "Changing server connection",
+    };
   let info: ServerInfo;
   try {
     info = await fetchServerInfo();
@@ -814,7 +770,7 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
       return {
         status: "server_update_required",
         server_api_epoch: serverEpoch,
-        desktop_api_epoch: DESKTOP_SERVER_API_EPOCH,
+        client_api_epoch: DESKTOP_SERVER_API_EPOCH,
       };
     }
     // Compatible pair observed: re-arm the runtime monitor (#task:1763) so a
@@ -849,6 +805,14 @@ async function postAuthSession(
   path: typeof authPaths.signup | typeof authPaths.login,
   input: AuthSignupInput | AuthLoginInput,
 ): Promise<DesktopAuthResult> {
+  if (switchingServer)
+    return {
+      ok: false,
+      status: 409,
+      statusText: "Conflict",
+      bodyText: "Server connection is changing",
+    };
+  const isCurrent = clientSessionGeneration.capture();
   let res: Response;
   try {
     res = await backendFetch(backendUrl(path), {
@@ -883,8 +847,13 @@ async function postAuthSession(
       bodyText: JSON.stringify({ error: "invalid auth response" }),
     };
   }
+  if (!isCurrent())
+    return { ok: false, status: 409, statusText: "Conflict", bodyText: "Session changed" };
   await storeUserSession(parsed.data.user_token, parsed.data.user);
-  await claimLocalHostForUserSession();
+  if (isCurrent()) await claimLocalHostForUserSession();
+  if (!isCurrent()) {
+    return { ok: false, status: 409, statusText: "Conflict", bodyText: "Session changed" };
+  }
   return { ok: true, user: parsed.data.user };
 }
 
@@ -928,6 +897,7 @@ async function bootstrapEmbeddedUserSession(): Promise<boolean> {
 }
 
 async function claimLocalHostForUserSession(): Promise<void> {
+  const isCurrent = clientSessionGeneration.capture();
   const token = userSessionToken;
   if (!token || !backend) {
     localHostClaim = { status: "unclaimed", hostId: null };
@@ -952,6 +922,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
       body: JSON.stringify(claimInput),
     });
     const text = await res.text();
+    if (!isCurrent()) return;
 
     if (res.status === 401) {
       await clearUserSessionAfterUnauthorized("local host claim");
@@ -1011,6 +982,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
       attachWindow,
     });
   } catch (err) {
+    if (!isCurrent()) return;
     localHostClaim = {
       status: "error",
       hostId: existingConfig?.host_id ?? localHostClaim.hostId,
@@ -1021,9 +993,10 @@ async function claimLocalHostForUserSession(): Promise<void> {
 
 async function logoutUserSession(): Promise<{ ok: true }> {
   const token = userSessionToken;
+  const logoutUrl = token ? backendUrl(authPaths.logout) : null;
   await clearUserSession(false);
-  if (token) {
-    await backendFetch(backendUrl(authPaths.logout), {
+  if (token && logoutUrl) {
+    await backendFetch(logoutUrl, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     }).catch((err) => {
@@ -1032,28 +1005,6 @@ async function logoutUserSession(): Promise<{ ok: true }> {
   }
   return { ok: true };
 }
-
-type DesktopHostMutationResult =
-  | {
-      ok: true;
-      host: HostDto;
-      local_host_id: string | null;
-      local_host_status: LocalHostClaimStatus["status"];
-      local_host_ws_attachment: LocalHostWsAttachment;
-      local_host_server_url: string | null;
-    }
-  | {
-      ok: false;
-      code:
-        | "unauthorized"
-        | "not_current_host"
-        | "host_not_found"
-        | "host_revoked"
-        | "kind_not_supported"
-        | "invalid_response"
-        | "network_error";
-      message?: string;
-    };
 
 function snapshotLocalHostInfo(): {
   local_host_id: string | null;
@@ -1091,6 +1042,7 @@ async function triggerLocalHostOutboundAttach(input: {
   attachWindow: ExpectedAttachWindow;
 }): Promise<void> {
   const client = hostClient;
+  const isCurrent = clientSessionGeneration.capture();
   if (!client || !backend) {
     logger?.warn(
       { localHostId: input.localHostId },
@@ -1109,6 +1061,8 @@ async function triggerLocalHostOutboundAttach(input: {
     );
     return;
   }
+
+  if (!isCurrent()) return;
 
   if (!result.attached) {
     logger?.warn(
@@ -1144,7 +1098,14 @@ async function triggerLocalHostOutboundAttach(input: {
  *  Mid-flight token bytes never cross the renderer IPC boundary. */
 async function rotateHostToken(hostId: string): Promise<DesktopHostMutationResult> {
   const token = userSessionToken;
-  if (!token || !backend) {
+  const generationIsCurrent = clientSessionGeneration.capture();
+  const serverUrl = backend ? requireBackendUrl() : null;
+  const isCurrent = () =>
+    generationIsCurrent() &&
+    userSessionToken === token &&
+    backend !== null &&
+    requireBackendUrl() === serverUrl;
+  if (!token || !backend || switchingServer) {
     return { ok: false, code: "unauthorized" };
   }
   if (!hostId) {
@@ -1173,6 +1134,7 @@ async function rotateHostToken(hostId: string): Promise<DesktopHostMutationResul
   }
   const text = await res.text();
   const body = parseJson(text);
+  if (!isCurrent()) return { ok: false, code: "unauthorized", message: "Session changed" };
   if (res.status === 401) {
     await clearUserSessionAfterUnauthorized("host rotate");
     return { ok: false, code: "unauthorized" };
@@ -1195,15 +1157,25 @@ async function rotateHostToken(hostId: string): Promise<DesktopHostMutationResul
   }
 
   const parsed = HostRotateTokenEmbeddedResponseSchema.safeParse(body);
-  if (!parsed.success) {
+  if (!parsed.success || parsed.data.host_id !== hostId) {
     return { ok: false, code: "invalid_response" };
+  }
+
+  const currentConfig = readDaemonHostConfig(daemonConfigPath);
+  if (
+    !currentConfig ||
+    currentConfig.host_id !== existingConfig.host_id ||
+    currentConfig.host_token !== existingConfig.host_token ||
+    currentConfig.server_url !== existingConfig.server_url
+  ) {
+    return { ok: false, code: "not_current_host" };
   }
 
   // Token bytes land here and ONLY here. Persist to daemon-config
   // before we return; the renderer reply below has no token.
   applyRotateSideEffects({
     daemonConfigPath,
-    serverUrl: requireBackendUrl(),
+    serverUrl: serverUrl!,
     hostId: parsed.data.host_id,
     hostToken: parsed.data.host_token,
   });
@@ -1215,56 +1187,15 @@ async function rotateHostToken(hostId: string): Promise<DesktopHostMutationResul
   };
 }
 
-/** Revoke a host the user owns. If the revoked host is the desktop's
- *  current local host, also clear `daemon-config.json` and update
- *  `localHostClaim` so subsequent `BackendInfo` reads reflect the
- *  new state. Other owned hosts only update the server; local state
- *  is unchanged. */
-async function revokeHost(hostId: string): Promise<DesktopHostMutationResult> {
-  const token = userSessionToken;
-  if (!token || !backend) {
-    return { ok: false, code: "unauthorized" };
-  }
-  if (!hostId) {
-    return { ok: false, code: "host_not_found", message: "missing host id" };
-  }
-
-  let res: Response;
-  try {
-    res = await backendFetch(backendUrl(apiPaths.hostRevoke(hostId)), {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-  } catch (err) {
-    logger?.warn({ err }, "host revoke request failed");
-    return { ok: false, code: "network_error" };
-  }
-  const text = await res.text();
-  const body = parseJson(text);
-  if (res.status === 401) {
-    await clearUserSessionAfterUnauthorized("host revoke");
-    return { ok: false, code: "unauthorized" };
-  }
-  if (res.status === 404) {
-    return { ok: false, code: "host_not_found" };
-  }
-  if (!res.ok) {
-    return {
-      ok: false,
-      code: "network_error",
-      message: `${res.status} ${res.statusText}`,
-    };
-  }
-  const parsed = HostRevokeResponseSchema.safeParse(body);
-  if (!parsed.success) {
-    return { ok: false, code: "invalid_response" };
-  }
-
-  // If we just revoked the host this desktop was bound to, drop the
-  // local daemon-config and surface `revoked` through the
-  // `BackendInfo` IPC so the renderer can prompt the user to log in
-  // again (which provisions a fresh active host row under the new
-  // active-only partial-unique index).
+/** Server revocation is a client operation; only local binding cleanup is native. */
+function reconcileRevokedLocalHost(
+  input: BackendProxyRequest,
+  response: BackendProxyResponse,
+): void {
+  if (input.method !== "POST" || response.status < 200 || response.status >= 300) return;
+  const parsed = HostRevokeResponseSchema.safeParse(parseJson(response.bodyText ?? ""));
+  if (!parsed.success || input.path !== apiPaths.hostRevoke(parsed.data.host.id)) return;
+  const hostId = parsed.data.host.id;
   const reconcile = applyRevokeSideEffects({
     daemonConfigPath: desktopAppPaths().desktop.computerBinding,
     hostId,
@@ -1272,11 +1203,6 @@ async function revokeHost(hostId: string): Promise<DesktopHostMutationResult> {
   if (reconcile === "cleared") {
     localHostClaim = { status: "revoked", hostId };
   }
-  return {
-    ok: true,
-    host: parsed.data.host,
-    ...snapshotLocalHostInfo(),
-  };
 }
 
 function normalizeDesktopHostProxyConfig(input: unknown): DesktopHostProxyConfig | null {
@@ -1286,7 +1212,14 @@ function normalizeDesktopHostProxyConfig(input: unknown): DesktopHostProxyConfig
 
 async function getHostProxyConfig(hostId: string): Promise<DesktopHostProxyConfigResult> {
   const token = userSessionToken;
-  if (!token || !backend) {
+  const generationIsCurrent = clientSessionGeneration.capture();
+  const serverUrl = backend ? requireBackendUrl() : null;
+  const isCurrent = () =>
+    generationIsCurrent() &&
+    userSessionToken === token &&
+    backend !== null &&
+    requireBackendUrl() === serverUrl;
+  if (!token || !backend || switchingServer) {
     return { ok: false, code: "unauthorized" };
   }
   if (!hostId) {
@@ -1307,6 +1240,7 @@ async function getHostProxyConfig(hostId: string): Promise<DesktopHostProxyConfi
   }
 
   const body = parseJson(await res.text());
+  if (!isCurrent()) return { ok: false, code: "unauthorized", message: "Session changed" };
   if (res.status === 401) {
     await clearUserSessionAfterUnauthorized("host proxy config get");
     return { ok: false, code: "unauthorized" };
@@ -1331,7 +1265,14 @@ async function saveHostProxyConfig(input: {
   config: unknown;
 }): Promise<DesktopHostProxyConfigResult> {
   const token = userSessionToken;
-  if (!token || !backend) {
+  const generationIsCurrent = clientSessionGeneration.capture();
+  const serverUrl = backend ? requireBackendUrl() : null;
+  const isCurrent = () =>
+    generationIsCurrent() &&
+    userSessionToken === token &&
+    backend !== null &&
+    requireBackendUrl() === serverUrl;
+  if (!token || !backend || switchingServer) {
     return { ok: false, code: "unauthorized" };
   }
   if (!input.hostId) {
@@ -1359,6 +1300,7 @@ async function saveHostProxyConfig(input: {
   }
 
   const body = parseJson(await res.text());
+  if (!isCurrent()) return { ok: false, code: "unauthorized", message: "Session changed" };
   if (res.status === 401) {
     await clearUserSessionAfterUnauthorized("host proxy config set");
     return { ok: false, code: "unauthorized" };
@@ -1521,7 +1463,7 @@ async function marshalBackendResponse(
 
 async function proxyBackendRequest(input: BackendProxyRequest): Promise<BackendProxyResponse> {
   assertApiProxyPath(input.path);
-  if (!userSessionToken) {
+  if (!userSessionToken || switchingServer) {
     return {
       status: 401,
       statusText: "Unauthorized",
@@ -1530,6 +1472,7 @@ async function proxyBackendRequest(input: BackendProxyRequest): Promise<BackendP
     };
   }
   const requestSessionToken = userSessionToken;
+  const isCurrent = clientSessionGeneration.capture();
   const headers = proxyHeaders(input.headers);
   headers.set("Authorization", `Bearer ${requestSessionToken}`);
   if (input.bodyText !== undefined && !headers.has("Content-Type")) {
@@ -1552,12 +1495,25 @@ async function proxyBackendRequest(input: BackendProxyRequest): Promise<BackendP
       bodyText: JSON.stringify({ error: "backend_unreachable", message }),
     };
   }
-  if (res.status === 401 && userSessionToken === requestSessionToken) {
-    await clearUserSessionAfterUnauthorized("backend request");
-  }
   const response = await marshalBackendResponse(res, input.responseType ?? "text");
+  if (!isCurrent() || userSessionToken !== requestSessionToken) {
+    return {
+      status: 409,
+      statusText: "Session Changed",
+      headers: {},
+      bodyText: '{"error":"session_changed"}',
+    };
+  }
+  if (res.status === 401) {
+    await clearUserSessionAfterUnauthorized("backend request");
+    return response;
+  }
   if (shouldClearPasswordSession(input, response, requestSessionToken, userSessionToken)) {
     await clearUserSession(true);
+    return response;
+  }
+  if (input.method === "POST" && /^\/api\/hosts\/[^/]+\/revoke$/.test(input.path)) {
+    reconcileRevokedLocalHost(input, response);
   }
   runtimeUpgradeMonitor.onRestResponse(response.status, response.bodyText);
   reseatCachedUserSessionFromProxy(
@@ -1570,7 +1526,7 @@ async function proxyBackendRequest(input: BackendProxyRequest): Promise<BackendP
 
 async function proxyBackendUpload(input: BackendUploadRequest): Promise<BackendProxyResponse> {
   assertApiProxyPath(input.path);
-  if (!userSessionToken) {
+  if (!userSessionToken || switchingServer) {
     return {
       status: 401,
       statusText: "Unauthorized",
@@ -1579,6 +1535,7 @@ async function proxyBackendUpload(input: BackendUploadRequest): Promise<BackendP
     };
   }
   const requestSessionToken = userSessionToken;
+  const isCurrent = clientSessionGeneration.capture();
   const form = new FormData();
   for (const field of input.fields ?? []) {
     form.append(field.name, field.value);
@@ -1607,10 +1564,19 @@ async function proxyBackendUpload(input: BackendUploadRequest): Promise<BackendP
       bodyText: JSON.stringify({ error: "backend_unreachable", message }),
     };
   }
-  if (res.status === 401 && userSessionToken === requestSessionToken) {
-    await clearUserSessionAfterUnauthorized("backend upload");
-  }
   const response = await marshalBackendResponse(res, "text");
+  if (!isCurrent() || userSessionToken !== requestSessionToken) {
+    return {
+      status: 409,
+      statusText: "Session Changed",
+      headers: {},
+      bodyText: '{"error":"session_changed"}',
+    };
+  }
+  if (res.status === 401) {
+    await clearUserSessionAfterUnauthorized("backend request");
+    return response;
+  }
   runtimeUpgradeMonitor.onRestResponse(response.status, response.bodyText);
   reseatCachedUserSessionFromProxy(
     { path: input.path, method: "POST" },
@@ -2301,10 +2267,6 @@ guardedIpc.handle("hosts:rotate", (_event, input: { hostId: string }) =>
   rotateHostToken(input?.hostId ?? ""),
 );
 
-guardedIpc.handle("hosts:revoke", (_event, input: { hostId: string }) =>
-  revokeHost(input?.hostId ?? ""),
-);
-
 guardedIpc.handle("hosts:proxyConfig:get", (_event, input: { hostId: string }) =>
   getHostProxyConfig(input?.hostId ?? ""),
 );
@@ -2319,53 +2281,6 @@ guardedIpc.handle("hosts:proxyConfig:set", (_event, input: { hostId: string; con
 guardedIpc.handle("settings:saveServerUrl", (_event, input: { serverUrl: string }) =>
   saveServerUrlFromSettings(input?.serverUrl ?? ""),
 );
-
-/**
- * Result shape of `profile:saveWithTest`. Kept structurally separate
- * from the `ProbeServerInfoResult` because the renderer needs to
- * know which phase failed (test vs write).
- */
-export type ProfileSaveWithTestResult =
-  | {
-      ok: true;
-      test: ProbeServerInfoResult & { ok: true };
-      profile: ServerConnectionProfileView;
-      phase2: ServerProfileApplyOutcome;
-    }
-  | {
-      ok: false;
-      phase: "test";
-      test: ProbeServerInfoResult & { ok: false };
-    }
-  | {
-      ok: false;
-      phase: "commit_guard";
-      reason: "remote_backend_not_yet_supported";
-      message: string;
-      test: ProbeServerInfoResult & { ok: true };
-    }
-  | {
-      ok: false;
-      phase: "write";
-      reason: "write_failed";
-      detail?: string;
-    };
-
-export type PartialApplyRetryResult =
-  | {
-      ok: true;
-      outcome: ServerProfileApplyOutcome;
-      state: PartialApplyState;
-    }
-  | {
-      ok: false;
-      reason: "no_profile";
-    }
-  | {
-      ok: false;
-      reason: "profile_unreadable";
-      detail: string;
-    };
 
 function buildServerProfileApplyDeps(): ApplyServerProfileDeps | null {
   const client = hostClient;
@@ -2411,7 +2326,6 @@ function applyProfileToActiveRemoteBackend(input: {
   testKind: (ProbeServerInfoResult & { ok: true })["kind"];
 }): void {
   if (!backend || backend.kind !== "remote") return;
-  if (input.testKind === "loopback_ok") return;
   const insecure = input.testKind === "insecure_dev_remote";
   if (backend.url === input.profile.server_url && backend.insecure === insecure) {
     return;
@@ -2422,8 +2336,9 @@ function applyProfileToActiveRemoteBackend(input: {
     serverUrl: input.profile.server_url,
     insecure,
   });
+  runtimeUpgradeMonitor.reset();
   installBackendEventWsOriginOverride();
-  void syncEventWsSessionCookie(userSessionToken);
+  void syncEventWsSessionCookie(null);
   logger?.info(
     {
       previousUrl,
@@ -2445,68 +2360,83 @@ async function handleProfileSaveWithTest(
     return { ok: false, phase: "test", test };
   }
 
-  const writeResult = writeServerConnectionProfile({
-    profilePath: desktopAppPaths().desktop.serverProfile,
-    serverUrl: test.originUrl,
-    logger: logger ?? undefined,
-  });
-  if (!writeResult.ok) {
-    logger?.warn(
-      { reason: writeResult.reason, serverUrl },
-      "profile:saveWithTest write phase failed",
+  const changesServer =
+    backend?.kind === "remote" && new URL(backend.url).origin !== new URL(test.originUrl).origin;
+  if (changesServer) switchingServer = true;
+  try {
+    if (changesServer) {
+      // Clear credentials before committing the new profile, including crash/restart paths.
+      await clearUserSession(false);
+      hydrateInFlight = null;
+      if (hostClient) await gracefullyDetachOutbound({ client: hostClient, hostId: null });
+    }
+    const writeResult = writeServerConnectionProfile({
+      profilePath: desktopAppPaths().desktop.serverProfile,
+      serverUrl: test.originUrl,
+      logger: logger ?? undefined,
+    });
+    if (!writeResult.ok) {
+      logger?.warn(
+        { reason: writeResult.reason, serverUrl },
+        "profile:saveWithTest write phase failed",
+      );
+      return {
+        ok: false,
+        phase: "write",
+        reason: writeResult.reason,
+        detail: "detail" in writeResult ? writeResult.detail : undefined,
+      };
+    }
+    logger?.info(
+      {
+        serverUrl,
+        classification: test.kind,
+        profileVersion: writeResult.profile.version,
+      },
+      "profile:saveWithTest committed",
     );
-    return {
-      ok: false,
-      phase: "write",
-      reason: writeResult.reason,
-      detail: "detail" in writeResult ? writeResult.detail : undefined,
-    };
-  }
-  logger?.info(
-    {
-      serverUrl,
-      classification: test.kind,
-      profileVersion: writeResult.profile.version,
-    },
-    "profile:saveWithTest committed",
-  );
 
-  const applyOutcome = await runServerProfileApply(writeResult.profile);
-  applyProfileToActiveRemoteBackend({
-    profile: writeResult.profile,
-    testKind: test.kind,
-  });
-  partialApplyState = derivePartialApplyState(applyOutcome, Date.now());
-  if (applyOutcome.kind === "partial_apply_pending") {
-    logger?.warn(
-      {
-        profileVersion: applyOutcome.profileVersion,
-        reason: applyOutcome.reason,
-        reloadRejectionReason: applyOutcome.reloadRejectionReason,
-      },
-      "profile:saveWithTest partial_apply_pending",
-    );
-  } else if (applyOutcome.kind === "fully_applied") {
-    logger?.info(
-      {
-        profileVersion: applyOutcome.profileVersion,
-        reloadKind: applyOutcome.reloadKind,
-        elapsedMs: applyOutcome.elapsedMs,
-      },
-      "profile:saveWithTest fully_applied",
-    );
-  } else {
-    logger?.info(
-      { profileVersion: applyOutcome.profileVersion },
-      "profile:saveWithTest no_op_no_host_claim (pre-auth)",
-    );
+    const applyOutcome: ServerProfileApplyOutcome = changesServer
+      ? { kind: "no_op_no_host_claim", profileVersion: writeResult.profile.version }
+      : await runServerProfileApply(writeResult.profile);
+    applyProfileToActiveRemoteBackend({
+      profile: writeResult.profile,
+      testKind: test.kind,
+    });
+    partialApplyState = derivePartialApplyState(applyOutcome, Date.now());
+    if (applyOutcome.kind === "partial_apply_pending") {
+      logger?.warn(
+        {
+          profileVersion: applyOutcome.profileVersion,
+          reason: applyOutcome.reason,
+          reloadRejectionReason: applyOutcome.reloadRejectionReason,
+        },
+        "profile:saveWithTest partial_apply_pending",
+      );
+    } else if (applyOutcome.kind === "fully_applied") {
+      logger?.info(
+        {
+          profileVersion: applyOutcome.profileVersion,
+          reloadKind: applyOutcome.reloadKind,
+          elapsedMs: applyOutcome.elapsedMs,
+        },
+        "profile:saveWithTest fully_applied",
+      );
+    } else {
+      logger?.info(
+        { profileVersion: applyOutcome.profileVersion },
+        "profile:saveWithTest no_op_no_host_claim (pre-auth)",
+      );
+    }
+    return {
+      ok: true,
+      test,
+      profile: redactServerConnectionProfile(writeResult.profile),
+      phase2: applyOutcome,
+    };
+  } finally {
+    switchingServer = false;
   }
-  return {
-    ok: true,
-    test,
-    profile: redactServerConnectionProfile(writeResult.profile),
-    phase2: applyOutcome,
-  };
 }
 
 async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
@@ -2564,9 +2494,12 @@ guardedIpc.handle("profile:get", (): ServerConnectionProfileView | null =>
   }),
 );
 
-guardedIpc.handle("profile:saveWithTest", (_event, input: { serverUrl: string }) =>
-  handleProfileSaveWithTest(input),
-);
+let profileSaveQueue: Promise<unknown> = Promise.resolve();
+guardedIpc.handle("profile:saveWithTest", (_event, input: { serverUrl: string }) => {
+  const save = profileSaveQueue.then(() => handleProfileSaveWithTest(input));
+  profileSaveQueue = save.catch(() => undefined);
+  return save;
+});
 
 guardedIpc.handle("profile:clear", () => {
   const result = clearServerConnectionProfile({

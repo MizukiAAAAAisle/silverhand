@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { LocalHostClaimStatus } from "../local-host-claim.js";
-import { applyFatalExitToClaim } from "../local-host-failure.js";
+import type { LocalHostClaimStatus } from "../local-host/local-host-claim.js";
+import { applyFatalExitToClaim } from "../local-host/local-host-failure.js";
 
 const states: LocalHostClaimStatus[] = [
   { status: "unclaimed", hostId: null },

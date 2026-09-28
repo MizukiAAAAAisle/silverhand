@@ -7,7 +7,7 @@ import {
   DESKTOP_API_EPOCH_HEADER,
   DESKTOP_SERVER_API_EPOCH,
 } from "@silverhand/shared";
-import { fetchBackendWithNetworkPolicy } from "./renderer-backend-network";
+import { fetchBackendWithNetworkPolicy } from "./client/renderer-backend-network";
 
 const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 function rawFetchOwner(text: string): { source: ts.SourceFile; owner: ts.FunctionDeclaration } {

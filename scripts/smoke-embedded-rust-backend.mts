@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
-import type { EmbeddedRustBackendHandle, EmbeddedRustBackendConfig } from '../apps/desktop/src/main/embedded-rust-backend.js';
+import type { EmbeddedRustBackendHandle, EmbeddedRustBackendConfig } from '../apps/desktop/src/main/embedded/embedded-rust-backend.js';
 
 const repo = fileURLToPath(new URL('..', import.meta.url));
 const root = join(repo, '.cache/embedded-smoke', randomUUID());
@@ -24,7 +24,7 @@ const { resolveDesktopAppPaths } = await import('../packages/shared/src/app-data
 const { DESKTOP_SERVER_API_EPOCH, MINIMUM_SERVER_API_EPOCH,
   DESKTOP_API_EPOCH_HEADER, EVENT_WS_SESSION_COOKIE } = await import('../packages/shared/src/index.js');
 const { startDesktopEmbeddedBackend } =
-  await import('../apps/desktop/src/main/embedded-launcher.js');
+  await import('../apps/desktop/src/main/embedded/embedded-launcher.js');
 const paths = resolveDesktopAppPaths(process.env.SILVERHAND_DIR);
 mkdirSync(paths.embeddedServer.root, { recursive: true });
 let resources = process.argv[2];

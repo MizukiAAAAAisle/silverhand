@@ -9,7 +9,7 @@ import {
   shouldRedirectElectronUserData,
   silverhandDir,
   writeServerConfig,
-} from "../config.js";
+} from "../shell/config.js";
 
 const fixtureParent = process.env.SILVERHAND_DIR;
 if (!fixtureParent) throw new Error("config tests require an isolated SILVERHAND_DIR");

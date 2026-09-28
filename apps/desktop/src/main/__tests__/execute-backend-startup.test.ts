@@ -5,8 +5,8 @@ import {
   planBackendStartup,
   ProfileUnusableError,
   type DecideBackendBootModeInput,
-} from "../backend-boot-mode.js";
-import { buildRemoteBackendHandle } from "../remote-backend-handle.js";
+} from "../shell/backend-boot-mode.js";
+import { buildRemoteBackendHandle } from "../client/remote-backend-handle.js";
 
 function startup(input: Partial<DecideBackendBootModeInput> = {}) {
   const decision = decideBackendBootMode({

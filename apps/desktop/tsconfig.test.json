@@ -1,8 +1,17 @@
 {
   "extends": "./tsconfig.web.json",
   "compilerOptions": {
-    "types": ["vite/client", "node"]
+    "types": ["vite/client", "node"],
+    "composite": false,
+    "paths": {
+      "@/*": ["../../packages/app-ui/src/*"]
+    }
   },
-  "include": ["src/renderer", "src/preload/api.d.ts"],
+  "include": [
+    "src/renderer",
+    "src/preload/api.d.ts",
+    "src/preload/contract.ts",
+    "src/build-flags.ts"
+  ],
   "exclude": []
 }

@@ -74,18 +74,21 @@ function literalChannels(files: ts.SourceFile[], method: string): string[] {
 }
 
 describe("Desktop architecture boundaries (no renderer execution)", () => {
-  it.each([mainRoot, preloadRoot, rendererRoot])(
-    "does not import retired backend/server packages from %s",
-    (root) => {
-      const offenders = find(sourceFiles(root), (node) => {
-        const module = importedModule(node);
-        return module && /^@silverhand\/(?:backend|server)(?:\/|$)/.test(module)
-          ? { path: relative(desktopRoot, node.getSourceFile().fileName), module }
-          : undefined;
-      });
-      expect(offenders).toEqual([]);
-    },
-  );
+  it.each([
+    mainRoot,
+    preloadRoot,
+    rendererRoot,
+    join(desktopRoot, "../../packages/app-ui/src"),
+    join(desktopRoot, "../../packages/client/src"),
+  ])("does not import retired backend/server packages from %s", (root) => {
+    const offenders = find(sourceFiles(root), (node) => {
+      const module = importedModule(node);
+      return module && /^@silverhand\/(?:backend|server)(?:\/|$)/.test(module)
+        ? { path: relative(desktopRoot, node.getSourceFile().fileName), module }
+        : undefined;
+    });
+    expect(offenders).toEqual([]);
+  });
 
   it.each(["0", "1"])("evaluates the real build profile remoteOnly=%s", (remoteOnly) => {
     const result = spawnSync(

@@ -1,7 +1,10 @@
 import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveBackendSidecarManifestPath, verifySidecar } from "../rust-backend-sidecar.js";
+import {
+  resolveBackendSidecarManifestPath,
+  verifySidecar,
+} from "../embedded/rust-backend-sidecar.js";
 
 // SHA-256 of the literal artifact bytes "abc", not computed by the verifier under test.
 const SHA = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";

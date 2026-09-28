@@ -1,18 +1,15 @@
+import type { MeFetchOutcome } from "@silverhand/client";
+import { classifyMeFetchOutcome, type SessionValidationResult } from "@silverhand/client";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UserDto } from "@silverhand/shared";
-import {
-  classifyMeFetchOutcome,
-  executeHydrate,
-  type HydrateDeps,
-  type MeFetchOutcome,
-} from "../auth-hydrate";
+import { executeHydrate, type HydrateDeps } from "../client/auth-hydrate";
 import {
   clearPersistedDesktopSession,
   loadPersistedDesktopSessionToken,
   persistDesktopSessionToken,
-} from "../desktop-session-storage";
+} from "../client/desktop-session-storage";
 
 const user: UserDto = {
   id: "u-recover",

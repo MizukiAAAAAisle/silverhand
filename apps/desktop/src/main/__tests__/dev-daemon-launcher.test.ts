@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { desktopDaemonLauncher } from "../daemon-launcher.js";
+import { desktopDaemonLauncher } from "../local-host/daemon-launcher.js";
 
 const repo = resolve(__dirname, "../../../../..");
 

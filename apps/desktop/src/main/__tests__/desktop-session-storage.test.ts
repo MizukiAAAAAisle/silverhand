@@ -13,7 +13,7 @@ import {
   clearPersistedDesktopSession,
   loadPersistedDesktopSessionToken,
   persistDesktopSessionToken,
-} from "../desktop-session-storage.js";
+} from "../client/desktop-session-storage.js";
 
 const desktopSessionPath = (root: string) => join(root, "desktop", "session.bin");
 

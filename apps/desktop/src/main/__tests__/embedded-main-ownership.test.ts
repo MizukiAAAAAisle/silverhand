@@ -4,21 +4,21 @@ import type { ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "@silverhand/shared";
-import { EmbeddedBackendOwner } from "../embedded-backend-owner.js";
+import { EmbeddedBackendOwner } from "../embedded/embedded-backend-owner.js";
 import {
   invalidateEmbeddedRuntime,
   persistEmbeddedBackend,
-} from "../embedded-backend-publication.js";
+} from "../embedded/embedded-backend-publication.js";
 import {
   desktopAppPaths,
   invalidateEmbeddedServerUrl,
   loadOrCreateServerConfig,
   writeServerConfig,
-} from "../config.js";
+} from "../shell/config.js";
 import {
   startEmbeddedRustBackend,
   type EmbeddedRustBackendHandle,
-} from "../embedded-rust-backend.js";
+} from "../embedded/embedded-rust-backend.js";
 
 function deferred() {
   let resolve!: () => void;

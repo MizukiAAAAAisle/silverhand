@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { describeStartupFailure } from "../startup-failure";
+import { describeStartupFailure } from "../shell/startup-failure";
 import {
   presentStartupFailure,
   renderStartupFailureDocument,
   QUIT_URL,
   REVEAL_LOGS_URL,
   type StartupFailureExitDeps,
-} from "../startup-failure-exit";
-import { ProfileUnusableError, RemoteOnlyServerProfileRequiredError } from "../backend-boot-mode";
+} from "../shell/startup-failure-exit";
+import {
+  ProfileUnusableError,
+  RemoteOnlyServerProfileRequiredError,
+} from "../shell/backend-boot-mode";
 
 const NOTICE = {
   headline: "Silverhand could not finish starting.",

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { prepareEmbeddedStartup } from "../embedded-startup-preparation.js";
+import { prepareEmbeddedStartup } from "../embedded/embedded-startup-preparation.js";
 
 describe("pre-child cleanup ownership", () => {
   it.each(["verification", "async launch", "sync launch"])(

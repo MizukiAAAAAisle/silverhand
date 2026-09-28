@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchServerInfoWithRetry } from "../fetch-server-info.js";
+import { fetchServerInfoWithRetry } from "../client/fetch-server-info.js";
 
 const url = "https://example.test/api/server/info";
 function response(status: number, body: unknown, statusText = "Bad Gateway"): Response {

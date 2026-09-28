@@ -17,7 +17,7 @@ import {
   readServerConnectionProfile,
   readServerConnectionProfileViewOrNull,
   writeServerConnectionProfile,
-} from "../server-connection-profile.js";
+} from "../client/server-connection-profile.js";
 
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();

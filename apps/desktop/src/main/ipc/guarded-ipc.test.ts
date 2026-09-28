@@ -20,7 +20,7 @@ vi.mock("electron", () => ({
 }));
 
 import { createGuardedIpcRegistrar } from "./guarded-ipc.js";
-import { resolveRendererEntry, type RendererEntry } from "../renderer-entry.js";
+import { resolveRendererEntry, type RendererEntry } from "../shell/renderer-entry.js";
 
 /**
  * #task:1762 — IPC sender validation behavior.

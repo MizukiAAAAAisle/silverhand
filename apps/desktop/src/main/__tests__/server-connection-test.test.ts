@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { probeServerInfo } from "../server-connection-test.js";
+import { probeServerInfo } from "../client/server-connection-test.js";
 
 const fetchMock = vi.fn<typeof fetch>();
 beforeEach(() => {

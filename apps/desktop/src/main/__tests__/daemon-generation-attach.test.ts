@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClientError, type HostClient } from "@silverhand/host";
-import { waitForDaemonGeneration } from "../daemon-generation-attach.js";
+import { waitForDaemonGeneration } from "../local-host/daemon-generation-attach.js";
 
 // The gate owns identity/deadline policy; HostClient's wire negotiation is
 // covered in packages/host/tests/host-client.test.ts.

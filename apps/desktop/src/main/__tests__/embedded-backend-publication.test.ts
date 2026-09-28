@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   persistEmbeddedBackend,
   invalidateEmbeddedRuntime,
-} from "../embedded-backend-publication.js";
+} from "../embedded/embedded-backend-publication.js";
 import type {
   EmbeddedRustBackendHandle,
   EmbeddedRustBackendTerminalReason,
-} from "../embedded-rust-backend.js";
+} from "../embedded/embedded-rust-backend.js";
 
 describe("embedded URL publication owner", () => {
   for (const reason of [

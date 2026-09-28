@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeLocalHostWsAttachment } from "../local-host-ws-attachment";
+import { describeLocalHostWsAttachment } from "../local-host/local-host-ws-attachment";
 
 describe("describeLocalHostWsAttachment (#task:1630 / #task:2343)", () => {
   it("a local registry observer with nothing attached is observable-but-empty, NOT unobservable", () => {

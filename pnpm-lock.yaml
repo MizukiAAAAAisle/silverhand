@@ -26,10 +26,74 @@ importers:
 
   apps/desktop:
     dependencies:
-      zod:
+      'zod':
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
+      '@silverhand/app-ui':
+        specifier: workspace:*
+        version: link:../../packages/app-ui
+      '@silverhand/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@silverhand/host':
+        specifier: workspace:*
+        version: link:../../packages/host
+      '@silverhand/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@tailwindcss/language-server':
+        specifier: 0.16.0
+        version: 0.16.0
+      '@tailwindcss/vite':
+        specifier: ^4.2.4
+        version: 4.2.4(vite@8.1.5(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
+      '@types/node':
+        specifier: ^22.19.17
+        version: 22.19.17
+      '@types/react':
+        specifier: ^18.3.11
+        version: 18.3.28
+      '@types/react-dom':
+        specifier: ^18.3.0
+        version: 18.3.7(@types/react@18.3.28)
+      '@vitejs/plugin-react':
+        specifier: ^6.0.4
+        version: 6.0.4(vite@8.1.5(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
+      'electron':
+        specifier: ^42.6.0
+        version: 42.6.0
+      'electron-builder':
+        specifier: ^26.8.1
+        version: 26.8.1(electron-builder-squirrel-windows@26.8.1)
+      'electron-vite':
+        specifier: 6.0.0-beta.1
+        version: 6.0.0-beta.1(vite@8.1.5(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
+      'typescript':
+        specifier: ^5.6.3
+        version: 5.9.3
+      'vite':
+        specifier: ^8.1.5
+        version: 8.1.5(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0)
+      'vitest':
+        specifier: ^4.1.10
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(vite@8.1.5(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
+
+  packages/client:
+    dependencies:
+      '@silverhand/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      'typescript':
+        specifier: ^5.6.3
+        version: 5.9.3
+      'vitest':
+        specifier: ^4.1.10
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(vite@8.1.5(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
+
+  packages/app-ui:
+    dependencies:
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -75,21 +139,73 @@ importers:
       '@radix-ui/react-tooltip':
         specifier: ^1.2.8
         version: 1.2.8(@types/react-dom@18.3.7(@types/react@18.3.28))(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      '@silverhand/host':
+      '@silverhand/client':
         specifier: workspace:*
-        version: link:../../packages/host
+        version: link:../client
       '@silverhand/shared':
         specifier: workspace:*
-        version: link:../../packages/shared
-      '@tailwindcss/language-server':
-        specifier: 0.16.0
-        version: 0.16.0
-      '@tailwindcss/vite':
-        specifier: ^4.2.4
-        version: 4.2.4(vite@8.1.5(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
+        version: link:../shared
       '@tanstack/react-query':
         specifier: ^5.100.6
         version: 5.100.6(react@18.3.1)
+      'class-variance-authority':
+        specifier: ^0.7.1
+        version: 0.7.1
+      'clsx':
+        specifier: ^2.1.1
+        version: 2.1.1
+      'dayjs':
+        specifier: ^1.11.20
+        version: 1.11.20
+      'html-to-image':
+        specifier: ^1.11.13
+        version: 1.11.13
+      'lucide-react':
+        specifier: ^1.14.0
+        version: 1.14.0(react@18.3.1)
+      'mermaid':
+        specifier: ^11.16.0
+        version: 11.16.0
+      'motion':
+        specifier: ^13.4.0
+        version: 13.4.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      'react':
+        specifier: ^18.3.1
+        version: 18.3.1
+      'react-dom':
+        specifier: ^18.3.1
+        version: 18.3.1(react@18.3.1)
+      'react-markdown':
+        specifier: ^10.1.0
+        version: 10.1.0(@types/react@18.3.28)(react@18.3.1)
+      'react-router-dom':
+        specifier: ^6.30.3
+        version: 6.30.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      'react-virtuoso':
+        specifier: ^4.18.7
+        version: 4.18.7(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      'rehype-highlight':
+        specifier: ^7.0.2
+        version: 7.0.2
+      'remark-breaks':
+        specifier: ^4.0.0
+        version: 4.0.0
+      'remark-gfm':
+        specifier: ^4.0.1
+        version: 4.0.1
+      'sonner':
+        specifier: ^2.0.7
+        version: 2.0.7(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      'tailwind-merge':
+        specifier: ^3.5.0
+        version: 3.5.0
+      'tailwindcss':
+        specifier: ^4.2.4
+        version: 4.2.4
+      'zod':
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
       '@types/node':
         specifier: ^22.19.17
         version: 22.19.17
@@ -99,79 +215,13 @@ importers:
       '@types/react-dom':
         specifier: ^18.3.0
         version: 18.3.7(@types/react@18.3.28)
-      '@vitejs/plugin-react':
-        specifier: ^6.0.4
-        version: 6.0.4(vite@8.1.5(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
-      class-variance-authority:
-        specifier: ^0.7.1
-        version: 0.7.1
-      clsx:
-        specifier: ^2.1.1
-        version: 2.1.1
-      dayjs:
-        specifier: ^1.11.20
-        version: 1.11.20
-      electron:
-        specifier: ^42.6.0
-        version: 42.6.0
-      electron-builder:
-        specifier: ^26.8.1
-        version: 26.8.1(electron-builder-squirrel-windows@26.8.1)
-      electron-vite:
-        specifier: 6.0.0-beta.1
-        version: 6.0.0-beta.1(vite@8.1.5(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
-      html-to-image:
-        specifier: ^1.11.13
-        version: 1.11.13
-      lucide-react:
-        specifier: ^1.14.0
-        version: 1.14.0(react@18.3.1)
-      mermaid:
-        specifier: ^11.16.0
-        version: 11.16.0
-      motion:
-        specifier: ^13.4.0
-        version: 13.4.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      react:
-        specifier: ^18.3.1
-        version: 18.3.1
-      react-dom:
-        specifier: ^18.3.1
-        version: 18.3.1(react@18.3.1)
-      react-markdown:
-        specifier: ^10.1.0
-        version: 10.1.0(@types/react@18.3.28)(react@18.3.1)
-      react-router-dom:
-        specifier: ^6.30.3
-        version: 6.30.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      react-virtuoso:
-        specifier: ^4.18.7
-        version: 4.18.7(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      rehype-highlight:
-        specifier: ^7.0.2
-        version: 7.0.2
-      remark-breaks:
-        specifier: ^4.0.0
-        version: 4.0.0
-      remark-gfm:
-        specifier: ^4.0.1
-        version: 4.0.1
-      sonner:
-        specifier: ^2.0.7
-        version: 2.0.7(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      tailwind-merge:
-        specifier: ^3.5.0
-        version: 3.5.0
-      tailwindcss:
-        specifier: ^4.2.4
-        version: 4.2.4
-      typescript:
+      'typescript':
         specifier: ^5.6.3
         version: 5.9.3
-      vite:
+      'vite':
         specifier: ^8.1.5
         version: 8.1.5(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0)
-      vitest:
+      'vitest':
         specifier: ^4.1.10
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(vite@8.1.5(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
 

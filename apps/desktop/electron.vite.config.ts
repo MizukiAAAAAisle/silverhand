@@ -38,7 +38,7 @@ function readMinifySetting(): false | "oxc" {
 
 const minify = readMinifySetting();
 
-const workspaceDeps = ["@silverhand/shared"];
+const workspaceDeps = ["@silverhand/shared", "@silverhand/client"];
 // Workspace packages are bundled here and must stay out of packaged app
 // production dependencies; electron-builder follows pnpm workspace symlinks
 // outside apps/desktop and fails packaging.
@@ -87,9 +87,9 @@ export default defineConfig({
             // remote-only main graph never imports `@silverhand/backend` (→ no
             // `better-sqlite3`), the Rust launcher, or the sidecar verifier. The `.js`
             // specifier matches the import in `index.ts`.
-            "./embedded-launcher.js": resolve(
+            "./embedded/embedded-launcher.js": resolve(
               __dirname,
-              "src/main/embedded-launcher.remote-only.ts",
+              "src/main/embedded/embedded-launcher.remote-only.ts",
             ),
           }
         : {},
@@ -129,7 +129,7 @@ export default defineConfig({
     },
     resolve: {
       alias: {
-        "@": resolve(__dirname, "src/renderer"),
+        "@": resolve(__dirname, "../../packages/app-ui/src"),
       },
     },
     build: {
@@ -140,6 +140,22 @@ export default defineConfig({
         },
       },
     },
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      {
+        name: "shared-ui-browser-boundary",
+        generateBundle() {
+          const forbidden = [...this.getModuleIds()].filter((id) =>
+            /apps\/desktop\/src\/(?:main|preload)\/|packages\/(?:host|silverhand-daemon)\/|__vite-browser-external/.test(
+              id,
+            ),
+          );
+          if (forbidden.length)
+            throw new Error(`Browser graph reached native modules: ${forbidden.join(", ")}`);
+          console.info("[shared UI graph] native host, preload and Node adapters absent");
+        },
+      },
+    ],
   },
 });

@@ -1,6 +1,6 @@
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron";
 import { pathToFileURL } from "node:url";
-import type { RendererEntry } from "../renderer-entry.js";
+import type { RendererEntry } from "../shell/renderer-entry.js";
 
 export interface GuardedIpcLogger {
   warn(payload: Record<string, unknown>, message: string): void;

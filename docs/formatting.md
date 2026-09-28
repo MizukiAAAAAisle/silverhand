@@ -5,10 +5,10 @@ Oxfmt is pinned in the root development dependencies. Install dependencies with
 
 ```sh
 # Format selected files or directories.
-pnpm fmt apps/desktop/src/renderer/features/profile
+pnpm fmt packages/app-ui/src/features/profile
 
 # Check selected files without writing.
-pnpm fmt:check apps/desktop/src/renderer/features/profile
+pnpm fmt:check packages/app-ui/src/features/profile
 
 # Format the repository (a separate migration from installing the tool).
 pnpm fmt

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BoundFrameReader } from "../rust-backend-frame.js";
+import { BoundFrameReader } from "../embedded/rust-backend-frame.js";
 
 const GEN = "gen-abc-123";
 const phase = (kind: string, generation = GEN, overrides = {}) =>

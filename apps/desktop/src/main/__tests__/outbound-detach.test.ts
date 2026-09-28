@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClientError, type HostClient } from "@silverhand/host";
-import { gracefullyDetachOutbound } from "../outbound-detach.js";
+import { gracefullyDetachOutbound } from "../local-host/outbound-detach.js";
 
 const stale = { connectionId: "old" };
 function client(action: "detached" | "noop" = "detached") {

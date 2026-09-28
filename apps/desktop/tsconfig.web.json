@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "composite": true,
+    "composite": false,
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
@@ -9,9 +9,14 @@
     "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/renderer/*"]
+      "@/*": ["../../packages/app-ui/src/*"]
     }
   },
-  "include": ["src/renderer", "src/preload/api.d.ts"],
+  "include": [
+    "src/renderer",
+    "src/preload/api.d.ts",
+    "src/preload/contract.ts",
+    "src/build-flags.ts"
+  ],
   "exclude": ["src/renderer/**/*.test.ts", "src/renderer/**/*.test.tsx"]
 }

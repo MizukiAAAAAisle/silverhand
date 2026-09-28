@@ -10,7 +10,7 @@ import {
   type EmbeddedRustBackendConfig,
   type EmbeddedRustBackendDeps,
   type EmbeddedRustBackendTerminalReason,
-} from "../embedded-rust-backend.js";
+} from "../embedded/embedded-rust-backend.js";
 
 const GENERATION = "gen-fixed-1";
 
