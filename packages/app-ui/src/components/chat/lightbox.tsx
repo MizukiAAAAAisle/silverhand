@@ -3,7 +3,7 @@ import { getPlatform } from "@/platform";
 import { RangeInput } from "@/components/ui/range-input";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as DialogPrimitive from "@/components/ui/modal";
-import { Download, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Download, Share2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
@@ -14,6 +14,8 @@ interface LightboxProps {
   onOpenChange: (open: boolean) => void;
   src: string;
   alt: string;
+  /** Read original bytes through the resource owner, independently of its display URL. */
+  loadExportBytes?: () => Promise<Uint8Array>;
   /**
    * Optional save-as callback. When provided, the footer shows a
    * "Download" action alongside "Copy". Omitted for the composer's
@@ -98,14 +100,21 @@ const clamp = (v: number, min: number, max: number): number => Math.min(max, Mat
  * it by default); a plain wheel / swipe is left to scroll the well. Backdrop
  * click + Escape close (Radix defaults).
  *
- * Copy reuses the `export:copyPng` IPC (`copyPngExport`): we fetch the
- * blob bytes behind `src` and let main build an NSImage + write the OS
+ * Copy reuses the `export:copyPng` IPC (`copyPngExport`): the resource owner
+ * supplies bytes (local previews fall back to `src`) and main builds an NSImage + writes the OS
  * pasteboard — the same path the screenshot export uses, which is far
  * more reliable than renderer-side `navigator.clipboard.write` for
  * images on Electron/macOS. nativeImage decodes PNG/JPEG; an
  * undecodable format surfaces a toast rather than failing silently.
  */
-export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxProps): JSX.Element {
+export function Lightbox({
+  open,
+  onOpenChange,
+  src,
+  alt,
+  onDownload,
+  loadExportBytes,
+}: LightboxProps): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
@@ -295,8 +304,11 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
     const generation = exportGeneration.current;
     setBusy(true);
     try {
-      const blob = await fetch(src).then((r) => r.blob());
-      const bytes = new Uint8Array(await blob.arrayBuffer());
+      // Attachment display URLs belong to an evictable cache, not to this modal.
+      // Use its authenticated byte reader instead of fetching the preview URL again.
+      const bytes = loadExportBytes
+        ? await loadExportBytes()
+        : new Uint8Array(await (await fetch(src)).arrayBuffer());
       if (generation !== exportGeneration.current) return;
       const result = await (shareImage ?? getPlatform().files.copyPngExport)({ pngBytes: bytes });
       if (generation !== exportGeneration.current) return;
@@ -477,6 +489,7 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
               <SelectionActionButton
                 rank={onDownload && !shareImage ? "secondary" : "primary"}
                 label={shareImage ? "Share" : "Copy"}
+                icon={shareImage ? <Share2 className="size-3.5" /> : undefined}
                 disabled={busy}
                 onClick={onExport}
               />

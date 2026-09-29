@@ -1,3 +1,4 @@
+import { fetchAttachmentBytes } from "@/lib/api";
 import { type FocusEvent, useCallback, useEffect, useRef, useState } from "react";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
@@ -1513,6 +1514,7 @@ function AttachmentTile({
             open={lightboxOpen}
             onOpenChange={setLightboxOpen}
             src={imageUrl}
+            loadExportBytes={async () => (await fetchAttachmentBytes(attachment.id)).bytes}
             alt={attachment.filename}
             // Preview stays; download is a member export. Omitting
             // `onDownload` hides the Lightbox's download action (Copy remains).

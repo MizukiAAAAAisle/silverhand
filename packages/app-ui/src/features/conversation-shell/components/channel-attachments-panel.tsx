@@ -1,3 +1,4 @@
+import { fetchAttachmentBytes } from "@/lib/api";
 import { AttachmentsSkeleton } from "./channel-list-skeletons";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { paneChrome } from "@/components/layout/pane-chrome";
@@ -911,6 +912,7 @@ function ImageLightboxHost({
       open={open}
       onOpenChange={onOpenChange}
       src={url}
+      loadExportBytes={async () => (await fetchAttachmentBytes(attachment.id)).bytes}
       alt={attachment.filename}
       onDownload={() => saveAttachmentToDisk(attachment)}
     />
