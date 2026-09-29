@@ -120,6 +120,7 @@ function msg(
 function render(
   messages: MessageDto[],
   options: {
+    compact?: boolean;
     channelTitle?: string;
     agentsByName?: ReadonlyMap<string, AgentDto>;
     humansByName?: ReadonlyMap<string, UserDto>;
@@ -141,6 +142,7 @@ function render(
       { client: qc },
       React.createElement(MessageScreenshotView, {
         messages,
+        compact: options.compact,
         agentsByName,
         humansByName: options.humansByName,
         channelsByName: options.channelsByName,
@@ -154,6 +156,17 @@ function render(
 }
 
 describe("MessageScreenshotView — non-interactive contract", () => {
+  it("uses a narrow export canvas without dropping selected content", () => {
+    const messages = [msg("first", 1, "Start of transcript"), msg("last", 2, "End of transcript")];
+    const mobile = render(messages, { compact: true });
+    const desktop = render(messages);
+    expect(mobile).toContain("width:360px");
+    expect(desktop).toContain("width:760px");
+    for (const output of [mobile, desktop]) {
+      expect(output).toContain("Start of transcript");
+      expect(output).toContain("End of transcript");
+    }
+  });
   it("renders the export channel header with the same channel symbol hook", () => {
     const html = render([msg("m1", 1, "hello")]);
     expect(html).toContain("data-conversation-title");

@@ -1,3 +1,4 @@
+import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
 import type { CSSProperties, ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { type PanelRole, paneChrome } from "./pane-chrome";
@@ -72,6 +73,7 @@ export function PaneHeader({
         className,
       )}
     >
+      <MobileNavigationSlot />
       <span className="flex shrink-0 items-center text-accent">{icon}</span>
       <span className="font-serif text-sm font-semibold text-text-primary">{title}</span>
       {count !== undefined && count !== null ? (

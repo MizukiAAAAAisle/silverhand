@@ -1,3 +1,4 @@
+import { selectSecondarySurface } from "./model/secondary-surface";
 import { directPairSenderSeed } from "@/features/search/advanced-search-seed";
 import type { ConversationPanesModel, SecondaryPaneModel } from "./pane-render-models";
 import type {
@@ -68,7 +69,17 @@ export function resolveSecondaryPane(
   state: PaneContentState,
   commands: PaneContentCommands,
 ): SecondaryPaneModel {
-  if (route.agentPanelId) {
+  const surface = selectSecondarySurface({
+    agent: Boolean(route.agentPanelId),
+    human: Boolean(route.humanPanelId),
+    settings: Boolean(route.channelSettingsId && route.channelId),
+    files: Boolean(state.filesListMounted && route.channelId),
+    task: Boolean(state.taskPaneId && route.channelId),
+    conversation: Boolean(state.secondaryDescriptor),
+    thread: Boolean(route.threadRootId && route.channelId),
+    threads: Boolean(state.threadsListMounted && route.channelId),
+  });
+  if (surface === "agent" && route.agentPanelId) {
     return {
       kind: "agent",
       props: {
@@ -82,14 +93,14 @@ export function resolveSecondaryPane(
     };
   }
 
-  if (route.humanPanelId) {
+  if (surface === "human" && route.humanPanelId) {
     return {
       kind: "human",
       props: { userId: route.humanPanelId, onClose: commands.closeHumanPanel },
     };
   }
 
-  if (route.channelSettingsId && route.channelId) {
+  if (surface === "settings" && route.channelSettingsId && route.channelId) {
     return {
       kind: "settings",
       channelId: route.channelSettingsId,
@@ -97,7 +108,7 @@ export function resolveSecondaryPane(
     };
   }
 
-  if (state.filesListMounted && route.channelId) {
+  if (surface === "files" && state.filesListMounted && route.channelId) {
     const channelId = route.channelId;
     return {
       kind: "files",
@@ -116,7 +127,7 @@ export function resolveSecondaryPane(
     };
   }
 
-  if (state.taskPaneId && route.channelId) {
+  if (surface === "task" && state.taskPaneId && route.channelId) {
     return {
       kind: "task",
       props: {
@@ -127,7 +138,7 @@ export function resolveSecondaryPane(
     };
   }
 
-  if (state.secondaryDescriptor) {
+  if (surface === "conversation" && state.secondaryDescriptor) {
     if (state.secondaryDescriptor.status !== "resolved") {
       return {
         kind: "conversation",
@@ -164,7 +175,7 @@ export function resolveSecondaryPane(
     return { kind: "none" };
   }
 
-  if (route.threadRootId && route.channelId) {
+  if (surface === "thread" && route.threadRootId && route.channelId) {
     const threadChannelId = route.channelId;
     const threadWorkspaceId = route.workspaceId ?? null;
     const threadRoot = route.threadRootId;
@@ -210,7 +221,7 @@ export function resolveSecondaryPane(
     };
   }
 
-  if (state.threadsListMounted && route.channelId) {
+  if (surface === "threads" && state.threadsListMounted && route.channelId) {
     return {
       kind: "threads",
       props: {

@@ -1,3 +1,4 @@
+import { useViewMemory } from "@/navigation/view-memory";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import { ArrowDown, ArrowUpRight, Bell, BellOff, Search } from "lucide-react";
@@ -364,6 +365,10 @@ export function ThreadPanel({
   // button appears once the user scrolls up. ThreadPanel uses a plain
   // scroll container (not the channel's Virtuoso list), so this is a small
   // vanilla controller rather than a reused hook.
+  const viewMemory = useViewMemory();
+  const readingKey = `thread:${channelId}:${rootMessageId}`;
+  const savedReading = useMemo(() => viewMemory?.get(readingKey), [viewMemory, readingKey]);
+  const restoredReading = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinBottomRef = useRef(true);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
@@ -405,9 +410,10 @@ export function ThreadPanel({
     const el = scrollRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 20;
+    viewMemory?.set(readingKey, { top: el.scrollTop, atBottom });
     pinBottomRef.current = atBottom;
     setShowScrollBottom(!atBottom);
-  }, []);
+  }, [viewMemory, readingKey]);
 
   // In-conversation header find (#task:1335), scoped to THIS thread stream
   // (stream='thread' + thread_root_id). Navigation is "ensure the match is
@@ -713,12 +719,20 @@ export function ThreadPanel({
   // newest reply in view as the root loads / replies arrive. Instant jump
   // (not smooth) so an open never animates up from the top.
   useLayoutEffect(() => {
-    if (!pinBottomRef.current) return;
     const el = scrollRef.current;
     if (!el) return;
+    if (!restoredReading.current && !cluster.isLoading) {
+      restoredReading.current = true;
+      if (savedReading && !savedReading.atBottom) {
+        el.scrollTop = savedReading.top ?? 0;
+        pinBottomRef.current = false;
+        setShowScrollBottom(true);
+      }
+    }
+    if (!pinBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
     setShowScrollBottom(false);
-  }, [messages, rootMessageId, cluster.isLoading, rootCtx.root]);
+  }, [messages, rootMessageId, cluster.isLoading, rootCtx.root, savedReading]);
 
   // Jump-locate: when App routes a jump to a reply inside THIS cluster,
   // scroll it into view + one-shot flash, mirroring the channel's

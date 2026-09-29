@@ -1,3 +1,6 @@
+import { useCompactLayout } from "@/navigation/layout";
+import { useLocation } from "react-router-dom";
+import { useNav } from "@/router";
 import { AccountSkeleton } from "./components/account-skeleton";
 import { ChangePasswordForm } from "./components/change-password-form";
 import { RangeInput } from "@/components/ui/range-input";
@@ -108,11 +111,56 @@ export function SettingsShell(): JSX.Element {
     resetMarkdownFontSize,
   } = useAppearance();
 
-  const [section, setSection] = useState<SettingsSection>(readSettingsSection);
+  const compact = useCompactLayout();
+  const location = useLocation();
+  const nav = useNav();
+  const sectionParam = new URLSearchParams(location.search).get("settingsSection");
+  const [rememberedSection, setRememberedSection] = useState<SettingsSection>(readSettingsSection);
+  const section = SETTINGS_SECTIONS.includes(sectionParam as SettingsSection)
+    ? (sectionParam as SettingsSection)
+    : rememberedSection;
+  const setSection = (next: SettingsSection) => {
+    setRememberedSection(next);
+    nav.go(`/settings?settingsSection=${next}`);
+  };
   useEffect(() => {
     persistSettingsSection(section);
   }, [section]);
 
+  const content = (
+    <PaneShell>
+      <PaneHeader icon={SECTION_CHROME[section].icon} title={SECTION_CHROME[section].label} />
+
+      <div className="flex min-h-0 min-w-0 flex-1 justify-center">
+        <div className="flex min-h-0 w-full min-w-0 max-w-196 flex-col">
+          {section === "appearance" ? (
+            <AppearancePane
+              appearance={appearance}
+              setTheme={setTheme}
+              setMarkdownFont={setMarkdownFont}
+              setMarkdownFontSize={setMarkdownFontSize}
+              resetMarkdownText={resetMarkdownText}
+              resetMarkdownFontSize={resetMarkdownFontSize}
+            />
+          ) : section === "account" ? (
+            <AccountPane />
+          ) : (
+            <ConnectionPane />
+          )}
+        </div>
+      </div>
+    </PaneShell>
+  );
+  if (compact)
+    return sectionParam ? (
+      content
+    ) : (
+      <Sidebar
+        name="settings"
+        fill
+        sidebar={<SettingsRailNav section={section} onSelect={setSection} />}
+      />
+    );
   return (
     <Sidebar
       name="settings"
@@ -120,28 +168,7 @@ export function SettingsShell(): JSX.Element {
       width="var(--sidebar-width)"
       sidebar={<SettingsRailNav section={section} onSelect={setSection} />}
     >
-      <PaneShell>
-        <PaneHeader icon={SECTION_CHROME[section].icon} title={SECTION_CHROME[section].label} />
-
-        <div className="flex min-h-0 min-w-0 flex-1 justify-center">
-          <div className="flex min-h-0 w-full min-w-0 max-w-196 flex-col">
-            {section === "appearance" ? (
-              <AppearancePane
-                appearance={appearance}
-                setTheme={setTheme}
-                setMarkdownFont={setMarkdownFont}
-                setMarkdownFontSize={setMarkdownFontSize}
-                resetMarkdownText={resetMarkdownText}
-                resetMarkdownFontSize={resetMarkdownFontSize}
-              />
-            ) : section === "account" ? (
-              <AccountPane />
-            ) : (
-              <ConnectionPane />
-            )}
-          </div>
-        </div>
-      </PaneShell>
+      {content}
     </Sidebar>
   );
 }
@@ -206,16 +233,19 @@ function AppearancePane({
   resetMarkdownFontSize: ReturnType<typeof useAppearance>["resetMarkdownFontSize"];
 }): JSX.Element {
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
-      <div className="mx-auto w-full max-w-3xl">
+    <section
+      data-appearance-pane
+      className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6"
+    >
+      <div className="mx-auto w-full min-w-0 max-w-3xl">
         <div className="min-w-0 space-y-8">
           <SettingsSection
             id="settings-appearance"
             icon={<Palette className="size-4" />}
             title="Appearance"
           >
-            <div className="grid gap-4">
-              <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid min-w-0 grid-cols-1 gap-4">
+              <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
                 {THEME_IDS.map((id) => {
                   const meta = THEME_META[id];
                   const active = appearance.theme === id;
@@ -225,7 +255,7 @@ function AppearancePane({
                       type="button"
                       onClick={() => setTheme(id)}
                       className={cn(
-                        "group relative flex min-h-23 flex-col items-start justify-between overflow-hidden rounded-[10px] p-3 text-left focus-outline",
+                        "group relative flex min-h-23 min-w-0 flex-col items-start justify-between overflow-hidden rounded-[10px] p-3 text-left focus-outline",
                         CONTROL_HOVER_LIFT,
                       )}
                       style={{
@@ -274,7 +304,7 @@ function AppearancePane({
             icon={<Type className="size-4" />}
             title="Markdown Text"
           >
-            <div className="grid gap-4">
+            <div className="grid min-w-0 grid-cols-1 gap-4">
               <SharedFontSizeControl
                 value={appearance.fontSize}
                 onChange={(value) => setMarkdownFontSize(value)}
@@ -318,7 +348,7 @@ function MessageAlignmentControl(): JSX.Element {
   const mode = useMessageLayoutMode();
 
   return (
-    <div className="grid gap-3 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
+    <div className="grid min-w-0 grid-cols-1 gap-3 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
       <h3 className="text-sm font-semibold text-text-primary">Message alignment</h3>
       <div role="radiogroup" aria-label="Message alignment" className="grid grid-cols-2 gap-3">
         {MESSAGE_LAYOUT_MODES.map((id) => {
@@ -466,8 +496,8 @@ function SharedFontSizeControl({
   };
 
   return (
-    <div className="grid gap-2 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
-      <div className="flex items-center justify-between gap-3">
+    <div className="grid min-w-0 grid-cols-1 gap-2 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-text-primary">Font size</h3>
           <p className="truncate text-xs text-text-muted">
@@ -599,8 +629,8 @@ function MarkdownFontControl({
   };
 
   return (
-    <div className="grid gap-3 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
-      <div className="flex min-w-0 items-center justify-between gap-3">
+    <div className="grid min-w-0 grid-cols-1 gap-3 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span
             data-settings-icon-chip
@@ -624,9 +654,10 @@ function MarkdownFontControl({
         </button>
       </div>
 
-      <div className="grid gap-2">
+      <div className="grid min-w-0 grid-cols-1 gap-2">
         <Label htmlFor={`markdown-${title.toLowerCase()}-font`}>Font family</Label>
         <Input
+          className="min-w-0"
           id={`markdown-${title.toLowerCase()}-font`}
           value={fontValue}
           onChange={(e) => onFontChange(e.target.value)}
@@ -644,7 +675,7 @@ function MarkdownFontControl({
                 data-selected={isSelected || undefined}
                 onClick={() => onFontChange(preset.value)}
                 className={cn(
-                  "rounded-(--pill-radius) border px-2 py-1 text-(length:--text-meta) font-medium transition-colors focus-outline",
+                  "max-w-full [overflow-wrap:anywhere] rounded-(--pill-radius) border px-2 py-1 text-(length:--text-meta) font-medium transition-colors focus-outline",
                   isSelected
                     ? "border-accent bg-accent text-text-on-accent"
                     : "border-border-subtle bg-bg-elevated text-text-secondary hover:border-(--border-control-hover) hover:text-text-primary",
@@ -659,7 +690,7 @@ function MarkdownFontControl({
 
       <div
         className={cn(
-          "rounded-(--control-radius) border border-border-subtle bg-bg-elevated px-3 py-2 text-text-primary",
+          "min-w-0 [overflow-wrap:anywhere] rounded-(--control-radius) border border-border-subtle bg-bg-elevated px-3 py-2 text-text-primary",
           code ? "font-mono" : "",
         )}
         style={sampleStyle}
@@ -682,7 +713,7 @@ function SettingsSection({
   children: ReactNode;
 }): JSX.Element {
   return (
-    <section id={id} className="scroll-mt-6 grid gap-4">
+    <section id={id} className="min-w-0 scroll-mt-6 grid grid-cols-1 gap-4">
       <SettingsHeading icon={icon} title={title} />
       <div className="min-w-0">{children}</div>
     </section>

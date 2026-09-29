@@ -1,3 +1,4 @@
+import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
 import { DirectDraftSkeleton } from "./direct-draft-skeleton";
 import { getCurrentUserId } from "@/features/session/current-user";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
@@ -133,6 +134,7 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
       style={paneChrome}
     >
       <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
+        <MobileNavigationSlot />
         <ConversationHeaderIdentity
           identity="counterpart"
           title={title}

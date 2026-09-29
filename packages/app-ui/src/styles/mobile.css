@@ -1,0 +1,316 @@
+/* Compact presentation shares the theme and panel vocabulary with desktop. */
+[data-app-frame] {
+  background: var(--bg-app, transparent);
+}
+.mobile-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  color: var(--text-primary);
+  background: var(--pane-bg, var(--bg-base));
+  font-weight: 600;
+}
+.mobile-back {
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-back-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--control-radius);
+}
+.mobile-tabbar {
+  display: flex;
+  flex-shrink: 0;
+  padding: 4px max(8px, env(safe-area-inset-right, 0px)) max(4px, env(safe-area-inset-bottom, 0px))
+    max(8px, env(safe-area-inset-left, 0px));
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+}
+.mobile-tab {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 44px;
+  min-height: 48px;
+  color: var(--text-nav-rail);
+  border: var(--nav-rail-item-border-width) solid transparent;
+  border-radius: var(--nav-row-radius, var(--row-radius));
+  corner-shape: var(--nav-corner-shape, normal);
+  font-size: var(--text-meta);
+}
+.mobile-tab[aria-current="page"] {
+  color: var(--text-nav-selected);
+  background: var(--bg-nav-selected);
+  border-color: var(--border-selected-card, var(--border-nav-rail-selected));
+  box-shadow: var(--shadow-row-selected, none);
+}
+.mobile-tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.mobile-tab:active,
+.mobile-back:active .mobile-back-icon {
+  background: var(--bg-hover);
+}
+@media (hover: hover) {
+  .mobile-tab:hover,
+  .mobile-back:hover .mobile-back-icon {
+    background: var(--bg-hover);
+  }
+}
+.mobile-attention {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--unread);
+}
+.mobile-more-menu [role="menuitem"] {
+  min-height: 44px;
+}
+.mobile-chat-list {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.mobile-chat-list > .sidebar-surface {
+  position: relative;
+  flex: 1;
+}
+@media (max-width: 767px) {
+  /* iOS focus zoom depends on the input font size. Keep this document-wide:
+     portaled popovers are outside the app shell and dialog subtrees. */
+  :root :is(input, textarea, select) {
+    font-size: max(16px, 1em);
+  }
+  /* The back button already owns a 44px hit area; do not add the desktop
+     header gutter before it. Retain the device safe area. */
+  header:has(> [data-mobile-navigation-slot] > .mobile-back),
+  .mobile-header:has(> .mobile-back) {
+    padding-left: env(safe-area-inset-left, 0px);
+  }
+  .app-shell {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: var(--native-navigation-inset, 0px);
+    --frame-padding: 0px;
+    --pane-radius: 0px;
+    --pane-border: 0;
+    --frame-corner-radius: 0px;
+    /* One content canvas; nested controls keep their own surfaces. */
+    --app-paper: none;
+    background-color: var(--bg-base);
+  }
+  :root [data-layout="compact"] [data-panel] {
+    --pane-bg: var(--bg-base);
+  }
+  [data-layout="compact"] [data-app-frame],
+  :root [data-layout="compact"] [data-section-sheet],
+  [data-layout="compact"] .mobile-header {
+    background: var(--bg-base);
+  }
+  .app-shell,
+  .auth-layout {
+    height: 100dvh;
+  }
+  .auth-layout > .auth-content {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    padding: calc(env(safe-area-inset-top) + 28px) 24px max(24px, env(safe-area-inset-bottom));
+  }
+  .auth-mobile-brand {
+    display: block;
+  }
+  :root .auth-layout [data-auth-form] {
+    max-width: none;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+  }
+  [data-layout="compact"] [data-section-sheet] {
+    min-height: 0;
+  }
+  [data-layout="compact"] [data-tasks-board] {
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  [data-layout="compact"] [data-tasks-column] {
+    width: 100%;
+    min-width: 0;
+    flex: none;
+    max-height: 70dvh;
+  }
+
+  /* Task detail */
+  [data-mobile-task-detail] {
+    top: env(safe-area-inset-top, 0px);
+    bottom: env(safe-area-inset-bottom, 0px);
+    max-width: 100%;
+    max-height: none;
+    min-height: 0;
+    border-radius: 0;
+  }
+  [data-task-detail-body] {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  [data-task-detail-body] > div {
+    flex: none;
+    overflow: visible;
+  }
+  [data-task-meta-panel] {
+    width: 100%;
+    border-left: 0;
+    border-top: 1px solid var(--border-subtle);
+    overflow: visible;
+  }
+
+  /* One swipeable filter strip followed by an icon-only New task. */
+  [data-task-board-toolbar] {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding-inline: 12px;
+  }
+  [data-task-board-toolbar] [data-task-filter-bar] {
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 6px;
+  }
+  [data-task-board-toolbar] [data-task-filter-bar]::-webkit-scrollbar {
+    display: none;
+  }
+  [data-task-board-toolbar] [data-task-filter-bar] > * {
+    flex-shrink: 0;
+  }
+  [data-task-board-toolbar] > button {
+    width: 32px;
+    padding-inline: 0;
+    justify-content: center;
+    font-size: 0;
+    gap: 0;
+  }
+
+  /* Tasks: the status group header carries the status, so the column drops its
+     frame and each card drops its repeated status chip. */
+  :root [data-layout="compact"] [data-tasks-board] {
+    gap: 16px;
+    padding: 12px;
+  }
+  :root [data-layout="compact"] [data-tasks-column] {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  :root [data-layout="compact"] [data-tasks-column] > [data-tasks-column-header] {
+    padding-inline: 2px;
+    border-bottom: 0;
+  }
+  [data-layout="compact"] [data-tasks-column-body] {
+    padding: 4px 0 0;
+  }
+  [data-layout="compact"] [data-tasks-board] [data-task-number] [data-task-status] {
+    display: none;
+  }
+
+  /* Chats list: New workspace scrolls with the list as a quiet row instead of
+     a pinned primary slab above the tab bar. */
+  [data-layout="compact"] [data-sidebar-cta-slot] {
+    position: static;
+    padding-top: 12px;
+    background: none;
+  }
+  :root [data-layout="compact"] [data-sidebar-cta] {
+    justify-content: flex-start;
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  /* Workspace rows are rows, not section headings. */
+  :root [data-layout="compact"] [data-sidebar-workspace-row] header {
+    font-family: var(--font-sans);
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  /* Touch-sized sidebar rows. */
+  [data-layout="compact"] aside[data-sidebar] .sidebar-row-border {
+    min-height: 40px;
+  }
+
+  /* Dialogs */
+  [data-dialog-content]:not([data-mobile-task-detail]) {
+    top: auto;
+    bottom: var(--dialog-viewport-bottom, 0px);
+    width: 100%;
+    max-width: none;
+    max-height: calc(var(--dialog-viewport-height, 100dvh) - env(safe-area-inset-top, 0px) - 12px);
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+}
+
+/* One editor and toolbar in both layouts; only the painted frame moves. */
+[data-composer-editor] {
+  display: contents;
+}
+@media (max-width: 767px) {
+  [data-composer] {
+    padding-bottom: max(8px, var(--input-safe-area-bottom, env(safe-area-inset-bottom, 0px)));
+  }
+  [data-composer-toolbar] {
+    padding-bottom: 4px;
+  }
+  [data-composer-shell] {
+    overflow: visible;
+    border-width: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  [data-composer-shell]:focus-within {
+    box-shadow: none;
+  }
+  [data-composer-editor] {
+    display: block;
+    overflow: hidden;
+    border: var(--composer-border-width, 1px) solid;
+    border-color: inherit;
+    border-radius: var(--control-radius);
+    background: var(--bg-floating);
+    box-shadow: var(--composer-shadow, none);
+    transition: var(--composer-transition, none);
+  }
+  [data-composer-shell]:focus-within > [data-composer-editor] {
+    box-shadow: var(--composer-shadow-focus, none);
+  }
+}

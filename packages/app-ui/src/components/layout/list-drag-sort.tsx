@@ -1,18 +1,11 @@
+import { useListSortSensors } from "./list-sort-sensors";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import {
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
+import { DndContext, closestCenter } from "@dnd-kit/core";
 import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import {
   SortableContext,
   arrayMove,
   defaultAnimateLayoutChanges,
-  sortableKeyboardCoordinates,
   verticalListSortingStrategy,
   type AnimateLayoutChanges,
 } from "@dnd-kit/sortable";
@@ -212,12 +205,7 @@ export function useListDragSort<GroupKey extends SortGroup, T>(params: {
   return { orderedGroups, onReorder };
 }
 
-/** The dragged row's inline style. Single-sourced so the lift affordance
- *  (opacity 0.6) + the follow-the-pointer transform stay identical on both
- *  surfaces. zIndex + relative keep the row above its siblings as it crosses
- *  them. NOTE: the 0.6→1 restore is intentionally instant (no transition-opacity
- *  settle) — a post-drop opacity fade reads as a trailing lift, inconsistent
- *  with "drop = final" + the settle guard. */
+/** Shared motion only. Sidebar drag chrome reuses the selected-row theme rules. */
 export function sortableItemStyle(args: {
   transform: { y: number } | null;
   transition: string | undefined;
@@ -226,7 +214,7 @@ export function sortableItemStyle(args: {
   return {
     transform: args.transform ? `translate3d(0, ${args.transform.y}px, 0)` : undefined,
     transition: args.transition,
-    opacity: args.isDragging ? 0.6 : undefined,
+    cursor: args.isDragging ? "grabbing" : undefined,
     zIndex: args.isDragging ? 1 : undefined,
     position: args.isDragging ? "relative" : undefined,
   };
@@ -241,7 +229,7 @@ export const animateLayoutChanges: AnimateLayoutChanges = (args) =>
   args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
 /** Generic per-group DnD context: vertical-only, in-place (no DragOverlay),
- *  4px pointer activation so a plain click still selects. Each hard group gets
+ *  4px mouse activation; touch must hold still before dragging so swipes scroll. Each hard group gets
  *  its own context so drags never cross a group boundary. The consumer renders
  *  its `SortableXxxItem` rows as children and sends the COMPLETE new group
  *  order up through `onReorder`. */
@@ -254,10 +242,7 @@ export function SortableGroup({
   onReorder: (orderedIds: string[]) => void;
   children: ReactNode;
 }): JSX.Element {
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
+  const sensors = useListSortSensors();
   return (
     <DndContext
       sensors={sensors}

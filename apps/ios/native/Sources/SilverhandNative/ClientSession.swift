@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 public final class ClientSession {
   public typealias Fetch = (URLRequest) async throws -> HTTPResult
+  private let defaultServerURL: String?
   private let store: SessionStore
   public let contract: WireContract
   private let fetch: Fetch
@@ -22,8 +23,10 @@ public final class ClientSession {
 
   public init(
     store: SessionStore = KeychainSessionStore(), contract: WireContract? = nil,
-    transport: NativeTransport = NativeTransport(), fetch: Fetch? = nil
+    transport: NativeTransport = NativeTransport(), fetch: Fetch? = nil,
+    defaultServerURL: String? = nil
   ) throws {
+    self.defaultServerURL = try defaultServerURL.map(Self.origin)
     self.store = store
     self.contract = try contract ?? WireContract.bundled()
     self.transport = transport
@@ -59,6 +62,10 @@ public final class ClientSession {
 
   public func profile() throws -> [String: Any] {
     try checkStorage()
+    if record == nil, let defaultServerURL {
+      // A bundled default carries no credentials and never overwrites a saved origin.
+      record = SessionRecord(serverURL: defaultServerURL, updatedAt: 0)
+    }
     guard let record else { return ["server_url": NSNull()] }
     return ["server_url": record.serverURL, "updated_at": record.updatedAt]
   }
@@ -192,6 +199,13 @@ public final class ClientSession {
     generation &+= 1
     closeAll()
     let captured = generation
+    if record.updatedAt == 0 {
+      let discovery = try await fetch(request(origin: record.serverURL, path: contract.serverInfo))
+      try check(captured)
+      guard discovery.status == 200, let info = discovery.json, validServerInfo(info) else {
+        throw ClientError.invalidResponse
+      }
+    }
     let response = try await fetch(
       request(
         origin: record.serverURL, path: action == "login" ? contract.login : contract.signup,

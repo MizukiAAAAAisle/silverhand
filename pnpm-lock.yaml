@@ -166,6 +166,9 @@ importers:
       '@radix-ui/react-tooltip':
         specifier: ^1.2.8
         version: 1.2.8(@types/react-dom@18.3.7(@types/react@18.3.28))(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@remix-run/router':
+        specifier: 1.23.2
+        version: 1.23.2
       '@silverhand/client':
         specifier: workspace:*
         version: link:../client

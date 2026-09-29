@@ -5,6 +5,9 @@ import XCTest
 #if os(iOS)
   import UIKit
   import WebKit
+  #if canImport(App)
+    @testable import App
+  #endif
 #endif
 
 /// Requires the isolated simulator CA and scripts/ios-acceptance-server.mjs.
@@ -128,6 +131,14 @@ final class NetworkAcceptanceTests: XCTestCase {
         try await Task.sleep(nanoseconds: 100_000_000)
       }
       let view = try XCTUnwrap(web)
+      let tabs = try XCTUnwrap(
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap {
+          $0.windows
+        }.compactMap { $0.rootViewController as? UITabBarController }.first)
+      func selectTab(_ index: Int) {
+        _ = tabs.delegate?.tabBarController?(tabs, shouldSelect: tabs.viewControllers![index])
+      }
+
       for _ in 0..<100 {
         if (try? await view.evaluateJavaScript(
           "typeof window.Capacitor?.nativePromise === 'function'")) as? Bool == true
@@ -171,6 +182,17 @@ final class NetworkAcceptanceTests: XCTestCase {
           ]))
       let channelID = try XCTUnwrap(
         (channel["channel"] as? [String: Any] ?? channel)["id"] as? String)
+      for index in 0..<12 {
+        _ = try await call(
+          "request",
+          [
+            "path": "/api/channels/\(channelID)/messages", "method": "POST",
+            "bodyText": json([
+              "content": "Reading position \(index)\n"
+                + String(repeating: "A line of history.\n", count: 8)
+            ]),
+          ])
+      }
       _ = try await view.evaluateJavaScript(
         "window.location.hash = '/chat/w/\(workspaceID)/c/\(channelID)'; window.location.reload();")
       var composerReady = false
@@ -280,14 +302,308 @@ final class NetworkAcceptanceTests: XCTestCase {
       XCTAssertEqual(
         sameComposer, true,
         "Resuming must retain the composer instance and its in-flight send identity")
+      // Exercise the production React navigation through its visible controls.
+      func waitFor(_ expression: String) async throws {
+        for _ in 0..<100 {
+          if (try? await view.evaluateJavaScript(expression)) as? Bool == true { return }
+          try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTFail("Timed out waiting for mobile UI: \(expression)")
+      }
+      try await waitFor("document.querySelectorAll('.mobile-tabbar button').length === 0")
+      if #available(iOS 18.0, *) { XCTAssertTrue(tabs.isTabBarHidden) }
+      selectTab(1)
+      try await waitFor("location.hash === '#/activity'")
+      #if canImport(App)
+        let actionHost = try XCTUnwrap(tabs as? SilverhandNavigationController)
+        if #available(iOS 18.0, *) {
+          for _ in 0..<50 {
+            if !tabs.isTabBarHidden { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+          }
+        }
+        actionHost.view.layoutIfNeeded()
+        let moreHit = CGPoint(
+          x: actionHost.moreAction.frame.midX, y: actionHost.moreAction.frame.midY)
+        XCTAssertTrue(actionHost.view.hitTest(moreHit, with: nil) === actionHost.moreAction)
+      #endif
+
+      selectTab(0)
+      try await waitFor("document.querySelector('textarea')?.value === 'unsent foreground draft'")
+      _ = try await view.evaluateJavaScript(
+        "document.querySelector('button[aria-label=\"Channel settings\"]').click()")
+      try await waitFor(
+        "location.hash.includes('settings=') && !document.querySelector('textarea')")
+      _ = try await view.evaluateJavaScript(
+        "Array.from(document.querySelectorAll('section button')).find(b => /^Members \\d+$/.test(b.textContent.trim())).click()"
+      )
+      try await waitFor("location.hash.includes('settingsPage=members')")
+      #if canImport(App)
+        let navigationHost = try XCTUnwrap(tabs as? SilverhandNavigationController)
+        _ = try await view.evaluateJavaScript(
+          "window.memberField = document.querySelector('input[placeholder=\"Search members or add someone\"]'); window.memberField.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(window.memberField, 'unfinished member search'); window.memberField.dispatchEvent(new Event('input', {bubbles:true}))"
+        )
+        XCTAssertTrue(navigationHost.beginInteractiveBack())
+        navigationHost.updateInteractiveBack(progress: 0.45)
+        let moving = navigationHost.view.subviews.first {
+          $0.accessibilityIdentifier == "navigation-transition-front"
+        }
+        XCTAssertGreaterThan(moving?.transform.tx ?? 0, 0)
+        navigationHost.endInteractiveBack(complete: false)
+        try await Task.sleep(nanoseconds: 350_000_000)
+        try await waitFor(
+          "location.hash.includes('settingsPage=members') && document.activeElement === window.memberField && window.memberField.value === 'unfinished member search'"
+        )
+        XCTAssertTrue(navigationHost.beginInteractiveBack())
+        navigationHost.updateInteractiveBack(progress: 0.7)
+        navigationHost.endInteractiveBack(complete: true)
+        navigationHost.endInteractiveBack(complete: true)
+        try await waitFor(
+          "location.hash.includes('settings=') && !location.hash.includes('settingsPage=')")
+        try await Task.sleep(nanoseconds: 350_000_000)
+        XCTAssertTrue(navigationHost.beginInteractiveBack())
+        navigationHost.updateInteractiveBack(progress: 0.7)
+        navigationHost.endInteractiveBack(complete: true)
+        try await waitFor("document.querySelector('textarea')?.value === 'unsent foreground draft'")
+        // Re-open to retain the button-return regression below.
+        _ = try await view.evaluateJavaScript(
+          "document.querySelector('button[aria-label=\"Channel settings\"]').click()")
+        try await waitFor("location.hash.includes('settings=')")
+        _ = try await view.evaluateJavaScript(
+          "Array.from(document.querySelectorAll('section button')).find(b => /^Members \\d+$/.test(b.textContent.trim())).click()"
+        )
+        try await waitFor("location.hash.includes('settingsPage=members')")
+      #else
+        XCTFail("Hosted gesture acceptance requires the App module")
+      #endif
+
+      _ = try await view.evaluateJavaScript("document.querySelector('.mobile-back').click()")
+      try await waitFor(
+        "location.hash.includes('settings=') && !location.hash.includes('settingsPage=') && !document.querySelector('textarea')"
+      )
+      _ = try await view.evaluateJavaScript("document.querySelector('.mobile-back').click()")
+      try await waitFor("document.querySelector('textarea')?.value === 'unsent foreground draft'")
+      let beforeMoreSelection = tabs.selectedIndex
+      #if canImport(App)
+        let host = try XCTUnwrap(tabs as? SilverhandNavigationController)
+        host.moreAction.sendActions(for: .touchUpInside)
+      #else
+        XCTFail("Hosted More input requires App module")
+      #endif
+      try await Task.sleep(nanoseconds: 350_000_000)
+      XCTAssertEqual(tabs.selectedIndex, beforeMoreSelection)
+      XCTAssertNotNil(tabs.viewControllers?[3].tabBarItem.selectedImage)
+      let firstMenu = try XCTUnwrap(tabs.presentedViewController)
+      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        firstMenu.dismiss(animated: false) { continuation.resume() }
+      }
+      XCTAssertEqual(tabs.selectedIndex, beforeMoreSelection)
+      selectTab(3)
+      try await Task.sleep(nanoseconds: 350_000_000)
+      #if canImport(App)
+        let menu = try XCTUnwrap(tabs.presentedViewController as? NavigationMoreMenu)
+        XCTAssertEqual(tabs.selectedIndex, beforeMoreSelection)
+        XCTAssertEqual(menu.menuButtons.count, 3)
+        for (index, title) in ["Members", "Computers", "Settings"].enumerated() {
+          let configuration = try XCTUnwrap(menu.menuButtons[index].configuration)
+          XCTAssertEqual(configuration.title, title)
+          XCTAssertNotNil(configuration.image)
+        }
+        let menuShot = UIGraphicsImageRenderer(bounds: tabs.view.bounds).image { _ in
+          tabs.view.window?.drawHierarchy(in: tabs.view.bounds, afterScreenUpdates: true)
+        }
+        let menuAttachment = XCTAttachment(image: menuShot)
+        menuAttachment.name = "native-more-menu"
+        menuAttachment.lifetime = .keepAlways
+        add(menuAttachment)
+        menu.menuButtons[0].sendActions(for: .touchUpInside)
+      #else
+        XCTFail("Hosted menu acceptance requires the App module")
+      #endif
+      try await waitFor("location.hash === '#/members'")
+      XCTAssertEqual(tabs.selectedIndex, 3)
+      _ = try await view.evaluateJavaScript("document.querySelector('.mobile-back').click()")
+      try await waitFor("document.querySelector('textarea')?.value === 'unsent foreground draft'")
+      try await waitFor("!!document.querySelector('button[aria-label=\"Thread\"]')")
+      _ = try await view.evaluateJavaScript(
+        "window.threadRowId = Array.from(document.querySelectorAll('button[aria-label=\"Thread\"]')).find(b => { const row = b.closest('[data-message-row]').getBoundingClientRect(); const viewport = document.querySelector('[data-virtuoso-scroller]').getBoundingClientRect(); return row.top >= viewport.top && row.bottom <= viewport.bottom; }).closest('[data-message-row]').id; document.getElementById(window.threadRowId).querySelector('button[aria-label=\"Thread\"]').click()"
+      )
+      try await waitFor(
+        "location.hash.includes('thread=') && document.querySelectorAll('textarea').length === 1")
+      let threadDraft =
+        try await view.evaluateJavaScript("document.querySelector('textarea').value") as? String
+      XCTAssertEqual(threadDraft, "", "A thread must not inherit its parent's unsent draft")
+      _ = try await view.evaluateJavaScript(
+        "const threadField = document.querySelector('textarea'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(threadField, 'thread-only draft'); threadField.dispatchEvent(new Event('input', {bubbles:true}))"
+      )
+      try await Task.sleep(nanoseconds: 100_000_000)
+      _ = try await view.evaluateJavaScript("document.querySelector('.mobile-back').click()")
+      try await waitFor("document.querySelector('textarea')?.value === 'unsent foreground draft'")
+      try await waitFor("!!document.querySelector('button[aria-label=\"Thread\"]')")
+      try await waitFor("!!document.getElementById(window.threadRowId)")
+      _ = try await view.evaluateJavaScript(
+        "document.getElementById(window.threadRowId).querySelector('button[aria-label=\"Thread\"]').click()"
+      )
+      try await waitFor("document.querySelector('textarea')?.value === 'thread-only draft'")
+      _ = try await view.evaluateJavaScript("document.querySelector('.mobile-back').click()")
+      try await waitFor("document.querySelector('textarea')?.value === 'unsent foreground draft'")
+      // Main-list pages use the full viewport; More preserves its caller.
+      _ = try await view.evaluateJavaScript("document.querySelector('.mobile-back').click()")
+      try await waitFor(
+        "location.hash === '#/chat' && !!document.querySelector('[data-sidebar=workspaces]')")
+      let listWidth =
+        try await view.evaluateJavaScript(
+          "document.querySelector('[data-sidebar=workspaces]').getBoundingClientRect().width / innerWidth"
+        ) as? Double ?? 0
+      XCTAssertGreaterThan(
+        listWidth, 0.9, "The phone chat list must not retain the desktop sidebar width")
+      _ = try await view.evaluateJavaScript(
+        "location.hash = '/chat/w/\(workspaceID)/c/\(channelID)'")
+      try await waitFor("document.querySelector('textarea')?.value === 'unsent foreground draft'")
+      let horizontalOverflow =
+        try await view.evaluateJavaScript("document.documentElement.scrollWidth > innerWidth")
+        as? Bool
+      XCTAssertEqual(horizontalOverflow, false, "Compact navigation must fit the phone viewport")
+      try await waitFor("!!document.querySelector('[data-virtuoso-scroller]')")
+      _ = try await view.evaluateJavaScript(
+        "const scroller = document.querySelector('[data-virtuoso-scroller]'); scroller.scrollTop = scroller.scrollHeight / 2"
+      )
+      try await Task.sleep(nanoseconds: 250_000_000)
+      _ = try await view.evaluateJavaScript(
+        "const viewport = document.querySelector('[data-virtuoso-scroller]').getBoundingClientRect(); window.readingAnchor = Array.from(document.querySelectorAll('[data-message-row]')).find(e => e.getBoundingClientRect().top >= viewport.top && e.getBoundingClientRect().top < viewport.bottom)?.id"
+      )
+      try await waitFor("!!window.readingAnchor")
+      selectTab(1)
+      try await waitFor("location.hash === '#/activity'")
+      selectTab(0)
+      try await waitFor(
+        "(() => { const item = document.getElementById(window.readingAnchor); const list = document.querySelector('[data-virtuoso-scroller]'); return !!item && !!list && item.getBoundingClientRect().bottom > list.getBoundingClientRect().top && item.getBoundingClientRect().top < list.getBoundingClientRect().bottom; })()"
+      )
+      _ = try await view.evaluateJavaScript(
+        "document.querySelector('[data-scroll-bottom]')?.click()")
+      try await waitFor("document.body.innerText.includes('WS after foreground')")
+      // Each shipped theme must resolve the same navigation surface tokens.
+      for theme in ["studio-light", "forza6", "slack-dark", "iris"] {
+        _ = try await view.evaluateJavaScript("document.documentElement.dataset.theme = '\(theme)'")
+        try await Task.sleep(nanoseconds: 150_000_000)
+        let themeShot = UIGraphicsImageRenderer(bounds: view.bounds).image { _ in
+          view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: themeShot)
+        attachment.name = "mobile-chat-\(theme)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+      }
       let snapshot = UIGraphicsImageRenderer(bounds: view.bounds).image { _ in
         view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
       }
       let screenshot = XCTAttachment(image: snapshot)
       screenshot.lifetime = .keepAlways
       add(screenshot)
+      selectTab(2)
+      try await waitFor(
+        "location.hash === '#/tasks' && !!document.querySelector('[data-task-board-toolbar]')")
+      if #available(iOS 18.0, *) { XCTAssertFalse(tabs.isTabBarHidden) }
+      let nativeRootShot = UIGraphicsImageRenderer(bounds: tabs.view.bounds).image { _ in
+        tabs.view.drawHierarchy(in: tabs.view.bounds, afterScreenUpdates: true)
+      }
+      let nativeRootAttachment = XCTAttachment(image: nativeRootShot)
+      nativeRootAttachment.name = "native-liquid-glass-tasks"
+      nativeRootAttachment.lifetime = .keepAlways
+      add(nativeRootAttachment)
+      let filtersUseTwoColumns =
+        try await view.evaluateJavaScript(
+          "getComputedStyle(document.querySelector('[data-task-board-toolbar] [data-task-filter-bar]')).gridTemplateColumns.split(' ').length === 2"
+        ) as? Bool
+      XCTAssertEqual(filtersUseTwoColumns, true)
+      let createHasOwnRow =
+        try await view.evaluateJavaScript(
+          "(() => { const toolbar = document.querySelector('[data-task-board-toolbar]'); return toolbar.querySelector(':scope > button').getBoundingClientRect().top >= toolbar.querySelector('[data-task-filter-bar]').getBoundingClientRect().bottom; })()"
+        ) as? Bool
+      XCTAssertEqual(createHasOwnRow, true)
+      // Native controls must respect the same nested Web modal boundary.
+      _ = try await view.evaluateJavaScript(
+        "document.querySelector('[data-task-board-toolbar] > button').click()")
+      try await waitFor("document.querySelectorAll('[role=dialog]').length === 1")
+      _ = try await view.evaluateJavaScript(
+        "const title = document.querySelector('[role=dialog] input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(title, 'modal draft'); title.dispatchEvent(new Event('input', {bubbles:true})); Array.from(document.querySelectorAll('[role=dialog] button')).find(b => b.textContent.includes('Select a channel')).click()"
+      )
+      try await waitFor("document.querySelectorAll('[role=dialog]').length === 2")
+      try await Task.sleep(nanoseconds: 100_000_000)
+      selectTab(0)
+      #if canImport(App)
+        XCTAssertFalse(
+          try XCTUnwrap(tabs as? SilverhandNavigationController).beginInteractiveBack())
+      #endif
+      _ = try await view.evaluateJavaScript(
+        "Array.from(document.querySelectorAll('[role=dialog]')).at(-1).querySelector('[data-sticker-close]').click()"
+      )
+      try await waitFor("document.querySelectorAll('[role=dialog]').length === 1")
+      selectTab(0)
+      try await Task.sleep(nanoseconds: 100_000_000)
+      let modalRoute = try await view.evaluateJavaScript("location.hash") as? String
+      XCTAssertEqual(modalRoute, "#/tasks")
+      let modalDraft =
+        try await view.evaluateJavaScript("document.querySelector('[role=dialog] input').value")
+        as? String
+      XCTAssertEqual(modalDraft, "modal draft")
+      _ = try await view.evaluateJavaScript(
+        "document.querySelector('[role=dialog] [data-sticker-close]').click()")
+      try await waitFor("!document.querySelector('[role=dialog]')")
+      try await Task.sleep(nanoseconds: 100_000_000)
+      selectTab(0)
+      try await waitFor("location.hash !== '#/tasks'")
+      selectTab(2)
+      try await waitFor("!!document.querySelector('[data-task-board-toolbar] > button')")
+      _ = try await view.evaluateJavaScript(
+        "document.querySelector('[data-task-board-toolbar] > button').click()")
+      try await waitFor("!!document.querySelector('[role=dialog]')")
+      // An explicit page replacement unmounts the form; ownership must release.
+      _ = try await view.evaluateJavaScript("location.hash = '/activity'")
+      try await waitFor(
+        "location.hash === '#/activity' && !document.querySelector('[role=dialog]')")
+      try await Task.sleep(nanoseconds: 100_000_000)
+      selectTab(2)
+      try await waitFor("location.hash === '#/tasks'")
+
       _ = try await call("logout")
+      _ = try await view.evaluateJavaScript("location.reload()")
+      try await waitFor(
+        "!!document.querySelector('input[autocomplete=\"current-password\"]') && !!document.querySelector('button[aria-label=\"Change server\"]')"
+      )
+      _ = try await view.evaluateJavaScript(
+        "for (const [selector, value] of [['#auth-email', 'isolated@example.test'], ['input[autocomplete=\"current-password\"]', 'test-password']]) { const field = document.querySelector(selector); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(field, value); field.dispatchEvent(new Event('input', {bubbles:true})); }"
+      )
+      try await waitFor("!document.querySelector('button[type=submit]').disabled")
+      _ = try await view.evaluateJavaScript(
+        "document.querySelector('button[aria-label=\"Change server\"]').click()")
+      try await waitFor(
+        "!!document.querySelector('#login-server') && document.querySelector('button[type=submit]').disabled"
+      )
+      _ = try await view.evaluateJavaScript(
+        "const address = document.querySelector('#login-server'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(address, 'invalid address'); address.dispatchEvent(new Event('input', {bubbles:true}))"
+      )
+      let enterPrevented =
+        try await view.evaluateJavaScript(
+          "!document.querySelector('#login-server').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}))"
+        ) as? Bool
+      XCTAssertEqual(
+        enterPrevented, true, "Address Enter must not submit the outer credential form")
+      try await waitFor("document.body.innerText.includes('Enter a valid HTTPS server address.')")
+      try await waitFor("document.querySelector('button[type=submit]').disabled")
+      _ = try await view.evaluateJavaScript(
+        "Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Cancel').click()"
+      )
+      try await waitFor(
+        "!document.querySelector('#login-server') && !document.querySelector('button[type=submit]').disabled && !document.body.innerText.includes('Enter a valid HTTPS server address.')"
+      )
       _ = try await call("clearProfile")
+      _ = try await view.evaluateJavaScript("location.hash = '/chat'; location.reload()")
+      try await waitFor("!!document.querySelector('input[autocomplete=\"current-password\"]')")
+      let legacyConnect =
+        try await view.evaluateJavaScript("!!document.querySelector('.ios-server-setup')") as? Bool
+      XCTAssertEqual(legacyConnect, false, "A fresh install must open login directly")
+      try await waitFor("document.body.innerText.includes('https://silverhand.taobao.net')")
     }
   #endif
 

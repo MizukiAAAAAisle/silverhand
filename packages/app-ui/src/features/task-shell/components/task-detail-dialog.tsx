@@ -136,6 +136,7 @@ export function TaskDetailDialog({
       }}
     >
       <DialogContent
+        data-mobile-task-detail
         // Widest dialog after workspace settings: the body carries prose
         // (description, edit fields) that reads badly in a 512px column.
         // Explicit px instead of a Tailwind step because this sits between
@@ -393,7 +394,7 @@ function TaskDetailBody({
           without dragging the metadata out of view, while the metadata stays
           put. Load / failure states never reach here — they get their own
           compact shell, so this column is always real content. */}
-      <div className="flex min-h-0 flex-1">
+      <div data-task-detail-body className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-y-auto px-5 py-4">
           {editingField === "content" ? (
             <InlineFieldEditor

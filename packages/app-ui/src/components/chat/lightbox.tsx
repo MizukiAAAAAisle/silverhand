@@ -1,7 +1,8 @@
+import "./image-preview.css";
 import { getPlatform } from "@/platform";
 import { RangeInput } from "@/components/ui/range-input";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import * as DialogPrimitive from "@radix-ui/react-dialog";
+import * as DialogPrimitive from "@/components/ui/modal";
 import { Download, X, ZoomIn, ZoomOut } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -126,6 +127,7 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
   // the image resizes so zoom stays anchored on the middle of the view.
   const pendingCenterRef = useRef<{ fx: number; fy: number } | null>(null);
   // Drag-to-pan origin: pointer + scroll offset captured at pointerdown.
+  const exportGeneration = useRef(0);
   const dragRef = useRef<{ px: number; py: number; sl: number; st: number } | null>(null);
 
   useEffect(() => {
@@ -135,10 +137,15 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
   // Reset zoom whenever the modal opens or the image changes — a stale zoom
   // carried into a different image would open it mid-scroll.
   useEffect(() => {
+    exportGeneration.current += 1;
+    setBusy(false);
     setScale(1);
     setFit(null);
     setFrozenBox(null);
     pendingCenterRef.current = null;
+    return () => {
+      exportGeneration.current += 1;
+    };
   }, [open, src]);
 
   // Fit = the image's natural size scaled down (never up) to sit inside the
@@ -282,22 +289,27 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
     }
   };
 
-  const onCopy = async (): Promise<void> => {
+  const shareImage = getPlatform().files.sharePngExport;
+  const onExport = async (): Promise<void> => {
     if (busy) return;
+    const generation = exportGeneration.current;
     setBusy(true);
     try {
       const blob = await fetch(src).then((r) => r.blob());
       const bytes = new Uint8Array(await blob.arrayBuffer());
-      const result = await getPlatform().files.copyPngExport({ pngBytes: bytes });
+      if (generation !== exportGeneration.current) return;
+      const result = await (shareImage ?? getPlatform().files.copyPngExport)({ pngBytes: bytes });
+      if (generation !== exportGeneration.current) return;
       if (result.ok) {
-        toast.success("Image copied to clipboard");
-      } else {
-        toast.error("Couldn't copy: " + result.error);
+        if (!shareImage) toast.success("Image copied to clipboard");
+      } else if ("error" in result) {
+        toast.error(result.error);
       }
     } catch (err) {
-      toast.error("Couldn't copy: " + (err instanceof Error ? err.message : String(err)));
+      if (generation === exportGeneration.current)
+        toast.error("Couldn't export: " + (err instanceof Error ? err.message : String(err)));
     } finally {
-      setBusy(false);
+      if (generation === exportGeneration.current) setBusy(false);
     }
   };
 
@@ -320,6 +332,7 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
         <DialogPrimitive.Content
           ref={shellRef}
           data-modal-shell
+          data-image-lightbox
           onKeyDown={onKeyDown}
           // The shell's size is a function of the IMAGE, never of zoom (see the
           // component docblock): it hugs the fitted image under the caps, and
@@ -462,12 +475,12 @@ export function Lightbox({ open, onOpenChange, src, alt, onDownload }: LightboxP
             </div>
             <div className="flex items-center gap-2">
               <SelectionActionButton
-                rank={onDownload ? "secondary" : "primary"}
-                label="Copy"
+                rank={onDownload && !shareImage ? "secondary" : "primary"}
+                label={shareImage ? "Share" : "Copy"}
                 disabled={busy}
-                onClick={onCopy}
+                onClick={onExport}
               />
-              {onDownload ? (
+              {onDownload && !shareImage ? (
                 <SelectionActionButton
                   rank="primary"
                   icon={<Download className="size-3.5" />}

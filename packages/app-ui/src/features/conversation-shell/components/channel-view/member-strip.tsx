@@ -107,8 +107,9 @@ export function MemberStrip({
   // (shiki, 2026-07-26 "直接去掉").
   if (visibleMembers.length === 0) return null;
 
-  const inline = visibleMembers.slice(0, MEMBER_STRIP_VISIBLE_CAP);
-  const overflow = visibleMembers.slice(MEMBER_STRIP_VISIBLE_CAP);
+  const capacity = MEMBER_STRIP_VISIBLE_CAP;
+  const inline = visibleMembers.slice(0, capacity);
+  const overflow = visibleMembers.slice(capacity);
 
   return (
     <div

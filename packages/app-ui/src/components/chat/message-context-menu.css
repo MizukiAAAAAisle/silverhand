@@ -1,0 +1,21 @@
+/* Touch message gestures belong to the message menu. Mouse selection and all
+   composer editing retain their native behavior. */
+@media (max-width: 767px) and (pointer: coarse) {
+  .message-context-trigger {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .message-context-trigger :is(input, textarea, [contenteditable="true"]) {
+    -webkit-touch-callout: default;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+/* Selection stays on the original body, not metadata or message actions. */
+.message-text-selecting [data-message-body] {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
+}

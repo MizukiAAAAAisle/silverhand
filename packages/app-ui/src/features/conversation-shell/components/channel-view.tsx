@@ -1,3 +1,5 @@
+import { useCompactLayout } from "@/navigation/layout";
+import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Maximize2, Minimize2, Paperclip, Search, Settings, X } from "lucide-react";
 import { ThreadIcon } from "@/components/icons/conversation-icons";
@@ -586,8 +588,9 @@ function ActiveChannelView({
   // non-member (channelAgents is also empty there, the fetch being gated off) —
   // and a ROSTER surface: a pair's two endpoints are not a roster, so the mode
   // withholds it outright (shiki, #task:2039).
+  const compact = useCompactLayout();
   const memberStrip =
-    rosterTarget !== null ? (
+    !compact && rosterTarget !== null ? (
       <MemberStrip
         channelId={conversation.id}
         agentRuntime={channelAgentRuntime}
@@ -744,6 +747,7 @@ function ActiveChannelView({
           style={paneChrome}
         >
           <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
+            <MobileNavigationSlot />
             {showThreadHeader ? (
               <>
                 <ThreadIcon className="size-4 shrink-0 text-text-muted" />
@@ -759,7 +763,7 @@ function ActiveChannelView({
                   {parentTitle ?? conversation.title}
                 </span>
                 {memberStrip}
-                {addMemberWorkspaceId !== null ? (
+                {!compact && addMemberWorkspaceId !== null ? (
                   <AddConversationMemberPopover
                     workspaceId={addMemberWorkspaceId}
                     conversationId={conversation.id}
@@ -789,7 +793,7 @@ function ActiveChannelView({
                   counterpart={paneMode.kind === "direct_message" ? paneMode.counterpart : null}
                 />
                 {memberStrip}
-                {addMemberWorkspaceId !== null ? (
+                {!compact && addMemberWorkspaceId !== null ? (
                   <AddConversationMemberPopover
                     workspaceId={addMemberWorkspaceId}
                     conversationId={conversation.id}

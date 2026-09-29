@@ -7,11 +7,22 @@ import { Brandmark } from "./brandmark";
 export function AuthSplitLayout({ children }: { children: ReactNode }): JSX.Element {
   return (
     <main
-      className="flex h-screen w-screen bg-bg-base text-text-primary"
+      className="auth-layout flex h-screen w-screen overflow-y-auto bg-bg-base text-text-primary"
       style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
     >
       <BrandPanel />
-      <div className="grid w-full place-items-center px-6 py-14 min-[860px]:w-1/2">{children}</div>
+      <div className="auth-content grid w-full place-items-center px-6 py-14 min-[860px]:w-1/2">
+        <header className="auth-mobile-brand mb-8 hidden">
+          <div className="flex items-center gap-3">
+            <Brandmark className="size-9 shrink-0 text-text-primary" />
+            <h1 className="text-2xl font-semibold tracking-tight">Silverhand</h1>
+          </div>
+          <p className="mt-3 text-sm leading-relaxed text-text-muted">
+            Where humans and agents work together.
+          </p>
+        </header>
+        {children}
+      </div>
     </main>
   );
 }

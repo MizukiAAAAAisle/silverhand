@@ -1,3 +1,4 @@
+import { useCompactLayout } from "@/navigation/layout";
 import type { ReactNode } from "react";
 import { SectionLayer } from "./section-layer";
 import { Sidebar } from "./sidebar";
@@ -16,21 +17,32 @@ export function DirectoryShell({
   sidebar,
   children,
   splitter,
+  selected = false,
 }: DirectoryLifecycle & {
   name: string;
+  selected?: boolean;
   sidebar: ReactNode;
   children: ReactNode;
   splitter?: ReactNode;
 }): JSX.Element | null {
+  const compact = useCompactLayout();
   if (!mounted) {
     return null;
   }
 
   return (
     <SectionLayer visible={visible}>
-      <Sidebar name={name} width="var(--sidebar-width)" sidebar={sidebar} splitter={splitter}>
-        {children}
-      </Sidebar>
+      {compact ? (
+        selected ? (
+          children
+        ) : (
+          <Sidebar name={name} sidebar={sidebar} fill />
+        )
+      ) : (
+        <Sidebar name={name} width="var(--sidebar-width)" sidebar={sidebar} splitter={splitter}>
+          {children}
+        </Sidebar>
+      )}
     </SectionLayer>
   );
 }

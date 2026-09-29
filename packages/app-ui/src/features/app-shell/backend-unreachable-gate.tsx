@@ -273,7 +273,7 @@ export function BackendUnreachableGate({
   );
 }
 
-function describeProfileSaveForGate(result: ProfileSaveWithTestResult): SaveServerUrlBanner {
+export function describeProfileSaveForGate(result: ProfileSaveWithTestResult): SaveServerUrlBanner {
   if (result.ok) {
     return {
       tone: "success",

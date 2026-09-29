@@ -62,6 +62,7 @@ import type { StaticTaskRefSummary } from "./task-ref";
  * system rows.
  */
 export function MessageScreenshotView({
+  compact = false,
   messages,
   agentsByName,
   humansByName,
@@ -77,6 +78,7 @@ export function MessageScreenshotView({
   channelTitle,
   mermaidSvgByCode,
 }: {
+  compact?: boolean;
   messages: readonly MessageDto[];
   agentsByName: ReadonlyMap<string, AgentDto>;
   humansByName?: ReadonlyMap<string, UserDto>;
@@ -103,7 +105,9 @@ export function MessageScreenshotView({
   return (
     <div
       data-screenshot-root
-      className="flex w-190 flex-col gap-3 bg-bg-floating p-6 text-text-primary"
+      data-compact-export={compact || undefined}
+      className="flex flex-col gap-3 bg-bg-floating text-text-primary"
+      style={{ width: compact ? 360 : 760, padding: compact ? 16 : 24, overflowWrap: "anywhere" }}
     >
       {safeChannelTitle ? (
         <div className="border-b border-border-subtle pb-2 text-sm font-semibold">
@@ -355,7 +359,8 @@ function ScreenshotAttachmentTile({
           <img
             src={imageUrl}
             alt={filename}
-            className="block max-h-64 max-w-[320px] object-contain"
+            className="block max-h-64 object-contain"
+            style={{ maxWidth: "min(320px, 100%)" }}
             draggable={false}
           />
         </span>

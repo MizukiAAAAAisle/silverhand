@@ -1,4 +1,6 @@
-import { X } from "lucide-react";
+import { useCompactLayout } from "@/navigation/layout";
+import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
+import { ArrowLeft, X } from "lucide-react";
 
 /**
  * The fixed-height header row shared by every right-pane side panel — the agent
@@ -20,6 +22,7 @@ export function SidePanelHeader({
   children,
   actions,
   onClose,
+  onBack,
 }: {
   /** Leading/main header content — usually an icon + `<SidePanelHeaderTitle>`,
    *  or a custom identity block (avatar + name/description). It carries the
@@ -30,12 +33,25 @@ export function SidePanelHeader({
    *  `data-channel-actions` layout cluster, matching the channel header; each
    *  control carries its own forza6 `data-sticker` hook. */
   actions?: React.ReactNode;
+  onBack?: () => void;
   onClose?: () => void;
 }): JSX.Element {
+  const compact = useCompactLayout();
   const closeButton = onClose ? <SidePanelCloseButton onClose={onClose} /> : null;
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
+      <MobileNavigationSlot />
+      {!compact && onBack ? (
+        <button
+          type="button"
+          aria-label="Back"
+          onClick={onBack}
+          className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover focus-outline"
+        >
+          <ArrowLeft className="size-4" />
+        </button>
+      ) : null}
       {children}
       {actions ? (
         // `data-channel-actions` lays the trailing controls out only; each

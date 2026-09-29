@@ -1,5 +1,6 @@
+import { ServerAddressControl } from "./server-address-control";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { KeyRound, Loader2, LogIn, UserPlus } from "lucide-react";
+import { Loader2, LogIn, UserPlus } from "lucide-react";
 import { AUTH_HANDLE_TAKEN_CODE, suggestParticipantNameFromEmail } from "@silverhand/shared";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,12 @@ import { useLoginUser, useSignupUser } from "../session/hooks";
 export interface RegistrationGateProps {
   signupEnabled: boolean;
   preferLogin?: boolean;
+  autoFocus?: boolean;
+  connectionReady?: boolean;
+  connectionStatus?: string;
+  connectionChecking?: boolean;
+  showServerAddress?: boolean;
+  onRetry?: () => void;
 }
 
 type AuthMode = "signup" | "login";
@@ -38,6 +45,12 @@ interface AuthError {
 export function RegistrationGate({
   signupEnabled,
   preferLogin = false,
+  autoFocus = true,
+  connectionReady = true,
+  connectionStatus,
+  connectionChecking,
+  showServerAddress = true,
+  onRetry,
 }: RegistrationGateProps): JSX.Element {
   const signup = useSignupUser();
   const login = useLoginUser();
@@ -49,6 +62,7 @@ export function RegistrationGate({
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<AuthError | null>(null);
+  const [editingServer, setEditingServer] = useState(false);
   const emailInputRef = useRef<HTMLInputElement | null>(null);
   const handleInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -57,8 +71,8 @@ export function RegistrationGate({
   }, [signupEnabled]);
 
   useEffect(() => {
-    emailInputRef.current?.focus();
-  }, []);
+    if (autoFocus) emailInputRef.current?.focus();
+  }, [autoFocus]);
 
   const submitting = signup.isPending || login.isPending;
   const emailTrimmed = email.trim();
@@ -70,6 +84,8 @@ export function RegistrationGate({
   // is exactly what a handle is, so the words match create-agent and rename.
   const handleFormatMessage = nameFormatMessage("agent", handleTrimmed);
   const canSubmit =
+    connectionReady &&
+    !editingServer &&
     !submitting &&
     emailTrimmed.length > 0 &&
     password.length >= (isSignup ? 8 : 1) &&
@@ -122,26 +138,22 @@ export function RegistrationGate({
         // Same dialog identity as the other boot gates — see UpdateRequiredGate
         // for the per-theme rationale (#task:1833). Not forza6-only: studio-light
         // also drops the 1px frame by its own `[data-modal-shell]` rule.
+        data-auth-form
         data-modal-shell
         data-popover-frame="info"
         className="w-full max-w-105 rounded-md border border-border bg-bg-floating p-6 shadow-modal"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
-        <header className="mb-5 flex flex-col gap-1.5">
-          <div className="flex items-center gap-2">
-            <span className="grid size-7 place-items-center rounded-(--chip-radius) border border-border-subtle bg-bg-inset text-text-secondary">
-              <KeyRound className="size-4" />
-            </span>
-            <h1 className="text-base font-semibold leading-tight">
-              {isSignup ? "Create your account" : "Sign in"}
-            </h1>
-          </div>
-          <p className="text-xs leading-relaxed text-text-muted">
-            {isSignup
-              ? "Use an email and password for this Silverhand backend."
-              : "Sign in to continue to this Silverhand backend."}
-          </p>
-        </header>
+        {showServerAddress && (
+          <ServerAddressControl
+            status={connectionStatus}
+            checking={connectionChecking}
+            onRetry={onRetry}
+            onEditingChange={setEditingServer}
+            disabled={submitting}
+          />
+        )}
+        {!signupEnabled && <h1 className="mb-5 text-lg font-semibold">Log in</h1>}
 
         {signupEnabled ? (
           // The app's one segmented-control contract (`data-panel-tabs`,
@@ -280,7 +292,7 @@ export function RegistrationGate({
             ) : (
               <>
                 <LogIn className="size-3.5" />
-                Sign in
+                Log in
               </>
             )}
           </Button>

@@ -3,9 +3,9 @@ import { useChannelSettingsDetail } from "../use-channel-settings-detail";
 import { toast } from "sonner";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
-import { ArrowLeft, ChevronRight, Hash, Lock, Power, RefreshCw } from "lucide-react";
+import { ChevronRight, Hash, Lock, Power, RefreshCw } from "lucide-react";
 import type { ChannelDetailResponse } from "@silverhand/shared";
-import { useNav } from "@/router";
+import { useNav, useRouteState } from "@/router";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,7 @@ export function ChannelSettingsPanel({
   channelId: string;
 }): JSX.Element {
   const nav = useNav();
-  const [membersPage, setMembersPage] = useState<"browse" | "add" | null>(null);
+  const membersPage = useRouteState().channelSettingsPage;
   const mounted = useRef(false);
 
   useEffect(() => {
@@ -77,17 +77,10 @@ export function ChannelSettingsPanel({
       className="flex h-full min-h-0 w-full flex-col overflow-hidden"
       style={paneChrome}
     >
-      <SidePanelHeader onClose={nav.closeChannelSettings}>
-        {membersPage ? (
-          <button
-            type="button"
-            aria-label="Back to channel settings"
-            onClick={() => setMembersPage(null)}
-            className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover focus-outline"
-          >
-            <ArrowLeft className="size-4" />
-          </button>
-        ) : null}
+      <SidePanelHeader
+        onClose={nav.closeChannelSettings}
+        onBack={membersPage ? nav.navigateBack : undefined}
+      >
         <SidePanelHeaderTitle
           icon={
             detail.data?.channel.visibility === "private" ? (
@@ -127,7 +120,7 @@ export function ChannelSettingsPanel({
           detail={detail.data}
           membersPage={membersPage !== null}
           focusMemberSearch={membersPage === "add"}
-          onOpenMembers={(focusSearch) => setMembersPage(focusSearch ? "add" : "browse")}
+          onOpenMembers={(focusSearch) => nav.openChannelMembers(channelId, focusSearch)}
           onArchived={onArchived}
           onLeft={onLeft}
         />

@@ -1,5 +1,4 @@
 import { memo, useCallback, useMemo, useState } from "react";
-import { Plus } from "lucide-react";
 import { TaskIcon } from "@/features/task-shell/components/task-icon";
 import { useUpdateTaskStatus } from "@/features/task-shell/hooks/hooks";
 import { useKanbanColumnCollapse } from "@/features/task-shell/hooks/use-kanban-column-collapse";
@@ -17,24 +16,25 @@ import {
 import { useColumnWindow } from "@/features/task-shell/hooks/use-column-window";
 import { DEFAULT_TASK_FILTERS, type TaskFilters } from "@/features/task-shell/model/task-filters";
 import { TaskBoardColumns } from "@/features/task-shell/components/task-board-columns";
-import {
-  TaskFilterBar,
-  FILTER_ROW_TRIGGER_BOX,
-} from "@/features/task-shell/components/task-filter-bar";
+import { TaskToolbar } from "@/features/task-shell/components/task-toolbar";
 import {
   CreateTaskDialog,
   useCreateTaskSubmit,
   type CreateTaskTarget,
 } from "@/features/task-shell/components/create-task-dialog";
-import { Button } from "@/components/ui/button";
 import { PaneHeader, PaneShell } from "@/components/layout/pane-shell";
 
 export interface TaskBoardProps {
+  filters: TaskFilters;
+  onFiltersChange: (filters: TaskFilters) => void;
   onOpenTask: (taskId: string) => void;
 }
 
-export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps): JSX.Element {
-  const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
+export const TaskBoard = memo(function TaskBoard({
+  onOpenTask,
+  filters,
+  onFiltersChange: setFilters,
+}: TaskBoardProps): JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
   const updateStatus = useUpdateTaskStatus();
   // Per-column render bound, local to THIS surface (#task:1885). Every write that
@@ -103,27 +103,16 @@ export const TaskBoard = memo(function TaskBoard({ onOpenTask }: TaskBoardProps)
         }
       />
 
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2">
-        <TaskFilterBar
-          filters={filters}
-          onChange={applyFilters}
-          baselineFilters={DEFAULT_TASK_FILTERS}
-          workspaceOptions={workspaceOptions}
-          channelOptions={channelOptions}
-          allChannelsLabel="All"
-          people={people}
-        />
-        <Button
-          type="button"
-          variant="primary"
-          className={`shrink-0 gap-1.5 ${FILTER_ROW_TRIGGER_BOX}`}
-          onClick={() => setCreateOpen(true)}
-        >
-          <Plus className="size-3.5" />
-          New task
-        </Button>
-      </div>
-
+      <TaskToolbar
+        onCreate={() => setCreateOpen(true)}
+        filters={filters}
+        onChange={applyFilters}
+        baselineFilters={DEFAULT_TASK_FILTERS}
+        workspaceOptions={workspaceOptions}
+        channelOptions={channelOptions}
+        allChannelsLabel="All"
+        people={people}
+      />
       <TaskBoardColumns
         columns={columns}
         counts={counts}

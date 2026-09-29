@@ -248,8 +248,9 @@ function SortableChannelItem({
   return (
     <li
       ref={setNodeRef}
+      data-sidebar-sort-dragging={isDragging || undefined}
       style={sortableItemStyle({ transform, transition, isDragging })}
-      className="touch-none"
+      className="touch-manipulation"
       {...attributes}
       {...listeners}
     >
@@ -336,7 +337,7 @@ function WorkspaceChannelRow({
   );
 
   return (
-    <AppContextMenu trigger={row}>
+    <AppContextMenu trigger={row} touchLongPress={!draggable}>
       <ChannelRowMenuItems
         channelId={channel.id}
         title={channel.title}

@@ -305,6 +305,7 @@ export function SidebarSectionHeader({
           {...drag?.attributes}
           {...drag?.listeners}
           ref={drag?.setActivatorNodeRef}
+          data-sidebar-sort-dragging={drag?.isDragging || undefined}
           role="button"
           tabIndex={0}
           onClick={onToggle}
@@ -324,7 +325,7 @@ export function SidebarSectionHeader({
           className={cn(
             "group/sectionheader sidebar-row-gutter flex h-7 min-w-0 items-center justify-between",
             "cursor-pointer text-left",
-            drag && "touch-none",
+            drag && "touch-manipulation",
             drag?.isDragging && "cursor-grabbing",
             OUTER_GLYPH_INSET,
           )}

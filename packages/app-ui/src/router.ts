@@ -1,6 +1,8 @@
+import type { MainTab } from "@/navigation/history";
+import { useNavigationDriver } from "@/navigation/provider";
 import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useCallback, useMemo } from "react";
-import { matchPath, useLocation, useNavigate } from "react-router-dom";
+import { matchPath, useLocation } from "react-router-dom";
 import type { AppSection } from "@/components/layout/nav-rail";
 import type { LocatorTarget } from "@/features/conversations/locator-target";
 
@@ -257,6 +259,7 @@ export interface RouteState {
   filesListOpen: boolean;
   /** Settings is channel-keyed, including when opened from a secondary channel. */
   channelSettingsId?: string | null;
+  channelSettingsPage?: "members" | "add" | null;
   /** Open task-detail pointer (`?task=<task_id>`). When set, the app-level
    *  detail modal is open on that task (#task:1715).
    *
@@ -429,6 +432,11 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     threadsListOpen,
     filesListOpen,
     channelSettingsId: searchParams.get("settings") || null,
+    channelSettingsPage:
+      searchParams.has("settings") &&
+      ["members", "add"].includes(searchParams.get("settingsPage") ?? "")
+        ? (searchParams.get("settingsPage") as "members" | "add")
+        : null,
     taskDetailId,
     fullscreen,
     agentId: mAgent?.params.agentId ?? null,
@@ -657,6 +665,7 @@ function writeSecondaryPaneOpen(params: URLSearchParams, pane: SecondaryPane, va
     if (other === pane) continue;
     if (overlay && SECONDARY_PANES[other].survivesOverlay) continue;
     params.delete(other);
+    if (other === "settings") params.delete("settingsPage");
   }
 }
 
@@ -667,6 +676,7 @@ function writeSecondaryPaneOpen(params: URLSearchParams, pane: SecondaryPane, va
  */
 function writeSecondaryPaneClose(params: URLSearchParams, pane: SecondaryPane): void {
   params.delete(pane);
+  if (pane === "settings") params.delete("settingsPage");
   params.delete("fullscreen");
 }
 
@@ -878,6 +888,7 @@ export function withChannelSettingsQuery(
   channelId: string | null,
 ): string {
   const params = new URLSearchParams(search);
+  params.delete("settingsPage");
   if (channelId === null) writeSecondaryPaneClose(params, "settings");
   else {
     writeSecondaryPaneOpen(params, "settings", channelId);
@@ -969,297 +980,139 @@ export function buildAgentPanelOpenUrl(pathname: string, search: string, agentId
  * `setSelectedX` go through these — keeps URL construction in one
  * place and gives the call sites a self-documenting API.
  */
-export function useNav(): {
-  go: (to: string, opts?: { replace?: boolean }) => void;
-  toChat: () => void;
-  toChatSearch: (seed?: {
-    q?: string;
-    workspace?: string;
-    sender?: string;
-    reset?: boolean;
-  }) => void;
-  toChatSaved: () => void;
-  toChatArchived: () => void;
-  toActivity: () => void;
-  toWorkspace: (workspaceId: string) => void;
-  toChannel: (workspaceId: string, channelId: string) => void;
-  /** Open a WORKSPACE-LESS conversation (`/chat/d/:conversationId`, #task:2035).
-   *  A separate helper rather than `toChannel(null, id)` so a caller that has a
-   *  workspace cannot accidentally drop it: the two navigations mean different
-   *  placements, not one navigation with an optional argument. */
-  toDirect: (conversationId: string) => void;
-  /** Open the PRE-MINT direct line with `agentId` (`/chat/d/new/:agentId`,
-   *  #task:2039) — the standard chat surface for a line that does not exist yet.
-   *  Callers that already hold a pair use {@link toDirect} instead; this one is
-   *  for the case where there is nothing to name but the participant. */
-  toDirectDraft: (target: DirectMessageTarget) => void;
-  toMembers: (agentId?: string) => void;
-  /** Navigate the members section to a human's profile by user id.
-   *  Mutually exclusive with the agent form — only one of agentId /
-   *  userId is meaningful at a time. */
-  toMembersUser: (userId: string) => void;
-  toComputers: () => void;
-  toTasks: () => void;
-  toSettings: () => void;
-  /** Open `conversationId` as the right-side overlay. Writes `?side=<id>`
-   *  to the current URL via `replace` so opening a side pane doesn't
-   *  pile entries into history. The base path (`/chat/w/.../c/...`) is
-   *  preserved verbatim so closing the overlay restores whatever was
-   *  below it. */
-  openSide: (conversationId: string) => void;
-  /** Close the side overlay. Strips `?side` (and `?fullscreen`) from the
-   *  current URL. `replace` so the user's back button doesn't have to
-   *  step through every overlay open/close. */
-  closeSide: () => void;
-  /** Open the thread for `rootMessageId` in the right pane. Writes
-   *  `?thread=<id>` (clearing `?side`/`?fullscreen`) via `replace` so it
-   *  doesn't pile history entries. The base path is preserved so closing
-   *  restores whatever was below. */
-  openThread: (rootMessageId: string) => void;
-  /** Close the thread pane. Strips `?thread` (and `?fullscreen`). */
-  closeThread: () => void;
-  /** Open the channel Threads-list pane in the right pane. Writes
-   *  `?threads=1` (clearing `?side`/`?thread`/`?fullscreen`) via `replace`
-   *  so it doesn't pile history entries (#task:1073). */
-  openThreadsList: () => void;
-  /** Close the channel Threads-list pane. Strips `?threads` (and
-   *  `?fullscreen`). */
-  closeThreadsList: () => void;
-  /** Toggle the channel Threads-list pane — opens it when closed, closes
-   *  it when open. Drives the header Threads icon's click-to-toggle
-   *  behaviour (#task:1126 follow-up). */
-  toggleThreadsList: () => void;
-  /** Open the channel Attachments panel in the right pane (`?files=1`).
-   *  An OVERLAY: clears `?side` (correctness) + the other overlays
-   *  (`?agent`/`?task`) + `?fullscreen`, but PRESERVES `?thread`/`?threads`
-   *  as the restore stack. */
-  openFilesList: () => void;
-  /** Close the channel Attachments panel. Strips `?files` (and any residual
-   *  `?fullscreen`); the preserved `?thread`/`?threads` resurfaces. */
-  closeFilesList: () => void;
-  /** Toggle the channel Attachments panel — drives the header Paperclip
-   *  icon's click-to-toggle behaviour, mirroring `toggleThreadsList`. */
-  toggleFilesList: () => void;
-  openChannelSettings: (channelId: string) => void;
-  closeChannelSettings: () => void;
-  /** Open a task's detail by writing `?task=<task_id>` (an OVERLAY pane).
-   *  Every entrance (chat chip, global Tasks section card, per-conversation
-   *  Tasks tab card) goes through this one writer, so there is a single
-   *  task-detail state. In a conversation the host renders it as an overlay
-   *  side pane; from a board as a modal. `replace` so re-clicking chips doesn't
-   *  pile history. Clears `?side` + other overlays, preserves
-   *  `?thread`/`?threads`. */
-  openTask: (taskId: string) => void;
-  /** Close the task detail by clearing `?task` (and `?fullscreen`). The
-   *  preserved `?thread`/`?threads` resurfaces; closing a detail opened from a
-   *  board card returns to whatever board was underneath. */
-  closeTask: () => void;
-  /** Open agent `agentId` as the chat-section right-pane panel
-   *  (`?agent=<id>`, #task:1189) so a channel + the agent's Activity show
-   *  side-by-side. Clears any conversation-based secondary; `replace` so it
-   *  doesn't pile history entries. The base channel path is preserved. */
-  openAgentPanel: (agentId: string) => void;
-  /** Close the agent side panel. Strips `?agent` (and `?fullscreen`). */
-  closeAgentPanel: () => void;
-  openHumanPanel: (userId: string) => void;
-  closeHumanPanel: () => void;
-} {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const go = useCallback(
-    (to: string, opts?: { replace?: boolean }) => navigate(to, { replace: opts?.replace ?? false }),
-    [navigate],
-  );
-  const openSide = useCallback(
-    (conversationId: string) => {
-      const next = buildSideOpenUrl(location.pathname, location.search, conversationId);
-      navigate(next, { replace: true });
-    },
-    [navigate, location.pathname, location.search],
-  );
-  const closeSide = useCallback(() => {
-    const next = withSideQuery(location.pathname, location.search, null);
-    navigate(next, { replace: true });
-  }, [navigate, location.pathname, location.search]);
-  const openThread = useCallback(
-    (rootMessageId: string) => {
-      const next = buildThreadOpenUrl(location.pathname, location.search, rootMessageId);
-      navigate(next, { replace: true });
-    },
-    [navigate, location.pathname, location.search],
-  );
-  const closeThread = useCallback(() => {
-    const next = withThreadQuery(location.pathname, location.search, null);
-    navigate(next, { replace: true });
-  }, [navigate, location.pathname, location.search]);
-  const openThreadsList = useCallback(() => {
-    const next = withThreadsQuery(location.pathname, location.search, true);
-    navigate(next, { replace: true });
-  }, [navigate, location.pathname, location.search]);
-  const closeThreadsList = useCallback(() => {
-    const next = withThreadsQuery(location.pathname, location.search, false);
-    navigate(next, { replace: true });
-  }, [navigate, location.pathname, location.search]);
-  const toggleThreadsList = useCallback(() => {
-    const open = new URLSearchParams(location.search).get("threads") === "1";
-    const next = withThreadsQuery(location.pathname, location.search, !open);
-    navigate(next, { replace: true });
-  }, [navigate, location.pathname, location.search]);
-  const openChannelSettings = useCallback(
-    (channelId: string) => {
-      navigate(withChannelSettingsQuery(location.pathname, location.search, channelId), {
-        replace: true,
+export type NavigationTarget =
+  | { kind: "tab"; tab: MainTab }
+  | { kind: "url"; url: string }
+  | { kind: "conversation"; conversationId: string; workspaceId?: string }
+  | { kind: "thread"; rootMessageId: string; conversationId?: string; workspaceId?: string }
+  | { kind: "conversation-settings"; conversationId: string }
+  | { kind: "conversation-members"; conversationId: string; add?: boolean }
+  | { kind: "attachments" }
+  | { kind: "threads" }
+  | { kind: "task"; taskId: string }
+  | { kind: "agent"; agentId: string }
+  | { kind: "human"; userId: string }
+  | { kind: "side-conversation"; conversationId: string };
+
+/** Business destinations resolve through the existing URL schema. The shell,
+ * never the caller, decides whether a secondary destination fills a page. */
+export function resolveNavigationTarget(
+  target: NavigationTarget,
+  pathname: string,
+  search: string,
+): string {
+  if (
+    target.kind === "thread" &&
+    target.conversationId &&
+    parseRouteState(pathname, search).channelId !== target.conversationId
+  ) {
+    pathname = target.workspaceId
+      ? routes.chatChannel(target.workspaceId, target.conversationId)
+      : routes.chatDirect(target.conversationId);
+    search = "";
+  }
+  switch (target.kind) {
+    case "tab":
+      return `/${target.tab}`;
+    case "url":
+      return target.url;
+    case "conversation":
+      return target.workspaceId
+        ? routes.chatChannel(target.workspaceId, target.conversationId)
+        : routes.chatDirect(target.conversationId);
+    case "thread":
+      return buildThreadOpenUrl(pathname, search, target.rootMessageId);
+    case "conversation-members": {
+      const url = withChannelSettingsQuery(pathname, search, target.conversationId);
+      return `${url}&settingsPage=${target.add ? "add" : "members"}`;
+    }
+    case "conversation-settings":
+      return withChannelSettingsQuery(pathname, search, target.conversationId);
+    case "attachments":
+      return withFilesQuery(pathname, search, true);
+    case "threads":
+      return withThreadsQuery(pathname, search, true);
+    case "task":
+      return buildTaskOpenUrl(pathname, search, target.taskId);
+    case "agent":
+      return buildAgentPanelOpenUrl(pathname, search, target.agentId);
+    case "human":
+      return withHumanQuery(pathname, search, target.userId);
+    case "side-conversation":
+      return buildSideOpenUrl(pathname, search, target.conversationId);
+  }
+}
+
+export function useNav() {
+  const { go: drive, back, selectTab } = useNavigationDriver();
+  const { pathname, search } = useLocation();
+  const navigate = useCallback(
+    (target: NavigationTarget, opts?: { replace?: boolean }) => {
+      if (target.kind === "tab") {
+        selectTab(target.tab);
+        return;
+      }
+      const pane = target.kind !== "url" && target.kind !== "conversation";
+      drive(resolveNavigationTarget(target, pathname, search), {
+        replace: opts?.replace ?? pane,
+        pane,
       });
     },
-    [navigate, location.pathname, location.search],
+    [drive, selectTab, pathname, search],
   );
-  const closeChannelSettings = useCallback(() => {
-    navigate(withChannelSettingsQuery(location.pathname, location.search, null), { replace: true });
-  }, [navigate, location.pathname, location.search]);
-  const openFilesList = useCallback(() => {
-    const next = withFilesQuery(location.pathname, location.search, true);
-    navigate(next, { replace: true });
-  }, [navigate, location.pathname, location.search]);
-  const closeFilesList = useCallback(() => {
-    const next = withFilesQuery(location.pathname, location.search, false);
-    navigate(next, { replace: true });
-  }, [navigate, location.pathname, location.search]);
-  const toggleFilesList = useCallback(() => {
-    const open = new URLSearchParams(location.search).get("files") === "1";
-    const next = withFilesQuery(location.pathname, location.search, !open);
-    navigate(next, { replace: true });
-  }, [navigate, location.pathname, location.search]);
-  const openTask = useCallback(
-    (taskId: string) => {
-      const next = buildTaskOpenUrl(location.pathname, location.search, taskId);
-      navigate(next, { replace: true });
-    },
-    [navigate, location.pathname, location.search],
+  const go = useCallback(
+    (url: string, opts?: { replace?: boolean }) => navigate({ kind: "url", url }, opts),
+    [navigate],
   );
-  const closeTask = useCallback(() => {
-    const next = withTaskQuery(location.pathname, location.search, null);
-    navigate(next, { replace: true });
-  }, [navigate, location.pathname, location.search]);
-  const openAgentPanel = useCallback(
-    (agentId: string) => {
-      const next = buildAgentPanelOpenUrl(location.pathname, location.search, agentId);
-      navigate(next, { replace: true });
-    },
-    [navigate, location.pathname, location.search],
-  );
-  const closeAgentPanel = useCallback(() => {
-    const next = withAgentQuery(location.pathname, location.search, null);
-    navigate(next, { replace: true });
-  }, [navigate, location.pathname, location.search]);
-  const openHumanPanel = useCallback(
-    (userId: string) => {
-      navigate(withHumanQuery(location.pathname, location.search, userId), { replace: true });
-    },
-    [navigate, location.pathname, location.search],
-  );
-
-  const closeHumanPanel = useCallback(() => {
-    navigate(withHumanQuery(location.pathname, location.search, null), { replace: true });
-  }, [navigate, location.pathname, location.search]);
-
-  const toChat = useCallback(() => go(routes.chat()), [go]);
-  const toChatSearch = useCallback(
-    (seed?: { q?: string; workspace?: string; sender?: string; reset?: boolean }) =>
-      go(routes.chatSearch(seed)),
-    [go],
-  );
-  const toChatSaved = useCallback(() => go(routes.chatSaved()), [go]);
-  const toChatArchived = useCallback(() => go(routes.chatArchived()), [go]);
-  const toActivity = useCallback(() => go(routes.activity()), [go]);
-  const toWorkspace = useCallback((id: string) => go(routes.chatWorkspace(id)), [go]);
-  const toChannel = useCallback(
-    (wid: string, cid: string) => go(routes.chatChannel(wid, cid)),
-    [go],
-  );
-  const toDirect = useCallback((cid: string) => go(routes.chatDirect(cid)), [go]);
-  const toDirectDraft = useCallback(
-    (target: DirectMessageTarget) => go(routes.chatDirectDraft(target)),
-    [go],
-  );
-  const toMembers = useCallback(
-    (agentId?: string) => go(agentId ? routes.membersAgent(agentId) : routes.members()),
-    [go],
-  );
-  const toMembersUser = useCallback((userId: string) => go(routes.membersUser(userId)), [go]);
-  const toComputers = useCallback(() => go(routes.computers()), [go]);
-  const toTasks = useCallback(() => go(routes.tasks()), [go]);
-  const toSettings = useCallback(() => go(routes.settings()), [go]);
-
   return useMemo(
     () => ({
+      navigate,
+      navigateBack: () => back(),
       go,
-      toChat,
-      toChatSearch,
-      toChatSaved,
-      toChatArchived,
-      toActivity,
-      toWorkspace,
-      toChannel,
-      toDirect,
-      toDirectDraft,
-      toMembers,
-      toMembersUser,
-      toComputers,
-      toTasks,
-      toSettings,
-      openSide,
-      closeSide,
-      openThread,
-      closeThread,
-      openThreadsList,
-      closeThreadsList,
-      toggleThreadsList,
-      openFilesList,
-      closeFilesList,
-      toggleFilesList,
-      openChannelSettings,
-      closeChannelSettings,
-      openTask,
-      closeTask,
-      openAgentPanel,
-      closeAgentPanel,
-      openHumanPanel,
-      closeHumanPanel,
+      toChat: () => navigate({ kind: "tab", tab: "chat" }),
+      toChatSearch: (seed?: Parameters<typeof routes.chatSearch>[0]) => go(routes.chatSearch(seed)),
+      toChatSaved: () => go(routes.chatSaved()),
+      toChatArchived: () => go(routes.chatArchived()),
+      toActivity: () => navigate({ kind: "tab", tab: "activity" }),
+      toWorkspace: (id: string) => go(routes.chatWorkspace(id)),
+      toChannel: (workspaceId: string, conversationId: string) =>
+        navigate({ kind: "conversation", workspaceId, conversationId }),
+      toDirect: (conversationId: string) => navigate({ kind: "conversation", conversationId }),
+      toDirectDraft: (target: DirectMessageTarget) => go(routes.chatDirectDraft(target)),
+      toMembers: (id?: string) => go(id ? routes.membersAgent(id) : routes.members()),
+      toMembersUser: (id: string) => go(routes.membersUser(id)),
+      toComputers: () => go(routes.computers()),
+      toTasks: () => navigate({ kind: "tab", tab: "tasks" }),
+      toSettings: () => go(routes.settings()),
+      openSide: (conversationId: string) => navigate({ kind: "side-conversation", conversationId }),
+      closeSide: () => drive(withSideQuery(pathname, search, null), { replace: true }),
+      openThread: (rootMessageId: string) => navigate({ kind: "thread", rootMessageId }),
+      closeThread: () => drive(withThreadQuery(pathname, search, null), { replace: true }),
+      openThreadsList: () => navigate({ kind: "threads" }),
+      closeThreadsList: () => drive(withThreadsQuery(pathname, search, false), { replace: true }),
+      toggleThreadsList: () =>
+        new URLSearchParams(search).get("threads") === "1"
+          ? drive(withThreadsQuery(pathname, search, false), { replace: true })
+          : navigate({ kind: "threads" }),
+      openFilesList: () => navigate({ kind: "attachments" }),
+      closeFilesList: () => drive(withFilesQuery(pathname, search, false), { replace: true }),
+      toggleFilesList: () =>
+        new URLSearchParams(search).get("files") === "1"
+          ? drive(withFilesQuery(pathname, search, false), { replace: true })
+          : navigate({ kind: "attachments" }),
+      openChannelSettings: (conversationId: string) =>
+        navigate({ kind: "conversation-settings", conversationId }),
+      openChannelMembers: (conversationId: string, add = false) =>
+        navigate({ kind: "conversation-members", conversationId, add }),
+      closeChannelSettings: () =>
+        drive(withChannelSettingsQuery(pathname, search, null), { replace: true }),
+      openTask: (taskId: string) => navigate({ kind: "task", taskId }),
+      closeTask: () => drive(withTaskQuery(pathname, search, null), { replace: true }),
+      openAgentPanel: (agentId: string) => navigate({ kind: "agent", agentId }),
+      closeAgentPanel: () => drive(withAgentQuery(pathname, search, null), { replace: true }),
+      openHumanPanel: (userId: string) => navigate({ kind: "human", userId }),
+      closeHumanPanel: () => drive(withHumanQuery(pathname, search, null), { replace: true }),
     }),
-    [
-      go,
-      toChat,
-      toChatSearch,
-      toChatSaved,
-      toChatArchived,
-      toActivity,
-      toWorkspace,
-      toChannel,
-      toDirect,
-      toDirectDraft,
-      toMembers,
-      toMembersUser,
-      toComputers,
-      toTasks,
-      toSettings,
-      openSide,
-      closeSide,
-      openThread,
-      closeThread,
-      openThreadsList,
-      closeThreadsList,
-      toggleThreadsList,
-      openFilesList,
-      closeFilesList,
-      toggleFilesList,
-      openChannelSettings,
-      closeChannelSettings,
-      openTask,
-      closeTask,
-      openAgentPanel,
-      closeAgentPanel,
-      openHumanPanel,
-      closeHumanPanel,
-    ],
+    [navigate, go, back, drive, pathname, search],
   );
 }

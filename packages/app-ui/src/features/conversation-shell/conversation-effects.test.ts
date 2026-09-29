@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelListItem, WorkspaceListItem } from "@/features/workspaces/hooks";
 
 const h = vi.hoisted(() => ({
+  compact: false,
   route: {
     section: "chat",
     chatView: "channel",
@@ -21,6 +22,7 @@ const h = vi.hoisted(() => ({
   persist: vi.fn(),
   memory: new Map<string, string>(),
 }));
+vi.mock("@/navigation/layout", () => ({ useCompactLayout: () => h.compact }));
 vi.mock("react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("react")>()),
   useCallback: <T>(cb: T) => cb,
@@ -110,6 +112,7 @@ function recover(
   });
 }
 beforeEach(() => {
+  h.compact = false;
   vi.clearAllMocks();
   h.effects = [];
   h.removal = undefined;
@@ -160,6 +163,13 @@ describe("shared conversation invalidation", () => {
   });
 });
 describe("Chat recovery boundary", () => {
+  it("keeps the compact conversation list open instead of restoring a desktop selection", () => {
+    h.compact = true;
+    h.route.channelId = null;
+    recover({ current: null });
+    h.effects.forEach((e) => e());
+    expect(h.go).not.toHaveBeenCalled();
+  });
   it("does not auto-select an Activity conversation", () => {
     h.route.section = "activity";
     h.route.channelId = null;

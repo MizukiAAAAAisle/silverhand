@@ -1,3 +1,4 @@
+import { useViewMemory } from "@/navigation/view-memory";
 import {
   useCallback,
   useEffect,
@@ -181,6 +182,9 @@ export function MessageList({
    *  always their own surface. */
   surfaceActive?: boolean;
 }): JSX.Element {
+  const viewMemory = useViewMemory();
+  const readingKey = `conversation:${channelId}`;
+  const savedPosition = useMemo(() => viewMemory?.get(readingKey), [viewMemory, readingKey]);
   // Render context (lookup maps + sigil resolution + resolved viewer)
   // comes from the shared hook so the channel pane and the thread
   // reply-cluster pane resolve `@mention` / `#<channel>` / `#conv:` /
@@ -530,12 +534,23 @@ export function MessageList({
     setShowScrollBottom(false);
   }, [jumpToMessageId, onJumped]);
   const shouldResetToLatest = !isAtTail || hasNewerLiveGap;
-  const initialTopMostItemIndex = getInitialTopMostItemIndex({
-    jumpTargetIndex: jumpTargetIdx,
-    hasJumpTarget: jumpToMessageId != null,
-    itemCount: items.length,
-    preferBottom: bottomAnchor.intent === "bottom",
-  });
+  const savedIndex = savedPosition?.anchor
+    ? items.findIndex((item) => itemKey(item) === savedPosition.anchor)
+    : -1;
+  const restoringPosition =
+    !jumpToMessageId &&
+    bottomAnchorVersion === 0 &&
+    savedPosition &&
+    !savedPosition.atBottom &&
+    savedIndex >= 0;
+  const initialTopMostItemIndex = restoringPosition
+    ? savedIndex
+    : getInitialTopMostItemIndex({
+        jumpTargetIndex: jumpTargetIdx,
+        hasJumpTarget: jumpToMessageId != null,
+        itemCount: items.length,
+        preferBottom: bottomAnchor.intent === "bottom",
+      });
 
   // Jump-to-message completion gate. Actual positioning is declarative:
   // when the target exists, the layout effect above remounts Virtuoso and
@@ -775,7 +790,16 @@ export function MessageList({
                 atBottom,
               })
             }
-            atBottomStateChange={setIsAtBottom}
+            rangeChanged={({ startIndex }) => {
+              const item = items[startIndex - firstItemIndex];
+              if (item)
+                viewMemory?.set(readingKey, { anchor: itemKey(item), atBottom: isAtBottom });
+            }}
+            atBottomStateChange={(atBottom) => {
+              setIsAtBottom(atBottom);
+              const previous = viewMemory?.get(readingKey);
+              viewMemory?.set(readingKey, { ...previous, atBottom });
+            }}
             atBottomThreshold={20}
             startReached={handleStartReached}
             increaseViewportBy={{ top: 200, bottom: 200 }}

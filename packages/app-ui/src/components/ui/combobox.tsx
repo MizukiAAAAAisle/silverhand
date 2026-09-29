@@ -1,3 +1,4 @@
+import { useDialogBoundary } from "./dialog";
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { ChevronDown } from "lucide-react";
@@ -42,6 +43,7 @@ export function Combobox({
   className?: string;
   ariaLabel?: string;
 }): JSX.Element {
+  const boundary = useDialogBoundary();
   const [open, setOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listId = useId();
@@ -127,11 +129,14 @@ export function Combobox({
           ) : null}
         </div>
       </Popover.Anchor>
-      <Popover.Portal>
+      <Popover.Portal container={boundary ?? undefined}>
         <Popover.Content
           id={listId}
           align="start"
           sideOffset={4}
+          collisionBoundary={boundary ?? undefined}
+          collisionPadding={8}
+          style={{ maxHeight: "min(42vh, var(--radix-popover-content-available-height))" }}
           onOpenAutoFocus={(e) => e.preventDefault()}
           {...dropdownPanelProps(
             "poster",

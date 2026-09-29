@@ -178,8 +178,9 @@ function SortableFavoriteRow(props: Omit<FavoriteRowProps, "draggable">): JSX.El
   return (
     <li
       ref={setNodeRef}
+      data-sidebar-sort-dragging={isDragging || undefined}
       style={sortableItemStyle({ transform, transition, isDragging })}
-      className="touch-none"
+      className="touch-manipulation"
       {...attributes}
       {...listeners}
     >
@@ -218,7 +219,7 @@ function FavoriteRow({
   );
 
   return (
-    <AppContextMenu trigger={row}>
+    <AppContextMenu trigger={row} touchLongPress={!draggable}>
       <FavoriteMenuItems
         item={item}
         attention={attention}

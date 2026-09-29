@@ -12,6 +12,11 @@ import type { NativeBridge } from './bridge';
 
 function harness() {
   const native = {
+    navigationBadges: vi.fn(async () => {}),
+    navigationSync: vi.fn(async () => ({ bottomInset: 0 })),
+    navigationCapture: vi.fn(async () => {}),
+    navigationFinish: vi.fn(async () => {}),
+    navigationReset: vi.fn(async () => {}),
     getProfile: vi.fn(async () => ({ server_url: 'https://server.example', updated_at: 1 })),
     authState: vi.fn(async () => ({
       serverUrl: 'https://server.example',
@@ -34,6 +39,7 @@ function harness() {
     authenticate: vi.fn(),
     logout: vi.fn(),
     addListener: vi.fn(async () => ({ remove: vi.fn() })),
+    sharePng: vi.fn(async () => ({ completed: true })),
     openExternal: vi.fn(),
     openSocket: vi.fn(),
     sendSocket: vi.fn(),
@@ -44,6 +50,46 @@ function harness() {
 }
 
 describe('iOS platform', () => {
+  it('orders native presentation commands and continues after a failed capture', async () => {
+    const { native, platform } = harness();
+    let rejectCapture!: (error: Error) => void;
+    native.navigationCapture.mockImplementationOnce(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectCapture = reject;
+        }),
+    );
+    const navigation = platform.navigation!;
+    const capture = navigation.capture({ session: 's', key: 'entry' });
+    const failed = expect(capture).rejects.toThrow('snapshot failed');
+    const reset = navigation.reset('s');
+    await Promise.resolve();
+    expect(native.navigationCapture).toHaveBeenCalledOnce();
+    expect(native.navigationReset).not.toHaveBeenCalled();
+
+    rejectCapture(new Error('snapshot failed'));
+    await failed;
+    await reset;
+    expect(native.navigationReset).toHaveBeenCalledExactlyOnceWith({ session: 's' });
+  });
+
+  it('shares exact image bytes and distinguishes cancellation and failure', async () => {
+    const { native, platform } = harness();
+    const pngBytes = Uint8Array.from({ length: 20000 }, (_, i) => i % 256);
+    expect(await platform.files.sharePngExport!({ pngBytes })).toEqual({ ok: true });
+    const encoded = native.sharePng.mock.calls[0] as unknown as [{ base64: string }];
+    expect(Uint8Array.from(atob(encoded[0].base64), (c) => c.charCodeAt(0))).toEqual(pngBytes);
+    native.sharePng.mockResolvedValueOnce({ completed: false });
+    expect(await platform.files.sharePngExport!({ pngBytes })).toEqual({
+      ok: false,
+      canceled: true,
+    });
+    native.sharePng.mockRejectedValueOnce(new Error('Sharing unavailable'));
+    expect(await platform.files.sharePngExport!({ pngBytes })).toEqual({
+      ok: false,
+      error: 'Sharing unavailable',
+    });
+  });
   it('never advertises local host or desktop shell capabilities', async () => {
     const { platform } = harness();
     expect(platform.localHost).toBeUndefined();

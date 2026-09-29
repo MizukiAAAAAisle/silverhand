@@ -1,3 +1,4 @@
+import { useCompactLayout } from "@/navigation/layout";
 import { useEffect, useRef } from "react";
 
 import { useSelectionPersistenceEffects } from "@/features/app-shell/selection-persistence";
@@ -54,6 +55,7 @@ export function useChatRouteRecovery({
   onJump: (target: MessageJumpTarget) => boolean;
   recentlyRemovedPrimaryRef: RefObject<RemovedPrimary | null>;
 }) {
+  const compact = useCompactLayout();
   const route = useRouteState();
   const nav = useNav();
   const {
@@ -70,7 +72,7 @@ export function useChatRouteRecovery({
   const handleJumpToMessage = onJump;
   const lastSelectedWorkspaceId = useRef<string | null>(getLastWorkspaceId());
   useEffect(() => {
-    if (appSection !== "chat" || view !== "channel") {
+    if (compact || appSection !== "chat" || view !== "channel") {
       return;
     }
     // `/chat/d/:id` is a chat-channel URL with NO workspace on purpose
@@ -111,6 +113,7 @@ export function useChatRouteRecovery({
       nav.go(`/chat/w/${target}`, { replace: true });
     }
   }, [
+    compact,
     appSection,
     view,
     directConversationId,
@@ -135,7 +138,7 @@ export function useChatRouteRecovery({
     // section is a peer navigator whose right pane stays empty until the user
     // picks a row (no auto-select) — restoring a channel here would hijack
     // `/activity/...` back into chat (#task:1394).
-    if (appSection !== "chat") {
+    if (compact || appSection !== "chat") {
       return;
     }
     if (!selectedWorkspaceId) {
@@ -195,6 +198,7 @@ export function useChatRouteRecovery({
         return;
     }
   }, [
+    compact,
     appSection,
     selectedWorkspaceId,
     selectedChannelId,

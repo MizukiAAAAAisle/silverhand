@@ -1,7 +1,23 @@
-import * as DialogPrimitive from "@radix-ui/react-dialog";
+import * as DialogPrimitive from "./modal";
 import { X } from "lucide-react";
-import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from "react";
+import {
+  createContext,
+  useContext,
+  useCallback,
+  forwardRef,
+  useEffect,
+  useState,
+  type CSSProperties,
+  type ComponentPropsWithoutRef,
+  type ElementRef,
+} from "react";
 import { cn } from "@/lib/cn";
+
+const DialogBoundaryContext = createContext<HTMLElement | null>(null);
+/** Inline popovers must collide with the dialog's clipping viewport, not the window. */
+export function useDialogBoundary() {
+  return useContext(DialogBoundaryContext);
+}
 
 export const Dialog = DialogPrimitive.Root;
 export const DialogTrigger = DialogPrimitive.Trigger;
@@ -58,6 +74,28 @@ export const DialogOverlay = forwardRef<
 ));
 DialogOverlay.displayName = "DialogOverlay";
 
+/** Track the keyboard-reduced visual viewport without moving desktop dialogs. */
+function useDialogViewport() {
+  const [viewport, setViewport] = useState<CSSProperties>({});
+  useEffect(() => {
+    const visual = window.visualViewport;
+    if (!visual) return;
+    const update = () =>
+      setViewport({
+        "--dialog-viewport-height": `${visual.height}px`,
+        "--dialog-viewport-bottom": `${Math.max(0, window.innerHeight - visual.height - visual.offsetTop)}px`,
+      } as CSSProperties);
+    update();
+    visual.addEventListener("resize", update);
+    visual.addEventListener("scroll", update);
+    return () => {
+      visual.removeEventListener("resize", update);
+      visual.removeEventListener("scroll", update);
+    };
+  }, []);
+  return viewport;
+}
+
 export const DialogContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,
   ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
@@ -77,67 +115,81 @@ export const DialogContent = forwardRef<
      *    own padding (`p-0`) and whose first band is not a `p-6` title line. */
     cornerBand?: "title" | "top";
   }
->(({ className, children, cornerActions, cornerBand = "title", ...props }, ref) => (
-  <DialogPortal>
-    <DialogOverlay />
-    <DialogPrimitive.Content
-      ref={ref}
-      data-modal-shell
-      data-popover-frame="info"
-      className={cn(
-        // TOP-ANCHORED, not vertically centred (#task:1829, shiki go). Under
-        // `top-1/2 -translate-y-1/2` a dialog's HEIGHT IS ITS POSITION: every
-        // content growth moves the whole shell by half the delta, in both
-        // directions. That made routine, correct behaviour read as flicker —
-        // a one-line validation note appearing and leaving, a member tag row
-        // wrapping to a second line. Anchoring the top edge makes growth go
-        // DOWNWARD only: the title and the field the user is looking at stay
-        // put, and nothing has to reserve space it doesn't need.
-        // 15vh (shiki), proportional so a short window keeps the whole shell
-        // on screen.
-        // `grid-cols-[minmax(0,1fr)]`, not the default `auto` column: an auto
-        // track's min sizing function is `auto`, which floors the track at its
-        // items' MIN-CONTENT width. One unbreakable string inside — a long
-        // display name in the members roster (#task:1836) — then pushed the
-        // track past `max-w-*` while the shell itself stayed put, so the
-        // content spilled out of the frame and every `w-full` child (search
-        // field, footer button) stretched with it. A `0` min sizing function
-        // removes that floor, and the items' own `truncate` / `min-w-0` do the
-        // rest. Non-overflowing dialogs are unaffected: a stretched auto track
-        // and a `1fr` track both resolve to the content box.
-        "fixed left-1/2 top-[15vh] z-(--z-dialog) grid w-full max-w-md grid-cols-[minmax(0,1fr)] -translate-x-1/2 gap-4 bg-bg-floating p-6 shadow-modal focus:outline-none",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-      {/* Top-right corner action cluster: optional peer actions, then the close
+>(({ className, children, cornerActions, cornerBand = "title", style, ...props }, ref) => {
+  const viewport = useDialogViewport();
+  const [boundary, setBoundary] = useState<HTMLDivElement | null>(null);
+  const contentRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      setBoundary(node);
+      if (typeof ref === "function") ref(node);
+      else if (ref) ref.current = node;
+    },
+    [ref],
+  );
+  return (
+    <DialogPortal>
+      <DialogOverlay />
+      <DialogPrimitive.Content
+        ref={contentRef}
+        data-dialog-content
+        data-modal-shell
+        style={{ ...viewport, ...style }}
+        data-popover-frame="info"
+        className={cn(
+          // TOP-ANCHORED, not vertically centred (#task:1829, shiki go). Under
+          // `top-1/2 -translate-y-1/2` a dialog's HEIGHT IS ITS POSITION: every
+          // content growth moves the whole shell by half the delta, in both
+          // directions. That made routine, correct behaviour read as flicker —
+          // a one-line validation note appearing and leaving, a member tag row
+          // wrapping to a second line. Anchoring the top edge makes growth go
+          // DOWNWARD only: the title and the field the user is looking at stay
+          // put, and nothing has to reserve space it doesn't need.
+          // 15vh (shiki), proportional so a short window keeps the whole shell
+          // on screen.
+          // `grid-cols-[minmax(0,1fr)]`, not the default `auto` column: an auto
+          // track's min sizing function is `auto`, which floors the track at its
+          // items' MIN-CONTENT width. One unbreakable string inside — a long
+          // display name in the members roster (#task:1836) — then pushed the
+          // track past `max-w-*` while the shell itself stayed put, so the
+          // content spilled out of the frame and every `w-full` child (search
+          // field, footer button) stretched with it. A `0` min sizing function
+          // removes that floor, and the items' own `truncate` / `min-w-0` do the
+          // rest. Non-overflowing dialogs are unaffected: a stretched auto track
+          // and a `1fr` track both resolve to the content box.
+          "fixed left-1/2 top-[15vh] z-(--z-dialog) grid w-full max-w-md grid-cols-[minmax(0,1fr)] -translate-x-1/2 gap-4 bg-bg-floating p-6 shadow-modal focus:outline-none",
+          className,
+        )}
+        {...props}
+      >
+        <DialogBoundaryContext.Provider value={boundary}>{children}</DialogBoundaryContext.Provider>
+        {/* Top-right corner action cluster: optional peer actions, then the close
           ✕. A fixed 24px band + `items-center` co-aligns glyphs regardless of
           per-theme box size (forza6 borders the stickers → taller boxes, which
           now overflow the band symmetrically instead of pushing their centres
           down), and `gap-1.5` spaces them — so twins never need pixel/right-*
           math per theme. */}
-      <div
-        className={cn(
-          "absolute right-3 flex h-6 items-center gap-1.5",
-          cornerBand === "title" ? "top-6" : "top-3",
-        )}
-      >
-        {cornerActions}
-        <DialogPrimitive.Close
-          data-sticker-close
-          data-sticker
-          data-sticker-size="md"
-          data-sticker-tone="neutral"
-          className={dialogCornerButtonClass}
+        <div
+          className={cn(
+            "absolute right-3 flex h-6 items-center gap-1.5",
+            cornerBand === "title" ? "top-6" : "top-3",
+          )}
         >
-          <X className="size-4" />
-          <span className="sr-only">Close</span>
-        </DialogPrimitive.Close>
-      </div>
-    </DialogPrimitive.Content>
-  </DialogPortal>
-));
+          {cornerActions}
+          <DialogPrimitive.Close
+            data-sticker-close
+            data-sticker
+            data-sticker-size="md"
+            data-sticker-tone="neutral"
+            className={dialogCornerButtonClass}
+          >
+            <X className="size-4" />
+            <span className="sr-only">Close</span>
+          </DialogPrimitive.Close>
+        </div>
+      </DialogPrimitive.Content>
+    </DialogPortal>
+  );
+});
 DialogContent.displayName = "DialogContent";
 
 export function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {

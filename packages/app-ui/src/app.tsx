@@ -1,6 +1,12 @@
+import { MobileHeaderProvider, MobileHeaderScope } from "@/components/layout/mobile-header-slot";
+import { useAppOptions } from "./app-options";
+import { NavigationLaunch } from "@/navigation/launch";
+import { NavigationProvider } from "@/navigation/provider";
+import { useCompactLayout } from "@/navigation/layout";
+import { MobileHeader, MobileTabBar } from "@/components/layout/mobile-shell";
 import { useEffect, useState } from "react";
 import { ShutdownOverlay } from "@/features/app-shell/shutdown-overlay";
-import { ChatShell } from "@/features/chat-shell/chat-shell";
+import { ChatShell, isChatSidebarPage } from "@/features/chat-shell/chat-shell";
 import { ActivityShell } from "@/features/activity-shell/activity-shell";
 import { TaskShell } from "@/features/task-shell/task-shell";
 import { useConversationShell } from "@/features/conversation-shell/use-conversation-shell";
@@ -33,12 +39,16 @@ import { toasterTypedIcons } from "@/lib/toast-icons";
 
 export { LAST_CHANNEL_KEY, clearPlaceMemory };
 
-export function App(): JSX.Element {
+export function App({
+  initialNavigationUrl = "/chat",
+}: { initialNavigationUrl?: string } = {}): JSX.Element {
   const { appearance } = useAppearance();
+  const { loginFirst } = useAppOptions();
 
   useRuntimeEpochPromotion();
 
   const viewer = useViewerUser();
+  const [navigationLaunch] = useState(() => new NavigationLaunch(initialNavigationUrl));
   const [hasSignedIn, setHasSignedIn] = useState(false);
   const authenticated = Boolean(viewer.data && "id" in viewer.data);
   useEffect(() => {
@@ -53,6 +63,33 @@ export function App(): JSX.Element {
   // call dozens more hooks than the pre-registration render and React
   // would crash with "Rendered more hooks than during the previous
   // render".
+  if (
+    loginFirst &&
+    (!viewer.data || isBackendUnreachable(viewer.data) || isRegistrationRequired(viewer.data))
+  ) {
+    const registration = viewer.data && isRegistrationRequired(viewer.data) ? viewer.data : null;
+    const ready = registration !== null;
+    return (
+      <RegistrationGate
+        signupEnabled={registration?.signup_enabled ?? false}
+        preferLogin
+        autoFocus={false}
+        connectionStatus={
+          !viewer.data
+            ? "Checking server…"
+            : isBackendUnreachable(viewer.data)
+              ? viewer.data.message
+              : undefined
+        }
+        connectionChecking={viewer.isFetching}
+        connectionReady={ready}
+        showServerAddress
+        onRetry={() => {
+          void viewer.refetch();
+        }}
+      />
+    );
+  }
   if (!viewer.data) {
     return (
       <div className="grid h-screen w-screen place-items-center bg-bg-base text-xs text-text-muted">
@@ -94,7 +131,9 @@ export function App(): JSX.Element {
   // global.css don't cover (e.g. any action/close button greys).
   return (
     <EmbeddedProfileSetupGate key={viewer.data.id} viewerId={viewer.data.id}>
-      <RegisteredAppShell toasterTheme={appearance.theme === "slack-dark" ? "dark" : "light"} />
+      <NavigationProvider launch={navigationLaunch}>
+        <RegisteredAppShell toasterTheme={appearance.theme === "slack-dark" ? "dark" : "light"} />
+      </NavigationProvider>
     </EmbeddedProfileSetupGate>
   );
 }
@@ -132,6 +171,7 @@ const TOAST_MOBILE_OFFSET = {
 } as const;
 
 function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }): JSX.Element {
+  const compact = useCompactLayout();
   const signals = useApplicationSignals();
   const { navRailDots } = signals;
   const conversation = useConversationShell(signals);
@@ -154,112 +194,141 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
   );
 
   return (
-    <div
-      className="flex h-screen w-screen flex-col overflow-hidden"
-      style={{
-        backgroundImage: "var(--app-paper, none)",
-        backgroundSize: "100vw 100vh",
-        backgroundRepeat: "no-repeat",
-      }}
-    >
-      <Titlebar
-        workspaceArchivedAt={selectedWorkspace?.archived_at ?? null}
-        workspaceSidebarVisible={workspaceSidebarVisible}
-        onToggleWorkspaceSidebar={toggleWorkspaceSidebar}
-        chromeMode={appSection === "activity" ? "activity" : "chat"}
-        search={
-          <TitlebarSearch
-            nav={{
-              onJumpMessage: handleJumpToMessage,
-              onOpenConversation: (workspaceId, channelId) => {
-                const navWorkspaceId = resolveNavWorkspaceId(workspaceId, channelId);
-                if (navWorkspaceId) nav.toChannel(navWorkspaceId, channelId);
-              },
-              onOpenWorkspace: nav.toWorkspace,
-              onOpenDirectPair: nav.toDirect,
-              onOpenDirectDraft: nav.toDirectDraft,
-              onOpenAdvanced: (query) => nav.toChatSearch(query ? { q: query } : undefined),
-            }}
-          />
-        }
-      />
+    <MobileHeaderProvider section={appSection}>
       <div
-        className="flex min-w-0 flex-1 overflow-hidden"
+        data-layout={compact ? "compact" : "desktop"}
+        className="app-shell flex h-screen w-screen flex-col overflow-hidden"
         style={{
-          backgroundColor: "var(--bg-app, transparent)",
-          padding: "0 var(--frame-padding, 0) var(--frame-padding, 0)",
-          gap: "var(--frame-padding, 0)",
+          backgroundImage: "var(--app-paper, none)",
+          backgroundSize: "100vw 100vh",
+          backgroundRepeat: "no-repeat",
         }}
       >
-        <NavRail
-          current={appSection}
-          dots={navRailDots}
-          onChange={(section) => {
-            if (section === "chat") {
-              nav.toChat();
-            } else if (section === "activity") {
-              nav.toActivity();
-            } else if (section === "tasks") {
-              nav.toTasks();
-            } else if (section === "members") {
-              nav.toMembers();
-            } else if (section === "settings") {
-              nav.toSettings();
-            } else {
-              nav.toComputers();
+        {compact ? (
+          <MobileHeader
+            hideFallback={appSection === "chat" && isChatSidebarPage(conversation.chat, content)}
+          />
+        ) : (
+          <Titlebar
+            workspaceArchivedAt={selectedWorkspace?.archived_at ?? null}
+            workspaceSidebarVisible={workspaceSidebarVisible}
+            onToggleWorkspaceSidebar={toggleWorkspaceSidebar}
+            chromeMode={appSection === "activity" ? "activity" : "chat"}
+            search={
+              <TitlebarSearch
+                nav={{
+                  onJumpMessage: handleJumpToMessage,
+                  onOpenConversation: (workspaceId, channelId) => {
+                    const navWorkspaceId = resolveNavWorkspaceId(workspaceId, channelId);
+                    if (navWorkspaceId) nav.toChannel(navWorkspaceId, channelId);
+                  },
+                  onOpenWorkspace: nav.toWorkspace,
+                  onOpenDirectPair: nav.toDirect,
+                  onOpenDirectDraft: nav.toDirectDraft,
+                  onOpenAdvanced: (query) => nav.toChatSearch(query ? { q: query } : undefined),
+                }}
+              />
             }
-          }}
-        />
+          />
+        )}
         <div
-          data-section-sheet=""
-          className="flex min-w-0 flex-1"
-          style={{ gap: "var(--pane-gap)" }}
+          data-app-frame
+          className="flex min-w-0 flex-1 overflow-hidden"
+          style={{
+            padding: "0 var(--frame-padding, 0) var(--frame-padding, 0)",
+            gap: "var(--frame-padding, 0)",
+          }}
         >
-          {deferredSection === "settings" && (
-            <SectionLayer visible={appSection !== "chat"}>
-              <SettingsShell />
-            </SectionLayer>
+          {!compact && (
+            <NavRail
+              current={appSection}
+              dots={navRailDots}
+              onChange={(section) => {
+                if (section === "chat") {
+                  nav.toChat();
+                } else if (section === "activity") {
+                  nav.toActivity();
+                } else if (section === "tasks") {
+                  nav.toTasks();
+                } else if (section === "members") {
+                  nav.toMembers();
+                } else if (section === "settings") {
+                  nav.toSettings();
+                } else {
+                  nav.toComputers();
+                }
+              }}
+            />
           )}
-          {deferredSection === "tasks" && (
-            <SectionLayer visible={appSection !== "chat"}>
-              <TaskShell onJump={handleJumpToMessage} />
-            </SectionLayer>
-          )}
-          <AgentShell
-            mounted={deferredSection === "members"}
-            visible={appSection !== "chat"}
-            onMessageAgent={handleMessageAgent}
-            onOpenConversation={openAgentConversation}
-          />
-          <ComputerShell
-            mounted={deferredSection === "computers"}
-            visible={appSection !== "chat"}
-          />
-          <ActivityShell model={conversation.activity} content={content} fullscreen={fullscreen} />
-          <ChatShell model={conversation.chat} content={content} fullscreen={fullscreen} />
+          <div
+            data-section-sheet=""
+            className="flex min-w-0 flex-1"
+            style={{ gap: "var(--pane-gap)" }}
+          >
+            {deferredSection === "settings" && (
+              <SectionLayer visible={appSection !== "chat"}>
+                <MobileHeaderScope section="settings">
+                  <SettingsShell />
+                </MobileHeaderScope>
+              </SectionLayer>
+            )}
+            <MobileHeaderScope section="tasks">
+              <TaskShell
+                mounted={deferredSection === "tasks"}
+                visible={appSection !== "chat"}
+                onJump={handleJumpToMessage}
+              />
+            </MobileHeaderScope>
+            <MobileHeaderScope section="members">
+              <AgentShell
+                mounted={deferredSection === "members"}
+                visible={appSection !== "chat"}
+                onMessageAgent={handleMessageAgent}
+                onOpenConversation={openAgentConversation}
+              />
+            </MobileHeaderScope>
+            <MobileHeaderScope section="computers">
+              <ComputerShell
+                mounted={deferredSection === "computers"}
+                visible={appSection !== "chat"}
+              />
+            </MobileHeaderScope>
+            <MobileHeaderScope section="activity">
+              <ActivityShell
+                model={conversation.activity}
+                content={content}
+                fullscreen={fullscreen}
+              />
+            </MobileHeaderScope>
+            <MobileHeaderScope section="chat">
+              <ChatShell model={conversation.chat} content={content} fullscreen={fullscreen} />
+            </MobileHeaderScope>
+          </div>
         </div>
+
+        {compact && <MobileTabBar dots={navRailDots} />}
+
+        {/* Toast surface follows the active theme: `theme` picks sonner's
+         * light/dark default scale, and global.css maps its fill / text /
+         * border / radius onto our tokens (forza6 gets the ink frame). No
+         * `richColors` — that paints the whole toast in sonner's own hue
+         * palette; instead the surface stays neutral and the type icon carries
+         * the semantic, matching AppStatusBanner. Icons come from the shared
+         * lib/toast-icons authority; only sonner's typed levels have map slots
+         * here — neutral `toast()` calls pass their own icon from the same
+         * table. */}
+        <Toaster
+          position="top-right"
+          theme={toasterTheme}
+          icons={toasterTypedIcons}
+          offset={TOAST_OFFSET}
+          mobileOffset={TOAST_MOBILE_OFFSET}
+        />
+
+        <AppStatusBanner />
+
+        <ShutdownOverlay />
       </div>
-
-      {/* Toast surface follows the active theme: `theme` picks sonner's
-       * light/dark default scale, and global.css maps its fill / text /
-       * border / radius onto our tokens (forza6 gets the ink frame). No
-       * `richColors` — that paints the whole toast in sonner's own hue
-       * palette; instead the surface stays neutral and the type icon carries
-       * the semantic, matching AppStatusBanner. Icons come from the shared
-       * lib/toast-icons authority; only sonner's typed levels have map slots
-       * here — neutral `toast()` calls pass their own icon from the same
-       * table. */}
-      <Toaster
-        position="top-right"
-        theme={toasterTheme}
-        icons={toasterTypedIcons}
-        offset={TOAST_OFFSET}
-        mobileOffset={TOAST_MOBILE_OFFSET}
-      />
-
-      <AppStatusBanner />
-
-      <ShutdownOverlay />
-    </div>
+    </MobileHeaderProvider>
   );
 }

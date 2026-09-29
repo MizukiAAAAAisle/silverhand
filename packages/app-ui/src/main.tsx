@@ -1,7 +1,7 @@
+import { AppOptionsContext, type AppOptions } from "./app-options";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { App } from "./app";
 import { queryClient } from "./lib/query-client";
 // Rajdhani is forza6's tech/racing display face — bundled (not a CDN
@@ -17,22 +17,17 @@ import "@fontsource/space-mono/400.css";
 import "@fontsource/space-mono/700.css";
 import "./styles/global.css";
 
-export function mountApp(root: HTMLElement): () => void {
+export function mountApp(root: HTMLElement, options: AppOptions = {}): () => void {
   const reactRoot = createRoot(root);
   reactRoot.render(
     <React.StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <HashRouter>
-          <Routes>
-            <Route path="/" element={<Navigate to="/chat" replace />} />
-            {/* Catch-all keeps App mounted across all navigations so its
-              refs (lastSessionByChannel) and dialog state survive route
-              changes. App reads URL params via useRouteState (useMatch
-              under the hood — works fine without nested Route defs). */}
-            <Route path="*" element={<App />} />
-          </Routes>
-        </HashRouter>
-      </QueryClientProvider>
+      <AppOptionsContext.Provider value={options}>
+        <QueryClientProvider client={queryClient}>
+          <App
+            initialNavigationUrl={window.location.hash.slice(1).replace(/^\/$/, "/chat") || "/chat"}
+          />
+        </QueryClientProvider>
+      </AppOptionsContext.Provider>
     </React.StrictMode>,
   );
 

@@ -112,7 +112,7 @@ function ContextCardShell({
       data-context-card={model.kind}
       className={"my-1 border-l-2 bg-bg-floating px-2 py-2 " + CONTEXT_KIND_BORDER[model.kind]}
     >
-      <div className="mb-1 flex items-center gap-1.5 text-xs text-text-muted">
+      <div className="mb-1 flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-text-muted">
         <span
           className={
             "inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-(length:--text-badge) font-semibold uppercase tracking-wider " +

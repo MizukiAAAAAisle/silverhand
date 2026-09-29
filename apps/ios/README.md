@@ -32,6 +32,20 @@ CapApp-SPM; the application separately references the local `native` package, so
 sync never overwrites the session implementation. Commit Package.resolved.
 `vite build` generates the native wire contract from the shared API/epoch authority.
 
+## Phone navigation
+
+Compact windows use full-screen list → conversation → thread/attachments/settings
+pages, with React Chats / Activity / Tasks buttons and an upward More menu for
+Members / Computers / Settings. The shared router resolves semantic destinations;
+Desktop keeps its simultaneous panes. Tab return paths and reading positions live
+inside the authenticated session; composer drafts and send identities retain their
+existing conversation/thread ownership. The four existing themes supply the UI tokens.
+
+Fresh installs open login directly using `https://silverhand.taobao.net`. A saved
+custom origin always wins. Login exposes Change server before authentication;
+Settings → Connection remains available after login. Discovery must succeed before
+submitting credentials; network/TLS errors leave retry and address repair available.
+
 ## Session and network behavior
 
 - One Keychain item binds server origin and user token atomically. It is available
@@ -87,8 +101,9 @@ claim that a physical iPhone or the entire mobile interface was exercised.
 
 Connect a development-enabled iPhone, select the user's signing Team, and repeat
 login/WS/message/suspend/resume/switch-server checks with an isolated, reachable
-HTTPS server. Verify keyboard and message composer behavior on-device. The iPhone chat sidebar is an overlay toggled by the existing sidebar button;
-full mobile layout, attachment capabilities, TestFlight and APNs are outside this first phase.
+HTTPS server. Verify keyboard and message composer behavior on-device. Full-screen navigation and separate parent/thread drafts are covered by the hosted
+WebView tests; real keyboard, touch and OS suspension still require device acceptance.
+Attachment capabilities, native Tab Bar, TestFlight and APNs remain outside this phase.
 
 References: [Capacitor local Swift plugins](https://capacitorjs.com/docs/ios/custom-code),
 [iOS setup](https://capacitorjs.com/docs/ios),

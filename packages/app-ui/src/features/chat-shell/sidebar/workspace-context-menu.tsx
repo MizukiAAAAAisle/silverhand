@@ -1,3 +1,4 @@
+import { useSidebarBranchDrag } from "@/components/layout/sidebar-branch-drag";
 import { useState, type ReactElement, type JSX } from "react";
 import { LogOut } from "lucide-react";
 import { AppContextMenu, AppContextMenuItem } from "@/components/menus/app-context-menu";
@@ -40,6 +41,7 @@ export function WorkspaceContextMenu({
    *  Leaving an archived workspace routes through Settings instead. */
   leaveWorkspace?: { id: string; name: string } | null;
 }): JSX.Element {
+  const branchDrag = useSidebarBranchDrag();
   const [confirmingLeave, setConfirmingLeave] = useState(false);
 
   // A row with no capability at all would render an empty menu, so it gets no
@@ -48,7 +50,7 @@ export function WorkspaceContextMenu({
 
   return (
     <>
-      <AppContextMenu trigger={trigger}>
+      <AppContextMenu trigger={trigger} touchLongPress={!branchDrag}>
         {muteWorkspaceId ? <WorkspaceMuteMenuItem workspaceId={muteWorkspaceId} /> : null}
         {leaveWorkspace ? (
           <WorkspaceLeaveMenuItem

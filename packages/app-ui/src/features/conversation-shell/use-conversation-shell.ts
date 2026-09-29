@@ -1,3 +1,4 @@
+import { useCompactLayout } from "@/navigation/layout";
 import { buildConversationPanes } from "./build-conversation-panes";
 import { senderFilterToParam } from "@/components/ui/sender-filter-select";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
@@ -30,6 +31,7 @@ export function useConversationShell({
   attentionBadges,
   unreadCounts,
 }: ConversationShellSignals): ConversationShellModel {
+  const compact = useCompactLayout();
   const { layout, toggleWorkspaceSidebar } = useLayoutSettings();
 
   const route = useRouteState();
@@ -151,6 +153,10 @@ export function useConversationShell({
     workspaceId: string | null = selectedWorkspaceId,
   ): void => {
     if (!workspaceId) {
+      return;
+    }
+    if (compact) {
+      nav.toChannel(workspaceId, id);
       return;
     }
     const sameWorkspace = workspaceId === selectedWorkspaceId;

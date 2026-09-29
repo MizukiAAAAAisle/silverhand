@@ -20,6 +20,7 @@
    token re-assignments inside it.
 */
 @import "./themes/forza6-components.css";
+@import "./mobile.css";
 
 @theme inline {
   --color-bg-base: var(--bg-base);
@@ -340,6 +341,7 @@ button:disabled {
 /* ── Markdown body — applied to .markdown-body wrapper around <ReactMarkdown> ── */
 .markdown-body {
   min-width: 0;
+  max-width: 100%;
   line-height: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) + 8px);
   overflow-wrap: anywhere;
   font-family: var(--appearance-prose-font, var(--font-sans));
@@ -357,6 +359,8 @@ button:disabled {
 }
 
 .system-message-row {
+  min-width: 0;
+  overflow-wrap: anywhere;
   --system-message-control-height: max(
     18px,
     calc(var(--appearance-markdown-font-size, var(--system-message-size, 12px)) * 1.5)
@@ -465,12 +469,17 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   opacity: 0.5;
 }
 
-.sidebar-row-border.navigation-row.text-text-nav-selected {
-  border-color: var(--border-selected-card, var(--border-row-selected));
-  box-shadow: var(--shadow-row-selected, none);
-}
 .sidebar-row-border.navigation-row:not(.text-text-nav-selected):hover {
   border-color: var(--border-row-hover);
+}
+
+/* Dragging borrows selection geometry, never its background or text state. */
+.sidebar-row-border.navigation-row.text-text-nav-selected,
+[data-sidebar-sort-dragging="true"] .sidebar-row-border.navigation-row,
+[data-sidebar-sort-dragging="true"] .sidebar-row-border.navigation-row:hover,
+.sidebar-row-gutter[data-sidebar-sort-dragging="true"] {
+  border-color: var(--border-selected-card, var(--border-row-selected));
+  box-shadow: var(--shadow-row-selected, none);
 }
 
 /* Rail and sidebar navigation share selected text; their surfaces remain independent. */

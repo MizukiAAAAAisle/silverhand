@@ -69,6 +69,9 @@ export interface FileCapability {
   }): Promise<
     { ok: true; path?: string } | { ok: false; canceled: true } | { ok: false; reason: string }
   >;
+  sharePngExport?(input: {
+    pngBytes: Uint8Array;
+  }): Promise<{ ok: true } | { ok: false; canceled: true } | { ok: false; error: string }>;
   savePngExport(input: {
     pngBytes: Uint8Array;
     suggestedName: string;
@@ -87,4 +90,38 @@ export interface ClientPlatform {
   localHost?: LocalHostCapability;
   shell?: ShellCapability;
   notifications?: NotificationCapability;
+  navigation?: NavigationCapability;
+}
+
+/** Optional native presentation. Navigation history remains owned by the shared UI. */
+export interface NativeNavigationState {
+  blocked: boolean;
+  modalVersion: number;
+  session: string;
+  key: string;
+  tab: "chat" | "activity" | "tasks" | "more";
+  visible: boolean;
+  backKey?: string;
+  backVisible: boolean;
+}
+export interface NativeNavigationIntent {
+  modalVersion: number;
+  session: string;
+  kind: "tab" | "more" | "back";
+  key?: string;
+  target?: string;
+  request?: string;
+}
+export interface NavigationCapability {
+  badges(input: {
+    session: string;
+    chat?: boolean;
+    activity?: boolean;
+    tasks?: boolean;
+  }): Promise<void>;
+  sync(state: NativeNavigationState): Promise<{ bottomInset: number }>;
+  capture(input: { session: string; key: string }): Promise<void>;
+  finish(input: { session: string; request: string; accepted: boolean }): Promise<void>;
+  reset(session: string): Promise<void>;
+  subscribe(handler: (intent: NativeNavigationIntent) => void): Promise<() => void>;
 }

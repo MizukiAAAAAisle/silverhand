@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StaticRouter } from "react-router-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentDto, TaskSummaryDto, UserDto } from "@silverhand/shared";
 import { decodeMessageSeq } from "@silverhand/shared";
@@ -17,6 +17,19 @@ import {
   taskByNumberKey,
 } from "@/features/task-shell/hooks/use-task-by-number";
 import { setCurrentUserId } from "@/features/session/current-user";
+
+// Static markup tests do not execute navigation. Interactive route behavior
+// is tested against the real history store in navigation/provider.test.ts.
+vi.mock("@/navigation/provider", () => ({
+  useNavigationDriver: () => ({
+    go: vi.fn(),
+    back: vi.fn(),
+    selectTab: vi.fn(),
+    tab: "chat",
+    canBack: false,
+    registerLeaveGuard: () => () => {},
+  }),
+}));
 
 // Tests pass actor ids through SystemMessage rendering and assert the
 // renderer maps the viewer's id to "@you". Under the post pre-ship

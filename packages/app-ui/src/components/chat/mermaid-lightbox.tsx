@@ -1,6 +1,6 @@
 import { RangeInput } from "@/components/ui/range-input";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import * as DialogPrimitive from "@radix-ui/react-dialog";
+import * as DialogPrimitive from "@/components/ui/modal";
 import { X, ZoomIn, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";

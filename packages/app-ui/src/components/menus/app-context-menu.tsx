@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from "react";
+import type { ComponentPropsWithoutRef, ReactElement, ReactNode } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { ChevronRight } from "lucide-react";
@@ -44,8 +44,19 @@ export function AppContextMenu({
   trigger,
   children,
   contentClassName,
+  touchLongPress = true,
+  triggerClassName,
+  triggerRef,
+  disabled = false,
+  onCloseAutoFocus,
 }: {
   trigger: ReactElement;
+  triggerClassName?: string;
+  triggerRef?: React.Ref<HTMLSpanElement>;
+  disabled?: boolean;
+  onCloseAutoFocus?: ComponentPropsWithoutRef<typeof ContextMenu.Content>["onCloseAutoFocus"];
+  /** Sortable rows reserve touch long-press for dragging; mouse menus stay enabled. */
+  touchLongPress?: boolean;
   children: ReactNode;
   /** Extra classes merged onto the menu content — e.g. a narrower `min-w-*`
    *  than the shared default for a compact single-action menu. */
@@ -53,9 +64,25 @@ export function AppContextMenu({
 }): JSX.Element {
   return (
     <ContextMenu.Root>
-      <ContextMenu.Trigger asChild>{trigger}</ContextMenu.Trigger>
+      <ContextMenu.Trigger
+        asChild
+        className={triggerClassName}
+        ref={triggerRef}
+        disabled={disabled}
+        style={disabled ? { WebkitTouchCallout: "default" } : undefined}
+        onPointerDown={(event) => {
+          // Radix checks defaultPrevented before scheduling its long-press menu.
+          // Touch scrolling is owned by TouchSensor, not PointerSensor.
+          if (!touchLongPress && event.pointerType === "touch") event.preventDefault();
+        }}
+      >
+        {trigger}
+      </ContextMenu.Trigger>
       <ContextMenu.Portal>
-        <ContextMenu.Content className={cn(MENU_CONTENT_CLASS, contentClassName)}>
+        <ContextMenu.Content
+          className={cn(MENU_CONTENT_CLASS, contentClassName)}
+          onCloseAutoFocus={onCloseAutoFocus}
+        >
           {children}
         </ContextMenu.Content>
       </ContextMenu.Portal>
@@ -124,11 +151,13 @@ export function AppDropdownMenu({
   trigger,
   children,
   align = "end",
+  side = "bottom",
   contentClassName,
 }: {
   trigger: ReactElement;
   children: ReactNode;
   align?: "start" | "center" | "end";
+  side?: "top" | "bottom";
   /** Extra classes merged onto the menu content — e.g. a narrower
    *  `min-w-*` than the shared default for compact menus. */
   contentClassName?: string;
@@ -139,6 +168,7 @@ export function AppDropdownMenu({
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           align={align}
+          side={side}
           sideOffset={4}
           className={cn(MENU_CONTENT_CLASS, contentClassName)}
         >

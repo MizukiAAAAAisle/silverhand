@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Plus } from "lucide-react";
 import type { TaskFilters } from "@/features/task-shell/model/task-filters";
 import { cn } from "@/lib/cn";
 import { useUpdateTaskStatus } from "@/features/task-shell/hooks/hooks";
@@ -17,16 +16,12 @@ import {
   type TaskBoardContainer,
 } from "@/features/task-shell/model/task-container";
 import { TaskBoardColumns } from "@/features/task-shell/components/task-board-columns";
-import {
-  TaskFilterBar,
-  FILTER_ROW_TRIGGER_BOX,
-} from "@/features/task-shell/components/task-filter-bar";
+import { TaskToolbar } from "@/features/task-shell/components/task-toolbar";
 import {
   CreateTaskDialog,
   useCreateTaskSubmit,
   type CreateTaskTarget,
 } from "@/features/task-shell/components/create-task-dialog";
-import { Button } from "@/components/ui/button";
 
 /**
  * The conversation's Tasks tab (#task:2121) — the five-column status kanban
@@ -110,26 +105,16 @@ export function ChannelTasksTab({ container, onOpenTask }: ChannelTasksTabProps)
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col bg-bg-base")}>
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2">
-        <TaskFilterBar
-          filters={filters}
-          onChange={applyFilters}
-          baselineFilters={baselineFilters}
-          workspaceOptions={workspaceOptions}
-          channelOptions={channelOptions}
-          allChannelsLabel="All"
-          people={people}
-        />
-        <Button
-          type="button"
-          variant="primary"
-          className={`shrink-0 gap-1.5 ${FILTER_ROW_TRIGGER_BOX}`}
-          onClick={() => setCreateOpen(true)}
-        >
-          <Plus className="size-3.5" />
-          New task
-        </Button>
-      </div>
+      <TaskToolbar
+        onCreate={() => setCreateOpen(true)}
+        filters={filters}
+        onChange={applyFilters}
+        baselineFilters={baselineFilters}
+        workspaceOptions={workspaceOptions}
+        channelOptions={channelOptions}
+        allChannelsLabel="All"
+        people={people}
+      />
 
       <TaskBoardColumns
         columns={columns}

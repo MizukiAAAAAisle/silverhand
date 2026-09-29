@@ -39,7 +39,7 @@ function TaskEventRowEnriched({ meta }: { meta: TaskSystemMetadata }): JSX.Eleme
   const dotKind: TaskEventDotKind = meta.subtype === "task_unclaim" ? "unclaim" : meta.task_status;
 
   return (
-    <div className="flex items-center gap-2.5 px-4 py-1.5 text-text-secondary">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 px-4 py-1.5 text-text-secondary">
       <TaskEventDot kind={dotKind} />
       <TaskEventBody subtype={meta.subtype} actorLabel={actorLabel} meta={meta} />
     </div>
@@ -222,7 +222,7 @@ function TaskEventRowDegraded({ meta }: { meta: TaskSystemMetadataPartial }): JS
   const dotKind: TaskEventDotKind = meta.subtype === "task_unclaim" ? "unclaim" : meta.task_status;
   return (
     <div
-      className="flex items-center gap-2.5 px-4 py-1.5 text-text-secondary"
+      className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 px-4 py-1.5 text-text-secondary"
       data-task-event-degraded="1"
     >
       <TaskEventDot kind={dotKind} />

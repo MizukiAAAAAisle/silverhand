@@ -963,6 +963,7 @@ function ActorMessageItem({
   return (
     <MessageContextMenu
       trigger={row}
+      text={committed ? message.content : undefined}
       saved={saved}
       onCopyMarkdown={committed && onCopyMarkdown ? () => onCopyMarkdown(message) : undefined}
       onToggleSave={committed && onSave ? () => onSave(message) : undefined}
@@ -1485,12 +1486,12 @@ function AttachmentTile({
 
   if (isImage && !decodeFailed) {
     return (
-      <div className="flex flex-col gap-1">
+      <div className="flex min-w-0 max-w-full flex-col gap-1">
         <button
           type="button"
           onClick={() => imageUrl && setLightboxOpen(true)}
           disabled={!imageUrl}
-          className="block overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating focus-outline"
+          className="block max-w-full overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating focus-outline"
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}
         >
           {imageUrl ? (
@@ -1498,7 +1499,7 @@ function AttachmentTile({
               src={imageUrl}
               alt={attachment.filename}
               onError={onImgError}
-              className="block max-h-64 max-w-[320px] cursor-zoom-in object-contain"
+              className="block max-h-64 max-w-[min(320px,100%)] cursor-zoom-in object-contain"
             />
           ) : (
             <div className="flex h-32 w-48 items-center justify-center text-xs text-text-muted">
@@ -1528,9 +1529,9 @@ function AttachmentTile({
     // non-interactive chip. Clicking would download-and-open (an export), so
     // the whole tile is inert and the explicit Download button is omitted.
     return (
-      <div className="flex flex-col items-start gap-1">
+      <div className="flex min-w-0 max-w-full flex-col items-start gap-1">
         <div
-          className="flex max-w-[320px] items-center gap-2 overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary"
+          className="flex max-w-[min(320px,100%)] items-center gap-2 overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary"
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}
         >
           <FileText className="size-4 shrink-0 text-text-muted" />
@@ -1545,8 +1546,8 @@ function AttachmentTile({
   }
 
   return (
-    <div className="flex flex-col items-start gap-1">
-      <div className="flex max-w-[320px] items-stretch overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating focus-outline-within">
+    <div className="flex min-w-0 max-w-full flex-col items-start gap-1">
+      <div className="flex max-w-[min(320px,100%)] items-stretch overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating focus-outline-within">
         <button
           type="button"
           onClick={previewable ? () => onOpenAttachment?.(attachment) : downloadAndOpen}

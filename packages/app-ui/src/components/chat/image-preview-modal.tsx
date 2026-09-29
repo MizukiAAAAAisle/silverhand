@@ -1,6 +1,9 @@
+import { prepareExportImages } from "./prepare-export-images";
+import { useCompactLayout } from "@/navigation/layout";
+import "./image-preview.css";
 import { getPlatform } from "@/platform";
 import { useEffect, useRef, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
+import * as Dialog from "@/components/ui/modal";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { toPng } from "html-to-image";
@@ -20,17 +23,13 @@ import type { ChannelReference } from "./channel-ref";
 import type { WorkspaceChannelReference } from "./conversation-ref";
 import type { StaticTaskRefSummary } from "./task-ref";
 
-/** 1×1 transparent PNG. Used as html-to-image's `imagePlaceholder` so a
- *  single failed avatar doesn't abort the whole screenshot. */
-const TRANSPARENT_PIXEL_DATA_URL =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
-
 /** Per-diagram pre-render budget (#task:1322). A diagram that doesn't settle
  *  within this bound is treated as failed → falls back to source, so a single
  *  stuck mermaid render can never hang the whole "share as image" flow. This
  *  is what makes "always produces an image" bounded rather than a bet that
  *  every diagram resolves promptly (Alice's review point). */
 const MERMAID_PRERENDER_TIMEOUT_MS = 4000;
+const EXPORT_PIXEL_RATIO = 2;
 
 /**
  * Pre-render every Mermaid diagram in the selected messages to SVG, off-screen
@@ -235,6 +234,8 @@ export function ImagePreviewModal({
   viewer?: UserDto;
   viewerAvatarObjectUrl?: string | null;
 }): JSX.Element {
+  const compact = useCompactLayout();
+  const shareImage = getPlatform().files.sharePngExport;
   const queryClient = useQueryClient();
   const [phase, setPhase] = useState<"idle" | "rendering" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -254,11 +255,14 @@ export function ImagePreviewModal({
   // subtree. We position it offscreen rather than `display:none` so
   // layout actually computes (display:none zeroes intrinsic sizes).
   const offscreenRef = useRef<HTMLDivElement | null>(null);
+  const exportGeneration = useRef(0);
 
   // Run capture once per open. We deliberately depend on `open` not on
   // `messages` because messages identity is stable for the lifetime of
   // a single open request (selection is frozen at toolbar-click time).
   useEffect(() => {
+    exportGeneration.current += 1;
+    setBusy(false);
     if (!open) {
       setPhase("idle");
       setError(null);
@@ -283,30 +287,27 @@ export function ImagePreviewModal({
         return;
       }
       const backgroundColor = screenshotCanvasBackground(node);
-      toPng(node, {
-        pixelRatio: 2,
-        // `cacheBust: true` appends `?cb=<ts>` to every <img> src so the
-        // embed pass re-fetches a clean copy. That breaks blob: URLs
-        // (avatars come through `URL.createObjectURL`) — querystrings on
-        // blob URLs make the resource non-findable. shiki
-        // `cKM3NLjAQU-idOWD` saw "渲染失败：[object Event]" because an
-        // <img> ended up with `blob:...?cb=...` and fired `onerror`.
-        // Static React tree → cache-busting buys us nothing anyway.
-        cacheBust: false,
-        // 1×1 transparent PNG. When an individual <img> still fails to
-        // load (revoked object URL, denied CORS, missing file), the
-        // embed pass swaps in this placeholder rather than rejecting
-        // the whole capture. We'd rather ship a screenshot with one
-        // gap than zero screenshot at all — single-avatar failures
-        // should not block the user's share flow.
-        imagePlaceholder: TRANSPARENT_PIXEL_DATA_URL,
-        // Match the rendered screenshot root instead of hard-coding
-        // white. The root itself uses theme tokens (`bg-bg-floating`);
-        // this option only fills transparent canvas edges / gaps.
-        backgroundColor,
-      })
+      prepareExportImages(node, EXPORT_PIXEL_RATIO)
+        .then(() => {
+          if (cancelled) return null;
+          return toPng(node, {
+            pixelRatio: EXPORT_PIXEL_RATIO,
+            // `cacheBust: true` appends `?cb=<ts>` to every <img> src so the
+            // embed pass re-fetches a clean copy. That breaks blob: URLs
+            // (avatars come through `URL.createObjectURL`) — querystrings on
+            // blob URLs make the resource non-findable. shiki
+            // `cKM3NLjAQU-idOWD` saw "渲染失败：[object Event]" because an
+            // <img> ended up with `blob:...?cb=...` and fired `onerror`.
+            // Static React tree → cache-busting buys us nothing anyway.
+            cacheBust: false,
+            // Match the rendered screenshot root instead of hard-coding
+            // white. The root itself uses theme tokens (`bg-bg-floating`);
+            // this option only fills transparent canvas edges / gaps.
+            backgroundColor,
+          });
+        })
         .then(async (url) => {
-          if (cancelled) return;
+          if (cancelled || !url) return;
           // Strip the `data:image/png;base64,` prefix and decode to raw
           // bytes. We keep both forms: dataUrl for the preview <img>,
           // bytes for the IPC save / copy handlers.
@@ -355,11 +356,30 @@ export function ImagePreviewModal({
     });
     return () => {
       cancelled = true;
+      exportGeneration.current += 1;
       for (const raf of rafs) cancelAnimationFrame(raf);
     };
   }, [open]);
 
   const suggestedName = suggestImageFilename(messages, channelTitle);
+
+  const onShare = async (): Promise<void> => {
+    if (!pngBytes || busy || !shareImage) return;
+    const generation = exportGeneration.current;
+    setBusy(true);
+    try {
+      const result = await shareImage({ pngBytes });
+      if (generation !== exportGeneration.current) return;
+      if (result.ok) {
+        onExportComplete?.();
+        onOpenChange(false);
+      } else if ("error" in result) {
+        toast.error("Couldn't share: " + result.error);
+      }
+    } finally {
+      if (generation === exportGeneration.current) setBusy(false);
+    }
+  };
 
   const onCopy = async (): Promise<void> => {
     if (!pngBytes || busy) return;
@@ -406,7 +426,8 @@ export function ImagePreviewModal({
         <Dialog.Overlay className="fixed inset-0 z-(--z-lightbox) bg-black/40" />
         <Dialog.Content
           data-modal-shell
-          className="fixed left-1/2 top-1/2 z-(--z-lightbox-chrome) flex max-h-[80vh] w-205 -translate-x-1/2 -translate-y-1/2 flex-col rounded-(--floating-radius,var(--radius-md)) bg-bg-floating p-4 shadow-xl"
+          data-image-export-preview
+          className="fixed left-0 top-0 md:left-1/2 md:top-1/2 z-(--z-lightbox-chrome) flex max-h-[80vh] w-205 md:-translate-x-1/2 md:-translate-y-1/2 flex-col rounded-(--floating-radius,var(--radius-md)) bg-bg-floating p-4 shadow-xl"
         >
           <div className="flex items-center gap-2">
             <Dialog.Title className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
@@ -427,7 +448,10 @@ export function ImagePreviewModal({
             {messages.length === 0 ? "Select at least one message" : ""}
           </Dialog.Description>
 
-          <div className="mt-3 min-h-50 flex-1 overflow-auto rounded-(--control-radius) border border-border-subtle bg-bg-elevated p-2">
+          <div
+            data-image-export-scroll
+            className="mt-3 min-h-50 flex-1 overflow-auto rounded-(--control-radius) border border-border-subtle bg-bg-elevated p-2"
+          >
             {phase === "rendering" || phase === "idle" ? (
               <div className="flex h-full items-center justify-center text-xs text-text-muted">
                 Rendering…
@@ -441,19 +465,33 @@ export function ImagePreviewModal({
             ) : null}
           </div>
 
-          <div className="mt-3 flex items-center justify-end gap-2 text-xs">
-            <SelectionActionButton
-              rank="secondary"
-              label="Copy"
-              disabled={phase !== "ready" || busy}
-              onClick={onCopy}
-            />
-            <SelectionActionButton
-              rank="primary"
-              label="Save"
-              disabled={phase !== "ready" || busy}
-              onClick={onSave}
-            />
+          <div
+            data-image-export-actions
+            className="mt-3 flex items-center justify-end gap-2 text-xs"
+          >
+            {shareImage ? (
+              <SelectionActionButton
+                rank="primary"
+                label="Share"
+                disabled={phase !== "ready" || busy}
+                onClick={onShare}
+              />
+            ) : (
+              <>
+                <SelectionActionButton
+                  rank="secondary"
+                  label="Copy"
+                  disabled={phase !== "ready" || busy}
+                  onClick={onCopy}
+                />
+                <SelectionActionButton
+                  rank="primary"
+                  label="Save"
+                  disabled={phase !== "ready" || busy}
+                  onClick={onSave}
+                />
+              </>
+            )}
           </div>
 
           {/* Offscreen render target. Positioned far off-canvas so the
@@ -471,6 +509,7 @@ export function ImagePreviewModal({
           >
             <div ref={offscreenRef}>
               <MessageScreenshotView
+                compact={compact}
                 messages={messages}
                 channelTitle={channelTitle}
                 agentsByName={agentsByName}

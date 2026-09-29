@@ -1,3 +1,4 @@
+import { useListReadingPosition } from "@/navigation/view-memory";
 import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
 import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useMemo, type ReactNode } from "react";
@@ -25,6 +26,7 @@ import {
 import { Sidebar } from "../../../components/layout/sidebar";
 
 interface ChatSidebarProps {
+  fill?: boolean;
   workspaces: WorkspaceItem[];
   workspacesLoading: boolean;
   /** Owner agents supply agent-space avatars. */
@@ -128,13 +130,18 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
     ownerAgentAvatarUrls,
   };
 
+  const readingPosition = useListReadingPosition("chat-list");
   return (
     <Sidebar
       name="workspaces"
+      fill={props.fill}
       width="var(--sidebar-width)"
       sidebar={
         <>
-          <nav className="scrollbar-hide min-h-0 flex-1 overflow-y-auto">
+          <nav
+            {...readingPosition}
+            className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto pb-1 pr-1"
+          >
             <div className="mb-3 space-y-1">
               <SidebarNavigationButton onClick={props.onSelectSearch} active={props.searchActive}>
                 <Search className="size-4" />
@@ -195,19 +202,22 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
             {props.workspacesLoading && props.workspaces.length === 0 ? (
               <SidebarRowsSkeleton label="Loading workspaces" />
             ) : null}
-          </nav>
-          <div className="shrink-0 px-1 pb-1 pt-2">
-            <Button
-              type="button"
-              variant="primary"
-              className="h-8 w-full"
-              data-sidebar-cta
-              onClick={props.onCreateWorkspace}
+            <div
+              data-sidebar-cta-slot
+              className="sticky bottom-0 mt-auto shrink-0 bg-(--pane-bg,var(--bg-base)) px-1 pt-2"
             >
-              <Plus className="size-4" />
-              <span>New workspace</span>
-            </Button>
-          </div>
+              <Button
+                type="button"
+                variant="primary"
+                className="h-8 w-full"
+                data-sidebar-cta
+                onClick={props.onCreateWorkspace}
+              >
+                <Plus className="size-4" />
+                <span>New workspace</span>
+              </Button>
+            </div>
+          </nav>
         </>
       }
     />

@@ -1,4 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCompactLayout } from "@/navigation/layout";
+import { useLocation } from "react-router-dom";
+import { useNav } from "@/router";
+import { useEffect, useRef, useState } from "react";
 import { useBackendInfoSnapshot, useHostsQuery } from "@/features/computer-shell/hooks/hooks";
 import { NewComputerDialog } from "@/features/computer-shell/components/new-computer-dialog";
 import { DirectoryShell, type DirectoryLifecycle } from "@/components/layout/directory-shell";
@@ -7,7 +10,13 @@ import { ComputerDetailPage } from "./computer-detail-page";
 import { resolveComputerSelection } from "./selection";
 
 export function ComputerShell({ mounted, visible }: DirectoryLifecycle): JSX.Element {
-  const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
+  const compact = useCompactLayout();
+  const location = useLocation();
+  const nav = useNav();
+  const lastSelectedHostId = useRef<string | null>(null);
+  const selectedHostId = new URLSearchParams(location.search).get("computer");
+  const setSelectedHostId = (id: string | null, replace = false) =>
+    nav.go(id ? `/computers?computer=${encodeURIComponent(id)}` : "/computers", { replace });
   const [newComputerOpen, setNewComputerOpen] = useState(false);
 
   const hostsQuery = useHostsQuery();
@@ -17,21 +26,24 @@ export function ComputerShell({ mounted, visible }: DirectoryLifecycle): JSX.Ele
   const selectedHost = hosts.find((host) => host.id === selectedHostId) ?? null;
 
   useEffect(() => {
+    if (compact || location.pathname !== "/computers") return;
     const next = resolveComputerSelection(
       hosts.map((host) => host.id),
-      selectedHostId,
+      selectedHostId ?? lastSelectedHostId.current,
       localHostId,
     );
 
+    lastSelectedHostId.current = next;
     if (next !== selectedHostId) {
-      setSelectedHostId(next);
+      setSelectedHostId(next, true);
     }
-  }, [hosts, localHostId, selectedHostId]);
+  }, [compact, location.pathname, hosts, localHostId, selectedHostId, nav.go]);
 
   return (
     <>
       <DirectoryShell
         name="computers"
+        selected={selectedHostId !== null}
         mounted={mounted}
         visible={visible}
         sidebar={
@@ -40,7 +52,7 @@ export function ComputerShell({ mounted, visible }: DirectoryLifecycle): JSX.Ele
             localHostId={localHostId}
             isLoading={hostsQuery.isLoading}
             selectedHostId={selectedHostId}
-            onSelectHost={setSelectedHostId}
+            onSelectHost={(id) => setSelectedHostId(id)}
             onAddComputer={() => setNewComputerOpen(true)}
           />
         }
@@ -50,7 +62,7 @@ export function ComputerShell({ mounted, visible }: DirectoryLifecycle): JSX.Ele
       <NewComputerDialog
         open={newComputerOpen}
         onOpenChange={setNewComputerOpen}
-        onCreated={setSelectedHostId}
+        onCreated={(id) => setSelectedHostId(id)}
       />
     </>
   );

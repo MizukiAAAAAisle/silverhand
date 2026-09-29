@@ -9,6 +9,8 @@ import {
 } from '@silverhand/shared';
 import type { NativeBridge } from './bridge';
 import { NativeEventSocket } from './event-socket';
+import { createIOSNavigation } from './navigation';
+import { createIOSFiles } from './files';
 
 function parse(text?: string): unknown {
   try {
@@ -50,6 +52,7 @@ export function createIOSPlatform(
   };
 
   return {
+    navigation: createIOSNavigation(bridge),
     client: {
       getConnectionPolicy: async () => ({ allow_insecure_remote: false }),
       getConnectionInfo: async () => {
@@ -97,6 +100,8 @@ export function createIOSPlatform(
           serverUrl = profile.server_url ?? '';
           const state = await bridge.authState();
           serverUrl = state.serverUrl;
+          if (state.info.status !== 200)
+            throw new Error(`Server discovery returned HTTP ${state.info.status}`);
           const info = ServerInfoSchema.parse(parse(state.info.bodyText));
           const skew = compatibility(info);
           if (skew) return skew;
@@ -163,24 +168,6 @@ export function createIOSPlatform(
       },
       openEventSocket: (url) => new NativeEventSocket(bridge, url),
     },
-    files: {
-      openExternal: (url) => bridge.openExternal({ url }),
-      openAttachmentExternal: async () => ({
-        ok: false,
-        reason: 'Attachments are not available in this iOS preview',
-      }),
-      saveAttachment: async () => ({
-        ok: false,
-        reason: 'Attachments are not available in this iOS preview',
-      }),
-      savePngExport: async () => ({
-        ok: false,
-        error: 'Image export is not available in this iOS preview',
-      }),
-      copyPngExport: async () => ({
-        ok: false,
-        error: 'Image clipboard is not available in this iOS preview',
-      }),
-    },
+    files: createIOSFiles(bridge),
   };
 }

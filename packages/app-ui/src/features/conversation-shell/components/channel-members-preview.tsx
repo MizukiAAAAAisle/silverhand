@@ -1,14 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import type { MemberDto } from "@silverhand/shared";
+import { UserAvatar } from "@/components/user-avatar";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
+import { useUsersById } from "@/features/users/hooks";
 import { AgentAvatar } from "@/components/agent-avatar";
 
 export function memberPreviewCapacity(
   width: number,
   canAdd: boolean,
-): { columns: number; agents: number } {
+): { columns: number; members: number } {
   const columns = Math.max(1, Math.floor((width + 8) / 40));
-  return { columns, agents: columns * 2 - (canAdd ? 1 : 0) };
+  return { columns, members: columns * 2 - (canAdd ? 1 : 0) };
 }
 
 export function ChannelMembersPreview({
@@ -41,7 +44,23 @@ export function ChannelMembersPreview({
   }, []);
 
   const capacity = memberPreviewCapacity(width, canAdd);
-  const agents = members.filter((member) => member.kind === "agent").slice(0, capacity.agents);
+  const preview = members.slice(0, capacity.members);
+  const usersById = useUsersById();
+  const humanSources = useMemo(
+    () =>
+      members.flatMap((member) =>
+        member.kind === "human"
+          ? [
+              {
+                id: member.user_id,
+                avatar_url: member.avatar_url ?? usersById.get(member.user_id)?.avatar_url ?? null,
+              },
+            ]
+          : [],
+      ),
+    [members, usersById],
+  );
+  const humanAvatarUrls = useUserAvatarObjectUrls(humanSources);
 
   return (
     <div ref={container}>
@@ -49,22 +68,31 @@ export function ChannelMembersPreview({
         className="grid gap-2"
         style={{ gridTemplateColumns: `repeat(${capacity.columns}, 32px)` }}
       >
-        {agents.map((member) => (
+        {preview.map((member) => (
           <button
-            key={member.agent_id}
+            key={member.kind === "agent" ? `agent:${member.agent_id}` : `human:${member.user_id}`}
             type="button"
             onClick={onOpen}
             title={member.display_name || member.name}
             aria-label={`View member ${member.display_name || member.name}`}
             className="size-8"
           >
-            <AgentAvatar
-              runtime={member.runtime}
-              size={32}
-              className="border-(length:--border-avatar-width) border-border-avatar"
-              avatarObjectUrl={avatarUrls.get(member.agent_id) ?? null}
-              alt={member.display_name || member.name}
-            />
+            {member.kind === "agent" ? (
+              <AgentAvatar
+                runtime={member.runtime}
+                size={32}
+                className="border-(length:--border-avatar-width) border-border-avatar"
+                avatarObjectUrl={avatarUrls.get(member.agent_id) ?? null}
+                alt={member.display_name || member.name}
+              />
+            ) : (
+              <UserAvatar
+                size={32}
+                className="border-(length:--border-avatar-width) border-border-avatar"
+                avatarObjectUrl={humanAvatarUrls.get(member.user_id) ?? null}
+                alt={member.display_name || member.name}
+              />
+            )}
           </button>
         ))}
         {canAdd ? (

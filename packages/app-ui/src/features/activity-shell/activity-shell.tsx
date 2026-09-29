@@ -1,3 +1,4 @@
+import { useCompactLayout } from "@/navigation/layout";
 import { SectionLayer } from "@/components/layout/section-layer";
 import { ActivityView } from "@/features/activity-shell/activity-view";
 import { VerticalSplitter } from "@/components/layout/vertical-splitter";
@@ -15,6 +16,7 @@ export function ActivityShell({
   content: ConversationContent;
   fullscreen: boolean;
 }) {
+  const compact = useCompactLayout();
   const {
     appSection,
     selectedChannelId,
@@ -35,18 +37,22 @@ export function ActivityShell({
     <>
       {deferredSection === "activity" && (
         <SectionLayer visible={appSection !== "chat"}>
-          <ActivityView
-            width={selectedChannelId == null ? undefined : "var(--activity-list-width)"}
-            workspaceRefById={workspaceRefById}
-            agentsById={agentsById}
-            onJump={handleJumpToMessageStable}
-          />
+          {(!compact || selectedChannelId == null) && (
+            <ActivityView
+              width={selectedChannelId == null ? undefined : "var(--activity-list-width)"}
+              workspaceRefById={workspaceRefById}
+              agentsById={agentsById}
+              onJump={handleJumpToMessageStable}
+            />
+          )}
           {selectedChannelId != null ? (
             <>
-              <VerticalSplitter
-                onPointerDown={activityList.startResize}
-                active={activityList.isDragging}
-              />
+              {!compact && (
+                <VerticalSplitter
+                  onPointerDown={activityList.startResize}
+                  active={activityList.isDragging}
+                />
+              )}
               <ConversationStage
                 content={content}
                 ready={appSection === "activity"}

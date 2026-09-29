@@ -5,6 +5,8 @@ import type { ConversationIdentityResolution } from "@/features/conversations/co
 import type { PaneJumpModel, PaneReadModel } from "./conversation-shell-models";
 
 const h = vi.hoisted(() => ({
+  compact: false,
+  leaveGuard: undefined as (() => boolean) | undefined,
   route: {
     section: "chat",
     chatView: "channel",
@@ -17,6 +19,9 @@ const h = vi.hoisted(() => ({
     threadsListOpen: false,
     taskDetailId: null as string | null,
     threadRootId: null as string | null,
+    humanPanelId: null as string | null,
+    agentPanelId: null as string | null,
+    channelSettingsId: null as string | null,
   },
   workspaces: [] as WorkspaceListItem[],
   active: [] as ChannelListItem[],
@@ -41,6 +46,17 @@ const h = vi.hoisted(() => ({
   effects: [] as Array<() => void>,
 }));
 
+vi.mock("@/navigation/provider", () => ({
+  useNavigationDriver: () => ({
+    registerLeaveGuard: (guard: () => boolean) => {
+      h.leaveGuard = guard;
+      return () => {
+        h.leaveGuard = undefined;
+      };
+    },
+  }),
+}));
+vi.mock("@/navigation/layout", () => ({ useCompactLayout: () => h.compact }));
 vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
   useMemo: <T>(fn: () => T) => fn(),
@@ -186,6 +202,7 @@ function render(
   return model;
 }
 beforeEach(() => {
+  h.compact = false;
   vi.clearAllMocks();
   Object.assign(h.route, {
     section: "chat",
@@ -198,6 +215,10 @@ beforeEach(() => {
     threadsListOpen: false,
     taskDetailId: null,
     threadRootId: null,
+    humanPanelId: null,
+    agentPanelId: null,
+    channelSettingsId: null,
+    chatView: "channel",
   });
   h.workspaces = [
     {
@@ -279,6 +300,40 @@ describe("conversation authority read model", () => {
 });
 
 describe("conversation pane coordination", () => {
+  it("keeps pure thread focus but clears it when a higher-priority page covers the thread", () => {
+    h.compact = true;
+    h.route.threadRootId = "root";
+    expect(render().focusedConversation?.id).toBe("c");
+    h.route.filesListOpen = true;
+    expect(render().focusedConversation).toBeNull();
+    h.route.filesListOpen = false;
+    expect(render().focusedConversation?.id).toBe("c");
+  });
+  it("does not read or focus a side conversation covered by a person page", () => {
+    h.compact = true;
+    h.route.sideConversationId = "dm";
+    h.side = { status: "resolved", identity: { placement: "direct_pair", pair } };
+    h.route.humanPanelId = "person";
+    expect(render().focusedConversation).toBeNull();
+    expect(h.reads).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "filesListOpen",
+    "threadsListOpen",
+    "channelSettingsId",
+    "agentPanelId",
+    "humanPanelId",
+    "taskDetailId",
+  ] as const)("does not read or suppress notifications behind compact %s", (panel) => {
+    h.compact = true;
+    h.route.threadRootId = panel === "threadsListOpen" ? null : "preserved-root";
+    Object.assign(h.route, { [panel]: panel.endsWith("Open") ? true : "panel" });
+    const model = render();
+    expect(h.reads).not.toHaveBeenCalled();
+    expect(model.focusedConversation).toBeNull();
+  });
+
   it("marks each visible pane once, suppresses the hidden primary, and restores it once", () => {
     h.route.sideConversationId = "dm";
     h.side = { status: "resolved", identity: { placement: "direct_pair", pair } };
@@ -321,9 +376,11 @@ describe("conversation pane coordination", () => {
       threadsListOpen: false,
     });
     model.setTaskPaneEditing(true);
+    expect(h.leaveGuard?.()).toBe(false);
     model.requestCloseTaskPane();
     expect(h.closeTask).not.toHaveBeenCalled();
     model.setTaskPaneEditing(false);
+    expect(h.leaveGuard?.()).toBe(true);
     model.requestCloseTaskPane();
     expect(h.closeTask).toHaveBeenCalledTimes(1);
     h.route.section = "tasks";

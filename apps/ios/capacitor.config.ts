@@ -5,6 +5,6 @@ const config: CapacitorConfig = {
   appName: 'Silverhand',
   webDir: 'dist',
   loggingBehavior: 'none',
-  ios: { contentInset: 'automatic', preferredContentMode: 'mobile' },
+  ios: { contentInset: 'never', preferredContentMode: 'mobile' },
 };
 export default config;

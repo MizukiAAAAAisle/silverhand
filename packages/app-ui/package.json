@@ -51,7 +51,8 @@
     "tailwindcss": "^4.2.4",
     "@silverhand/client": "workspace:*",
     "@silverhand/shared": "workspace:*",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "@remix-run/router": "1.23.2"
   },
   "devDependencies": {
     "@types/react": "^18.3.11",

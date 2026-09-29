@@ -408,7 +408,7 @@ function TaskCard({
                 className="inline-flex min-w-0 items-center gap-0.5 text-text-secondary"
                 title={channelLabel}
               >
-                <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
+                <ChannelIcon variant="utility" density="sm" className="text-text-muted" />
                 <span className="min-w-0 truncate">{channelLabel}</span>
               </span>
             ) : null}

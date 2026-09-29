@@ -985,6 +985,7 @@ export function Composer({
 
   return (
     <form
+      data-composer
       onSubmit={onSubmit}
       onDrop={onDrop}
       onDragOver={onDragOver}
@@ -1039,48 +1040,42 @@ export function Composer({
           data-composer-shell
           className="flex flex-col overflow-hidden rounded-(--control-radius) border border-border-subtle bg-bg-floating focus-within:border-border-focus"
         >
-          <ComposerActivityHeader
-            conversationId={conversationId}
-            restrictToAgentIds={activityAgentIds}
-          />
-          <textarea
-            ref={ref}
-            value={draft}
-            data-composer-input
-            onChange={(e) => {
-              updateDraft(e.target.value, e.target.selectionStart ?? e.target.value.length);
-            }}
-            onKeyUp={(e) => updateCaret(e.currentTarget.selectionStart ?? 0)}
-            onClick={(e) => updateCaret(e.currentTarget.selectionStart ?? 0)}
-            onSelect={(e) => updateCaret(e.currentTarget.selectionStart ?? 0)}
-            onKeyDown={onKeyDown}
-            onPaste={onPaste}
-            onCompositionStart={() => setComposing(true)}
-            onCompositionEnd={() => setComposing(false)}
-            disabled={disabled}
-            placeholder={
-              archived
-                ? "This conversation is archived"
-                : readOnly
-                  ? "This conversation is read-only"
-                  : disabled
-                    ? "This conversation is closed"
-                    : // Hints follow the arm: `#channel` only where the arm offers
-                      // channels, `@member` only where it offers mentions — naming a
-                      // trigger whose picker opens on nothing promises a menu that
-                      // never appears (#task:2118). The withheld arm offers neither.
-                      offersChannels
-                      ? "Enter to send, Shift + Enter for a new line @member #channel"
-                      : offersMentions
-                        ? "Enter to send, Shift + Enter for a new line @member"
-                        : "Enter to send, Shift + Enter for a new line"
-            }
-            // No bottom/right padding to dodge buttons anymore — they
-            // live in the toolbar below. `min-h-[60px]` keeps the
-            // textarea at 3 rows; the toolbar adds its own ~32px
-            // below, so total composer height ≈ 92px (up from 76px)
-            className="block max-h-48 min-h-15 w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-          />
+          <div data-composer-editor>
+            <ComposerActivityHeader
+              conversationId={conversationId}
+              restrictToAgentIds={activityAgentIds}
+            />
+            <textarea
+              ref={ref}
+              value={draft}
+              data-composer-input
+              onChange={(e) => {
+                updateDraft(e.target.value, e.target.selectionStart ?? e.target.value.length);
+              }}
+              onKeyUp={(e) => updateCaret(e.currentTarget.selectionStart ?? 0)}
+              onClick={(e) => updateCaret(e.currentTarget.selectionStart ?? 0)}
+              onSelect={(e) => updateCaret(e.currentTarget.selectionStart ?? 0)}
+              onKeyDown={onKeyDown}
+              onPaste={onPaste}
+              onCompositionStart={() => setComposing(true)}
+              onCompositionEnd={() => setComposing(false)}
+              disabled={disabled}
+              placeholder={
+                archived
+                  ? "This conversation is archived"
+                  : readOnly
+                    ? "This conversation is read-only"
+                    : disabled
+                      ? "This conversation is closed"
+                      : "Message…"
+              }
+              // No bottom/right padding to dodge buttons anymore — they
+              // live in the toolbar below. `min-h-[60px]` keeps the
+              // textarea at 3 rows; the toolbar adds its own ~32px
+              // below, so total composer height ≈ 92px (up from 76px)
+              className="block max-h-48 min-h-15 w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            />
+          </div>
           <input
             ref={fileInputRef}
             type="file"
@@ -1092,11 +1087,9 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          {/* Toolbar row — sibling of the textarea, NOT overlaid. No
-           *  top border: the shared shell border already encloses
-           *  textarea + toolbar as one box, and an internal divider
-           *  read as two separate widgets stacked. */}
-          <div className="flex items-center justify-between px-2 py-1.5">
+          {/* Desktop frames the whole composer; compact layout frames only
+           *  the editor above this shared toolbar. */}
+          <div data-composer-toolbar className="flex items-center justify-between px-2 py-1.5">
             {/* One flat group, no dividers: peers that all put something into the
                 message. The `@` and `#` buttons are absent — not disabled — in an
                 arm that offers no such candidates: the withheld arm offers neither,

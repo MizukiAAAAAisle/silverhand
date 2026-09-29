@@ -20,33 +20,16 @@ async function start(): Promise<void> {
   await nativeBridge.addListener('foreground', () => {
     void resumeApp();
   });
-  configurePlatform(createIOSPlatform(nativeBridge, resetApplication));
-  const profile = await nativeBridge.getProfile();
-  if (profile.server_url) {
-    mountApp(root);
-    return;
-  }
-
-  const form = document.createElement('form');
-  form.className = 'ios-server-setup';
-  form.innerHTML =
-    '<h1>Connect to Silverhand</h1><label for="server">Server address</label><input id="server" name="server" type="url" inputmode="url" autocomplete="url" placeholder="https://your-server.example" required /><button type="submit">Connect</button><p role="alert"></p>';
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const input = form.querySelector('input')!;
-    const button = form.querySelector('button')!;
-    const message = form.querySelector('p')!;
-    button.disabled = true;
-    message.textContent = '';
-    try {
-      await nativeBridge.saveProfile({ serverUrl: input.value.trim() });
-      resetApplication();
-    } catch (error) {
-      message.textContent = String(error);
-      button.disabled = false;
-    }
+  // A docked keyboard already covers the home-indicator area. Do not add
+  // that screen-edge inset a second time above the keyboard/accessory bar.
+  await nativeBridge.addListener('keyboardChanged', ({ docked }) => {
+    const style = document.documentElement.style;
+    if (docked) style.setProperty('--input-safe-area-bottom', '0px');
+    else style.removeProperty('--input-safe-area-bottom');
   });
-  root.replaceChildren(form);
+  configurePlatform(createIOSPlatform(nativeBridge, resetApplication));
+  await nativeBridge.getProfile();
+  mountApp(root, { loginFirst: true });
 }
 
 void start().catch((error) => {

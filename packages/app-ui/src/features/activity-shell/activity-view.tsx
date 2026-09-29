@@ -1,3 +1,4 @@
+import { useListReadingPosition } from "@/navigation/view-memory";
 import { useMemo, useState } from "react";
 import { Activity as ActivityIcon, AlertTriangle, Check } from "lucide-react";
 import type { ActivityItemDto, MessageAuthorDto, AgentDto } from "@silverhand/shared";
@@ -348,6 +349,7 @@ export function ActivityView({
   agentsById,
   onJump,
 }: ActivityViewProps): JSX.Element {
+  const readingPosition = useListReadingPosition("activity-list");
   const { data, isLoading, isError } = useActivity();
   const [filter, setFilter] = useState<FilterKey>("all");
 
@@ -459,7 +461,7 @@ export function ActivityView({
         })}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3">
+      <div {...readingPosition} className="flex-1 overflow-y-auto px-4 py-3">
         {isLoading ? (
           <ActivityListSkeleton />
         ) : isError ? (

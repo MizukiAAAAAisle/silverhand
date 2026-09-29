@@ -25,6 +25,32 @@ final class ClientSessionTests: XCTestCase {
       200, #"{"signup_enabled":true,"desktop_api":{"current_epoch":4,"minimum_client_epoch":4}}"#)
   }
 
+  func testBundledDefaultNeverOverwritesSavedServerOrToken() throws {
+    let empty = MemoryStore()
+    let client = try ClientSession(store: empty, defaultServerURL: "https://silverhand.taobao.net")
+    XCTAssertEqual(try client.profile()["server_url"] as? String, "https://silverhand.taobao.net")
+    XCTAssertNil(empty.value, "Reading the bundled default must not persist or invent credentials")
+    let saved = MemoryStore(initial)
+    let restored = try ClientSession(store: saved, defaultServerURL: "https://silverhand.taobao.net")
+    XCTAssertEqual(try restored.profile()["server_url"] as? String, initial.serverURL)
+    XCTAssertEqual(saved.value?.token, "A-secret")
+  }
+
+  func testDefaultDiscoveryFailureNeverSendsLoginCredentials() async throws {
+    var paths: [String] = []
+    let client = try ClientSession(store: MemoryStore(), fetch: { request in
+      paths.append(request.url!.path)
+      return self.response(200, #"{"signup_enabled":true,"desktop_api":"invalid"}"#)
+    }, defaultServerURL: "https://silverhand.taobao.net")
+    _ = try client.profile()
+    do {
+      _ = try await client.authenticate(action: "login", body: #"{"password":"never-send"}"#)
+      XCTFail("Malformed discovery must block authentication")
+    } catch {}
+    XCTAssertEqual(paths.count, 1)
+    XCTAssertFalse(paths.contains { $0.contains("login") })
+  }
+
   func testOriginsAreHTTPSOnlyAndCanonical() throws {
     XCTAssertEqual(try ClientSession.origin("https://Example.com:443/"), "https://example.com")
     for url in [

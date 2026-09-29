@@ -1,3 +1,4 @@
+import { useCompactLayout } from "@/navigation/layout";
 import { useEffect, useRef } from "react";
 import { routes, useNav, useRouteState } from "@/router";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
@@ -12,6 +13,7 @@ export function AgentShell({
   onMessageAgent,
   onOpenConversation,
 }: DirectoryLifecycle & AgentNavigation): JSX.Element {
+  const compact = useCompactLayout();
   const route = useRouteState();
   const nav = useNav();
   const { data: agents = [] } = useAgents();
@@ -24,7 +26,7 @@ export function AgentShell({
   }, [agents, route.agentId]);
 
   useEffect(() => {
-    if (route.section !== "members") {
+    if (compact || route.section !== "members") {
       return;
     }
 
@@ -38,11 +40,12 @@ export function AgentShell({
     if (target) {
       nav.go(routes.membersAgent(target), { replace: true });
     }
-  }, [agents, route.section, route.agentId, route.userId, nav]);
+  }, [compact, agents, route.section, route.agentId, route.userId, nav]);
 
   return (
     <DirectoryShell
       name="members"
+      selected={Boolean(route.agentId || route.userId)}
       mounted={mounted}
       visible={visible}
       sidebar={

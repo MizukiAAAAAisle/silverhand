@@ -1,0 +1,120 @@
+import { showsTabBar } from "@/navigation/presentation";
+import { useLocation } from "react-router-dom";
+import { useEffect } from "react";
+import { createPortal } from "react-dom";
+import { useMobileHeaderTarget } from "./mobile-header-slot";
+import { getPlatform } from "@/platform";
+import type { CSSProperties } from "react";
+import {
+  ArrowLeft,
+  Activity,
+  MessagesSquare,
+  ListTodo,
+  MoreHorizontal,
+  Monitor,
+  Settings,
+  Users,
+} from "lucide-react";
+import { AppDropdownMenu, AppDropdownMenuItem } from "@/components/menus/app-context-menu";
+import { useNavigationDriver } from "@/navigation/provider";
+import { useNav, useRouteState } from "@/router";
+import type { AppSection } from "./nav-rail";
+
+export function MobileHeader({ hideFallback = false }: { hideFallback?: boolean }) {
+  const target = useMobileHeaderTarget();
+  const { back, canBack } = useNavigationDriver();
+  const route = useRouteState();
+  const windowChrome = Boolean(getPlatform().shell);
+  const title =
+    route.section === "chat" ? "Chats" : route.section[0]!.toUpperCase() + route.section.slice(1);
+  const backButton = canBack ? (
+    <button
+      type="button"
+      className="mobile-back no-drag focus-outline"
+      aria-label="Back"
+      onClick={back}
+    >
+      <span className="mobile-back-icon">
+        <ArrowLeft size={18} />
+      </span>
+    </button>
+  ) : null;
+  if (hideFallback && !windowChrome) return null;
+  if (target && !windowChrome) return createPortal(backButton, target);
+  return (
+    <header
+      className="mobile-header"
+      style={
+        windowChrome
+          ? ({
+              WebkitAppRegion: "drag",
+              paddingLeft: "var(--titlebar-controls-safe-width)",
+            } as CSSProperties)
+          : undefined
+      }
+    >
+      {backButton}
+      <span>{title}</span>
+    </header>
+  );
+}
+
+export function MobileTabBar({ dots }: { dots?: Partial<Record<AppSection, boolean>> }) {
+  const navigation = useNavigationDriver();
+  const nav = useNav();
+  const location = useLocation();
+  useEffect(() => {
+    void getPlatform().navigation?.badges({
+      session: navigation.session,
+      chat: dots?.chat,
+      activity: dots?.activity,
+      tasks: dots?.tasks,
+    });
+  }, [navigation.session, dots]);
+  if (getPlatform().navigation || !showsTabBar(location.pathname, location.search)) return null;
+  return (
+    <nav className="mobile-tabbar" aria-label="Main navigation">
+      {(
+        [
+          { tab: "chat", label: "Chats", Icon: MessagesSquare },
+          { tab: "activity", label: "Activity", Icon: Activity },
+          { tab: "tasks", label: "Tasks", Icon: ListTodo },
+        ] as const
+      ).map(({ tab, label, Icon }) => (
+        <button
+          type="button"
+          className="mobile-tab focus-outline"
+          key={tab}
+          aria-current={navigation.tab === tab ? "page" : undefined}
+          onClick={() => nav.navigate({ kind: "tab", tab })}
+        >
+          <span className="relative">
+            <Icon size={20} />
+            {dots?.[tab] && <span className="mobile-attention" aria-label="Unread" />}
+          </span>
+          <span>{label}</span>
+        </button>
+      ))}
+      <AppDropdownMenu
+        side="top"
+        contentClassName="mobile-more-menu"
+        trigger={
+          <button type="button" className="mobile-tab focus-outline">
+            <MoreHorizontal size={20} />
+            <span>More</span>
+          </button>
+        }
+      >
+        <AppDropdownMenuItem icon={<Users size={18} />} onSelect={() => nav.toMembers()}>
+          Members
+        </AppDropdownMenuItem>
+        <AppDropdownMenuItem icon={<Monitor size={18} />} onSelect={() => nav.toComputers()}>
+          Computers
+        </AppDropdownMenuItem>
+        <AppDropdownMenuItem icon={<Settings size={18} />} onSelect={() => nav.toSettings()}>
+          Settings
+        </AppDropdownMenuItem>
+      </AppDropdownMenu>
+    </nav>
+  );
+}

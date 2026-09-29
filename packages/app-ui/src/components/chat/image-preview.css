@@ -1,0 +1,67 @@
+/* Full-screen media surfaces share the existing modal ownership and content. */
+@media (max-width: 767px) {
+  :root [data-modal-shell][data-image-export-preview],
+  :root [data-modal-shell][data-image-lightbox] {
+    inset: 0;
+    transform: none;
+    margin: 0;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: var(--bg-base);
+    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+  }
+  :root [data-image-lightbox] > [data-modal-divider] {
+    border: 0;
+  }
+  [data-image-export-scroll] {
+    min-height: 0;
+    min-width: 0;
+    overscroll-behavior: contain;
+  }
+  [data-image-export-actions] > * {
+    flex: 1;
+    min-height: 36px;
+    font-size: 14px;
+  }
+  [data-image-lightbox] > div:has(> img) {
+    min-height: 0 !important;
+  }
+  [data-image-lightbox] > div:last-child {
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+  [data-image-lightbox] input[type="range"] {
+    display: none;
+  }
+}
+
+/* Export surfaces cannot rely on scrolling to reveal the rest of a code block
+   or table: all content must be painted into the captured bitmap. */
+[data-screenshot-root][data-compact-export] .markdown-body .code-block pre {
+  max-height: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: visible;
+}
+[data-compact-export] table {
+  width: 100%;
+  table-layout: fixed;
+}
+[data-compact-export] th,
+[data-compact-export] td {
+  overflow-wrap: anywhere;
+}
+[data-compact-export] [data-conversation-title] {
+  max-width: 100%;
+}
+
+[data-screenshot-root][data-compact-export] .markdown-body .code-block pre code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
