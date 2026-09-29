@@ -240,20 +240,11 @@
     display: none;
   }
 
-  /* Chats list: New workspace scrolls with the list as a quiet row instead of
-     a pinned primary slab above the tab bar. */
+  /* Keep the shared primary button, but let it follow the compact list content. */
   [data-layout="compact"] [data-sidebar-cta-slot] {
     position: static;
-    padding-top: 12px;
+    margin-top: 0;
     background: none;
-  }
-  :root [data-layout="compact"] [data-sidebar-cta] {
-    justify-content: flex-start;
-    border-color: transparent;
-    background: transparent;
-    box-shadow: none;
-    color: var(--text-muted);
-    font-weight: 500;
   }
 
   /* Touch-sized sidebar rows. */
