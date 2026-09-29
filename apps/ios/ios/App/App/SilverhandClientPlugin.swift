@@ -10,7 +10,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     "getProfile", "saveProfile", "clearProfile", "authState", "authenticate", "logout", "request",
     "openSocket", "sendSocket", "closeSocket", "openExternal",
     "navigationSync", "navigationCapture", "navigationFinish", "navigationReset",
-    "navigationBadges", "sharePng",
+    "navigationBadges", "sharePng", "saveAttachment",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
@@ -50,6 +50,25 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
   }
 
   deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) } }
+
+  @objc func saveAttachment(_ call: CAPPluginCall) {
+    Task { @MainActor in
+      guard let encoded = call.getString("base64"), let bytes = Data(base64Encoded: encoded),
+        let filename = call.getString("filename"),
+        let host = self.bridge?.viewController, host.view.window != nil,
+        host.presentedViewController == nil
+      else {
+        call.reject("Unable to present file saving")
+        return
+      }
+      do {
+        let picker = try AttachmentExportController(bytes: bytes, filename: filename) { completed in
+          call.resolve(["completed": completed])
+        }
+        host.present(picker, animated: true)
+      } catch { call.reject(error.localizedDescription) }
+    }
+  }
 
   @objc func sharePng(_ call: CAPPluginCall) {
     Task { @MainActor in

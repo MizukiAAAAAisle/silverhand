@@ -13,6 +13,56 @@ import XCTest
 /// Requires the isolated simulator CA and scripts/ios-acceptance-server.mjs.
 @MainActor
 final class NetworkAcceptanceTests: XCTestCase {
+  #if canImport(App)
+    func testAttachmentExportPreservesBytesAndCleansUpOnce() throws {
+      let bytes = Data([0, 255, 128, 1])
+      var results: [Bool] = []
+      let picker = try AttachmentExportController(bytes: bytes, filename: "报告.zip") { results.append($0) }
+      XCTAssertEqual(picker.sourceURL.lastPathComponent, "报告.zip")
+      XCTAssertEqual(try Data(contentsOf: picker.sourceURL), bytes)
+      picker.documentPicker(picker, didPickDocumentsAt: [URL(fileURLWithPath: "/destination/报告.zip")])
+      picker.documentPickerWasCancelled(picker)
+      XCTAssertEqual(results, [true])
+      XCTAssertFalse(FileManager.default.fileExists(atPath: picker.sourceURL.deletingLastPathComponent().path))
+    }
+
+    func testAttachmentExportCancelAndPathContainment() throws {
+      var results: [Bool] = []
+      let picker = try AttachmentExportController(bytes: Data(), filename: "../../outside.txt") { results.append($0) }
+      XCTAssertEqual(picker.sourceURL.lastPathComponent, "outside.txt")
+      XCTAssertTrue(picker.sourceURL.deletingLastPathComponent().lastPathComponent.hasPrefix("silverhand-export-"))
+      picker.documentPickerWasCancelled(picker)
+      picker.documentPickerWasCancelled(picker)
+      XCTAssertEqual(results, [false])
+      XCTAssertFalse(FileManager.default.fileExists(atPath: picker.sourceURL.path))
+    }
+
+    func testAttachmentExportUnpresentedDeallocationRemovesTemporaryFile() throws {
+      var picker: AttachmentExportController? = try AttachmentExportController(bytes: Data([1]), filename: "file.bin") { _ in }
+      let url = picker!.sourceURL
+      picker = nil
+      XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testAttachmentExportProgrammaticDismissalCompletesCancellation() async throws {
+      let window = UIWindow(frame: UIScreen.main.bounds)
+      let host = UIViewController()
+      window.rootViewController = host
+      window.makeKeyAndVisible()
+      defer { window.isHidden = true }
+      var results: [Bool] = []
+      let picker = try AttachmentExportController(bytes: Data([1]), filename: "file.bin") { results.append($0) }
+      await withCheckedContinuation { continuation in
+        host.present(picker, animated: false) { continuation.resume() }
+      }
+      await withCheckedContinuation { continuation in
+        host.dismiss(animated: false) { continuation.resume() }
+      }
+      XCTAssertEqual(results, [false])
+      XCTAssertFalse(FileManager.default.fileExists(atPath: picker.sourceURL.path))
+    }
+  #endif
+
   private func json(_ value: [String: Any]) throws -> String {
     String(data: try JSONSerialization.data(withJSONObject: value), encoding: .utf8)!
   }

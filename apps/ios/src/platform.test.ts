@@ -39,6 +39,7 @@ function harness() {
     authenticate: vi.fn(),
     logout: vi.fn(),
     addListener: vi.fn(async () => ({ remove: vi.fn() })),
+    saveAttachment: vi.fn(async () => ({ completed: true })),
     sharePng: vi.fn(async () => ({ completed: true })),
     openExternal: vi.fn(),
     openSocket: vi.fn(),
@@ -50,6 +51,22 @@ function harness() {
 }
 
 describe("iOS platform", () => {
+  it("saves arbitrary original bytes and filename, with silent cancellation and explicit failure", async () => {
+    const { native, platform } = harness();
+    const bytes = Uint8Array.from({ length: 20000 }, (_, i) => i % 256);
+    const input = { filename: "报告.zip", bytes };
+    expect(await platform.files.saveAttachment(input)).toEqual({ ok: true });
+    const payload = native.saveAttachment.mock.calls[0] as unknown as [
+      { filename: string; base64: string },
+    ];
+    expect(payload[0].filename).toBe(input.filename);
+    expect(Uint8Array.from(atob(payload[0].base64), (c) => c.charCodeAt(0))).toEqual(bytes);
+    native.saveAttachment.mockResolvedValueOnce({ completed: false });
+    expect(await platform.files.saveAttachment(input)).toEqual({ ok: false, canceled: true });
+    native.saveAttachment.mockRejectedValueOnce(new Error("Disk full"));
+    expect(await platform.files.saveAttachment(input)).toEqual({ ok: false, reason: "Disk full" });
+  });
+
   it("orders native presentation commands and continues after a failed capture", async () => {
     const { native, platform } = harness();
     let rejectCapture!: (error: Error) => void;
@@ -156,9 +173,6 @@ describe("iOS platform", () => {
     await expect(
       platform.client.backendUpload({ path: "/api/upload", fields: [], files: [] }),
     ).rejects.toThrow("not available");
-    expect(
-      await platform.files.saveAttachment({ filename: "file", bytes: new Uint8Array() }),
-    ).toMatchObject({ ok: false });
   });
 
   it("keeps native admission and route resource tied to shared authority", () => {
