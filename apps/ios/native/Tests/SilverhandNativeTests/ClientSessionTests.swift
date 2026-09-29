@@ -27,13 +27,22 @@ final class ClientSessionTests: XCTestCase {
 
   func testBundledDefaultNeverOverwritesSavedServerOrToken() throws {
     let empty = MemoryStore()
-    let client = try ClientSession(store: empty, defaultServerURL: "https://silverhand.taobao.net")
-    XCTAssertEqual(try client.profile()["server_url"] as? String, "https://silverhand.taobao.net")
+    let client = try ClientSession(store: empty, defaultServerURL: "https://silverhand.ai")
+    XCTAssertEqual(try client.profile()["server_url"] as? String, "https://silverhand.ai")
     XCTAssertNil(empty.value, "Reading the bundled default must not persist or invent credentials")
     let saved = MemoryStore(initial)
-    let restored = try ClientSession(store: saved, defaultServerURL: "https://silverhand.taobao.net")
+    let restored = try ClientSession(store: saved, defaultServerURL: "https://silverhand.ai")
     XCTAssertEqual(try restored.profile()["server_url"] as? String, initial.serverURL)
     XCTAssertEqual(saved.value?.token, "A-secret")
+  }
+
+  func testNoBundledDefaultRequiresServerSelectionUnlessSaved() throws {
+    let empty = MemoryStore()
+    let client = try ClientSession(store: empty)
+    XCTAssertTrue(try client.profile()["server_url"] is NSNull)
+    XCTAssertNil(empty.value)
+    let restored = try ClientSession(store: MemoryStore(initial))
+    XCTAssertEqual(try restored.profile()["server_url"] as? String, initial.serverURL)
   }
 
   func testDefaultDiscoveryFailureNeverSendsLoginCredentials() async throws {
@@ -41,7 +50,7 @@ final class ClientSessionTests: XCTestCase {
     let client = try ClientSession(store: MemoryStore(), fetch: { request in
       paths.append(request.url!.path)
       return self.response(200, #"{"signup_enabled":true,"desktop_api":"invalid"}"#)
-    }, defaultServerURL: "https://silverhand.taobao.net")
+    }, defaultServerURL: "https://silverhand.ai")
     _ = try client.profile()
     do {
       _ = try await client.authenticate(action: "login", body: #"{"password":"never-send"}"#)

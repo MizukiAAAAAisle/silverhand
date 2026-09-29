@@ -603,7 +603,7 @@ final class NetworkAcceptanceTests: XCTestCase {
       let legacyConnect =
         try await view.evaluateJavaScript("!!document.querySelector('.ios-server-setup')") as? Bool
       XCTAssertEqual(legacyConnect, false, "A fresh install must open login directly")
-      try await waitFor("document.body.innerText.includes('https://silverhand.taobao.net')")
+      try await waitFor("document.body.innerText.includes('https://silverhand.ai')")
     }
   #endif
 

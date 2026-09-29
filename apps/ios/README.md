@@ -12,14 +12,22 @@ and first-launch setup complete, and an installed iOS simulator runtime.
 
 ```sh
 pnpm install
-pnpm --filter @silverhand/ios sync
+SILVERHAND_DEFAULT_SERVER_URL=https://your-server.example pnpm --filter @silverhand/ios sync
 pnpm --filter @silverhand/ios open
 ```
 
 Choose the App scheme and a simulator. Simulator builds need normal ad-hoc
 signing (`CODE_SIGN_IDENTITY=-`), not `CODE_SIGNING_ALLOWED=NO`: Keychain access
-requires a signed process. A physical device requires the user's Development
-Team and provisioning choice; no team or signing identity is committed.
+requires a signed process. A physical device requires a Development Team and
+provisioning choice valid for the configured bundle identifier.
+
+`SILVERHAND_DEFAULT_SERVER_URL` is optional and is captured by Capacitor during
+`sync` (or `cap copy ios`), then bundled for the native client. It must be an HTTPS
+origin without credentials, query, fragment or a path. An invalid value fails the
+sync; an unset/blank value supplies no default. It is not a secret and does not
+change the WebView URL. Xcode builds use the last synced value, not the shell or
+scheme's runtime environment. Re-run sync with the variable to change it, or
+without the variable to remove it. A plain `pnpm build` only rebuilds Web assets.
 
 ```sh
 xcodebuild -project apps/ios/ios/App/App.xcodeproj -scheme App \
@@ -41,8 +49,8 @@ Desktop keeps its simultaneous panes. Tab return paths and reading positions liv
 inside the authenticated session; composer drafts and send identities retain their
 existing conversation/thread ownership. The four existing themes supply the UI tokens.
 
-Fresh installs open login directly using `https://silverhand.taobao.net`. A saved
-custom origin always wins. Login exposes Change server before authentication;
+Fresh installs use the build's default server if configured; otherwise they ask
+for a server address. A saved custom origin always wins. Login exposes Change server before authentication;
 Settings → Connection remains available after login. Discovery must succeed before
 submitting credentials; network/TLS errors leave retry and address repair available.
 

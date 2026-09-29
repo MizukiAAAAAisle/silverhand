@@ -5,29 +5,6 @@ locally. It builds embedded and remote-only apps in separate standard
 `macos-15` ARM64 jobs. It does not build or deploy the standalone ECS server,
 publish npm packages, bump versions, or create tags.
 
-## Repository setup
-
-Configure the non-secret repository Actions variable (not an Environment):
-
-```sh
-gh variable set SILVERHAND_REMOTE_SERVER_URL --body 'https://silverhand.taobao.net'
-gh variable list
-```
-
-Run this in the intended repository, or pass `--repo OWNER/REPO`. Missing or
-invalid HTTPS origins fail preflight. Credentials, paths, query strings and
-loopback URLs are rejected. The URL is baked into the remote-only app; changing
-the variable does not alter previously built apps. Embedded keeps its existing
-local default.
-
-No Apple signing secrets are needed: existing ad-hoc signing is retained, with
-no Apple notarization. These builds are not Developer ID distribution builds;
-macOS Gatekeeper may require user intervention after downloading.
-
-Allow the pinned actions in repository/organization Actions policy. Build jobs
-have read-only repository permissions; only the tag release job gets
-`contents: write` through `GITHUB_TOKEN`. No personal token is needed.
-
 ## Triggering
 
 - **Manual:** Actions → Desktop DMG → Run workflow. This produces both variants

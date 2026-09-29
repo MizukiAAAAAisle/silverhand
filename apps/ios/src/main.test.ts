@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
 const h = vi.hoisted(() => ({
   mount: vi.fn(),
   configure: vi.fn(),
@@ -8,15 +9,19 @@ const h = vi.hoisted(() => ({
   setProperty: vi.fn(),
   removeProperty: vi.fn(),
 }));
+
 vi.mock('@silverhand/app-ui', () => ({
   mountApp: h.mount,
   configurePlatform: h.configure,
   resumeApp: vi.fn(),
 }));
+
 vi.mock('./bridge', () => ({
   nativeBridge: { getProfile: h.profile, saveProfile: h.save, addListener: h.listen },
 }));
+
 vi.mock('./platform', () => ({ createIOSPlatform: () => ({}) }));
+
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
@@ -25,6 +30,7 @@ beforeEach(() => {
     documentElement: { style: { setProperty: h.setProperty, removeProperty: h.removeProperty } },
   });
 });
+
 describe('iOS entry', () => {
   it('uses keyboard spacing only while the native keyboard is docked', async () => {
     h.profile.mockResolvedValue({});
@@ -37,7 +43,8 @@ describe('iOS entry', () => {
     expect(h.removeProperty).toHaveBeenLastCalledWith('--input-safe-area-bottom');
     expect(h.mount).toHaveBeenCalledTimes(1);
   });
-  it.each(['https://silverhand.taobao.net', 'https://my-server.example'])(
+
+  it.each(['https://silverhand.ai', 'https://my-server.example'])(
     'opens the shared login directly for %s without rewriting its profile',
     async (url) => {
       h.profile.mockResolvedValue({ server_url: url, updated_at: 0 });

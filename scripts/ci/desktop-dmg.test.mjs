@@ -9,7 +9,7 @@ const valid = {
   version: '0.4.1',
   event: 'push',
   ref: 'refs/tags/desktop-v0.4.1',
-  remoteUrl: 'https://silverhand.taobao.net',
+  remoteUrl: 'https://silverhand.ai',
 };
 
 test('exact Desktop version tags and manual branch builds are accepted', () => {

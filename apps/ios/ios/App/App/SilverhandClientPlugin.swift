@@ -82,7 +82,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
 
   @MainActor private func client() throws -> ClientSession {
     if let session { return session }
-    let client = try ClientSession(defaultServerURL: "https://silverhand.taobao.net")
+    let client = try ClientSession(defaultServerURL: getConfig().getString("defaultServerURL"))
     client.onSocket = { [weak self] event in self?.notifyListeners("socket", data: event) }
     client.onInvalidated = { [weak self] in
       self?.navigationHost?.invalidate()
