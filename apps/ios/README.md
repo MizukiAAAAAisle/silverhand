@@ -74,8 +74,11 @@ submitting credentials; network/TLS errors leave retry and address repair availa
   and refreshes snapshots in the existing React tree, preserving composer drafts
   and pending send identities. Transient network failures retain the mounted
   conversation. Background delivery is not promised.
-- PNG export uses the native share sheet. Direct PNG save/copy and native attachment
-  open/save remain unsupported; ordinary file selection uses WebKit. Desktop-only
+- PNG export uses the native share sheet. Attachment Download reads original bytes
+  through the authenticated backend and opens the system document picker to save a
+  copy in Files. Cancellation is silent; completion or dismissal removes the
+  temporary source file. Direct PNG save/copy and opening attachments in external
+  apps remain unsupported; ordinary file selection uses WebKit. Desktop-only
   capabilities are absent, never replaced with successful stubs.
 
 ## Tests
