@@ -24,7 +24,7 @@ if (defaultServerURL) {
 }
 
 const config: CapacitorConfig = {
-  appId: "com.silverhand.ios",
+  appId: "com.silverhand-ai.ios",
   appName: "Silverhand",
   webDir: "dist",
   loggingBehavior: "none",

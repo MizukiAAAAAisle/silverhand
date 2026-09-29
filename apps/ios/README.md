@@ -40,10 +40,12 @@ CapApp-SPM; the application separately references the local `native` package, so
 sync never overwrites the session implementation. Commit Package.resolved.
 `vite build` generates the native wire contract from the shared API/epoch authority.
 
+For Release archives and TestFlight preparation, see [TESTFLIGHT.md](./TESTFLIGHT.md).
+
 ## Phone navigation
 
 Compact windows use full-screen list → conversation → thread/attachments/settings
-pages, with React Chats / Activity / Tasks buttons and an upward More menu for
+pages, with native Chats / Activity / Tasks tabs and an upward More menu for
 Members / Computers / Settings. The shared router resolves semantic destinations;
 Desktop keeps its simultaneous panes. Tab return paths and reading positions live
 inside the authenticated session; composer drafts and send identities retain their
@@ -72,8 +74,9 @@ submitting credentials; network/TLS errors leave retry and address repair availa
   and refreshes snapshots in the existing React tree, preserving composer drafts
   and pending send identities. Transient network failures retain the mounted
   conversation. Background delivery is not promised.
-- Attachments/upload/export/clipboard return explicit unsupported errors in this
-  phase. Desktop capabilities are absent, never replaced with successful stubs.
+- PNG export uses the native share sheet. Direct PNG save/copy and native attachment
+  open/save remain unsupported; ordinary file selection uses WebKit. Desktop-only
+  capabilities are absent, never replaced with successful stubs.
 
 ## Tests
 
@@ -121,7 +124,7 @@ Connect a development-enabled iPhone, select the user's signing Team, and repeat
 login/WS/message/suspend/resume/switch-server checks with an isolated, reachable
 HTTPS server. Verify keyboard and message composer behavior on-device. Full-screen navigation and separate parent/thread drafts are covered by the hosted
 WebView tests; real keyboard, touch and OS suspension still require device acceptance.
-Attachment capabilities, native Tab Bar, TestFlight and APNs remain outside this phase.
+TestFlight upload/review, remaining attachment capabilities and APNs require separate acceptance.
 
 References: [Capacitor local Swift plugins](https://capacitorjs.com/docs/ios/custom-code),
 [iOS setup](https://capacitorjs.com/docs/ios),
