@@ -88,6 +88,16 @@ export class NavigationStore {
     this.tab = tab;
     this.publish();
   };
+  /** Desktop section entry is a destination, unlike restoring a mobile Tab.
+   * Publish only the final entry so no saved utility page flashes in between. */
+  openSection = (tab: MainTab) => {
+    if (this.disposed) return;
+    const changedTab = this.tab !== tab;
+    this.tab = tab;
+    const root = `/${tab}`;
+    if (urlOf(this.history.location) !== root) this.go(root);
+    else if (changedTab) this.publish();
+  };
   external = (url: string) => {
     if (this.disposed) return;
     const tab = mainTab(url);

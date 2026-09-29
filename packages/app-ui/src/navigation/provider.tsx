@@ -21,6 +21,7 @@ type Driver = {
   go: (url: string, options?: { replace?: boolean; pane?: boolean }) => void;
   back: () => void;
   selectTab: (tab: MainTab) => void;
+  openSection: (tab: MainTab) => void;
   tab: MainTab;
   canBack: boolean;
   registerLeaveGuard: (guard: () => boolean) => () => void;
@@ -59,6 +60,9 @@ export function NavigationProvider({
       },
       selectTab: (tab) => {
         void run(() => store.selectTab(tab));
+      },
+      openSection: (tab) => {
+        void run(() => store.openSection(tab));
       },
       tab: snapshot.tab,
       canBack: snapshot.canBack,

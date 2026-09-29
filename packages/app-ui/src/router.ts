@@ -982,6 +982,7 @@ export function buildAgentPanelOpenUrl(pathname: string, search: string, agentId
  */
 export type NavigationTarget =
   | { kind: "tab"; tab: MainTab }
+  | { kind: "section"; tab: MainTab }
   | { kind: "url"; url: string }
   | { kind: "conversation"; conversationId: string; workspaceId?: string }
   | { kind: "thread"; rootMessageId: string; conversationId?: string; workspaceId?: string }
@@ -1013,6 +1014,7 @@ export function resolveNavigationTarget(
   }
   switch (target.kind) {
     case "tab":
+    case "section":
       return `/${target.tab}`;
     case "url":
       return target.url;
@@ -1044,12 +1046,16 @@ export function resolveNavigationTarget(
 }
 
 export function useNav() {
-  const { go: drive, back, selectTab } = useNavigationDriver();
+  const { go: drive, back, selectTab, openSection } = useNavigationDriver();
   const { pathname, search } = useLocation();
   const navigate = useCallback(
     (target: NavigationTarget, opts?: { replace?: boolean }) => {
       if (target.kind === "tab") {
         selectTab(target.tab);
+        return;
+      }
+      if (target.kind === "section") {
+        openSection(target.tab);
         return;
       }
       const pane = target.kind !== "url" && target.kind !== "conversation";
@@ -1058,7 +1064,7 @@ export function useNav() {
         pane,
       });
     },
-    [drive, selectTab, pathname, search],
+    [drive, selectTab, openSection, pathname, search],
   );
   const go = useCallback(
     (url: string, opts?: { replace?: boolean }) => navigate({ kind: "url", url }, opts),
@@ -1069,11 +1075,11 @@ export function useNav() {
       navigate,
       navigateBack: () => back(),
       go,
-      toChat: () => navigate({ kind: "tab", tab: "chat" }),
+      toChat: () => navigate({ kind: "section", tab: "chat" }),
       toChatSearch: (seed?: Parameters<typeof routes.chatSearch>[0]) => go(routes.chatSearch(seed)),
       toChatSaved: () => go(routes.chatSaved()),
       toChatArchived: () => go(routes.chatArchived()),
-      toActivity: () => navigate({ kind: "tab", tab: "activity" }),
+      toActivity: () => navigate({ kind: "section", tab: "activity" }),
       toWorkspace: (id: string) => go(routes.chatWorkspace(id)),
       toChannel: (workspaceId: string, conversationId: string) =>
         navigate({ kind: "conversation", workspaceId, conversationId }),
@@ -1082,7 +1088,7 @@ export function useNav() {
       toMembers: (id?: string) => go(id ? routes.membersAgent(id) : routes.members()),
       toMembersUser: (id: string) => go(routes.membersUser(id)),
       toComputers: () => go(routes.computers()),
-      toTasks: () => navigate({ kind: "tab", tab: "tasks" }),
+      toTasks: () => navigate({ kind: "section", tab: "tasks" }),
       toSettings: () => go(routes.settings()),
       openSide: (conversationId: string) => navigate({ kind: "side-conversation", conversationId }),
       closeSide: () => drive(withSideQuery(pathname, search, null), { replace: true }),
