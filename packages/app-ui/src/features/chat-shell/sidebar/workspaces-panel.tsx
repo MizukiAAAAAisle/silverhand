@@ -204,7 +204,7 @@ function WorkspaceHeaderRow({
   return (
     <WorkspaceContextMenu
       trigger={
-        <div data-sidebar-workspace-row className="group/wsbranch">
+        <div className="group/wsbranch">
           {row}
         </div>
       }

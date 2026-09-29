@@ -6,3 +6,5 @@ ios/App/App.xcodeproj/xcuserdata/
 ios/App/App.xcodeproj/project.xcworkspace/xcuserdata/
 
 native/.build/
+# Per-user Xcode scheme state for the native Swift package.
+native/.swiftpm/xcode/xcuserdata/

@@ -93,6 +93,9 @@
   flex: 1;
 }
 @media (max-width: 767px) {
+  .mobile-chat-list .chat-sidebar-brand {
+    display: flex;
+  }
   /* iOS focus zoom depends on the input font size. Keep this document-wide:
      portaled popovers are outside the app shell and dialog subtrees. */
   :root :is(input, textarea, select) {
@@ -117,6 +120,9 @@
   }
   :root [data-layout="compact"] [data-panel] {
     --pane-bg: var(--bg-base);
+  }
+  [data-layout="compact"] main[data-panel] > header {
+    border-bottom-width: 0;
   }
   [data-layout="compact"] [data-app-frame],
   :root [data-layout="compact"] [data-section-sheet],
@@ -248,15 +254,6 @@
     box-shadow: none;
     color: var(--text-muted);
     font-weight: 500;
-  }
-
-  /* Workspace rows are rows, not section headings. */
-  :root [data-layout="compact"] [data-sidebar-workspace-row] header {
-    font-family: var(--font-sans);
-    font-size: 15px;
-    font-weight: 500;
-    letter-spacing: 0;
-    text-transform: none;
   }
 
   /* Touch-sized sidebar rows. */

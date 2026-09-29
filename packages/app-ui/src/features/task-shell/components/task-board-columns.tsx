@@ -279,7 +279,11 @@ function KanbanColumn({
         </span>
       </button>
       {collapsed ? null : (
-        <div ref={bodyRef} data-tasks-column-body className="min-h-0 flex-auto overflow-y-auto p-2">
+        <div
+          ref={bodyRef}
+          data-tasks-column-body
+          className="min-h-0 flex-auto overflow-y-auto p-2 scrollbar-hide"
+        >
           {isLoading ? (
             <div role="status" aria-label="Loading tasks">
               <TaskCardsSkeleton />

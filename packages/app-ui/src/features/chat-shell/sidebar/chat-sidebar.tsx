@@ -1,4 +1,5 @@
 import { useListReadingPosition } from "@/navigation/view-memory";
+import { Brandmark } from "@/components/brand/brandmark";
 import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
 import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useMemo, type ReactNode } from "react";
@@ -138,6 +139,10 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
       width="var(--sidebar-width)"
       sidebar={
         <>
+          <header className="chat-sidebar-brand hidden h-14 shrink-0 items-center gap-2 px-2 text-text-primary">
+            <Brandmark className="size-6 shrink-0" />
+            <h1 className="text-xl font-bold">silverhand</h1>
+          </header>
           <nav
             {...readingPosition}
             className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto pb-1 pr-1"
