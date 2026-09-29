@@ -1,3 +1,4 @@
+import { getPlatform } from "@/platform";
 import { fetchAttachmentBytes } from "@/lib/api";
 import { AttachmentsSkeleton } from "./channel-list-skeletons";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -658,6 +659,14 @@ function AttachmentRow({
             filename + row lift (structural signal); no bg reversal. */}
         <button
           type="button"
+          disabled={
+            !isImage &&
+            !(
+              onOpenAttachment &&
+              attachmentPreviewKind(attachment.content_type, attachment.filename)
+            ) &&
+            !getPlatform().files.openAttachmentExternal
+          }
           onClick={() => {
             if (isImage) {
               void openImagePreview();

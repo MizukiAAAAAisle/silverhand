@@ -1,3 +1,4 @@
+import { getPlatform } from "@/platform";
 import { fetchAttachmentBytes } from "@/lib/api";
 import { type FocusEvent, useCallback, useEffect, useRef, useState } from "react";
 import dayjs from "dayjs";
@@ -1552,6 +1553,7 @@ function AttachmentTile({
       <div className="flex max-w-[min(320px,100%)] items-stretch overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating focus-outline-within">
         <button
           type="button"
+          disabled={!previewable && !getPlatform().files.openAttachmentExternal}
           onClick={previewable ? () => onOpenAttachment?.(attachment) : downloadAndOpen}
           className="group flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-xs text-text-secondary hover:text-text-primary focus:outline-none"
           title={error ?? `${attachment.filename} (${formatBytes(attachment.size)})`}

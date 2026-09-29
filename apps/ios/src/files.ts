@@ -15,10 +15,6 @@ export function createIOSFiles(bridge: NativeBridge): ClientPlatform["files"] {
       }
     },
     openExternal: (url) => bridge.openExternal({ url }),
-    openAttachmentExternal: async () => ({
-      ok: false,
-      reason: "Attachments are not available in this iOS preview",
-    }),
     saveAttachment: async ({ filename, bytes }) => {
       try {
         const { completed } = await bridge.saveAttachment({ filename, base64: encodeBytes(bytes) });

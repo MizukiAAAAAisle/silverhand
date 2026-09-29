@@ -1,3 +1,4 @@
+import { getPlatform } from "@/platform";
 import { DocumentSkeleton } from "@/components/layout/document-skeleton";
 import { RangeInput } from "@/components/ui/range-input";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -195,18 +196,20 @@ export function ChannelAttachmentTab({
             </span>
           </div>
         ) : null}
-        <button
-          type="button"
-          onClick={() => void openAttachmentExternally({ id: attachmentId, filename })}
-          data-sticker
-          data-sticker-size="md"
-          data-sticker-tone="neutral"
-          className="flex shrink-0 items-center gap-1.5 rounded-(--chip-radius) px-2 py-1 text-xs text-text-secondary hover:text-text-primary focus-outline"
-          title="Open in default app"
-        >
-          <ExternalLink className="size-3.5" />
-          Open
-        </button>
+        {getPlatform().files.openAttachmentExternal ? (
+          <button
+            type="button"
+            onClick={() => void openAttachmentExternally({ id: attachmentId, filename })}
+            data-sticker
+            data-sticker-size="md"
+            data-sticker-tone="neutral"
+            className="flex shrink-0 items-center gap-1.5 rounded-(--chip-radius) px-2 py-1 text-xs text-text-secondary hover:text-text-primary focus-outline"
+            title="Open in default app"
+          >
+            <ExternalLink className="size-3.5" />
+            Open
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => void saveAttachmentToDisk({ id: attachmentId, filename })}

@@ -126,7 +126,12 @@ export interface OpenAttachmentDeps extends OpenAttachmentCoreDeps {
 
 const defaultDeps: OpenAttachmentDeps = {
   fetchBytes: (id) => fetchAttachmentBytes(id),
-  open: (input) => getPlatform().files.openAttachmentExternal(input),
+  open: async (input) => {
+    const open = getPlatform().files.openAttachmentExternal;
+    return open
+      ? open(input)
+      : { ok: false, reason: "Opening attachments in external apps is unavailable." };
+  },
   toastError: (msg) => {
     toast.error(msg);
   },

@@ -168,8 +168,9 @@ describe("iOS platform", () => {
     ).toEqual(new Uint8Array([0, 255, 128]));
   });
 
-  it("fails unsupported attachment operations explicitly", async () => {
+  it("omits external attachment opening and rejects unsupported uploads", async () => {
     const { platform } = harness();
+    expect(platform.files.openAttachmentExternal).toBeUndefined();
     await expect(
       platform.client.backendUpload({ path: "/api/upload", fields: [], files: [] }),
     ).rejects.toThrow("not available");

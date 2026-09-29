@@ -58,7 +58,8 @@ export interface NotificationCapability {
 
 export interface FileCapability {
   openExternal(url: string): Promise<void>;
-  openAttachmentExternal(input: {
+  /** Omitted when the host cannot hand attachment files to external apps. */
+  openAttachmentExternal?(input: {
     attachmentId: string;
     filename: string;
     bytes: Uint8Array;
