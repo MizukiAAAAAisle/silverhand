@@ -2,7 +2,7 @@
 
 ## Identity and build inputs
 
-- App and Capacitor identifier: `com.silverhand-ai.ios`.
+- App and Capacitor identifier: `com.silverhand.ios`.
 - Supported devices: iPhone and iPad; retain the shared responsive UI and iPad
   portrait/landscape orientations. System share sheets must have a popover anchor.
 - Select the paid Apple Developer team in Xcode after enrollment completes.

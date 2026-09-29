@@ -22,16 +22,16 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>LSRequiresIPhoneOS</key>
-	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Take photos or videos you choose to attach to a message.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Record audio when you choose to capture a video attachment.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your chosen silverhand server on your local network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record audio when you choose to capture a video attachment.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save images you choose to export to your photo library.</string>
 	<key>UIApplicationSceneManifest</key>

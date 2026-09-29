@@ -17,7 +17,7 @@ it.each([undefined, "", "   "])("has no default when env is %j", async (value) =
 
 it("passes the build default only to the native client plugin", async () => {
   const result = await config(" https://Example.com:8443/ ");
-  expect(result.appId).toBe("com.silverhand-ai.ios");
+  expect(result.appId).toBe("com.silverhand.ios");
   expect(result.plugins?.SilverhandClient).toEqual({
     defaultServerURL: "https://Example.com:8443/",
   });
