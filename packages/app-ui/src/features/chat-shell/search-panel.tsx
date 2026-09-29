@@ -6,6 +6,7 @@ import dayjs from "dayjs";
 import { ChevronDown, Clock, Hash, MessageSquareMore, Search as SearchIcon, X } from "lucide-react";
 import type { AgentDto, SearchResultDto } from "@silverhand/shared";
 import { Input } from "@/components/ui/input";
+import { FilterPanel, FilterToggle, useFilterDisclosure } from "@/components/ui/responsive-filters";
 import {
   FilterBlock,
   FilterSelectItem as SelectItem,
@@ -90,6 +91,7 @@ export function SearchPanel({
   onOpenConversation,
 }: SearchPanelProps): JSX.Element {
   const [query, setQuery] = useState(initialQuery ?? "");
+  const filterDisclosure = useFilterDisclosure();
   // Filters are App-owned (controlled) so they persist across pane switches
   // for the session (#task:1259). Query stays local (see SearchPanelProps).
   const { workspace: workspaceFilter, sender: senderFilter, time: timeRange } = filter;
@@ -130,11 +132,8 @@ export function SearchPanel({
     ],
   );
 
-  const hasIntent =
-    query.trim().length > 0 ||
-    workspaceFilter !== "all" ||
-    senderFilter !== "all" ||
-    timeRange !== "all";
+  const hasFilters = workspaceFilter !== "all" || senderFilter !== "all" || timeRange !== "all";
+  const hasIntent = query.trim().length > 0 || hasFilters;
   const { data, isFetching, isLoading, isError, refetch } = useMessageSearch(filters);
   const identities = isError ? undefined : data?.identities;
   const identityCount = identities
@@ -169,7 +168,10 @@ export function SearchPanel({
         title="Search"
         count={hasIntent ? results.length + identityCount : undefined}
         trailing={
-          isFetching ? <span className="ml-auto text-xs text-text-muted">Searching…</span> : null
+          <div className="ml-auto flex items-center gap-2">
+            {isFetching ? <span className="text-xs text-text-muted">Searching…</span> : null}
+            <FilterToggle disclosure={filterDisclosure} active={hasFilters} />
+          </div>
         }
       />
 
@@ -201,30 +203,32 @@ export function SearchPanel({
           </button>
         </div>
 
-        <div className="mt-3 flex flex-wrap items-end gap-3">
-          <FilterBlock label="Workspace" className="w-full sm:w-72">
-            <WorkspaceFilterSelect
-              value={workspaceFilter}
-              workspaces={workspaces}
-              agents={agents}
-              onChange={setWorkspaceFilter}
-            />
-          </FilterBlock>
+        <FilterPanel disclosure={filterDisclosure} className="mt-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <FilterBlock label="Workspace" className="w-full sm:w-72">
+              <WorkspaceFilterSelect
+                value={workspaceFilter}
+                workspaces={workspaces}
+                agents={agents}
+                onChange={setWorkspaceFilter}
+              />
+            </FilterBlock>
 
-          <FilterBlock label="Sender" className="w-full sm:w-60">
-            <SenderFilterSelect
-              value={senderFilter}
-              agents={agents}
-              users={users}
-              userResolver={userResolver}
-              onChange={setSenderFilter}
-            />
-          </FilterBlock>
+            <FilterBlock label="Sender" className="w-full sm:w-60">
+              <SenderFilterSelect
+                value={senderFilter}
+                agents={agents}
+                users={users}
+                userResolver={userResolver}
+                onChange={setSenderFilter}
+              />
+            </FilterBlock>
 
-          <FilterBlock label="Time" className="w-full sm:w-44">
-            <TimeRangeSelect value={timeRange} onChange={setTimeRange} />
-          </FilterBlock>
-        </div>
+            <FilterBlock label="Time" className="w-full sm:w-44">
+              <TimeRangeSelect value={timeRange} onChange={setTimeRange} />
+            </FilterBlock>
+          </div>
+        </FilterPanel>
       </section>
 
       <div className="search-list min-h-0 flex-1 overflow-y-auto px-4 py-3">

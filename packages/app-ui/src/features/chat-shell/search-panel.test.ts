@@ -4,6 +4,8 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { SearchIdentities } from "@silverhand/shared";
 import { SearchPanel, SEARCH_FILTER_DEFAULT } from "./search-panel";
 
+vi.mock("@/navigation/layout", () => ({ useCompactLayout: () => true }));
+
 const state = vi.hoisted(() => ({
   identities: undefined as SearchIdentities | undefined,
   error: false,
@@ -98,4 +100,15 @@ it("does not turn query failure into empty identities or show retained identity 
 it("has a real empty state when the server has no identity or content hits", () => {
   state.identities!.humans = { results: [], total: 0, truncated: false };
   expect(render()).toContain("No matches");
+});
+
+it("keeps search and loading status visible while compact filters start collapsed", () => {
+  state.loading = true;
+  const html = render();
+  expect(html).toContain("Searching…");
+  expect(html).toContain('aria-label="Show filters"');
+  expect(html).toContain('aria-expanded="false"');
+  expect(html).toContain('aria-label="Filters" hidden=""');
+  expect(html).toContain('value="alice"');
+  expect(state.filters.q).toBe("alice");
 });

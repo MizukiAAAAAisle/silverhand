@@ -15,6 +15,7 @@ import {
   type WorkspaceListItem,
 } from "@/features/workspaces/hooks";
 import { FilterBlock } from "@/components/ui/filter-select";
+import { FilterPanel, FilterToggle, useFilterDisclosure } from "@/components/ui/responsive-filters";
 import {
   WorkspaceFilterSelect,
   workspaceFilterId,
@@ -63,6 +64,7 @@ export function ArchivedChannelsPanel({
   onOpenWorkspace,
   onOpenWorkspaceSettings,
 }: ArchivedChannelsPanelProps): JSX.Element {
+  const filterDisclosure = useFilterDisclosure();
   // App-owned (controlled) filter state so switching panes and returning
   // keeps the selection for the session (#task:1259).
   const { workspace: workspaceFilter, date: dateFilter } = filter;
@@ -117,11 +119,17 @@ export function ArchivedChannelsPanel({
         title="Archived"
         count={workspaceRows.length + channels.length}
         trailing={
-          isFetching ? <span className="ml-auto text-xs text-text-muted">Refreshing…</span> : null
+          <div className="ml-auto flex items-center gap-2">
+            {isFetching ? <span className="text-xs text-text-muted">Refreshing…</span> : null}
+            <FilterToggle disclosure={filterDisclosure} active={hasFilters} />
+          </div>
         }
       />
 
-      <section className="shrink-0 border-b border-border-subtle px-4 py-3">
+      <FilterPanel
+        disclosure={filterDisclosure}
+        className="shrink-0 border-b border-border-subtle px-4 py-3"
+      >
         <div className="flex flex-wrap items-end gap-3">
           <FilterBlock label="Workspace" className="w-full sm:w-72">
             <WorkspaceFilterSelect
@@ -140,7 +148,7 @@ export function ArchivedChannelsPanel({
             />
           </FilterBlock>
         </div>
-      </section>
+      </FilterPanel>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
         {/* Workspaces first: restoring a workspace is the precondition for

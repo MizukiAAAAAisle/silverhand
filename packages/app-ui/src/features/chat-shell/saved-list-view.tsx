@@ -16,6 +16,7 @@ import { useUsers, useUsersById, makeUserNameResolver } from "@/features/users/h
 import { useSavedMessages, useUnsaveMessage } from "@/features/saved/hooks";
 import type { WorkspaceListItem } from "@/features/workspaces/hooks";
 import { FilterBlock } from "@/components/ui/filter-select";
+import { FilterPanel, FilterToggle, useFilterDisclosure } from "@/components/ui/responsive-filters";
 import { SavedListSkeleton } from "./saved-list-skeleton";
 import {
   WorkspaceFilterSelect,
@@ -94,6 +95,7 @@ export function SavedListView({
   onJump,
 }: SavedListViewProps): JSX.Element {
   const unsave = useUnsaveMessage();
+  const filterDisclosure = useFilterDisclosure();
 
   // Same filter form as ArchivedChannelsPanel (shiki #task:1258): Workspace +
   // Date, sharing that panel's WorkspaceFilterSelect (identical item design +
@@ -174,10 +176,20 @@ export function SavedListView({
         icon={<Bookmark className="size-3.5 fill-current" />}
         title="Saved"
         count={data ? items.length : undefined}
+        trailing={
+          showFilters ? (
+            <div className="ml-auto">
+              <FilterToggle disclosure={filterDisclosure} active={hasFilters} />
+            </div>
+          ) : null
+        }
       />
 
       {showFilters ? (
-        <section className="shrink-0 border-b border-border-subtle px-4 py-3">
+        <FilterPanel
+          disclosure={filterDisclosure}
+          className="shrink-0 border-b border-border-subtle px-4 py-3"
+        >
           <div className="flex flex-wrap items-end gap-3">
             <FilterBlock label="Workspace" className="w-full sm:w-72">
               <WorkspaceFilterSelect
@@ -201,7 +213,7 @@ export function SavedListView({
               <DateFilterSelect value={date} onChange={setDate} ariaLabel="Saved date filter" />
             </FilterBlock>
           </div>
-        </section>
+        </FilterPanel>
       ) : null}
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
