@@ -1,4 +1,5 @@
 import { useViewMemory } from "@/navigation/view-memory";
+import { useCompactLayout } from "@/navigation/layout";
 import {
   useCallback,
   useEffect,
@@ -36,6 +37,7 @@ import {
   FIRST_ITEM_INDEX_START,
   getFollowOutputBehavior,
   getInitialTopMostItemIndex,
+  getMessageListViewportBudget,
   INITIAL_BOTTOM_ANCHOR_STATE,
   reduceBottomAnchor,
   resolveTopShiftAction,
@@ -43,6 +45,16 @@ import {
 } from "@/features/conversation-shell/model/message-list-virtualization";
 
 // ── Message list ────────────────────────────────────────────────────────
+
+type ListContext = { leadingSlot?: ReactNode };
+// Component identities must stay stable across loading and scroll state changes.
+const listComponents = {
+  Header: ({ context }: { context?: ListContext }) =>
+    context?.leadingSlot ? (
+      <div className="mx-auto mb-1 max-w-300 px-4">{context.leadingSlot}</div>
+    ) : null,
+  Footer: () => <div className="h-3" />,
+};
 
 export function MessageList({
   channelId,
@@ -183,6 +195,23 @@ export function MessageList({
   surfaceActive?: boolean;
 }): JSX.Element {
   const viewMemory = useViewMemory();
+  const compact = useCompactLayout();
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  useLayoutEffect(() => {
+    const node = viewportRef.current;
+    if (!node) return;
+    const measure = () => setViewportHeight(node.clientHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  const viewportBudget = useMemo(
+    () => getMessageListViewportBudget(compact, viewportHeight),
+    [compact, viewportHeight],
+  );
+  const listContext = useMemo(() => ({ leadingSlot }), [leadingSlot]);
   const readingKey = `conversation:${channelId}`;
   const savedPosition = useMemo(() => viewMemory?.get(readingKey), [viewMemory, readingKey]);
   // Render context (lookup maps + sigil resolution + resolved viewer)
@@ -203,11 +232,14 @@ export function MessageList({
     liveChannels,
     archivedChannels,
   } = useMessageRenderContext(workspaceId, channelId, canParticipate);
-  const handleOpenThread = (msg: CachedMessage, jumpToMessageId?: string): void => {
-    // A pending optimistic row has no server id to anchor a thread on.
-    if (!isCommittedMessage(msg)) return;
-    onOpenThread?.(msg.id, jumpToMessageId);
-  };
+  const handleOpenThread = useCallback(
+    (msg: CachedMessage, jumpToMessageId?: string): void => {
+      // A pending optimistic row has no server id to anchor a thread on.
+      if (!isCommittedMessage(msg)) return;
+      onOpenThread?.(msg.id, jumpToMessageId);
+    },
+    [onOpenThread],
+  );
 
   // Auto-scroll to bottom on new messages or when a new activity bubble
   // appears — except when a jump is pending (the jump effect below owns
@@ -338,11 +370,7 @@ export function MessageList({
       archivedChannels.find((x) => x.id === channelId);
     return c ? c.title : null;
   }, [liveChannels, archivedChannels, channelId]);
-  const firstItemIndexRef = useRef(FIRST_ITEM_INDEX_START);
-  // Full key list of the previously observed window — lets us tell a head-trim
-  // (rows dropped from the top, anchor survives) from a disjoint window
-  // replacement by overlap (#task:1505). See the shift-classification effect.
-  const lastItemKeysRef = useRef<string[]>([]);
+  const [previousWindow, setPreviousWindow] = useState({ channelId, items });
   const lastJumpRemountKeyRef = useRef<string | null>(null);
 
   const itemKey = useCallback((item: ReturnType<typeof groupMessages>[number]) => {
@@ -361,9 +389,6 @@ export function MessageList({
   // entering a fresh stream and the stale baselines from the previous
   // channel must not leak in.
   useEffect(() => {
-    firstItemIndexRef.current = FIRST_ITEM_INDEX_START;
-    setFirstItemIndex(FIRST_ITEM_INDEX_START);
-    setWindowResetVersion(0);
     // Do NOT reset `bottomAnchorVersion` here: `channelId` is already in the
     // Virtuoso key, so the channel switch remounts on its own. Bumping this
     // version back to 0 would remount a SECOND time (extra cache discard /
@@ -371,8 +396,6 @@ export function MessageList({
     // semantics — a monotonic counter is fine. Cancel any in-flight bottom
     // request instead (not in the key, so this does not remount).
     dispatchBottomAnchor({ type: "cancel" });
-    lastItemKeysRef.current = [];
-    lastJumpRemountKeyRef.current = null;
     setIsAtBottom(true);
     setShowScrollBottom(false);
     setFlashedMessageId(null);
@@ -421,17 +444,18 @@ export function MessageList({
   //                 Without the reset Virtuoso's size cache stays anchored to the
   //                 long-gone layout and any subsequent scrollToIndex misses.
   //
-  // useLayoutEffect (not useEffect) — this MUST commit synchronously before any
-  // passive effect (especially the jump effect below) runs, otherwise
-  // scrollToIndex fires with stale firstItemIndex props queued, Virtuoso
-  // miscomputes the target offset, and the row never materialises.
-  useLayoutEffect(() => {
-    if (items.length === 0) {
-      lastItemKeysRef.current = [];
-      return;
-    }
-    const keys = items.map(itemKey);
-    const shift = classifyTopShift(lastItemKeysRef.current, keys);
+  // Reconcile during render, before Virtuoso receives either prop. A parent
+  // layout effect is too late: the child already committed the new data with
+  // the OLD index and measured those rows against the previous size cache.
+  // React retries this component before rendering children when its own state
+  // changes here, so data and its absolute index are published together.
+  if (previousWindow.channelId !== channelId) {
+    setPreviousWindow({ channelId, items });
+    setFirstItemIndex(FIRST_ITEM_INDEX_START);
+    setWindowResetVersion(0);
+  } else if (previousWindow.items !== items) {
+    setPreviousWindow({ channelId, items });
+    const shift = classifyTopShift(previousWindow.items.map(itemKey), items.map(itemKey));
     if (shift.kind !== "none") {
       const action = resolveTopShiftAction(shift, {
         userPositioning: jumpToMessageId != null || bottomAnchor.intent === "bottom",
@@ -440,16 +464,13 @@ export function MessageList({
         preferBottom: bottomAnchor.intent === "bottom",
       });
       if (action.firstItemIndex === "reset") {
-        firstItemIndexRef.current = FIRST_ITEM_INDEX_START;
         setFirstItemIndex(FIRST_ITEM_INDEX_START);
         if (action.remount) setWindowResetVersion((v) => v + 1);
       } else if (action.delta !== 0) {
-        firstItemIndexRef.current += action.delta;
-        setFirstItemIndex(firstItemIndexRef.current);
+        setFirstItemIndex((index) => index + action.delta);
       }
     }
-    lastItemKeysRef.current = keys;
-  }, [items, itemKey, jumpTargetIdx, jumpToMessageId, bottomAnchor.intent]);
+  }
 
   // Treat every resolved jump as a fresh positioning request. This keeps
   // saved-message jumps on the same channel on the same path as
@@ -515,9 +536,9 @@ export function MessageList({
   }, [isAtBottom]);
 
   const handleStartReached = useCallback(() => {
-    if (!hasMoreBefore || isFetchingEarlier) return;
+    if (!surfaceActive || jumpToMessageId || !hasMoreBefore || isFetchingEarlier) return;
     onLoadEarlier();
-  }, [hasMoreBefore, isFetchingEarlier, onLoadEarlier]);
+  }, [surfaceActive, jumpToMessageId, hasMoreBefore, isFetchingEarlier, onLoadEarlier]);
 
   // Shared side-effects of the back-to-bottom command: cancel the in-flight
   // jump and clear the local flash/button. The bottom INTENT itself is armed
@@ -750,7 +771,7 @@ export function MessageList({
         conversationId={channelId}
         channelTitle={channelTitle}
       />
-      <div className="relative min-h-0 min-w-0 flex-1">
+      <div ref={viewportRef} className="relative min-h-0 min-w-0 flex-1">
         {isLoading ? (
           // Initial window fetch: the message skeleton (shared with the full-view
           // skeleton) rather than a "加载消息…" line, so entering a channel reads
@@ -760,7 +781,7 @@ export function MessageList({
         ) : items.length === 0 && !leadingSlot ? (
           <EmptyConversation />
         ) : (
-          <Virtuoso<(typeof items)[number]>
+          <Virtuoso<(typeof items)[number], ListContext>
             // Remount on channel switches and full window replacements
             // (latest ↔ around-message). Prepends keep the same key so
             // Virtuoso can preserve scroll position; disjoint windows get
@@ -801,35 +822,36 @@ export function MessageList({
               viewMemory?.set(readingKey, { ...previous, atBottom });
             }}
             atBottomThreshold={20}
+            // On compact screens, correct variable row heights before the next
+            // paint instead of showing the estimate for one more animation frame.
+            // Virtuoso documents benign ResizeObserver loop notifications for
+            // this mode; don't suppress global errors to hide them.
+            skipAnimationFrameInResizeObserver={compact}
             startReached={handleStartReached}
-            increaseViewportBy={{ top: 200, bottom: 200 }}
-            computeItemKey={(_index, item) => itemKey(item)}
-            components={{
-              Header: () => (
-                <>
-                  {isFetchingEarlier ? (
-                    <div className="pb-2 text-center text-xs text-text-muted">
-                      Loading earlier messages…
-                    </div>
-                  ) : null}
-                  {leadingSlot ? (
-                    <div className="mx-auto mb-1 max-w-300 px-4">{leadingSlot}</div>
-                  ) : null}
-                </>
-              ),
-              // Bottom padding spacer — keeps the last message off the
-              // composer edge without baking the gutter into every item.
-              // The activity status now lives inside the Composer's own
-              // chrome (variant A), so there is no bottom overlay to
-              // reserve space for.
-              Footer: () => <div className="h-3" />,
+            onScroll={(event) => {
+              if (event.currentTarget.scrollTop <= viewportBudget.preload) handleStartReached();
             }}
+            increaseViewportBy={viewportBudget.render}
+            computeItemKey={(_index, item) => itemKey(item)}
+            context={listContext}
+            components={listComponents}
             itemContent={(_index, item) => (
               <div className="mx-auto max-w-300 px-4 py-0.5">{renderItem(item)}</div>
             )}
             className="h-full min-w-0"
           />
         )}
+
+        {isFetchingEarlier ? (
+          // Loading must not change the measured list header height: doing so
+          // moves every message while the reader is waiting at the top.
+          <div
+            role="status"
+            className="pointer-events-none absolute inset-x-0 top-0 text-center text-xs text-text-muted"
+          >
+            Loading earlier messages…
+          </div>
+        ) : null}
 
         {surfaceActive && (showScrollBottom || shouldResetToLatest) ? (
           <button

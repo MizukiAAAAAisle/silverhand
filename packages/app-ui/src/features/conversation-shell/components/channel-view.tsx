@@ -621,7 +621,9 @@ function ActiveChannelView({
   );
   const loadEarlierMessages = useCallback(() => {
     if (!hasPreviousPage || isFetchingPreviousPage) return;
-    void fetchPreviousPage();
+    // Scroll and startReached can arrive before React commits the fetching
+    // flag. Let the query deduplicate them rather than cancel/restart the page.
+    void fetchPreviousPage({ cancelRefetch: false });
   }, [fetchPreviousPage, hasPreviousPage, isFetchingPreviousPage]);
 
   // Resolve the prop-driven jump target — fires when the global Saved

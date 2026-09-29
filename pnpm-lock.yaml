@@ -212,8 +212,8 @@ importers:
         specifier: ^6.30.3
         version: 6.30.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       react-virtuoso:
-        specifier: ^4.18.7
-        version: 4.18.7(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        specifier: ^4.18.15
+        version: 4.18.15(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       rehype-highlight:
         specifier: ^7.0.2
         version: 7.0.2
@@ -3847,8 +3847,8 @@ packages:
       '@types/react':
         optional: true
 
-  react-virtuoso@4.18.7:
-    resolution: {integrity: sha512-xNF5zDGEEIMB7cKwcen/pLig0YDf6OnfFrVgKFa7sHPf9fRem0CaLshyObbBcP88jzn0enavL39EgplgdyT21g==}
+  react-virtuoso@4.18.15:
+    resolution: {integrity: sha512-YvmOV0PThfObKUzXbZvlCfIO04yvZ6gRXkSiib472qEypDyT2ZSfNtqHr1F7XY3UsHp43hJkDo8WiFq3irHQZA==}
     peerDependencies:
       react: '>=16 || >=17 || >= 18 || >= 19'
       react-dom: '>=16 || >=17 || >= 18 || >=19'
@@ -8246,7 +8246,7 @@ snapshots:
     optionalDependencies:
       '@types/react': 18.3.28
 
-  react-virtuoso@4.18.7(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
+  react-virtuoso@4.18.15(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
     dependencies:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)

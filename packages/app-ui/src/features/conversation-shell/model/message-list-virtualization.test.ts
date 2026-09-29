@@ -3,6 +3,7 @@ import {
   classifyTopShift,
   getFollowOutputBehavior,
   getInitialTopMostItemIndex,
+  getMessageListViewportBudget,
   INITIAL_BOTTOM_ANCHOR_STATE,
   reduceBottomAnchor,
   resolveTopShiftAction,
@@ -16,6 +17,50 @@ const range = (from: number, to: number): string[] =>
   Array.from({ length: to - from + 1 }, (_, i) => String(from + i));
 
 describe("message list virtualization helpers", () => {
+  it("preserves shared rows when pagination extends the leading activity cluster", () => {
+    const previous = ["activity-cluster:100", "message:105", "message:106"];
+    expect(
+      classifyTopShift(previous, ["activity-cluster:90", "message:105", "message:106"]),
+    ).toEqual({ kind: "none" });
+    expect(
+      classifyTopShift(previous, [
+        "message:80",
+        "activity-cluster:90",
+        "message:105",
+        "message:106",
+      ]),
+    ).toEqual({ kind: "prepend", count: 1 });
+    expect(
+      classifyTopShift(
+        ["message:80", ...previous],
+        ["activity-cluster:103", "message:105", "message:106"],
+      ),
+    ).toEqual({ kind: "head-trim", count: 1 });
+  });
+  describe("viewport budgets", () => {
+    it("prefetches earlier on mobile without using the desktop DOM budget", () => {
+      const mobile = getMessageListViewportBudget(true, 700);
+      const desktop = getMessageListViewportBudget(false, 700);
+      expect(mobile).toEqual({ preload: 1400, render: { top: 525, bottom: 350 } });
+      expect(desktop).toEqual({ preload: 700, render: { top: 700, bottom: 525 } });
+      expect(mobile.preload).toBeGreaterThan(mobile.render.top);
+    });
+    it("adapts to the list height and caps both rendering and network lookahead", () => {
+      expect(getMessageListViewportBudget(true, 300)).toEqual({
+        preload: 600,
+        render: { top: 225, bottom: 150 },
+      });
+      expect(getMessageListViewportBudget(true, 3000)).toEqual({
+        preload: 1600,
+        render: { top: 600, bottom: 400 },
+      });
+      expect(getMessageListViewportBudget(false, 3000)).toEqual({
+        preload: 1200,
+        render: { top: 1200, bottom: 800 },
+      });
+      expect(getMessageListViewportBudget(true, 0).render.top).toBe(200);
+    });
+  });
   describe("getInitialTopMostItemIndex", () => {
     it("centers the jump target when it is present", () => {
       expect(

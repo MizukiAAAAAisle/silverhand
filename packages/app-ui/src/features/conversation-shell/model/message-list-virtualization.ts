@@ -1,5 +1,23 @@
 export const FIRST_ITEM_INDEX_START = 1_000_000;
 
+// Fetching rows and mounting their DOM have separate budgets. Touch scrolling
+// needs an earlier network head start, but a smaller render budget than desktop.
+// Distances follow the actual list viewport (including keyboard/rotation), with
+// caps so a large window cannot turn virtualization into an unbounded render.
+export function getMessageListViewportBudget(compact: boolean, viewportHeight: number) {
+  const height = Math.max(0, viewportHeight);
+  const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+  return compact
+    ? {
+        preload: clamp(height * 2, 400, 1600),
+        render: { top: clamp(height * 0.75, 200, 600), bottom: clamp(height * 0.5, 150, 400) },
+      }
+    : {
+        preload: clamp(height, 400, 1200),
+        render: { top: clamp(height, 400, 1200), bottom: clamp(height * 0.75, 200, 800) },
+      };
+}
+
 export type InitialTopMostItemIndex = number | { index: number; align: "center" } | undefined;
 
 // `initialTopMostItemIndex` is consumed only when Virtuoso mounts.
@@ -68,8 +86,9 @@ export function shouldRemountForWindowReplacement(args: {
 //
 // Overlap decides the shape: if the old top still appears in the new window it
 // prepended; else if the new top still appears in the OLD window the head was
-// trimmed; else the windows are disjoint. Classification mirrors the trust level
-// of the existing prepend detection (index lookup, no full contiguity proof).
+// trimmed. If a boundary cluster changes its key, compare the surviving rows
+// before declaring the windows disjoint. Classification relies on the query's
+// chronological row order (index lookup, no full contiguity proof).
 export type TopShift =
   | { kind: "none" }
   | { kind: "prepend"; count: number }
@@ -90,6 +109,18 @@ export function classifyTopShift(prevKeys: string[], keys: string[]): TopShift {
   // New top still inside the old window → the head was trimmed.
   const newTopInPrev = prevKeys.indexOf(newTop);
   if (newTopInPrev > 0) return { kind: "head-trim", count: newTopInPrev };
+  // A system-activity cluster is keyed by its first message. Loading older
+  // events can extend that cluster and change its key, even though the rows
+  // after it still overlap. Preserve those rows instead of remounting at tail.
+  const previousIndexes = new Map(prevKeys.map((key, index) => [key, index]));
+  for (let index = 0; index < keys.length; index++) {
+    const previousIndex = previousIndexes.get(keys[index]!);
+    if (previousIndex === undefined) continue;
+    const delta = index - previousIndex;
+    if (delta > 0) return { kind: "prepend", count: delta };
+    if (delta < 0) return { kind: "head-trim", count: -delta };
+    return { kind: "none" };
+  }
   return { kind: "replace" };
 }
 
