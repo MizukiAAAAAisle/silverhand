@@ -3,7 +3,7 @@ import { getPlatform } from "@/platform";
 import { RangeInput } from "@/components/ui/range-input";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as DialogPrimitive from "@/components/ui/modal";
-import { Download, Share2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Download, Share, X, ZoomIn, ZoomOut } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
@@ -489,7 +489,7 @@ export function Lightbox({
               <SelectionActionButton
                 rank={onDownload && !shareImage ? "secondary" : "primary"}
                 label={shareImage ? "Share" : "Copy"}
-                icon={shareImage ? <Share2 className="size-3.5" /> : undefined}
+                icon={shareImage ? <Share className="size-3.5" /> : undefined}
                 disabled={busy}
                 onClick={onExport}
               />
