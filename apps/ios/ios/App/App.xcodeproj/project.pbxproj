@@ -16,13 +16,13 @@
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
-		A26720000000000000000001 /* SilverhandNavigationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26720000000000000000002 /* SilverhandNavigationController.swift */; };
-		A26890000000000000000001 /* NavigationMoreMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26890000000000000000002 /* NavigationMoreMenu.swift */; };
 		A26630000000000000000001 /* SilverhandClientPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26630000000000000000002 /* SilverhandClientPlugin.swift */; };
 		A26630000000000000000003 /* SilverhandNative in Frameworks */ = {isa = PBXBuildFile; productRef = A26630000000000000000004 /* SilverhandNative */; };
 		A26631000000000000000001 /* ClientSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26631000000000000000002 /* ClientSessionTests.swift */; };
 		A26631000000000000000003 /* NetworkAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26631000000000000000004 /* NetworkAcceptanceTests.swift */; };
 		A26631000000000000000005 /* SilverhandNative in Frameworks */ = {isa = PBXBuildFile; productRef = A26630000000000000000004 /* SilverhandNative */; };
+		A26720000000000000000001 /* SilverhandNavigationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26720000000000000000002 /* SilverhandNavigationController.swift */; };
+		A26890000000000000000001 /* NavigationMoreMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26890000000000000000002 /* NavigationMoreMenu.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -48,11 +48,11 @@
 		57B76339306A45E6006BF7EB /* AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9582B6822FE993A50072D4E8 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
-		A26720000000000000000002 /* SilverhandNavigationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilverhandNavigationController.swift; sourceTree = "<group>"; };
-		A26890000000000000000002 /* NavigationMoreMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationMoreMenu.swift; sourceTree = "<group>"; };
 		A26630000000000000000002 /* SilverhandClientPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilverhandClientPlugin.swift; sourceTree = "<group>"; };
 		A26631000000000000000002 /* ClientSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ClientSessionTests.swift; path = ../../native/Tests/SilverhandNativeTests/ClientSessionTests.swift; sourceTree = SOURCE_ROOT; };
 		A26631000000000000000004 /* NetworkAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NetworkAcceptanceTests.swift; path = ../../native/Tests/SilverhandNativeTests/NetworkAcceptanceTests.swift; sourceTree = SOURCE_ROOT; };
+		A26720000000000000000002 /* SilverhandNavigationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilverhandNavigationController.swift; sourceTree = "<group>"; };
+		A26890000000000000000002 /* NavigationMoreMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationMoreMenu.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -173,8 +173,9 @@
 		504EC2FC1FED79650016851F /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
+				BuildIndependentTargetsInParallel = YES;
 				LastSwiftUpdateCheck = 0920;
-				LastUpgradeCheck = 0920;
+				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					504EC3031FED79650016851F = {
 						CreatedOnToolsVersion = 9.2;
@@ -289,6 +290,7 @@
 				CLANG_WARN_BOOL_CONVERSION = YES;
 				CLANG_WARN_COMMA = YES;
 				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
 				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
 				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
 				CLANG_WARN_EMPTY_BODY = YES;
@@ -296,8 +298,10 @@
 				CLANG_WARN_INFINITE_RECURSION = YES;
 				CLANG_WARN_INT_CONVERSION = YES;
 				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
 				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
 				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
 				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
 				CLANG_WARN_STRICT_PROTOTYPES = YES;
 				CLANG_WARN_SUSPICIOUS_MOVE = YES;
@@ -309,6 +313,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -346,6 +351,7 @@
 				CLANG_WARN_BOOL_CONVERSION = YES;
 				CLANG_WARN_COMMA = YES;
 				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
 				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
 				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
 				CLANG_WARN_EMPTY_BODY = YES;
@@ -353,8 +359,10 @@
 				CLANG_WARN_INFINITE_RECURSION = YES;
 				CLANG_WARN_INT_CONVERSION = YES;
 				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
 				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
 				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
 				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
 				CLANG_WARN_STRICT_PROTOTYPES = YES;
 				CLANG_WARN_SUSPICIOUS_MOVE = YES;
@@ -366,6 +374,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -390,7 +399,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = G6R45TZYFC;
+				DEVELOPMENT_TEAM = BA8W99F567;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -399,7 +408,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
-				PRODUCT_BUNDLE_IDENTIFIER = com.silverhand.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.silverhand-ai.ios";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_VERSION = 5.0;
@@ -413,7 +422,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = G6R45TZYFC;
+				DEVELOPMENT_TEAM = BA8W99F567;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -421,7 +430,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.silverhand.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.silverhand-ai.ios";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
 				SWIFT_VERSION = 5.0;
