@@ -140,7 +140,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
       sidebar={
         <>
           <header className="chat-sidebar-brand hidden h-14 shrink-0 items-center gap-2 px-2 text-text-primary">
-            <Brandmark className="size-6 shrink-0" />
+            <Brandmark className="size-7 shrink-0" />
             <h1 className="text-xl font-bold">silverhand</h1>
           </header>
           <nav
