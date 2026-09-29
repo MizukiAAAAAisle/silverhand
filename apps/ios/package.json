@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt --check .",
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",

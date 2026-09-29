@@ -1,5 +1,5 @@
-import type { EventSocket, EventSocketEvents } from '@silverhand/client';
-import type { NativeBridge, NativeSocketEvent } from './bridge';
+import type { EventSocket, EventSocketEvents } from "@silverhand/client";
+import type { NativeBridge, NativeSocketEvent } from "./bridge";
 
 /** Listener registration precedes native connect, so immediate auth frames cannot be lost. */
 export class NativeEventSocket implements EventSocket {
@@ -30,7 +30,7 @@ export class NativeEventSocket implements EventSocket {
 
   private async start(url: string): Promise<void> {
     try {
-      const subscription = await this.bridge.addListener('socket', (event) => this.receive(event));
+      const subscription = await this.bridge.addListener("socket", (event) => this.receive(event));
       this.removeListener = () => subscription.remove();
       if (this.readyState === 3) {
         await this.removeListener();
@@ -42,7 +42,7 @@ export class NativeEventSocket implements EventSocket {
         await this.bridge.closeSocket({ id: this.id });
     } catch {
       if (this.readyState === 3) return;
-      this.emit('error', {});
+      this.emit("error", {});
       this.finish(1006);
     }
   }
@@ -50,17 +50,17 @@ export class NativeEventSocket implements EventSocket {
   private receive(event: NativeSocketEvent): void {
     if (event.id !== this.id || this.readyState === 3) return;
     switch (event.type) {
-      case 'open':
+      case "open":
         this.readyState = 1;
-        this.emit('open', {});
+        this.emit("open", {});
         break;
-      case 'message':
-        if (this.readyState === 1) this.emit('message', { data: event.data });
+      case "message":
+        if (this.readyState === 1) this.emit("message", { data: event.data });
         break;
-      case 'error':
-        this.emit('error', {});
+      case "error":
+        this.emit("error", {});
         break;
-      case 'close':
+      case "close":
         this.finish(event.code ?? 1006);
         break;
     }
@@ -70,14 +70,14 @@ export class NativeEventSocket implements EventSocket {
     if (this.readyState === 3) return;
     this.readyState = 3;
     void this.removeListener?.();
-    this.emit('close', { code, wasClean: code === 1000 });
+    this.emit("close", { code, wasClean: code === 1000 });
     this.listeners.clear();
   }
 
   send(data: string): void {
-    if (this.readyState !== 1) throw new Error('Socket is not open');
+    if (this.readyState !== 1) throw new Error("Socket is not open");
     void this.bridge.sendSocket({ id: this.id, data }).catch(() => {
-      this.emit('error', {});
+      this.emit("error", {});
       this.close();
     });
   }

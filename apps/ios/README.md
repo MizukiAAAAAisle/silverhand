@@ -77,6 +77,16 @@ submitting credentials; network/TLS errors leave retry and address repair availa
 
 ## Tests
 
+Formatting uses the repository's oxfmt version and Desktop style conventions:
+
+```sh
+pnpm --filter @silverhand/ios fmt
+pnpm --filter @silverhand/ios fmt:check
+```
+
+These commands cover the Web client, build configuration, scripts and docs.
+Generated assets and `ios/` / `native/` are excluded; oxfmt does not format Swift.
+
 ```sh
 pnpm --filter @silverhand/ios typecheck
 pnpm --filter @silverhand/ios test
@@ -92,7 +102,7 @@ network acceptance test. For native HTTPS/WSS against the real server:
    It creates a two-day CA and isolated backend under `.cache`, and trusts that
    CA only in the named simulator. TLS validation stays enabled.
 3. Run `xcodebuild -project apps/ios/ios/App/App.xcodeproj -scheme App -destination
-   'platform=iOS Simulator,id=<uuid>' -parallel-testing-enabled NO CODE_SIGN_IDENTITY=- test`.
+'platform=iOS Simulator,id=<uuid>' -parallel-testing-enabled NO CODE_SIGN_IDENTITY=- test`.
    Use the hosted AppTests target: hostless iOS SwiftPM tests cannot access Keychain.
 4. Stop the fixture with Ctrl-C; delete the dedicated simulator when finished.
 

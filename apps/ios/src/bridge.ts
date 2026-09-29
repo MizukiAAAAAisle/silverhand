@@ -1,16 +1,16 @@
-import type { ServerInfo } from '@silverhand/shared';
-import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
+import type { ServerInfo } from "@silverhand/shared";
+import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import type {
   BackendProxyRequest,
   BackendProxyResponse,
   ClientAuthResult,
   NativeNavigationState,
   NativeNavigationIntent,
-} from '@silverhand/client';
+} from "@silverhand/client";
 
 export interface NativeSocketEvent {
   id: string;
-  type: 'open' | 'message' | 'close' | 'error';
+  type: "open" | "message" | "close" | "error";
   data?: string;
   code?: number;
 }
@@ -26,7 +26,7 @@ export interface NativeBridge {
   navigationFinish(input: { session: string; request: string; accepted: boolean }): Promise<void>;
   navigationReset(input: { session: string }): Promise<void>;
   addListener(
-    event: 'navigation',
+    event: "navigation",
     handler: (intent: NativeNavigationIntent) => void,
   ): Promise<PluginListenerHandle>;
   getProfile(): Promise<{ server_url: string; updated_at: number } | { server_url: null }>;
@@ -39,7 +39,7 @@ export interface NativeBridge {
     info: BackendProxyResponse;
     me?: BackendProxyResponse;
   }>;
-  authenticate(input: { action: 'login' | 'signup'; body: string }): Promise<ClientAuthResult>;
+  authenticate(input: { action: "login" | "signup"; body: string }): Promise<ClientAuthResult>;
   logout(): Promise<void>;
   request(input: BackendProxyRequest): Promise<BackendProxyResponse & { bodyBase64?: string }>;
   openSocket(input: { id: string; url: string }): Promise<void>;
@@ -48,14 +48,14 @@ export interface NativeBridge {
   sharePng(input: { base64: string }): Promise<{ completed: boolean }>;
   openExternal(input: { url: string }): Promise<void>;
   addListener(
-    event: 'socket',
+    event: "socket",
     handler: (event: NativeSocketEvent) => void,
   ): Promise<PluginListenerHandle>;
-  addListener(event: 'sessionInvalidated', handler: () => void): Promise<PluginListenerHandle>;
+  addListener(event: "sessionInvalidated", handler: () => void): Promise<PluginListenerHandle>;
   addListener(
-    event: 'keyboardChanged',
+    event: "keyboardChanged",
     handler: (state: { docked: boolean }) => void,
   ): Promise<PluginListenerHandle>;
-  addListener(event: 'foreground', handler: () => void): Promise<PluginListenerHandle>;
+  addListener(event: "foreground", handler: () => void): Promise<PluginListenerHandle>;
 }
-export const nativeBridge = registerPlugin<NativeBridge>('SilverhandClient');
+export const nativeBridge = registerPlugin<NativeBridge>("SilverhandClient");

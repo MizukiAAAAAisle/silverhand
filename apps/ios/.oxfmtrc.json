@@ -1,0 +1,29 @@
+{
+  "$schema": "../../node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 100,
+  "tabWidth": 2,
+  "useTabs": false,
+  "endOfLine": "lf",
+  "insertFinalNewline": true,
+  "semi": true,
+  "singleQuote": false,
+  "jsxSingleQuote": false,
+  "trailingComma": "all",
+  "arrowParens": "always",
+  "bracketSpacing": true,
+  "bracketSameLine": false,
+  "objectWrap": "preserve",
+  "sortImports": false,
+  "sortTailwindcss": false,
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    ".tmp/**",
+    "dist/**",
+    "coverage/**",
+    "ios/**",
+    "native/**",
+    "**/*.generated.*",
+    "**/*.min.*",
+    "**/*.tsbuildinfo"
+  ]
+}

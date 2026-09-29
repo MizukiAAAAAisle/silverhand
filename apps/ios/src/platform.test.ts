@@ -1,14 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   apiPaths,
   authPaths,
   DESKTOP_SERVER_API_EPOCH,
   MINIMUM_SERVER_API_EPOCH,
-} from '@silverhand/shared';
-import admission from '../../../packages/shared/src/backend-admission.json';
-import { createIOSPlatform } from './platform';
-import type { NativeBridge } from './bridge';
+} from "@silverhand/shared";
+import admission from "../../../packages/shared/src/backend-admission.json";
+import { createIOSPlatform } from "./platform";
+import type { NativeBridge } from "./bridge";
 
 function harness() {
   const native = {
@@ -17,12 +17,12 @@ function harness() {
     navigationCapture: vi.fn(async () => {}),
     navigationFinish: vi.fn(async () => {}),
     navigationReset: vi.fn(async () => {}),
-    getProfile: vi.fn(async () => ({ server_url: 'https://server.example', updated_at: 1 })),
+    getProfile: vi.fn(async () => ({ server_url: "https://server.example", updated_at: 1 })),
     authState: vi.fn(async () => ({
-      serverUrl: 'https://server.example',
+      serverUrl: "https://server.example",
       info: {
         status: 200,
-        statusText: 'OK',
+        statusText: "OK",
         headers: {},
         bodyText: JSON.stringify({
           signup_enabled: true,
@@ -49,8 +49,8 @@ function harness() {
   return { native, reset, platform: createIOSPlatform(native as NativeBridge, reset) };
 }
 
-describe('iOS platform', () => {
-  it('orders native presentation commands and continues after a failed capture', async () => {
+describe("iOS platform", () => {
+  it("orders native presentation commands and continues after a failed capture", async () => {
     const { native, platform } = harness();
     let rejectCapture!: (error: Error) => void;
     native.navigationCapture.mockImplementationOnce(
@@ -60,20 +60,20 @@ describe('iOS platform', () => {
         }),
     );
     const navigation = platform.navigation!;
-    const capture = navigation.capture({ session: 's', key: 'entry' });
-    const failed = expect(capture).rejects.toThrow('snapshot failed');
-    const reset = navigation.reset('s');
+    const capture = navigation.capture({ session: "s", key: "entry" });
+    const failed = expect(capture).rejects.toThrow("snapshot failed");
+    const reset = navigation.reset("s");
     await Promise.resolve();
     expect(native.navigationCapture).toHaveBeenCalledOnce();
     expect(native.navigationReset).not.toHaveBeenCalled();
 
-    rejectCapture(new Error('snapshot failed'));
+    rejectCapture(new Error("snapshot failed"));
     await failed;
     await reset;
-    expect(native.navigationReset).toHaveBeenCalledExactlyOnceWith({ session: 's' });
+    expect(native.navigationReset).toHaveBeenCalledExactlyOnceWith({ session: "s" });
   });
 
-  it('shares exact image bytes and distinguishes cancellation and failure', async () => {
+  it("shares exact image bytes and distinguishes cancellation and failure", async () => {
     const { native, platform } = harness();
     const pngBytes = Uint8Array.from({ length: 20000 }, (_, i) => i % 256);
     expect(await platform.files.sharePngExport!({ pngBytes })).toEqual({ ok: true });
@@ -84,88 +84,88 @@ describe('iOS platform', () => {
       ok: false,
       canceled: true,
     });
-    native.sharePng.mockRejectedValueOnce(new Error('Sharing unavailable'));
+    native.sharePng.mockRejectedValueOnce(new Error("Sharing unavailable"));
     expect(await platform.files.sharePngExport!({ pngBytes })).toEqual({
       ok: false,
-      error: 'Sharing unavailable',
+      error: "Sharing unavailable",
     });
   });
-  it('never advertises local host or desktop shell capabilities', async () => {
+  it("never advertises local host or desktop shell capabilities", async () => {
     const { platform } = harness();
     expect(platform.localHost).toBeUndefined();
     expect(platform.shell).toBeUndefined();
     expect(platform.notifications).toBeUndefined();
     expect(await platform.client.getConnectionInfo()).toEqual({
-      url: 'https://server.example',
-      mode: 'remote',
+      url: "https://server.example",
+      mode: "remote",
     });
     expect(await platform.client.getAuthState()).toEqual({
-      status: 'unauthenticated',
+      status: "unauthenticated",
       signup_enabled: true,
     });
   });
 
-  it('does not reset UI if native secure profile commit fails', async () => {
+  it("does not reset UI if native secure profile commit fails", async () => {
     const { native, platform, reset } = harness();
-    native.saveProfile.mockRejectedValue(new Error('Keychain failed'));
+    native.saveProfile.mockRejectedValue(new Error("Keychain failed"));
     expect(
-      await platform.client.saveServerConnectionProfile({ serverUrl: 'https://b.example' }),
+      await platform.client.saveServerConnectionProfile({ serverUrl: "https://b.example" }),
     ).toMatchObject({ ok: false });
     expect(reset).not.toHaveBeenCalled();
   });
 
-  it('resets all browser state after a successful native switch', async () => {
+  it("resets all browser state after a successful native switch", async () => {
     const { native, platform, reset } = harness();
     native.saveProfile.mockResolvedValue({
-      server_url: 'https://b.example',
+      server_url: "https://b.example",
       updated_at: 2,
       info: { signup_enabled: true },
     });
     expect(
-      await platform.client.saveServerConnectionProfile({ serverUrl: 'https://b.example' }),
+      await platform.client.saveServerConnectionProfile({ serverUrl: "https://b.example" }),
     ).toMatchObject({ ok: true });
     expect(reset).toHaveBeenCalledOnce();
   });
 
-  it('routes login natively and never asks native to reveal a token', async () => {
+  it("routes login natively and never asks native to reveal a token", async () => {
     const { native, platform } = harness();
-    native.authenticate.mockResolvedValue({ ok: true, user: { id: 'u' } });
-    await platform.client.login({ email: 'u@example.com', password: 'password' });
+    native.authenticate.mockResolvedValue({ ok: true, user: { id: "u" } });
+    await platform.client.login({ email: "u@example.com", password: "password" });
     expect(native.authenticate).toHaveBeenCalledWith({
-      action: 'login',
+      action: "login",
       body: '{"email":"u@example.com","password":"password"}',
     });
   });
 
-  it('keeps binary bytes intact across JSON transport', async () => {
+  it("keeps binary bytes intact across JSON transport", async () => {
     const { native, platform } = harness();
     native.request.mockResolvedValue({
       status: 200,
       headers: {},
-      statusText: 'OK',
-      bodyBase64: 'AP+A',
+      statusText: "OK",
+      bodyBase64: "AP+A",
     });
     expect(
-      (await platform.client.backendRequest({ path: '/api/bytes', responseType: 'arrayBuffer' }))
+      (await platform.client.backendRequest({ path: "/api/bytes", responseType: "arrayBuffer" }))
         .bodyBytes,
     ).toEqual(new Uint8Array([0, 255, 128]));
   });
 
-  it('fails unsupported attachment operations explicitly', async () => {
+  it("fails unsupported attachment operations explicitly", async () => {
     const { platform } = harness();
     await expect(
-      platform.client.backendUpload({ path: '/api/upload', fields: [], files: [] }),
-    ).rejects.toThrow('not available');
+      platform.client.backendUpload({ path: "/api/upload", fields: [], files: [] }),
+    ).rejects.toThrow("not available");
     expect(
-      await platform.files.saveAttachment({ filename: 'file', bytes: new Uint8Array() }),
+      await platform.files.saveAttachment({ filename: "file", bytes: new Uint8Array() }),
     ).toMatchObject({ ok: false });
   });
 
-  it('keeps native admission and route resource tied to shared authority', () => {
+  it("keeps native admission and route resource tied to shared authority", () => {
     const native = JSON.parse(
       readFileSync(
-        new URL('../native/Sources/SilverhandNative/Resources/Protocol.json', import.meta.url),
-        'utf8',
+        new URL("../native/Sources/SilverhandNative/Resources/Protocol.json", import.meta.url),
+        "utf8",
       ),
     );
     expect(native).toEqual({
@@ -181,9 +181,9 @@ describe('iOS platform', () => {
     });
   });
 
-  it('has no remote WebView URL, wildcard navigation or relaxed TLS', () => {
-    const config = readFileSync(new URL('../capacitor.config.ts', import.meta.url), 'utf8');
-    const plist = readFileSync(new URL('../ios/App/App/Info.plist', import.meta.url), 'utf8');
+  it("has no remote WebView URL, wildcard navigation or relaxed TLS", () => {
+    const config = readFileSync(new URL("../capacitor.config.ts", import.meta.url), "utf8");
+    const plist = readFileSync(new URL("../ios/App/App/Info.plist", import.meta.url), "utf8");
     expect(config).not.toMatch(/server\s*:|allowNavigation|allowMixedContent/);
     expect(plist).not.toMatch(/NSAllowsArbitraryLoads|NSExceptionAllowsInsecureHTTPLoads/);
   });
