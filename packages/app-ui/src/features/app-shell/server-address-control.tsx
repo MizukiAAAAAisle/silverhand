@@ -6,7 +6,7 @@ import { Input, Label } from "@/components/ui/input";
 import { validateServerUrlDraft } from "@/features/settings-shell/model/server-url-validation";
 import { describeProfileSaveForGate } from "./backend-unreachable-gate";
 
-/** Login always offers an escape to a different self-hosted origin. */
+/** Remote-only auth gates offer an escape to a different self-hosted origin. */
 export function ServerAddressControl({
   status,
   onRetry,

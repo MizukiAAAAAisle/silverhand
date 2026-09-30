@@ -49,7 +49,9 @@ describe("iOS entry", () => {
     async (url) => {
       h.profile.mockResolvedValue({ server_url: url, updated_at: 0 });
       await import("./main");
-      await vi.waitFor(() => expect(h.mount).toHaveBeenCalledWith({}, { loginFirst: true }));
+      await vi.waitFor(() =>
+        expect(h.mount).toHaveBeenCalledWith({}, { loginFirst: true, showServerAddress: true }),
+      );
       expect(h.save).not.toHaveBeenCalled();
     },
   );

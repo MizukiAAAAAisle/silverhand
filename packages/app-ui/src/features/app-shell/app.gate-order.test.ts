@@ -50,19 +50,31 @@ const silverhand = {
   revokeHost: vi.fn(),
 };
 
-async function renderApp(viewer: ViewerState | undefined): Promise<string> {
+async function renderApp(
+  viewer: ViewerState | undefined,
+  showServerAddress = false,
+): Promise<string> {
   // Late-import so the silverhand stub is installed before app.tsx is
   // evaluated. app.tsx pulls in `useAppearance` and a handful of
   // module-scope `useQuery` consumers; they call into
   // `window.silverhand.*` lazily, but a bare top-of-file `import` would
   // still evaluate them before `vi.stubGlobal` ran.
   const { App } = await import("@/app");
+  const { AppOptionsContext } = await import("@/app-options");
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   if (viewer !== undefined) qc.setQueryData(["me"], viewer);
   return renderToStaticMarkup(
-    React.createElement(QueryClientProvider, { client: qc }, React.createElement(App)),
+    React.createElement(
+      QueryClientProvider,
+      { client: qc },
+      React.createElement(
+        AppOptionsContext.Provider,
+        { value: { showServerAddress } },
+        React.createElement(App),
+      ),
+    ),
   );
 }
 
@@ -241,3 +253,17 @@ it("uses the shared themed primary action for password change without the redund
   expect(html).toContain('data-button-action="primary"');
   expect(html).not.toContain("You will be signed out on all devices");
 });
+
+it.each([true, false])(
+  "server editing follows the product option (enabled=%s) in login and signup",
+  async (enabled) => {
+    for (const signup_enabled of [true, false]) {
+      const html = await renderApp(
+        { registration_required: true, suggested_name: "", signup_enabled },
+        enabled,
+      );
+      expect(html.includes('aria-label="Change server"')).toBe(enabled);
+      expect(html).toContain('type="email"');
+    }
+  },
+);

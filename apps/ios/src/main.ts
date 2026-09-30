@@ -29,7 +29,7 @@ async function start(): Promise<void> {
   });
   configurePlatform(createIOSPlatform(nativeBridge, resetApplication));
   await nativeBridge.getProfile();
-  mountApp(root, { loginFirst: true });
+  mountApp(root, { loginFirst: true, showServerAddress: true });
 }
 
 void start().catch((error) => {

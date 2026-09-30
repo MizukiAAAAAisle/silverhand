@@ -49,7 +49,7 @@ export function RegistrationGate({
   connectionReady = true,
   connectionStatus,
   connectionChecking,
-  showServerAddress = true,
+  showServerAddress = false,
   onRetry,
 }: RegistrationGateProps): JSX.Element {
   const signup = useSignupUser();

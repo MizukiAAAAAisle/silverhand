@@ -43,7 +43,7 @@ export function App({
   initialNavigationUrl = "/chat",
 }: { initialNavigationUrl?: string } = {}): JSX.Element {
   const { appearance } = useAppearance();
-  const { loginFirst } = useAppOptions();
+  const { loginFirst, showServerAddress = false } = useAppOptions();
 
   useRuntimeEpochPromotion();
 
@@ -83,7 +83,7 @@ export function App({
         }
         connectionChecking={viewer.isFetching}
         connectionReady={ready}
-        showServerAddress
+        showServerAddress={showServerAddress}
         onRetry={() => {
           void viewer.refetch();
         }}
@@ -123,7 +123,14 @@ export function App({
   }
   if (isRegistrationRequired(viewer.data)) {
     return (
-      <RegistrationGate signupEnabled={viewer.data.signup_enabled} preferLogin={hasSignedIn} />
+      <RegistrationGate
+        signupEnabled={viewer.data.signup_enabled}
+        preferLogin={hasSignedIn}
+        showServerAddress={showServerAddress}
+        onRetry={() => {
+          void viewer.refetch();
+        }}
+      />
     );
   }
   // slack-dark is our only dark theme; studio-light / forza6 are light. sonner
