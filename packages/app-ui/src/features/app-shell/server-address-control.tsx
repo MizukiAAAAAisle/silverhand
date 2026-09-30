@@ -126,7 +126,7 @@ export function ServerAddressControl({
             type="button"
             variant="ghost"
             size="icon"
-            className="size-11 shrink-0"
+            className="size-11 shrink-0 md:size-8"
             aria-label="Change server"
             title="Change server"
             disabled={saving || disabled}
