@@ -970,7 +970,9 @@ function ProxySection({
                     data-runtime-tile
                     data-checked={checked || undefined}
                     className={cn(
-                      "flex min-w-0 items-center gap-3 rounded-(--control-radius) border px-3 py-2 transition-colors",
+                      // Keep the sr-only checkbox inside this tile's scroll coordinates.
+                      // Otherwise focusing it can scroll the root document.
+                      "relative flex min-w-0 items-center gap-3 rounded-(--control-radius) border px-3 py-2 transition-colors",
                       proxyEnabled ? "cursor-pointer" : "cursor-not-allowed",
                       checked
                         ? "border-accent bg-(--bg-row-selected,var(--bg-selected)) text-text-on-selected"
