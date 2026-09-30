@@ -276,16 +276,24 @@ export function useLoginUser() {
   });
 }
 
+/** Clear identity-owned state without detaching the mounted auth query observers. */
+export function clearLoggedOutSession(qc: QueryClient): Promise<void> {
+  clearCurrentUser();
+  clearViewerLocalState();
+  eventWsClient.disconnect();
+
+  // clear() removes the observed me query without publishing a new result.
+  // Keep that query attached so App leaves the shell and reads signed-out policy.
+  qc.removeQueries({ predicate: (query) => query.queryKey[0] !== meKey[0] });
+  qc.getMutationCache().clear();
+  return qc.resetQueries({ queryKey: meKey, exact: true });
+}
+
 export function useLogout() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => getPlatform().client.logout(),
-    onSuccess: () => {
-      clearCurrentUser();
-      clearViewerLocalState();
-      eventWsClient.disconnect();
-      qc.clear();
-    },
+    onSuccess: () => clearLoggedOutSession(qc),
   });
 }
 
