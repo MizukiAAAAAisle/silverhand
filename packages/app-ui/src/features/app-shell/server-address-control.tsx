@@ -92,7 +92,7 @@ export function ServerAddressControl({
               }
             }}
           />
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 md:flex md:justify-end md:gap-2">
             <Button
               type="button"
               variant="primary"
