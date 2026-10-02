@@ -10,7 +10,7 @@
   align-items: center;
   flex-shrink: 0;
   min-height: 44px;
-  padding: 0 4px;
+  padding: 0 12px;
   color: var(--text-primary);
   background: var(--pane-bg, var(--bg-base));
 }
@@ -42,12 +42,22 @@
   min-height: 44px;
   -webkit-tap-highlight-color: transparent;
 }
-.mobile-back-icon {
+/* iOS 26 bar buttons sit on a glass capsule. */
+.mobile-back-icon,
+.mobile-header-action > svg {
+  box-sizing: content-box;
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--control-radius);
+  width: 22px;
+  height: 22px;
+  padding: 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-floating) 72%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.8);
+  backdrop-filter: blur(12px) saturate(1.8);
+  box-shadow:
+    0 2px 8px rgb(0 0 0 / 0.08),
+    inset 0 0 0 0.5px color-mix(in srgb, var(--text-primary) 14%, transparent);
 }
 .mobile-tabbar {
   display: flex;
@@ -93,15 +103,23 @@
   user-select: none;
   -webkit-touch-callout: none;
 }
-/* iOS bar buttons signal a press by dimming the glyph, never with a fill. */
-.mobile-back .mobile-back-icon,
-.mobile-header-action {
-  transition: opacity 150ms ease-out;
+/* Glass answers a press by swelling and brightening, never by dimming. */
+.mobile-back-icon,
+.mobile-header-action > svg {
+  transition:
+    transform 220ms cubic-bezier(0.3, 1.4, 0.5, 1),
+    background-color 220ms ease-out;
+}
+/* A chevron's mass sits at its point; nudge it toward the open side so it
+   reads centered in the round capsule. */
+.mobile-back-icon > svg {
+  transform: translateX(-1px);
 }
 .mobile-back:active .mobile-back-icon,
-.mobile-header-action:active {
-  opacity: 0.3;
-  transition: none;
+.mobile-header-action:active > svg {
+  transform: scale(1.12);
+  background-color: color-mix(in srgb, var(--bg-floating) 92%, transparent);
+  transition-duration: 90ms;
 }
 @media (hover: hover) {
   .mobile-tab:hover {
@@ -138,10 +156,10 @@
 :root:where([data-layout="compact"]) :is(input, textarea, select) {
   font-size: max(16px, 1em);
 }
-/* The back button already owns a 44px hit area; do not add the desktop
-   header gutter before it. Retain the device safe area. */
+/* Bar buttons are 44px hit areas around a 36px capsule; a 12px gutter puts
+   the capsule 16px from the screen edge, as iOS does. */
 :where([data-layout="compact"]) header:has(> [data-mobile-navigation-slot] > .mobile-back) {
-  padding-left: env(safe-area-inset-left, 0px);
+  padding-left: max(12px, env(safe-area-inset-left, 0px));
 }
 
 /* Section panes. A tab root gets the large title, matching the Chats brand
@@ -169,7 +187,7 @@
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   min-height: 44px;
-  padding: 0 4px;
+  padding: 0 12px 0 max(12px, env(safe-area-inset-left, 0px));
 }
 [data-layout="compact"]
   header[data-pane-header]:has(> [data-mobile-navigation-slot] > .mobile-back)
@@ -201,7 +219,6 @@
   display: flex;
   grid-column: 3;
   justify-self: end;
-  padding-right: 12px;
 }
 :where([data-layout="compact"]) .app-shell {
   padding-top: env(safe-area-inset-top, 0px);
@@ -212,6 +229,24 @@
   /* One content canvas; nested controls keep their own surfaces. */
   --app-paper: none;
   background-color: var(--bg-base);
+}
+/* Scroll edge effect: with a transparent bar, content dissolves into the
+   top edge once it scrolls under the header. */
+@property --scroll-edge-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@keyframes scroll-edge-top {
+  to {
+    --scroll-edge-top: 20px;
+  }
+}
+[data-layout="compact"] [data-scroll-root] {
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--scroll-edge-top));
+  animation: scroll-edge-top linear both;
+  animation-timeline: scroll(self);
+  animation-range: 0 20px;
 }
 /* The native tab bar is glass: content runs beneath it, and each tab root's
    scroller pads its end so the last row can scroll clear. The inset is 0

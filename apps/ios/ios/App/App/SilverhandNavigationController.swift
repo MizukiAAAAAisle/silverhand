@@ -9,7 +9,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   UIGestureRecognizerDelegate
 {
   let content = SilverhandViewController()
-  let moreAction = UIControl()
+  let moreAction = TabItemHitRegion()
   private let names = ["chat", "activity", "tasks", "more"]
   private var session = ""
   private var entryKey = ""
@@ -60,6 +60,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     moreAction.isAccessibilityElement = false
     moreAction.accessibilityIdentifier = "native-more-action"
     moreAction.addAction(UIAction { [weak self] _ in self?.showMore() }, for: .touchUpInside)
+    moreAction.region = { [weak self] in self?.moreItemFrame() }
     view.addSubview(moreAction)
     attachContent(to: viewControllers![0])
     hideBar(true, animated: false)
@@ -71,17 +72,23 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
 
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
-    if #available(iOS 17.0, *), let item = viewControllers?[3].tabBarItem,
-      let itemFrame = item.frame(in: view), !itemFrame.isEmpty
-    {
-      moreAction.frame = itemFrame
-    } else {
-      let actionRegion = CGRect(
-        x: tabBar.bounds.width * 0.75, y: 0,
-        width: tabBar.bounds.width * 0.25, height: tabBar.bounds.height)
-      moreAction.frame = tabBar.convert(actionRegion, to: view)
-    }
+    moreAction.frame = view.bounds
     view.bringSubviewToFront(moreAction)
+  }
+
+  /// Read at touch time: a minimized tab bar relocates its items without a
+  /// controller layout pass, so a cached frame would cover content.
+  private func moreItemFrame() -> CGRect? {
+    guard !tabBar.isHidden, tabBar.alpha > 0 else { return nil }
+    if #available(iOS 17.0, *), let item = viewControllers?[3].tabBarItem,
+      let itemFrame = item.frame(in: view)
+    {
+      return itemFrame.isEmpty ? nil : itemFrame
+    }
+    let actionRegion = CGRect(
+      x: tabBar.bounds.width * 0.75, y: 0,
+      width: tabBar.bounds.width * 0.25, height: tabBar.bounds.height)
+    return tabBar.convert(actionRegion, to: view)
   }
 
   private func attachContent(to host: UIViewController) {
@@ -134,7 +141,43 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     }
     if front == nil { hideBar(!visible || blocked, animated: false) }
     view.layoutIfNeeded()
+    observeContentScroll()
     return visible ? max(0, view.bounds.maxY - tabBar.frame.minY) : 0
+  }
+
+  // WebKit backs each overflow scroller with its own UIScrollView. Handing the
+  // page's main one to UIKit lets the glass tab bar minimize on scroll. WebKit
+  // may replace it after layout, so look again once the page settles.
+  private func observeContentScroll() {
+    guard #available(iOS 26.0, *) else { return }
+    tabBarMinimizeBehavior = visible ? .onScrollDown : .never
+    let host = selectedViewController
+    for delay in [0.05, 0.6] {
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+        guard let self, let host, host === self.selectedViewController,
+          let root = self.content.webView?.scrollView
+        else { return }
+        host.setContentScrollView(self.visible ? self.mainScroller(in: root) : nil, for: .bottom)
+      }
+    }
+  }
+
+  private func mainScroller(in root: UIScrollView) -> UIScrollView? {
+    var best: UIScrollView?
+    var bestArea: CGFloat = 0
+    var stack: [UIView] = root.subviews
+    while let next = stack.popLast() {
+      stack.append(contentsOf: next.subviews)
+      guard let scroller = next as? UIScrollView, scroller.window != nil,
+        scroller.contentSize.height > scroller.bounds.height + 1
+      else { continue }
+      let area = scroller.bounds.width * scroller.bounds.height
+      if area > bestArea {
+        best = scroller
+        bestArea = area
+      }
+    }
+    return best
   }
 
   func invalidate() {
@@ -327,5 +370,15 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     pendingCompletion = false
     tabBar.alpha = 1
     hideBar(!visible || blocked, animated: false)
+  }
+}
+
+/// Claims touches only inside `region`; everything else passes through.
+final class TabItemHitRegion: UIControl {
+  var region: () -> CGRect? = { nil }
+
+  override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+    guard let superview, let frame = region() else { return false }
+    return frame.contains(convert(point, to: superview))
   }
 }

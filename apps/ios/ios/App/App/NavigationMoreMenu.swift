@@ -25,7 +25,8 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
     super.init(nibName: nil, bundle: nil)
     modalPresentationStyle = .custom
     transitioningDelegate = self
-    preferredContentSize = CGSize(width: 0, height: 72)
+    // Shorter than the tab bar beneath it so the menu reads as its accessory.
+    preferredContentSize = CGSize(width: 0, height: 60)
   }
 
   func presentationController(
@@ -63,7 +64,7 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
       configuration.image = UIImage(named: item.symbol)
       configuration.title = item.title
       configuration.imagePlacement = .top
-      configuration.imagePadding = 4
+      configuration.imagePadding = 2
       configuration.contentInsets = .zero
       configuration.baseForegroundColor = .label
       configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
@@ -86,8 +87,8 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
     NSLayoutConstraint.activate([
       actions.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
       actions.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-      actions.topAnchor.constraint(equalTo: view.topAnchor, constant: 6),
-      actions.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6),
+      actions.topAnchor.constraint(equalTo: view.topAnchor, constant: 4),
+      actions.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
     ])
   }
 
@@ -108,11 +109,15 @@ private final class CompactMenuPresentation: UIPresentationController {
 
   override var frameOfPresentedViewInContainerView: CGRect {
     guard let containerView else { return .zero }
+    // The iOS 26 glass tab bar floats about 21pt in from each edge; share its
+    // width so the menu stacks on it as one column.
+    let inset: CGFloat
+    if #available(iOS 26.0, *) { inset = 21 } else { inset = 16 }
     let size = CGSize(
-      width: containerView.bounds.width - 32,
+      width: containerView.bounds.width - inset * 2,
       height: presentedViewController.preferredContentSize.height)
     return CGRect(
-      x: containerView.bounds.maxX - size.width - 16,
+      x: containerView.bounds.maxX - size.width - inset,
       y: max(containerView.safeAreaInsets.top + 8, anchor().minY - size.height - 8),
       width: size.width, height: size.height)
   }

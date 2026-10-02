@@ -36,7 +36,7 @@ export function MobileHeader({ hideFallback = false }: { hideFallback?: boolean 
       onClick={back}
     >
       <span className="mobile-back-icon">
-        <ChevronLeft size={26} strokeWidth={2.25} />
+        <ChevronLeft size={22} strokeWidth={2.25} />
       </span>
     </button>
   ) : null;
