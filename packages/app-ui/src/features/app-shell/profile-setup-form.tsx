@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type FormEvent } from "react";
 import { Loader2, UserRound } from "lucide-react";
 import { validateAvatarFile } from "@silverhand/shared";
 import { AvatarPickerButton } from "@/components/avatar-picker-button";
+import { AVATAR_PX } from "@/components/avatar-scale";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { AuthSplitLayout } from "@/components/brand/auth-split-layout";
@@ -80,7 +81,7 @@ export function ProfileSetupForm({
         <h1 className="text-lg font-semibold">Set up your profile</h1>
         <div className="flex items-center gap-3">
           <AvatarPickerButton
-            size={56}
+            size={AVATAR_PX["3xl"]}
             label={avatar ? "Edit" : "Add"}
             ariaLabel="Choose profile photo"
             disabled={pending}

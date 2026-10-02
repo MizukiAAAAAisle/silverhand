@@ -5,6 +5,7 @@ import { UserAvatar } from "@/components/user-avatar";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { useUsersById } from "@/features/users/hooks";
 import { AgentAvatar } from "@/components/agent-avatar";
+import { AVATAR_PX } from "@/components/avatar-scale";
 
 export function memberPreviewCapacity(
   width: number,
@@ -80,14 +81,14 @@ export function ChannelMembersPreview({
             {member.kind === "agent" ? (
               <AgentAvatar
                 runtime={member.runtime}
-                size={32}
+                size={AVATAR_PX.lg}
                 className="border-(length:--border-avatar-width) border-border-avatar"
                 avatarObjectUrl={avatarUrls.get(member.agent_id) ?? null}
                 alt={member.display_name || member.name}
               />
             ) : (
               <UserAvatar
-                size={32}
+                size={AVATAR_PX.lg}
                 className="border-(length:--border-avatar-width) border-border-avatar"
                 avatarObjectUrl={humanAvatarUrls.get(member.user_id) ?? null}
                 alt={member.display_name || member.name}

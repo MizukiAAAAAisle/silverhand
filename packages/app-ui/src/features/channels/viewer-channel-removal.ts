@@ -419,7 +419,16 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<string, ChannelKeyC
     reason:
       "RETAINED ON PURPOSE: notification-repo filters by recipient only, NOT by conversation membership, so a refetch still returns these rows — a local delete would diverge from the server and be resurrected. Whether losing a channel should clear its notifications is a backend domain decision, not a viewer-local cleanup",
   },
+  "password-status": {
+    verdicts: ["exempt"],
+    reason: "viewer's own credential state; no conversation axis",
+  },
   presence: { verdicts: ["exempt"], reason: "per-user presence; no conversation axis" },
+  "related-users": {
+    verdicts: ["exempt"],
+    reason:
+      "users sharing a workspace with the viewer; refetched on workspace membership change, no channel axis",
+  },
   "profile-message-counts": {
     verdicts: ["exempt"],
     reason:

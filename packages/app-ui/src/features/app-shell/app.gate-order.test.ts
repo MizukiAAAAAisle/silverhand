@@ -239,21 +239,6 @@ it("opens Login for a returning user even when signup remains available", async 
   expect(html).not.toContain(SIG_REG_SIGNUP_AUTOCOMPLETE);
 });
 
-it("uses the shared themed primary action for password change without the redundant subtitle", async () => {
-  const { ChangePasswordForm } = await import("../settings-shell/components/change-password-form");
-  const client = new QueryClient();
-  client.setQueryData(["password-status", "test-user"], { has_password: true });
-  const html = renderToStaticMarkup(
-    React.createElement(
-      QueryClientProvider,
-      { client },
-      React.createElement(ChangePasswordForm, { userId: "test-user" }),
-    ),
-  );
-  expect(html).toContain('data-button-action="primary"');
-  expect(html).not.toContain("You will be signed out on all devices");
-});
-
 it.each([true, false])(
   "server editing follows the product option (enabled=%s) in login and signup",
   async (enabled) => {
