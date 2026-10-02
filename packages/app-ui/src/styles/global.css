@@ -1144,9 +1144,23 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   transform: translate3d(0, 0, 0);
   pointer-events: auto;
 }
+/* The content trails the panel: it recedes and fades while the surface slides. */
+.sidebar-surface > * {
+  transform-origin: top left;
+  transition:
+    opacity var(--sidebar-anim-ms) var(--sidebar-ease),
+    scale var(--sidebar-anim-ms) var(--sidebar-ease),
+    translate var(--sidebar-anim-ms) var(--sidebar-ease);
+}
+.sidebar-surface[data-state="closed"] > * {
+  opacity: 0;
+  scale: 0.95;
+  translate: 24px 0;
+}
 @media (prefers-reduced-motion: reduce) {
   .sidebar-slot,
-  .sidebar-surface {
+  .sidebar-surface,
+  .sidebar-surface > * {
     transition: none;
   }
 }

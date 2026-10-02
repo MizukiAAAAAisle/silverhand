@@ -120,81 +120,75 @@ export function ChatShell({
                 {...(compact || workspaceSidebarVisible ? {} : { inert: "" })}
                 aria-hidden={compact || workspaceSidebarVisible ? undefined : true}
               >
-                {compact || workspaceSidebarPane.present ? (
-                  <div
-                    className="sidebar-surface"
-                    data-state={compact ? "open" : workspaceSidebarPane.surfaceState}
-                    style={{ width: compact ? "100%" : "var(--sidebar-width)" }}
-                  >
-                    <ChatSidebar
-                      fill={compact}
-                      workspacesLoading={model.workspacesLoading}
-                      workspaces={workspaces.map((w) => ({
-                        id: w.id,
-                        name: w.name,
-                        owner_agent_id: w.owner_agent_id,
-                        unread: attentionBadges?.by_workspace?.[w.id] ?? 0,
-                        // Both row signals come from the ONE roll-up (#task:1870):
-                        // the count and the mute marker must never disagree about
-                        // the same workspace.
-                        muted: attentionBadges?.muted_workspace_ids?.includes(w.id) ?? false,
-                        archived: w.archived_at !== null,
-                        created_at: w.created_at,
-                      }))}
-                      agentsById={agentsById}
-                      selectedWorkspaceId={selectedWorkspaceId}
-                      // The tree's ONE selection object. Carries forward the
-                      // secondary-pane preference the retired channel column owned;
-                      // `selectSidebarSelectedConversationId` holds the rule (a
-                      // resolved secondary owns the highlight only when its row is
-                      // in this sidebar — always true for a private line, which
-                      // lives in the workspace-independent DIRECT MESSAGES list).
-                      selectedChannelId={sidebarSelectedConversationId}
-                      onSelectChannel={handleSelectChannel}
-                      // A pair has no workspace to open it in, so it takes the
-                      // workspace-less route directly. No remembered-layout
-                      // restore: the panes that memory replays (thread /
-                      // threads-list / side) are channel-scoped, so there is
-                      // nothing recorded for a pair to restore (#task:2035).
-                      onSelectDirectPair={nav.toDirect}
-                      // The transient draft row (#task:2039) re-opens THE DRAFT,
-                      // never the pair: while the draft route is open that row is
-                      // the draft's (`mergeDirectLineRows`), and it holds unsent
-                      // text or a failed first send. Routing it through
-                      // `handleMessageAgent` — which prefers an existing pair —
-                      // would discard both (@Cindy, #task:2039 review).
-                      directDraftTarget={directDraftTarget}
-                      onSelectDirectDraft={nav.toDirectDraft}
-                      onCreateChannel={setCreateChannelWorkspaceId}
-                      onOpenWorkspaceSettings={setWorkspaceSettingsId}
-                      // STARRED is global, so the parent workspace is explicit —
-                      // `handleSelectChannel` then opens a starred channel in another
-                      // workspace with the SAME remembered-layout restore as its home
-                      // row, instead of a bare jump.
-                      onSelectConversation={(workspaceId, conversationId) =>
-                        handleSelectChannel(conversationId, workspaceId)
-                      }
-                      onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
-                      savedActive={view === "saved"}
-                      onSelectSaved={() => nav.toChatSaved()}
-                      archivedActive={view === "archived"}
-                      onSelectArchived={() => nav.toChatArchived()}
-                      searchActive={view === "search"}
-                      onSelectSearch={() => nav.toChatSearch()}
-                      savedCount={savedItems?.length}
-                    />
-                  </div>
-                ) : null}
+                <div
+                  className="sidebar-surface"
+                  data-state={compact ? "open" : workspaceSidebarPane.surfaceState}
+                  style={{ width: compact ? "100%" : "var(--sidebar-width)" }}
+                >
+                  <ChatSidebar
+                    fill={compact}
+                    workspacesLoading={model.workspacesLoading}
+                    workspaces={workspaces.map((w) => ({
+                      id: w.id,
+                      name: w.name,
+                      owner_agent_id: w.owner_agent_id,
+                      unread: attentionBadges?.by_workspace?.[w.id] ?? 0,
+                      // Both row signals come from the ONE roll-up (#task:1870):
+                      // the count and the mute marker must never disagree about
+                      // the same workspace.
+                      muted: attentionBadges?.muted_workspace_ids?.includes(w.id) ?? false,
+                      archived: w.archived_at !== null,
+                      created_at: w.created_at,
+                    }))}
+                    agentsById={agentsById}
+                    selectedWorkspaceId={selectedWorkspaceId}
+                    // The tree's ONE selection object. Carries forward the
+                    // secondary-pane preference the retired channel column owned;
+                    // `selectSidebarSelectedConversationId` holds the rule (a
+                    // resolved secondary owns the highlight only when its row is
+                    // in this sidebar — always true for a private line, which
+                    // lives in the workspace-independent DIRECT MESSAGES list).
+                    selectedChannelId={sidebarSelectedConversationId}
+                    onSelectChannel={handleSelectChannel}
+                    // A pair has no workspace to open it in, so it takes the
+                    // workspace-less route directly. No remembered-layout
+                    // restore: the panes that memory replays (thread /
+                    // threads-list / side) are channel-scoped, so there is
+                    // nothing recorded for a pair to restore (#task:2035).
+                    onSelectDirectPair={nav.toDirect}
+                    // The transient draft row (#task:2039) re-opens THE DRAFT,
+                    // never the pair: while the draft route is open that row is
+                    // the draft's (`mergeDirectLineRows`), and it holds unsent
+                    // text or a failed first send. Routing it through
+                    // `handleMessageAgent` — which prefers an existing pair —
+                    // would discard both (@Cindy, #task:2039 review).
+                    directDraftTarget={directDraftTarget}
+                    onSelectDirectDraft={nav.toDirectDraft}
+                    onCreateChannel={setCreateChannelWorkspaceId}
+                    onOpenWorkspaceSettings={setWorkspaceSettingsId}
+                    // STARRED is global, so the parent workspace is explicit —
+                    // `handleSelectChannel` then opens a starred channel in another
+                    // workspace with the SAME remembered-layout restore as its home
+                    // row, instead of a bare jump.
+                    onSelectConversation={(workspaceId, conversationId) =>
+                      handleSelectChannel(conversationId, workspaceId)
+                    }
+                    onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
+                    savedActive={view === "saved"}
+                    onSelectSaved={() => nav.toChatSaved()}
+                    archivedActive={view === "archived"}
+                    onSelectArchived={() => nav.toChatArchived()}
+                    searchActive={view === "search"}
+                    onSelectSearch={() => nav.toChatSearch()}
+                    savedCount={savedItems?.length}
+                  />
+                </div>
               </div>
             )}
-            {/* Splitter stays mounted for the entire animation lifecycle —
-             * keying it to `present` (not `visible`) avoids the 4 px
-             * layout snap that happens if the splitter unmounts at frame
-             * zero of the hide animation while the slot is still 220 ms
-             * away from finishing its collapse. The splitter slides
-             * leftward in lockstep with the slot's right edge and
-             * unmounts together with the surface at the end. */}
-            {!compact && workspaceSidebarPane.present ? (
+            {/* The splitter outlives the hide transition: unmounting it at
+             * frame zero snaps the layout 4 px while the slot is still
+             * collapsing. */}
+            {!compact && (workspaceSidebarVisible || workspaceSidebarPane.transitioning) ? (
               <VerticalSplitter onPointerDown={sidebar.startResize} active={sidebar.isDragging} />
             ) : null}
             {!showList &&

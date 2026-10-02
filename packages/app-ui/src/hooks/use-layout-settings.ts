@@ -1,9 +1,8 @@
 import { type SidebarPane, useSidebarPane } from "./use-sidebar-pane";
-import { SIDEBAR_KEEP_MOUNTED } from "@/sidebar-performance-experiment";
 
 /**
- * Top-level layout preferences. The sidebar owns an animated visibility state
- * machine (see `useSidebarPane`); persistence is delegated to that hook so the
+ * Top-level layout preferences. The sidebar owns its animated visibility (see
+ * `useSidebarPane`); persistence is delegated to that hook so the
  * storage shape stays per-key (one bool per pane) instead of a monolithic
  * `silverhand:layout-settings` blob — small, additive, and trivially
  * forward-compatible.
@@ -28,7 +27,6 @@ export function useLayoutSettings(): {
   const workspaceSidebar = useSidebarPane({
     storageKey: WORKSPACE_SIDEBAR_KEY,
     defaultVisible: true,
-    keepMounted: SIDEBAR_KEEP_MOUNTED,
   });
 
   return {
