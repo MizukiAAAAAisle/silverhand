@@ -40,8 +40,17 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
 
   override func viewDidLoad() {
     super.viewDidLoad()
-    view.backgroundColor = .systemBackground
     view.accessibilityViewIsModal = true
+    // On iOS 26 the menu shares the tab bar's glass instead of an opaque card.
+    if #available(iOS 26.0, *) {
+      let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+      glass.frame = view.bounds
+      glass.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+      glass.cornerConfiguration = .capsule()
+      view.addSubview(glass)
+    } else {
+      view.backgroundColor = .systemBackground
+    }
 
     let actions = UIStackView()
     actions.axis = .horizontal
@@ -114,6 +123,8 @@ private final class CompactMenuPresentation: UIPresentationController {
     dismissArea.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     dismissArea.addTarget(self, action: #selector(closeMenu), for: .touchUpInside)
     containerView.insertSubview(dismissArea, at: 0)
+    // Glass draws its own shape and depth.
+    if #available(iOS 26.0, *) { return }
     presentedView?.layer.cornerRadius = 24
     presentedView?.layer.shadowColor = UIColor.black.cgColor
     presentedView?.layer.shadowOpacity = 0.12

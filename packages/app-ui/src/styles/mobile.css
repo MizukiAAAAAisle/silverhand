@@ -204,7 +204,6 @@
   }
   .app-shell {
     padding-top: env(safe-area-inset-top, 0px);
-    padding-bottom: var(--native-navigation-inset, 0px);
     --frame-padding: 0px;
     --pane-radius: 0px;
     --pane-border: 0;
@@ -212,6 +211,13 @@
     /* One content canvas; nested controls keep their own surfaces. */
     --app-paper: none;
     background-color: var(--bg-base);
+  }
+  /* The native tab bar is glass: content runs beneath it, and only the
+     outermost scroller pads its end so the last row can scroll clear. */
+  :root[style*="--native-navigation-inset"]
+    .app-shell
+    :is(.overflow-y-auto, [data-tasks-board]):not(:is(.overflow-y-auto, [data-tasks-board]) *) {
+    padding-bottom: calc(var(--native-navigation-inset) + min(12px, var(--native-navigation-inset)));
   }
   :root [data-layout="compact"] [data-panel] {
     --pane-bg: var(--bg-base);
