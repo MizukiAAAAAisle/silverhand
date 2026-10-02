@@ -915,7 +915,7 @@ describe("viewer-local channel removal contract (#task:1689)", () => {
             conversationRefCalls(f.lines.join("\n")).some((verb) => EVICTION_VERBS.has(verb)),
         )
         .map((f) => f.rel);
-      expect(evicting).toContain("features/workspaces/hooks.ts");
+      expect(evicting).toContain("features/workspaces/channel-mutations.ts");
     });
   });
 

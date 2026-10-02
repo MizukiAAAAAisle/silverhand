@@ -32,7 +32,7 @@ import {
   type ChannelSlice,
   type ChannelSourceStatus,
   type HumanMentionCandidate,
-} from "./composer";
+} from "./composer-picker";
 
 /**
  * Locks the branches `formatPickInsertion` can produce so the mention

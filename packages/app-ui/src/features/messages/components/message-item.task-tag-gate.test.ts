@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
 describe("MessageTaskTag — status-picker mutation is member-gated", () => {
-  const source = read("./message-item.tsx");
+  const source = read("./message-task-tag.tsx");
 
   it("has exactly one status mutation entry — the read-only branch cannot write", () => {
     const mutations = source.split("updateStatus.mutate(").length - 1;
