@@ -588,3 +588,9 @@
 [data-theme="forza6"] [data-button-action="neutral"]:hover:not(:disabled) {
   box-shadow: var(--forza6-poster-shadow-xl);
 }
+
+[data-theme="forza6"] [data-settings-group] {
+  border: var(--control-border-width) solid var(--forza6-ink);
+  border-radius: 0;
+  box-shadow: var(--forza6-poster-shadow-sm);
+}

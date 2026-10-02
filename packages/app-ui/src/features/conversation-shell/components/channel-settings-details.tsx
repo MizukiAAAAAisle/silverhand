@@ -1,8 +1,13 @@
 import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Archive, ArchiveRestore, Loader2, Lock, LockOpen, LogOut } from "lucide-react";
 import type { ChannelLeaveBlockedReason, ConversationVisibility } from "@silverhand/shared";
-import { Input, Label } from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+
+const SECTION_TITLE_CLASS = "text-xs font-semibold uppercase tracking-wide text-text-secondary";
+const ROW_CLASS = "flex min-h-10 w-full items-center gap-2.5 px-3 py-2 text-left text-xs";
+const ROW_BUTTON_CLASS = `${ROW_CLASS} transition-colors hover:bg-bg-hover focus-outline disabled:pointer-events-none disabled:text-text-muted`;
+const ROW_ICON_CLASS = "size-3.5 shrink-0 text-text-secondary";
 
 /** Client-side cap. Keep in sync with the backend rename schema. */
 const MAX_TITLE_LENGTH = 128;
@@ -158,10 +163,10 @@ export function ChannelSettingsDetails({
 
   const renameNode = onRename ? (
     <form className="flex flex-col gap-2" onSubmit={(e) => void handleSubmit(e)}>
-      <Label htmlFor="channel-settings-name">Channel name</Label>
       <div className="flex items-center gap-2">
         <Input
           id="channel-settings-name"
+          aria-label="Channel name"
           value={title}
           maxLength={MAX_TITLE_LENGTH}
           spellCheck={false}
@@ -177,72 +182,79 @@ export function ChannelSettingsDetails({
     </form>
   ) : null;
 
-  const actions: { key: string; node: JSX.Element }[] = [];
+  const rows: { key: string; node: JSX.Element }[] = [];
 
   if (showVisibility) {
-    actions.push({
+    rows.push({
       key: "visibility",
       node: (
-        <div className="flex flex-col gap-2">
+        <div className={ROW_CLASS}>
+          {isPrivate ? (
+            <Lock className={ROW_ICON_CLASS} />
+          ) : (
+            <LockOpen className={ROW_ICON_CLASS} />
+          )}
+          <span className="min-w-0 flex-1">Visibility</span>
+          <span className="text-text-muted">{isPrivate ? "Private" : "Public"}</span>
           <Button
             type="button"
             variant="neutral"
-            className="w-full"
+            size="sm"
+            className="text-xs"
             disabled={visSaving}
             onClick={() => void handleToggleVisibility()}
           >
-            {visSaving ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : isPrivate ? (
-              <LockOpen className="size-3.5" />
-            ) : (
-              <Lock className="size-3.5" />
-            )}
+            {visSaving ? <Loader2 className="size-3.5 animate-spin" /> : null}
             {isPrivate ? "Make public" : "Make private"}
           </Button>
-          {visError ? <p className="text-xs text-error">{visError}</p> : null}
         </div>
       ),
     });
   }
 
   if (onToggleArchive) {
-    actions.push({
+    rows.push({
       key: "archive",
       node: (
-        <Button
+        <button
           type="button"
-          variant="neutral"
-          className="w-full"
+          className={ROW_BUTTON_CLASS}
           disabled={archivePending}
           onClick={() => void handleToggleArchive()}
         >
-          {isArchived ? <ArchiveRestore className="size-3.5" /> : <Archive className="size-3.5" />}
-          {isArchived ? "Restore channel" : "Archive channel"}
-        </Button>
+          {archivePending ? (
+            <Loader2 className={`${ROW_ICON_CLASS} animate-spin`} />
+          ) : isArchived ? (
+            <ArchiveRestore className={ROW_ICON_CLASS} />
+          ) : (
+            <Archive className={ROW_ICON_CLASS} />
+          )}
+          <span className="min-w-0 flex-1">
+            {isArchived ? "Restore channel" : "Archive channel"}
+          </span>
+        </button>
       ),
     });
   }
 
   if (onLeave) {
-    actions.push({
+    rows.push({
       key: "leave",
-      // The Leave button stays put; clicking it APPENDS a warning tip below it
-      // (never replaces the row) carrying the consequence + Cancel/confirm.
+      // Confirming expands this row in place with the consequence and
+      // Cancel/confirm; the row itself never moves.
       node: canLeave ? (
-        <div className="flex flex-col gap-2">
-          <Button
+        <div>
+          <button
             type="button"
-            variant="neutral"
-            className="w-full"
-            disabled={leaving}
+            className={ROW_BUTTON_CLASS}
+            disabled={leaving || leaveConfirm}
             onClick={() => setLeaveConfirm(true)}
           >
-            <LogOut className="size-3.5" />
-            Leave channel
-          </Button>
+            <LogOut className={ROW_ICON_CLASS} />
+            <span className="min-w-0 flex-1">Leave channel</span>
+          </button>
           {leaveConfirm ? (
-            <div className="flex flex-col gap-2.5">
+            <div className="flex flex-col gap-2.5 px-3 pb-3">
               <div className="rounded-(--control-radius) bg-(--warning-surface) px-3 py-2.5">
                 <p className="text-sm leading-relaxed text-text-primary">
                   {isPrivate
@@ -278,13 +290,13 @@ export function ChannelSettingsDetails({
           ) : null}
         </div>
       ) : (
-        <div className="flex flex-col gap-2">
-          <Button type="button" variant="neutral" className="w-full" disabled>
-            <LogOut className="size-3.5" />
+        <button type="button" className={ROW_BUTTON_CLASS} disabled>
+          <LogOut className={ROW_ICON_CLASS} />
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             Leave channel
-          </Button>
-          {blockedCopy ? <p className="text-xs text-text-secondary">{blockedCopy}</p> : null}
-        </div>
+            {blockedCopy ? <span className="text-text-muted">{blockedCopy}</span> : null}
+          </span>
+        </button>
       ),
     });
   }
@@ -292,13 +304,8 @@ export function ChannelSettingsDetails({
   return (
     <div className="flex flex-col gap-8">
       <section className="flex flex-col gap-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-text-secondary">INFO</h3>
-        {renameNode ?? (
-          <div>
-            <p className="text-xs text-text-muted">Channel name</p>
-            <p className="mt-1 text-sm font-medium">{currentTitle}</p>
-          </div>
-        )}
+        <h3 className={SECTION_TITLE_CLASS}>Name</h3>
+        {renameNode ?? <p className="text-sm font-medium">{currentTitle}</p>}
         {isArchived ? <p className="mt-2 text-xs text-text-muted">Archived</p> : null}
       </section>
       {notifications}
@@ -307,11 +314,18 @@ export function ChannelSettingsDetails({
           {archiveError}
         </p>
       ) : null}
-      {actions.length > 0 ? (
-        <section className="flex flex-col gap-2">
-          {actions.map((action) => (
-            <Fragment key={action.key}>{action.node}</Fragment>
-          ))}
+      {rows.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          <h3 className={SECTION_TITLE_CLASS}>Channel</h3>
+          <div
+            data-settings-group
+            className="flex flex-col divide-y divide-border-subtle overflow-hidden rounded-(--card-radius) border border-border-subtle bg-bg-floating"
+          >
+            {rows.map((row) => (
+              <Fragment key={row.key}>{row.node}</Fragment>
+            ))}
+          </div>
+          {visError ? <p className="text-xs text-error">{visError}</p> : null}
         </section>
       ) : null}
     </div>
