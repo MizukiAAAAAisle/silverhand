@@ -1,5 +1,5 @@
 import { AgentActivitySkeleton } from "./agent-loading";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Ban,
@@ -289,12 +289,9 @@ const TONE_TEXT: Record<KindVisual["tone"], string> = {
 const ACTIVITY_META = "text-[color:var(--activity-meta)]";
 
 /**
- * Shared row chrome: the time leads the row, then a tone-coloured glyph, then
- * the body — a left-to-right `time → icon → name → params` read. Everything is
- * aligned to the FIRST line of the content (items-start — a multi-line body
- * keeps time + glyph on the opening line, not floating to the vertical middle).
- * The preview sits in the body column so it indents under the title with no
- * magic margin, regardless of the leading columns' widths.
+ * Shared row chrome: a `time → icon → body` grid aligned to the first line.
+ * `preview` (prose) stays in the body column; `block` (code / diff) starts at
+ * the icon column so wide content gains the time column's width.
  */
 function RowShell({
   Icon,
@@ -302,31 +299,136 @@ function RowShell({
   title,
   time,
   preview,
+  block,
 }: {
   Icon: KindVisual["Icon"];
   tone: KindVisual["tone"];
   title: React.ReactNode;
   time: string;
   preview?: React.ReactNode;
+  block?: React.ReactNode;
 }): JSX.Element {
   return (
-    <li className="py-1">
-      <div className="flex items-start gap-2.5">
-        <span
-          className={cn(
-            "mt-0.5 shrink-0 font-mono text-(length:--text-badge) tabular-nums",
-            ACTIVITY_META,
-          )}
-        >
-          {time}
-        </span>
-        <Icon className={cn("mt-0.5 size-3.5 shrink-0", TONE_TEXT[tone])} strokeWidth={2} />
-        <div className="min-w-0 flex-1 text-xs leading-snug">
-          <div className="wrap-break-word">{title}</div>
-          {preview ? <div className="mt-1 min-w-0">{preview}</div> : null}
-        </div>
+    <li className="grid grid-cols-[auto_auto_minmax(0,1fr)] items-start gap-x-2.5 py-1">
+      <span
+        className={cn("mt-0.5 font-mono text-(length:--text-badge) tabular-nums", ACTIVITY_META)}
+      >
+        {time}
+      </span>
+      <Icon className={cn("mt-0.5 size-3.5", TONE_TEXT[tone])} strokeWidth={2} />
+      <div className="min-w-0 text-xs leading-snug">
+        <div className="wrap-break-word">{title}</div>
+        {preview ? <div className="mt-1 min-w-0">{preview}</div> : null}
       </div>
+      {block ? (
+        <div data-activity-block className="col-span-2 col-start-2 mt-1 min-w-0">
+          {block}
+        </div>
+      ) : null}
     </li>
+  );
+}
+
+/** Toggle on a plain click; a click that ends a text selection is a copy, not a toggle. */
+function toggleUnlessSelecting(toggle: () => void): void {
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed) {
+    return;
+  }
+  toggle();
+}
+
+/**
+ * A tool argument that can expand. Collapsed it is one truncated line after the
+ * tool name; expanded it leaves the title and becomes a full-width block, so
+ * long commands use the row's width instead of the column after the name.
+ */
+function ToolArg({
+  text,
+  expanded,
+  onToggle,
+}: {
+  text: string;
+  expanded: boolean;
+  onToggle: () => void;
+}): JSX.Element {
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
+      data-activity-arg
+      className={cn(
+        expanded
+          ? "block cursor-text whitespace-pre-wrap wrap-anywhere bg-(--activity-params-bg) px-2 py-1 font-mono text-(length:--text-meta) leading-relaxed"
+          : "ml-1.5 min-w-0 cursor-pointer truncate font-mono",
+        ACTIVITY_META,
+      )}
+      onClick={() => {
+        toggleUnlessSelecting(onToggle);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onToggle();
+        }
+      }}
+    >
+      {text}
+    </span>
+  );
+}
+
+/**
+ * Six-line window over a code or diff block. The toggle exists only when the
+ * content actually overflows, measured after layout so width changes re-check.
+ */
+function ClampedBlock({ children }: { children: React.ReactNode }): JSX.Element {
+  const ref = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || expanded) {
+      return;
+    }
+    const measure = () => {
+      setOverflows(el.scrollHeight > el.clientHeight + 1);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+    };
+  }, [expanded]);
+
+  const clamped = !expanded && overflows;
+
+  return (
+    <div>
+      <div
+        ref={ref}
+        data-activity-block-clamped={clamped ? "" : undefined}
+        className="overflow-hidden font-mono text-(length:--text-meta) leading-relaxed"
+        style={expanded ? undefined : { maxHeight: "calc(6lh + 0.5rem)" }}
+      >
+        {children}
+      </div>
+      {overflows ? (
+        <button
+          type="button"
+          data-activity-block-toggle
+          className="mt-0.5 text-(length:--text-meta) text-text-secondary hover:text-text-primary"
+          onClick={() => {
+            setExpanded((value) => !value);
+          }}
+        >
+          {expanded ? "Show less" : "Show all"}
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -368,8 +470,14 @@ function GroupRow({
  *  only a proven `success` is green — `failed` is an error mark, `cancelled`
  *  neutral, and `completed` (the wire default for old / unclassified outputs) a
  *  neutral "done". A finished call whose success we can't prove is never green. */
-function ToolOutcomeMark({ outcome }: { outcome: ToolOutcome }): JSX.Element {
-  const base = "ml-1.5 inline-block size-3 -translate-y-px";
+function ToolOutcomeMark({
+  outcome,
+  className = "ml-1.5 -translate-y-px",
+}: {
+  outcome: ToolOutcome;
+  className?: string;
+}): JSX.Element {
+  const base = cn("inline-block size-3 shrink-0", className);
   switch (outcome) {
     case "success":
       return (
@@ -420,23 +528,7 @@ function EventRow({
   const time = dayjs(event.created_at).format("HH:mm:ss");
 
   if (kind === "tool_call") {
-    const name = str(payload, "name") ?? "tool";
-    const p = presentToolCall(name, payload?.["input"] ?? null);
-    return (
-      <RowShell
-        Icon={Icon}
-        tone={tone}
-        time={time}
-        title={
-          <span className="text-text-primary">
-            <span className="font-semibold">{p.verb}</span>
-            {completed ? <ToolOutcomeMark outcome={outcome ?? "completed"} /> : null}
-            {p.arg ? <span className={cn("ml-1.5 font-mono", ACTIVITY_META)}>{p.arg}</span> : null}
-          </span>
-        }
-        preview={p.detail ? <ToolDetailView detail={p.detail} /> : null}
-      />
-    );
+    return <ToolCallRow event={event} completed={completed} outcome={outcome} />;
   }
 
   if (kind === "compaction_started" || kind === "compaction_finished") {
@@ -542,6 +634,63 @@ function EventRow({
   return <RowShell Icon={Icon} tone={tone} time={time} title={title} />;
 }
 
+function ToolCallRow({
+  event,
+  completed,
+  outcome,
+}: {
+  event: ActivityEvent;
+  completed?: boolean;
+  outcome?: ToolOutcome;
+}): JSX.Element {
+  const [argExpanded, setArgExpanded] = useState(false);
+
+  const { Icon, tone } = visualForKind(event.kind);
+  const time = dayjs(event.created_at).format("HH:mm:ss");
+  const name = str(event.payload, "name") ?? "tool";
+  const p = presentToolCall(name, event.payload?.["input"] ?? null);
+  const toggleArg = () => {
+    setArgExpanded((value) => !value);
+  };
+
+  const expandedArg =
+    p.arg && argExpanded ? <ToolArg text={p.arg} expanded onToggle={toggleArg} /> : null;
+  const detail = p.detail ? (
+    <ClampedBlock>
+      <ToolDetailView detail={p.detail} />
+    </ClampedBlock>
+  ) : null;
+  const block =
+    expandedArg || detail ? (
+      <div className="flex flex-col gap-1">
+        {expandedArg}
+        {detail}
+      </div>
+    ) : null;
+
+  return (
+    <RowShell
+      Icon={Icon}
+      tone={tone}
+      time={time}
+      title={
+        <span className="flex min-w-0 items-start text-text-primary">
+          <span className="shrink-0 font-semibold">{p.verb}</span>
+          {completed ? (
+            <span className="ml-1.5 flex h-[1lh] shrink-0 items-center">
+              <ToolOutcomeMark outcome={outcome ?? "completed"} className="" />
+            </span>
+          ) : null}
+          {p.arg && !argExpanded ? (
+            <ToolArg text={p.arg} expanded={false} onToggle={toggleArg} />
+          ) : null}
+        </span>
+      }
+      block={block}
+    />
+  );
+}
+
 /** Renders a tool_call's optional richer body: a diff (Edit/Write), or a
  *  monospace code/JSON block (shell / fallback). */
 function ToolDetailView({ detail }: { detail: ToolDetail }): JSX.Element {
@@ -551,7 +700,7 @@ function ToolDetailView({ detail }: { detail: ToolDetail }): JSX.Element {
   return (
     <pre
       className={cn(
-        "whitespace-pre-wrap break-all bg-(--activity-params-bg) px-2 py-1 font-mono text-(length:--text-meta) leading-relaxed",
+        "m-0 whitespace-pre-wrap wrap-anywhere bg-(--activity-params-bg) px-2 py-1 font-[inherit] leading-[inherit]",
         ACTIVITY_META,
       )}
     >
@@ -565,7 +714,7 @@ function ToolDetailView({ detail }: { detail: ToolDetail }): JSX.Element {
  *  never shown (marker-only). */
 function DiffView({ removed, added }: { removed: string; added: string }): JSX.Element {
   return (
-    <div className="flex flex-col gap-px border border-border-subtle font-mono text-(length:--text-meta) leading-relaxed">
+    <div className="flex flex-col gap-px border border-border-subtle">
       <DiffSide
         text={removed}
         sign="-"
@@ -599,7 +748,7 @@ function DiffSide({
       {text.split("\n").map((line, i) => (
         <div key={i} className="flex gap-2 px-2">
           <span className={cn("shrink-0 select-none", signClass)}>{sign}</span>
-          <span className="min-w-0 whitespace-pre-wrap break-all text-text-secondary">
+          <span className="min-w-0 whitespace-pre-wrap wrap-anywhere text-text-secondary">
             {line.length > 0 ? line : " "}
           </span>
         </div>

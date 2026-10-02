@@ -1165,6 +1165,10 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   }
 }
 
+[data-activity-block-clamped] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5lh), transparent);
+}
+
 /* Shared surface geometry; theme corner overrides still adapt to the app frame. */
 .nav-rail,
 [data-panel],

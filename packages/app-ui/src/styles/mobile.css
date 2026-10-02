@@ -423,3 +423,8 @@
 :where([data-layout="compact"]) [data-composer-shell]:focus-within > [data-composer-editor] {
   box-shadow: var(--composer-shadow-focus, none);
 }
+
+/* A narrow pane spends the time column on the block too. */
+:where([data-layout="compact"]) [data-activity-block] {
+  grid-column: 1 / -1;
+}
