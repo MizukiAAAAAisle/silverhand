@@ -232,6 +232,19 @@ body,
   border-radius: var(--nav-row-radius, var(--control-radius));
   corner-shape: var(--nav-corner-shape, normal);
 }
+/* Create stays neutral at rest; hover previews it in the action hue as a soft
+   tint, never a full fill flashing in under the pointer. */
+[data-sidebar-cta]:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Secondary text inside a selected row follows the row's on-selected ink;
+   theme muted grey disappears into a saturated selected fill. */
+[data-ink-selected] {
+  --text-muted: color-mix(in srgb, var(--text-on-selected) 80%, transparent);
+}
 
 .sidebar-row-gutter {
   border-width: var(--sidebar-row-border-width, 2px);

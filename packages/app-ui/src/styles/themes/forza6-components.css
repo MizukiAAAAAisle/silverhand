@@ -226,9 +226,6 @@
   --sticker-fg: currentColor;
   --sticker-frame: transparent;
 }
-[data-theme="forza6"] [data-ink-selected] {
-  --text-muted: color-mix(in srgb, var(--forza6-paper) 66%, transparent);
-}
 [data-theme="forza6"] [data-ink-selected] [data-sticker-tone="channel"] {
   --sticker-fg: var(--text-on-dark-pop);
 }
@@ -593,4 +590,10 @@
   border: var(--control-border-width) solid var(--forza6-ink);
   border-radius: 0;
   box-shadow: var(--forza6-poster-shadow-sm);
+}
+
+[data-theme="forza6"] [data-sidebar-cta]:hover:not(:disabled) {
+  border-color: var(--forza6-ink);
+  background: var(--bg-control-primary);
+  color: var(--text-on-control-primary);
 }

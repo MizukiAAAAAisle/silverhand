@@ -11,11 +11,11 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
 
   /* Application frame and panes */
-  --bg-app: #eff1f0;
+  --bg-app: #eef0f3;
   --card-radius: 8px;
   --pane-radius: 1.5rem;
   --pane-corner-shape: squircle;
-  --pane-border: 1px solid #e4e8e6;
+  --pane-border: 1px solid #e3e6ec;
   --card-shadow: 0 1px 3px rgba(var(--shadow-base), 0.08);
   --pane-shadow: 0 0.125rem 0.25rem 0 #0000000d, 0 1px 2px -1px #0000000d;
   --frame-padding: 8px;
@@ -25,7 +25,7 @@
   /* Surface, text and border foundations */
   --bg-base: #ffffff;
   --bg-elevated: #e6ebf3;
-  --bg-hover: #e9eef6;
+  --bg-hover: #eff1f4;
   --bg-primary: #edf1f7;
   --bg-selected: #ffffff;
   --bg-structure-dark: #1b2030;
@@ -42,7 +42,7 @@
   --text-on-selected: #ffffff;
   --text-on-structure: #f2f5f9;
   --text-primary: #111725;
-  --text-secondary: #171a19;
+  --text-secondary: #3a4152;
 
   /* Brand and semantic colors */
   --accent: #2f5ad0;
@@ -65,9 +65,9 @@
 
   /* Navigation and rows */
   --bg-nav-rail: transparent;
-  --nav-hover-tint: #1f1a12;
+  --nav-hover-tint: var(--text-primary);
   --nav-hover-strength: 6%;
-  --bg-nav-hover: rgba(31, 26, 18, 0.06);
+  --bg-nav-hover: rgba(17, 23, 37, 0.06);
   --bg-nav-selected: #fff;
   --bg-row-selected: var(--brand-primary);
   --border-nav-rail-hover: transparent;
@@ -75,7 +75,7 @@
   --border-row-hover: transparent;
   --row-frame-hover-bg: color-mix(in srgb, var(--bg-base), var(--text-primary) 6%);
   --border-row-selected: transparent;
-  --border-selected-card: #e4e8e6;
+  --border-selected-card: rgba(17, 23, 37, 0.1);
   --nav-rail-indicator-color: transparent;
   --nav-rail-indicator-display: none;
   --nav-rail-item-border-width: 1px;
@@ -86,13 +86,13 @@
   --sidebar-row-border-width: 1px;
   --text-nav-rail: var(--text-secondary);
   --text-nav-rail-hover: var(--text-primary);
-  --text-nav-selected: var(--text-secondary);
+  --text-nav-selected: var(--text-primary);
 
   /* Controls and actions */
   --border-control: rgba(17, 23, 37, 0.32);
   --border-control-hover: color-mix(in oklab, var(--text-primary) 26%, transparent);
   --control-border-width: 1px;
-  --control-radius: 6px;
+  --control-radius: 8px;
   --field-border-color: initial;
   --field-disabled-border-color: initial;
   --field-disabled-shadow: initial;
@@ -144,7 +144,7 @@
   --activity-params-bg: oklab(0 0 0 / 0.05);
   --chip-bg: rgba(17, 23, 37, 0.06);
   --chip-bg-hover: rgba(17, 23, 37, 0.11);
-  --chip-radius: 4px;
+  --chip-radius: 6px;
   --message-bubble-radius: var(--card-radius);
   --pill-radius: 9999px;
   --message-framed-border: rgba(var(--shadow-base), 0.16);
@@ -237,7 +237,7 @@
 /* Hooks: Identity */
 
 [data-theme="studio-light"] [data-panel="sidebar"] {
-  --pane-bg: #f8faf9;
+  --pane-bg: #f7f8fa;
 }
 
 /* Hooks: Messages and composer */

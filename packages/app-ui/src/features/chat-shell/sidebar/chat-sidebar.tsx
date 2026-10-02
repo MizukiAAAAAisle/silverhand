@@ -214,7 +214,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
             >
               <Button
                 type="button"
-                variant="primary"
+                variant="neutral"
                 className="h-8 w-full"
                 data-sidebar-cta
                 onClick={props.onCreateWorkspace}
