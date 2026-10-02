@@ -1,6 +1,5 @@
 import { useNavigationDriver } from "@/navigation/provider";
 import { selectSecondarySurface } from "./model/secondary-surface";
-import { useCompactLayout } from "@/navigation/layout";
 import { useContextualCloseResponder } from "@/features/app-shell/keyboard-shortcuts";
 import { useSecondaryPaneModel } from "@/features/app-shell/secondary-pane-model";
 import { useMarkMessageChannelRead } from "@/features/channels/hooks";
@@ -19,8 +18,11 @@ import type {
 } from "./conversation-shell-models";
 
 /** Owns pane-local state and visible-conversation effects across Chat/Activity presentations. */
-export function useConversationPanes(read: PaneReadModel, jump: PaneJumpModel) {
-  const compact = useCompactLayout();
+export function useConversationPanes(
+  read: PaneReadModel,
+  jump: PaneJumpModel,
+  { compact }: { compact: boolean },
+) {
   const route = useRouteState();
   const nav = useNav();
   const {

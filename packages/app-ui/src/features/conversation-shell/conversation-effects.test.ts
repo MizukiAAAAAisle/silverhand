@@ -109,6 +109,7 @@ function recover(
     jumpTarget: null,
     onJump: vi.fn(),
     recentlyRemovedPrimaryRef: removed,
+    compact: h.compact,
   });
 }
 beforeEach(() => {

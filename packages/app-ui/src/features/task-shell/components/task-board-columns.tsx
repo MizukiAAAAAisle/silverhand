@@ -120,6 +120,7 @@ export function TaskBoardColumns({
   return (
     <div
       data-tasks-board
+      data-scroll-root
       // Columns share the width when it's ample (`flex-1`) but never squeeze
       // below a readable floor (`min-w` on each column): once the five floors
       // exceed the container the board scrolls horizontally instead of crushing

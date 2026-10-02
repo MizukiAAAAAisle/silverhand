@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { useCompactLayout } from "@/navigation/layout";
+import { useCoarsePointer } from "@/navigation/layout";
 import "./message-context-menu.css";
 import {
   BellOff,
@@ -60,13 +60,13 @@ export function MessageContextMenu({
   onShare?: () => void;
   onUnfollowThread?: () => void;
 }): JSX.Element {
-  const compact = useCompactLayout();
+  const touch = useCoarsePointer();
   const [selecting, setSelecting] = useState(false);
   const triggerRef = useRef<HTMLSpanElement>(null);
   const openingSelection = useRef(false);
   useEffect(() => {
-    if (!compact) setSelecting(false);
-  }, [compact]);
+    if (!touch) setSelecting(false);
+  }, [touch]);
   useEffect(() => {
     if (!selecting) return;
     const row = triggerRef.current;
@@ -95,7 +95,7 @@ export function MessageContextMenu({
       if (ownsSelection()) window.getSelection()?.removeAllRanges();
     };
   }, [selecting]);
-  const canSelectText = compact && !!text?.trim();
+  const canSelectText = touch && !!text?.trim();
   const hasAnyAction =
     canSelectText || !!(onCopyMarkdown || onToggleSave || onShare || onUnfollowThread);
   if (!hasAnyAction) return trigger;

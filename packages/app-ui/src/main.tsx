@@ -16,8 +16,10 @@ import "@fontsource/space-grotesk/700.css";
 import "@fontsource/space-mono/400.css";
 import "@fontsource/space-mono/700.css";
 import "./styles/global.css";
+import { bindLayoutAttribute } from "./navigation/layout";
 
 export function mountApp(root: HTMLElement, options: AppOptions = {}): () => void {
+  const unbindLayout = bindLayoutAttribute(document.documentElement);
   const reactRoot = createRoot(root);
   reactRoot.render(
     <React.StrictMode>
@@ -31,5 +33,8 @@ export function mountApp(root: HTMLElement, options: AppOptions = {}): () => voi
     </React.StrictMode>,
   );
 
-  return () => reactRoot.unmount();
+  return () => {
+    reactRoot.unmount();
+    unbindLayout();
+  };
 }

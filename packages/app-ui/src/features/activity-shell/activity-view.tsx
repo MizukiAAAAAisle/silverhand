@@ -429,10 +429,7 @@ export function ActivityView({
 
   return (
     <PaneShell width={width}>
-      <PaneHeader
-        icon={<ActivityIcon className="size-3.5" />}
-        title="Activity"
-      />
+      <PaneHeader icon={<ActivityIcon className="size-3.5" />} title="Activity" />
 
       {/* Filter chips. Selected chips use the theme selection token, never a
           semantic hue (they must not steal the items' volume budget). (The
@@ -462,7 +459,7 @@ export function ActivityView({
         })}
       </div>
 
-      <div {...readingPosition} className="flex-1 overflow-y-auto px-4 py-3">
+      <div {...readingPosition} data-scroll-root className="flex-1 overflow-y-auto px-4 py-3">
         {isLoading ? (
           <ActivityListSkeleton />
         ) : isError ? (

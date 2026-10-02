@@ -1,4 +1,3 @@
-import { useCompactLayout } from "@/navigation/layout";
 import { useEffect, useRef } from "react";
 
 import { useSelectionPersistenceEffects } from "@/features/app-shell/selection-persistence";
@@ -45,6 +44,7 @@ export function useChatRouteRecovery({
   jumpTarget,
   onJump,
   recentlyRemovedPrimaryRef,
+  compact,
 }: {
   workspaces: WorkspaceListItem[];
   channels: ChannelListItem[];
@@ -54,8 +54,9 @@ export function useChatRouteRecovery({
   jumpTarget: MessageJumpTarget | null;
   onJump: (target: MessageJumpTarget) => boolean;
   recentlyRemovedPrimaryRef: RefObject<RemovedPrimary | null>;
+  /** Compact keeps the conversation list as the Chats root, so no selection is restored. */
+  compact: boolean;
 }) {
-  const compact = useCompactLayout();
   const route = useRouteState();
   const nav = useNav();
   const {

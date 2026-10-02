@@ -396,6 +396,7 @@ export function Lightbox({
               rather than pushing the footer out of the frame. */}
           <div
             ref={attachWell}
+            data-lightbox-well
             className="flex flex-1 overflow-auto bg-bg-elevated p-3 scrollbar-hide"
             style={{ minHeight: WELL_MIN_HEIGHT }}
           >
@@ -440,6 +441,7 @@ export function Lightbox({
 
           <div
             data-modal-divider
+            data-lightbox-footer
             className="flex shrink-0 items-center justify-between gap-2 border-t-(length:--control-border-width) border-border-subtle px-3 py-2 text-xs"
           >
             <div className="flex items-center gap-2">
@@ -456,6 +458,7 @@ export function Lightbox({
                 <ZoomOut className="size-4" />
               </Button>
               <RangeInput
+                data-zoom-range
                 className="w-28"
                 min={MIN_SCALE * 100}
                 max={MAX_SCALE * 100}

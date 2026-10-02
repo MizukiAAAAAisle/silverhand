@@ -1,6 +1,6 @@
-/* Touch message gestures belong to the message menu. Mouse selection and all
+/* Touch message gestures belong to the message menu (any width: iPad too). Mouse selection and all
    composer editing retain their native behavior. */
-@media (max-width: 767px) and (pointer: coarse) {
+@media (pointer: coarse) {
   .message-context-trigger {
     -webkit-touch-callout: none;
     -webkit-user-select: none;

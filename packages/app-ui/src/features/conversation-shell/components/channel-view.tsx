@@ -748,7 +748,10 @@ function ActiveChannelView({
           className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden"
           style={paneChrome}
         >
-          <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">
+          <header
+            data-conversation-header
+            className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4"
+          >
             <MobileNavigationSlot />
             {showThreadHeader ? (
               <>

@@ -86,7 +86,13 @@ export function PaneHeader({
           {count}
         </span>
       ) : null}
-      {trailing}
+      {trailing ? (
+        // `contents` keeps desktop flex layout (children push right with
+        // `ml-auto`); compact gives the slot its own grid cell.
+        <span data-pane-header-trailing className="contents">
+          {trailing}
+        </span>
+      ) : null}
     </header>
   );
 }

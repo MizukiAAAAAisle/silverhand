@@ -89,6 +89,7 @@ export function ConversationViewSkeleton({
       data-conversation-skeleton
     >
       <header
+        data-conversation-header
         aria-hidden
         className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4"
       >
@@ -110,7 +111,10 @@ export function ConversationViewSkeleton({
         </div>
       ) : null}
       <MessageRowsSkeleton />
-      <div aria-hidden className="shrink-0 border-t border-border-subtle bg-(--pane-bg,var(--bg-base)) px-3 py-3">
+      <div
+        aria-hidden
+        className="shrink-0 border-t border-border-subtle bg-(--pane-bg,var(--bg-base)) px-3 py-3"
+      >
         <div className="overflow-hidden rounded-(--control-radius) border border-border-subtle bg-bg-floating">
           <div className="min-h-15 px-3 py-2">
             <SkeletonBlock className="h-3 w-32" />

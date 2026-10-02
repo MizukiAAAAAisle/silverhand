@@ -145,6 +145,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
           </header>
           <nav
             {...readingPosition}
+            data-scroll-root
             className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto pb-1 pr-1"
           >
             <div className="mb-3 space-y-1">

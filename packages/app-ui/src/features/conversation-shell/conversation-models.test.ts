@@ -197,7 +197,7 @@ function render(
   nextJump = jump,
 ) {
   h.cursor = 0;
-  const model = useConversationPanes(read, nextJump);
+  const model = useConversationPanes(read, nextJump, { compact: h.compact });
   h.effects.splice(0).forEach((effect) => effect());
   return model;
 }

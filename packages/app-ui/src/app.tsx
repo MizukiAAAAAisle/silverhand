@@ -203,7 +203,6 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
   return (
     <MobileHeaderProvider section={appSection}>
       <div
-        data-layout={compact ? "compact" : "desktop"}
         className="app-shell flex h-screen w-screen flex-col overflow-hidden"
         style={{
           backgroundImage: "var(--app-paper, none)",

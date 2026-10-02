@@ -5,7 +5,7 @@ import {
   DialogTitle,
   useDialogBoundary,
 } from "@/components/ui/dialog";
-import { useCompactLayout } from "@/navigation/layout";
+import { useCoarsePointer, useCompactLayout } from "@/navigation/layout";
 import { useId, useMemo, useState, useRef } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { ChevronDown, Search } from "lucide-react";
@@ -42,6 +42,7 @@ export function CreateTaskChannelPicker({
 }): JSX.Element {
   const boundary = useDialogBoundary();
   const compact = useCompactLayout();
+  const touch = useCoarsePointer();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -138,7 +139,7 @@ export function CreateTaskChannelPicker({
       >
         <Search className="size-3.5 shrink-0 text-text-muted" />
         <input
-          autoFocus={!compact}
+          autoFocus={!touch}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {

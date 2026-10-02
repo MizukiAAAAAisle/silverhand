@@ -16,6 +16,7 @@ export function TaskToolbar({
       <Button
         type="button"
         variant="primary"
+        data-task-create
         className={`shrink-0 gap-1.5 ${FILTER_ROW_TRIGGER_BOX}`}
         onClick={onCreate}
       >

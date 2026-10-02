@@ -1,44 +1,42 @@
 /* Full-screen media surfaces share the existing modal ownership and content. */
-@media (max-width: 767px) {
-  :root [data-modal-shell][data-image-export-preview],
-  :root [data-modal-shell][data-image-lightbox] {
-    inset: 0;
-    transform: none;
-    margin: 0;
-    width: 100% !important;
-    min-width: 0 !important;
-    max-width: 100% !important;
-    height: 100% !important;
-    max-height: 100% !important;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-    background: var(--bg-base);
-    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
-  }
-  :root [data-image-lightbox] > [data-modal-divider] {
-    border: 0;
-  }
-  [data-image-export-scroll] {
-    min-height: 0;
-    min-width: 0;
-    overscroll-behavior: contain;
-  }
-  [data-image-export-actions] > * {
-    flex: 1;
-    min-height: 36px;
-    font-size: 14px;
-  }
-  [data-image-lightbox] > div:has(> img) {
-    min-height: 0 !important;
-  }
-  [data-image-lightbox] > div:last-child {
-    flex-wrap: wrap;
-    justify-content: space-between;
-  }
-  [data-image-lightbox] input[type="range"] {
-    display: none;
-  }
+:root:where([data-layout="compact"]) [data-modal-shell][data-image-export-preview],
+:root:where([data-layout="compact"]) [data-modal-shell][data-image-lightbox] {
+  inset: 0;
+  transform: none;
+  margin: 0;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--bg-base);
+  padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+}
+:root:where([data-layout="compact"]) [data-image-lightbox] > [data-modal-divider] {
+  border: 0;
+}
+:where([data-layout="compact"]) [data-image-export-scroll] {
+  min-height: 0;
+  min-width: 0;
+  overscroll-behavior: contain;
+}
+:where([data-layout="compact"]) [data-image-export-actions] > * {
+  flex: 1;
+  min-height: 36px;
+  font-size: 14px;
+}
+:where([data-layout="compact"]) [data-image-lightbox] > [data-lightbox-well] {
+  min-height: 0 !important;
+}
+:where([data-layout="compact"]) [data-image-lightbox] > [data-lightbox-footer] {
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+:where([data-layout="compact"]) [data-image-lightbox] [data-zoom-range] {
+  display: none;
 }
 
 /* Export surfaces cannot rely on scrolling to reveal the rest of a code block

@@ -114,9 +114,10 @@ export function useConversationShell({
     jumpTarget,
     onJump: (target) => handleJumpToMessage(target),
     recentlyRemovedPrimaryRef,
+    compact,
   });
 
-  const panes = useConversationPanes(read, jump);
+  const panes = useConversationPanes(read, jump, { compact });
 
   useNotificationToasts(panes.focusedConversation?.id ?? null, (target) =>
     handleJumpToMessage(target),
