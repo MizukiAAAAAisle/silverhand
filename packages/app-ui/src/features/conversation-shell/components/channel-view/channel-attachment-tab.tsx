@@ -148,7 +148,7 @@ export function ChannelAttachmentTab({
   usePinchZoomLease(readyKind === "html");
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-base">
+    <div className="flex h-full min-h-0 flex-col bg-(--pane-bg,var(--bg-base))">
       <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4 py-2">
         <span className="min-w-0 flex-1 truncate text-sm text-text-primary" title={filename}>
           {filename}

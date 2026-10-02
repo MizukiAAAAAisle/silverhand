@@ -5,20 +5,16 @@
   /* Theme palette */
   --forza6-code-deep: color-mix(in srgb, var(--forza6-code-island) 70%, #000);
   --forza6-code-island: #07111f;
-  --forza6-cobalt: #2b4fd6;
+  --forza6-blue: #2448d8;
   --forza6-cyan: #22b7e0;
-  --forza6-indigo-slab: #2d2ab8;
-  --forza6-ink: #0a0a0a;
+  --forza6-green: #1a7f45;
+  --forza6-ink: #0d0c0b;
   --forza6-lime: #d4f523;
-  --forza6-lime-pale: #e6f68a;
-  --forza6-lime-deep: #3f7a1b;
   --forza6-orange: #ff7a1a;
-  --forza6-paper: #fafbf6;
+  --forza6-paper: #fffdf7;
+  --forza6-paper-2: #f5f2ea;
   --forza6-pink: #ff2c7a;
-  --forza6-poster-teal: #329e86;
-  --forza6-poster-teal-deep: #23545e;
-  --forza6-task-gold: #ffd440;
-  --forza6-yellow: #ffeb00;
+  --forza6-yellow: #ffe100;
 
   /* Typography and motion */
   --chrome-label-tracking: 0.06em;
@@ -31,7 +27,7 @@
     "PingFang SC", "Hiragino Sans GB", sans-serif;
 
   /* Application frame and panes */
-  --bg-app: #0a1314;
+  --bg-app: #121110;
   --card-radius: 2px;
   --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
   --frame-padding: 8px;
@@ -40,35 +36,35 @@
 
   /* Surface, text and border foundations */
   --bg-base: #ffffff;
-  --bg-elevated: #f2f2f2;
-  --bg-hover: #f4f4f4;
-  --bg-primary: #eceeeb;
+  --bg-elevated: #f2efe8;
+  --bg-hover: #f4f2ec;
+  --bg-primary: #eceae2;
   --bg-selected: var(--brand-primary);
   --bg-structure-dark: var(--forza6-ink);
-  --border: rgba(15, 31, 29, 0.14);
+  --border: rgba(13, 12, 11, 0.14);
   --border-focus: var(--forza6-ink);
-  --border-subtle: rgba(15, 31, 29, 0.1);
+  --border-subtle: rgba(13, 12, 11, 0.1);
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 10px;
   --radius-xl: 14px;
-  --text-inverse: #f7f8f6;
-  --text-muted: #3d3d3d;
+  --text-inverse: var(--forza6-paper);
+  --text-muted: #3d3a35;
   --text-on-dark-pop: var(--forza6-yellow);
-  --text-on-selected: var(--forza6-ink);
+  --text-on-selected: var(--forza6-paper);
   --text-on-structure: #ffffff;
   --text-primary: var(--forza6-ink);
   --text-secondary: var(--forza6-ink);
 
   /* Brand and semantic colors */
-  --accent: var(--forza6-cobalt);
+  --accent: var(--forza6-blue);
   --soft-alpha: 16%;
-  --accent-hover: #164fb0;
+  --accent-hover: #1a37ad;
   --accent-soft: color-mix(in srgb, var(--accent), transparent calc(100% - var(--soft-alpha)));
   --brand-primary: var(--forza6-pink);
   --error: #c8003c;
   --error-soft: color-mix(in srgb, var(--error), transparent calc(100% - var(--soft-alpha)));
-  --success: var(--forza6-lime-deep);
+  --success: var(--forza6-green);
   --success-soft: color-mix(in srgb, var(--success), transparent calc(100% - var(--soft-alpha)));
   --text-on-accent: #ffffff;
   --text-on-brand: var(--forza6-ink);
@@ -77,14 +73,14 @@
   --text-on-warning: #ffffff;
   --warning: #8a5a00;
   --warning-soft: color-mix(in srgb, var(--warning), transparent calc(100% - var(--soft-alpha)));
-  --warning-surface: #fdf3c2;
+  --warning-surface: #fff3b8;
 
   /* Navigation and rows */
   --nav-hover-tint: white;
   --nav-hover-strength: 20%;
-  --bg-nav-hover: var(--forza6-lime-pale);
-  --bg-nav-selected: var(--forza6-lime);
-  --bg-row-selected: var(--forza6-lime);
+  --bg-nav-hover: #ffffff;
+  --bg-nav-selected: #ffffff;
+  --bg-row-selected: var(--forza6-ink);
   --border-nav-rail-hover: var(--forza6-ink);
   --border-nav-rail-selected: var(--forza6-ink);
   --border-row-hover: var(--forza6-ink);
@@ -145,8 +141,8 @@
   --forza6-poster-shadow-lg: 2px 2px 0 var(--forza6-ink);
   --forza6-poster-shadow-sm: 1px 1px 0 var(--forza6-ink);
   --forza6-poster-shadow-xl: 2.5px 2.5px 0 var(--forza6-ink);
-  --overlay-backdrop: rgba(8, 30, 27, 0.45);
-  --shadow-base: 14, 24, 22;
+  --overlay-backdrop: rgba(18, 17, 16, 0.45);
+  --shadow-base: 18, 17, 16;
   --shadow-button: 0 1px 2px 0 rgba(var(--shadow-base), 0.06);
   --shadow-modal: 0 25px 50px -12px rgba(var(--shadow-base), 0.34);
   --shadow-popover:
@@ -160,15 +156,15 @@
   /* Messages and activity */
   --activity-meta: oklab(0 0 0 / 0.4);
   --activity-params-bg: oklab(0 0 0 / 0.05);
-  --chip-bg: rgba(15, 31, 29, 0.06);
-  --chip-bg-hover: rgba(15, 31, 29, 0.12);
+  --chip-bg: rgba(13, 12, 11, 0.06);
+  --chip-bg-hover: rgba(13, 12, 11, 0.12);
   --chip-radius: 0;
   --message-bubble-radius: 0;
   --pill-radius: 0;
   --thread-preview-bg: oklab(0 0 0 / 0.03);
   --thread-preview-bg-hover: oklab(0 0 0 / 0.08);
   --thread-preview-text: oklab(0 0 0 / 0.6);
-  --unread: #b3186a;
+  --unread: #c2185b;
 
   /* Composer */
   --composer-border-color: var(--field-border-color);
@@ -206,45 +202,45 @@
 
   /* Task references and search */
   --search-hit-bg: #fff3a6;
-  --search-hit-bg-active: #ffdd5c;
+  --search-hit-bg-active: var(--forza6-yellow);
   --search-hit-text: var(--forza6-ink);
   --task-num: var(--brand-primary);
   --task-ref-activity-color: var(--text-muted);
   --task-ref-activity-hover-bg: transparent;
   --task-ref-activity-hover-color: var(--forza6-ink);
   --task-ref-activity-margin: 0;
-  --task-ref-activity-marker: var(--forza6-task-gold);
+  --task-ref-activity-marker: var(--forza6-yellow);
   --task-ref-activity-padding: 0;
   --task-ref-color: var(--forza6-ink);
   --task-ref-font: var(--appearance-prose-font, var(--font-sans));
   --task-ref-hover-decoration: none;
   --task-ref-line-height: 1.24;
-  --task-ref-marker: color-mix(in srgb, var(--forza6-task-gold) 66%, transparent);
-  --task-ref-marker-hover: var(--forza6-task-gold);
+  --task-ref-marker: color-mix(in srgb, var(--forza6-yellow) 66%, transparent);
+  --task-ref-marker-hover: var(--forza6-yellow);
   --task-ref-number-font: var(--font-display);
   --task-ref-number-tracking: 0.01em;
   --task-ref-number-weight: 700;
   --task-ref-weight: 400;
 
   /* Task status */
-  --task-status-closed-bg: var(--forza6-indigo-slab);
+  --task-status-closed-bg: var(--forza6-ink);
   --task-status-closed-border: none;
   --task-status-closed-solid: var(--task-status-closed-bg);
-  --task-status-closed-text: #ffffff;
-  --task-status-done-bg: var(--forza6-lime-deep);
+  --task-status-closed-text: var(--forza6-paper);
+  --task-status-done-bg: var(--forza6-green);
   --task-status-done-border: none;
   --task-status-done-solid: var(--task-status-done-bg);
   --task-status-done-text: var(--text-inverse);
-  --task-status-in-progress-bg: var(--forza6-cyan);
+  --task-status-in-progress-bg: var(--forza6-blue);
   --task-status-in-progress-border: none;
   --task-status-in-progress-solid: var(--task-status-in-progress-bg);
-  --task-status-in-progress-text: var(--forza6-ink);
+  --task-status-in-progress-text: var(--forza6-paper);
   --task-status-in-review-bg: var(--forza6-orange);
   --task-status-in-review-border: none;
   --task-status-in-review-solid: var(--task-status-in-review-bg);
   --task-status-in-review-text: var(--forza6-ink);
   --task-status-radius: 0;
-  --task-status-todo-bg: #5a6b67;
+  --task-status-todo-bg: #736c62;
   --task-status-todo-border: none;
   --task-status-todo-solid: var(--task-status-todo-bg);
   --task-status-todo-text: var(--text-inverse);
@@ -255,9 +251,10 @@
 
 [data-theme="forza6"] {
   --bg-nav-rail: transparent;
+  --pane-bg: var(--forza6-paper);
 
-  /* Primary CTA is forza6-only avocado green (its accent is pink); kept out of
-   *  `:root` so other themes' CTA falls back to their own `--accent`. */
+  /* Primary CTA is forza6-only avocado green; kept out of `:root` so other
+   *  themes' CTA falls back to their own `--accent`. */
   --bg-control-primary: #9cbf5c;
   --bg-control-primary-hover: #8cac53;
   --bg-primary-action-hover: var(--bg-control-primary);

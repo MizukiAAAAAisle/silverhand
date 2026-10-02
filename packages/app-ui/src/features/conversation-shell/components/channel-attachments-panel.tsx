@@ -321,7 +321,7 @@ export function ChannelAttachmentsContent({
             firstItemIndex={attachWindow.firstItemIndex}
             groupCounts={groupCounts}
             groupContent={(index) => (
-              <div className="bg-bg-base">
+              <div className="bg-(--pane-bg,var(--bg-base))">
                 <div className="pb-1 pt-2 text-(length:--text-badge) font-medium uppercase tracking-wide text-text-muted">
                   {groups[index]?.label ?? ""}
                 </div>

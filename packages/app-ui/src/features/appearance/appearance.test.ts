@@ -216,7 +216,11 @@ describe("theme markdown token cascade contract", () => {
     //              CTA is avocado green), declared in its `[data-theme]` block
     //              (NOT `:root`). Other themes omit them and the consumers fall
     //              back to `--accent` / `--accent-hover` / `--text-on-accent`.
+    //  --pane-bg   forza6 paper pane ground, declared in its `[data-theme]` block
+    //              (NOT `:root`). Every consumer reads `var(--pane-bg, var(--bg-base))`,
+    //              so other themes paint panes with their own `--bg-base`.
     const FORZA6_ONLY = new Set([
+      "--pane-bg",
       "--task-num",
       "--bg-nav-rail",
       "--nav-rail-border-color",

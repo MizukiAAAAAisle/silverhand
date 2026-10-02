@@ -1104,7 +1104,7 @@ function ActiveChannelView({
             pane via the same `onOpenTask` an inline `#task` chip uses. `inset-0`
             covers the whole column. */}
             {tasksTabActive && taskBoardContainer && onOpenTask ? (
-              <div className="absolute inset-0 z-(--z-raised) bg-bg-base">
+              <div className="absolute inset-0 z-(--z-raised) bg-(--pane-bg,var(--bg-base))">
                 <ChannelTasksTab container={taskBoardContainer} onOpenTask={onOpenTask} />
               </div>
             ) : null}
@@ -1115,7 +1115,7 @@ function ActiveChannelView({
             attachment tabs remounts the fetch/decode rather than reusing stale
             body state. */}
             {activeAttachmentTab ? (
-              <div className="absolute inset-0 z-(--z-raised) bg-bg-base">
+              <div className="absolute inset-0 z-(--z-raised) bg-(--pane-bg,var(--bg-base))">
                 <ChannelAttachmentTab
                   key={activeAttachmentTab.attachmentId}
                   attachmentId={activeAttachmentTab.attachmentId}
@@ -1130,7 +1130,7 @@ function ActiveChannelView({
             switching between two panel tabs remounts the surface's own
             filter/scroll rather than carrying one list's state into another. */}
             {activePanelTab ? (
-              <div className="absolute inset-0 z-(--z-raised) bg-bg-base">
+              <div className="absolute inset-0 z-(--z-raised) bg-(--pane-bg,var(--bg-base))">
                 {activePanelHostable ? (
                   <ConversationPanelTab
                     key={activePanelTab}

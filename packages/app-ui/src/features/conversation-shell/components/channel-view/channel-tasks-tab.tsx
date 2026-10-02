@@ -104,7 +104,7 @@ export function ChannelTasksTab({ container, onOpenTask }: ChannelTasksTabProps)
   }, [container, channelOptions, filters.channelId]);
 
   return (
-    <div className={cn("flex h-full min-h-0 flex-col bg-bg-base")}>
+    <div className={cn("flex h-full min-h-0 flex-col bg-(--pane-bg,var(--bg-base))")}>
       <TaskToolbar
         onCreate={() => setCreateOpen(true)}
         filters={filters}

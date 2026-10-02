@@ -6,15 +6,17 @@
    at its physical right edge so opening/closing a side pane transfers the corner
    naturally; interior panels keep the shared theme radius. */
 [data-theme="forza6"] .nav-rail {
-  /* Dark frame navigation; keep the light sidebar's row tokens unchanged. */
-  --text-nav-rail: #a3a3a3;
-  --nav-hover-base: var(--bg-nav-selected);
-  --text-nav-rail-hover: var(--forza6-ink);
-  --border-nav-rail-hover: #8a8a8a;
-  --bg-nav-selected: var(--forza6-lime);
-  --text-nav-selected: var(--forza6-ink);
-  --border-nav-rail-selected: #4b5556;
-  --nav-rail-indicator-color: var(--forza6-lime);
+  /* The rail sits on the dark frame: idle and hover speak the titlebar's white
+     ink. Selection is the sidebar's white paper sticker. An ink shadow vanishes
+     on the frame and a hue shadow reads as a second identity, so the shadow is
+     the white sinking into the frame. */
+  --text-nav-rail: rgba(255, 255, 255, 0.78);
+  --text-nav-rail-hover: #ffffff;
+  --bg-nav-hover: rgba(255, 255, 255, 0.12);
+  --border-nav-rail-hover: transparent;
+  --border-nav-rail-selected: transparent;
+  --shadow-row-selected: 2.5px 2.5px 0 color-mix(in srgb, #ffffff, var(--bg-app) 55%);
+  --nav-rail-indicator-display: none;
 
   border-bottom-left-radius: var(--frame-corner-radius, 12px) !important;
 }
@@ -104,7 +106,7 @@
 }
 
 [data-theme="forza6"] [data-sticker-tone="host"] {
-  --sticker-bg: var(--forza6-poster-teal-deep);
+  --sticker-bg: var(--forza6-blue);
   --sticker-fg: var(--forza6-paper);
 }
 
@@ -172,17 +174,20 @@
 /* Hooks: Navigation and unread */
 
 [data-theme="forza6"] aside[data-sidebar] {
+  --pane-bg: var(--forza6-paper-2);
   --text-primary: var(--forza6-ink);
   --text-secondary: var(--forza6-ink);
-  --text-muted: #586865;
+  --text-muted: #6b645a;
   --bg-hover: rgba(0, 0, 0, 0.06);
   --bg-elevated: rgba(0, 0, 0, 0.1);
 }
 
-[data-theme="forza6"] .sidebar-row-border.navigation-row.text-text-nav-selected {
-  --text-primary: var(--forza6-ink);
-  --text-secondary: var(--forza6-ink);
-  --text-muted: rgba(0, 0, 0, 0.62);
+/* Touch has no resting hover, so the press borrows the poster shadow as its
+   feedback. Pointer hover stays an ink frame on white paper. */
+@media (hover: none) {
+  [data-theme="forza6"] .sidebar-row-border.navigation-row:not(.text-text-nav-selected):is(:hover, :active) {
+    box-shadow: var(--forza6-poster-shadow);
+  }
 }
 
 /* Feed the shared row rule rather than competing with its hover specificity. */
@@ -190,16 +195,6 @@
 [data-theme="forza6"] [data-sidebar-sort-dragging="true"] .sidebar-row-border.navigation-row,
 [data-theme="forza6"] .sidebar-row-gutter[data-sidebar-sort-dragging="true"] {
   --shadow-row-selected: var(--forza6-poster-shadow-xl);
-}
-
-[data-theme="forza6"] .sidebar-row-border.navigation-row:not(.text-text-nav-selected):hover:not([data-sidebar-sort-dragging="true"] *) {
-  box-shadow: var(--forza6-poster-shadow);
-}
-
-[data-theme="forza6"]
-  .sidebar-row-border.navigation-row.text-text-nav-selected
-  .bg-success:not([data-status-pip]) {
-  background-color: var(--forza6-ink);
 }
 
 [data-theme="forza6"] aside[data-sidebar] [data-sidebar-count] {
@@ -225,6 +220,23 @@
 [data-theme="forza6"] [data-sidebar-section-icon] {
   color: var(--forza6-ink);
   opacity: 0.7;
+}
+
+/* Option rows and the channel filter trigger print the channel glyph without
+   its sticker body, so the selected value is the loudest thing in the list.
+   The transparent frame keeps the sticker's footprint. Ink-selected surfaces
+   print the glyph yellow straight onto the ink and invert sublabels to paper. */
+[data-theme="forza6"] [data-option-row] [data-sticker-tone="channel"],
+[data-theme="forza6"] .task-filter-channel-hash[data-sticker-tone="channel"] {
+  --sticker-bg: transparent;
+  --sticker-fg: currentColor;
+  --sticker-frame: transparent;
+}
+[data-theme="forza6"] [data-ink-selected] {
+  --text-muted: color-mix(in srgb, var(--forza6-paper) 66%, transparent);
+}
+[data-theme="forza6"] [data-ink-selected] [data-sticker-tone="channel"] {
+  --sticker-fg: var(--text-on-dark-pop);
 }
 
 /* Hooks: Messages and composer */
@@ -449,9 +461,9 @@
 }
 
 [data-theme="forza6"] [data-panel-pill="schedule-target"] {
-  background-color: var(--forza6-indigo-slab);
-  border-color: var(--forza6-indigo-slab);
-  color: #ffffff;
+  background-color: var(--forza6-blue);
+  border-color: var(--forza6-blue);
+  color: var(--forza6-paper);
   font-family: var(--font-mono);
   letter-spacing: 0;
   font-weight: 400;
@@ -508,10 +520,11 @@
   border-color: var(--forza6-ink);
 }
 
+/* The checked tile is solid ink, so its check mark inverts to paper. */
 [data-theme="forza6"] [data-runtime-tile-check][data-checked] {
-  border-color: var(--forza6-ink);
-  background-color: var(--forza6-ink);
-  color: var(--forza6-paper);
+  border-color: var(--forza6-paper);
+  background-color: var(--forza6-paper);
+  color: var(--forza6-ink);
 }
 
 /* Hooks: Settings */

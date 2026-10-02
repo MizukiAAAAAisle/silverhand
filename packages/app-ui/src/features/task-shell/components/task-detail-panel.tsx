@@ -91,15 +91,14 @@ export function TaskDetailPanel({
   useEffect(() => () => onEditingChange(false), [onEditingChange]);
 
   return (
-    // `.task-pane` names the container query the metadata grid reads; it also
-    // owns the pane's own ground, since it isn't seated inside a Dialog. `w-full`
+    // `.task-pane` names the container query the metadata grid reads. `w-full`
     // makes it fill the SplitPane's right wrapper — without it the pane is a flex
     // row child that shrinks to its intrinsic content width (a thin strip); the
     // inner body's `flex-1` can only fill this root, not widen it (#task:1721).
     <div
       data-panel="side"
-      className="task-pane flex h-full w-full flex-col overflow-hidden bg-bg-floating"
-      style={{ ...paneChrome, background: undefined }}
+      className="task-pane flex h-full w-full flex-col overflow-hidden"
+      style={paneChrome}
       aria-label="Task detail"
     >
       {/* The shared side-panel header, same primitive (and same title/subtitle

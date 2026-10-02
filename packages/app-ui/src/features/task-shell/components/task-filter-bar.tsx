@@ -362,6 +362,7 @@ const FilterTrigger = forwardRef<
       ref={ref}
       type="button"
       data-active={active || undefined}
+      data-ink-selected={active || undefined}
       className={cn(
         "flex max-w-50 items-center gap-1.5 rounded-(--control-radius)",
         "border-(length:--control-border-width) px-2 py-1 text-(length:--text-meta) transition-colors",
@@ -468,6 +469,8 @@ export function OptionRow({
       role="option"
       aria-selected={selected}
       data-active-option={active || undefined}
+      data-option-row=""
+      data-ink-selected={activeSelected || undefined}
       onMouseMove={onHover}
       onClick={onSelect}
       className={cn(
@@ -477,7 +480,8 @@ export function OptionRow({
         // only to reserve layout space (no hover colour) so rows don't shift
         // (shiki #task:790).
         "flex w-full items-center gap-2 rounded-(--select-item-radius) px-2 py-1.5 text-left text-xs transition-colors",
-        "border border-transparent hover:bg-(--bg-hover) hover:text-text-primary",
+        "border border-transparent",
+        !activeSelected && "hover:bg-(--bg-hover) hover:text-text-primary",
         // A real (non-default) current value = the app-wide selected-row
         // vocabulary (festive lime fill + on-selected ink), NOT the magenta
         // `accent-soft` tint. The ALL/All-channels default row stays plain
