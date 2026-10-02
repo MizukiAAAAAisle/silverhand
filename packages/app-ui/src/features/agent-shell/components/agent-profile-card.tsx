@@ -143,9 +143,6 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
       </section>
 
       <ProfileFactBand>
-        <ProfileFact icon={<IdCard className="size-3.5" />} label="ID">
-          <span className="font-medium text-text-primary">{agent.id}</span>
-        </ProfileFact>
         <ProfileFact icon={<Monitor className="size-3.5" />} label="Computer">
           <span className="font-medium text-text-primary">{computerName}</span>
         </ProfileFact>
@@ -170,6 +167,9 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
           >
             {dayjs(agent.created_at).format("YYYY-MM-DD")}
           </span>
+        </ProfileFact>
+        <ProfileFact icon={<IdCard className="size-3.5" />} label="ID">
+          <span className="font-mono">{agent.id}</span>
         </ProfileFact>
       </ProfileFactBand>
 

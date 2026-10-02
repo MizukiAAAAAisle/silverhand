@@ -39,9 +39,6 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
       </section>
 
       <ProfileFactBand>
-        <ProfileFact icon={<IdCard className="size-3.5" />} label="ID">
-          <span className="font-medium text-text-primary">{user.id}</span>
-        </ProfileFact>
         <ProfileFact icon={<Clock className="size-3.5" />} label="Created">
           <span
             className="font-medium text-text-primary"
@@ -49,6 +46,9 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
           >
             {dayjs(user.created_at).format("YYYY-MM-DD")}
           </span>
+        </ProfileFact>
+        <ProfileFact icon={<IdCard className="size-3.5" />} label="ID">
+          <span className="font-mono">{user.id}</span>
         </ProfileFact>
       </ProfileFactBand>
 

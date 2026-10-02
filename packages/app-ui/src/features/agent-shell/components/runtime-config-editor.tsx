@@ -432,12 +432,15 @@ export function RuntimeConfigEditor({
   );
 }
 
+/** Shared by the summary and the edit form so editing keeps the same columns. */
+const RUNTIME_GRID_CLASS = "grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-x-6 gap-y-3";
+
 /** Read-only presentation of the current runtime + tuning tuple. */
 function ReadOnlyGrid({ agent }: { agent: AgentDto }): JSX.Element {
   const supportsReasoning = runtimeSupportsReasoningEffort(agent.runtime);
   const supportsFastMode = runtimeSupportsFastMode(agent.runtime);
   return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+    <div data-runtime-summary className={RUNTIME_GRID_CLASS}>
       <ReadOnlyRow label="Runtime" value={runtimeCliLabel(agent.runtime)} />
       <ReadOnlyRow label="Model" value={agent.model} placeholder="driver default" />
       {supportsReasoning ? (
@@ -475,9 +478,14 @@ function ReadOnlyRow({
 }): JSX.Element {
   const displayed = value && value.length > 0 ? value : null;
   return (
-    <div className="flex flex-col gap-0.5">
+    <div className="flex min-w-0 flex-col gap-0.5">
       <span className="text-xs text-text-muted">{label}</span>
-      <span className={cn("text-sm", displayed ? "text-text-primary" : "text-text-muted italic")}>
+      <span
+        className={cn(
+          "text-sm wrap-anywhere",
+          displayed ? "text-text-primary" : "text-text-muted italic",
+        )}
+      >
         {displayed ?? placeholder ?? "—"}
       </span>
     </div>
@@ -549,8 +557,8 @@ function EditForm({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-        <div className="flex flex-col gap-1.5">
+      <div className={RUNTIME_GRID_CLASS}>
+        <div className="flex min-w-0 flex-col gap-1.5">
           {/* All four label rows in this grid are fixed h-5 (see Model /
            * Reasoning / Fast mode wrappers below). Recheck lives INSIDE
            * that height: `size-5 p-0` = 20×20 button, icon `size-3.5` =
@@ -592,7 +600,7 @@ function EditForm({
           {sectionHint ? <p className="text-xs text-text-muted">{sectionHint}</p> : null}
         </div>
 
-        <div className="flex flex-col gap-1.5">
+        <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex h-5 items-center">
             <Label required>Model</Label>
           </div>
@@ -605,7 +613,7 @@ function EditForm({
         </div>
 
         {supportsReasoning ? (
-          <div className="flex flex-col gap-1.5">
+          <div className="flex min-w-0 flex-col gap-1.5">
             <div className="flex h-5 items-center">
               <Label htmlFor="rc-reasoning" required>
                 Reasoning
@@ -633,7 +641,7 @@ function EditForm({
         ) : null}
 
         {supportsFastMode ? (
-          <div className="flex flex-col gap-1.5">
+          <div className="flex min-w-0 flex-col gap-1.5">
             <div className="flex h-5 items-center">
               <Label htmlFor="rc-fastmode" required>
                 Fast mode
@@ -687,7 +695,9 @@ function RuntimeSelect({
         data-panel-control="select-trigger"
         className={triggerClass()}
       >
-        <Select.Value />
+        <span className="min-w-0 truncate">
+          <Select.Value />
+        </span>
         <Select.Icon>
           <ChevronDown className="size-3.5 text-text-muted" />
         </Select.Icon>
@@ -757,7 +767,9 @@ function ChoicePickerSelect({
   return (
     <Select.Root value={value} onValueChange={onChange}>
       <Select.Trigger id={id} data-panel-control="select-trigger" className={triggerClass()}>
-        <Select.Value placeholder={placeholder} />
+        <span className="min-w-0 truncate">
+          <Select.Value placeholder={placeholder} />
+        </span>
         <Select.Icon>
           <ChevronDown className="size-3.5 text-text-muted" />
         </Select.Icon>
