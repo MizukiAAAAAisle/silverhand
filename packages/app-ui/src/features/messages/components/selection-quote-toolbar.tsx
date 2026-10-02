@@ -199,7 +199,7 @@ export function SelectionQuoteToolbar({
       // popover 需要加上 border（所有主题），否则看不清」) — this reverses the
       // frameless call in #task:1959: over a message stream the lift alone did not
       // separate the bubble from the prose behind it. Border + radius come from
-      // the `--floating-border` / `--floating-radius` contract in global.css, the
+      // the `--floating-border` / `--floating-radius` contract in chrome.css, the
       // same one menus and info cards read, so each theme paints it once (forza6 →
       // 2px ink, the hairline themes → 1px subtle) and nothing is hardcoded here.
       data-popover-frame="toolbar"

@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import type { ServerFrame } from "@silverhand/shared";
 import { useChannelDetail } from "@/features/workspaces/hooks";
 import { onWsFrame, subscribeWsScope } from "@/lib/ws-client";
-import { wsConversationSideScope } from "@/hooks/use-conversation-stream";
+import { wsConversationSideScope } from "@/features/realtime/conversation-scope";
 
 /** A settings inspector remains live even when opened from a secondary channel. */
 export function refreshesChannelSettings(

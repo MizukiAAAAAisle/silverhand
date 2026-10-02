@@ -11,9 +11,6 @@ const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const SHARED_LAYERS = ["components", "hooks", "lib", "navigation", "icons"];
 const FEATURE_IMPORT = /(?:from\s+|import\(\s*)["'](?:@\/features\/|(?:\.\.\/)+features\/)/;
 
-/** Files that predate the fence. The list only shrinks. */
-const KNOWN_OFFENDERS: readonly string[] = ["hooks/use-appearance.ts"];
-
 function walk(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
@@ -35,7 +32,7 @@ function offenders(): string[] {
 }
 
 describe("shared layers never import features", () => {
-  it("only known offenders import @/features from a shared layer", () => {
-    expect(offenders()).toEqual([...KNOWN_OFFENDERS].sort());
+  it("no shared-layer module imports @/features", () => {
+    expect(offenders()).toEqual([]);
   });
 });

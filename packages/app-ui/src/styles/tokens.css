@@ -1,0 +1,140 @@
+@theme inline {
+  --color-bg-base: var(--bg-base);
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-bg-hover: var(--bg-hover);
+  --color-bg-selected: var(--bg-selected);
+  --color-bg-floating: var(--bg-floating);
+  --color-bg-message-context: var(--bg-message-context);
+  --color-bg-island: var(--bg-island);
+  --color-bg-island-deep: var(--bg-island-deep);
+  --color-bg-inset: var(--bg-inset);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-text-inverse: var(--text-inverse);
+  --color-text-island: var(--text-island);
+  --color-text-inline-code: var(--text-inline-code);
+
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-hover: var(--accent-hover);
+
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-error: var(--error);
+  --color-error-soft: var(--error-soft);
+
+  --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-island: var(--border-island);
+  --color-border-control: var(--border-control);
+  --color-border-focus: var(--border-focus);
+  --color-border-avatar: var(--border-avatar);
+
+  --color-text-on-accent: var(--text-on-accent);
+  --color-text-on-success: var(--text-on-success);
+  --color-text-on-warning: var(--text-on-warning);
+  --color-text-on-error: var(--text-on-error);
+  --color-bg-nav-hover: var(--bg-nav-hover);
+  --color-bg-nav-selected: var(--bg-nav-selected);
+  --color-text-nav-selected: var(--text-nav-selected);
+  --color-text-on-selected: var(--text-on-selected);
+
+  --color-overlay-backdrop: var(--overlay-backdrop);
+
+  --shadow-popover: var(--shadow-popover);
+  --shadow-modal: var(--shadow-modal);
+  --shadow-button: var(--shadow-button);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
+  --font-sans: var(--font-sans);
+  --font-serif: var(--font-serif);
+  --font-mono: var(--appearance-code-font, var(--font-mono));
+  --font-display: var(--font-display);
+
+  --color-bg-structure-dark: var(--bg-structure-dark);
+  --color-text-on-structure: var(--text-on-structure);
+  --color-text-on-dark-pop: var(--text-on-dark-pop);
+}
+
+/* ── Non-themable layout constants ── */
+:root {
+  --titlebar-height: 36px;
+  --nav-rail-width: 36px;
+  --sidebar-width: 240px;
+  --titlebar-sidebar-toggle-left: 78px;
+  --titlebar-controls-safe-width: 138px;
+  --conversation-tab-strip-height: 30px;
+}
+
+/* ── Z-index ladder ──
+   One ascending stack for the whole app, named by role so a new overlay
+   picks a tier instead of inventing a magic number. Non-themable: stacking
+   order is structural, not a palette choice. Consumed as z-[var(--z-*)].
+   raised(10) local lift · sticky(20) pinned headers · drawer(40) side
+   panels · dialog(50) the modal layer · in-dialog(60) menus/selects opened
+   inside a dialog · toolbar(70) floating action bars · popover(80)
+   hover-cards & pickers · popover-nested(85) a picker opened from a popover
+   · lightbox(90) full-screen media, +1 for its own chrome. */
+:root {
+  --z-raised: 10;
+  --z-sticky: 20;
+  --z-drawer: 40;
+  --z-dialog: 50;
+  --z-in-dialog: 60;
+  --z-toolbar: 70;
+  --z-popover: 80;
+  --z-popover-nested: 85;
+  --z-lightbox: 90;
+  --z-lightbox-chrome: 91;
+}
+
+/* ── Micro type-scale ── */
+:root {
+  --text-badge: 10px;
+  --text-meta: 11px;
+  --text-strong: 13px;
+}
+
+/* ── Theme-agnostic constants ──
+   Values every theme shared verbatim: motion curve, Markdown/system type
+   sizes, the uppercase chrome-label transform, the serif→sans alias, and the
+   two transparent chrome edges. Not palette choices, so they live once here
+   instead of being re-declared (identically) in every theme file. Kept out of
+   the theme files also keeps them off the no-:root-leak contract. */
+:root {
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --md-code-size: 14px;
+  --md-prose-size: 14px;
+  --system-message-size: 12px;
+  --chrome-label-transform: uppercase;
+  --font-serif: var(--font-sans);
+  --splitter-bg: transparent;
+  --titlebar-border: transparent;
+}
+
+:root {
+  --bg-terminal: #0a0b0a;
+  --bg-terminal-chrome: #141715;
+  --text-terminal: #a9d877;
+  --text-terminal-chrome: rgba(255, 255, 255, 0.62);
+  --border-terminal: rgba(255, 255, 255, 0.1);
+  --bg-terminal-select: rgba(169, 216, 119, 0.28);
+}
+
+/* Derived from each theme's ink, so no theme declares them. */
+:root {
+  --bg-avatar-ground: color-mix(in oklab, var(--text-primary) 12%, transparent);
+  --bg-inset: color-mix(in oklab, var(--text-primary) 7%, transparent);
+  --bg-message-bubble: color-mix(in oklab, var(--text-primary) 9%, transparent);
+  --text-faint: color-mix(in oklab, var(--text-muted) 75%, transparent);
+}

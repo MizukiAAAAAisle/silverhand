@@ -157,7 +157,7 @@ export function RegistrationGate({
 
         {signupEnabled ? (
           // The app's one segmented-control contract (`data-panel-tabs`,
-          // global.css panel-radius SSOT) rather than hand-written radii, so
+          // surfaces.css panel-radius SSOT) rather than hand-written radii, so
           // this switch and the Schedules FilterTabs stay one widget. The
           // `hero` value is the density: a modal-level switch earns forza6's
           // poster weight (2px ink bracket + hard ink shadow); the valueless
@@ -325,7 +325,7 @@ function ModeButton({
       type="button"
       onClick={onClick}
       className={cn(
-        // Radius comes from `[data-panel-tabs] button` (global.css SSOT), not
+        // Radius comes from `[data-panel-tabs] button` (surfaces.css SSOT), not
         // from a class here — same reason the track dropped its own.
         "inline-flex h-8 items-center justify-center gap-1.5 text-xs font-medium text-text-muted transition",
         active && "bg-bg-floating text-text-primary shadow-sm",

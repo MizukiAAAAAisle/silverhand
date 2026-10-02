@@ -31,7 +31,7 @@ function sliceFunctionBody(source: string, declaration: string): string {
 
 describe("replayed-frame cache merge — idempotent (#task:1251)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../features/channels/message-cache-core.ts", import.meta.url)),
+    fileURLToPath(new URL("../channels/message-cache-core.ts", import.meta.url)),
     "utf8",
   );
 
@@ -47,7 +47,7 @@ describe("replayed-frame cache merge — idempotent (#task:1251)", () => {
 
 describe("central conversation ingestor — read-inert (#task:1255)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../features/realtime/conversation-ingestor.ts", import.meta.url)),
+    fileURLToPath(new URL("./conversation-ingestor.ts", import.meta.url)),
     "utf8",
   );
 
@@ -66,7 +66,7 @@ describe("central conversation ingestor — read-inert (#task:1255)", () => {
 
 describe("useChannelMessages — pure reader / gate-(b) fence (#task:1255)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../features/channels/hooks.ts", import.meta.url)),
+    fileURLToPath(new URL("../channels/hooks.ts", import.meta.url)),
     "utf8",
   );
   const body = sliceFunctionBody(source, "export function useChannelMessages(");
@@ -107,7 +107,7 @@ describe("useChannelMessages — pure reader / gate-(b) fence (#task:1255)", () 
 
 describe("channels/hooks.ts — registry-migrated hooks / body-scoped deny (#task:1260 P2)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../features/channels/hooks.ts", import.meta.url)),
+    fileURLToPath(new URL("../channels/hooks.ts", import.meta.url)),
     "utf8",
   );
   const MIGRATED = [
@@ -148,7 +148,7 @@ describe("channels/hooks.ts — registry-migrated hooks / body-scoped deny (#tas
 
 describe("mark-read mutations — global badges ride the WS clear patch, no whole-list refetch (#task:1284)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../features/channels/hooks.ts", import.meta.url)),
+    fileURLToPath(new URL("../channels/hooks.ts", import.meta.url)),
     "utf8",
   );
 
@@ -172,7 +172,7 @@ describe("mark-read mutations — global badges ride the WS clear patch, no whol
 
 describe("Activity mark-read callers — settle per-stream via the seam, no single-point patch (#task:1402)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../features/attention/hooks.ts", import.meta.url)),
+    fileURLToPath(new URL("../attention/hooks.ts", import.meta.url)),
     "utf8",
   );
 
@@ -199,7 +199,7 @@ describe("Activity mark-read callers — settle per-stream via the seam, no sing
 
 describe("useAgentRunStates — pure reader / gate-(b) fence (#task:1255 P1c)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../features/channels/hooks.ts", import.meta.url)),
+    fileURLToPath(new URL("../channels/hooks.ts", import.meta.url)),
     "utf8",
   );
   const body = sliceFunctionBody(source, "export function useAgentRunStates(");
@@ -220,7 +220,7 @@ describe("useAgentRunStates — pure reader / gate-(b) fence (#task:1255 P1c)", 
 
 describe("useChannelThreads — pure reader / gate-(b) fence (#task:1255 P1c)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../features/channels/use-channel-threads.ts", import.meta.url)),
+    fileURLToPath(new URL("../channels/use-channel-threads.ts", import.meta.url)),
     "utf8",
   );
   const body = sliceFunctionBody(source, "export function useChannelThreads(");
@@ -238,7 +238,7 @@ describe("useChannelThreads — pure reader / gate-(b) fence (#task:1255 P1c)", 
 
 describe("channel membership/runtime readers — gate-(b) fence (#task:2026)", () => {
   const source = readFileSync(
-    fileURLToPath(new URL("../features/channels/hooks.ts", import.meta.url)),
+    fileURLToPath(new URL("../channels/hooks.ts", import.meta.url)),
     "utf8",
   );
   const membershipBody = sliceFunctionBody(source, "export function useChannelAgents(");
@@ -264,9 +264,7 @@ describe("channel membership/runtime readers — gate-(b) fence (#task:2026)", (
 
 describe("ChannelView — read-cursor cache-driven / gate-(b) (#task:1255 P1c)", () => {
   const source = readFileSync(
-    fileURLToPath(
-      new URL("../features/conversation-shell/components/channel-view.tsx", import.meta.url),
-    ),
+    fileURLToPath(new URL("../conversation-shell/components/channel-view.tsx", import.meta.url)),
     "utf8",
   );
 
@@ -290,7 +288,7 @@ describe("ChannelView — read-cursor cache-driven / gate-(b) (#task:1255 P1c)",
 describe("AgentActivityTimeline — pure reader / gate-(b) (#task:1255 P1c #2)", () => {
   const source = readFileSync(
     fileURLToPath(
-      new URL("../features/agent-shell/components/agent-activity-timeline.tsx", import.meta.url),
+      new URL("../agent-shell/components/agent-activity-timeline.tsx", import.meta.url),
     ),
     "utf8",
   );
@@ -307,9 +305,7 @@ describe("AgentActivityTimeline — pure reader / gate-(b) (#task:1255 P1c #2)",
 
 describe("useAgentActivityFeed — read-inert content cache (#task:1255 P1c #2)", () => {
   const source = readFileSync(
-    fileURLToPath(
-      new URL("../features/agent-shell/hooks/use-agent-activity-feed.ts", import.meta.url),
-    ),
+    fileURLToPath(new URL("../agent-shell/hooks/use-agent-activity-feed.ts", import.meta.url)),
     "utf8",
   );
 
@@ -331,7 +327,7 @@ describe("useAgentActivityFeed — read-inert content cache (#task:1255 P1c #2)"
 
 describe("conversation-scope subscribe whitelist (#task:1255 P2 step-3)", () => {
   const hooksSrc = readFileSync(
-    fileURLToPath(new URL("../features/channels/hooks.ts", import.meta.url)),
+    fileURLToPath(new URL("../channels/hooks.ts", import.meta.url)),
     "utf8",
   );
 
@@ -365,9 +361,7 @@ describe("conversation-scope subscribe whitelist (#task:1255 P2 step-3)", () => 
 
   it("useAgentActivityFeed subscribes the SIDE scope", () => {
     const src = readFileSync(
-      fileURLToPath(
-        new URL("../features/agent-shell/hooks/use-agent-activity-feed.ts", import.meta.url),
-      ),
+      fileURLToPath(new URL("../agent-shell/hooks/use-agent-activity-feed.ts", import.meta.url)),
       "utf8",
     );
     expect(src).toContain("wsConversationSideScope(");
@@ -376,9 +370,7 @@ describe("conversation-scope subscribe whitelist (#task:1255 P2 step-3)", () => 
 
   it("useConversationMembers declares SIDE-scope interest via the registry + keeps its own onWsFrame", () => {
     const src = readFileSync(
-      fileURLToPath(
-        new URL("../features/conversations/use-conversation-members.ts", import.meta.url),
-      ),
+      fileURLToPath(new URL("../conversations/use-conversation-members.ts", import.meta.url)),
       "utf8",
     );
     expect(src).toContain("wsConversationSideScope(");
@@ -390,7 +382,7 @@ describe("conversation-scope subscribe whitelist (#task:1255 P2 step-3)", () => 
 
   it("useChannelThreads stays on the MESSAGE-STREAM scope", () => {
     const src = readFileSync(
-      fileURLToPath(new URL("../features/channels/use-channel-threads.ts", import.meta.url)),
+      fileURLToPath(new URL("../channels/use-channel-threads.ts", import.meta.url)),
       "utf8",
     );
     expect(src).toContain("wsConversationScope(");

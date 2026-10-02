@@ -775,7 +775,7 @@ function ActorMessageItem({
            only ONE body line of HEIGHT: a taller rail would pad the row back
            out and undo the tightening that makes a run read as one block. The
            line box is taken off the same Appearance token `.markdown-body`
-           uses (see `[data-message-continuation-rail]` in global.css), so it
+           uses (see `[data-message-continuation-rail]` in chrome.css), so it
            still matches the body's first line at any font-size slider value.
 
            It carries THIS row's own clock time, revealed on row hover: the

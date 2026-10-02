@@ -58,7 +58,7 @@ export function SystemMessage(props: SystemMessageProps): JSX.Element {
   // schedule banner pills, rename chips, etc.). `.markdown-body` already
   // pulls the same vars; this class is the system-row analogue.
   // PR-10: also tag with `data-system-event-row="1"` so the activity
-  // cluster CSS in `global.css` (`.system-activity-cluster
+  // cluster CSS in `chrome.css` (`.system-activity-cluster
   // [data-system-event-row="1"] > *`) can demote the inner row body's
   // chunky padding without depending on the row body's exact Tailwind
   // utility class list.
@@ -72,7 +72,7 @@ export function SystemMessage(props: SystemMessageProps): JSX.Element {
   // content column alignment because it reads as commentary alongside
   // replies. The split is expressed as `data-system-layout="info"` on
   // the wrapper; the layout CSS (`.system-message-row[data-system-
-  // layout="info"]` in `global.css`) does the alignment override.
+  // layout="info"]` in `chrome.css`) does the alignment override.
   const layout =
     resolution.kind === "current" && INFO_BLOCK_SUBTYPES.has(resolution.subtype)
       ? "info"

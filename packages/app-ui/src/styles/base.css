@@ -1,0 +1,201 @@
+/* Scoped by the `data-terminal-surface` hook the card puts on its root, so
+   the rule travels with the surface instead of with a feature path. */
+[data-terminal-surface] ::selection {
+  background: var(--bg-terminal-select);
+  color: var(--text-terminal);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Electron window-drag regions. Apply `.drag-region` to anything that
+   should let the user pick up the window (the titlebar bar, empty
+   spans). Children that need pointer events (buttons, dropdowns) opt
+   out with `.no-drag`. */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-elevated);
+  border-radius: 0px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--bg-elevated), var(--text-primary) 14%);
+}
+
+[data-popover-frame]::-webkit-scrollbar-thumb,
+[data-popover-frame] ::-webkit-scrollbar-thumb {
+  background: var(--border);
+}
+
+.scrollbar-hide {
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+[data-zoom-stepper],
+[data-zoom-stepper]:hover:not(:disabled) {
+  border-color: transparent;
+}
+
+.sidebar-row-border {
+  border-width: var(--sidebar-row-border-width, 2px);
+  border-radius: var(--nav-row-radius, var(--row-radius));
+  corner-shape: var(--nav-corner-shape, normal);
+}
+
+[data-sidebar-cta] {
+  border-radius: var(--nav-row-radius, var(--control-radius));
+  corner-shape: var(--nav-corner-shape, normal);
+}
+/* Create stays neutral at rest; hover previews it in the action hue as a soft
+   tint, never a full fill flashing in under the pointer. */
+[data-sidebar-cta]:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Secondary text inside a selected row follows the row's on-selected ink;
+   theme muted grey disappears into a saturated selected fill. */
+[data-ink-selected] {
+  --text-muted: color-mix(in srgb, var(--text-on-selected) 80%, transparent);
+}
+
+/* Header trailing controls read as a button group, not loose glyphs. forza6
+   frames them through its own sticker recipe. */
+:root:not([data-theme="forza6"]) [data-channel-actions] > button {
+  border: 1px solid var(--border);
+}
+
+.sidebar-row-gutter {
+  border-width: var(--sidebar-row-border-width, 2px);
+  border-style: solid;
+  border-color: transparent;
+  border-radius: var(--nav-row-radius, var(--row-radius));
+  corner-shape: var(--nav-corner-shape, normal);
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+button:not(:disabled) {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* Width belongs to the consumer; thumb geometry follows the track tokens. */
+.range-input {
+  height: var(--range-height, 20px);
+  appearance: none;
+  background: transparent;
+  cursor: var(--range-cursor, auto);
+}
+.range-input:focus-visible {
+  outline: none;
+}
+.range-input::-webkit-slider-runnable-track {
+  height: var(--range-track-height, 2px);
+  border: 0;
+  border-radius: var(--range-radius, 999px);
+  background: var(--range-track-bg, color-mix(in oklab, var(--text-muted) 30%, transparent));
+}
+.range-input::-webkit-slider-thumb {
+  width: var(--range-thumb-size, 14px);
+  height: var(--range-thumb-size, 14px);
+  margin-top: calc((var(--range-track-height, 2px) - var(--range-thumb-size, 14px)) / 2);
+  appearance: none;
+  border: var(--range-thumb-border-width, 1.5px) solid var(--range-thumb-border, var(--accent));
+  border-radius: var(--range-radius, 999px);
+  background: var(--range-thumb-bg, var(--bg-floating));
+  box-shadow: var(--range-thumb-shadow, 0 1px 3px rgba(var(--shadow-base), 0.18));
+  cursor: var(--range-thumb-cursor, auto);
+}
+.range-input:active::-webkit-slider-thumb {
+  background: var(--range-thumb-active-bg, var(--range-thumb-bg, var(--bg-floating)));
+  cursor: var(--range-thumb-active-cursor, auto);
+}
+.range-input:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--range-focus-color, var(--border-focus));
+  outline-offset: var(--range-focus-offset, 2px);
+}
+.range-input::-moz-range-track {
+  height: var(--range-track-height, 2px);
+  border: 0;
+  border-radius: var(--range-radius, 999px);
+  background: var(--range-track-bg, color-mix(in oklab, var(--text-muted) 30%, transparent));
+}
+.range-input::-moz-range-thumb {
+  width: var(--range-thumb-size, 14px);
+  height: var(--range-thumb-size, 14px);
+  border: var(--range-thumb-border-width, 1.5px) solid var(--range-thumb-border, var(--accent));
+  border-radius: var(--range-radius, 999px);
+  background: var(--range-thumb-bg, var(--bg-floating));
+  box-shadow: var(--range-thumb-shadow, 0 1px 3px rgba(var(--shadow-base), 0.18));
+  cursor: var(--range-thumb-cursor, auto);
+}
+.range-input:active::-moz-range-thumb {
+  background: var(--range-thumb-active-bg, var(--range-thumb-bg, var(--bg-floating)));
+  cursor: var(--range-thumb-active-cursor, auto);
+}
+.range-input:focus-visible::-moz-range-thumb {
+  outline: 2px solid var(--range-focus-color, var(--border-focus));
+  outline-offset: var(--range-focus-offset, 2px);
+}
+
+/* Unset painting slots defer to the component's existing utility styles. */
+:where([data-input], button[role="combobox"]) {
+  border-color: var(--field-border-color, revert-layer);
+  box-shadow: var(--field-shadow, revert-layer);
+  transition: var(--field-transition, revert-layer);
+}
+:where([data-input]):focus-within,
+:where(button[role="combobox"]):focus-visible,
+:where(button[role="combobox"][data-state="open"]) {
+  box-shadow: var(--field-shadow-focus, revert-layer);
+}
+:where([data-input], button[role="combobox"]):disabled {
+  border-color: var(--field-disabled-border-color, revert-layer);
+  box-shadow: var(--field-disabled-shadow, revert-layer);
+}
+:where([data-composer-shell]) {
+  border-width: var(--composer-border-width, revert-layer);
+  border-color: var(--composer-border-color, revert-layer);
+  box-shadow: var(--composer-shadow, revert-layer);
+  transition: var(--composer-transition, revert-layer);
+}
+:where([data-composer-shell]):focus-within {
+  box-shadow: var(--composer-shadow-focus, revert-layer);
+}

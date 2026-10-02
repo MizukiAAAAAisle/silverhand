@@ -189,7 +189,7 @@ function Segment({ sigil, label }: { sigil: JSX.Element; label: string }): JSX.E
   // sigil `self-center`, so a multi-segment chip reads as one line; `items-center`
   // would align segments on synthesized baselines that differ between a letter and
   // an SVG sigil. The chip in turn sits on the prose baseline via the family rule
-  // (`.markdown-body [data-locator-ref]`, global.css).
+  // (`.markdown-body [data-locator-ref]`, markdown.css).
   return (
     <span className="inline-flex min-w-0 items-baseline gap-0.5">
       {sigil}

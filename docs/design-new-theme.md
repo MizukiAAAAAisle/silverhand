@@ -11,14 +11,19 @@
 ```
 packages/app-ui/src/
 ├── styles/
-│   ├── global.css                  # 入口：@import tailwind + 各主题；@theme inline 暴露 var；非主题化常量（titlebar-height）；全局 element 样式
+│   ├── global.css                  # 入口：@import tailwind、各主题、组件层与共享层
+│   ├── tokens.css                  # @theme inline 暴露 var；非主题化常量与派生 token
+│   ├── base.css                    # 全局 element、滚动条、控件默认外观
+│   ├── chrome.css                  # 浮层、toast、导航行、system message、container 布局
+│   ├── markdown.css                # .markdown-body 正文、行内引用、代码块、mermaid
+│   ├── surfaces.css                # 侧栏动效、panel 几何、焦点轮廓
 │   └── themes/
 │       ├── forza6.css              # :root + [data-theme='forza6']（默认主题，避免 FOUC）
 │       ├── forza6-components.css   # forza6 component 特化层
 │       ├── studio-light.css        # [data-theme='studio-light']
 │       └── slack-dark.css          # [data-theme='slack-dark']
-├── hooks/
-│   └── use-appearance.ts            # 启动时读 config，把 data-theme 设到 <html>
+├── features/appearance/
+│   └── use-appearance.ts           # 启动时读 config，把 data-theme 设到 <html>
 └── settings/
     ├── types.ts                    # ThemeId 联合类型 + DEFAULTS.appearance.theme
     └── sections/AppearanceSection.tsx  # 主题选择器 UI（4 色预览 swatch）
@@ -26,7 +31,7 @@ packages/app-ui/src/
 
 **主题文件 = 一个完整的 token 定义块**，挂在 `[data-theme='your-theme']` 选择器下，含**所有**契约 token（见 §3）。缺一个，会从默认主题"漏过去"，肉眼看不见但行为不可预测。
 
-`@theme inline { ... }`（global.css）把 `--color-bg-base: var(--bg-base)` 之类映射成 Tailwind 的 `bg-bg-base` 工具类。`inline` 模式的关键作用：Tailwind 不把 var **写回** `:root`，所以主题切换时下游 `var()` 会重新解析到当前 `data-theme` 块的值（如果没有 `inline`，会有 self-reference 死循环）。
+`@theme inline { ... }`（tokens.css）把 `--color-bg-base: var(--bg-base)` 之类映射成 Tailwind 的 `bg-bg-base` 工具类。`inline` 模式的关键作用：Tailwind 不把 var **写回** `:root`，所以主题切换时下游 `var()` 会重新解析到当前 `data-theme` 块的值（如果没有 `inline`，会有 self-reference 死循环）。
 
 ---
 
@@ -256,7 +261,7 @@ neutral 按密度分级，不一刀切：输入框旁的图标按钮（Browse、
 
 ### 3.6.1 Floating frame
 
-Menu / popover / hover-card 共用一套外框契约。命中规则都在 `global.css`：
+Menu / popover / hover-card 共用一套外框契约。命中规则都在 `chrome.css`：
 
 - `[data-radix-menu-content]` —— Radix DropdownMenu + ContextMenu 内部共用属性
 - `[data-popover-frame='info']` —— 自定义的中性结构 hook，挂在 AgentInfoPopover / HumanInfoPopover / ManageMembersPopover / HoverPopover 的 `Content`
@@ -277,7 +282,7 @@ Menu / popover / hover-card 共用一套外框契约。命中规则都在 `globa
 
 ### 3.6.2 Select listbox radius
 
-Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `global.css` 里 `[role='listbox']` / `[role='listbox'] [role='option']` 全局选择器消费。所有 SelectContent / SelectItem 调用点的 TSX **不动**，由 global 选择器扫（同 floating frame 的 source-order + 等 specificity 胜出机制）。
+Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `chrome.css` 里 `[role='listbox']` / `[role='listbox'] [role='option']` 全局选择器消费。所有 SelectContent / SelectItem 调用点的 TSX **不动**，由 global 选择器扫（同 floating frame 的 source-order + 等 specificity 胜出机制）。
 
 **为什么用 `[role='listbox']` 而不是 `[data-radix-select-content]`**：Radix Select 不在 Content 根暴露该属性；`role="listbox"` 是它实际设置的属性，也是 W3C 标准词汇。Composer mention 自定义下拉也用 `role="listbox"`，selector 顺便覆盖 —— 形态一致，海报系都要直角。
 

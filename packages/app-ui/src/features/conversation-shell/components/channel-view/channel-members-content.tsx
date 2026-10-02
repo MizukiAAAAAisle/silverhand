@@ -81,7 +81,7 @@ function leaveBlockedCopy(reason: ChannelLeaveBlockedReason | null | undefined):
  * with its inline confirm. The settings panel owns successful leave navigation.
  *
  * Width-adaptive: `conversation-surface` names the query container, so the
- * groups go side by side once THIS surface is wide (see `global.css`). Extra
+ * groups go side by side once THIS surface is wide (see `chrome.css`). Extra
  * width buys more GROUP COLUMNS, never a wider row — a roster row stays one
  * narrow column of short names.
  */
@@ -386,7 +386,7 @@ export function ChannelMembersContent({
           <p className="px-1.5 py-3 text-center text-xs italic text-text-muted">No matches</p>
         ) : (
           // One column when narrow, HUMANS | AGENTS side by side once this
-          // surface is wide (rule in `global.css`).
+          // surface is wide (rule in `chrome.css`).
           <div data-members-groups>
             {orderedHumans.length > 0 ? (
               <section>

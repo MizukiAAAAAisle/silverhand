@@ -118,7 +118,7 @@ describe("SystemActivityCluster (PR-10)", () => {
 
   it('renders one inner system event-row per cluster member, each tagged with `data-system-event-row="1"`', () => {
     // Drift guard: SystemActivityCluster delegates per-row rendering to
-    // SystemMessage. The cluster CSS in `global.css` uses
+    // SystemMessage. The cluster CSS in `chrome.css` uses
     // `.system-activity-cluster [data-system-event-row="1"] > *` to
     // override the row body's chunky padding. If the SystemMessage
     // wrapper ever drops the `data-system-event-row` attribute, the

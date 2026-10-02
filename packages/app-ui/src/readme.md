@@ -36,9 +36,13 @@ the composer, message rows, Markdown and inline references, system messages, and
 lightboxes.
 
 `components`, `hooks`, `lib`, `navigation` and `icons` never import `features`;
-`layer-direction-fence.test.ts` enforces the direction and its allow-list only
-shrinks. A component that needs feature data belongs to that feature.
+`layer-direction-fence.test.ts` enforces the direction. A component or hook that
+needs feature data belongs to that feature.
 
 `lib` is for application infrastructure and domain-neutral helpers. Place business
 rules and caches with their domain, even when more than one page consumes them.
 Use kebab-case file names and update imports and source-based test paths together.
+
+`styles/global.css` is the stylesheet entry: themes load first, then the shared
+layers in cascade order: `tokens`, `base`, `chrome`, `markdown`, `surfaces`.
+`mobile.css` holds compact-layout rules keyed on `[data-layout]`.

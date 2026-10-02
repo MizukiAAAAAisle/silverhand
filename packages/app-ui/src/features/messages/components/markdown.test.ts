@@ -530,7 +530,7 @@ describe("SystemMessage channel refs", () => {
     // Drift guard for the avatar-column / content-column split in
     // `system-message.tsx`'s `INFO_BLOCK_SUBTYPES` set, paired with
     // `.system-message-row[data-system-layout="info"]` in
-    // global.css. Banners + cards (schedule_fire, context cards,
+    // chrome.css. Banners + cards (schedule_fire, context cards,
     // mention_cc, onboarding) must carry the
     // attribute so the avatar-column alignment kicks in; cluster
     // narration (task_* / session_cleared / rename) must NOT carry
@@ -846,7 +846,7 @@ describe("SystemMessage task event rows (PR-2)", () => {
   it("PR-8: every system message renders inside the system event-row wrapper", () => {
     // Drift guard: the SystemMessage entry wraps every per-subtype renderer
     // in the shared system event-row container (marked
-    // `data-system-event-row="1"`), which global.css hooks the theme prose
+    // `data-system-event-row="1"`), which chrome.css hooks the theme prose
     // font/size cascade onto. Removing the wrapper would silently strip
     // system rows out of that cascade. Keyed on the data marker, not the
     // class name (the class string is a styling detail).

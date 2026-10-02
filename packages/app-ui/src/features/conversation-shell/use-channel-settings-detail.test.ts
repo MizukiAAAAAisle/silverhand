@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decodeTransportSeq, decodeTransportEpoch, type ServerFrame } from "@silverhand/shared";
 import { refreshesChannelSettings } from "./use-channel-settings-detail";
-import { wsConversationSideScope } from "@/hooks/use-conversation-stream";
+import { wsConversationSideScope } from "@/features/realtime/conversation-scope";
 
 const event = (scope: string, kind: string): ServerFrame => ({
   type: "event",

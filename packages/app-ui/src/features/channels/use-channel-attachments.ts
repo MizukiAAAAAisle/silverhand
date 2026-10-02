@@ -14,7 +14,7 @@ import {
 } from "@silverhand/shared";
 import { api } from "@/lib/api";
 import { dateFilterSince, type DateFilterValue } from "@/components/ui/date-filter-select";
-import { wsConversationScope } from "@/hooks/use-conversation-stream";
+import { wsConversationScope } from "@/features/realtime/conversation-scope";
 import { useInterest } from "@/features/realtime/interest-registry";
 
 /**

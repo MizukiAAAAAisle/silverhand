@@ -30,7 +30,7 @@ import type { WorkspaceChannelReference } from "./conversation-ref";
  *
  * The per-row demotion (actor → muted, chip → transparent + outline,
  * pill → transparent + outline, dot → smaller) is handled entirely via
- * CSS scoped to `.system-activity-cluster` in `global.css`. This keeps
+ * CSS scoped to `.system-activity-cluster` in `chrome.css`. This keeps
  * the per-subtype renderers in `system-message.tsx` unchanged — they
  * still know how to render standalone, and the cluster just borrows
  * their structured output and restyles it from the outside.

@@ -34,7 +34,7 @@ interface UserAvatarProps {
  * avatar (resolved object URL passed in), we render those bytes
  * full-bleed inside the same square silhouette as agent avatars.
  *
- * Both branches carry `data-avatar-ground` (painted in global.css), so
+ * Both branches carry `data-avatar-ground` (painted in surfaces.css), so
  * the fallback occupies the same visible square as an uploaded image
  * instead of reading as a floating glyph — an agent fallback is always a
  * filled square (its runtime tint), and a person's must be too.

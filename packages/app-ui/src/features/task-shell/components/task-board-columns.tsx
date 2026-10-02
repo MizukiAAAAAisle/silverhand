@@ -47,7 +47,7 @@ interface ColumnSpec {
   label: string;
   icon: LucideIcon;
   /** Icon color — the SAME `--task-status-<status>-solid` token the card chip
-   *  reads (TaskStatusBadge via global.css `[data-task-status]`), so a column
+   *  reads (TaskStatusBadge via chrome.css `[data-task-status]`), so a column
    *  header and its cards' chips can never disagree (shiki review #task:912). */
   iconClass: string;
 }

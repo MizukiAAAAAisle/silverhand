@@ -10,7 +10,7 @@ import { VerticalSplitter } from "@/components/layout/vertical-splitter";
 import {
   SIDEBAR_ANIMATE_LAYOUT,
   SIDEBAR_PERFORMANCE_VARIANT,
-} from "@/sidebar-performance-experiment";
+} from "@/features/chat-shell/sidebar-performance-experiment";
 import { useResizableWidth } from "@/hooks/use-resizable-width";
 import { CreateWorkspaceDialog } from "@/features/workspaces/create-workspace-dialog";
 import { CreateChannelDialog } from "@/features/workspaces/create-channel-dialog";

@@ -175,7 +175,7 @@ function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
  *
  * Height is driven by the `.system-message-row` scoped CSS rule
  * (`--system-message-control-height: max(18px, calc(var(--md-prose-size,
- * 12px) * 1.5))` in `global.css`), which is also applied to the sibling
+ * 12px) * 1.5))` in `chrome.css`), which is also applied to the sibling
  * `TaskRef` chip via `[data-task-ref]`. Both grow together at larger
  * theme prose sizes so the chip + pill stay pixel-aligned and never
  * crop their text. `leading-none` keeps the inline content centered

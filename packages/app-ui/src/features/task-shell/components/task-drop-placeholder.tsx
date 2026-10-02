@@ -7,7 +7,7 @@ import { ArrowDownToLine } from "lucide-react";
  * armed", the slot says "the card will land here".
  *
  * Geometry routes through the shared `data-panel-card="placeholder"`
- * contract (global.css) so corners are squared in every theme (forza6
+ * contract (surfaces.css) so corners are squared in every theme (forza6
  * hard-cut) and forza6 supplies its 2px dashed poster stroke automatically
  * — no hardcoded `rounded-*`. Ink + border colour use `--text-on-selected`
  * so the slot reads as dark-on-brand against the bold selected column fill

@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
 import { CONTROL_HOVER_LIFT } from "@/components/common/control-ink-border";
 import { cn } from "@/lib/cn";
-import { useAppearance } from "@/hooks/use-appearance";
+import { useAppearance } from "@/features/appearance/use-appearance";
 import {
   MESSAGE_LAYOUT_MODES,
   setMessageLayoutMode,

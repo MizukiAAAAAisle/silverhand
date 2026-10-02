@@ -175,7 +175,7 @@ export function ChannelAttachmentsPanel({
  * header. Keying the subtree is both simpler and correct.
  *
  * Width-adaptive: `conversation-surface` names the query container, so the
- * layout tracks THIS surface's own width (see `global.css`) — the narrow stack
+ * layout tracks THIS surface's own width (see `chrome.css`) — the narrow stack
  * of filename over byline becomes filename / author / size / date as aligned
  * columns once there is room. The surface fills whatever box its host gives it;
  * the outer inset belongs to the host, this component only spaces its own rows.
@@ -696,7 +696,7 @@ function AttachmentRow({
           <AttachmentThumb attachment={attachment} isImage={isImage} />
           {/* Filename over byline when the surface is narrow; wide, the
               filename and this byline cluster flow as one left-hugging content
-              block with the elastic gap after it (rule in `global.css`, keyed on
+              block with the elastic gap after it (rule in `chrome.css`, keyed on
               the surface's own container width — never on which host mounted
               it). */}
           <span data-attachment-row-body className="flex min-w-0 flex-1 flex-col leading-tight">

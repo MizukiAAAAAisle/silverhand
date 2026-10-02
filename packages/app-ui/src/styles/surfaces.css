@@ -1,0 +1,116 @@
+:root {
+  --sidebar-anim-ms: 220ms;
+  --sidebar-ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sidebar-slot {
+  position: relative;
+  flex-shrink: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.sidebar-slot[data-animating="true"] {
+  will-change: flex-basis, margin-right;
+  transition:
+    flex-basis var(--sidebar-anim-ms) var(--sidebar-ease),
+    margin-right var(--sidebar-anim-ms) var(--sidebar-ease);
+}
+.sidebar-slot[data-performance-variant="compositor-isolation"] {
+  overflow: visible;
+  z-index: 1;
+}
+.sidebar-surface {
+  height: 100%;
+  transform: translate3d(-100%, 0, 0);
+  transition: transform var(--sidebar-anim-ms) var(--sidebar-ease);
+  contain: layout paint;
+  will-change: transform;
+  backface-visibility: hidden;
+  pointer-events: none;
+}
+.sidebar-surface[data-state="open"] {
+  transform: translate3d(0, 0, 0);
+  pointer-events: auto;
+}
+/* The content trails the panel: it recedes and fades while the surface slides. */
+.sidebar-surface > * {
+  transform-origin: top left;
+  transition:
+    opacity var(--sidebar-anim-ms) var(--sidebar-ease),
+    scale var(--sidebar-anim-ms) var(--sidebar-ease),
+    translate var(--sidebar-anim-ms) var(--sidebar-ease);
+}
+.sidebar-surface[data-state="closed"] > * {
+  opacity: 0;
+  scale: 0.95;
+  translate: 24px 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-slot,
+  .sidebar-surface,
+  .sidebar-surface > * {
+    transition: none;
+  }
+}
+
+[data-activity-block-clamped] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5lh), transparent);
+}
+
+/* Shared surface geometry; theme corner overrides still adapt to the app frame. */
+.nav-rail,
+[data-panel],
+[data-pane-clip] {
+  border-radius: var(--pane-radius, var(--card-radius, 0));
+  corner-shape: var(--pane-corner-shape, normal);
+}
+
+[data-panel] {
+  border: var(--pane-border, none);
+}
+
+[data-panel-card="row"],
+[data-panel-card="placeholder"],
+[data-panel-card="schedule"] {
+  border-radius: var(--row-radius);
+}
+[data-panel-card="profile-section"] {
+  border-radius: var(--profile-section-radius, var(--card-radius));
+}
+[data-panel-pill] {
+  border-radius: var(--chip-radius);
+}
+[data-panel-tabs] {
+  border-radius: var(--control-radius);
+}
+[data-panel-tabs] button {
+  border-radius: var(--tab-segment-radius);
+}
+[data-panel-tabs] button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+[data-panel-control] {
+  border-radius: var(--control-radius);
+}
+[data-channel-actions] button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+.focus-outline:focus-visible,
+.focus-outline-within:focus-within {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+[data-avatar-ground] {
+  background-color: var(--bg-avatar-ground);
+}
+
+[data-tasks-column][data-drop-target] {
+  background-color: var(--bg-row-selected);
+  border-color: var(--accent);
+}
+[data-tasks-column][data-drop-target] > [data-tasks-column-header] > span,
+[data-tasks-column][data-drop-target] > [data-tasks-column-header] > svg {
+  color: var(--text-on-selected);
+}

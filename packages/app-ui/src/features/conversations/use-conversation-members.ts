@@ -9,7 +9,7 @@ import {
 import { ApiError, api } from "@/lib/api";
 import { onWsFrame } from "@/lib/ws-client";
 import { useInterest } from "@/features/realtime/interest-registry";
-import { wsConversationSideScope } from "@/hooks/use-conversation-stream";
+import { wsConversationSideScope } from "@/features/realtime/conversation-scope";
 
 export type ConversationMembersStatus = "loading" | "resolved" | "unauthorized" | "not_found";
 

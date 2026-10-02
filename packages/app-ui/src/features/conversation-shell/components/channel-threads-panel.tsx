@@ -92,7 +92,7 @@ export function ChannelThreadsPanel({
  * channel-scoped aggregate via `useChannelThreads`.
  *
  * Width-adaptive: `conversation-surface` names the query container, so any width
- * rule tracks THIS surface's own width (see `global.css`). The surface fills
+ * rule tracks THIS surface's own width (see `chrome.css`). The surface fills
  * whatever box its host gives it — the outer inset belongs to the host.
  */
 export function ChannelThreadsContent({

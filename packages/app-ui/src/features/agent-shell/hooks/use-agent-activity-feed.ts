@@ -7,7 +7,7 @@ import type {
   ConversationActivityListResponse,
 } from "@silverhand/shared";
 import { api } from "@/lib/api";
-import { wsConversationSideScope } from "@/hooks/use-conversation-stream";
+import { wsConversationSideScope } from "@/features/realtime/conversation-scope";
 import { useInterest } from "@/features/realtime/interest-registry";
 
 // #task:1255 Stage-2 P1c #2 — the agent activity feed (the `conversation_activity`

@@ -1,6 +1,6 @@
 /**
  * Shared pane paint. Pair with data-panel for geometry and borders, whose
- * single authority is the panel rule in global.css. Themes override its tokens
+ * single authority is the panel rule in surfaces.css. Themes override its tokens
  * and selectors without competing with inline border-radius declarations.
  *
  * Layout/overflow stays with each caller; SplitPane's animated shell uses

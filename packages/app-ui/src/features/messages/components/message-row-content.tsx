@@ -136,8 +136,8 @@ export function MessageRowContent({
           preview all stay outside it. `alignRight` is already
           `user-right && isCurrentUser` and `isCurrentUser` implies
           `from_kind === 'user'`, so "own side + human" needs no second
-          predicate. Colour + corner are per-theme tokens (see §Own-message
-          bubble in global.css); only the padding is stated here, because
+          predicate. Colour + corner are per-theme tokens (see the own-message
+          bubble tokens in tokens.css); only the padding is stated here, because
           spacing is this layout's business and the token cluster's is
           identity. The `max-w-full` on that box is load-bearing, not
           belt-and-braces: `w-fit` is `width: fit-content`, whose floor is the

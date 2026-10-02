@@ -107,7 +107,7 @@ export function MessageTaskTag({
         type="button"
         data-message-task-tag
         // Status colour / border / radius all flow from the shared
-        // `[data-task-status]` token contract (global.css + per-theme),
+        // `[data-task-status]` token contract (chrome.css + per-theme),
         // so this tag stays in lockstep with the board chips. No bg /
         // border / colour utilities here — they would fight the tokens.
         data-task-status={status}

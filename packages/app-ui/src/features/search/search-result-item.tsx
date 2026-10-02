@@ -22,7 +22,7 @@ export type SearchItem =
 
 /**
  * The leading icon square is width-gated, not host-gated: `data-search-item-icon`
- * shows only when the `search-list` container is wide enough (see `global.css`).
+ * shows only when the `search-list` container is wide enough (see `chrome.css`).
  * Identity and agent-space rows are exempt — their avatar is identity, not type
  * chrome — so they stay visible at every width.
  */

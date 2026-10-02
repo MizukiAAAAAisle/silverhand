@@ -19,7 +19,7 @@ import { NavRail } from "@/components/layout/nav-rail";
 import { SectionLayer } from "@/components/layout/section-layer";
 import { Titlebar } from "@/components/layout/titlebar";
 import { TitlebarSearch } from "@/features/search/titlebar-search";
-import { useAppearance } from "@/hooks/use-appearance";
+import { useAppearance } from "@/features/appearance/use-appearance";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
@@ -136,7 +136,7 @@ export function App({
   }
   // slack-dark is our only dark theme; studio-light / forza6 are light. sonner
   // then picks the matching default scale for the parts our token overrides in
-  // global.css don't cover (e.g. any action/close button greys).
+  // chrome.css don't cover (e.g. any action/close button greys).
   return (
     <EmbeddedProfileSetupGate key={viewer.data.id} viewerId={viewer.data.id}>
       <NavigationProvider launch={navigationLaunch}>
@@ -316,7 +316,7 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
         {compact && <MobileTabBar dots={navRailDots} />}
 
         {/* Toast surface follows the active theme: `theme` picks sonner's
-         * light/dark default scale, and global.css maps its fill / text /
+         * light/dark default scale, and chrome.css maps its fill / text /
          * border / radius onto our tokens (forza6 gets the ink frame). No
          * `richColors` — that paints the whole toast in sonner's own hue
          * palette; instead the surface stays neutral and the type icon carries

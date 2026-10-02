@@ -29,7 +29,10 @@ import {
   agentRunStatesKey,
   reconcileAgentRunStateSnapshot,
 } from "@/features/agent-shell/model/agent-run-state-cache";
-import { wsConversationScope, wsConversationSideScope } from "@/hooks/use-conversation-stream";
+import {
+  wsConversationScope,
+  wsConversationSideScope,
+} from "@/features/realtime/conversation-scope";
 import { clusterInitialFetchEnabled } from "@/features/conversation-shell/model/thread-mark-read";
 import {
   mainlineStreamSourceHead,

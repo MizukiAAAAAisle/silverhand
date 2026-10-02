@@ -7,7 +7,7 @@ import {
   type ThreadSummaryInvariant,
 } from "@silverhand/shared";
 import { api } from "@/lib/api";
-import { wsConversationScope } from "@/hooks/use-conversation-stream";
+import { wsConversationScope } from "@/features/realtime/conversation-scope";
 import { useInterest } from "@/features/realtime/interest-registry";
 
 // Re-export so existing consumers (ChannelThreadsPanel) keep their import path
