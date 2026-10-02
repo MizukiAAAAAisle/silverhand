@@ -6,7 +6,7 @@ import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { dropdownPanelProps } from "@/components/ui/dropdown-panel";
 import { SEARCH_FIELD_FRAME } from "@/components/common/control-ink-border";
-import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { cn } from "@/lib/cn";
 import {

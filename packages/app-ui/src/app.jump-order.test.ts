@@ -3,7 +3,7 @@ import {
   executeMessageJump,
   type MessageJumpEnvironment,
 } from "./features/conversation-shell/message-jump";
-import type { DirectPairAuthority } from "./features/chat-shell/model/chat-place-restore";
+import type { DirectPairAuthority } from "./features/app-shell/chat-place-restore";
 
 function environment(pairs: DirectPairAuthority, workspace: string | null = "w") {
   const calls: string[] = [];

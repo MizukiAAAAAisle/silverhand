@@ -34,11 +34,8 @@ import {
   __resetAttachmentBlobCacheForTest,
   readAttachmentToken,
 } from "@/features/attachments/attachment-blob-cache";
-import {
-  taskBoardCacheScope,
-  taskByNumberKey,
-} from "@/features/task-shell/hooks/use-task-by-number";
-import { taskDetailKey } from "@/features/task-shell/model/task-detail";
+import { taskBoardCacheScope, taskByNumberKey } from "@/features/tasks/hooks/use-task-by-number";
+import { taskDetailKey } from "@/features/tasks/model/task-detail";
 import {
   channelThreadsKey,
   channelThreadsUnreadKey,
@@ -47,7 +44,7 @@ import {
   channelAttachmentsKey,
   channelAttachmentSendersKey,
 } from "@/features/channels/use-channel-attachments";
-import { agentRunStatesKey } from "@/features/agent-shell/model/agent-run-state-cache";
+import { agentRunStatesKey } from "@/features/agents/model/agent-run-state-cache";
 import { eventWsClient } from "@/lib/ws-client";
 import {
   clearPendingAgentStatusPatches,

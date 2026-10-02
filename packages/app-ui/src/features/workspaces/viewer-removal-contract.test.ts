@@ -21,7 +21,7 @@ import {
   attentionModesKey,
   workspaceAttentionPreferenceKey,
 } from "../attention/hooks";
-import { favoritesKey } from "../favorites/hooks";
+import { favoritesKey } from "./favorites";
 import {
   messageUnreadByConversationKey,
   messageUnreadSummaryKey,
@@ -118,7 +118,7 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       // so seed the removed row's entry plus the survivor's. Note the entry key can
       // no longer CONTAIN the parent id (`conversation:<cid>`), so this arm of the
       // whole-cache invariant went vacuous with #task:1888 — the orphan-entry drop
-      // is asserted directly in `features/favorites` instead.
+      // is asserted directly in `features/workspaces/favorites` instead.
       viewer_sort: {
         list_key: "favorites",
         modes: {},
@@ -330,7 +330,7 @@ describe("viewer-local projection removal contract (#task:1412)", () => {
   describe("source smoke: every exported read-model key is classified", () => {
     const READ_MODEL_FILES = [
       "../attention/hooks.ts",
-      "../favorites/hooks.ts",
+      "./favorites.ts",
       "../channels/message-unread.ts",
     ];
     const EXPORTED_KEY = /export const (\w*Key)\b/g;

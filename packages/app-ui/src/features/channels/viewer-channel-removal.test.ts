@@ -36,16 +36,16 @@ import type {
 } from "@silverhand/shared";
 import { activityKey } from "../attention/hooks";
 import { messageKey } from "../messages/hooks";
-import { removeChannelFromSaved, savedHeldChannelIds, savedKey } from "../saved/hooks";
+import { removeChannelFromSaved, savedHeldChannelIds, savedKey } from "../messages/saved";
 import { searchKey } from "../search/hooks";
 import {
   boardColumnKey,
   boardCountsKey,
   boardFacetsKey,
   boardFilterKey,
-} from "../task-shell/model/board-query";
-import { DEFAULT_TASK_FILTERS } from "../task-shell/model/task-filters";
-import { taskDetailKey } from "../task-shell/model/task-detail";
+} from "../tasks/model/board-query";
+import { DEFAULT_TASK_FILTERS } from "../tasks/model/task-filters";
+import { taskDetailKey } from "../tasks/model/task-detail";
 import {
   CHANNEL_WORKSPACE_ATTRIBUTION_SOURCES,
   channelWorkspaceConflicts,
@@ -687,6 +687,7 @@ describe("viewer-local channel removal contract (#task:1689)", () => {
 
   describe("classification is registry-anchored (layer 3, not a drifting hand-list)", () => {
     const FEATURES_DIR = fileURLToPath(new URL("..", import.meta.url));
+    const PAGES_DIR = fileURLToPath(new URL("../../pages", import.meta.url));
     /** The three key shapes the codebase actually writes: a single-line `*Key`
      *  constant, a `*Key` FACTORY (`= (args) => [ 'root', … ]`, possibly spanning
      *  lines), and an inline `queryKey: ['root', …]`. */
@@ -735,8 +736,8 @@ describe("viewer-local channel removal contract (#task:1689)", () => {
       ]);
     });
 
-    it("every key root under features/** is classified, and every entry is real", () => {
-      const scanned = scanRoots(FEATURES_DIR);
+    it("every key root under features/** and pages/** is classified, and every entry is real", () => {
+      const scanned = scanRoots(PAGES_DIR, scanRoots(FEATURES_DIR));
       const classified = Object.keys(VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION);
       expect(scanned.size).toBeGreaterThanOrEqual(30); // not vacuous
       // BOTH directions: a new root goes red (no "unknown ⇒ exempt" default that

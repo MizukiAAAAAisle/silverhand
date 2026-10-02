@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MutationObserver, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { channelArchiveMutationOptions } from "./hooks";
-import { applyFavoritesSync, favoritesKey } from "../favorites/hooks";
+import { applyFavoritesSync, favoritesKey } from "./favorites";
 import { api } from "@/lib/api";
 
 vi.mock("@/lib/api", async (importOriginal) => ({

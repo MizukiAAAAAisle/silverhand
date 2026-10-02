@@ -5,7 +5,7 @@ import {
   fetchBackendInfo,
   revokeComputer,
   backendInfoRefetchIntervalMs,
-} from "./features/computer-shell/hooks/hooks";
+} from "./features/computers/hooks/hooks";
 import { api, getBackendInfo } from "./lib/api";
 import { mapAuthStateToViewer } from "./features/session/hooks";
 

@@ -8,7 +8,7 @@ import type { MemberCandidate, MemberCandidateGroup } from "../workspaces/member
 import { useWorkspaceMemberLists } from "../workspaces/hooks";
 import { useConversationMembers } from "./use-conversation-members";
 import { useAddConversationMember } from "./use-add-conversation-member";
-import { useAgents } from "@/features/agent-shell/hooks/hooks";
+import { useAgents } from "@/features/agents/hooks/hooks";
 import { useUsers } from "@/features/users/hooks";
 
 export interface AddConversationMemberPopoverProps {

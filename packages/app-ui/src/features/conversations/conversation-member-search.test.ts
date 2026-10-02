@@ -20,7 +20,7 @@ vi.mock("../workspaces/hooks", () => ({
     },
   }),
 }));
-vi.mock("@/features/agent-shell/hooks/hooks", () => ({
+vi.mock("@/features/agents/hooks/hooks", () => ({
   useAgents: () => ({ data: [{ id: "own" }, { id: "already" }] }),
 }));
 vi.mock("@/features/users/hooks", () => ({

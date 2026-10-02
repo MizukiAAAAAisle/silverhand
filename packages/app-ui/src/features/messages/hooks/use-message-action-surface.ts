@@ -7,7 +7,7 @@ import {
 } from "@/features/messages/hooks/use-message-selection";
 import { buildMarkdownTranscript } from "@/features/messages/model/markdown-transcript";
 import { type CachedMessage, isCommittedMessage } from "@/features/channels/pending-message";
-import { useSavedMessageIds, useToggleSave } from "@/features/saved/hooks";
+import { useSavedMessageIds, useToggleSave } from "@/features/messages/saved";
 
 /** Per-row action props spread onto `MessageItem` / `ChannelMessageItem`.
  *  A single bundle so neither call site can silently drop one — that

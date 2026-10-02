@@ -63,7 +63,7 @@ import {
   removeWorkspaceFromActivity,
   removeWorkspaceFromAttentionBadges,
 } from "@/features/attention/hooks";
-import { favoritesKey, removeWorkspaceFromFavorites } from "@/features/favorites/hooks";
+import { favoritesKey, removeWorkspaceFromFavorites } from "@/features/workspaces/favorites";
 import {
   messageUnreadSummaryKey,
   removeWorkspaceFromMessageUnread,

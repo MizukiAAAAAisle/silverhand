@@ -39,7 +39,7 @@
 import type { MessageUnreadPointerDto, MessageSeq } from "@silverhand/shared";
 import type { ChannelLayout } from "@/router";
 import { resolveChannelOpen } from "@/features/conversation-shell/model/channel-open";
-import { pickDefaultChannel } from "@/features/chat-shell/model/archive-fallback";
+import { pickDefaultChannel } from "@/features/app-shell/archive-fallback";
 
 export interface RestoreNavigationInputs {
   /** Route workspace id (`null` when the route has no workspace). */

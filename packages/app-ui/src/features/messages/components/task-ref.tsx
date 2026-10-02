@@ -1,10 +1,10 @@
-import { taskChannelLabel } from "@/features/task-shell/model/task-place";
+import { taskChannelLabel } from "@/features/tasks/model/task-place";
 import { useState } from "react";
 import { Clock } from "lucide-react";
-import { useTaskByNumber } from "@/features/task-shell/hooks/use-task-by-number";
-import { useTaskRefContext } from "@/features/task-shell/components/task-ref-context";
-import { useUpdateTaskStatus } from "@/features/task-shell/hooks/hooks";
-import { TaskStatusBadge } from "@/features/task-shell/components/task-status-badge";
+import { useTaskByNumber } from "@/features/tasks/hooks/use-task-by-number";
+import { useTaskRefContext } from "@/features/tasks/components/task-ref-context";
+import { useUpdateTaskStatus } from "@/features/tasks/hooks/hooks";
+import { TaskStatusBadge } from "@/features/tasks/components/task-status-badge";
 import { HoverPopover } from "./hover-popover";
 import { useRelativeTime } from "../hooks/use-relative-time";
 import type { TaskSummaryDto, TaskStatus } from "@silverhand/shared";

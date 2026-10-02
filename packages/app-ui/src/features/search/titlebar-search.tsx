@@ -15,8 +15,8 @@ import type { AgentDto, SearchIdentity, SearchResultDto } from "@silverhand/shar
 import { Button } from "@/components/ui/button";
 import { useAuthorAvatarObjectUrls } from "@/features/messages/hooks/author-avatar-hooks";
 import { cn } from "@/lib/cn";
-import { useAgents } from "@/features/agent-shell/hooks/hooks";
-import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
+import { useAgents } from "@/features/agents/hooks/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useMessageSearch } from "@/features/search/hooks";

@@ -1,5 +1,5 @@
 import type { AgentDto, UserDto } from "@silverhand/shared";
-import { AgentInfoPopover } from "@/features/agent-shell/components/agent-info-popover";
+import { AgentInfoPopover } from "@/features/agents/components/agent-info-popover";
 import { HumanInfoPopover } from "@/features/profile/human-info-popover";
 import { useUserAvatarObjectUrl } from "@/features/users/avatar-hooks";
 import { useNav } from "@/router";

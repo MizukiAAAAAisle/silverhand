@@ -4,8 +4,8 @@ import { ChannelView } from "@/features/conversation-shell/components/channel-vi
 import { ThreadPanel } from "@/features/conversation-shell/components/thread-panel";
 import { ChannelThreadsPanel } from "@/features/conversation-shell/components/channel-threads-panel";
 import { ChannelAttachmentsPanel } from "@/features/conversation-shell/components/channel-attachments-panel";
-import { TaskDetailPanel } from "@/features/task-shell/components/task-detail-panel";
-import { AgentView } from "@/features/agent-shell/components/agent-view";
+import { TaskDetailPanel } from "@/features/tasks/components/task-detail-panel";
+import { AgentView } from "@/features/agents/components/agent-view";
 import { SideUnresolvedPlaceholder } from "@/features/conversation-shell/components/side-unresolved-placeholder";
 import { ConversationPaneCapabilitiesProvider } from "@/features/conversations/pane-capabilities-context";
 import type { SecondaryPaneModel } from "./pane-render-models";

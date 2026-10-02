@@ -41,8 +41,8 @@ import {
   reduceAttachmentsWindow,
 } from "@/features/conversation-shell/model/attachments-window";
 import { useMessageRenderContext } from "@/features/messages/hooks/use-message-render-context";
-import { useAgents } from "@/features/agent-shell/hooks/hooks";
-import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
+import { useAgents } from "@/features/agents/hooks/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import {
   useChannelAttachments,
   useChannelAttachmentSenders,

@@ -3,7 +3,7 @@ import type { AppSection } from "@/components/layout/nav-rail";
 import type { MembershipState } from "@/features/channels/membership";
 import type { JumpPhase } from "@/features/channels/message-jump-phase";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
-import type { UnreadCounts } from "@/features/notifications/hooks";
+import type { UnreadCounts } from "@/features/attention/notifications";
 import type { WorkspaceListItem } from "@/features/workspaces/hooks";
 import type { SidebarPane } from "@/features/conversation-shell/use-sidebar-pane";
 import type {

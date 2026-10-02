@@ -14,7 +14,7 @@ vi.mock("@/router", () => ({
   useNav: () => ({ toDirect: state.direct, toDirectDraft: state.draft }),
 }));
 vi.mock("@/features/direct-pairs/hooks", () => ({ useDirectPairs: () => state.pairs }));
-vi.mock("@/features/agent-shell/hooks/avatar-hooks", () => ({
+vi.mock("@/features/agents/hooks/avatar-hooks", () => ({
   useAgentAvatarObjectUrls: () => new Map(),
 }));
 vi.mock("@/components/layout/collection-item-card", () => ({

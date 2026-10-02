@@ -28,7 +28,7 @@ import {
   patchMessageUnreadByConversation,
   patchMessageUnreadSummary,
 } from "@/features/channels/hooks";
-import { favoritesKey, patchFavoritesUnread } from "@/features/favorites/hooks";
+import { favoritesKey, patchFavoritesUnread } from "@/features/workspaces/favorites";
 import { ingestViewerUnreadFrame } from "./viewer-unread-ingestor";
 
 function pointer(messageId: string, seq: number): MessageUnreadPointerDto {

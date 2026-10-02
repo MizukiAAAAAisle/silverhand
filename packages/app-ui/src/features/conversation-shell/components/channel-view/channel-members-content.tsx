@@ -23,7 +23,7 @@ import {
 } from "@/features/conversations/use-conversation-members";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { useUsersById } from "@/features/users/hooks";
-import { presenceDotStatus, usePresenceById } from "@/features/presence/hooks";
+import { presenceDotStatus, usePresenceById } from "@/features/users/presence";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
@@ -31,11 +31,8 @@ import {
   useViewerUser,
 } from "@/features/session/hooks";
 import { STATUS_DOT } from "@/components/status-dot";
-import { projectMemberRuntimeStatus } from "@/features/agent-shell/model/member-runtime-status";
-import {
-  PRESENCE_TONE_DOT,
-  projectPresence,
-} from "@/features/agent-shell/model/presence-projection";
+import { projectMemberRuntimeStatus } from "@/features/agents/model/member-runtime-status";
+import { PRESENCE_TONE_DOT, projectPresence } from "@/features/agents/model/presence-projection";
 
 /** The row's exit action (Leave / Remove). Bare glyph: muted at rest, error ink
  *  on hover, no fill and no box — the row hover is the only colour surface in

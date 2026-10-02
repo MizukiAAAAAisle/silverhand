@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import type { MessageDto, TaskSummaryDto } from "@silverhand/shared";
-import {
-  taskBoardCacheScope,
-  taskByNumberKey,
-} from "@/features/task-shell/hooks/use-task-by-number";
+import { taskBoardCacheScope, taskByNumberKey } from "@/features/tasks/hooks/use-task-by-number";
 import { snapshotStaticTaskRefs } from "./image-preview-modal";
 
 /**

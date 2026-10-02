@@ -42,9 +42,9 @@ const RETIRED_HOOK = /data-(?:list-row|thread-row|attachment-row)(?![-\w])/g;
 
 const CONSUMERS = [
   "../../features/search/search-result-item.tsx",
-  "../../features/chat-shell/saved-list-view.tsx",
-  "../../features/chat-shell/archived-channels-panel.tsx",
-  "../../features/activity-shell/activity-view.tsx",
+  "../../pages/chat/saved-list-view.tsx",
+  "../../pages/chat/archived-channels-panel.tsx",
+  "../../pages/activity/activity-view.tsx",
   "../../features/conversation-shell/components/channel-threads-panel.tsx",
   "../../features/conversation-shell/components/channel-attachments-panel.tsx",
 ] as const;

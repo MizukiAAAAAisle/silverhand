@@ -1,4 +1,4 @@
-import { useAgent } from "@/features/agent-shell/hooks/hooks";
+import { useAgent } from "@/features/agents/hooks/hooks";
 import { useUsers } from "@/features/users/hooks";
 import type { DirectMessageTarget } from "./target";
 import { counterpartFromAgent, counterpartFromHuman } from "./counterpart-presentation";

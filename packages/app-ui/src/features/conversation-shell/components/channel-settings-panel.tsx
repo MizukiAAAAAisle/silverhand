@@ -15,9 +15,9 @@ import {
   useRenameChannel,
   useSetChannelVisibility,
 } from "@/features/workspaces/hooks";
-import { useAgents } from "@/features/agent-shell/hooks/hooks";
-import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
-import { canEditAgentProfile } from "@/features/agent-shell/model/permissions";
+import { useAgents } from "@/features/agents/hooks/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
+import { canEditAgentProfile } from "@/features/agents/model/permissions";
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/session/hooks";
 import {
   useChannelAgents,

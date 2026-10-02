@@ -35,9 +35,9 @@ import { AlertTriangle, Check, Loader2, Pencil, RefreshCw, X } from "lucide-reac
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
-import type { SaveServerUrlBanner } from "@/features/settings-shell/model/describe-save-server-url-outcome";
-import { validateServerUrlDraft } from "@/features/settings-shell/model/server-url-validation";
-import { describeProbeOutcome } from "@/features/setup/describe-probe-outcome";
+import type { SaveServerUrlBanner } from "@/features/settings/model/describe-save-server-url-outcome";
+import { validateServerUrlDraft } from "@/features/settings/model/server-url-validation";
+import { describeProbeOutcome } from "@/features/settings/model/describe-probe-outcome";
 import type { ProfileSaveWithTestResult } from "@silverhand/client";
 
 export interface BackendUnreachableGateProps {

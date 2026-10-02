@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DirectPairAuthority } from "@/features/chat-shell/model/chat-place-restore";
+import type { DirectPairAuthority } from "@/features/app-shell/chat-place-restore";
 import type { JumpRoute } from "./message-jump-nav";
 import { jumpBasePath, resolveJumpNav, resolveJumpRoute } from "./message-jump-nav";
 

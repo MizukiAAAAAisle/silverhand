@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { MessageAuthorDto } from "@silverhand/shared";
-import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { collectAuthorAvatarSources } from "../model/author-presentation";
 

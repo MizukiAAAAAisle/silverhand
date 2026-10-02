@@ -9,7 +9,7 @@ import type {
 } from "@silverhand/shared";
 import { apiPaths } from "@silverhand/shared";
 import { api } from "@/lib/api";
-import { favoritesKey } from "@/features/favorites/hooks";
+import { favoritesKey } from "@/features/workspaces/favorites";
 import type { ChannelListPayload } from "./hooks";
 import { archivedChannelsKey, channelDetailKey, channelsKey } from "./query-keys";
 

@@ -4,11 +4,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "./markdown";
-import { TaskRefContextProvider } from "@/features/task-shell/components/task-ref-context";
-import { useTaskByNumber } from "@/features/task-shell/hooks/use-task-by-number";
+import { TaskRefContextProvider } from "@/features/tasks/components/task-ref-context";
+import { useTaskByNumber } from "@/features/tasks/hooks/use-task-by-number";
 import { highlightText } from "@/features/search/highlight";
-vi.mock("@/features/task-shell/hooks/use-task-by-number", async (orig) => ({
-  ...(await orig<typeof import("@/features/task-shell/hooks/use-task-by-number")>()),
+vi.mock("@/features/tasks/hooks/use-task-by-number", async (orig) => ({
+  ...(await orig<typeof import("@/features/tasks/hooks/use-task-by-number")>()),
   useTaskByNumber: vi.fn(() => ({ data: null, isLoading: true, isError: false })),
 }));
 beforeEach(() => vi.clearAllMocks());
@@ -38,13 +38,13 @@ function render(taskReferences?: "raw" | "resolve", text = content) {
 
 describe("task numbers stay literal outside chat", () => {
   it.each([
-    ["description dialog", "../../task-shell/components/task-detail-dialog.tsx", "detail.content"],
     [
-      "description side panel",
-      "../../task-shell/components/task-detail-panel.tsx",
+      "description dialog",
+      "../../../pages/task/components/task-detail-dialog.tsx",
       "detail.content",
     ],
-    ["saved message", "../../chat-shell/saved-list-view.tsx", "item.message.content"],
+    ["description side panel", "../../tasks/components/task-detail-panel.tsx", "detail.content"],
+    ["saved message", "../../../pages/chat/saved-list-view.tsx", "item.message.content"],
   ])("%s opts into raw task text even inside a chat task context", (_, path, expression) => {
     const source = readFileSync(new URL(path, import.meta.url), "utf8");
     expect(source).toContain(`<Markdown content={${expression}} taskReferences="raw" />`);

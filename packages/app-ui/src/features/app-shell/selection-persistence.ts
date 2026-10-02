@@ -11,7 +11,7 @@ import {
   recordLastChatPlace,
   recordLastWorkspace,
 } from "@/features/app-shell/place-memory";
-import { chatPlaceForRoute } from "@/features/chat-shell/model/chat-place-restore";
+import { chatPlaceForRoute } from "@/features/app-shell/chat-place-restore";
 
 /** Chat selection memory and recent-opened stamps. Page-specific selection lives in its Shell. */
 export function useSelectionPersistenceEffects(params: {

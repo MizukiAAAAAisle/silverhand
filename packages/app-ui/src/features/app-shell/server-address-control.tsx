@@ -3,7 +3,7 @@ import { AlertCircle, Loader2, Pencil, RotateCw } from "lucide-react";
 import { getPlatform } from "@/platform";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
-import { validateServerUrlDraft } from "@/features/settings-shell/model/server-url-validation";
+import { validateServerUrlDraft } from "@/features/settings/model/server-url-validation";
 import { describeProfileSaveForGate } from "./backend-unreachable-gate";
 
 /** Remote-only auth gates offer an escape to a different self-hosted origin. */

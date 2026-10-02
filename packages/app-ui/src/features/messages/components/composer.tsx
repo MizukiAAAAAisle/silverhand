@@ -20,7 +20,7 @@ import {
 } from "@silverhand/shared/reference-markdown";
 import { MAX_ATTACHMENTS, shouldInterceptOversizedPaste } from "../model/oversize-paste";
 import { Button } from "@/components/ui/button";
-import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import {
   useChannelsAcrossWorkspaces,
@@ -29,7 +29,7 @@ import {
   useWorkspaces,
   type WorkspaceHumanMember,
 } from "@/features/workspaces/hooks";
-import { useAgents } from "@/features/agent-shell/hooks/hooks";
+import { useAgents } from "@/features/agents/hooks/hooks";
 import type { ComposerDirectory, MentionAgent } from "@/features/conversations/pane-mode";
 
 import { useConversationMembers } from "@/features/conversations/use-conversation-members";

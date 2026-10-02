@@ -5,7 +5,7 @@ import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { SidePanelHeader } from "@/components/layout/side-panel-header";
 import { ProfileHeaderContent } from "@/features/profile/profile-header-content";
-import { usePresenceById, presenceDotStatus, humanPresenceText } from "@/features/presence/hooks";
+import { usePresenceById, presenceDotStatus, humanPresenceText } from "@/features/users/presence";
 import { useHumanAvatar } from "./use-human-avatar";
 
 export function HumanHeader({

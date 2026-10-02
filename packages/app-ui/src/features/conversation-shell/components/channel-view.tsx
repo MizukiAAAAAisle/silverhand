@@ -15,10 +15,10 @@ import {
 } from "@/features/attachments/attachment-preview";
 import { ConversationViewSkeleton } from "@/features/conversation-shell/components/conversation-view-skeleton";
 import { AddConversationMemberPopover } from "@/features/conversations/add-conversation-member-popover";
-import { TaskRefContextProvider } from "@/features/task-shell/components/task-ref-context";
+import { TaskRefContextProvider } from "@/features/tasks/components/task-ref-context";
 import { useNav, useRouteState } from "@/router";
-import { useAgents } from "@/features/agent-shell/hooks/hooks";
-import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
+import { useAgents } from "@/features/agents/hooks/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import {
   useChannelAgents,
   useChannelAgentRuntime,
@@ -64,7 +64,7 @@ import { tabKey, type PanelTabKind } from "@/features/conversation-shell/model/c
 import {
   taskBoardContainerForPane,
   type TaskBoardContainer,
-} from "@/features/task-shell/model/task-container";
+} from "@/features/tasks/model/task-container";
 
 interface ChannelViewProps {
   /** Whether this conversation's container has a `#` channel namespace: true for

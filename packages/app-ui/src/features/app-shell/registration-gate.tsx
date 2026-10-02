@@ -4,7 +4,7 @@ import { Loader2, LogIn, UserPlus } from "lucide-react";
 import { AUTH_HANDLE_TAKEN_CODE, suggestParticipantNameFromEmail } from "@silverhand/shared";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { nameFormatMessage } from "@/features/naming/use-name-availability";
+import { nameFormatMessage } from "@/features/identity/use-name-availability";
 import { cn } from "@/lib/cn";
 import { AuthSplitLayout } from "@/components/brand/auth-split-layout";
 import { useLoginUser, useSignupUser } from "../session/hooks";

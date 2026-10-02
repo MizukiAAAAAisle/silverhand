@@ -6,14 +6,11 @@ import {
   DeletedActorMarker,
 } from "@/features/messages/components/author-avatar-view";
 import { useNav } from "@/router";
-import { focusAgentSideSection } from "@/features/agent-shell/components/agent-view";
-import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
-import { useAgent, useAgentPresence } from "@/features/agent-shell/hooks/hooks";
-import {
-  PRESENCE_TONE_DOT,
-  projectPresence,
-} from "@/features/agent-shell/model/presence-projection";
-import { usePresenceById } from "@/features/presence/hooks";
+import { focusAgentSideSection } from "@/features/agents/components/agent-view";
+import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
+import { useAgent, useAgentPresence } from "@/features/agents/hooks/hooks";
+import { PRESENCE_TONE_DOT, projectPresence } from "@/features/agents/model/presence-projection";
+import { usePresenceById } from "@/features/users/presence";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import {
   collectCounterpartAvatarSources,

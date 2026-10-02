@@ -5,10 +5,10 @@ import type { AgentDto, AgentRunState } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useAgentRunStates } from "@/features/channels/hooks";
-import { useAgents } from "@/features/agent-shell/hooks/hooks";
-import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
+import { useAgents } from "@/features/agents/hooks/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import { useNav } from "@/router";
-import { focusAgentSideSection } from "@/features/agent-shell/components/agent-view";
+import { focusAgentSideSection } from "@/features/agents/components/agent-view";
 
 // ── Time helpers ─────────────────────────────────────────────────────────
 

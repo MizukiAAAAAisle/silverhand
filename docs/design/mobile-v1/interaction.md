@@ -186,7 +186,7 @@ More → Settings：当前头像/姓名、server 域名、账号、外观、连�
 
 ## 13. 依据与明确待确认点
 
-仓库依据：`packages/app-ui/src/router.ts`（主路由与来源上下文）、`features/conversations/pane-mode.ts`（频道/DM 能力）、`features/task-shell/model/task-container.ts`（任务容器）、`features/activity-shell/activity-view.tsx`（动态语义）、`features/computer-shell/model/computer-actions.ts`（远程计算机权限）、`features/settings-shell/model/settings-section.ts`（账号/外观/连接）。目录以 packages/app-ui/src 为基准。
+仓库依据：`packages/app-ui/src/router.ts`（主路由与来源上下文）、`features/conversations/pane-mode.ts`（频道/DM 能力）、`features/tasks/model/task-container.ts`（任务容器）、`pages/activity/activity-view.tsx`（动态语义）、`pages/computer/model/computer-actions.ts`（远程计算机权限）、`features/settings/model/settings-section.ts`（账号/外观/连接）。目录以 packages/app-ui/src 为基准。
 
 Apple 的 [Tab bars](https://developer.apple.com/design/human-interface-guidelines/tab-bars)、[Navigation and search](https://developer.apple.com/design/human-interface-guidelines/navigation-and-search)、[Sheets](https://developer.apple.com/design/human-interface-guidelines/sheets) 是实现阶段的系统交互参考；本提案的具体底部入口、局部范围和返回栈是针对 Silverhand 的设计判断，并非 Apple 对本产品的建议。
 

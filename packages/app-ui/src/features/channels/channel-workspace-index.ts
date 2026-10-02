@@ -72,7 +72,7 @@ export const CHANNEL_WORKSPACE_ATTRIBUTION_SOURCES = [
   "conversations/conversation-ref-query.ts",
   // Notification jumps, including the reply-cluster branch that never fetches a
   // ref — the notification's own `(workspace_id, conversation_id)` is the carrier.
-  "notifications/hooks.ts",
+  "attention/notifications.ts",
 ] as const;
 
 const channelWorkspace = new Map<string, string>();

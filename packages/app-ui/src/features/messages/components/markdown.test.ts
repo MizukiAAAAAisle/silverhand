@@ -11,11 +11,8 @@ import { SystemMessage } from "./system-message";
 import type { ChannelReference } from "./channel-ref";
 import type { WorkspaceChannelReference } from "./conversation-ref";
 import { AUTHORED_HREF_PROP, PLUGIN_LINK_PROP } from "../model/reference-href";
-import { TaskRefContextProvider } from "@/features/task-shell/components/task-ref-context";
-import {
-  taskBoardCacheScope,
-  taskByNumberKey,
-} from "@/features/task-shell/hooks/use-task-by-number";
+import { TaskRefContextProvider } from "@/features/tasks/components/task-ref-context";
+import { taskBoardCacheScope, taskByNumberKey } from "@/features/tasks/hooks/use-task-by-number";
 import { setCurrentUserId } from "@/features/session/current-user";
 
 // Static markup tests do not execute navigation. Interactive route behavior

@@ -37,7 +37,7 @@ import {
   threadLocateAllowed,
 } from "@/features/channels/message-jump-phase";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
-import { TaskRefContextProvider } from "@/features/task-shell/components/task-ref-context";
+import { TaskRefContextProvider } from "@/features/tasks/components/task-ref-context";
 import {
   useFollowThread,
   useMarkThreadRead,
@@ -49,8 +49,8 @@ import {
 import { isCommittedMessage } from "@/features/channels/pending-message";
 import type { AttachmentSnapshot, MessageSeq } from "@silverhand/shared";
 import type { ComposerDirectory } from "@/features/conversations/pane-mode";
-import { useAgents } from "@/features/agent-shell/hooks/hooks";
-import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
+import { useAgents } from "@/features/agents/hooks/hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import { useJoinChannel } from "@/features/workspaces/hooks";
 import type { ChannelGate } from "@/features/channels/membership";
 import { classifyTopShift } from "@/features/conversation-shell/model/message-list-virtualization";

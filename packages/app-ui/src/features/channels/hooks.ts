@@ -28,7 +28,7 @@ import {
   AGENT_RUN_STATES_GC_MS,
   agentRunStatesKey,
   reconcileAgentRunStateSnapshot,
-} from "@/features/agent-shell/model/agent-run-state-cache";
+} from "@/features/agents/model/agent-run-state-cache";
 import {
   wsConversationScope,
   wsConversationSideScope,

@@ -27,7 +27,7 @@ import {
   decideFavoritesInvalidation,
   favoritesKey,
   removeWorkspaceFromFavorites,
-} from "../favorites/hooks";
+} from "./favorites";
 import { activityKey, removeWorkspaceFromActivity } from "../attention/hooks";
 import {
   messageUnreadByConversationKey,

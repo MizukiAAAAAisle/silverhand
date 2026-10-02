@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { DeleteButton } from "@/components/ui/delete-button";
 import { cn } from "@/lib/cn";
 import { SidebarRow } from "@/components/layout/sidebar-shared";
-import { nameFormatMessage } from "@/features/naming/use-name-availability";
+import { nameFormatMessage } from "@/features/identity/use-name-availability";
 import { AgentPermissionsPanel } from "./agent-permissions-panel";
 import { WorkspaceMembersPanel } from "./manage-members-popover";
 import { HumanRolesPanel } from "./human-roles-panel";

@@ -1,6 +1,6 @@
 import type { ClientAuthState, ClientAuthResult } from "@silverhand/client";
 import { getPlatform } from "@/platform";
-import { agentStreamCache } from "@/features/agent-shell/model/agent-stream-cache";
+import { agentStreamCache } from "@/features/agents/model/agent-stream-cache";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
@@ -22,7 +22,7 @@ import {
   loadAvatarBlobUrl,
 } from "@/features/identity/avatar-blob-cache";
 import { CONVERSATION_MEMBERS_KEY_PREFIX } from "@/features/conversations/use-conversation-members";
-import { clearSettingsSection } from "@/features/settings-shell/model/settings-section";
+import { clearSettingsSection } from "@/features/settings/model/settings-section";
 import { usersKey } from "@/features/users/hooks";
 
 function clearViewerLocalState(): void {

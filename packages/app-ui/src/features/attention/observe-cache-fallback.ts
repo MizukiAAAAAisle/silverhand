@@ -4,7 +4,7 @@ import {
   invalidateMessageUnreadQueries,
   conversationUnreadKey,
 } from "@/features/channels/message-unread";
-import { favoritesKey } from "@/features/favorites/hooks";
+import { favoritesKey } from "@/features/workspaces/favorites";
 import { eventWsClient, type WsClientStatus } from "@/lib/ws-client";
 
 /**

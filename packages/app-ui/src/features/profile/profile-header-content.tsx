@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { AVATAR_PX } from "@/components/avatar-scale";
-import "@/features/agent-shell/components/agent-page.css";
+import "@/features/agents/components/agent-page.css";
 
 export function ProfileHeaderContent({
   compact,

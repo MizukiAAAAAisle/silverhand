@@ -9,17 +9,14 @@ import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { STATUS_DOT } from "@/components/status-dot";
-import { AgentInfoPopover } from "@/features/agent-shell/components/agent-info-popover";
+import { AgentInfoPopover } from "@/features/agents/components/agent-info-popover";
 import { HumanInfoPopover } from "@/features/profile/human-info-popover";
-import { useAgents } from "@/features/agent-shell/hooks/hooks";
-import { projectMemberRuntimeStatus } from "@/features/agent-shell/model/member-runtime-status";
-import {
-  PRESENCE_TONE_DOT,
-  projectPresence,
-} from "@/features/agent-shell/model/presence-projection";
+import { useAgents } from "@/features/agents/hooks/hooks";
+import { projectMemberRuntimeStatus } from "@/features/agents/model/member-runtime-status";
+import { PRESENCE_TONE_DOT, projectPresence } from "@/features/agents/model/presence-projection";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { useUsersById } from "@/features/users/hooks";
-import { usePresenceById, presenceDotStatus } from "@/features/presence/hooks";
+import { usePresenceById, presenceDotStatus } from "@/features/users/presence";
 import {
   isBackendUnreachable,
   isRegistrationRequired,

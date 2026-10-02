@@ -21,7 +21,7 @@ import type {
 } from "@silverhand/shared";
 import { apiPaths } from "@silverhand/shared";
 import { api } from "@/lib/api";
-import { favoritesKey } from "@/features/favorites/hooks";
+import { favoritesKey } from "@/features/workspaces/favorites";
 import { attentionBadgesKey } from "@/features/attention/hooks";
 import {
   recordChannelWorkspace,

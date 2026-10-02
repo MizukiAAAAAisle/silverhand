@@ -50,11 +50,11 @@ import {
   activityHeldChannelIds,
   removeConversationFromActivity,
 } from "@/features/attention/hooks";
-import { removeChannelFromSaved, savedHeldChannelIds, savedKey } from "@/features/saved/hooks";
+import { removeChannelFromSaved, savedHeldChannelIds, savedKey } from "@/features/messages/saved";
 import { removeChannelFromSearch, searchHeldChannelIds, searchKey } from "@/features/search/hooks";
-import { removeChannelFromTasks, tasksHeldChannelIds } from "@/features/task-shell/hooks/hooks";
-import { boardColumnKey, boardFilterKey } from "@/features/task-shell/model/board-query";
-import { DEFAULT_TASK_FILTERS } from "@/features/task-shell/model/task-filters";
+import { removeChannelFromTasks, tasksHeldChannelIds } from "@/features/tasks/hooks/hooks";
+import { boardColumnKey, boardFilterKey } from "@/features/tasks/model/board-query";
+import { DEFAULT_TASK_FILTERS } from "@/features/tasks/model/task-filters";
 import {
   messageUnreadHeldChannelIds,
   messageUnreadSummaryKey,

@@ -10,7 +10,7 @@ import {
 import { useNav, useRouteState } from "@/router";
 import { lastChannelByWorkspace, persistLastChannel } from "@/features/app-shell/place-memory";
 
-import { pickFallbackAfterArchive } from "@/features/chat-shell/model/archive-fallback";
+import { pickFallbackAfterArchive } from "@/features/app-shell/archive-fallback";
 
 export interface RemovedPrimary {
   workspaceId: string;

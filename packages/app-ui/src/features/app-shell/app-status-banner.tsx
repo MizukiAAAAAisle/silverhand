@@ -1,6 +1,6 @@
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useBackendInfoSnapshot } from "@/features/computer-shell/hooks/hooks";
+import { useBackendInfoSnapshot } from "@/features/computers/hooks/hooks";
 import { useBackendUnreachableSnitch } from "./use-backend-unreachable-snitch";
 import { describeProtocolSkew } from "./protocol-skew-presentation";
 import { selectAppStatusBanner } from "./app-status-banner-model";

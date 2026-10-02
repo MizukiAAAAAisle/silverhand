@@ -13,7 +13,7 @@ import type {
 } from "@silverhand/shared";
 import { ThreadIcon } from "@/components/icons/conversation-icons";
 import { AVATAR_PX } from "@/components/avatar-scale";
-import { AgentInfoPopover } from "@/features/agent-shell/components/agent-info-popover";
+import { AgentInfoPopover } from "@/features/agents/components/agent-info-popover";
 import { HumanInfoPopover } from "@/features/profile/human-info-popover";
 import { useNav } from "@/router";
 import { isCurrentUserId, type UserNameResolver } from "@/features/session/current-user";

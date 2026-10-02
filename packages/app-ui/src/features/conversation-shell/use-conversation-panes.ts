@@ -4,7 +4,7 @@ import { useContextualCloseResponder } from "@/features/app-shell/keyboard-short
 import { useSecondaryPaneModel } from "@/features/app-shell/secondary-pane-model";
 import { useMarkMessageChannelRead } from "@/features/channels/hooks";
 import { mountsMemberOnlyPanel } from "@/features/channels/membership";
-import { resolveTaskDetailSurface } from "@/features/task-shell/model/task-detail-surface";
+import { resolveTaskDetailSurface } from "@/features/tasks/model/task-detail-surface";
 import {
   selectSecondaryViewInputs,
   selectSidebarSelectedConversationId,

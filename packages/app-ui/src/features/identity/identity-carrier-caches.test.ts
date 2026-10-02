@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import type { ServerFrame } from "@silverhand/shared";
 import { api } from "@/lib/api";
-import { decideAgentSyncAction } from "@/features/agent-shell/model/agent-sync";
+import { decideAgentSyncAction } from "@/features/agents/model/agent-sync";
 import {
   agentsKey,
   clusterFetchEpochKey,
@@ -18,7 +18,7 @@ import {
 } from "@/features/channels/use-channel-threads";
 import { channelAttachmentsKey } from "@/features/channels/use-channel-attachments";
 import { directPairsKey, directPairsQueryOptions } from "@/features/direct-pairs/hooks";
-import { savedKey } from "@/features/saved/hooks";
+import { savedKey } from "@/features/messages/saved";
 import { searchKey } from "@/features/search/hooks";
 import { decideUserSyncAction } from "@/features/users/user-sync";
 import {

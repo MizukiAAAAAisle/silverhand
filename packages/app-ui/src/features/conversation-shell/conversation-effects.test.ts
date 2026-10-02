@@ -56,7 +56,7 @@ vi.mock("@/features/app-shell/place-memory", () => ({
   recordCloseWatermark: vi.fn(),
 }));
 import { useConversationInvalidation } from "./use-conversation-invalidation";
-import { useChatRouteRecovery } from "@/features/chat-shell/use-chat-route-recovery";
+import { useChatRouteRecovery } from "@/features/app-shell/use-chat-route-recovery";
 
 const channel = (id: string): ChannelListItem => ({
   id,

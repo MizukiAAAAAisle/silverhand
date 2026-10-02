@@ -1,13 +1,13 @@
 import { useCompactLayout } from "@/navigation/layout";
 import { buildConversationPanes } from "./build-conversation-panes";
 import { senderFilterToParam } from "@/features/search/sender-filter-select";
-import { useAgents } from "@/features/agent-shell/hooks/hooks";
+import { useAgents } from "@/features/agents/hooks/hooks";
 import { useLayoutKeyboardShortcuts } from "@/features/app-shell/effects";
 import { useMessageUnreadCounts } from "@/features/channels/hooks";
-import { useChatRouteRecovery } from "@/features/chat-shell/use-chat-route-recovery";
+import { useChatRouteRecovery } from "@/features/app-shell/use-chat-route-recovery";
 import { findAgentDirectPair } from "@/features/direct-pairs/hooks";
-import { useNotificationToasts } from "@/features/notifications/hooks";
-import { useSavedMessages } from "@/features/saved/hooks";
+import { useNotificationToasts } from "@/features/attention/notifications";
+import { useSavedMessages } from "@/features/messages/saved";
 import type { AdvancedSearchSeed } from "@/features/search/advanced-search-seed";
 import { useLayoutSettings } from "@/features/conversation-shell/use-layout-settings";
 import { resolveChannelOpen } from "@/features/conversation-shell/model/channel-open";

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { AuthSplitLayout } from "@/components/brand/auth-split-layout";
 import { rejectDisplayName } from "@/features/identity/display-name";
-import { nameFormatMessage } from "@/features/naming/use-name-availability";
+import { nameFormatMessage } from "@/features/identity/use-name-availability";
 
 export interface ProfileSetupValues {
   displayName: string;

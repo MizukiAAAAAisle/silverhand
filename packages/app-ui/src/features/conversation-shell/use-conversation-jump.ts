@@ -4,7 +4,7 @@ import {
   useMessageJumpController,
   type MessageJumpTarget,
 } from "@/features/channels/use-message-jump-controller";
-import type { DirectPairAuthority } from "@/features/chat-shell/model/chat-place-restore";
+import type { DirectPairAuthority } from "@/features/app-shell/chat-place-restore";
 import { executeMessageJump, type MessageJumpEnvironment } from "./message-jump";
 
 export function useConversationJump(

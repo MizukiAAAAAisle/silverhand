@@ -35,12 +35,12 @@ import {
   appendAgentActivityToCache,
   hasActiveAgentActivityReader,
   reconcileAgentActivityOnSnapshotRequired,
-} from "@/features/agent-shell/hooks/use-agent-activity-feed";
+} from "@/features/agents/hooks/use-agent-activity-feed";
 import {
   applyAgentRunStateToCache,
   hasActiveAgentRunStatesReader,
   invalidateAgentRunStates,
-} from "@/features/agent-shell/model/agent-run-state-cache";
+} from "@/features/agents/model/agent-run-state-cache";
 import {
   hasActiveChannelThreadsReader,
   invalidateChannelThreadsList,
@@ -78,7 +78,7 @@ import {
 } from "@/features/channels/hooks";
 import type { ConversationAgentStatusPatch } from "@/features/channels/hooks";
 import { applyCommittedReactionFromEvent } from "@/features/channels/reaction-hooks";
-import { applyTaskChangedToTaskByNumberCache } from "@/features/task-shell/hooks/use-task-by-number";
+import { applyTaskChangedToTaskByNumberCache } from "@/features/tasks/hooks/use-task-by-number";
 import {
   dispositionSettle,
   ingestMessageProjections,

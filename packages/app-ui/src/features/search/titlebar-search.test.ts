@@ -32,9 +32,9 @@ vi.mock("@/features/search/hooks", () => ({
     };
   },
 }));
-vi.mock("@/features/agent-shell/hooks/hooks", () => ({ useAgents: () => ({ data: [] }) }));
+vi.mock("@/features/agents/hooks/hooks", () => ({ useAgents: () => ({ data: [] }) }));
 vi.mock("@/features/direct-pairs/hooks", () => ({ useDirectPairs: () => [] }));
-vi.mock("@/features/agent-shell/hooks/avatar-hooks", () => ({
+vi.mock("@/features/agents/hooks/avatar-hooks", () => ({
   useAgentAvatarObjectUrls: () => new Map(),
 }));
 vi.mock("@/features/messages/hooks/author-avatar-hooks", () => ({

@@ -1,27 +1,23 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import type { TaskFilters } from "@/features/task-shell/model/task-filters";
+import type { TaskFilters } from "@/features/tasks/model/task-filters";
 import { cn } from "@/lib/cn";
-import { useUpdateTaskStatus } from "@/features/task-shell/hooks/hooks";
-import { useKanbanColumnCollapse } from "@/features/task-shell/hooks/use-kanban-column-collapse";
-import { useTaskFilterOptions } from "@/features/task-shell/hooks/use-task-filter-options";
-import {
-  useBoardColumns,
-  useBoardCounts,
-  useBoardFacets,
-} from "@/features/task-shell/hooks/use-board";
-import { useColumnWindow } from "@/features/task-shell/hooks/use-column-window";
+import { useUpdateTaskStatus } from "@/features/tasks/hooks/hooks";
+import { useKanbanColumnCollapse } from "@/features/tasks/hooks/use-kanban-column-collapse";
+import { useTaskFilterOptions } from "@/features/tasks/hooks/use-task-filter-options";
+import { useBoardColumns, useBoardCounts, useBoardFacets } from "@/features/tasks/hooks/use-board";
+import { useColumnWindow } from "@/features/tasks/hooks/use-column-window";
 import {
   taskContainerBaseline,
   taskContainerKey,
   type TaskBoardContainer,
-} from "@/features/task-shell/model/task-container";
-import { TaskBoardColumns } from "@/features/task-shell/components/task-board-columns";
-import { TaskToolbar } from "@/features/task-shell/components/task-toolbar";
+} from "@/features/tasks/model/task-container";
+import { TaskBoardColumns } from "@/features/tasks/components/task-board-columns";
+import { TaskToolbar } from "@/features/tasks/components/task-toolbar";
 import {
   CreateTaskDialog,
   useCreateTaskSubmit,
   type CreateTaskTarget,
-} from "@/features/task-shell/components/create-task-dialog";
+} from "@/features/tasks/components/create-task-dialog";
 
 /**
  * The conversation's Tasks tab (#task:2121) — the five-column status kanban

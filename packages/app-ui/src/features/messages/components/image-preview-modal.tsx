@@ -14,7 +14,7 @@ import {
   taskBoardCacheScope,
   taskByNumberKey,
   type TaskRefCoord,
-} from "@/features/task-shell/hooks/use-task-by-number";
+} from "@/features/tasks/hooks/use-task-by-number";
 import { MessageScreenshotView } from "./message-screenshot-view";
 import { extractMermaidSources, isDarkTheme, renderMermaidSvg } from "./mermaid-diagram";
 import { suggestImageFilename } from "../model/markdown-transcript";

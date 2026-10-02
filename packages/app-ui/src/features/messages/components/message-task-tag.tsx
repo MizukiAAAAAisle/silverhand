@@ -5,8 +5,8 @@ import {
   StatusPicker,
   taskStatusLabel,
   TASK_STATUS_ICON,
-} from "@/features/task-shell/components/task-status-badge";
-import { useUpdateTaskStatus } from "@/features/task-shell/hooks/hooks";
+} from "@/features/tasks/components/task-status-badge";
+import { useUpdateTaskStatus } from "@/features/tasks/hooks/hooks";
 
 /**
  * Task tag for a message linked to a task.

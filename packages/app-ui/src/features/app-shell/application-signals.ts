@@ -1,6 +1,6 @@
 import { deriveNavRailDots } from "@/components/layout/nav-rail";
-import { useBackendInfoSnapshot } from "@/features/computer-shell/hooks/hooks";
-import { useTaskBoardRealtime } from "@/features/task-shell/hooks/use-board";
+import { useBackendInfoSnapshot } from "@/features/computers/hooks/hooks";
+import { useTaskBoardRealtime } from "@/features/tasks/hooks/use-board";
 import {
   useAppShellGlobalSync,
   useComposerDraftCleanup,
@@ -8,7 +8,7 @@ import {
   useSettingsMenuNav,
 } from "@/features/app-shell/effects";
 import { useNavSectionShortcuts } from "@/features/app-shell/keyboard-shortcuts";
-import { useUnreadCounts } from "@/features/notifications/hooks";
+import { useUnreadCounts } from "@/features/attention/notifications";
 import { useMessageUnreadSummary } from "@/features/channels/hooks";
 import { useActivity, useAttentionBadges, useAttentionRealtime } from "@/features/attention/hooks";
 import { useNav } from "@/router";

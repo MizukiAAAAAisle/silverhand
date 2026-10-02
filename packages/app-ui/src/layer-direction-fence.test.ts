@@ -3,13 +3,15 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Architecture scan, not a behavior test: the shared layers stay domain-neutral,
-// so nothing under them may import a feature. Domain UI that needs feature data
-// belongs in that feature (see readme.md).
+// Architecture scan, not a behavior test. Imports point one way:
+// pages → features → shared layers (see readme.md).
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const SHARED_LAYERS = ["components", "hooks", "lib", "navigation", "icons"];
-const FEATURE_IMPORT = /(?:from\s+|import\(\s*)["'](?:@\/features\/|(?:\.\.\/)+features\/)/;
+const importOf = (dir: string) =>
+  new RegExp(`(?:from\\s+|import\\s*\\(?\\s*)["'](?:@/${dir}/|(?:\\.\\./)+${dir}/)`);
+const FEATURE_IMPORT = importOf("features");
+const PAGE_IMPORT = importOf("pages");
 
 function walk(dir: string): string[] {
   const out: string[] = [];
@@ -24,15 +26,45 @@ function walk(dir: string): string[] {
   return out;
 }
 
-function offenders(): string[] {
-  return SHARED_LAYERS.flatMap((layer) => walk(join(ROOT, layer)))
-    .filter((file) => FEATURE_IMPORT.test(readFileSync(file, "utf8")))
-    .map((file) => relative(ROOT, file).split(sep).join("/"))
+function rel(file: string): string {
+  return relative(ROOT, file).split(sep).join("/");
+}
+
+function importers(dirs: readonly string[], pattern: RegExp): string[] {
+  return dirs
+    .flatMap((dir) => walk(join(ROOT, dir)))
+    .filter((file) => pattern.test(readFileSync(file, "utf8")))
+    .map(rel)
     .sort();
 }
 
-describe("shared layers never import features", () => {
-  it("no shared-layer module imports @/features", () => {
-    expect(offenders()).toEqual([]);
+function crossPageImports(): string[] {
+  const pages = readdirSync(join(ROOT, "pages"));
+  return pages.flatMap((page) =>
+    walk(join(ROOT, "pages", page))
+      .filter((file) => {
+        const source = readFileSync(file, "utf8");
+        return pages.some(
+          (other) =>
+            other !== page &&
+            new RegExp(`["'](?:@/pages/${other}/|(?:\\.\\./)+${other}/)`).test(source),
+        );
+      })
+      .map(rel),
+  );
+}
+
+describe("import direction", () => {
+  it("shared layers never import features or pages", () => {
+    expect(importers(SHARED_LAYERS, FEATURE_IMPORT)).toEqual([]);
+    expect(importers(SHARED_LAYERS, PAGE_IMPORT)).toEqual([]);
+  });
+
+  it("features never import pages", () => {
+    expect(importers(["features"], PAGE_IMPORT)).toEqual([]);
+  });
+
+  it("a page never imports another page", () => {
+    expect(crossPageImports()).toEqual([]);
   });
 });

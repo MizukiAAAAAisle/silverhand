@@ -10,8 +10,11 @@ import {
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { describeApiError } from "@/lib/api-error-message";
-import { NameAvailabilityHint, useNameAvailability } from "@/features/naming/use-name-availability";
-import { useAgents } from "@/features/agent-shell/hooks/hooks";
+import {
+  NameAvailabilityHint,
+  useNameAvailability,
+} from "@/features/identity/use-name-availability";
+import { useAgents } from "@/features/agents/hooks/hooks";
 import {
   isBackendUnreachable,
   isRegistrationRequired,

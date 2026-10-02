@@ -26,7 +26,7 @@ import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
 import {
   directPairAuthorityFromQuery,
   type DirectPairAuthority,
-} from "@/features/chat-shell/model/chat-place-restore";
+} from "@/features/app-shell/chat-place-restore";
 import { type ConversationPointer } from "@/features/conversation-shell/model/secondary-pane";
 import { useRouteState } from "@/router";
 import { isWorkspacePlaced } from "@silverhand/shared";

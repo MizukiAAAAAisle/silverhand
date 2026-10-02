@@ -1,7 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ObserveSource } from "@silverhand/shared";
-import { favoritesKey } from "@/features/favorites/hooks";
+import { favoritesKey } from "@/features/workspaces/favorites";
 import { conversationUnreadKey, messageUnreadSummaryKey } from "@/features/channels/message-unread";
 import {
   reconcileUnreadAfterObserveIfRealtimeUnavailable,

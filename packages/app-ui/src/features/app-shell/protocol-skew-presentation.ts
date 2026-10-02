@@ -1,4 +1,4 @@
-import type { BackendInfoSnapshot } from "@/features/computer-shell/hooks/hooks";
+import type { BackendInfoSnapshot } from "@/features/computers/hooks/hooks";
 
 type OutboundProtocolCompatibility = BackendInfoSnapshot["outbound_protocol_compatibility"];
 

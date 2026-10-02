@@ -9,7 +9,7 @@ import {
   patchMessageUnreadByConversation,
   patchMessageUnreadSummary,
 } from "@/features/channels/hooks";
-import { favoritesKey, patchFavoritesUnread } from "@/features/favorites/hooks";
+import { favoritesKey, patchFavoritesUnread } from "@/features/workspaces/favorites";
 
 /** Route one realtime frame into the viewer-unread badge caches. Pure (takes the
  *  `QueryClient` explicitly) so it is unit-testable without rendering. */

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
 import { User as UserIcon } from "lucide-react";
-import { humanPresenceText, presenceDotStatus, usePresenceById } from "@/features/presence/hooks";
+import { humanPresenceText, presenceDotStatus, usePresenceById } from "@/features/users/presence";
 
 dayjs.extend(relativeTime);
 

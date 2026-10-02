@@ -7,7 +7,7 @@ import { useHumanAvatar } from "./use-human-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useProfileHeroSize } from "@/features/profile/use-profile-hero-size";
-import "@/features/agent-shell/components/agent-profile-hero.css";
+import "@/features/agents/components/agent-profile-hero.css";
 
 interface HumanProfileCardProps {
   user: UserDto;

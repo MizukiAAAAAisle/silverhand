@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { ApiError } from "@/lib/api";
-import { backendInfoKey } from "@/features/computer-shell/hooks/hooks";
+import { backendInfoKey } from "@/features/computers/hooks/hooks";
 import {
   decideNextVisible,
   isBackendUnreachableError,

@@ -11,7 +11,7 @@ import { CancelButton, SaveButton } from "./edit-toolbar-buttons";
  *
  * Commit is explicit — blur does not save. Enter or the Save button
  * persists; Escape or Cancel discards; focus loss preserves the draft.
- * This differs from `features/computer-shell/components/inline-rename`, which commits on
+ * This differs from `pages/computer/components/inline-rename`, which commits on
  * blur; profile edits use explicit-Save semantics so a stray click on
  * the page can't silently PATCH.
  */

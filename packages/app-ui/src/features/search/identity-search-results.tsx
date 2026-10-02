@@ -1,4 +1,4 @@
-import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
+import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import { useNav } from "@/router";
 import { SearchResultItem } from "@/features/search/search-result-item";
