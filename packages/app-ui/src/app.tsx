@@ -63,24 +63,25 @@ export function App({
   // call dozens more hooks than the pre-registration render and React
   // would crash with "Rendered more hooks than during the previous
   // render".
+  // A relaunch (the OS reclaims the WebView in the background) starts with no
+  // session answer. Until it arrives, paint the bare canvas the native launch
+  // screen already shows: a signed-in user must not see the login form flash.
+  if (loginFirst && !viewer.data) {
+    return <div className="h-screen w-screen bg-bg-base" />;
+  }
   if (
     loginFirst &&
-    (!viewer.data || isBackendUnreachable(viewer.data) || isRegistrationRequired(viewer.data))
+    viewer.data &&
+    (isBackendUnreachable(viewer.data) || isRegistrationRequired(viewer.data))
   ) {
-    const registration = viewer.data && isRegistrationRequired(viewer.data) ? viewer.data : null;
+    const registration = isRegistrationRequired(viewer.data) ? viewer.data : null;
     const ready = registration !== null;
     return (
       <RegistrationGate
         signupEnabled={registration?.signup_enabled ?? false}
         preferLogin
         autoFocus={false}
-        connectionStatus={
-          !viewer.data
-            ? "Checking server…"
-            : isBackendUnreachable(viewer.data)
-              ? viewer.data.message
-              : undefined
-        }
+        connectionStatus={isBackendUnreachable(viewer.data) ? viewer.data.message : undefined}
         connectionChecking={viewer.isFetching}
         connectionReady={ready}
         showServerAddress={showServerAddress}
