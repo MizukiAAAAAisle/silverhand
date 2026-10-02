@@ -53,6 +53,8 @@ const THEME_CSS = [
   "../../styles/themes/forza6-components.css",
   "../../styles/themes/slack-dark.css",
   "../../styles/themes/studio-light.css",
+  "../../styles/themes/iris.css",
+  "../../styles/themes/soft.css",
 ] as const;
 
 describe("CollectionItemCard — the shell owns the theme-paint marker", () => {

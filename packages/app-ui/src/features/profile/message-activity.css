@@ -147,5 +147,5 @@
 }
 
 [data-theme="forza6"] .message-activity-cell:hover {
-  box-shadow: var(--forza6-poster-shadow-hover-tiny);
+  box-shadow: var(--forza6-poster-shadow);
 }

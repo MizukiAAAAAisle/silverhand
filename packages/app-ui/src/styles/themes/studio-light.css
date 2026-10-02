@@ -138,6 +138,8 @@
   --message-activity-radius: 3px;
 
   /* Messages and activity */
+  --activity-cluster-rule: none;
+  --activity-status-opacity: 1;
   --activity-meta: oklab(0 0 0 / 0.4);
   --activity-params-bg: oklab(0 0 0 / 0.05);
   --chip-bg: rgba(17, 23, 37, 0.06);
@@ -145,7 +147,8 @@
   --chip-radius: 4px;
   --message-bubble-radius: var(--card-radius);
   --pill-radius: 9999px;
-  --studio-light-bg-message-framed: color-mix(in oklab, var(--accent) 6%, transparent);
+  --message-framed-border: rgba(var(--shadow-base), 0.16);
+  --message-framed-bg: color-mix(in oklab, var(--accent) 6%, transparent);
   --thread-preview-bg: var(--chip-bg);
   --thread-preview-bg-hover: var(--chip-bg-hover);
   --thread-preview-text: oklab(0 0 0 / 0.6);
@@ -237,72 +240,10 @@
   --pane-bg: #f8faf9;
 }
 
-[data-theme="studio-light"] [data-workspace-icon] {
-  background-color: var(--text-secondary);
-  color: var(--text-on-structure);
-  border-radius: var(--chip-radius);
-  font-size: 11px;
-}
-
-[data-theme="studio-light"] [data-conversation-hash-icon] {
-  display: inline-block;
-  margin-right: 0.1em;
-}
-
 /* Hooks: Messages and composer */
-
-[data-theme="studio-light"] .system-activity-cluster {
-  border-inline-start: none;
-  padding-inline-start: 10px;
-}
-
-[data-theme="studio-light"] .system-activity-cluster [data-task-event-status] {
-  opacity: 1;
-}
 
 [data-theme="studio-light"] [data-message-task-tag] {
   border: none;
-}
-
-[data-theme="studio-light"] [data-message-row] {
-  border-width: 1px;
-}
-
-[data-theme="studio-light"] [data-message-row].border-accent {
-  border-color: rgba(var(--shadow-base), 0.16);
-  background-color: var(--studio-light-bg-message-framed);
-}
-
-[data-theme="studio-light"] [data-composer-shell]:focus-within {
-  border-color: var(--accent);
-}
-
-/* Hooks: Tasks */
-
-[data-theme="studio-light"] [data-tasks-board] [data-task-number] {
-  background: var(--bg-floating);
-  border-color: var(--border);
-  box-shadow: var(--card-shadow);
-}
-
-[data-theme="studio-light"] [data-tasks-board] [data-task-number]:hover {
-  border-color: var(--border);
-  background: color-mix(in srgb, var(--bg-floating), var(--text-primary) 3%);
-  box-shadow: var(--shadow-popover);
-}
-
-[data-theme="studio-light"] [data-tasks-column] {
-  background-color: var(--bg-elevated);
-  border-color: var(--border);
-}
-
-/* Hooks: Panels and collections */
-
-[data-theme="studio-light"] [data-collection-card]:hover,
-[data-theme="studio-light"] [data-collection-card][data-active] {
-  background-color: var(--bg-hover);
-  box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.12);
-  transform: translateY(-1px);
 }
 
 /* Hooks: Floating surfaces and actions */

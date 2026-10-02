@@ -14,11 +14,10 @@
 @import "./themes/slack-dark.css";
 @import "./themes/iris.css";
 
-/* Forza6-only component-layer specialization. Every selector inside is
-   `[data-theme='forza6']`-scoped; studio-light + slack-dark are pixel-
-   identical before and after this import. Must come AFTER forza6.css so
-   token re-assignments inside it.
-*/
+/* Component layers. `soft.css` paints the studio-light, slack-dark and iris
+   family; `forza6-components.css` paints forza6 only. Both read the tokens
+   declared above. */
+@import "./themes/soft.css";
 @import "./themes/forza6-components.css";
 @import "./mobile.css";
 
@@ -587,7 +586,7 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   margin-inline-end: 16px;
   max-width: 85%;
   padding-inline-start: 10px;
-  border-inline-start: 1px solid var(--border-subtle);
+  border-inline-start: var(--activity-cluster-rule, 1px solid var(--border-subtle));
 }
 
 .system-activity-cluster [data-system-event-row="1"] > * {
@@ -616,7 +615,7 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
 .system-activity-cluster [data-task-event-status] {
   background: transparent;
   border: 1px solid currentColor;
-  opacity: 0.85;
+  opacity: var(--activity-status-opacity, 0.85);
 }
 .system-activity-cluster [data-task-event-status="todo"] {
   color: var(--task-status-todo-solid);
@@ -1093,30 +1092,6 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   background-color: var(--search-hit-bg-active, #ffde5c);
 }
 
-@keyframes tool-badge-bump {
-  0% {
-    background-color: var(--accent-soft);
-    transform: scale(1.08);
-  }
-  60% {
-    background-color: var(--accent-soft);
-    transform: scale(1);
-  }
-  100% {
-    background-color: var(--bg-elevated);
-    transform: scale(1);
-  }
-}
-.tool-badge-bump {
-  display: inline-block;
-  animation: tool-badge-bump 350ms ease-out;
-}
-@media (prefers-reduced-motion: reduce) {
-  .tool-badge-bump {
-    animation: none;
-  }
-}
-
 :root {
   --sidebar-anim-ms: 220ms;
   --sidebar-ease: cubic-bezier(0.4, 0, 0.2, 1);
@@ -1203,20 +1178,15 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   outline-offset: 2px;
 }
 
+/* Derived from each theme's ink, so no theme declares them. */
 :root {
   --bg-avatar-ground: color-mix(in oklab, var(--text-primary) 12%, transparent);
+  --bg-inset: color-mix(in oklab, var(--text-primary) 7%, transparent);
+  --bg-message-bubble: color-mix(in oklab, var(--text-primary) 9%, transparent);
+  --text-faint: color-mix(in oklab, var(--text-muted) 75%, transparent);
 }
 [data-avatar-ground] {
   background-color: var(--bg-avatar-ground);
-}
-
-:root {
-  --bg-inset: color-mix(in oklab, var(--text-primary) 7%, transparent);
-  --text-faint: color-mix(in oklab, var(--text-muted) 75%, transparent);
-}
-
-html {
-  --bg-message-bubble: color-mix(in oklab, var(--text-primary) 9%, transparent);
 }
 
 [data-tasks-column][data-drop-target] {

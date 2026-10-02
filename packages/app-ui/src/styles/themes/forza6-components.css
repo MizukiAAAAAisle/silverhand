@@ -58,7 +58,7 @@
 [data-theme="forza6"] [data-sticker][data-sticker-size="sm"] {
   --sticker-border-w: 1px;
   --sticker-shadow: var(--forza6-poster-shadow-sm);
-  --sticker-hover-shadow: var(--forza6-poster-shadow-hover-sm);
+  --sticker-hover-shadow: var(--forza6-poster-shadow-lg);
 }
 
 [data-theme="forza6"] [data-sticker][data-sticker-size="lg"] {
@@ -117,16 +117,14 @@
 
 /* Hooks: Identity */
 
-[data-theme="forza6"] [data-member-chip="add"] {
-  background-color: var(--bg-avatar-ground);
-}
-
+[data-theme="forza6"] [data-member-chip="add"],
 [data-theme="forza6"] [data-member-chip="add"]:hover:not(:disabled) {
   background-color: var(--bg-avatar-ground);
 }
 
 [data-theme="forza6"] [data-conversation-title] {
   font-family: var(--font-display);
+  font-style: italic;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -140,10 +138,6 @@
   padding: 4px;
   margin-right: 0.4em;
   stroke-width: 2.5;
-}
-
-[data-theme="forza6"] [data-conversation-title] {
-  font-style: italic;
 }
 
 [data-theme="forza6"] [data-channel-icon] {
@@ -400,31 +394,20 @@
   border: var(--panel-border-width) solid var(--border-subtle);
   transition:
     border-color 150ms ease,
-    background-color 150ms ease,
-    color 150ms ease;
-}
-
-[data-theme="forza6"] [data-panel-card="schedule"] {
-  transition:
-    border-color 150ms ease,
     color 150ms ease,
     transform 150ms ease,
     box-shadow 150ms ease;
 }
 
 [data-theme="forza6"] [data-panel-card="schedule"]:hover {
+  border-color: var(--forza6-ink);
+  color: var(--forza6-ink);
   transform: translateY(-1px);
   box-shadow: var(--forza6-poster-shadow);
 }
 
 [data-theme="forza6"] [data-panel-card="placeholder"] {
-  border: var(--panel-border-width) solid var(--forza6-ink);
-  border-style: dashed;
-}
-
-[data-theme="forza6"] [data-panel-card="schedule"]:hover {
-  border-color: var(--forza6-ink);
-  color: var(--forza6-ink);
+  border: var(--panel-border-width) dashed var(--forza6-ink);
 }
 
 [data-theme="forza6"] [data-panel-card="profile-section"] {

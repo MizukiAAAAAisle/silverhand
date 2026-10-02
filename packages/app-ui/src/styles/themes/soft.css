@@ -1,0 +1,54 @@
+/* Soft surface family: studio-light, slack-dark and iris share one card and
+   message language. Per-theme differences arrive as tokens from each theme file.
+   `:is()` keeps the specificity of a single `[data-theme]` selector. */
+
+:is([data-theme="studio-light"], [data-theme="slack-dark"], [data-theme="iris"]) {
+  & [data-workspace-icon] {
+    background-color: var(--text-secondary);
+    color: var(--workspace-icon-fg, var(--text-on-structure));
+    border-radius: var(--workspace-icon-radius, var(--chip-radius));
+    font-size: 11px;
+  }
+
+  & [data-conversation-hash-icon] {
+    display: inline-block;
+    margin-right: 0.1em;
+  }
+
+  & [data-message-row] {
+    border-width: 1px;
+  }
+
+  & [data-message-row].border-accent {
+    border-color: var(--message-framed-border);
+    background-color: var(--message-framed-bg);
+  }
+
+  & [data-composer-shell]:focus-within {
+    border-color: var(--accent);
+  }
+
+  & [data-tasks-column] {
+    background-color: var(--bg-elevated);
+    border-color: var(--border);
+  }
+
+  & [data-tasks-board] [data-task-number] {
+    background: var(--bg-floating);
+    border-color: var(--border);
+    box-shadow: var(--card-shadow);
+  }
+
+  & [data-tasks-board] [data-task-number]:hover {
+    border-color: var(--border);
+    background: color-mix(in srgb, var(--bg-floating), var(--text-primary) 3%);
+    box-shadow: var(--shadow-popover);
+  }
+
+  & [data-collection-card]:hover,
+  & [data-collection-card][data-active] {
+    background-color: var(--bg-hover);
+    box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), var(--shadow-lift-alpha, 0.12));
+    transform: translateY(-1px);
+  }
+}

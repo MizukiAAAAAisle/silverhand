@@ -120,6 +120,7 @@
   --floating-radius: var(--radius-md);
   --overlay-backdrop: rgba(0, 0, 0, 0.55);
   --shadow-base: 0, 0, 0;
+  --shadow-lift-alpha: 0.45;
   --shadow-button: 0 1px 2px 0 rgba(var(--shadow-base), 0.2);
   --shadow-modal: 0 25px 50px -12px rgba(var(--shadow-base), 0.6);
   --shadow-popover:
@@ -138,8 +139,11 @@
   --chip-bg: rgba(255, 255, 255, 0.06);
   --chip-bg-hover: rgba(255, 255, 255, 0.12);
   --chip-radius: 4px;
+  --workspace-icon-fg: var(--bg-base);
+  --workspace-icon-radius: 0;
   --message-bubble-radius: var(--card-radius);
-  --slack-dark-bg-message-framed: color-mix(in oklab, var(--accent) 10%, transparent);
+  --message-framed-border: rgba(255, 255, 255, 0.26);
+  --message-framed-bg: color-mix(in oklab, var(--accent) 10%, transparent);
   --pill-radius: 9999px;
   --thread-preview-bg: var(--chip-bg);
   --thread-preview-bg-hover: var(--chip-bg-hover);
@@ -228,13 +232,6 @@
 
 /* Hooks: Identity */
 
-[data-theme="slack-dark"] [data-workspace-icon] {
-  background-color: var(--text-secondary);
-  color: var(--bg-base);
-  border-radius: 0;
-  font-size: 11px;
-}
-
 [data-theme="slack-dark"] [data-channel-icon] {
   color: var(--text-muted);
 }
@@ -244,10 +241,8 @@
 }
 
 [data-theme="slack-dark"] [data-conversation-hash-icon] {
-  display: inline-block;
   color: var(--accent);
   stroke-width: 2.5;
-  margin-right: 0.1em;
 }
 
 /* Hooks: Messages and composer */
@@ -256,49 +251,8 @@
   border: none;
 }
 
-[data-theme="slack-dark"] [data-message-row] {
-  border-width: 1px;
-}
-
-[data-theme="slack-dark"] [data-message-row].border-accent {
-  border-color: rgba(255, 255, 255, 0.26);
-  background-color: var(--slack-dark-bg-message-framed);
-}
-
-[data-theme="slack-dark"] [data-composer-shell]:focus-within {
-  border-color: var(--accent);
-}
-
 /* Hooks: Agent creation */
 
 [data-theme="slack-dark"] [data-create-agent-dialog] button[aria-pressed="true"] {
   border-color: var(--bg-row-selected);
-}
-
-/* Hooks: Tasks */
-
-[data-theme="slack-dark"] [data-tasks-board] [data-task-number] {
-  background: var(--bg-floating);
-  border-color: var(--border);
-  box-shadow: var(--card-shadow);
-}
-
-[data-theme="slack-dark"] [data-tasks-board] [data-task-number]:hover {
-  border-color: var(--border);
-  background: color-mix(in srgb, var(--bg-floating), var(--text-primary) 3%);
-  box-shadow: var(--shadow-popover);
-}
-
-[data-theme="slack-dark"] [data-tasks-column] {
-  background-color: var(--bg-elevated);
-  border-color: var(--border);
-}
-
-/* Hooks: Panels and collections */
-
-[data-theme="slack-dark"] [data-collection-card]:hover,
-[data-theme="slack-dark"] [data-collection-card][data-active] {
-  background-color: var(--bg-hover);
-  box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.45);
-  transform: translateY(-1px);
 }
