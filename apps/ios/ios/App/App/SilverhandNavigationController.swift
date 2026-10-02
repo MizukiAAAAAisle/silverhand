@@ -83,7 +83,11 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     if #available(iOS 17.0, *), let item = viewControllers?[3].tabBarItem,
       let itemFrame = item.frame(in: view)
     {
-      return itemFrame.isEmpty ? nil : itemFrame
+      // Minimized, every item reports the single pill's frame. That pill
+      // expands the bar; it is not More.
+      let selected = selectedViewController?.tabBarItem.frame(in: view)
+      if itemFrame.isEmpty || (selectedIndex != 3 && selected == itemFrame) { return nil }
+      return itemFrame
     }
     let actionRegion = CGRect(
       x: tabBar.bounds.width * 0.75, y: 0,
