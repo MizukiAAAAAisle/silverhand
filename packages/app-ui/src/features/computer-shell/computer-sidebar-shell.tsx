@@ -11,6 +11,7 @@ import {
   type HostStatusTone,
 } from "@/features/computer-shell/model/host-status-presentation";
 import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
+import { useCompactLayout } from "@/navigation/layout";
 
 export interface ComputerSidebarShellProps {
   hosts: HostDto[];
@@ -33,6 +34,47 @@ export function ComputerSidebarShell({
     hosts.filter((host) => host.status === "active" || host.status === "revoked"),
     localHostId,
   );
+
+  const compact = useCompactLayout();
+
+  const rows =
+    sorted.length === 0 ? (
+      <li>
+        {isLoading ? (
+          <ComputerRowsSkeleton />
+        ) : (
+          <p className="px-2 py-1.5 text-xs text-text-muted">No computers yet.</p>
+        )}
+      </li>
+    ) : (
+      sorted.map((host) => (
+        <ComputerRow
+          key={host.id}
+          host={host}
+          isSelected={host.id === selectedHostId}
+          onSelect={() => onSelectHost(host.id)}
+        />
+      ))
+    );
+
+  // The compact page title already names the only group, so the header goes and
+  // its add action becomes the list's last row.
+  if (compact) {
+    return (
+      <DirectorySidebar>
+        <ul className="space-y-0.5">
+          {rows}
+          {onAddComputer ? (
+            <SidebarRow
+              icon={<Plus className="size-3.5" />}
+              title={computerCopy.addComputer}
+              onClick={onAddComputer}
+            />
+          ) : null}
+        </ul>
+      </DirectorySidebar>
+    );
+  }
 
   return (
     <DirectorySidebar>
@@ -59,24 +101,7 @@ export function ComputerSidebarShell({
           ) : undefined
         }
       >
-        {sorted.length === 0 ? (
-          <li>
-            {isLoading ? (
-              <ComputerRowsSkeleton />
-            ) : (
-              <p className="px-2 py-1.5 text-xs text-text-muted">No computers yet.</p>
-            )}
-          </li>
-        ) : (
-          sorted.map((host) => (
-            <ComputerRow
-              key={host.id}
-              host={host}
-              isSelected={host.id === selectedHostId}
-              onSelect={() => onSelectHost(host.id)}
-            />
-          ))
-        )}
+        {rows}
       </SidebarSection>
     </DirectorySidebar>
   );

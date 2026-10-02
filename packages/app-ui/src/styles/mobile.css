@@ -203,6 +203,9 @@
     overflow-x: auto;
     scrollbar-width: none;
     gap: 6px;
+    /* The strip scrolls under the New task button; fade the trailing edge so a
+       cut-off chip reads as "more to swipe" instead of a clipping bug. */
+    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
   }
   [data-task-board-toolbar] [data-task-filter-bar]::-webkit-scrollbar {
     display: none;

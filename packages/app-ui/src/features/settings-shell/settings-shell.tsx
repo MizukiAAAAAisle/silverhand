@@ -158,7 +158,7 @@ export function SettingsShell(): JSX.Element {
       <Sidebar
         name="settings"
         fill
-        sidebar={<SettingsRailNav section={section} onSelect={setSection} />}
+        sidebar={<SettingsRailNav section={null} bare onSelect={setSection} />}
       />
     );
   return (
@@ -181,35 +181,46 @@ const SECTION_CHROME: Record<SettingsSection, { label: string; icon: ReactNode }
 
 function SettingsRailNav({
   section,
+  bare = false,
   onSelect,
 }: {
-  section: SettingsSection;
+  /** Null on the compact list page: no detail pane is showing, so no row is current. */
+  section: SettingsSection | null;
+  /** Drop the group header when the page title already names the only group. */
+  bare?: boolean;
   onSelect: (next: SettingsSection) => void;
 }): JSX.Element {
+  const rows = SETTINGS_SECTIONS.map((id) => {
+    const { label, icon } = SECTION_CHROME[id];
+    const selected = id === section;
+
+    return (
+      <SidebarRow
+        key={id}
+        icon={icon}
+        title={label}
+        selected={selected}
+        aria-current={selected ? "page" : undefined}
+        onClick={() => onSelect(id)}
+      />
+    );
+  });
+
   return (
     <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
-      <SidebarSection
-        label="SETTINGS"
-        icon={<Settings className="size-3.5" />}
-        collapsible
-        defaultExpanded
-        persistId="settings-directory"
-      >
-        {SETTINGS_SECTIONS.map((id) => {
-          const { label, icon } = SECTION_CHROME[id];
-          const selected = id === section;
-          return (
-            <SidebarRow
-              key={id}
-              icon={icon}
-              title={label}
-              selected={selected}
-              aria-current={selected ? "page" : undefined}
-              onClick={() => onSelect(id)}
-            />
-          );
-        })}
-      </SidebarSection>
+      {bare ? (
+        <ul className="space-y-0.5">{rows}</ul>
+      ) : (
+        <SidebarSection
+          label="SETTINGS"
+          icon={<Settings className="size-3.5" />}
+          collapsible
+          defaultExpanded
+          persistId="settings-directory"
+        >
+          {rows}
+        </SidebarSection>
+      )}
     </nav>
   );
 }

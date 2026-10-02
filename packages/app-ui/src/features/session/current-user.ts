@@ -30,7 +30,7 @@ export function getCurrentUserId(): string | null {
 }
 
 export const CURRENT_USER_DISPLAY_NAME = "you" as const;
-export const CURRENT_USER_SUBTITLE = "current viewer" as const;
+export const CURRENT_USER_SUBTITLE = "You" as const;
 
 /**
  * Displayed label for rows whose author has been lost (pre-multi-human

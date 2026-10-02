@@ -432,7 +432,6 @@ export function ActivityView({
       <PaneHeader
         icon={<ActivityIcon className="size-3.5" />}
         title="Activity"
-        count={counts.all}
       />
 
       {/* Filter chips. Selected chips use the theme selection token, never a
@@ -455,7 +454,9 @@ export function ActivityView({
               }
             >
               {f.label}
-              <span className={on ? "opacity-100" : "opacity-60"}>{counts[f.key]}</span>
+              {counts[f.key] > 0 ? (
+                <span className={on ? "opacity-100" : "opacity-60"}>{counts[f.key]}</span>
+              ) : null}
             </button>
           );
         })}
