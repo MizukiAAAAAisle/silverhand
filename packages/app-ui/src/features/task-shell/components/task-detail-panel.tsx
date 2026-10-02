@@ -3,10 +3,10 @@ import { paneChrome } from "@/components/layout/pane-chrome";
 import { ExternalLink, Pencil } from "lucide-react";
 import type { TaskDetailDto } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
-import { TaskIcon } from "@/features/task-shell/components/task-icon";
+import { TaskIcon } from "@/components/task-icon";
 import { MiniIconButton } from "@/features/task-shell/components/mini-icon-button";
 import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
-import { Markdown } from "@/components/chat/markdown";
+import { Markdown } from "@/features/messages/components/markdown";
 import {
   FAILURE_COPY,
   InlineFieldEditor,
@@ -98,7 +98,8 @@ export function TaskDetailPanel({
 
   // Hidden while editing: navigating away would unmount the editor before its
   // blur-save settles.
-  const jumpTarget = onJump && painted && editingField === null ? resolveTaskJumpTarget(painted) : null;
+  const jumpTarget =
+    onJump && painted && editingField === null ? resolveTaskJumpTarget(painted) : null;
   const jumpAction = jumpTarget ? (
     <button
       type="button"

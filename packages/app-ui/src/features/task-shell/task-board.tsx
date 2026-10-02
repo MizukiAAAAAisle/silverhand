@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState } from "react";
-import { TaskIcon } from "@/features/task-shell/components/task-icon";
+import { TaskIcon } from "@/components/task-icon";
 import { useUpdateTaskStatus } from "@/features/task-shell/hooks/hooks";
 import { useKanbanColumnCollapse } from "@/features/task-shell/hooks/use-kanban-column-collapse";
 import { useTaskFilterOptions } from "@/features/task-shell/hooks/use-task-filter-options";

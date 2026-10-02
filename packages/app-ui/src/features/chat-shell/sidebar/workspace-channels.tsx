@@ -16,8 +16,8 @@ import {
   SortableGroup,
   animateLayoutChanges,
   sortableItemStyle,
-  useListDragSort,
 } from "@/components/layout/list-drag-sort";
+import { useListDragSort } from "@/features/workspaces/use-list-drag-sort";
 import {
   useArchiveChannel,
   useChannelSortState,

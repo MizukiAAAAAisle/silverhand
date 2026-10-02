@@ -1,4 +1,4 @@
-import type { WorkspaceChannelReference } from "@/components/chat/conversation-ref";
+import type { WorkspaceChannelReference } from "@/features/messages/components/conversation-ref";
 import type { JumpPhase } from "@/features/channels/message-jump-phase";
 import type { ResolvedChannelMembership } from "@/features/channels/use-channel-membership";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";

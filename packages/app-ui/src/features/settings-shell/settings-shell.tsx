@@ -28,7 +28,7 @@ import {
   setMessageLayoutMode,
   useMessageLayoutMode,
   type MessageLayoutMode,
-} from "@/components/chat/use-message-layout-mode";
+} from "@/features/messages/hooks/use-message-layout-mode";
 import {
   isBackendUnreachable,
   isRegistrationRequired,

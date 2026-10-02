@@ -7,7 +7,10 @@ import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useDraftCounterpart } from "@/features/direct-pairs/use-draft-counterpart";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
-import { AuthorAvatarView, DeletedActorMarker } from "@/components/chat/author-avatar-view";
+import {
+  AuthorAvatarView,
+  DeletedActorMarker,
+} from "@/features/messages/components/author-avatar-view";
 import { useDirectPairsList } from "@/features/direct-pairs/hooks";
 import {
   collectCounterpartAvatarSources,

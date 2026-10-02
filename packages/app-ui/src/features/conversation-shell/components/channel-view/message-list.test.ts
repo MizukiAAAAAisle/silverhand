@@ -44,17 +44,25 @@ vi.mock("react", async (load) => {
 });
 vi.mock("@/navigation/layout", () => ({ useCompactLayout: () => h.compact }));
 vi.mock("@/navigation/view-memory", () => ({ useViewMemory: () => null }));
-vi.mock("@/components/chat/use-message-render-context", () => ({
+vi.mock("@/features/messages/hooks/use-message-render-context", () => ({
   useMessageRenderContext: () => ({ liveChannels: [], archivedChannels: [] }),
 }));
-vi.mock("@/components/chat/author-avatar-hooks", () => ({ useAuthorAvatarObjectUrls: () => ({}) }));
-vi.mock("@/components/chat/use-message-action-surface", () => ({
+vi.mock("@/features/messages/hooks/author-avatar-hooks", () => ({
+  useAuthorAvatarObjectUrls: () => ({}),
+}));
+vi.mock("@/features/messages/hooks/use-message-action-surface", () => ({
   useMessageActionSurface: () => ({}),
 }));
-vi.mock("@/components/chat/message-action-chrome", () => ({ MessageActionChrome: () => null }));
-vi.mock("@/components/chat/channel-message-item", () => ({ ChannelMessageItem: () => null }));
-vi.mock("@/components/chat/system-message", () => ({ SystemMessage: () => null }));
-vi.mock("@/components/chat/system-activity-cluster", () => ({ SystemActivityCluster: () => null }));
+vi.mock("@/features/messages/components/message-action-chrome", () => ({
+  MessageActionChrome: () => null,
+}));
+vi.mock("@/features/messages/components/channel-message-item", () => ({
+  ChannelMessageItem: () => null,
+}));
+vi.mock("@/features/messages/components/system-message", () => ({ SystemMessage: () => null }));
+vi.mock("@/features/messages/components/system-activity-cluster", () => ({
+  SystemActivityCluster: () => null,
+}));
 vi.mock("@/features/conversation-shell/components/conversation-view-skeleton", () => ({
   MessageRowsSkeleton: () => null,
 }));

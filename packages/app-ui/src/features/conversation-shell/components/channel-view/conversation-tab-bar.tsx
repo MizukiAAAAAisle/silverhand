@@ -29,7 +29,7 @@ import {
   type PanelTabKind,
   type Tab,
 } from "@/features/conversation-shell/model/conversation-tabs";
-import { TaskIcon } from "@/features/task-shell/components/task-icon";
+import { TaskIcon } from "@/components/task-icon";
 import { ThreadIcon } from "@/components/icons/conversation-icons";
 
 /**
@@ -48,7 +48,7 @@ import { ThreadIcon } from "@/components/icons/conversation-icons";
  * an ungated surface is absent from the menu, never a disabled row).
  *
  * Drag-reorder is LOCAL state (not the cache-driven sidebar sort), so the
- * frame-desync invariants in `list-drag-sort.tsx` don't apply — the reorder
+ * frame-desync invariants in `use-list-drag-sort.ts` don't apply — the reorder
  * result becomes state synchronously in `onDragEnd`. We reuse only its
  * `animateLayoutChanges` settle guard for a consistent slide/settle feel.
  */

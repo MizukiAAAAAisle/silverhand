@@ -22,7 +22,7 @@ import {
 import dayjs from "dayjs";
 import type { ConversationEventKind, ToolOutcome } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
-import { Markdown } from "@/components/chat/markdown";
+import { Markdown } from "@/features/messages/components/markdown";
 import {
   coalesceActivity,
   presentToolCall,

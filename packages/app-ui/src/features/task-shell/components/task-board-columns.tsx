@@ -19,7 +19,7 @@ import {
 import { useColumnEndSentinel } from "@/features/task-shell/hooks/use-column-window";
 import type { ColumnWindow } from "@/features/task-shell/model/column-window";
 import { isTaskDrag, readTaskDrag, writeTaskDrag } from "@/features/task-shell/model/task-dnd";
-import { useRelativeTime } from "@/components/chat/use-relative-time";
+import { useRelativeTime } from "@/features/messages/hooks/use-relative-time";
 import { ChannelIcon } from "@/components/channel-icon";
 import {
   TaskStatusBadge,

@@ -31,6 +31,14 @@ viewer. `features/app-shell` owns application gates and navigation coordination.
 page. Other shared domains retain their own names, such as identity, attention,
 attachments, and messages.
 
+`features/messages` owns the message surface shared by every conversation view:
+the composer, message rows, Markdown and inline references, system messages, and
+lightboxes.
+
+`components`, `hooks`, `lib`, `navigation` and `icons` never import `features`;
+`layer-direction-fence.test.ts` enforces the direction and its allow-list only
+shrinks. A component that needs feature data belongs to that feature.
+
 `lib` is for application infrastructure and domain-neutral helpers. Place business
 rules and caches with their domain, even when more than one page consumes them.
 Use kebab-case file names and update imports and source-based test paths together.

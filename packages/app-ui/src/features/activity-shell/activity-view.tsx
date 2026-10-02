@@ -10,9 +10,9 @@ import {
   AuthorAvatarView,
   AuthorName,
   DeletedActorMarker,
-} from "@/components/chat/author-avatar-view";
-import { presentAuthor } from "@/components/chat/author-presentation";
-import type { AuthorAvatar } from "@/components/chat/author-presentation";
+} from "@/features/messages/components/author-avatar-view";
+import { presentAuthor } from "@/features/messages/model/author-presentation";
+import type { AuthorAvatar } from "@/features/messages/model/author-presentation";
 import {
   collectCounterpartAvatarSources,
   presentCounterpart,

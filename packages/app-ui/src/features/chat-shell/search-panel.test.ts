@@ -30,7 +30,7 @@ vi.mock("@/features/search/hooks", () => ({
     };
   },
 }));
-vi.mock("@/components/chat/author-avatar-hooks", () => ({
+vi.mock("@/features/messages/hooks/author-avatar-hooks", () => ({
   useAuthorAvatarObjectUrls: () => ({ agentAvatarUrls: new Map(), humanAvatarUrls: new Map() }),
 }));
 vi.mock("@/features/agent-shell/hooks/avatar-hooks", () => ({
@@ -38,7 +38,7 @@ vi.mock("@/features/agent-shell/hooks/avatar-hooks", () => ({
 }));
 vi.mock("@/features/direct-pairs/hooks", () => ({ useDirectPairs: () => [] }));
 vi.mock("@/router", () => ({ useNav: () => ({ toDirect: vi.fn(), toDirectDraft: vi.fn() }) }));
-vi.mock("@/components/ui/sender-filter-select", () => ({
+vi.mock("@/features/search/sender-filter-select", () => ({
   SenderFilterSelect: () => null,
   parseSenderFilter: () => ({}),
 }));

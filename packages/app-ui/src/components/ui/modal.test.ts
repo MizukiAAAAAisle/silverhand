@@ -35,12 +35,12 @@ it("closed force-mounted and nonmodal content does not acquire ownership", () =>
 });
 it("all existing styled dialogs and lightboxes use the shared unstyled boundary", () => {
   for (const file of [
-    "ui/dialog.tsx",
-    "chat/lightbox.tsx",
-    "chat/mermaid-lightbox.tsx",
-    "chat/image-preview-modal.tsx",
+    "components/ui/dialog.tsx",
+    "features/messages/components/lightbox.tsx",
+    "features/messages/components/mermaid-lightbox.tsx",
+    "features/messages/components/image-preview-modal.tsx",
   ]) {
-    const source = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    const source = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
     expect(source).not.toContain('from "@radix-ui/react-dialog"');
     expect(source).toMatch(/from "(?:\.\/modal|@\/components\/ui\/modal)"/);
   }

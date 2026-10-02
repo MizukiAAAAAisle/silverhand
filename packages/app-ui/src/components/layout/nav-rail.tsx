@@ -1,7 +1,7 @@
 import { type JSX, type ReactNode } from "react";
 import { Activity, MessagesSquare, Monitor, Settings, Users } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { TaskIcon } from "@/features/task-shell/components/task-icon";
+import { TaskIcon } from "@/components/task-icon";
 
 /**
  * Top-level app sections. Outer to the channels/sessions sidebars —

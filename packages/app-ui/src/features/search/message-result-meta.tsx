@@ -5,8 +5,8 @@ import type { SearchResultDto } from "@silverhand/shared";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { ChannelIcon } from "@/components/channel-icon";
 import { WorkspaceIcon } from "@/components/workspace-icon";
-import { AuthorAvatarView, AuthorName } from "@/components/chat/author-avatar-view";
-import { presentAuthor } from "@/components/chat/author-presentation";
+import { AuthorAvatarView, AuthorName } from "@/features/messages/components/author-avatar-view";
+import { presentAuthor } from "@/features/messages/model/author-presentation";
 
 /**
  * Shared message-result meta line: workspace icon + channel sticker + sender +

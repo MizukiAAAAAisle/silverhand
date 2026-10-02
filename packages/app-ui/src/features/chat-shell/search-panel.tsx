@@ -14,7 +14,7 @@ import {
   FILTER_SELECT_CONTENT_CLASS as SELECT_CONTENT_CLASS,
 } from "@/components/ui/filter-select";
 import { WorkspaceIcon } from "@/components/workspace-icon";
-import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
+import { useAuthorAvatarObjectUrls } from "@/features/messages/hooks/author-avatar-hooks";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import { useMessageSearch } from "@/features/search/hooks";
@@ -25,7 +25,7 @@ import {
   SenderFilterSelect,
   parseSenderFilter,
   type SenderFilterValue,
-} from "@/components/ui/sender-filter-select";
+} from "@/features/search/sender-filter-select";
 import { SearchResultsSkeleton } from "@/features/search/search-results-skeleton";
 import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 

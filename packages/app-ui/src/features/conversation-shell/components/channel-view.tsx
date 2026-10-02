@@ -3,12 +3,12 @@ import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Maximize2, Minimize2, Paperclip, Search, Settings, X } from "lucide-react";
 import { ThreadIcon } from "@/components/icons/conversation-icons";
-import { Composer } from "@/components/chat/composer";
-import { SelectionQuoteToolbar } from "@/components/chat/selection-quote-toolbar";
-import { ChannelJoinBar } from "@/components/chat/channel-join-bar";
-import { QuotedMessagePreview } from "@/components/chat/quoted-message-preview";
-import { findThreadAnchor, readAnchorMessageId } from "@/components/chat/thread-anchor";
-import { openAttachmentExternally } from "@/components/chat/open-attachment";
+import { Composer } from "@/features/messages/components/composer";
+import { SelectionQuoteToolbar } from "@/features/messages/components/selection-quote-toolbar";
+import { ChannelJoinBar } from "@/features/messages/components/channel-join-bar";
+import { QuotedMessagePreview } from "@/features/messages/components/quoted-message-preview";
+import { findThreadAnchor, readAnchorMessageId } from "@/features/messages/model/thread-anchor";
+import { openAttachmentExternally } from "@/features/messages/model/open-attachment";
 import {
   attachmentPreviewKind,
   resolveAttachmentOpenRoute,
@@ -34,7 +34,7 @@ import {
   observeVisibleTail,
   type TailReadMark,
 } from "@/features/conversation-shell/model/channel-read";
-import type { WorkspaceChannelReference } from "@/components/chat/conversation-ref";
+import type { WorkspaceChannelReference } from "@/features/messages/components/conversation-ref";
 import { MemberStrip } from "./channel-view/member-strip";
 import { MessageList } from "./channel-view/message-list";
 import { InlineFindBar } from "./inline-find-bar";

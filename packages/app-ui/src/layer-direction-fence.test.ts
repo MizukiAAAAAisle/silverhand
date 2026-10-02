@@ -12,40 +12,7 @@ const SHARED_LAYERS = ["components", "hooks", "lib", "navigation", "icons"];
 const FEATURE_IMPORT = /(?:from\s+|import\(\s*)["'](?:@\/features\/|(?:\.\.\/)+features\/)/;
 
 /** Files that predate the fence. The list only shrinks. */
-const KNOWN_OFFENDERS: readonly string[] = [
-  "components/agent-info-popover.tsx",
-  "components/chat/attachment-html-preview.tsx",
-  "components/chat/author-avatar-hooks.ts",
-  "components/chat/author-grouping.ts",
-  "components/chat/channel-message-item.tsx",
-  "components/chat/composer-activity-header.tsx",
-  "components/chat/composer.tsx",
-  "components/chat/conversation-ref.tsx",
-  "components/chat/group-messages.ts",
-  "components/chat/image-preview-modal.tsx",
-  "components/chat/locator-ref.tsx",
-  "components/chat/mention.tsx",
-  "components/chat/message-item.tsx",
-  "components/chat/message-reactions.tsx",
-  "components/chat/message-screenshot-view.tsx",
-  "components/chat/quoted-message-preview.tsx",
-  "components/chat/selection-quote-toolbar.tsx",
-  "components/chat/system-message/context-cards.tsx",
-  "components/chat/system-message/message-cards.tsx",
-  "components/chat/system-message/shared.tsx",
-  "components/chat/system-message/task-event.tsx",
-  "components/chat/task-ref.tsx",
-  "components/chat/thread-anchor.ts",
-  "components/chat/use-message-action-surface.ts",
-  "components/chat/use-message-render-context.ts",
-  "components/human-info-popover.tsx",
-  "components/layout/list-drag-sort.tsx",
-  "components/layout/nav-rail.tsx",
-  "components/layout/titlebar-search.tsx",
-  "components/ui/sender-filter-select.tsx",
-  "components/ui/workspace-filter-select.tsx",
-  "hooks/use-appearance.ts",
-];
+const KNOWN_OFFENDERS: readonly string[] = ["hooks/use-appearance.ts"];
 
 function walk(dir: string): string[] {
   const out: string[] = [];

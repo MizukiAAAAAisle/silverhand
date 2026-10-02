@@ -484,7 +484,7 @@ function read(relative: string): string {
 
 describe("the pane gates its roster reads on the capability (the wiring half)", () => {
   const viewSource = read("../conversation-shell/components/channel-view.tsx");
-  const popoverSource = read("../../components/agent-info-popover.tsx");
+  const popoverSource = read("../agent-shell/components/agent-info-popover.tsx");
 
   it("computes ONE roster target and hands it to BOTH roster reads", () => {
     // Desktop's test env is `node` (no jsdom/RTL), so the counter-example @Cindy

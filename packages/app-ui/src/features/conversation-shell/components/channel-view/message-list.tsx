@@ -19,19 +19,19 @@ import type {
   StreamUnreadDto,
   ThreadReplyPreviewRow,
 } from "@silverhand/shared";
-import { ChannelMessageItem } from "@/components/chat/channel-message-item";
-import { useMessageRenderContext } from "@/components/chat/use-message-render-context";
-import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
-import { SystemMessage } from "@/components/chat/system-message";
-import { SystemActivityCluster } from "@/components/chat/system-activity-cluster";
-import { authorGroupContinuations } from "@/components/chat/author-grouping";
-import { groupMessages } from "@/components/chat/group-messages";
-import { useMessageActionSurface } from "@/components/chat/use-message-action-surface";
-import { MessageActionChrome } from "@/components/chat/message-action-chrome";
+import { ChannelMessageItem } from "@/features/messages/components/channel-message-item";
+import { useMessageRenderContext } from "@/features/messages/hooks/use-message-render-context";
+import { useAuthorAvatarObjectUrls } from "@/features/messages/hooks/author-avatar-hooks";
+import { SystemMessage } from "@/features/messages/components/system-message";
+import { SystemActivityCluster } from "@/features/messages/components/system-activity-cluster";
+import { authorGroupContinuations } from "@/features/messages/model/author-grouping";
+import { groupMessages } from "@/features/messages/model/group-messages";
+import { useMessageActionSurface } from "@/features/messages/hooks/use-message-action-surface";
+import { MessageActionChrome } from "@/features/messages/components/message-action-chrome";
 import { MessageRowsSkeleton } from "@/features/conversation-shell/components/conversation-view-skeleton";
 import { EmptyConversation } from "./empty-conversation";
 import { type CachedMessage, isCommittedMessage } from "@/features/channels/pending-message";
-import type { WorkspaceChannelReference } from "@/components/chat/conversation-ref";
+import type { WorkspaceChannelReference } from "@/features/messages/components/conversation-ref";
 import {
   classifyTopShift,
   FIRST_ITEM_INDEX_START,

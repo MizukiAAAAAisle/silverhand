@@ -5,7 +5,7 @@
  * the name, and this is the one place that resolution lives.
  *
  * It maps onto the EXISTING author-presentation vocabulary
- * (`components/chat/author-presentation.ts`) rather than growing a second one: the
+ * (`features/messages/model/author-presentation.ts`) rather than growing a second one: the
  * counterpart union has exactly the arms an author has (an active agent with a
  * runtime, an active human, and a principal that no longer exists), and
  * `AuthorAvatarView` already renders all four `AuthorAvatar` variants including the
@@ -24,7 +24,10 @@
  * one). The translation happens HERE, once, instead of at each rendering surface.
  */
 import type { AgentDto, UserDto, DirectPairCounterpart } from "@silverhand/shared";
-import type { AuthorAvatar, AuthorAvatarSources } from "@/components/chat/author-presentation";
+import type {
+  AuthorAvatar,
+  AuthorAvatarSources,
+} from "@/features/messages/model/author-presentation";
 
 export interface CounterpartPresentation {
   /** The name to render — the pair's whole title. */

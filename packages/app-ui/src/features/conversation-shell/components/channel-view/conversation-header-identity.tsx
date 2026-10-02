@@ -1,7 +1,10 @@
 import { useMemo } from "react";
 import { Hash } from "lucide-react";
 import type { DirectPairCounterpart } from "@silverhand/shared";
-import { AuthorAvatarView, DeletedActorMarker } from "@/components/chat/author-avatar-view";
+import {
+  AuthorAvatarView,
+  DeletedActorMarker,
+} from "@/features/messages/components/author-avatar-view";
 import { useNav } from "@/router";
 import { focusAgentSideSection } from "@/features/agent-shell/components/agent-view";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";

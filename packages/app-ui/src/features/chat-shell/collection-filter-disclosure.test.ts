@@ -15,7 +15,7 @@ vi.mock("@/features/agent-shell/hooks/hooks", () => ({ useAgents: () => ({ data:
 vi.mock("@/features/agent-shell/hooks/avatar-hooks", () => ({
   useAgentAvatarObjectUrls: () => new Map(),
 }));
-vi.mock("@/components/chat/author-avatar-hooks", () => ({
+vi.mock("@/features/messages/hooks/author-avatar-hooks", () => ({
   useAuthorAvatarObjectUrls: () => ({ agentAvatarUrls: new Map(), humanAvatarUrls: new Map() }),
 }));
 vi.mock("@/features/saved/hooks", () => ({

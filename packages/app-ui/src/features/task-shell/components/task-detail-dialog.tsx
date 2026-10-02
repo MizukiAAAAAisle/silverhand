@@ -19,7 +19,7 @@ import {
   useTaskWriteSlot,
   type EditingField,
 } from "@/features/task-shell/components/task-detail-shared";
-import { Markdown } from "@/components/chat/markdown";
+import { Markdown } from "@/features/messages/components/markdown";
 import { useTaskDetail } from "@/features/task-shell/hooks/hooks";
 import {
   classifyTaskDetailFailure,

@@ -22,7 +22,7 @@ import { useRef } from "react";
  * live — Cindy P1). Manual mode never consults this (it is rank-ordered).
  *
  * This is the same persistence-vs-presentation split as the `pendingDrop` drop
- * override in list-drag-sort: `touch` stays pure persistence (writes
+ * override in use-list-drag-sort: `touch` stays pure persistence (writes
  * `last_accessed_at`, touches no cache); the visible order is composed here.
  */
 export interface RecentKeySnapshot {

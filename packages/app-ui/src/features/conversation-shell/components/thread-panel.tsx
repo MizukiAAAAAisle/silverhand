@@ -3,24 +3,24 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { paneChrome } from "@/components/layout/pane-chrome";
 import { ArrowDown, ArrowUpRight, Bell, BellOff, Search } from "lucide-react";
 import { ThreadIcon } from "@/components/icons/conversation-icons";
-import { authorGroupContinuations } from "@/components/chat/author-grouping";
-import { groupMessages } from "@/components/chat/group-messages";
-import { MessageItem } from "@/components/chat/message-item";
-import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
+import { authorGroupContinuations } from "@/features/messages/model/author-grouping";
+import { groupMessages } from "@/features/messages/model/group-messages";
+import { MessageItem } from "@/features/messages/components/message-item";
+import { useAuthorAvatarObjectUrls } from "@/features/messages/hooks/author-avatar-hooks";
 import { InlineFindBar } from "./inline-find-bar";
 import { useInlineFindController, useInlineFindHotkey } from "@/features/search/use-inline-find";
 import type { AdvancedSearchSeed } from "@/features/search/advanced-search-seed";
-import type { SenderFilterValue } from "@/components/ui/sender-filter-select";
-import { SystemMessage } from "@/components/chat/system-message";
-import { SystemActivityCluster } from "@/components/chat/system-activity-cluster";
-import { Composer } from "@/components/chat/composer";
-import { SelectionQuoteToolbar } from "@/components/chat/selection-quote-toolbar";
-import { ChannelJoinBar } from "@/components/chat/channel-join-bar";
+import type { SenderFilterValue } from "@/features/search/sender-filter-select";
+import { SystemMessage } from "@/features/messages/components/system-message";
+import { SystemActivityCluster } from "@/features/messages/components/system-activity-cluster";
+import { Composer } from "@/features/messages/components/composer";
+import { SelectionQuoteToolbar } from "@/features/messages/components/selection-quote-toolbar";
+import { ChannelJoinBar } from "@/features/messages/components/channel-join-bar";
 import { MessageRowsSkeleton } from "@/features/conversation-shell/components/conversation-view-skeleton";
 import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
-import { useMessageRenderContext } from "@/components/chat/use-message-render-context";
-import { useMessageActionSurface } from "@/components/chat/use-message-action-surface";
-import { MessageActionChrome } from "@/components/chat/message-action-chrome";
+import { useMessageRenderContext } from "@/features/messages/hooks/use-message-render-context";
+import { useMessageActionSurface } from "@/features/messages/hooks/use-message-action-surface";
+import { MessageActionChrome } from "@/features/messages/components/message-action-chrome";
 import {
   threadClusterShowsLoader,
   threadLiveMarkReadSeq,
@@ -30,7 +30,7 @@ import {
   threadTailIsVisible,
   threadVisibleReplySeq,
 } from "../model/thread-mark-read";
-import type { WorkspaceChannelReference } from "@/components/chat/conversation-ref";
+import type { WorkspaceChannelReference } from "@/features/messages/components/conversation-ref";
 import {
   type JumpPhase,
   jumpWindowLockedForPhase,

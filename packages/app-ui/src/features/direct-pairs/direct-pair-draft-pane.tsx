@@ -3,7 +3,7 @@ import { DirectDraftSkeleton } from "./direct-draft-skeleton";
 import { getCurrentUserId } from "@/features/session/current-user";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { resizeTextarea } from "@/components/chat/composer";
+import { resizeTextarea } from "@/features/messages/components/composer";
 import { EmptyConversation } from "@/features/conversation-shell/components/channel-view/empty-conversation";
 import { ConversationHeaderIdentity } from "@/features/conversation-shell/components/channel-view/conversation-header-identity";
 import { paneChrome } from "@/components/layout/pane-chrome";

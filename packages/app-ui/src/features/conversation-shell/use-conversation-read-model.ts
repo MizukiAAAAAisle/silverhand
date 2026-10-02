@@ -1,4 +1,4 @@
-import type { WorkspaceChannelReference } from "@/components/chat/conversation-ref";
+import type { WorkspaceChannelReference } from "@/features/messages/components/conversation-ref";
 import { isMemberChannel } from "@/features/channels/membership";
 import { useChannelMembership } from "@/features/channels/use-channel-membership";
 import { locatorWorkspaceName } from "@/features/conversations/locator-source";

@@ -2,13 +2,13 @@ import { useMemo } from "react";
 import { Bookmark, Clock, Layers } from "lucide-react";
 import dayjs from "dayjs";
 import type { AgentDto, SavedMessageDto } from "@silverhand/shared";
-import { Markdown } from "@/components/chat/markdown";
+import { Markdown } from "@/features/messages/components/markdown";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
 import { ChannelIcon } from "@/components/channel-icon";
 import { WorkspaceIcon } from "@/components/workspace-icon";
-import { AuthorAvatarView, AuthorName } from "@/components/chat/author-avatar-view";
-import { presentAuthor } from "@/components/chat/author-presentation";
-import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
+import { AuthorAvatarView, AuthorName } from "@/features/messages/components/author-avatar-view";
+import { presentAuthor } from "@/features/messages/model/author-presentation";
+import { useAuthorAvatarObjectUrls } from "@/features/messages/hooks/author-avatar-hooks";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
@@ -22,12 +22,12 @@ import {
   WorkspaceFilterSelect,
   workspaceFilterId,
   type WorkspaceFilterValue,
-} from "@/components/ui/workspace-filter-select";
+} from "@/features/workspaces/workspace-filter-select";
 import {
   SenderFilterSelect,
   parseSenderFilter,
   type SenderFilterValue,
-} from "@/components/ui/sender-filter-select";
+} from "@/features/search/sender-filter-select";
 import {
   DateFilterSelect,
   dateFilterSince,

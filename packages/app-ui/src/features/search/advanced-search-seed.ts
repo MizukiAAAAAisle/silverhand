@@ -2,7 +2,7 @@ import type { DirectPairCounterpart } from "@silverhand/shared";
 import {
   senderFilterForEndpoint,
   type SenderFilterValue,
-} from "@/components/ui/sender-filter-select";
+} from "@/features/search/sender-filter-select";
 
 /**
  * What an in-conversation find carries when it hands off to advanced search

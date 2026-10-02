@@ -9,8 +9,8 @@ import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { STATUS_DOT } from "@/components/status-dot";
-import { AgentInfoPopover } from "@/components/agent-info-popover";
-import { HumanInfoPopover } from "@/components/human-info-popover";
+import { AgentInfoPopover } from "@/features/agent-shell/components/agent-info-popover";
+import { HumanInfoPopover } from "@/features/profile/human-info-popover";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { projectMemberRuntimeStatus } from "@/features/agent-shell/model/member-runtime-status";
 import {

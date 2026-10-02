@@ -20,7 +20,7 @@ import {
   WorkspaceFilterSelect,
   workspaceFilterId,
   type WorkspaceFilterValue,
-} from "@/components/ui/workspace-filter-select";
+} from "@/features/workspaces/workspace-filter-select";
 import {
   DateFilterSelect,
   dateFilterSince,

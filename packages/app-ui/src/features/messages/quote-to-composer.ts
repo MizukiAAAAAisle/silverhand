@@ -13,7 +13,7 @@
  * This is a pure-renderer path: Quote inserts Markdown text a human could
  * have typed. It does NOT touch the metadata-quote contract
  * (`quoted_message_id` + source snapshot) that {@link
- * ../components/chat/QuotedMessagePreview} renders — that quotes a whole
+ * ./components/quoted-message-preview} renders — that quotes a whole
  * message with source-location semantics and is a separate feature.
  */
 

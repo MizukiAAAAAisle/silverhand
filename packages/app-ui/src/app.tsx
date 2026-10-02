@@ -18,7 +18,7 @@ import { Toaster } from "sonner";
 import { NavRail } from "@/components/layout/nav-rail";
 import { SectionLayer } from "@/components/layout/section-layer";
 import { Titlebar } from "@/components/layout/titlebar";
-import { TitlebarSearch } from "@/components/layout/titlebar-search";
+import { TitlebarSearch } from "@/features/search/titlebar-search";
 import { useAppearance } from "@/hooks/use-appearance";
 import {
   isBackendUnreachable,

@@ -6,7 +6,7 @@ import {
   ARCHIVED_FILTER_DEFAULT,
   type ArchivedFilterState,
 } from "@/features/chat-shell/archived-channels-panel";
-import { senderFilterFromParam } from "@/components/ui/sender-filter-select";
+import { senderFilterFromParam } from "@/features/search/sender-filter-select";
 
 /** Session filters survive presentation changes; URL seeds remain one-way. */
 export function useChatBrowse() {

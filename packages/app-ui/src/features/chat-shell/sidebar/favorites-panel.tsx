@@ -22,8 +22,8 @@ import {
   SortableGroup,
   animateLayoutChanges,
   sortableItemStyle,
-  useListDragSort,
 } from "@/components/layout/list-drag-sort";
+import { useListDragSort } from "@/features/workspaces/use-list-drag-sort";
 import { SidebarSection, SidebarEmptyRow } from "../../../components/layout/sidebar-shared";
 
 const FAVORITES_LIST_KEY = "favorites";

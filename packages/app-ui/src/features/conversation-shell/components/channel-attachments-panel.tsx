@@ -28,16 +28,19 @@ import type {
 } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
-import { AuthorAvatarView, AuthorName } from "@/components/chat/author-avatar-view";
-import { presentAuthor, type AuthorPresentation } from "@/components/chat/author-presentation";
-import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
+import { AuthorAvatarView, AuthorName } from "@/features/messages/components/author-avatar-view";
+import {
+  presentAuthor,
+  type AuthorPresentation,
+} from "@/features/messages/model/author-presentation";
+import { useAuthorAvatarObjectUrls } from "@/features/messages/hooks/author-avatar-hooks";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
 import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
 import {
   INITIAL_ATTACHMENTS_WINDOW,
   reduceAttachmentsWindow,
 } from "@/features/conversation-shell/model/attachments-window";
-import { useMessageRenderContext } from "@/components/chat/use-message-render-context";
+import { useMessageRenderContext } from "@/features/messages/hooks/use-message-render-context";
 import { useAgents } from "@/features/agent-shell/hooks/hooks";
 import { useAgentAvatarObjectUrls } from "@/features/agent-shell/hooks/avatar-hooks";
 import {
@@ -62,9 +65,12 @@ import {
 } from "@/components/ui/filter-select";
 import { cn } from "@/lib/cn";
 import { attachmentPreviewKind } from "@/features/attachments/attachment-preview";
-import { saveAttachmentToDisk } from "@/components/chat/save-attachment";
-import { formatOpenException, openAttachmentExternally } from "@/components/chat/open-attachment";
-import { Lightbox } from "@/components/chat/lightbox";
+import { saveAttachmentToDisk } from "@/features/messages/model/save-attachment";
+import {
+  formatOpenException,
+  openAttachmentExternally,
+} from "@/features/messages/model/open-attachment";
+import { Lightbox } from "@/features/messages/components/lightbox";
 import {
   getAttachmentBlobUrl,
   loadAttachmentBlobUrl,

@@ -6,14 +6,14 @@ import { ThreadIcon } from "@/components/icons/conversation-icons";
 import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
 import type { StreamUnreadDto } from "@silverhand/shared";
-import { AuthorAvatarView, AuthorName } from "@/components/chat/author-avatar-view";
+import { AuthorAvatarView, AuthorName } from "@/features/messages/components/author-avatar-view";
 import {
   authorGroupKey,
   authorStateLabel,
   presentAuthor,
-} from "@/components/chat/author-presentation";
-import { useAuthorAvatarObjectUrls } from "@/components/chat/author-avatar-hooks";
-import { useRelativeTime } from "@/components/chat/use-relative-time";
+} from "@/features/messages/model/author-presentation";
+import { useAuthorAvatarObjectUrls } from "@/features/messages/hooks/author-avatar-hooks";
+import { useRelativeTime } from "@/features/messages/hooks/use-relative-time";
 import { useConversationUnread } from "@/features/channels/hooks";
 import {
   useChannelThreads,
