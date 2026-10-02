@@ -67,6 +67,13 @@ export class NavigationStore {
   go = (url: string, options?: { replace?: boolean }) => {
     if (this.disposed || url === urlOf(this.history.location)) return;
     const current = this.history.location;
+    const parent = (current.state as { parent?: { url: string } } | null)?.parent;
+    // Closing an overlay lands on the entry that opened it. Pop instead of
+    // replacing, or the stack keeps a duplicate and Back shows on a root page.
+    if (options?.replace && parent?.url === url && this.history.index > 0) {
+      this.history.go(-1);
+      return;
+    }
     if (options?.replace) this.history.replace(url, current.state);
     else this.history.push(url, { parent: { key: current.key, url: urlOf(current) } });
   };

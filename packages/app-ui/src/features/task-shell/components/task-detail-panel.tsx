@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { paneChrome } from "@/components/layout/pane-chrome";
-import { Pencil } from "lucide-react";
+import { ExternalLink, Pencil } from "lucide-react";
 import type { TaskDetailDto } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
 import { TaskIcon } from "@/features/task-shell/components/task-icon";
@@ -18,8 +18,10 @@ import { useTaskDetail } from "@/features/task-shell/hooks/hooks";
 import {
   classifyTaskDetailFailure,
   resolveTaskDetailView,
+  resolveTaskJumpTarget,
   type TaskDetailFailure,
   type TaskDetailView,
+  type TaskJumpTarget,
 } from "@/features/task-shell/model/task-detail";
 
 export interface TaskDetailPanelProps {
@@ -28,7 +30,10 @@ export interface TaskDetailPanelProps {
    *  paint it. Non-null: the branch that renders this pane already gated on
    *  `?task=<id>` being present. */
   taskId: string;
-  onClose: () => void;
+  /** Omitted when the pane is a pushed page whose navigation bar owns Back. */
+  onClose?: () => void;
+  /** Adds "View in conversation" to the header. */
+  onJump?: (target: TaskJumpTarget) => void;
   /** Report whether an inline field editor is open (an UNSETTLED edit). The host
    *  reads this to gate its single request-close owner: a ✕ / ⌘W while editing
    *  must not unmount the pane before the blur-save settles (#task:1721). */
@@ -61,6 +66,7 @@ export interface TaskDetailPanelProps {
 export function TaskDetailPanel({
   taskId,
   onClose,
+  onJump,
   onEditingChange,
 }: TaskDetailPanelProps): JSX.Element {
   const detailQuery = useTaskDetail(taskId, { enabled: true });
@@ -90,6 +96,25 @@ export function TaskDetailPanel({
   }, [editingField, onEditingChange]);
   useEffect(() => () => onEditingChange(false), [onEditingChange]);
 
+  // Hidden while editing: navigating away would unmount the editor before its
+  // blur-save settles.
+  const jumpTarget = onJump && painted && editingField === null ? resolveTaskJumpTarget(painted) : null;
+  const jumpAction = jumpTarget ? (
+    <button
+      type="button"
+      data-task-view-jump
+      data-sticker
+      data-sticker-size="md"
+      data-sticker-tone="neutral"
+      title="View in conversation"
+      aria-label="View in conversation"
+      onClick={() => onJump?.(jumpTarget)}
+      className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline"
+    >
+      <ExternalLink className="size-3.5" aria-hidden />
+    </button>
+  ) : undefined;
+
   return (
     // `.task-pane` names the container query the metadata grid reads. `w-full`
     // makes it fill the SplitPane's right wrapper — without it the pane is a flex
@@ -107,7 +132,7 @@ export function TaskDetailPanel({
           sticker, and the `h-12` height contract can't drift. Mirrors the
           attachments pane exactly: a static section label as the title, the
           entity's identity as the subtitle. */}
-      <SidePanelHeader onClose={onClose}>
+      <SidePanelHeader onClose={onClose} actions={jumpAction}>
         <SidePanelHeaderTitle
           icon={<TaskIcon className="size-3.5 shrink-0 text-text-muted" aria-hidden />}
           title="Task"

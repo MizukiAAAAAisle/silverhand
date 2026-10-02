@@ -1,6 +1,9 @@
 import { DEFAULT_TASK_FILTERS, type TaskFilters } from "./model/task-filters";
 import { SectionLayer } from "@/components/layout/section-layer";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useCompactLayout } from "@/navigation/layout";
+import { useNavigationDriver } from "@/navigation/provider";
+import { TaskDetailPanel } from "@/features/task-shell/components/task-detail-panel";
 import { useNav, useRouteState } from "@/router";
 import { TaskDetailDialog } from "@/features/task-shell/components/task-detail-dialog";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
@@ -24,8 +27,45 @@ export function TaskShell({
 
   const openTask = useCallback((taskId: string) => openTaskRef.current(taskId), []);
   const taskId = resolveTaskDetailSurface(route) === "dialog" ? route.taskDetailId : null;
+  const compact = useCompactLayout();
+  const { registerLeaveGuard } = useNavigationDriver();
+  const editingRef = useRef(false);
+  const setEditing = useCallback((editing: boolean) => {
+    editingRef.current = editing;
+  }, []);
+  const pageTaskId = compact ? taskId : null;
+
+  useEffect(
+    () => registerLeaveGuard(() => pageTaskId === null || !editingRef.current),
+    [registerLeaveGuard, pageTaskId],
+  );
 
   if (!mounted) return null;
+
+  // Compact presents the task as a pushed page: the board stays mounted beneath
+  // it to keep its scroll, and Back pops the same history entry that opened it.
+  if (compact) {
+    return (
+      <SectionLayer visible={visible}>
+        <div className={pageTaskId ? "hidden" : "contents"}>
+          <TaskBoard filters={filters} onFiltersChange={setFilters} onOpenTask={openTask} />
+        </div>
+        {pageTaskId ? (
+          <TaskDetailPanel
+            key={pageTaskId}
+            taskId={pageTaskId}
+            onEditingChange={setEditing}
+            onJump={(target) => {
+              if (!onJump(target)) {
+                nav.closeTask();
+              }
+            }}
+          />
+        ) : null}
+      </SectionLayer>
+    );
+  }
+
   return (
     <SectionLayer visible={visible}>
       <TaskBoard filters={filters} onFiltersChange={setFilters} onOpenTask={openTask} />

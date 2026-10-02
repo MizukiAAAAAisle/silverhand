@@ -68,16 +68,23 @@ export function PaneHeader({
 }): JSX.Element {
   return (
     <header
+      data-pane-header
       className={cn(
         "flex h-(--titlebar-height) shrink-0 items-center gap-2 border-b border-border-subtle px-4",
         className,
       )}
     >
       <MobileNavigationSlot />
-      <span className="flex shrink-0 items-center text-accent">{icon}</span>
-      <span className="font-serif text-sm font-semibold text-text-primary">{title}</span>
+      <span data-pane-header-icon className="flex shrink-0 items-center text-accent">
+        {icon}
+      </span>
+      <span data-pane-header-title className="font-serif text-sm font-semibold text-text-primary">
+        {title}
+      </span>
       {count !== undefined && count !== null ? (
-        <span className="text-xs tabular-nums text-text-muted">{count}</span>
+        <span data-pane-header-count className="text-xs tabular-nums text-text-muted">
+          {count}
+        </span>
       ) : null}
       {trailing}
     </header>

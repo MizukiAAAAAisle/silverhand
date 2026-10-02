@@ -40,7 +40,10 @@ export function SidePanelHeader({
   const closeButton = onClose ? <SidePanelCloseButton onClose={onClose} /> : null;
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
+    <header
+      data-side-panel-header
+      className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3"
+    >
       <MobileNavigationSlot />
       {!compact && onBack ? (
         <button

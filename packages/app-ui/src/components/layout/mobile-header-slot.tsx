@@ -1,4 +1,13 @@
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import { useCompactLayout } from "@/navigation/layout";
 import type { AppSection } from "./nav-rail";
 
@@ -9,6 +18,11 @@ const MobileHeaderContext = createContext<{
   register: (owner: symbol, entry: Registration | null) => void;
 } | null>(null);
 const MobileHeaderSection = createContext<AppSection | null>(null);
+const MobileHeaderActionContext = createContext<{
+  section: AppSection;
+  target: HTMLSpanElement | null;
+  setTarget: (node: HTMLSpanElement | null) => void;
+} | null>(null);
 
 /** Presentation slots are owned by a page instance and scoped to its section.
  * Deferred/hidden sections may stay mounted, but cannot publish the active header. */
@@ -33,9 +47,42 @@ export function MobileHeaderProvider({
   const target = active?.node ?? null;
   return (
     <MobileHeaderContext.Provider value={{ target, register }}>
-      {children}
+      <MobileHeaderActionHost section={section}>{children}</MobileHeaderActionHost>
     </MobileHeaderContext.Provider>
   );
+}
+
+function MobileHeaderActionHost({
+  section,
+  children,
+}: {
+  section: AppSection;
+  children: ReactNode;
+}) {
+  const [target, setTarget] = useState<HTMLSpanElement | null>(null);
+  const value = useMemo(() => ({ section, target, setTarget }), [section, target]);
+
+  return (
+    <MobileHeaderActionContext.Provider value={value}>{children}</MobileHeaderActionContext.Provider>
+  );
+}
+
+/** Ref for the shell header's trailing slot. */
+export function useMobileHeaderActionRef() {
+  return useContext(MobileHeaderActionContext)?.setTarget ?? null;
+}
+
+/** Places a page action in the shell header's trailing slot. Renders nothing on
+ * desktop, while the page publishes its own header, or from a hidden section. */
+export function MobileHeaderAction({ children }: { children: ReactNode }) {
+  const context = useContext(MobileHeaderActionContext);
+  const section = useContext(MobileHeaderSection);
+
+  if (!context?.target || section !== context.section) {
+    return null;
+  }
+
+  return createPortal(children, context.target);
 }
 
 export function MobileHeaderScope({

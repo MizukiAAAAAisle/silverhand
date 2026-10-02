@@ -2,11 +2,11 @@ import { showsTabBar } from "@/navigation/presentation";
 import { useLocation } from "react-router-dom";
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
-import { useMobileHeaderTarget } from "./mobile-header-slot";
+import { useMobileHeaderActionRef, useMobileHeaderTarget } from "./mobile-header-slot";
 import { getPlatform } from "@/platform";
 import type { CSSProperties } from "react";
 import {
-  ArrowLeft,
+  ChevronLeft,
   Activity,
   MessagesSquare,
   ListTodo,
@@ -22,6 +22,7 @@ import type { AppSection } from "./nav-rail";
 
 export function MobileHeader({ hideFallback = false }: { hideFallback?: boolean }) {
   const target = useMobileHeaderTarget();
+  const actionRef = useMobileHeaderActionRef();
   const { back, canBack } = useNavigationDriver();
   const route = useRouteState();
   const windowChrome = Boolean(getPlatform().shell);
@@ -35,7 +36,7 @@ export function MobileHeader({ hideFallback = false }: { hideFallback?: boolean 
       onClick={back}
     >
       <span className="mobile-back-icon">
-        <ArrowLeft size={18} />
+        <ChevronLeft size={26} strokeWidth={2.25} />
       </span>
     </button>
   ) : null;
@@ -53,8 +54,9 @@ export function MobileHeader({ hideFallback = false }: { hideFallback?: boolean 
           : undefined
       }
     >
-      {backButton}
-      <span>{title}</span>
+      <span className="mobile-header-leading">{backButton}</span>
+      <span className="mobile-header-title">{title}</span>
+      <span ref={actionRef ?? undefined} className="mobile-header-trailing" />
     </header>
   );
 }

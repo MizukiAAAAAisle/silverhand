@@ -64,3 +64,10 @@ it("keeps library forward traversal within the active tab", () => {
   s.traverse(1);
   expect(url(s)).toBe("/tasks");
 });
+it("Closing an overlay returns to the entry that opened it", () => {
+  const s = new NavigationStore("/tasks");
+  s.go("/tasks?task=t");
+  s.go("/tasks", { replace: true });
+  expect(url(s)).toBe("/tasks");
+  expect(s.getSnapshot().canBack).toBe(false);
+});

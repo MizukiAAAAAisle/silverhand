@@ -1,6 +1,7 @@
 import { ComputerRowsSkeleton } from "./components/computer-skeletons";
 import type { JSX } from "react";
 import { DirectorySidebar } from "@/components/layout/directory-shell";
+import { MobileHeaderAction } from "@/components/layout/mobile-header-slot";
 import { Monitor, Plus } from "lucide-react";
 import type { HostDto } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
@@ -57,21 +58,24 @@ export function ComputerSidebarShell({
       ))
     );
 
-  // The compact page title already names the only group, so the header goes and
-  // its add action becomes the list's last row.
+  // The compact page title already names the only group, so the group header
+  // goes and its add action moves to the navigation bar.
   if (compact) {
     return (
       <DirectorySidebar>
-        <ul className="space-y-0.5">
-          {rows}
-          {onAddComputer ? (
-            <SidebarRow
-              icon={<Plus className="size-3.5" />}
-              title={computerCopy.addComputer}
+        {onAddComputer ? (
+          <MobileHeaderAction>
+            <button
+              type="button"
+              className="mobile-header-action focus-outline"
               onClick={onAddComputer}
-            />
-          ) : null}
-        </ul>
+              aria-label={computerCopy.addComputer}
+            >
+              <Plus size={22} />
+            </button>
+          </MobileHeaderAction>
+        ) : null}
+        <ul className="space-y-0.5">{rows}</ul>
       </DirectorySidebar>
     );
   }

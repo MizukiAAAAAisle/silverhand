@@ -94,7 +94,7 @@ export const TaskBoard = memo(function TaskBoard({
     <PaneShell>
       <PaneHeader
         icon={<TaskIcon data-sticker-size="sm" className="size-4 text-text-muted" />}
-        title={selectedChannelName ? `Tasks in #${selectedChannelName}` : "All Tasks"}
+        title={selectedChannelName ? `Tasks in #${selectedChannelName}` : "Tasks"}
         count={boardCountLabel(totalTaskCount(counts))}
         trailing={
           <span className="ml-auto text-(length:--text-badge) text-text-muted">

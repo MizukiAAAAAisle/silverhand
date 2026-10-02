@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
 vi.mock("react-dom", () => ({ createPortal: h.portal }));
 vi.mock("./mobile-header-slot", () => ({
   useMobileHeaderTarget: () => h.target,
+  useMobileHeaderActionRef: () => null,
 }));
 vi.mock("@/platform", () => ({ getPlatform: () => ({}) }));
 vi.mock("@/navigation/provider", () => ({
