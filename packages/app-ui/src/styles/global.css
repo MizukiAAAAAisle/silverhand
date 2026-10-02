@@ -246,6 +246,12 @@ body,
   --text-muted: color-mix(in srgb, var(--text-on-selected) 80%, transparent);
 }
 
+/* Header trailing controls read as a button group, not loose glyphs. forza6
+   frames them through its own sticker recipe. */
+:root:not([data-theme="forza6"]) [data-channel-actions] > button {
+  border: 1px solid var(--border);
+}
+
 .sidebar-row-gutter {
   border-width: var(--sidebar-row-border-width, 2px);
   border-style: solid;
