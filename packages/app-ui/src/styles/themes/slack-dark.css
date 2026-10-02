@@ -13,7 +13,8 @@
     "Hiragino Sans GB", sans-serif;
 
   /* Application frame and panes */
-  --bg-app: #141619;
+  --bg-app: #111316;
+  --pane-border: 1px solid rgba(255, 255, 255, 0.06);
   --card-radius: 8px;
   --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.4);
   --frame-padding: 8px;
@@ -28,7 +29,7 @@
   --bg-selected: var(--brand-primary);
   --bg-structure-dark: #0e1013;
   --border: rgba(255, 255, 255, 0.1);
-  --border-focus: var(--accent);
+  --border-focus: color-mix(in oklab, var(--text-primary) 32%, transparent);
   --border-subtle: rgba(255, 255, 255, 0.06);
   --radius-lg: 10px;
   --radius-md: 6px;
@@ -40,7 +41,7 @@
   --text-on-selected: #ffffff;
   --text-on-structure: var(--text-primary);
   --text-primary: #e2e3e3;
-  --text-secondary: #cbcccd;
+  --text-secondary: #a9abaf;
 
   /* Brand and semantic colors */
   --accent: #4a9eff;
@@ -80,7 +81,7 @@
   --sidebar-row-border-width: 2px;
   --text-nav-rail: var(--text-secondary);
   --text-nav-rail-hover: var(--text-primary);
-  --text-nav-selected: var(--text-secondary);
+  --text-nav-selected: var(--text-primary);
 
   /* Controls and actions */
   --border-control: var(--border);
@@ -158,16 +159,16 @@
   --composer-transition: initial;
 
   /* Markdown, code and diagrams */
-  --bg-inline-code: rgba(232, 145, 45, 0.12);
+  --bg-inline-code: rgba(255, 255, 255, 0.06);
   --bg-island: #1e1e22;
   --bg-island-deep: #181b1e;
-  --border-inline-code: 1px solid rgba(232, 145, 45, 0.28);
+  --border-inline-code: 1px solid rgba(255, 255, 255, 0.1);
   --border-island: rgba(255, 255, 255, 0.08);
   --code-block-border-width: 1px;
   --code-block-header-bg: var(--bg-island-deep);
   --inline-code-radius: var(--radius-sm);
   --mermaid-diagram-bg: var(--bg-island);
-  --text-inline-code: #e8912d;
+  --text-inline-code: var(--text-primary);
   --text-island: #d1d2d3;
 
   /* Syntax highlighting */
@@ -216,10 +217,10 @@
   --task-status-in-progress-border: 1px solid rgba(236, 178, 46, 0.4);
   --task-status-in-progress-solid: var(--task-status-in-progress-text);
   --task-status-in-progress-text: #ecb22e;
-  --task-status-in-review-bg: rgba(29, 155, 209, 0.2);
-  --task-status-in-review-border: 1px solid rgba(29, 155, 209, 0.4);
+  --task-status-in-review-bg: color-mix(in srgb, var(--accent) 16%, transparent);
+  --task-status-in-review-border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   --task-status-in-review-solid: var(--task-status-in-review-text);
-  --task-status-in-review-text: #4fbfe0;
+  --task-status-in-review-text: var(--accent);
   --task-status-radius: 9999px;
   --task-status-todo-bg: rgba(171, 171, 173, 0.16);
   --task-status-todo-border: 1px solid rgba(255, 255, 255, 0.1);

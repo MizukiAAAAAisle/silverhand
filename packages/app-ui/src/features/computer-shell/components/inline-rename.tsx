@@ -201,7 +201,7 @@ export function InlineRename({
             // (forza6 = 2px, warm = 1px) so the focus stroke matches the
             // theme's chrome weight.
             className={cn(
-              "h-8 min-w-0 flex-1 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2 leading-tight text-text-primary outline-none focus:border-accent disabled:opacity-60",
+              "h-8 min-w-0 flex-1 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2 leading-tight text-text-primary outline-none focus:border-border-focus disabled:opacity-60",
             )}
           />
           <Button

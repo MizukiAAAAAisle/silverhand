@@ -30,7 +30,7 @@
   --bg-selected: #ffffff;
   --bg-structure-dark: #1b2030;
   --border: rgba(17, 23, 37, 0.11);
-  --border-focus: rgba(17, 23, 37, 0.32);
+  --border-focus: color-mix(in oklab, var(--text-primary) 32%, transparent);
   --border-subtle: rgba(17, 23, 37, 0.07);
   --radius-lg: 14px;
   --radius-md: 10px;

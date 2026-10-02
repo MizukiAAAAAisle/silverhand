@@ -24,10 +24,6 @@
     background-color: var(--message-framed-bg);
   }
 
-  & [data-composer-shell]:focus-within {
-    border-color: var(--accent);
-  }
-
   & [data-tasks-column] {
     background-color: var(--bg-elevated);
     border-color: var(--border);
