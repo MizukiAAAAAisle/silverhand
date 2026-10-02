@@ -394,6 +394,10 @@
 :where([data-layout="compact"]) [data-composer] {
   padding-bottom: max(8px, var(--input-safe-area-bottom, env(safe-area-inset-bottom, 0px)));
 }
+:where([data-layout="compact"]) [data-channel-join-bar] {
+  border-top-width: 0;
+  padding: 8px 16px max(8px, env(safe-area-inset-bottom, 0px));
+}
 :where([data-layout="compact"]) [data-composer-toolbar] {
   padding-bottom: 4px;
 }
