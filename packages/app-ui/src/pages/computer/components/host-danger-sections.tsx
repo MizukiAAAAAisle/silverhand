@@ -63,7 +63,7 @@ export function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Elem
     <HostSection title={computerCopy.refreshCredentialsTitle}>
       <div className="flex flex-col gap-3">
         <p className="text-sm text-text-muted">{computerCopy.refreshCredentialsBody}</p>
-        <div className="flex items-center gap-3">
+        <div data-host-actions className="flex items-center gap-3">
           <Button
             size="sm"
             variant="primary"

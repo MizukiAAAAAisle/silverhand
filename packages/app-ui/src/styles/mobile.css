@@ -367,6 +367,16 @@
   background: none;
 }
 
+/* Computer detail actions stack full-width at touch height, like the
+   destructive actions below them. */
+[data-layout="compact"] [data-host-actions] {
+  flex-direction: column;
+  align-items: stretch;
+}
+[data-layout="compact"] [data-host-actions] > button {
+  height: 44px;
+}
+
 /* Touch-sized sidebar rows. */
 [data-layout="compact"] [data-sidebar] .sidebar-row-border {
   min-height: 40px;

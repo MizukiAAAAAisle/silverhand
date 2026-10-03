@@ -321,7 +321,7 @@ function ConnectionSection({
           />
         ) : null}
 
-        <div className="flex flex-col items-start gap-2">
+        <div data-host-actions className="flex flex-col items-start gap-2">
           <Button
             size="sm"
             variant="primary"
