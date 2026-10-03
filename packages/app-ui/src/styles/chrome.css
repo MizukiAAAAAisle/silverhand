@@ -216,6 +216,15 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   }
 }
 
+/* Narrow rows keep the sender readable: size and the year drop first, and
+   both stay in the row and time tooltips. */
+@container conversation-surface (max-width: 399px) {
+  [data-attachment-row-size],
+  [data-attachment-row-year] {
+    display: none;
+  }
+}
+
 @container conversation-surface (min-width: 620px) {
   [data-members-groups] {
     display: grid;

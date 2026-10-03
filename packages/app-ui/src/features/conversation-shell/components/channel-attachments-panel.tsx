@@ -708,9 +708,9 @@ function AttachmentRow({
             </span>
             <span
               data-attachment-row-meta
-              className="flex min-w-0 items-center gap-2 text-xs text-text-muted"
+              className="flex min-w-0 items-center gap-2 overflow-hidden text-xs text-text-muted"
             >
-              <span data-attachment-row-author className="flex min-w-0 items-center gap-1.5">
+              <span data-attachment-row-author className="flex min-w-4 items-center gap-1.5">
                 <span className="flex shrink-0">
                   <AuthorAvatarView
                     avatar={presentation?.avatar ?? { variant: "neutral-user" }}
@@ -739,7 +739,10 @@ function AttachmentRow({
                 className="flex shrink-0 items-center gap-1"
               >
                 <Clock className="size-3" />
-                {appeared.format("YYYY-MM-DD HH:mm")}
+                <span>
+                  <span data-attachment-row-year>{appeared.format("YYYY-")}</span>
+                  {appeared.format("MM-DD HH:mm")}
+                </span>
               </time>
             </span>
           </span>
