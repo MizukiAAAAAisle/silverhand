@@ -5,6 +5,7 @@ import { RuntimeKindSchema } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { Button } from "@/components/ui/button";
+import { useCompactLayout } from "@/navigation/layout";
 import {
   Dialog,
   DialogContent,
@@ -44,6 +45,7 @@ import { HostSection } from "./host-section";
  */
 export function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Element {
   const rotate = useRotateHostTokenMutation(host.id);
+  const compact = useCompactLayout();
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,7 +67,7 @@ export function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Elem
         <p className="text-sm text-text-muted">{computerCopy.refreshCredentialsBody}</p>
         <div data-host-actions className="flex items-center gap-3">
           <Button
-            size="sm"
+            size={compact ? "md" : "sm"}
             variant="primary"
             className="gap-2"
             onClick={() => void handleRefresh()}

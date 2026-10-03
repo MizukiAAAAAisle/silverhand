@@ -78,6 +78,7 @@ import {
 } from "@/features/session/hooks";
 import { useNav } from "@/router";
 import { Button } from "@/components/ui/button";
+import { useCompactLayout } from "@/navigation/layout";
 import { cn } from "@/lib/cn";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import {
@@ -277,6 +278,7 @@ function ConnectionSection({
 }): JSX.Element {
   const rotate = useRotateConnectTokenMutation(host.id);
   const disconnect = useDisconnectHostMutation(host.id);
+  const compact = useCompactLayout();
   // #task:1428 — the command is assembled locally from this desktop's own
   // connected server URL, never the server-echoed `server_url`.
   const backendInfo = useBackendInfoSnapshot();
@@ -323,7 +325,7 @@ function ConnectionSection({
 
         <div data-host-actions className="flex flex-col items-start gap-2">
           <Button
-            size="sm"
+            size={compact ? "md" : "sm"}
             variant="primary"
             className="gap-2"
             onClick={() => void handleGenerate()}
@@ -339,7 +341,7 @@ function ConnectionSection({
 
           {availability === "available" ? (
             <Button
-              size="sm"
+              size={compact ? "md" : "sm"}
               variant="neutral"
               className="gap-2"
               onClick={() => void handleDisconnect()}
