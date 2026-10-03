@@ -9,7 +9,7 @@ import { cn } from "@/lib/cn";
  * remembering to touch the others — the exact drift this centralises.
  *
  * `variant` is the poster/soft decision, not a look this file owns:
- *  - `poster` wires forza6's `data-field-dropdown` hook, which swaps the soft
+ *  - `poster` wires poster's `data-field-dropdown` hook, which swaps the soft
  *    shadow + 1px border for the theme's ink 2px frame + hard poster shadow
  *    (border-width and radius still come from the element's own tokens). Other
  *    themes have no rule for the hook, so they keep the soft frame below. This

@@ -26,10 +26,10 @@ interface SplitterTrackProps {
  * PAINT. Transparent by default (`--splitter-bg`, neutral fallback
  * `--border-subtle`); hover or active drag tints with `--splitter-hover-bg` — a
  * neutral ink every theme sets (fence-enforced in appearance.test.ts, since
- * forza6 declares it). The `var(--border)` fallback is a neutral safety net: a
+ * poster declares it). The `var(--border)` fallback is a neutral safety net: a
  * divider is a utility signal, so it must never fall back to `--accent` — a
  * saturated accent on a 4px separator reads as "look at this!" and steals the
- * accent budget (v6.9.6 #task:917: forza6's fallback used to map to hot brand
+ * accent budget (v6.9.6 #task:917: poster's fallback used to map to hot brand
  * pink).
  *
  * GEOMETRY (#task:1965 review round 1). The track is a flex item, so without

@@ -136,7 +136,7 @@ export function RegistrationGate({
       <form
         onSubmit={onSubmit}
         // Same dialog identity as the other boot gates — see UpdateRequiredGate
-        // for the per-theme rationale (#task:1833). Not forza6-only: studio-light
+        // for the per-theme rationale (#task:1833). Not poster-only: studio-light
         // also drops the 1px frame by its own `[data-modal-shell]` rule.
         data-auth-form
         data-modal-shell
@@ -159,7 +159,7 @@ export function RegistrationGate({
           // The app's one segmented-control contract (`data-panel-tabs`,
           // surfaces.css panel-radius SSOT) rather than hand-written radii, so
           // this switch and the Schedules FilterTabs stay one widget. The
-          // `hero` value is the density: a modal-level switch earns forza6's
+          // `hero` value is the density: a modal-level switch earns poster's
           // poster weight (2px ink bracket + hard ink shadow); the valueless
           // in-card filter does not (#task:1833).
           <div

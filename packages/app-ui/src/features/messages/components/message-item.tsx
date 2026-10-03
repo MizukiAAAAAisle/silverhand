@@ -744,7 +744,7 @@ function ActorMessageItem({
       className={
         // Row radius routed via `--row-radius` token (#task:912 review
         // round 2). The framed (saved/replying) outer ring picks up
-        // 6px in slack-dark and stays 0 in warm/forza6 — the soft hover
+        // 6px in slack-dark and stays 0 in warm/poster — the soft hover
         // box is invisible at 0 radius anyway, so consistency here is
         // about *framed* presentations.
         //

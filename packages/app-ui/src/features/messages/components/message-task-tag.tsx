@@ -19,7 +19,7 @@ import { useUpdateTaskStatus } from "@/features/tasks/hooks/hooks";
  * scattered). The whole tag is a single button: `<status-icon> #<num> ·
  * <assignee>`, status-coloured via the shared `[data-task-status]` token
  * contract (so it states its status at a glance and matches every other
- * status chip per theme — incl. forza6's poster caps / 0-radius). The status
+ * status chip per theme — incl. poster's poster caps / 0-radius). The status
  * is carried by the leading glyph (from the shared `TASK_STATUS_ICON` source,
  * so it tracks the kanban board) + the fill colour — no redundant status
  * text. For a member of an open channel (`canMutate`), clicking anywhere on the
@@ -66,9 +66,9 @@ export function MessageTaskTag({
           per-conversation Tasks tab use the same), so a future icon swap updates everywhere. */}
       <StatusIcon className="size-3 shrink-0" aria-hidden />
       {/* No `font-mono` on the number — it inherits the chip's typeface, so
-          it matches the `· assignee` next to it (and forza6's
+          it matches the `· assignee` next to it (and poster's
           `[data-task-status]` display face applies to the whole chip rather
-          than to the label alone). Space Mono digits read poorly in forza6
+          than to the label alone). Space Mono digits read poorly in poster
           (@shiki `sLh6CqwNw0uAtThk`, #task:1757). */}
       <span className="shrink-0">#{linkedTask.task_number}</span>
       {assignee ? <span className="min-w-0 truncate font-normal">{assignee}</span> : null}

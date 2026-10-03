@@ -994,7 +994,7 @@ export function ThreadPanel({
                 the SAME kind of element as the panel header's bottom rule (an
                 internal separator between stacked regions of one surface), so it
                 speaks the same language: `border-border-subtle`, the 1px neutral
-                hairline, in every theme — matching `SidePanelHeader`. forza6's
+                hairline, in every theme — matching `SidePanelHeader`. poster's
                 2px poster ink is reserved for FRAME borders (things enclosed on
                 all sides + hard shadow); using it here read as a frame fragment
                 next to the header hairline (#task:1735 shiki feedback). Full-bleed

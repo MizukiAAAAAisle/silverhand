@@ -18,8 +18,8 @@ packages/app-ui/src/
 │   ├── markdown.css                # .markdown-body 正文、行内引用、代码块、mermaid
 │   ├── surfaces.css                # 侧栏动效、panel 几何、焦点轮廓
 │   └── themes/
-│       ├── forza6.css              # :root + [data-theme='forza6']（默认主题，避免 FOUC）
-│       ├── forza6-components.css   # forza6 component 特化层
+│       ├── poster.css              # :root + [data-theme='poster']（默认主题，避免 FOUC）
+│       ├── poster-components.css   # poster component 特化层
 │       ├── studio-light.css        # [data-theme='studio-light']
 │       └── slack-dark.css          # [data-theme='slack-dark']
 ├── features/appearance/
@@ -111,7 +111,7 @@ packages/app-ui/src/
 
 海报 / festival 风格主题族用的一组扩展 token（重压字体、第二 accent、黑色结构层、深底荧光 metadata）。**每个主题都必须显式定义这 6 个 token** —— 单 accent / 无黑结构的主题可以全部退化成现有 sibling（`appearance.test.ts` 锁定）。这是 §3.1 关键规则 3 的硬约束：不显式定义就会从 `:root` 默认主题漏过来，切主题再切回会残留第二 accent / 黑结构条。
 
-> 曾经还有一对 `--bg-pattern-image` / `--bg-pattern-opacity`（frame 层的几何身份纹理，forza6 是唯一填过它的主题）。纹理与槽位都在 #task:1871 退役：`app.tsx` frame 层不再写 `background-image`，三个主题都不再声明它。要再给某个主题加常驻背景纹理，重新引入槽位、别复活旧值。
+> 曾经还有一对 `--bg-pattern-image` / `--bg-pattern-opacity`（frame 层的几何身份纹理，poster 是唯一填过它的主题）。纹理与槽位都在 #task:1871 退役：`app.tsx` frame 层不再写 `background-image`，三个主题都不再声明它。要再给某个主题加常驻背景纹理，重新引入槽位、别复活旧值。
 
 | Token | 含义 | 退化规则（warm/single-accent 主题） |
 |---|---|---|
@@ -180,16 +180,16 @@ packages/app-ui/src/
 | Token | 含义 | 选值原则 |
 |---|---|---|
 | `--bg-control-primary` | 主 CTA 背景 | 独立色值，不复用 `--accent` / `--brand-primary`（那两个另有语义）；深底主题取浅段、亮纸主题取深段，判据是**字色**能不能过 AA |
-| `--bg-control-primary-hover` | hover bg | 浅色主题往暗走一档；**深色主题往亮走**（高程语言：越上层越亮）。forza6 的海报 hook 会把 hover 填充钉回 resting（hover 只揭起），所以那里这个值只作用于未戴 hook 的按钮 |
+| `--bg-control-primary-hover` | hover bg | 浅色主题往暗走一档；**深色主题往亮走**（高程语言：越上层越亮）。poster 的海报 hook 会把 hover 填充钉回 resting（hover 只揭起），所以那里这个值只作用于未戴 hook 的按钮 |
 | `--text-on-control-primary` | 配 bg 的字色 | 跟 bg 一起选，≥4.5:1；写字面值或专属 token，别复用 `--text-on-accent` / `--text-on-brand`（它们还服务别的表面）|
 
-**当前值**：forza6 / slack-dark 共享"主操作 = 牛油果绿"（#task:1623）—— 浅段 `#9CBF5C` + 墨字（forza6 靠 2px 墨框给边界，slack 靠深底）；中段 olive drab 是死区：白字 3.81 不过、墨字 4.50 贴线。**studio-light 例外，CTA 直接吃 `--accent`（深蓝 `#2F5AD0`）**（#task:1656）：绿在那个主题里是 **agent 身份色**，CTA 再吃绿就是一个 hue 两个语义。→ 这个 token 的选值判据是"这个主题里还有哪个 hue 没被别的语义占"，不是"三主题统一"。
+**当前值**：poster / slack-dark 共享"主操作 = 牛油果绿"（#task:1623）—— 浅段 `#9CBF5C` + 墨字（poster 靠 2px 墨框给边界，slack 靠深底）；中段 olive drab 是死区：白字 3.81 不过、墨字 4.50 贴线。**studio-light 例外，CTA 直接吃 `--accent`（深蓝 `#2F5AD0`）**（#task:1656）：绿在那个主题里是 **agent 身份色**，CTA 再吃绿就是一个 hue 两个语义。→ 这个 token 的选值判据是"这个主题里还有哪个 hue 没被别的语义占"，不是"三主题统一"。
 
-**主 CTA 的形状走一个 hook，且它是「一对」**：`primaryAction()` / `primaryCancel()`（`components/common/primary-action.ts`）分别挂 `[data-primary-action='commit'|'cancel']`，consumer 只出 motion + layout，主题在 `[data-theme='...'] [data-primary-action='commit']` 里画 identity（forza6 = 2px 墨框 + 直角 + 硬投影 + hover 揭起）。新增主 CTA 直接消费它，别再造第二份配方。
+**主 CTA 的形状走一个 hook，且它是「一对」**：`primaryAction()` / `primaryCancel()`（`components/common/primary-action.ts`）分别挂 `[data-primary-action='commit'|'cancel']`，consumer 只出 motion + layout，主题在 `[data-theme='...'] [data-primary-action='commit']` 里画 identity（poster = 2px 墨框 + 直角 + 硬投影 + hover 揭起）。新增主 CTA 直接消费它，别再造第二份配方。
 
 Cancel 必须跟着一起换：commit 有框有填充有投影、Cancel 是裸 ghost 时，一个弹窗读起来是「一个按钮 + 一个文字」而不是「一个决定的两个答案」（shiki 2026-07-26）。`primaryCancel()` 出的就是全 app 唯一那份中性 framed surface `CONTROL_SURFACE_BUTTON`，并且**跟 `destructiveCancel()` 共用同一条主题规则** —— Cancel 回答绿色 Create 和红色 Delete 长得一样是刻意的：两个弹窗之间变的是「哪个 commit 在喊」，不是「出口长什么样」。用 `variant="outline"`，`ghost` 没有自己的纸给框落。
 
-**海报动作有三个 rank**：`primaryAction()`（填充 commit）/ `destructiveAction()`（红框）/ `neutralAction()`（墨框中性，`components/common/control-ink-border.ts` → `[data-neutral-action]`）。**可逆的状态变更**（Workspace Settings 的 Archive、Computer 的 Disconnect、Log out）是 neutral：不给填充（填充是 primary 的语义），但要有家族的框 + hover 抬起 + forza6 的墨贴纸。反例就是它们原来的样子 —— 夹在绿贴纸和红贴纸之间、唯一没有框和投影的按钮。
+**海报动作有三个 rank**：`primaryAction()`（填充 commit）/ `destructiveAction()`（红框）/ `neutralAction()`（墨框中性，`components/common/control-ink-border.ts` → `[data-neutral-action]`）。**可逆的状态变更**（Workspace Settings 的 Archive、Computer 的 Disconnect、Log out）是 neutral：不给填充（填充是 primary 的语义），但要有家族的框 + hover 抬起 + poster 的墨贴纸。反例就是它们原来的样子 —— 夹在绿贴纸和红贴纸之间、唯一没有框和投影的按钮。
 
 neutral 按密度分级，不一刀切：输入框旁的图标按钮（Browse、行内编辑的 ✓/✕）和 `h-6` 微型 chip（MCP pane 的 Reload / Check config）**故意保持安静**，给 24px 控件挂海报贴纸是用力过重。判据是「它是独立的一次动作，还是某个输入框 / 密集列表的附件」。`[data-host-action='neutral']` 与 `[data-channel-settings-action]` 是同 rank 的旧别名，渲染一致，碰到那两个 surface 时再并入。
 
@@ -308,7 +308,7 @@ Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `chrome
 | Token | 含义 |
 |---|---|
 | `--radius-sm` / `--radius-md` / `--radius-lg` / `--radius-xl` | 圆角等级 |
-| `--control-border-width` | control 表面（input/button/select/贴纸框）描边宽度 —— forza6 = 2px 海报硬框，软底 = 1px hairline |
+| `--control-border-width` | control 表面（input/button/select/贴纸框）描边宽度 —— poster = 2px 海报硬框，软底 = 1px hairline |
 | `--font-sans` | UI chrome 字体栈 |
 | `--font-serif` | 正文/prose 字体栈（极简主题可让 serif = sans） |
 | `--font-mono` | 等宽字体栈 |
@@ -452,7 +452,7 @@ Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `chrome
 ## 8. 已有参考
 - `packages/app-ui/src/styles/themes/studio-light.css`（冷中性 hairline 范式：accent = action/state、绿 = agent 身份、明度阶梯做层级）
 - `packages/app-ui/src/styles/themes/slack-dark.css`（深色主题范式）
-- `packages/app-ui/src/styles/themes/forza6.css` + `forza6-components.css`（loud-festival 范式；§12）
+- `packages/app-ui/src/styles/themes/poster.css` + `poster-components.css`（loud-festival 范式；§12）
 
 ---
 
@@ -538,20 +538,20 @@ NavRail 项 / channel / DM / session 这种**一级导航 row**，用同一套�
 
 ## 12. Component-skin 架构（token + component skin）
 
-forza6 是首个走"token + component skin"两层的主题，不只是换色。其它主题加新 component-layer specialization 时，可以参考 forza6 的边界与 hook 约定。Token 层见 §3.1.3，本节聚焦 component-layer 的架构原则。
+poster 是首个走"token + component skin"两层的主题，不只是换色。其它主题加新 component-layer specialization 时，可以参考 poster 的边界与 hook 约定。Token 层见 §3.1.3，本节聚焦 component-layer 的架构原则。
 
 ### 12.3 TSX 结构 hook 约定
 
-特化全部走 CSS，TSX 只加 **theme-neutral 结构 hook** —— hook 名描述 DOM 角色，不带 forza6 语义。这样：
+特化全部走 CSS，TSX 只加 **theme-neutral 结构 hook** —— hook 名描述 DOM 角色，不带 poster 语义。这样：
 - 其它主题想做特化时复用同一组 hook
 - TSX review 不会被主题词污染
 - 主题切换不需要改 React 树
 
-**canonical hook 清单以代码为准**：`rg -o 'data-[a-z-]+' packages/app-ui/src/styles/themes/forza6-components.css | sort -u`。
+**canonical hook 清单以代码为准**：`rg -o 'data-[a-z-]+' packages/app-ui/src/styles/themes/poster-components.css | sort -u`。
 
 **禁止用作 hook 的 attr**：
 - 任何 `aria-*`（a11y 是产品契约，不能被 CSS 私吞）
-- 任何含 `forza6` / 主题词的命名
+- 任何含 `poster` / 主题词的命名
 
 ### 12.4 不特化的（设计边界，避免噪声过载）
 
@@ -565,11 +565,11 @@ forza6 是首个走"token + component skin"两层的主题，不只是换色。�
 ### 12.5 关键架构原则
 
 1. **三层 token 模型（L1-raw / L2-semantic / L3-zero-hex）**，三条硬规则，`appearance.test.ts` 锁定：
-   - **L1 — Raw palette（唯一允许 hex 的地方）。** forza6.css 顶部 `--forza6-*` 原始色相块是品牌/festival 色相**唯一**可以写裸 hex 字面量的地方。改一个色相只改这里一处。（`--forza6-syntax-*` / `--forza6-indigo-*` 是 code-island 子系统的 theme-private raw，同属 L1。）冷中性 bg 阶梯和深饱和语义变体不是 festival 品牌色，暂不强制入 raw palette。
-   - **L2 — 语义 token 全走 `var(--forza6-*)` 衍生。** forza6.css 的 `[data-theme='forza6']` **单个** root 块里，每个语义 token（`--brand-primary` / `--accent` / `--bg-row-selected` / `--task-status-*` / `--border-focus`…）的值都是 `var(--forza6-*)` 或其 alpha / `color-mix` 衍生，**不内嵌品牌 hex**。语义 token 名保持区分（per-role alias），值指向同一 raw 但不合并。alpha 形是允许的例外。
-   - **L3 — `forza6-components.css` 0 hex（例外：data-uri / alpha / 几何）。** 组件特化层只读语义 token（必要时读 L1 raw，如 sidebar carrier），**不写品牌 hex 字面量**，也**不再有第二个 root-level token 重定义块** —— root token 的唯一定义点是 forza6.css。例外仅：SVG data-uri 里的 `rgba()`、纯 alpha 叠层、几何尺寸。
+   - **L1 — Raw palette（唯一允许 hex 的地方）。** poster.css 顶部 `--poster-*` 原始色相块是品牌/festival 色相**唯一**可以写裸 hex 字面量的地方。改一个色相只改这里一处。（`--poster-syntax-*` / `--poster-indigo-*` 是 code-island 子系统的 theme-private raw，同属 L1。）冷中性 bg 阶梯和深饱和语义变体不是 festival 品牌色，暂不强制入 raw palette。
+   - **L2 — 语义 token 全走 `var(--poster-*)` 衍生。** poster.css 的 `[data-theme='poster']` **单个** root 块里，每个语义 token（`--brand-primary` / `--accent` / `--bg-row-selected` / `--task-status-*` / `--border-focus`…）的值都是 `var(--poster-*)` 或其 alpha / `color-mix` 衍生，**不内嵌品牌 hex**。语义 token 名保持区分（per-role alias），值指向同一 raw 但不合并。alpha 形是允许的例外。
+   - **L3 — `poster-components.css` 0 hex（例外：data-uri / alpha / 几何）。** 组件特化层只读语义 token（必要时读 L1 raw，如 sidebar carrier），**不写品牌 hex 字面量**，也**不再有第二个 root-level token 重定义块** —— root token 的唯一定义点是 poster.css。例外仅：SVG data-uri 里的 `rgba()`、纯 alpha 叠层、几何尺寸。
 2. **Scoped painting**：Sidebar 在 `aside[data-sidebar]` 内覆盖文字与通用 hover 色；容器背景统一使用 `--bg-base`，导航状态由 `--bg-nav-hover` / `--bg-nav-selected` 控制。
-3. **Specificity > Tailwind utility**：`[data-theme='forza6'] [hook]` selector 是 (0,2,0)，稳赢 Tailwind utility (0,1,0)，不需要 `!important`。
+3. **Specificity > Tailwind utility**：`[data-theme='poster'] [hook]` selector 是 (0,2,0)，稳赢 Tailwind utility (0,1,0)，不需要 `!important`。
 4. **Hover→Selected 硬度递进**：hover（浅 lime + 黑边）→ selected（实心 lime + 黑边 + notch）→ inline（lime sticker 方角）→ send（magenta sticker + display caps）→ status badge → `#` 大号 magenta。每一档比上一档"更硬"。
 5. **Status 配色阶梯**：todo 中性黑边 / in_progress HUD live cyan / in_review 高注意 magenta / done passed muted green。lime 不进工作流状态色（避免和 done/pass 撞语义）。
 6. **WCAG 必须不让步**：任何"主观感觉应该换色"的提议先算对比度。
@@ -578,14 +578,14 @@ forza6 是首个走"token + component skin"两层的主题，不只是换色。�
 
 - `pnpm --filter @silverhand/desktop typecheck`
 - `pnpm --filter @silverhand/desktop test`（跑 appearance.test.ts 的主题结构守卫）
-- 切到 forza6 → 切回 studio-light 的来回测试，无 token 残留
+- 切到 poster → 切回 studio-light 的来回测试，无 token 残留
 - 颜色对比度走 WCAG 2.1 AA / AAA
 
 ### 12.7 可复用模式
 
-从 forza6 特化中沉淀的五个跨主题可复用配方（当作设计规则用，具体 CSS 值以主题 CSS 为准）。
+从 poster 特化中沉淀的五个跨主题可复用配方（当作设计规则用，具体 CSS 值以主题 CSS 为准）。
 
-**(1) Sticker primitive（`[data-sticker]`，#task:1913）**。曾经每个 call site 手抄的"高识别度小标"配方已抽成一个参数化 primitive：consumer 挂 `data-sticker`（+ 可选 `data-sticker-tone`），forza6 在 `[data-theme='forza6'] [data-sticker]` 里统一画 **shape + colour** 两件曾被手抄的事，别的主题整体忽略这个 hook、保留自己的 JSX base class。
+**(1) Sticker primitive（`[data-sticker]`，#task:1913）**。曾经每个 call site 手抄的"高识别度小标"配方已抽成一个参数化 primitive：consumer 挂 `data-sticker`（+ 可选 `data-sticker-tone`），poster 在 `[data-theme='poster'] [data-sticker]` 里统一画 **shape + colour** 两件曾被手抄的事，别的主题整体忽略这个 hook、保留自己的 JSX base class。
 - **shape 轴**：`data-sticker-size`（sm=1px 边/1px 影、默认 1.5px、lg=`--control-border-width`/2px）；`data-sticker-flat`（去 rest 阴影，抬起留给 hero/peel）；`data-sticker-no-frame`（去边框）。
 - **tone map**：`data-sticker-tone` = `channel`（黄/ink）· `task`（gold/ink）· `host`（deep-teal/paper）· `workspace`（ink/paper），一次改 hue 即跨语义复用。
 - **fill 与 frame 分两个槽**是关键：`--sticker-frame` 默认 ink，是旧规则唯一被 fill 污染的槽 —— 拆开后 fill 本身就是 ink（workspace）或对 ink 对比不足（host）的贴纸能靠 `data-sticker-no-frame` 去边而不丢 fill。
@@ -598,7 +598,7 @@ forza6 是首个走"token + component skin"两层的主题，不只是换色。�
 **(4) 焦点契约（硬规则）**：
 - **utility 状态绝不用饱和 hue**。focus / hover / splitter / row-hover / control-hover / 焦点框都是 utility → 走中性 ink 词汇（`--border-focus`）。`--border-focus` **钉死在 token 层，不准在 component 层重定义**（appearance test 锁）。
 - **例外：brand-anchored 主舞台**。composer 这种用户核心 anchor 的 focus 是 brand identity 高光，保留品牌色 —— 用 element-scoped `:focus-within` 覆盖，不动全局 token。判断标准：是不是"主舞台"？是→brand focus；否（一般 input/select/button）→ink focus。
-- **focus 用 `outline` 不用 ring（#task:1920，app-wide）**。Tailwind ring 是 `box-shadow`，会被 forza6 海报贴纸的硬投影（及 `box-shadow:none` 楔子）吃掉；`outline` 是独立属性、免疫，且天然融进 forza6 的贴纸-focus 语言。机制：per-control opt-in 的 `.focus-outline` / `.focus-outline-within` 工具类 → `outline: 2px solid var(--border-focus)` + `outline-offset: 2px`（不是全局 `:focus-visible`，否则 menu item / link / input 全被描框）。emphasis 色 focus（task jump / drop target）走 `.focus-outline-accent`（吃 `--accent`）。**文本输入框刻意例外**：仍走 `--border-focus` 的 border-color 交换（无 layout shift、对已有边框的控件更轻）。颜色一律骑 `--border-focus`（forza6 ink / slack-dark 蓝 / studio ink）。
+- **focus 用 `outline` 不用 ring（#task:1920，app-wide）**。Tailwind ring 是 `box-shadow`，会被 poster 海报贴纸的硬投影（及 `box-shadow:none` 楔子）吃掉；`outline` 是独立属性、免疫，且天然融进 poster 的贴纸-focus 语言。机制：per-control opt-in 的 `.focus-outline` / `.focus-outline-within` 工具类 → `outline: 2px solid var(--border-focus)` + `outline-offset: 2px`（不是全局 `:focus-visible`，否则 menu item / link / input 全被描框）。emphasis 色 focus（task jump / drop target）走 `.focus-outline-accent`（吃 `--accent`）。**文本输入框刻意例外**：仍走 `--border-focus` 的 border-color 交换（无 layout shift、对已有边框的控件更轻）。颜色一律骑 `--border-focus`（poster ink / slack-dark 蓝 / studio ink）。
 - **hover→focus 不能跨色族**。同一控件 hover 一色 + focus 另一色族 = click 瞬间色彩跳跃。复合 hover-border token 让 hover/focus 跨主题各自同族。
 
 **(5) 在线状态点（presence dot）**：复用 app 既有 active 点色 `--success`（与 WORKSPACES 活跃点同款）。presence/online=绿是 app 既定约定，新做 presence 指示直接复用，**不算违反"饱和 hue 独占语义"**。批量数据用 `useAgentsPresence`（`useQueries` 拉 N 个 `/runtime-state`，共享 `useAgentRuntimeState` 的 query key + 节奏）。

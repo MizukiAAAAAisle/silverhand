@@ -83,7 +83,7 @@ export function AuthorAvatarView({
  *  container makes it a discrete token that's distinguishable from flowing meta
  *  without raising its loudness. Deliberately flat — one neutral fill, no border
  *  and no shadow (utility/state stays in the ink vocabulary). Its corner radius
- *  rides the per-theme `--chip-radius` token (forza6 hard-cuts to 0, the hairline
+ *  rides the per-theme `--chip-radius` token (poster hard-cuts to 0, the hairline
  *  themes round to 4px) so the chip speaks each theme's shape language instead of
  *  a hardcoded `rounded` that split across them (shiki 2026-08-03). The ONE
  *  deleted-state visual, shared by every surface that shows a text author name

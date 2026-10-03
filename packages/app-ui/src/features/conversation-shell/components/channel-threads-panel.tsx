@@ -363,7 +363,7 @@ function ThreadRow({
             ) : null}
             <span className="text-xs font-medium text-text-secondary">{replyLabel}</span>
             {/* Unread hint rides right after the reply count (not right-aligned):
-                followed → filled count sticker, unfollowed → soft dot. forza6
+                followed → filled count sticker, unfollowed → soft dot. poster
                 squares both via data-thread-unread. */}
             {hasUnread ? (
               summary.viewer_following ? (

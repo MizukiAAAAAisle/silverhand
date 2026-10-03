@@ -161,7 +161,7 @@ function FullBrowser({
 }: LayoutBrowserProps): JSX.Element {
   return (
     <div
-      // Routed through `--card-radius` so warm/forza6 stay 0 (poster
+      // Routed through `--card-radius` so warm/poster stay 0 (poster
       // hard-cut) and slack-dark gets 8px. #task:912 review round 6.
       className="flex h-full min-h-0 overflow-hidden rounded-(--card-radius) border border-border-subtle bg-bg-floating"
     >
@@ -400,7 +400,7 @@ function TreeRow({
         type="button"
         onClick={() => onToggle(node.path)}
         className={cn(
-          // Row vocabulary — picks up theme `--row-radius` (warm/forza6 = 0 for
+          // Row vocabulary — picks up theme `--row-radius` (warm/poster = 0 for
           // scan-line, slack-dark = 6px for Slack-style soft list rows).
           // #task:912 review round 4.
           "flex w-full items-center gap-1.5 rounded-(--row-radius) py-1 pr-2 text-left text-text-secondary hover:bg-bg-hover",

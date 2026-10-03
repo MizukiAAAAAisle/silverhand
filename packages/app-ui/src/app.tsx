@@ -134,7 +134,7 @@ export function App({
       />
     );
   }
-  // slack-dark is our only dark theme; studio-light / forza6 are light. sonner
+  // slack-dark is our only dark theme; studio-light / poster are light. sonner
   // then picks the matching default scale for the parts our token overrides in
   // chrome.css don't cover (e.g. any action/close button greys).
   return (
@@ -317,7 +317,7 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
 
         {/* Toast surface follows the active theme: `theme` picks sonner's
          * light/dark default scale, and chrome.css maps its fill / text /
-         * border / radius onto our tokens (forza6 gets the ink frame). No
+         * border / radius onto our tokens (poster gets the ink frame). No
          * `richColors` — that paints the whole toast in sonner's own hue
          * palette; instead the surface stays neutral and the type icon carries
          * the semantic, matching AppStatusBanner. Icons come from the shared

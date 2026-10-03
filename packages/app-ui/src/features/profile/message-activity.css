@@ -15,8 +15,8 @@
   --profile-week-count: 54;
 }
 
-[data-theme="forza6"] [data-profile-layout],
-[data-theme="forza6"] [data-profile-host]:has([data-profile-layout]) {
+[data-theme="poster"] [data-profile-layout],
+[data-theme="poster"] [data-profile-host]:has([data-profile-layout]) {
   --profile-section-border: 2px;
 }
 
@@ -146,6 +146,6 @@
   margin-left: 4px;
 }
 
-[data-theme="forza6"] .message-activity-cell:hover {
-  box-shadow: var(--forza6-poster-shadow);
+[data-theme="poster"] .message-activity-cell:hover {
+  box-shadow: var(--poster-shadow);
 }

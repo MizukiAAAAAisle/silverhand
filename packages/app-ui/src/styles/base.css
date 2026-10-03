@@ -90,9 +90,9 @@ body,
   --text-muted: color-mix(in srgb, var(--text-on-selected) 80%, transparent);
 }
 
-/* Header trailing controls read as a button group, not loose glyphs. forza6
+/* Header trailing controls read as a button group, not loose glyphs. poster
    frames them through its own sticker recipe. */
-:root:not([data-theme="forza6"]) [data-channel-actions] > button {
+:root:not([data-theme="poster"]) [data-channel-actions] > button {
   border: 1px solid var(--border);
 }
 

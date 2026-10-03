@@ -36,7 +36,7 @@ import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
  *
  * v1 UI scope = GLOBAL: one list spanning every workspace. Each row is a LIST
  * CARD in the Saved-item visual language — NOT an alert feed: no left icon box,
- * no left salience rail, items spaced apart, themed border, forza6 poster hover
+ * no left salience rail, items spaced apart, themed border, poster hover
  * via the shared `data-collection-card` hook. Salience is carried by the two sections
  * (Requires attention / Subscribed), not by a per-row border. Location reads
  * through real identity icons on the where-line.
@@ -50,7 +50,7 @@ import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
  *     has no such coordinate to draw, and one is never fabricated). The icons are
  *     the canonical identity primitives (`WorkspaceIcon`; `Hash` with the
  *     `data-channel-icon` theme hook; `AuthorAvatarView` for a counterpart), NOT
- *     raw glyphs — so forza6 paints them as its `W`/`#` posters instead of
+ *     raw glyphs — so poster paints them as its `W`/`#` posters instead of
  *     generic lucide shapes. The old "Channel/mention/Thread" text label is
  *     dropped: real icons + the thread glyph (row 2) + the sender (row 3) carry
  *     that signal now.
@@ -661,7 +661,7 @@ function ActivityRow({
   return (
     <li>
       {/* List card in the Saved-item language: themed border + bg-floating
-          ground + `--row-radius`; forza6 repaints it as a 0-radius poster with
+          ground + `--row-radius`; poster repaints it as a 0-radius poster with
           ink-border + drop-shadow + lift hover via the shared `data-collection-card`
           hook (no per-row left rail). A row hover is a utility signal → ink
           border, never the brand hue. */}
@@ -682,7 +682,7 @@ function ActivityRow({
               icon + name then `#` + title; a pair draws the counterpart's face +
               name and no workspace segment. Canonical identity primitives (themed
               `WorkspaceIcon`, `data-channel-icon` `#`, `AuthorAvatarView`) replace
-              the old type text label; forza6 repaints them as its posters. Segments
+              the old type text label; poster repaints them as its posters. Segments
               self-delimit by identity glyph + `gap` — no `·` middot. */}
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-text-muted">
             {location.workspace ? (

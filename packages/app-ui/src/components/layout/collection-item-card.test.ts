@@ -50,7 +50,7 @@ const CONSUMERS = [
 ] as const;
 
 const THEME_CSS = [
-  "../../styles/themes/forza6-components.css",
+  "../../styles/themes/poster-components.css",
   "../../styles/themes/slack-dark.css",
   "../../styles/themes/studio-light.css",
   "../../styles/themes/iris.css",
@@ -92,7 +92,7 @@ describe("collection-item-card — one shell, one marker, no drift", () => {
   it("frame SSOT never falls back to a hardcoded framework default", () => {
     // The frame must ride the theme token clusters, never raw `rounded-md` /
     // bare `border` (1px). Failure mode if this regresses: the shell splits
-    // across themes — forza6 (radius 0) vs warm/slack (radius 6px) render
+    // across themes — poster (radius 0) vs warm/slack (radius 6px) render
     // differently because a hardcoded default bypasses the semantic token layer.
     // We assert the NEGATIVE (no hardcoded default), not which exact token is
     // used — the token value itself is a visual concern.

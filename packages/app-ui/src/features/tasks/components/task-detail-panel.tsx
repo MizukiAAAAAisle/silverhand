@@ -129,7 +129,7 @@ export function TaskDetailPanel({
     >
       {/* The shared side-panel header, same primitive (and same title/subtitle
           idiom) the agent / thread / attachments panes use — so the close ✕ is
-          the ONE `data-sticker-close` affordance forza6 stamps as a poster
+          the ONE `data-sticker-close` affordance poster stamps as a poster
           sticker, and the `h-12` height contract can't drift. Mirrors the
           attachments pane exactly: a static section label as the title, the
           entity's identity as the subtitle. */}

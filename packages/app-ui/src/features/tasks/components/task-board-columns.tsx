@@ -200,7 +200,7 @@ function KanbanColumn({
   cardClassName: string;
 }): JSX.Element {
   // Drag-over affordance (#task:779). Any task drag entering the column arms it
-  // (accent edge + soft wash, painted in forza6-components.css off
+  // (accent edge + soft wash, painted in poster-components.css off
   // `[data-drop-target]`) and shows a "Drop here" slot. The source column is
   // not special-cased — its own drop is a no-op (below), so it still highlights.
   const [dragOver, setDragOver] = useState(false);

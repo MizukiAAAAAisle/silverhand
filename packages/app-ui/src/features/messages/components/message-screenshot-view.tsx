@@ -114,7 +114,7 @@ export function MessageScreenshotView({
           {/* Every conversation header carries the channel `#` — channel and DM
               alike (matching the live header, #task:1179). No branch: a
               channel-like conversation always earns it (#task:1373). Painted per
-              theme via `[data-conversation-hash-icon]` (forza6 = poster
+              theme via `[data-conversation-hash-icon]` (poster = poster
               sticker). */}
           <span
             data-conversation-title

@@ -31,7 +31,7 @@ export function SidePanelHeader({
   /** Extra trailing controls rendered before the close button (search, follow,
    *  view-in-channel…). When present they + the close button sit in the
    *  `data-channel-actions` layout cluster, matching the channel header; each
-   *  control carries its own forza6 `data-sticker` hook. */
+   *  control carries its own poster `data-sticker` hook. */
   actions?: React.ReactNode;
   onBack?: () => void;
   onClose?: () => void;
@@ -58,7 +58,7 @@ export function SidePanelHeader({
       {children}
       {actions ? (
         // `data-channel-actions` lays the trailing controls out only; each
-        // button declares its own forza6 sticker axes.
+        // button declares its own poster sticker axes.
         <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1.5">
           {actions}
           {closeButton}

@@ -9,10 +9,10 @@ import { Button } from "@/components/ui/button";
  *
  *  - Save is the app-wide primary CTA (`variant="primary"`) plus an ink
  *    border of its own (`--control-border-width` + `border-border-focus`),
- *    so outside forza6 the inline Save reads as a bordered solid fill; in
- *    forza6 the theme sticker frame supersedes it.
+ *    so outside poster the inline Save reads as a bordered solid fill; in
+ *    poster the theme sticker frame supersedes it.
  *  - Cancel is `variant="cancel"` — the pair's neutral framed surface, whose
- *    frame + control-hover pair (and forza6 ink sticker shadow) match Save.
+ *    frame + control-hover pair (and poster ink sticker shadow) match Save.
  */
 
 const EDIT_BUTTON_BORDER = "border-[length:var(--control-border-width)] border-border-focus";

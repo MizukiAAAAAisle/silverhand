@@ -40,7 +40,7 @@ import {
  *    is just the input. It is NOT a portal/Radix layer: consumers mount this
  *    inside a Radix Popover, and a nested dismissable layer would let a click
  *    in the inner list dismiss the outer popover. Staying in the same layer
- *    also keeps the input focused while the list is open. In forza6 the panel
+ *    also keeps the input focused while the list is open. In poster the panel
  *    wears the poster ink frame via `dropdownPanelProps`.
  *  - `inline`: the list is always visible below the input, a frameless scroll
  *    region inside a host popover that already supplies the frame — used where

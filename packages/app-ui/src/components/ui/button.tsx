@@ -11,17 +11,17 @@ import { CONTROL_HOVER_LIFT, CONTROL_INK_BORDER } from "@/components/common/cont
  * variant carries its own hover transition (the base row omits it so the fuller
  * `translate,box-shadow` tuple is not fighting a `transition-colors` from base),
  * and tags itself with `data-button-action` so a theme can finish the sticker
- * (see forza6-components.css). Layout stays on `className`.
+ * (see poster-components.css). Layout stays on `className`.
  *
  * The three action treatments a theme paints:
  *  - `primary`  — the filled commit (Save / Create).
  *  - `destructive` / `destructive-outline` — the delete rank. Solid `danger`
  *    fill for a dialog footer where the delete IS the primary; red-on-paper
  *    frame for a settings / inline delete whose page already has a primary and
- *    must not gain a second shout. In forza6 both are the same red poster.
+ *    must not gain a second shout. In poster both are the same red poster.
  *  - `cancel` / `neutral` — the ink-framed surface. `cancel` answers a commit
  *    (hover changes the frame only); `neutral` is a reversible action like
- *    Archive (hover also fills). Both are the same forza6 ink poster.
+ *    Archive (hover also fills). Both are the same poster ink poster.
  */
 const SURFACE_BASE = `${CONTROL_INK_BORDER} bg-bg-floating text-text-primary ${CONTROL_HOVER_LIFT} hover:border-[color:var(--border-control-hover)]`;
 
@@ -60,7 +60,7 @@ const buttonVariants = cva(
 
 /** The `data-button-action` a theme keys its sticker off. `primary` and the two
  *  destructive ranks and the two surface ranks collapse to three groups because
- *  that is how many treatments forza6 paints. */
+ *  that is how many treatments poster paints. */
 function actionHook(variant: ButtonProps["variant"]): string | undefined {
   switch (variant) {
     case "primary":

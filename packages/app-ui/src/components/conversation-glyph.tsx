@@ -18,7 +18,7 @@ export interface ConversationGlyphProps {
  * sticker hook for such a row, so no call-site hand-writes it (#task:1438).
  *
  * Both branches wear the sticker treatment: the roster frames every row the
- * same way and forza6 currently keys that off `data-channel-icon` for both `#`
+ * same way and poster currently keys that off `data-channel-icon` for both `#`
  * and `@` (there is no separate DM sticker hook). Owning the hook here keeps
  * that identity painting centralized — if a distinct DM sticker is ever wanted,
  * it changes in one spot rather than at the call-site. Visuals are unchanged

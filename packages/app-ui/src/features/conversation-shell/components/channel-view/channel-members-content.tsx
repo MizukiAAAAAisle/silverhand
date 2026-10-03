@@ -274,7 +274,7 @@ export function ChannelMembersContent({
             </span>
             {isSelf ? (
               // Radius comes from the chip token, not a literal — `--chip-radius`
-              // is 0 in forza6 (hard-cut poster geometry) and 4px in the warm
+              // is 0 in poster (hard-cut poster geometry) and 4px in the warm
               // themes, the same token the row above already consumes.
               <span className="shrink-0 rounded-(--chip-radius) border border-border-subtle px-1 text-(length:--text-badge) text-text-muted">
                 you

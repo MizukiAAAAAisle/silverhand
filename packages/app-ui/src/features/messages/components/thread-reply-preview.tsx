@@ -160,12 +160,12 @@ export function ThreadReplyPreview({
         // (shiki 2026-07-31) — one layer only: the fill REPLACED the hairline
         // rule that used to do this job rather than stacking on top of it, and
         // there is no border / shadow / accent here. `--thread-preview-bg` /
-        // `-hover` are the block's own pair (forza6 sets them lighter than the
+        // `-hover` are the block's own pair (poster sets them lighter than the
         // chip: this wash covers a full-width multi-line area, where chip
         // strength reads as a second card; the other two themes point them
         // BACK at the chip fill, which is what keeps badge and lines reading as
-        // one shape there). All three themes declare the pair — `forza6.css`
-        // owns `:root`, so an omitted token inherits forza6's value instead of
+        // one shape there). All three themes declare the pair — `poster.css`
+        // owns `:root`, so an omitted token inherits poster's value instead of
         // reaching the fallback below.
         "bg-(--thread-preview-bg,var(--chip-bg)) hover:bg-(--thread-preview-bg-hover,var(--chip-bg-hover)) " +
         (alignRight ? "items-end" : "items-start")
@@ -190,7 +190,7 @@ export function ThreadReplyPreview({
           // token — a literal neutral faded toward each theme's ground, chosen
           // to stay at WCAG AA for normal text (this is 12px prose a reader
           // actually reads, not decoration). Every theme DECLARES it —
-          // `forza6.css` owns `:root`, so the `var(…, var(--text-muted))`
+          // `poster.css` owns `:root`, so the `var(…, var(--text-muted))`
           // fallback here only covers a theme that does not exist yet. The ink
           // lifts on a hover ANYWHERE in the block (`group-hover`), not only
           // over the lines: one target, one response.

@@ -200,7 +200,7 @@ export function SelectionQuoteToolbar({
       // frameless call in #task:1959: over a message stream the lift alone did not
       // separate the bubble from the prose behind it. Border + radius come from
       // the `--floating-border` / `--floating-radius` contract in chrome.css, the
-      // same one menus and info cards read, so each theme paints it once (forza6 →
+      // same one menus and info cards read, so each theme paints it once (poster →
       // 2px ink, the hairline themes → 1px subtle) and nothing is hardcoded here.
       data-popover-frame="toolbar"
       className="z-(--z-popover) flex items-center gap-0.5 rounded-(--floating-radius,var(--radius-md)) bg-bg-floating p-0.5 text-xs text-text-primary shadow-popover"
@@ -237,8 +237,8 @@ function SelectionQuoteButton({
       // `--control-radius`. The container is `rounded-[--floating-radius]` +
       // `p-0.5` (2px); with the frame back (#task:2114) the exact term is padding
       // + border width, but the border has no width-only token and the residual is
-      // 1px on a `--radius-md` corner in the hairline themes only — forza6 clamps
-      // to 0 either way. Clamped at 0 so forza6's hard corners
+      // 1px on a `--radius-md` corner in the hairline themes only — poster clamps
+      // to 0 either way. Clamped at 0 so poster's hard corners
       // (`--floating-radius: 0`) never go negative. Keep the `2px` in sync with
       // the container's `p-0.5` if that padding changes.
       className="inline-flex items-center gap-1 rounded-[max(0px,calc(var(--floating-radius,var(--radius-md))-2px))] px-2 py-0.5 font-medium text-text-primary transition-colors hover:bg-(--bg-hover) focus-outline"

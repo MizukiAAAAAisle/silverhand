@@ -171,12 +171,12 @@ describe("TaskFilterBar — trigger glyphs stay height-uniform (#task:1437)", ()
 
   it("channel trigger uses the sticker `#` identity hook (#task:1441)", () => {
     // #task:1437 originally kept the channel trigger on the UTILITY `#` (no
-    // `data-channel-icon` hook) so the forza6 sticker recipe couldn't inflate
+    // `data-channel-icon` hook) so the poster sticker recipe couldn't inflate
     // it past its 14px siblings. #task:1441 SUPERSEDES that: now that the
-    // forza6 `#` sticker is FLAT at rest (no drop-shadow), shiki wants the
+    // poster `#` sticker is FLAT at rest (no drop-shadow), shiki wants the
     // selected-label `#` to carry the same yellow poster identity as the
     // dropdown rows + the rest of the app — so the trigger DOES wear the hook.
-    // (The slight forza6 border/padding inflation is CSS-only, out of SSR
+    // (The slight poster border/padding inflation is CSS-only, out of SSR
     // scope, and an accepted trade-off for identity consistency.)
     const html = renderBar();
     expect(html).toContain('aria-label="Channel"');

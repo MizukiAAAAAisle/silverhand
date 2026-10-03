@@ -17,7 +17,7 @@ export const TONE_BANNER_CLASS: Record<HostStatusTone, string> = {
  * Section primitive for this surface. shiki #task:1360 redesign: the
  * previous version wrapped each section's body in a solid white card
  * (`data-panel-card="profile-section"` border + `bg-bg-floating` tile +
- * `p-4` + hover border, amplified to a 2px frame in forza6). Multiple
+ * `p-4` + hover border, amplified to a 2px frame in poster). Multiple
  * equal-weight boxes read as "obvious boxes" and diluted the hierarchy —
  * the loudness budget went to containers instead of content.
  *

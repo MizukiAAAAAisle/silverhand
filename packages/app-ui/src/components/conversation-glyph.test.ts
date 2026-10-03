@@ -7,7 +7,7 @@ import { ConversationGlyph } from "./conversation-glyph";
 // Closes the last hand-written `data-channel-icon` hook (the AgentActivityPane
 // #/@ roster). The hook is now owned by this primitive, not a call-site
 // (#task:1438). Both kinds keep the roster's sticker treatment — dropping the
-// DM `@`'s chip would be a forza6 visual change, out of scope.
+// DM `@`'s chip would be a poster visual change, out of scope.
 
 describe("ConversationGlyph — roster #/@ owns the sticker hook (#task:1438)", () => {
   it("channel renders `#` with the canonical sticker hook", () => {
@@ -15,7 +15,7 @@ describe("ConversationGlyph — roster #/@ owns the sticker hook (#task:1438)", 
     expect(html).toContain("data-channel-icon");
   });
 
-  it("dm renders `@` and KEEPS the sticker hook (forza6 roster unchanged)", () => {
+  it("dm renders `@` and KEEPS the sticker hook (poster roster unchanged)", () => {
     const html = renderToStaticMarkup(React.createElement(ConversationGlyph, { kind: "dm" }));
     expect(html).toContain("data-channel-icon");
   });

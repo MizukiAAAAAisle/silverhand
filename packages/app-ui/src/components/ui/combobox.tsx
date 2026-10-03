@@ -16,7 +16,7 @@ import { dropdownPanelProps } from "./dropdown-panel";
  *
  * Styling consumes the same per-theme control tokens as `filter-select.tsx`
  * (`--control-radius`, `--control-border-width`, `--select-*`) so it inherits
- * forza6's square/hard-edged look without a bespoke visual language.
+ * poster's square/hard-edged look without a bespoke visual language.
  *
  * Focus discipline: the popover never steals focus from the input
  * (`onOpenAutoFocus` prevented); suggestion rows `preventDefault` on

@@ -35,7 +35,7 @@ import { ComputerStatusSkeleton } from "./computer-skeletons";
  *                   the detail pane (shiki dogfood `CEq57Kisu3w2d-Pl`).
  *
  * `HostSection` is a local primitive — solid `bg-bg-floating` white
- * tile with `border-radius: var(--floating-radius)` (forza6 = 0,
+ * tile with `border-radius: var(--floating-radius)` (poster = 0,
  * warm = `var(--radius-md)`) so the corners follow the theme's
  * floating-panel geometry. We deliberately do NOT reuse the shared
  * `ProfileSection` (which uses `bg-bg-floating/50`); shiki asked for
@@ -535,7 +535,7 @@ function SystemSection({
 
           v6.9 (#task:917, shiki computer-pane review): wrap the `<dl>`
           in `data-host-system-list` and each value column in `data-
-          host-system-value` so forza6 can paint label-column HUD caps
+          host-system-value` so poster can paint label-column HUD caps
           + tabular spacing without leaking theme code into the base
           structure. Base styling stays plain; ID/version/PID/uptime
           values pick up `tabular-nums` here so digits line up across
@@ -718,11 +718,11 @@ function RegisteredAgentsSection({
  * **Border / radius / hover** (shiki dogfood `DXVl5tEBshVT2LqF` #1):
  * uses plain theme tokens — `border-border-subtle` at rest,
  * transitions to `border-text-primary` on hover — with width driven
- * by `var(--control-border-width)` (forza6 = 2px, warm = 1px) so the
+ * by `var(--control-border-width)` (poster = 2px, warm = 1px) so the
  * card chrome matches the theme's stroke weight. Radius is NOT forced
- * here: forza6 wants 0 (poster aesthetic) and the browser default is
+ * here: poster wants 0 (poster aesthetic) and the browser default is
  * 0, which is what we get without inline radius styling. The previous
- * `var(--card-radius)` (forza6 = 6px) was wrong — shiki only asked
+ * `var(--card-radius)` (poster = 6px) was wrong — shiki only asked
  * for a color change, not a corner change.
  *
  * **Click**: the whole card is a button that navigates to

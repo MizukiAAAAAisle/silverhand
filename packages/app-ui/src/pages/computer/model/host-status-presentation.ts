@@ -29,7 +29,7 @@
  * Tone keys are the shared status palette (`accent` / `success` /
  * `muted` / `warning` / `error`) so the same Tailwind utilities
  * (`text-success` etc.) work in every status surface, and theme
- * tokens (studio-light.css / forza6.css) need no new definitions.
+ * tokens (studio-light.css / poster.css) need no new definitions.
  */
 import type {
   HostAdmissionFailure,

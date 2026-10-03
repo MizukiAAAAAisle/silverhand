@@ -22,29 +22,29 @@ class StyleStub {
 
 describe("parseAppearance", () => {
   it("keeps the legacy theme-only shape", () => {
-    expect(parseAppearance({ theme: "forza6" })).toEqual({
-      theme: "forza6",
+    expect(parseAppearance({ theme: "poster" })).toEqual({
+      theme: "poster",
     });
   });
 
   it("falls back to the current default theme when input is missing or bad", () => {
-    expect(parseAppearance(null)).toEqual({ theme: "forza6" });
-    expect(parseAppearanceJson("{bad json")).toEqual({ theme: "forza6" });
+    expect(parseAppearance(null)).toEqual({ theme: "poster" });
+    expect(parseAppearanceJson("{bad json")).toEqual({ theme: "poster" });
     expect(parseAppearance({ theme: "unknown" })).toEqual({
-      theme: "forza6",
+      theme: "poster",
     });
   });
 
   it("normalizes shared font size and trims font families", () => {
     expect(
       parseAppearance({
-        theme: "forza6",
+        theme: "poster",
         fontSize: 100,
         prose: { fontFamily: "  Georgia, serif  " },
         code: { fontFamily: "   " },
       }),
     ).toEqual({
-      theme: "forza6",
+      theme: "poster",
       // Clamped to FONT_SIZE_MAX.
       fontSize: 22,
       prose: { fontFamily: "Georgia, serif" },
@@ -102,7 +102,7 @@ describe("applyAppearanceOverrides", () => {
 
   it("removes markdown override tokens when settings reset", () => {
     const style = new StyleStub();
-    applyAppearanceOverrides(style, { theme: "forza6" });
+    applyAppearanceOverrides(style, { theme: "poster" });
 
     expect(style.removed).toEqual([
       APPEARANCE_TOKENS.PROSE_FONT,
@@ -118,12 +118,12 @@ describe("theme markdown token cascade contract", () => {
     new URL("../../styles/themes/studio-light.css", import.meta.url),
     "utf8",
   );
-  const forza6Css = readFileSync(
-    new URL("../../styles/themes/forza6.css", import.meta.url),
+  const posterCss = readFileSync(
+    new URL("../../styles/themes/poster.css", import.meta.url),
     "utf8",
   );
-  const forza6ComponentsCss = readFileSync(
-    new URL("../../styles/themes/forza6-components.css", import.meta.url),
+  const posterComponentsCss = readFileSync(
+    new URL("../../styles/themes/poster-components.css", import.meta.url),
     "utf8",
   );
   const slackDarkCss = readFileSync(
@@ -141,40 +141,40 @@ describe("theme markdown token cascade contract", () => {
     const order = [...globalCss.matchAll(/@import ['"]\.\/themes\/([^'"]+)['"];/g)].map(
       (m) => m[1],
     );
-    const forzaIdx = order.indexOf("forza6.css");
-    expect(forzaIdx).toBeGreaterThanOrEqual(0);
+    const posterIdx = order.indexOf("poster.css");
+    expect(posterIdx).toBeGreaterThanOrEqual(0);
     for (const override of ["studio-light.css", "slack-dark.css", "iris.css"]) {
-      expect(order.indexOf(override)).toBeGreaterThan(forzaIdx);
+      expect(order.indexOf(override)).toBeGreaterThan(posterIdx);
     }
   });
 
   it("keeps :root only on the default theme", () => {
-    // Whitespace-insensitive: the default theme owns a `:root, [data-theme='forza6']`
+    // Whitespace-insensitive: the default theme owns a `:root, [data-theme='poster']`
     // block. Match the selector pair structurally so this guard doesn't itself
     // relock the exact newline/spacing formatting.
-    expect(forza6Css).toMatch(/:root\s*,\s*\[data-theme=['"]forza6['"]\]/);
+    expect(posterCss).toMatch(/:root\s*,\s*\[data-theme=['"]poster['"]\]/);
     expect(studioLightCss).not.toContain(":root");
     expect(slackDarkCss).not.toContain(":root");
     expect(irisCss).not.toContain(":root");
   });
 
   // Component-layer root-ownership guard (restored, #task:788 failure path).
-  // `forza6-components.css` may add element-/state-scoped overrides and may
+  // `poster-components.css` may add element-/state-scoped overrides and may
   // redefine tokens INSIDE those scoped bundles, but must NOT reintroduce a
-  // bare `[data-theme='forza6'] { --token: … }` block or a `:root` block —
-  // root-level token reassignment has a single source in `forza6.css`. A bare
+  // bare `[data-theme='poster'] { --token: … }` block or a `:root` block —
+  // root-level token reassignment has a single source in `poster.css`. A bare
   // theme block here would silently fork the token SSOT (values drift between
   // the two files, invisible to TS). This is a stable layering boundary
   // (guideline 5), not a CSS re-lock: it names the concrete corruption path.
-  it("forbids root-level token reassignment in the forza6 component layer", () => {
+  it("forbids root-level token reassignment in the poster component layer", () => {
     // Strip CSS comments first — the file's own header prose mentions the
-    // removed `[data-theme='forza6'] {}` block, which must not trip the guard.
-    const code = forza6ComponentsCss.replace(/\/\*[\s\S]*?\*\//g, "");
+    // removed `[data-theme='poster'] {}` block, which must not trip the guard.
+    const code = posterComponentsCss.replace(/\/\*[\s\S]*?\*\//g, "");
     // A bare theme selector = the attribute selector directly followed by `{`
     // (only whitespace between). Qualified selectors like
-    // `[data-theme='forza6'] header[...] {` have another selector before `{`,
+    // `[data-theme='poster'] header[...] {` have another selector before `{`,
     // so they don't match.
-    expect(code).not.toMatch(/\[data-theme=['"]forza6['"]\]\s*\{/);
+    expect(code).not.toMatch(/\[data-theme=['"]poster['"]\]\s*\{/);
     expect(code).not.toContain(":root");
   });
 
@@ -184,11 +184,11 @@ describe("theme markdown token cascade contract", () => {
   // bug (a new theme forgets a token). We assert the token is DECLARED per theme
   // — never its value (14px / a hue / a radius), a visual concern for dogfood.
   //
-  // The required set is DERIVED from the default theme, not hand-listed. forza6
+  // The required set is DERIVED from the default theme, not hand-listed. poster
   // owns `:root`, so every token it declares there becomes the global default;
-  // any token another theme omits resolves back to forza6's festival value — the
-  // exact leak. So the contract is simply "whatever forza6 declares, every other
-  // theme must declare too." Adding a token to forza6 auto-extends the contract;
+  // any token another theme omits resolves back to poster's festival value — the
+  // exact leak. So the contract is simply "whatever poster declares, every other
+  // theme must declare too." Adding a token to poster auto-extends the contract;
   // deleting a dead one auto-retracts it — the fence maintains itself, no manual
   // token list to drift out of sync.
   it("every theme explicitly declares the full promoted-token set (no :root leak)", () => {
@@ -199,27 +199,27 @@ describe("theme markdown token cascade contract", () => {
       new Set([...stripComments(css).matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
 
     // Excluded from the per-theme contract:
-    //  --forza6-*  private palette (namespaced; each theme owns its own palette)
+    //  --poster-*  private palette (namespaced; each theme owns its own palette)
     //  --color-*   Tailwind bridge (lives in global.css @theme inline, not here)
-    //  --task-num  intentionally forza6-only (#task:1914). The `#nnn` number hue
-    //              (`[data-tasks-num]`) is painted ONLY in forza6-components.css
-    //              `[data-theme='forza6']` rules; other themes render the number
+    //  --task-num  intentionally poster-only (#task:1914). The `#nnn` number hue
+    //              (`[data-tasks-num]`) is painted ONLY in poster-components.css
+    //              `[data-theme='poster']` rules; other themes render the number
     //              as `text-text-muted` and never read the token, so it can't leak.
     //  --bg-nav-rail / --nav-rail-border-color / --nav-rail-border-width
-    //              forza6-only nav-rail chrome, declared in its `[data-theme]`
+    //              poster-only nav-rail chrome, declared in its `[data-theme]`
     //              block (NOT `:root`). Other themes leave the rail bg/border
     //              unset; the `.nav-rail` rule resolves them off via CSS-level
     //              fallbacks (transparent / 0 / none), so nothing leaks.
     //  --bg-control-primary / -hover / --bg-primary-action-hover /
     //  --text-on-control-primary
-    //              forza6-only CTA color (its accent is pink, but the primary
+    //              poster-only CTA color (its accent is pink, but the primary
     //              CTA is avocado green), declared in its `[data-theme]` block
     //              (NOT `:root`). Other themes omit them and the consumers fall
     //              back to `--accent` / `--accent-hover` / `--text-on-accent`.
-    //  --pane-bg   forza6 paper pane ground, declared in its `[data-theme]` block
+    //  --pane-bg   poster paper pane ground, declared in its `[data-theme]` block
     //              (NOT `:root`). Every consumer reads `var(--pane-bg, var(--bg-base))`,
     //              so other themes paint panes with their own `--bg-base`.
-    const FORZA6_ONLY = new Set([
+    const POSTER_ONLY = new Set([
       "--pane-bg",
       "--task-num",
       "--bg-nav-rail",
@@ -231,9 +231,9 @@ describe("theme markdown token cascade contract", () => {
       "--text-on-control-primary",
     ]);
     const isPromoted = (t: string) =>
-      !t.startsWith("--forza6-") && !t.startsWith("--color-") && !FORZA6_ONLY.has(t);
+      !t.startsWith("--poster-") && !t.startsWith("--color-") && !POSTER_ONLY.has(t);
 
-    const required = [...declaredTokens(forza6Css)].filter(isPromoted);
+    const required = [...declaredTokens(posterCss)].filter(isPromoted);
     // Sanity: if the regex ever breaks, the set collapses and the test would
     // pass vacuously. The real set is ~130 tokens.
     expect(required.length).toBeGreaterThan(100);

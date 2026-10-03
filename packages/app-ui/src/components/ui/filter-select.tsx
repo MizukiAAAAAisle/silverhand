@@ -10,7 +10,7 @@ import { cn } from "@/lib/cn";
  * selects through THESE constants + components rather than hand-rolling its own
  * dropdown, so keyboard nav (arrows / typeahead / Enter / Esc), focus ring,
  * portal positioning, and per-theme radius/border all behave identically
- * (Cindy review #task:1258). Radius/border consume control tokens, so forza6
+ * (Cindy review #task:1258). Radius/border consume control tokens, so poster
  * stays square + hard-edged automatically.
  *
  * This is the value-list select (a fixed set of options with built-in keyboard

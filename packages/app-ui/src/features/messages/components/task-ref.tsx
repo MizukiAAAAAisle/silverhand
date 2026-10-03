@@ -29,7 +29,7 @@ export function TaskRefStaticChip({
     return <>{inertLabel}</>;
   }
   // Same silhouette as the live `interactiveChip`: borderless accent link, no
-  // fill, no dead side padding. forza6 repaints it to ink + gold marker via the
+  // fill, no dead side padding. poster repaints it to ink + gold marker via the
   // shared `state='resolved'` hook — no export-specific styling exists.
   return (
     <span

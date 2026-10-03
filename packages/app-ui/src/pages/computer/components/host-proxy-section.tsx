@@ -140,7 +140,7 @@ export function ProxySection({
                 are host:port / scheme strings — make the input read as a
                 config value, not prose. `font-mono` on the field itself
                 keeps it readable across themes; the `data-host-proxy-url`
-                hook lets forza6 layer HUD-specific weight/tracking
+                hook lets poster layer HUD-specific weight/tracking
                 without forking the input. */}
             <Input
               id="proxy-url"
@@ -183,9 +183,9 @@ export function ProxySection({
                     // v6.9.2 #task:917 (shiki "runtime 选中 background 和
                     // border 不搭"): the generic `border-accent` + `bg-row-
                     // selected` pair lands as pink-border + acid-lime fill
-                    // in forza6 — two high-sat hues fighting. The
+                    // in poster — two high-sat hues fighting. The
                     // `data-runtime-tile` + `data-checked` hooks let
-                    // forza6 swap the border (and inner check fill) to
+                    // poster swap the border (and inner check fill) to
                     // ink-black so the tile reads as a poster-sticker
                     // family member (lime ground + 1px ink stroke) instead
                     // of clashing complements. Other themes keep the

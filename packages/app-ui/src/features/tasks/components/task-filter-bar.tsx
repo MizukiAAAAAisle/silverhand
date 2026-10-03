@@ -55,7 +55,7 @@ const NO_PEOPLE: PersonOption[] = [];
  * (`--control-radius` + `--control-border-width`); dropdown panels carry
  * `role="listbox"` / option rows `role="option"` and route radius through
  * `--select-content-radius` / `--select-item-radius`; selected state
- * reuses `--accent`. No hardcoded radius/border literals, so forza6 stays
+ * reuses `--accent`. No hardcoded radius/border literals, so poster stays
  * square + hard-edged automatically.
  */
 export interface ChannelOption {
@@ -307,7 +307,7 @@ export function TaskFilterBar({
           className={cn(
             // Reset affordance: icon-only, no label. Idle is a bare muted
             // glyph; hover paints a square box behind it — radius follows
-            // `--control-radius` (forza6 squares it to 0, warm rounds) and
+            // `--control-radius` (poster squares it to 0, warm rounds) and
             // the fill is the theme hover token, so it adapts per theme
             // (shiki #task:795).
             "inline-flex items-center justify-center rounded-(--control-radius) p-1.5",
@@ -338,11 +338,11 @@ const TRIGGER_GLYPH_PX = 14;
  * trigger's box EXACTLY — `px-2 py-1 text-[length:var(--text-meta)]` plus a border-box border of
  * `--control-border-width` — instead of a fixed height, because the filter's
  * own height is content-driven and grows with the per-theme border (1px default
- * / 2px forza6). Spread this over the CTA's own fill/identity: only the OUTER
+ * / 2px poster). Spread this over the CTA's own fill/identity: only the OUTER
  * box is shared.
  *
  * The border is `transparent` here on purpose — the CTA has no consumer-edge
- * frame (its identity is the fill; forza6 repaints this same border into the
+ * frame (its identity is the fill; poster repaints this same border into the
  * poster ink frame via `[data-primary-action]`). But it still RESERVES the
  * border width, so a borderless fill can't come out 1–2px shorter than the
  * bordered filters beside it in any theme.
@@ -367,7 +367,7 @@ const FilterTrigger = forwardRef<
         "flex max-w-50 items-center gap-1.5 rounded-(--control-radius)",
         "border-(length:--control-border-width) px-2 py-1 text-(length:--text-meta) transition-colors",
         // Hover always paints the theme's control hover border
-        // (`--border-control-hover`: forza6 near-black ink / warm
+        // (`--border-control-hover`: poster near-black ink / warm
         // accent / slack-dark `--border` 10% white). Note this is a
         // CONTROL-surface hover token, not the row-state token —
         // slack-dark intentionally sets `--border-row-hover:
@@ -376,7 +376,7 @@ const FilterTrigger = forwardRef<
         // border is the only hover signal (#task:912 review round 3).
         "hover:border-(--border-control-hover)",
         active
-          ? // Non-default value → theme selected-row fill (forza6 festive
+          ? // Non-default value → theme selected-row fill (poster festive
             // lime) + on-selected ink + the selected-row border colour
             // (`--border-row-selected`, same near-black as hover) so the
             // chip reads as a framed poster sticker, not a borderless fill
@@ -622,7 +622,7 @@ function ChannelFilter({
           // Sticker-variant `#` (shiki #task:1441): the selected-label `#`
           // wears the same yellow poster sticker as the dropdown rows + the rest
           // of the app, so the channel's identity glyph reads consistently. The
-          // `task-filter-channel-hash` class lets forza6 TIGHTEN this one sticker
+          // `task-filter-channel-hash` class lets poster TIGHTEN this one sticker
           // to the shared 14px trigger box (12px glyph + 1px ink frame, no
           // padding) so it sits height-uniform with its sibling triggers instead
           // of inflating to ~18px — identity AND alignment (shiki #task:1441

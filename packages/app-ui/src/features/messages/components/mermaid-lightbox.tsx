@@ -24,7 +24,7 @@ const clamp = (v: number, min: number, max: number): number => Math.min(max, Mat
 
 /**
  * Fullscreen Mermaid viewer. A read-only sibling of {@link Lightbox}
- * for a diagram: the same shell (`data-modal-shell` → forza6 poster drop shadow
+ * for a diagram: the same shell (`data-modal-shell` → poster drop shadow
  * + ink frame, elevation-only otherwise), the same zoom controls (−/slider/+ and `+` `−` `0`
  * keys, trackpad pinch), and the same drag-to-pan-plus-native-scroll well. It is
  * read-only on purpose — the inline block already owns Copy (source) and the
@@ -197,7 +197,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
           <div
             ref={attachWell}
             className="flex flex-1 overflow-auto p-4 scrollbar-hide"
-            // The diagram surface reads the theme's diagram ground (forza6 is
+            // The diagram surface reads the theme's diagram ground (poster is
             // white, not its dark code island); other themes fall back to the
             // modal's elevated surface.
             style={{ background: "var(--mermaid-diagram-bg, var(--bg-elevated))" }}

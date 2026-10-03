@@ -110,9 +110,9 @@ export function CreateTaskChannelPicker({
     <button
       type="button"
       aria-label="Channel"
-      // Bordered field surface, like the dialog's Title input: forza6 paints
+      // Bordered field surface, like the dialog's Title input: poster paints
       // the poster ink frame + drop shadow off `[data-input]` (SSOT comment
-      // in forza6-components.css). NOT `role='combobox'` — the inner search
+      // in poster-components.css). NOT `role='combobox'` — the inner search
       // input already carries that role, and a second combobox on the trigger
       // would confuse AT. Other themes leave `[data-input]` flat.
       data-input=""

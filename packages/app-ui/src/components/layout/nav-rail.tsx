@@ -96,7 +96,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
                   {hasDot && (
                     // Attention dot: no count, top-right corner (icon is centred, so
                     // the corner is empty). `--accent` = the app's unread/brand hue.
-                    // `data-nav-unread-dot` lets a theme reshape it (e.g. forza6's
+                    // `data-nav-unread-dot` lets a theme reshape it (e.g. poster's
                     // square-sticker language) without touching this layout.
                     <span
                       data-nav-unread-dot

@@ -80,7 +80,7 @@ export interface TaskDetailDialogProps {
  * field is being edited the modal refuses close requests (an outside-click / ✕
  * only fires the blur-save; a validation/request failure keeps the draft in the
  * open editor) and the jump icon is hidden. "View in conversation" is the modal
- * close ✕'s TWIN — same corner-button skin (and forza6 poster-sticker), sitting
+ * close ✕'s TWIN — same corner-button skin (and poster-sticker), sitting
  * in the top-right action cluster just left of the close — consuming the
  * viewer-resolved `nav` discriminant (source → source message, else →
  * task-created event; hidden entirely when nav is `unavailable`).
@@ -349,7 +349,7 @@ function TaskDetailBody({
             moved into the metadata sidebar, where they sit beside the rest of
             the task's facts instead of stacking chrome above the title.
             `pr-28` reserves the corner cluster, which shares this top band:
-            three 28px sticker boxes (forza6 adds a 2px border to the 24px
+            three 28px sticker boxes (poster adds a 2px border to the 24px
             `p-1`+`size-4` box) with `gap-1.5` and `right-3` reach 108px from
             the dialog's right edge, and the header's own `px-5` only accounts
             for 20 of those — so anything under 88px lets the title's edit

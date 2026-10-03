@@ -27,7 +27,7 @@ export const DialogPortal = DialogPrimitive.Portal;
 /** The corner-button skin (surface / ghost ink / hover), shared by the modal
  *  close ✕ AND any sibling top-right action (e.g. the task detail's jump) so the
  *  two can't drift. POSITION-AGNOSTIC: the `DialogContent` corner cluster owns
- *  the `absolute` slot and the inter-button gap. forza6 identity comes from the
+ *  the `absolute` slot and the inter-button gap. poster identity comes from the
  *  `data-sticker` primitive on each button, not from this class.
  *
  *  Rest→hover is a COLOUR step (`--text-muted` → `--text-primary`), never an
@@ -110,7 +110,7 @@ export const DialogContent = forwardRef<
      *    (`p-6`) `DialogHeader`, so the cluster reads as part of the title row
      *    instead of floating 12px above it (shiki 2026-07-28: 标题和右边的按钮
      *    不居中). The band is a fixed 24px with `items-center`, so per-theme box
-     *    growth (forza6's bordered stickers) stays centred on that same line.
+     *    growth (poster's bordered stickers) stays centred on that same line.
      *  - `top`: hugs the content's top-right corner — for a dialog that owns its
      *    own padding (`p-0`) and whose first band is not a `p-6` title line. */
     cornerBand?: "title" | "top";
@@ -164,7 +164,7 @@ export const DialogContent = forwardRef<
         <DialogBoundaryContext.Provider value={boundary}>{children}</DialogBoundaryContext.Provider>
         {/* Top-right corner action cluster: optional peer actions, then the close
           ✕. A fixed 24px band + `items-center` co-aligns glyphs regardless of
-          per-theme box size (forza6 borders the stickers → taller boxes, which
+          per-theme box size (poster borders the stickers → taller boxes, which
           now overflow the band symmetrically instead of pushing their centres
           down), and `gap-1.5` spaces them — so twins never need pixel/right-*
           math per theme. */}

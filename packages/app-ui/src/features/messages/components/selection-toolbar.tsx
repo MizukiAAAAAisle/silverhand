@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
  * - **Cancel** → `variant="cancel"`, the way out of selection mode.
  *
  * What this replaced: a local recipe where BOTH exports were "primary" and
- * ranked only on hover, by filling with `--brand-primary` (forza6 #FF2C7A hot
+ * ranked only on hover, by filling with `--brand-primary` (poster #FF2C7A hot
  * pink / warm #FFD440) — two equal primaries, a hue that no longer belongs to
  * commits after #task:1623 moved the CTA to `--bg-control-primary`, and a
  * resting state where all three buttons were indistinguishable. Cancel's

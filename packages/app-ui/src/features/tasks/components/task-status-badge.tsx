@@ -20,7 +20,7 @@ import { AppContextMenu, AppContextMenuItem } from "@/components/menus/app-conte
  * badge, the message task tag, and `TaskStatusPill`) shares ONE capsule form
  * so the same status reads identically wherever it appears (shiki 2026-08-09,
  * overriding the earlier chip/pill split from Cindy review
- * `ME-fJNO4XJRLpSHz`): warm themes give the capsule, forza6 hard-cuts to 0.
+ * `ME-fJNO4XJRLpSHz`): warm themes give the capsule, poster hard-cuts to 0.
  *
  * Read-only by default. Pass `onChange` to make it click-to-open a tiny
  * popover that moves the task to any other status — the human-side

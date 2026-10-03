@@ -133,7 +133,7 @@ export function BackendUnreachableGate({
     >
       <div
         // Same dialog identity as the other boot gates — see UpdateRequiredGate
-        // for the per-theme rationale (#task:1833). Not forza6-only: studio-light
+        // for the per-theme rationale (#task:1833). Not poster-only: studio-light
         // also drops the 1px frame by its own `[data-modal-shell]` rule.
         data-modal-shell
         data-popover-frame="info"
@@ -237,7 +237,7 @@ export function BackendUnreachableGate({
             role="status"
             className={cn(
               // Border width comes from the theme's control cluster, not
-              // Tailwind's 1px `border` — forza6 states are 2px (shiki
+              // Tailwind's 1px `border` — poster states are 2px (shiki
               // #task:1833 「下方的状态用 2px」). Warm themes declare 1px, so
               // they are unchanged.
               "mb-4 rounded-(--control-radius) border-(length:--control-border-width) px-3 py-2 text-xs",

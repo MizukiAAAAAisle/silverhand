@@ -78,8 +78,8 @@ const THEME_META: Record<
     text: "#111725",
     accent: "#2F5AD0",
   },
-  forza6: {
-    label: "Forza6",
+  poster: {
+    label: "Poster",
     bg: "#F4F8E8",
     surface: "#FF2C7A",
     text: "#0A0A0A",

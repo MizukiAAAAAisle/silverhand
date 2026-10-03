@@ -12,7 +12,7 @@
  *     `border-border` + `bg-bg-floating` ground, `transition` (via
  *     `COLLECTION_CARD_CLASS`).
  *   • The `data-collection-card` hook, so each theme paints ONE hover rule
- *     (`[data-collection-card]:hover`) — forza6 = ink border + poster shadow +
+ *     (`[data-collection-card]:hover`) — poster = ink border + poster shadow +
  *     lift; slack/warm = bg veil + soft lift. Hover is the only state the shared
  *     theme layer paints; focus stays per-consumer (only the interactive
  *     consumers carry a `focus-visible` ring, on their own element), and there

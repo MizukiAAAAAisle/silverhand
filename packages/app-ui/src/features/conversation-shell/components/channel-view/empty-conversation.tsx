@@ -13,7 +13,7 @@ import { Inbox } from "lucide-react";
  *    tried here first was wrong twice over: it re-states the header's identity,
  *    and `#` in this app is the channel hero sticker
  *    (`[data-conversation-hash-icon]`, painted as a filled poster chip in
- *    forza6), so it reads as a brand mark rather than "nothing here".
+ *    poster), so it reads as a brand mark rather than "nothing here".
  *    `MessageSquare` is off-limits by contract — that glyph means "thread"
  *    (see `components/icons/conversation-icons.ts`).
  *  - no dashed frame (the panel-list `EmptyState` recipe): the chat card already

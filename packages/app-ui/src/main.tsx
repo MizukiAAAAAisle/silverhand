@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./app";
 import { queryClient } from "./lib/query-client";
-// Rajdhani is forza6's tech/racing display face — bundled (not a CDN
+// Rajdhani is poster's tech/racing display face — bundled (not a CDN
 // link) so chrome label / task pill / sidebar count metrics don't
 // flash through a system fallback during a cold start with no network.
 // Single weight (700) only, ~16KB woff2.

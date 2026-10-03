@@ -375,7 +375,7 @@ export function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element 
  * goose-yellow on the light themes, a translucent amber veil on slack-dark) —
  * distinct from `--warning-soft`, which is the brown-gold `--warning` at low
  * alpha and muddies into a dirty tan when used as a large fill (shiki
- * 2026-07-07). Radius follows `--control-radius` (forza6 = 0 poster corners,
+ * 2026-07-07). Radius follows `--control-radius` (poster = 0 poster corners,
  * warm = rounded), matching the other in-dialog blocks.
  *
  * The list comes from `/resources` — DB ownership, so it stays populated and

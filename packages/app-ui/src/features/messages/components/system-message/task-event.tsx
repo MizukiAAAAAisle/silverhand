@@ -147,7 +147,7 @@ function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
   // Status dots consume the board's per-status SOLID signal colour
   // (`--task-status-*-solid`, #task:1018) so the chat-stream dot matches
   // the task board chip in every theme. Each theme homes `-solid` on its
-  // own identity source (forza6 → poster `-bg`; warm/slack → saturated
+  // own identity source (poster → poster `-bg`; warm/slack → saturated
   // `-text`), so this single token reads correctly everywhere. `unclaim`
   // is not a status — it keeps a neutral dashed-hollow marker.
   const cls: Record<TaskEventDotKind, string> = {

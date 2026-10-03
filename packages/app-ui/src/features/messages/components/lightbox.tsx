@@ -68,7 +68,7 @@ const clamp = (v: number, min: number, max: number): number => Math.min(max, Mat
 
 /**
  * Image preview modal. A modal shell (elevation via `shadow-xl`) that wears
- * forza6's shared ink modal frame + poster drop shadow; other themes render it
+ * poster's shared ink modal frame + poster drop shadow; other themes render it
  * frameless (elevation only). It has a header ("Image Preview" title + a close
  * icon on the right), the image well, and a bottom action bar (zoom controls
  * left, Copy/Download right).

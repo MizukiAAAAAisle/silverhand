@@ -332,7 +332,7 @@ function SavedItem({
           }
         }}
         // Frame + hover come from the shell; each theme paints one
-        // `[data-collection-card]:hover` (forza6 = ink border + poster shadow +
+        // `[data-collection-card]:hover` (poster = ink border + poster shadow +
         // lift; warm/slack = bg veil + soft lift), so a row hover never flips to
         // the brand hue. Local layout only below.
         className="px-4 py-3"

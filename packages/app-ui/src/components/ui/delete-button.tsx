@@ -33,7 +33,7 @@ export type DeleteButtonProps = {
  * Cancel are plain text-glyph buttons (no fill, no hover background — hover
  * only shifts colour): Confirm is `--success` (the go/affirm hue — never
  * `--error`, which is the delete action itself), Cancel is `--text-secondary`.
- * Corners follow `--control-radius` (forza6 sharp, iris 8px, slack/studio 6px).
+ * Corners follow `--control-radius` (poster sharp, iris 8px, slack/studio 6px).
  */
 export function DeleteButton({
   children,

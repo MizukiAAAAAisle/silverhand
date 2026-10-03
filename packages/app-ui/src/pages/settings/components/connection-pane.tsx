@@ -313,7 +313,7 @@ export function ConnectionPane(): JSX.Element {
           <div
             role="status"
             className={cn(
-              // Width from the theme's control cluster (forza6 = 2px), so this
+              // Width from the theme's control cluster (poster = 2px), so this
               // banner stays identical to its twin in BackendUnreachableGate
               // (#task:1833).
               "rounded-(--control-radius) border-(length:--control-border-width) px-3 py-2 text-xs",

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { ChannelIcon } from "./channel-icon";
 
 // The channel `#` glyph must be sticker-or-utility BY CONSTRUCTION: the
-// `data-channel-icon` theme hook (whose forza6 sticker chrome inflates the box)
+// `data-channel-icon` theme hook (whose poster sticker chrome inflates the box)
 // may ride identity surfaces but never a compact/utility control. #task:1437
 // was that hook on a filter trigger (14px → 18px); #task:1438 moves the
 // decision into this primitive so a call-site can't re-introduce the drift.

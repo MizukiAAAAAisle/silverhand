@@ -1,20 +1,20 @@
-/* Theme: forza6 */
+/* Theme: poster */
 
 :root,
-[data-theme="forza6"] {
+[data-theme="poster"] {
   /* Theme palette */
-  --forza6-code-deep: color-mix(in srgb, var(--forza6-code-island) 70%, #000);
-  --forza6-code-island: #07111f;
-  --forza6-blue: #2448d8;
-  --forza6-cyan: #22b7e0;
-  --forza6-green: #1a7f45;
-  --forza6-ink: #0d0c0b;
-  --forza6-lime: #d4f523;
-  --forza6-orange: #ff7a1a;
-  --forza6-paper: #fffdf7;
-  --forza6-paper-2: #f5f2ea;
-  --forza6-pink: #ff2c7a;
-  --forza6-yellow: #ffe100;
+  --poster-code-deep: color-mix(in srgb, var(--poster-code-island) 70%, #000);
+  --poster-code-island: #07111f;
+  --poster-blue: #2448d8;
+  --poster-cyan: #22b7e0;
+  --poster-green: #1a7f45;
+  --poster-ink: #0d0c0b;
+  --poster-lime: #d4f523;
+  --poster-orange: #ff7a1a;
+  --poster-paper: #fffdf7;
+  --poster-paper-2: #f5f2ea;
+  --poster-pink: #ff2c7a;
+  --poster-yellow: #ffe100;
 
   /* Typography and motion */
   --chrome-label-tracking: 0.06em;
@@ -40,34 +40,34 @@
   --bg-hover: #f4f2ec;
   --bg-primary: #eceae2;
   --bg-selected: var(--brand-primary);
-  --bg-structure-dark: var(--forza6-ink);
+  --bg-structure-dark: var(--poster-ink);
   --border: rgba(13, 12, 11, 0.14);
-  --border-focus: var(--forza6-ink);
+  --border-focus: var(--poster-ink);
   --border-subtle: rgba(13, 12, 11, 0.1);
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 10px;
   --radius-xl: 14px;
-  --text-inverse: var(--forza6-paper);
+  --text-inverse: var(--poster-paper);
   --text-muted: #3d3a35;
-  --text-on-dark-pop: var(--forza6-yellow);
-  --text-on-selected: var(--forza6-paper);
+  --text-on-dark-pop: var(--poster-yellow);
+  --text-on-selected: var(--poster-paper);
   --text-on-structure: #ffffff;
-  --text-primary: var(--forza6-ink);
-  --text-secondary: var(--forza6-ink);
+  --text-primary: var(--poster-ink);
+  --text-secondary: var(--poster-ink);
 
   /* Brand and semantic colors */
-  --accent: var(--forza6-blue);
+  --accent: var(--poster-blue);
   --soft-alpha: 16%;
   --accent-hover: #1a37ad;
   --accent-soft: color-mix(in srgb, var(--accent), transparent calc(100% - var(--soft-alpha)));
-  --brand-primary: var(--forza6-pink);
+  --brand-primary: var(--poster-pink);
   --error: #c8003c;
   --error-soft: color-mix(in srgb, var(--error), transparent calc(100% - var(--soft-alpha)));
-  --success: var(--forza6-green);
+  --success: var(--poster-green);
   --success-soft: color-mix(in srgb, var(--success), transparent calc(100% - var(--soft-alpha)));
   --text-on-accent: #ffffff;
-  --text-on-brand: var(--forza6-ink);
+  --text-on-brand: var(--poster-ink);
   --text-on-error: #ffffff;
   --text-on-success: #ffffff;
   --text-on-warning: #ffffff;
@@ -80,12 +80,12 @@
   --nav-hover-strength: 20%;
   --bg-nav-hover: #ffffff;
   --bg-nav-selected: #ffffff;
-  --bg-row-selected: var(--forza6-ink);
-  --border-nav-rail-hover: var(--forza6-ink);
-  --border-nav-rail-selected: var(--forza6-ink);
-  --border-row-hover: var(--forza6-ink);
+  --bg-row-selected: var(--poster-ink);
+  --border-nav-rail-hover: var(--poster-ink);
+  --border-nav-rail-selected: var(--poster-ink);
+  --border-row-hover: var(--poster-ink);
   --row-frame-hover-bg: transparent;
-  --border-row-selected: var(--forza6-ink);
+  --border-row-selected: var(--poster-ink);
   --nav-rail-indicator-color: var(--bg-structure-dark);
   --nav-rail-indicator-display: block;
   --nav-rail-item-border-width: 2px;
@@ -96,15 +96,15 @@
   --text-nav-selected: var(--text-secondary);
 
   /* Controls and actions */
-  --border-control: var(--forza6-ink);
-  --border-control-hover: var(--forza6-ink);
+  --border-control: var(--poster-ink);
+  --border-control-hover: var(--poster-ink);
   --control-border-width: 2px;
   --control-radius: 0;
-  --field-border-color: var(--forza6-ink);
+  --field-border-color: var(--poster-ink);
   --field-disabled-border-color: var(--border);
   --field-disabled-shadow: none;
-  --field-shadow: var(--forza6-poster-shadow);
-  --field-shadow-focus: var(--forza6-poster-shadow-xl);
+  --field-shadow: var(--poster-shadow);
+  --field-shadow-focus: var(--poster-shadow-xl);
   --field-transition: box-shadow 150ms ease, border-color 150ms ease;
   --select-content-radius: 0;
   --select-item-radius: 0;
@@ -116,29 +116,29 @@
   --range-focus-offset: 1px;
   --range-height: 18px;
   --range-radius: var(--control-radius);
-  --range-thumb-active-bg: var(--forza6-pink);
+  --range-thumb-active-bg: var(--poster-pink);
   --range-thumb-active-cursor: grabbing;
-  --range-thumb-bg: var(--forza6-yellow);
-  --range-thumb-border: var(--forza6-ink);
+  --range-thumb-bg: var(--poster-yellow);
+  --range-thumb-border: var(--poster-ink);
   --range-thumb-cursor: grab;
-  --range-thumb-shadow: var(--forza6-poster-shadow-sm);
-  --range-track-bg: var(--forza6-ink);
+  --range-thumb-shadow: var(--poster-shadow-sm);
+  --range-track-bg: var(--poster-ink);
   --range-track-height: 4px;
 
   /* Floating surfaces and shadows */
   --bg-floating: #ffffff;
   --bg-message-context: color-mix(in srgb, var(--chip-bg) 50%, transparent);
-  --floating-border: 2px solid var(--forza6-ink);
+  --floating-border: 2px solid var(--poster-ink);
   --floating-item-radius: 0;
   --floating-radius: 0;
-  --forza6-poster-shadow: 1.5px 1.5px 0 var(--forza6-ink);
-  --forza6-poster-shadow-error: 1.5px 1.5px 0 var(--error);
-  --forza6-poster-shadow-error-xl: 2.5px 2.5px 0 var(--error);
-  --forza6-poster-shadow-hover-lg: 4px 4px 0 var(--forza6-ink);
-  --forza6-poster-shadow-hover-md: 3px 3px 0 var(--forza6-ink);
-  --forza6-poster-shadow-lg: 2px 2px 0 var(--forza6-ink);
-  --forza6-poster-shadow-sm: 1px 1px 0 var(--forza6-ink);
-  --forza6-poster-shadow-xl: 2.5px 2.5px 0 var(--forza6-ink);
+  --poster-shadow: 1.5px 1.5px 0 var(--poster-ink);
+  --poster-shadow-error: 1.5px 1.5px 0 var(--error);
+  --poster-shadow-error-xl: 2.5px 2.5px 0 var(--error);
+  --poster-shadow-hover-lg: 4px 4px 0 var(--poster-ink);
+  --poster-shadow-hover-md: 3px 3px 0 var(--poster-ink);
+  --poster-shadow-lg: 2px 2px 0 var(--poster-ink);
+  --poster-shadow-sm: 1px 1px 0 var(--poster-ink);
+  --poster-shadow-xl: 2.5px 2.5px 0 var(--poster-ink);
   --overlay-backdrop: rgba(18, 17, 16, 0.45);
   --shadow-base: 18, 17, 16;
   --shadow-button: 0 1px 2px 0 rgba(var(--shadow-base), 0.06);
@@ -147,7 +147,7 @@
     0 10px 30px -8px rgba(var(--shadow-base), 0.28), 0 2px 6px -2px rgba(var(--shadow-base), 0.1);
 
   /* Identity and profile */
-  --border-avatar: var(--forza6-ink);
+  --border-avatar: var(--poster-ink);
   --border-avatar-width: 2px;
   --profile-section-radius: 0;
 
@@ -173,8 +173,8 @@
 
   /* Markdown, code and diagrams */
   --bg-inline-code: oklab(0 0 0 / 0.05);
-  --bg-island: var(--forza6-code-island);
-  --bg-island-deep: var(--forza6-code-deep);
+  --bg-island: var(--poster-code-island);
+  --bg-island-deep: var(--poster-code-deep);
   --border-inline-code: none;
   --border-island: var(--bg-island);
   --code-block-border-width: 2px;
@@ -183,60 +183,60 @@
   /* Diagram surface follows the theme's island (all themes route through
    *  --bg-island); source code keeps the dark island. */
   --mermaid-diagram-bg: var(--bg-island);
-  --text-inline-code: var(--forza6-ink);
+  --text-inline-code: var(--poster-ink);
   --text-island: #e8f1ef;
 
   /* Syntax highlighting */
-  --hljs-addition: var(--forza6-lime);
+  --hljs-addition: var(--poster-lime);
   --hljs-base: var(--text-island);
   --hljs-comment: rgba(255, 255, 255, 0.45);
   --hljs-deletion: #ff6f8c;
-  --hljs-keyword: var(--forza6-lime);
+  --hljs-keyword: var(--poster-lime);
   --hljs-meta: #9d97ff;
-  --hljs-number: var(--forza6-cyan);
+  --hljs-number: var(--poster-cyan);
   --hljs-selection-bg: #3b36c9;
   --hljs-selection-text: #ffffff;
   --hljs-string: #ffd7e5;
 
   /* Task references and search */
   --search-hit-bg: #fff3a6;
-  --search-hit-bg-active: var(--forza6-yellow);
-  --search-hit-text: var(--forza6-ink);
+  --search-hit-bg-active: var(--poster-yellow);
+  --search-hit-text: var(--poster-ink);
   --task-num: var(--brand-primary);
   --task-ref-activity-color: var(--text-muted);
   --task-ref-activity-hover-bg: transparent;
-  --task-ref-activity-hover-color: var(--forza6-ink);
+  --task-ref-activity-hover-color: var(--poster-ink);
   --task-ref-activity-margin: 0;
-  --task-ref-activity-marker: var(--forza6-yellow);
+  --task-ref-activity-marker: var(--poster-yellow);
   --task-ref-activity-padding: 0;
-  --task-ref-color: var(--forza6-ink);
+  --task-ref-color: var(--poster-ink);
   --task-ref-font: var(--appearance-prose-font, var(--font-sans));
   --task-ref-hover-decoration: none;
   --task-ref-line-height: 1.24;
-  --task-ref-marker: color-mix(in srgb, var(--forza6-yellow) 66%, transparent);
-  --task-ref-marker-hover: var(--forza6-yellow);
+  --task-ref-marker: color-mix(in srgb, var(--poster-yellow) 66%, transparent);
+  --task-ref-marker-hover: var(--poster-yellow);
   --task-ref-number-font: var(--font-display);
   --task-ref-number-tracking: 0.01em;
   --task-ref-number-weight: 700;
   --task-ref-weight: 400;
 
   /* Task status */
-  --task-status-closed-bg: var(--forza6-ink);
+  --task-status-closed-bg: var(--poster-ink);
   --task-status-closed-border: none;
   --task-status-closed-solid: var(--task-status-closed-bg);
-  --task-status-closed-text: var(--forza6-paper);
-  --task-status-done-bg: var(--forza6-green);
+  --task-status-closed-text: var(--poster-paper);
+  --task-status-done-bg: var(--poster-green);
   --task-status-done-border: none;
   --task-status-done-solid: var(--task-status-done-bg);
   --task-status-done-text: var(--text-inverse);
-  --task-status-in-progress-bg: var(--forza6-blue);
+  --task-status-in-progress-bg: var(--poster-blue);
   --task-status-in-progress-border: none;
   --task-status-in-progress-solid: var(--task-status-in-progress-bg);
-  --task-status-in-progress-text: var(--forza6-paper);
-  --task-status-in-review-bg: var(--forza6-orange);
+  --task-status-in-progress-text: var(--poster-paper);
+  --task-status-in-review-bg: var(--poster-orange);
   --task-status-in-review-border: none;
   --task-status-in-review-solid: var(--task-status-in-review-bg);
-  --task-status-in-review-text: var(--forza6-ink);
+  --task-status-in-review-text: var(--poster-ink);
   --task-status-radius: 0;
   --task-status-todo-bg: #736c62;
   --task-status-todo-border: none;
@@ -247,16 +247,16 @@
   --panel-border-width: 2px;
 }
 
-[data-theme="forza6"] {
+[data-theme="poster"] {
   --bg-nav-rail: transparent;
-  --pane-bg: var(--forza6-paper);
+  --pane-bg: var(--poster-paper);
 
-  /* Primary CTA is forza6-only avocado green; kept out of `:root` so other
+  /* Primary CTA is poster-only avocado green; kept out of `:root` so other
    *  themes' CTA falls back to their own `--accent`. */
   --bg-control-primary: #9cbf5c;
   --bg-control-primary-hover: #8cac53;
   --bg-primary-action-hover: var(--bg-control-primary);
-  --text-on-control-primary: var(--forza6-ink);
+  --text-on-control-primary: var(--poster-ink);
 
   /* Profile activity: explicit theme scope avoids exporting its color to other themes. */
   --message-activity-color: var(--bg-control-primary);
