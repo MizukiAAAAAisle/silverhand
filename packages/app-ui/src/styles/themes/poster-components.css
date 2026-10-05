@@ -6,30 +6,34 @@
    at its physical right edge so opening/closing a side pane transfers the corner
    naturally; interior panels keep the shared theme radius. */
 [data-theme="poster"] .nav-rail {
-  /* The rail sits on the dark frame: idle and hover speak the titlebar's white
-     ink. Selection is the sidebar's white paper sticker. An ink shadow vanishes
-     on the frame and a hue shadow reads as a second identity, so the shadow is
-     the white sinking into the frame. */
-  --text-nav-rail: rgba(255, 255, 255, 0.78);
-  --text-nav-rail-hover: #ffffff;
-  --bg-nav-hover: rgba(255, 255, 255, 0.12);
-  --border-nav-rail-hover: transparent;
-  --border-nav-rail-selected: transparent;
-  --shadow-row-selected: 2.5px 2.5px 0 color-mix(in srgb, #ffffff, var(--bg-app) 55%);
-  --nav-rail-indicator-display: none;
-
   border-bottom-left-radius: var(--frame-corner-radius, 12px) !important;
+}
+/* Touch devices paint the frame with the page paper (mobile.css), so the
+   white-on-frame ink below applies only to the dark desktop frame. */
+@media not (pointer: coarse) {
+  [data-theme="poster"] .nav-rail {
+    /* The rail sits on the dark frame: idle and hover speak the titlebar's
+       white ink. Selection is the sidebar's white paper sticker. An ink shadow
+       vanishes on the frame and a hue shadow reads as a second identity, so
+       the shadow is the white sinking into the frame. */
+    --text-nav-rail: rgba(255, 255, 255, 0.78);
+    --text-nav-rail-hover: #ffffff;
+    --bg-nav-hover: rgba(255, 255, 255, 0.12);
+    --border-nav-rail-hover: transparent;
+    --border-nav-rail-selected: transparent;
+    --shadow-row-selected: 2.5px 2.5px 0 color-mix(in srgb, #ffffff, var(--bg-app) 55%);
+    --nav-rail-indicator-display: none;
+  }
+  [data-theme="poster"] header[data-titlebar="app"] {
+    --text-muted: rgba(255, 255, 255, 0.78);
+    --text-primary: #ffffff;
+    --text-secondary: rgba(255, 255, 255, 0.92);
+    --bg-hover: rgba(255, 255, 255, 0.12);
+  }
 }
 [data-theme="poster"] [data-section-sheet] {
   border-bottom-right-radius: var(--frame-corner-radius, 12px);
   overflow: clip;
-}
-
-[data-theme="poster"] header[data-titlebar="app"] {
-  --text-muted: rgba(255, 255, 255, 0.78);
-  --text-primary: #ffffff;
-  --text-secondary: rgba(255, 255, 255, 0.92);
-  --bg-hover: rgba(255, 255, 255, 0.12);
 }
 
 /* Titlebar-search dividers: other themes take the neutral hairline the markup
