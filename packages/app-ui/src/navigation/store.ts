@@ -5,6 +5,7 @@ import {
   type MemoryHistory,
 } from "@remix-run/router";
 import { mainTab, parentUrl, type MainTab } from "./history";
+import { isMoreDestination } from "./presentation";
 
 const urlOf = (location: Location) => location.pathname + location.search;
 
@@ -90,10 +91,21 @@ export class NavigationStore {
     if (delta === -1) this.back();
     else this.history.go(delta);
   };
+  /** A Tab restores its own stack. A More page parked on top belongs to More,
+   * not to the Tab, so restoring lands on the Tab's page beneath it. */
   selectTab = (tab: MainTab) => {
-    if (this.disposed || this.tab === tab) return;
+    if (this.disposed) return;
+    const history = this.histories[tab];
+    const onMore = isMoreDestination(history.location.pathname);
+    if (this.tab === tab && !onMore) return;
     this.tab = tab;
-    this.publish();
+    if (!onMore) {
+      this.publish();
+      return;
+    }
+    // More pages can stack (`/members` → `/members/u/…`); leave all of them.
+    while (history.index > 0 && isMoreDestination(history.location.pathname)) history.go(-1);
+    if (isMoreDestination(history.location.pathname)) history.replace(`/${tab}`);
   };
   /** Desktop section entry is a destination, unlike restoring a mobile Tab.
    * Publish only the final entry so no saved utility page flashes in between. */

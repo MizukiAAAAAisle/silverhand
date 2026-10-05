@@ -32,12 +32,11 @@ it.each(cases)(
   ({ source, utility, target }) => {
     const store = new NavigationStore(`/${source}`);
     harness.store = store;
-    // Reproduce all three histories being parked on utility pages.
-    for (const tab of tabs) {
+    // Park all three histories on utility pages, ending on the source.
+    for (const tab of [...tabs.filter((tab) => tab !== source), source]) {
       store.selectTab(tab);
       store.go(utility);
     }
-    store.selectTab(source);
     const observations: string[] = [];
     store.subscribe(() => observations.push(`${store.getSnapshot().tab}:${url(store)}`));
     const nav = useNav();
@@ -52,7 +51,7 @@ it.each(cases)(
   },
 );
 
-it("mobile Tab restoration and More Back retain the source history after desktop navigation", () => {
+it("mobile Tab restoration lands on the Tab's own page, not a More page parked on it", () => {
   const store = new NavigationStore("/chat/d/conversation");
   harness.store = store;
   store.go("/settings");
@@ -61,14 +60,36 @@ it("mobile Tab restoration and More Back retain the source history after desktop
   store.go("/members");
   useNav().toActivity();
   const nav = useNav();
+  const observations: string[] = [];
+  store.subscribe(() => observations.push(`${store.getSnapshot().tab}:${url(store)}`));
   nav.navigate({ kind: "tab", tab: "chat" });
-  expect(url(store)).toBe("/settings");
-  store.back();
-  expect(url(store)).toBe("/chat/d/conversation");
+  expect(observations).toEqual(["chat:/chat/d/conversation"]);
   nav.navigate({ kind: "tab", tab: "tasks" });
-  expect(url(store)).toBe("/members");
-  store.back();
   expect(url(store)).toBe("/tasks?task=task");
+});
+
+it("selecting the current Tab from a More page returns to the Tab's page", () => {
+  const store = new NavigationStore("/tasks?task=task");
+  store.go("/members");
+  store.selectTab("tasks");
+  expect(url(store)).toBe("/tasks?task=task");
+});
+
+it("restoration leaves every stacked More page", () => {
+  const store = new NavigationStore("/activity");
+  store.go("/members");
+  store.go("/members/u/person");
+  store.selectTab("chat");
+  store.selectTab("activity");
+  expect(url(store)).toBe("/activity");
+});
+
+it("a Tab whose only entry is a More page restores to its root", () => {
+  const store = new NavigationStore("/settings");
+  store.selectTab("tasks");
+  store.selectTab("chat");
+  expect(url(store)).toBe("/chat");
+  expect(store.getSnapshot().canBack).toBe(false);
 });
 
 it("same-root switches publish once, while disposed section callbacks do nothing", () => {
