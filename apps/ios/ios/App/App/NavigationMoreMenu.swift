@@ -14,13 +14,17 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
     (title: "Settings", target: "settings", symbol: "NavigationSettings"),
   ]
   private let anchor: () -> CGRect
+  private let edge: () -> NSDirectionalRectEdge?
   private let onSelect: (String) -> Void
+  private let actions = UIStackView()
 
   init(
     anchor: @escaping () -> CGRect,
+    edge: @escaping () -> NSDirectionalRectEdge?,
     onSelect: @escaping (String) -> Void
   ) {
     self.anchor = anchor
+    self.edge = edge
     self.onSelect = onSelect
     super.init(nibName: nil, bundle: nil)
     modalPresentationStyle = .custom
@@ -34,7 +38,7 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
     source: UIViewController
   ) -> UIPresentationController? {
     CompactMenuPresentation(
-      presentedViewController: presented, presenting: presenting, anchor: anchor)
+      presentedViewController: presented, presenting: presenting, anchor: anchor, edge: edge)
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -53,8 +57,7 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
       view.backgroundColor = .systemBackground
     }
 
-    let actions = UIStackView()
-    actions.axis = .horizontal
+    actions.axis = edge() == nil ? .horizontal : .vertical
     actions.distribution = .fillEqually
     actions.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(actions)
@@ -62,7 +65,8 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
       let button = UIButton(type: .system)
       var configuration = UIButton.Configuration.plain()
       configuration.image = UIImage(named: item.symbol)
-      configuration.title = item.title
+      // Beside a vertical bar the menu is icon-only, like the bar itself.
+      if edge() == nil { configuration.title = item.title }
       configuration.imagePlacement = .top
       configuration.imagePadding = 2
       configuration.contentInsets = .zero
@@ -76,6 +80,7 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
       }
       button.configuration = configuration
       button.accessibilityIdentifier = "more-" + item.target
+      button.accessibilityLabel = item.title
       button.addAction(
         UIAction { [weak self] _ in
           guard let self else { return }
@@ -85,30 +90,34 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
       menuButtons.append(button)
     }
     NSLayoutConstraint.activate([
-      actions.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-      actions.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+      actions.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 4),
+      actions.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -4),
       actions.topAnchor.constraint(equalTo: view.topAnchor, constant: 4),
       actions.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
     ])
   }
+
 
 }
 
 @MainActor
 private final class CompactMenuPresentation: UIPresentationController {
   private let anchor: () -> CGRect
+  private let edge: () -> NSDirectionalRectEdge?
   private let dismissArea = UIControl()
 
   init(
     presentedViewController: UIViewController, presenting: UIViewController?,
-    anchor: @escaping () -> CGRect
+    anchor: @escaping () -> CGRect, edge: @escaping () -> NSDirectionalRectEdge?
   ) {
     self.anchor = anchor
+    self.edge = edge
     super.init(presentedViewController: presentedViewController, presenting: presenting)
   }
 
   override var frameOfPresentedViewInContainerView: CGRect {
     guard let containerView else { return .zero }
+    if let edge = edge() { return besideBar(edge, in: containerView) }
     // The iOS 26 glass tab bar floats about 21pt in from each edge; share its
     // width so the menu stacks on it as one column.
     let inset: CGFloat
@@ -120,6 +129,18 @@ private final class CompactMenuPresentation: UIPresentationController {
       x: containerView.bounds.maxX - size.width - inset,
       y: max(containerView.safeAreaInsets.top + 8, anchor().minY - size.height - 8),
       width: size.width, height: size.height)
+  }
+
+  /// A vertical bar: a column level with the bar's bottom, beside the bar.
+  private func besideBar(_ edge: NSDirectionalRectEdge, in containerView: UIView) -> CGRect {
+    let bar = anchor()
+    // Rows and width match the vertical bar's 50pt item pitch and pill.
+    let size = CGSize(width: bar.width - 12, height: 3 * 50 + 8)
+    let leftToRight = containerView.effectiveUserInterfaceLayoutDirection == .leftToRight
+    let onRight = (edge == .trailing) == leftToRight
+    let x = onRight ? bar.minX - size.width - 8 : bar.maxX + 8
+    let y = min(bar.maxY - containerView.safeAreaInsets.bottom, containerView.bounds.maxY) - size.height
+    return CGRect(x: x, y: max(containerView.safeAreaInsets.top + 8, y), width: size.width, height: size.height)
   }
 
   override func presentationTransitionWillBegin() {

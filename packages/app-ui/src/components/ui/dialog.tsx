@@ -169,6 +169,7 @@ export const DialogContent = forwardRef<
           down), and `gap-1.5` spaces them — so twins never need pixel/right-*
           math per theme. */}
         <div
+          data-dialog-corner
           className={cn(
             "absolute right-3 flex h-6 items-center gap-1.5",
             cornerBand === "title" ? "top-6" : "top-3",

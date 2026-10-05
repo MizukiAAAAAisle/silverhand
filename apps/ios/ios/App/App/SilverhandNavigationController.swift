@@ -146,7 +146,18 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     if front == nil { hideBar(!visible || blocked, animated: false) }
     view.layoutIfNeeded()
     observeContentScroll()
-    return visible ? max(0, view.bounds.maxY - tabBar.frame.minY) : 0
+    return visible && verticalBarEdge == nil ? max(0, view.bounds.maxY - tabBar.frame.minY) : 0
+  }
+
+  /// iPhone Duo stands the tab bar on a side edge. The page's side safe-area
+  /// inset already clears it there, so no bottom inset applies.
+  var verticalBarEdge: NSDirectionalRectEdge? {
+    guard #available(iOS 27.1, *) else { return nil }
+    switch traitCollection.verticalBarEdge {
+    case .leading: return .leading
+    case .trailing: return .trailing
+    default: return nil
+    }
   }
 
   // WebKit backs each overflow scroller with its own UIScrollView. Handing the
@@ -256,7 +267,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       anchor: { [weak self] in
         guard let self else { return .zero }
         return self.tabBar.convert(self.tabBar.bounds, to: self.view)
-      }
+      },
+      edge: { [weak self] in self?.verticalBarEdge }
     ) { [weak self] target in
       guard let self, self.session == originSession else { return }
       self.openMore(target)
