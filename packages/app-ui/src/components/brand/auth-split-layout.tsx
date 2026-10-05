@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 import { Brandmark } from "./brandmark";
 
-/** 50/50 shell shared by the auth gate and the profile-setup step: brand on
- *  the left, form on the right. Below `lg` the brand half is hidden and the
- *  form fills the width. */
+/** Split shell shared by the auth gate and the profile-setup step: a narrow
+ *  brand column on the left, the form on the open page to the right. Below
+ *  `min-[860px]` the brand column is hidden and a compact brand header sits
+ *  above the form. */
 export function AuthSplitLayout({ children }: { children: ReactNode }): JSX.Element {
   return (
     <main
@@ -11,7 +12,7 @@ export function AuthSplitLayout({ children }: { children: ReactNode }): JSX.Elem
       style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
     >
       <BrandPanel />
-      <div className="auth-content grid w-full place-items-center px-6 py-14 min-[860px]:w-1/2">
+      <div className="auth-content grid w-full place-items-center px-6 py-14 min-[860px]:flex-1">
         <header className="auth-mobile-brand mb-8 hidden">
           <div className="flex items-center gap-3">
             <Brandmark className="size-9 shrink-0 text-text-primary" />
@@ -29,31 +30,30 @@ export function AuthSplitLayout({ children }: { children: ReactNode }): JSX.Elem
 
 const ISO_GRID =
   "repeating-linear-gradient(30deg, var(--border-subtle) 0 1px, transparent 1px 88px)," +
-  "repeating-linear-gradient(150deg, var(--border-subtle) 0 1px, transparent 1px 88px)," +
-  "repeating-linear-gradient(90deg, var(--border-subtle) 0 1px, transparent 1px 152px)";
+  "repeating-linear-gradient(150deg, var(--border-subtle) 0 1px, transparent 1px 88px)";
+
+const GRID_FADE = "linear-gradient(to top, #000 10%, transparent 75%)";
 
 function BrandPanel(): JSX.Element {
   return (
     <section
       aria-hidden
-      className="relative hidden w-1/2 shrink-0 overflow-hidden bg-bg-inset min-[860px]:block"
+      data-auth-brand
+      className="relative hidden w-[44%] shrink-0 overflow-hidden border-r border-border bg-(--auth-brand-bg,color-mix(in_oklab,var(--text-primary)_3%,var(--bg-base))) min-[860px]:block"
     >
-      <div className="absolute inset-0 opacity-70" style={{ backgroundImage: ISO_GRID }} />
       <div
-        className="pointer-events-none absolute inset-x-0 top-0 h-1/3"
-        style={{ background: "linear-gradient(to bottom, var(--bg-inset), transparent)" }}
+        className="absolute inset-0"
+        style={{ backgroundImage: ISO_GRID, maskImage: GRID_FADE, WebkitMaskImage: GRID_FADE }}
       />
-      <Brandmark className="absolute -bottom-24 -right-20 size-[34rem] text-text-primary opacity-[0.04]" />
-      <div className="absolute inset-0 grid place-items-center p-12">
-        <div className="flex max-w-md flex-col gap-8">
-          <Brandmark className="size-16 text-text-primary" />
-          <div className="flex flex-col gap-3">
-            <h2 className="text-4xl font-semibold leading-none tracking-tight">Silverhand</h2>
-            <p className="text-base leading-relaxed text-text-muted">
-              Where humans and agents work together.
-            </p>
-          </div>
+      <div className="relative flex h-full flex-col justify-between px-14 pt-18 pb-12">
+        <Brandmark className="size-11 text-text-primary" />
+        <div className="flex flex-col gap-5">
+          <h2 className="text-6xl font-semibold leading-none tracking-tighter">Silverhand</h2>
+          <p className="max-w-96 text-base leading-relaxed text-text-muted">
+            Where humans and agents work together.
+          </p>
         </div>
+        <p className="text-xs tracking-wide text-text-muted">silverhand</p>
       </div>
     </section>
   );

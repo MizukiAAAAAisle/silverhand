@@ -73,12 +73,11 @@ export function ProfileSetupForm({
     <AuthSplitLayout>
       <form
         onSubmit={submit}
-        data-modal-shell
-        data-popover-frame="info"
-        className="flex w-full max-w-105 flex-col gap-5 rounded-md border border-border bg-bg-floating p-6 shadow-modal"
+        data-auth-form
+        className="flex w-full max-w-90 flex-col gap-5"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
-        <h1 className="text-lg font-semibold">Set up your profile</h1>
+        <h1 className="mb-2 text-3xl font-semibold tracking-tight">Set up your profile</h1>
         <div className="flex items-center gap-3">
           <AvatarPickerButton
             size={AVATAR_PX["3xl"]}

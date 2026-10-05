@@ -283,11 +283,6 @@
 }
 :root:where([data-layout="compact"]) .auth-layout [data-auth-form] {
   max-width: none;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  background: transparent;
 }
 [data-layout="compact"] [data-section-sheet] {
   min-height: 0;

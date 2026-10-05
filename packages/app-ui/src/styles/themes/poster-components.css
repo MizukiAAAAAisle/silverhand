@@ -167,6 +167,10 @@
 
 /* Hooks: Navigation and unread */
 
+[data-theme="poster"] [data-auth-brand] {
+  --auth-brand-bg: var(--poster-paper-2);
+}
+
 [data-theme="poster"] aside[data-sidebar] {
   --pane-bg: var(--poster-paper-2);
   --text-primary: var(--poster-ink);

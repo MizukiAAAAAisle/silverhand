@@ -1,6 +1,6 @@
-import { ServerAddressControl } from "./server-address-control";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Loader2, LogIn, UserPlus } from "lucide-react";
+import { ServerAddressControl, ServerConnectionStatus } from "./server-address-control";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Loader2 } from "lucide-react";
 import { AUTH_HANDLE_TAKEN_CODE, suggestParticipantNameFromEmail } from "@silverhand/shared";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -135,53 +135,20 @@ export function RegistrationGate({
     <AuthSplitLayout>
       <form
         onSubmit={onSubmit}
-        // Same dialog identity as the other boot gates — see UpdateRequiredGate
-        // for the per-theme rationale (#task:1833). Not poster-only: studio-light
-        // also drops the 1px frame by its own `[data-modal-shell]` rule.
+        // Sits on the open page, not in a card: the brand column already frames
+        // the screen, so a second container only adds weight.
         data-auth-form
-        data-modal-shell
-        data-popover-frame="info"
-        className="w-full max-w-105 rounded-md border border-border bg-bg-floating p-6 shadow-modal"
+        className="w-full max-w-90"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
-        {showServerAddress && (
-          <ServerAddressControl
-            status={connectionStatus}
-            checking={connectionChecking}
-            onRetry={onRetry}
-            onEditingChange={setEditingServer}
-            disabled={submitting}
-          />
-        )}
-        {!signupEnabled && <h1 className="mb-5 text-lg font-semibold">Log in</h1>}
-
-        {signupEnabled ? (
-          // The app's one segmented-control contract (`data-panel-tabs`,
-          // surfaces.css panel-radius SSOT) rather than hand-written radii, so
-          // this switch and the Schedules FilterTabs stay one widget. The
-          // `hero` value is the density: a modal-level switch earns poster's
-          // poster weight (2px ink bracket + hard ink shadow); the valueless
-          // in-card filter does not (#task:1833).
-          <div
-            data-panel-tabs="hero"
-            className="mb-5 grid grid-cols-2 border border-border-subtle bg-bg-inset p-0.5"
-          >
-            <ModeButton
-              active={isSignup}
-              onClick={() => setMode("signup")}
-              icon={<UserPlus className="size-3.5" />}
-            >
-              Sign up
-            </ModeButton>
-            <ModeButton
-              active={!isSignup}
-              onClick={() => setMode("login")}
-              icon={<LogIn className="size-3.5" />}
-            >
-              Log in
-            </ModeButton>
-          </div>
-        ) : null}
+        <header className="mb-7 flex flex-col gap-1.5">
+          <h1 className="text-3xl font-semibold tracking-tight">
+            {isSignup ? "Sign up" : "Log in"}
+          </h1>
+          <p className="text-sm text-text-muted">
+            {isSignup ? "Create your account." : "Welcome back."}
+          </p>
+        </header>
 
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
@@ -201,7 +168,7 @@ export function RegistrationGate({
           {isSignup ? (
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="auth-handle" required>
-                Handle
+                Username
               </Label>
               <Input
                 ref={handleInputRef}
@@ -219,7 +186,7 @@ export function RegistrationGate({
                 }}
                 autoComplete="username"
                 spellCheck={false}
-                placeholder="your-handle"
+                placeholder="username"
               />
               {/* One line, always occupied: the problem when there is one, the
                   irreversibility note otherwise. Same height either way, so
@@ -227,7 +194,7 @@ export function RegistrationGate({
               <p
                 className={cn("text-xs leading-4", handleError ? "text-error" : "text-text-muted")}
               >
-                {handleError ?? "This handle is permanent and cannot be changed."}
+                {handleError ?? "Your username is permanent and cannot be changed."}
               </p>
             </div>
           ) : null}
@@ -272,10 +239,11 @@ export function RegistrationGate({
           ) : null}
         </div>
 
-        <footer className="mt-6 flex flex-col gap-2">
+        <footer className="mt-7 flex flex-col gap-3">
           <Button
             type="submit"
             variant="primary"
+            size="lg"
             className="w-full justify-center"
             disabled={!canSubmit}
           >
@@ -285,15 +253,9 @@ export function RegistrationGate({
                 {isSignup ? "Creating..." : "Signing in..."}
               </>
             ) : isSignup ? (
-              <>
-                <UserPlus className="size-3.5" />
-                Create account
-              </>
+              "Create account"
             ) : (
-              <>
-                <LogIn className="size-3.5" />
-                Log in
-              </>
+              "Log in"
             )}
           </Button>
           {isSignup && password.length > 0 && password !== confirmPassword ? (
@@ -303,37 +265,39 @@ export function RegistrationGate({
             <p className="text-xs text-error">Passwords do not match.</p>
           ) : null}
           {formError ? <p className="text-xs text-error">{formError}</p> : null}
+          {signupEnabled ? (
+            <p className="text-sm text-text-muted">
+              {isSignup ? "Already have an account?" : "No account?"}{" "}
+              <button
+                type="button"
+                className="font-medium text-text-primary underline underline-offset-3 hover:text-text-secondary focus-outline"
+                onClick={() => {
+                  setMode(isSignup ? "login" : "signup");
+                  setError(null);
+                }}
+              >
+                {isSignup ? "Log in" : "Sign up"}
+              </button>
+            </p>
+          ) : null}
         </footer>
+
+        {showServerAddress && (
+          <div className="mt-10 border-t border-border-subtle pt-4">
+            <ServerAddressControl
+              onRetry={onRetry}
+              onEditingChange={setEditingServer}
+              disabled={submitting}
+            />
+            <ServerConnectionStatus
+              status={connectionStatus}
+              checking={connectionChecking}
+              onRetry={onRetry}
+            />
+          </div>
+        )}
       </form>
     </AuthSplitLayout>
-  );
-}
-
-function ModeButton({
-  active,
-  onClick,
-  icon,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: ReactNode;
-  children: ReactNode;
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        // Radius comes from `[data-panel-tabs] button` (surfaces.css SSOT), not
-        // from a class here — same reason the track dropped its own.
-        "inline-flex h-8 items-center justify-center gap-1.5 text-xs font-medium text-text-muted transition",
-        active && "bg-bg-floating text-text-primary shadow-sm",
-      )}
-    >
-      {icon}
-      {children}
-    </button>
   );
 }
 
@@ -352,7 +316,7 @@ function authErrorMessage(err: unknown): AuthError {
     // not JSON — fall through.
   }
   if (parsed.error_code === AUTH_HANDLE_TAKEN_CODE || parsed.code === AUTH_HANDLE_TAKEN_CODE) {
-    return { field: "handle", message: "This handle is already taken." };
+    return { field: "handle", message: "This username is already taken." };
   }
   if (parsed.error_code === "auth_failed" || parsed.code === "auth_failed") {
     return { field: null, message: "Email or password is incorrect." };
