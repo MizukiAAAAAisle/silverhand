@@ -166,13 +166,13 @@ export function App({
  * unset var.
  */
 const TOAST_OFFSET = {
-  top: "calc(var(--titlebar-height) + 8px)",
+  top: "calc(var(--titlebar-row-height, var(--titlebar-height)) + var(--titlebar-inset-top, env(safe-area-inset-top, 0px)) + 8px)",
   right: "12px",
   bottom: "24px",
   left: "24px",
 } as const;
 const TOAST_MOBILE_OFFSET = {
-  top: "calc(var(--titlebar-height) + 8px)",
+  top: "calc(var(--titlebar-row-height, var(--titlebar-height)) + var(--titlebar-inset-top, env(safe-area-inset-top, 0px)) + 8px)",
   right: "16px",
   bottom: "16px",
   left: "16px",

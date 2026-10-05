@@ -244,7 +244,37 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
 }
 
 class SilverhandViewController: CAPBridgeViewController {
+  private let plugin = SilverhandClientPlugin()
+  private struct WindowControls: Equatable { let top, height, statusBar: CGFloat }
+  private var windowControls: WindowControls?
+
   override func capacitorDidLoad() {
-    bridge?.registerPluginInstance(SilverhandClientPlugin())
+    bridge?.registerPluginInstance(plugin)
+  }
+
+  // iPadOS window controls occupy the band between the top safe-area inset and
+  // the vertically corner-adapted inset. When the window reaches the top of
+  // the screen, the status bar covers part of that inset; the titlebar keeps
+  // its row below it.
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    let top = view.safeAreaInsets.top
+    var height: CGFloat = 0
+    var statusBar: CGFloat = 0
+    if #available(iOS 26.0, *) {
+      let adapted = view.edgeInsets(for: .safeArea(cornerAdaptation: .vertical))
+      height = max(0, adapted.top - top)
+    }
+    if let window = view.window, let frame = window.windowScene?.statusBarManager?.statusBarFrame {
+      let bar = window.convert(frame, from: window.screen.coordinateSpace)
+      let overlap = window.bounds.intersection(bar)
+      if !overlap.isNull { statusBar = min(top, overlap.height) }
+    }
+    let next = WindowControls(top: top, height: height, statusBar: statusBar)
+    guard next != windowControls else { return }
+    windowControls = next
+    plugin.notifyListeners(
+      "windowControls", data: ["top": top, "height": height, "statusBar": statusBar],
+      retainUntilConsumed: true)
   }
 }

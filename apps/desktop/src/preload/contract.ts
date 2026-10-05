@@ -81,6 +81,7 @@ export interface DesktopBridge {
 
   onEpochUpdateRequired(handler: () => void): () => void;
   onNavigateSettings(handler: () => void): () => void;
+  onFullScreenChange(handler: (fullScreen: boolean) => void): () => void;
 
   onContextualClose(handler: (reqId: string) => void): () => void;
 

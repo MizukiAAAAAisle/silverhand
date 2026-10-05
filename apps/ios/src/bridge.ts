@@ -58,5 +58,9 @@ export interface NativeBridge {
     handler: (state: { docked: boolean }) => void,
   ): Promise<PluginListenerHandle>;
   addListener(event: "foreground", handler: () => void): Promise<PluginListenerHandle>;
+  addListener(
+    event: "windowControls",
+    handler: (state: { top: number; height: number; statusBar: number }) => void,
+  ): Promise<PluginListenerHandle>;
 }
 export const nativeBridge = registerPlugin<NativeBridge>("SilverhandClient");

@@ -65,13 +65,18 @@ export function Titlebar({
     `calc(var(--nav-rail-width) + ${leftColumnWidth} + var(--frame-padding, 0px) * 2` +
     ` + var(--pane-gap))`;
   const toggleButton =
-    "no-drag flex size-6 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline";
+    "no-drag flex size-(--titlebar-control-size,1.5rem) items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline";
 
   return (
     <header
       data-titlebar="app"
+      // The iOS shell sets the inset, row height and control sizes in iPad
+      // windowed mode so the row centres on the system window controls;
+      // otherwise the bar clears the top safe area (0 on desktop).
       className={
-        "drag-region relative flex h-(--titlebar-height) shrink-0 items-center " +
+        "drag-region relative box-content flex shrink-0 items-center " +
+        "h-(--titlebar-row-height,var(--titlebar-height)) " +
+        "pt-(--titlebar-inset-top,env(safe-area-inset-top,0px)) " +
         "gap-2 border-b text-xs " +
         "bg-(--bg-app,var(--bg-primary)) " +
         "border-(--titlebar-border,var(--border-subtle))"
@@ -109,9 +114,9 @@ export function Titlebar({
               className={toggleButton}
             >
               {workspaceSidebarVisible ? (
-                <PanelLeftClose className="size-3.5" />
+                <PanelLeftClose className="size-(--titlebar-icon-size,0.875rem)" />
               ) : (
-                <PanelLeftOpen className="size-3.5" />
+                <PanelLeftOpen className="size-(--titlebar-icon-size,0.875rem)" />
               )}
             </button>
           ) : null}
@@ -124,10 +129,12 @@ export function Titlebar({
         </span>
       ) : null}
 
-      {/* Centered on the whole window (no-drag so the pill takes clicks). */}
+      {/* Centered on the whole window (no-drag so the pill takes clicks). The
+       * box spans only the content row, so a top inset never shifts it off
+       * the row's centre line. */}
       {search ? (
-        <div className="no-drag pointer-events-none absolute left-1/2 top-1/2 flex w-[clamp(420px,52vw,720px)] -translate-x-1/2 -translate-y-1/2 justify-center">
-          <div className="pointer-events-auto w-full">{search}</div>
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex h-(--titlebar-row-height,var(--titlebar-height)) items-center justify-center">
+          <div className="no-drag pointer-events-auto w-[clamp(420px,52vw,720px)]">{search}</div>
         </div>
       ) : null}
 

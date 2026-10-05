@@ -2038,6 +2038,12 @@ function createWindow(): void {
   win.webContents.on("zoom-changed", (event) => event.preventDefault());
 
   win.on("ready-to-show", () => win.show());
+  if (process.platform === "darwin") {
+    const sendFullScreen = () => win.webContents.send("window:full-screen", win.isFullScreen());
+    win.on("enter-full-screen", sendFullScreen);
+    win.on("leave-full-screen", sendFullScreen);
+    win.webContents.on("did-finish-load", sendFullScreen);
+  }
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = null;
   });

@@ -237,11 +237,11 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
           type="button"
           aria-label="Search"
           className={cn(
-            "no-drag flex h-6 w-full items-center gap-2 rounded-(--control-radius) px-2.5 text-left text-xs outline-none",
+            "no-drag flex h-(--titlebar-control-size,1.5rem) w-full items-center gap-2 rounded-(--control-radius) px-2.5 text-left text-(length:--titlebar-text-size,0.75rem) outline-none",
             "bg-text-primary/10 text-text-muted transition-colors hover:bg-text-primary/[0.14]",
           )}
         >
-          <SearchIcon className="size-3.5 shrink-0" />
+          <SearchIcon className="size-(--titlebar-icon-size,0.875rem) shrink-0" />
           <span className="min-w-0 flex-1 truncate">Search everything</span>
           <kbd className="shrink-0 rounded-(--chip-radius) bg-text-primary/[0.16] px-1.5 py-0.5 font-sans text-(length:--text-badge) leading-none text-text-secondary">
             ⌘K

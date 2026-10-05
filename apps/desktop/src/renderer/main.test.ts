@@ -13,7 +13,10 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   vi.stubGlobal("document", { getElementById: () => ({}) });
-  vi.stubGlobal("window", { silverhand: {}, location: { reload: vi.fn() } });
+  vi.stubGlobal("window", {
+    silverhand: { onFullScreenChange: vi.fn() },
+    location: { reload: vi.fn() },
+  });
 });
 
 it.each([true, false])(
