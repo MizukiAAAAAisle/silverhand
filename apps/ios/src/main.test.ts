@@ -32,6 +32,28 @@ beforeEach(() => {
 });
 
 describe("iOS entry", () => {
+  it("keeps the appearance preference when a session reset wipes storage", async () => {
+    const store = new Map<string, string>([
+      ["silverhand:appearance", '{"theme":"studio-light"}'],
+      ["silverhand:last-channel", "c1"],
+    ]);
+    const replace = vi.fn();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => store.set(key, value),
+      clear: () => store.clear(),
+    });
+    vi.stubGlobal("sessionStorage", { clear: vi.fn() });
+    vi.stubGlobal("window", { location: { origin: "capacitor://localhost", replace } });
+    h.profile.mockResolvedValue({});
+    await import("./main");
+    await vi.waitFor(() => expect(h.mount).toHaveBeenCalled());
+    const reset = h.listen.mock.calls.find(([event]) => event === "sessionInvalidated")![1];
+    reset();
+    expect([...store]).toEqual([["silverhand:appearance", '{"theme":"studio-light"}']]);
+    expect(replace).toHaveBeenCalledWith("capacitor://localhost/");
+  });
+
   it("uses keyboard spacing only while the native keyboard is docked", async () => {
     h.profile.mockResolvedValue({});
     await import("./main");

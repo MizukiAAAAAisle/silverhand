@@ -5,8 +5,17 @@ import "./mobile.css";
 
 // This WebView has one native profile. Never retain server-scoped browser state
 // across logout or origin changes, including modules hydrated at import time.
+// Appearance is a device preference, not server state, so it survives.
+const DEVICE_PREFERENCE_KEYS = ["silverhand:appearance"];
+
 function resetApplication(): void {
+  const kept = DEVICE_PREFERENCE_KEYS.map((key) => [key, localStorage.getItem(key)] as const);
   localStorage.clear();
+  for (const [key, value] of kept) {
+    if (value !== null) {
+      localStorage.setItem(key, value);
+    }
+  }
   sessionStorage.clear();
   window.location.replace(window.location.origin + "/");
 }
