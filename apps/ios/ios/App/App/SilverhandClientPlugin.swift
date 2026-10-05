@@ -248,9 +248,18 @@ class SilverhandViewController: CAPBridgeViewController {
   private struct WindowControls: Equatable { let top, height, statusBar: CGFloat }
   private var windowControls: WindowControls?
   private var verticalBar: String?
+  private var fold: [String: CGFloat]?
 
   override func capacitorDidLoad() {
     bridge?.registerPluginInstance(plugin)
+    // Folding moves the division region without a layout pass, so a dialog
+    // already open would keep its unfolded frame. Re-read on hinge changes.
+    if #available(iOS 27.1, *) {
+      view.addInteraction(
+        UIHingeInteraction { [weak self] _, _ in
+          DispatchQueue.main.async { self?.publishFold() }
+        })
+    }
   }
 
   // iPadOS window controls occupy the band between the top safe-area inset and
@@ -260,6 +269,7 @@ class SilverhandViewController: CAPBridgeViewController {
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
     publishVerticalBar()
+    publishFold()
     let top = view.safeAreaInsets.top
     var height: CGFloat = 0
     var statusBar: CGFloat = 0
@@ -278,6 +288,27 @@ class SilverhandViewController: CAPBridgeViewController {
     plugin.notifyListeners(
       "windowControls", data: ["top": top, "height": height, "statusBar": statusBar],
       retainUntilConsumed: true)
+  }
+
+  /// The active fold (iPhone Duo half open) as a band across the view,
+  /// including the system margins around the crease. The band runs top to
+  /// bottom when it is taller than wide.
+  private func publishFold() {
+    var next: [String: CGFloat] = [:]
+    if #available(iOS 27.1, *),
+      let region = view.reservedRegions(kind: .division).first(where: { $0.isActive })
+    {
+      let band = region.frame
+      let vertical = band.height > band.width
+      next = [
+        "vertical": vertical ? 1 : 0,
+        "start": vertical ? band.minX : band.minY,
+        "end": vertical ? band.maxX : band.maxY,
+      ]
+    }
+    guard next != fold else { return }
+    fold = next
+    plugin.notifyListeners("fold", data: next, retainUntilConsumed: true)
   }
 
   /// The edge where iOS stands the tab bar (iPhone Duo), or "" when bars are

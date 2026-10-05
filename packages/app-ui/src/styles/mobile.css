@@ -408,6 +408,12 @@
   border-left-width: 0;
   border-right-width: 0;
 }
+/* A half-open horizontal fold divides the display; a bottom sheet stays below
+   it. Centred dialogs ignore a vertical fold: the keyboard spans both panes,
+   so a dialog moved to one side detaches from it. */
+:root[data-layout="compact"][data-fold="horizontal"] [data-dialog-content] {
+  max-height: max(240px, calc(100dvh - var(--fold-end) - var(--dialog-viewport-bottom, 0px)));
+}
 :root[data-vertical-bar] .nav-rail {
   display: none;
 }

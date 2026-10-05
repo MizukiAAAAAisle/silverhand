@@ -64,6 +64,20 @@ async function start(): Promise<void> {
     if (edge) document.documentElement.dataset["verticalBar"] = edge;
     else delete document.documentElement.dataset["verticalBar"];
   });
+  // A half-open iPhone Duo divides the display at the fold. Dialogs move off
+  // the band; `start`/`end` are its edges along the dividing axis.
+  await nativeBridge.addListener("fold", ({ vertical, start, end }) => {
+    const root = document.documentElement;
+    if (start === undefined || end === undefined) {
+      delete root.dataset["fold"];
+      root.style.removeProperty("--fold-start");
+      root.style.removeProperty("--fold-end");
+      return;
+    }
+    root.dataset["fold"] = vertical ? "vertical" : "horizontal";
+    root.style.setProperty("--fold-start", `${start}px`);
+    root.style.setProperty("--fold-end", `${end}px`);
+  });
   configurePlatform(createIOSPlatform(nativeBridge, resetApplication));
   await nativeBridge.getProfile();
   mountApp(root, { loginFirst: true, showServerAddress: true });
