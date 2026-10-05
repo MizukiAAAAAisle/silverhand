@@ -85,8 +85,6 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     view.bringSubviewToFront(moreAction)
   }
 
-  /// Read at touch time: a minimized tab bar relocates its items without a
-  /// controller layout pass, so a cached frame would cover content.
   /// The glass pill around the items; the bar's own frame spans the screen.
   private func tabPillFrame() -> CGRect {
     let bar = tabBar.convert(tabBar.bounds, to: view)
@@ -102,6 +100,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     return CGRect(x: pill.minX - 4, y: bar.minY, width: pill.width + 8, height: bar.height)
   }
 
+  /// Read at touch time: a minimized tab bar relocates its items without a
+  /// controller layout pass, so a cached frame would cover content.
   private func moreItemFrame() -> CGRect? {
     guard !tabBar.isHidden, tabBar.alpha > 0 else { return nil }
     if #available(iOS 17.0, *), let item = viewControllers?[3].tabBarItem,
@@ -186,14 +186,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
 
   /// iPhone Duo stands the tab bar on a side edge. The page's side safe-area
   /// inset already clears it there, so no bottom inset applies.
-  var verticalBarEdge: NSDirectionalRectEdge? {
-    guard #available(iOS 27.1, *) else { return nil }
-    switch traitCollection.verticalBarEdge {
-    case .leading: return .leading
-    case .trailing: return .trailing
-    default: return nil
-    }
-  }
+  var verticalBarEdge: NSDirectionalRectEdge? { traitCollection.tabBarEdge }
 
   // WebKit backs each overflow scroller with its own UIScrollView. Handing the
   // page's main one to UIKit lets the glass tab bar minimize on scroll. WebKit

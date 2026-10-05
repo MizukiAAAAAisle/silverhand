@@ -166,14 +166,16 @@ export function App({
  * `width: calc(100% - var(--mobile-offset-left) * 2)`, which breaks on an
  * unset var.
  */
+const TOAST_TOP =
+  "calc(var(--titlebar-row-height, var(--titlebar-height)) + var(--titlebar-inset-top, env(safe-area-inset-top, 0px)) + 8px)";
 const TOAST_OFFSET = {
-  top: "calc(var(--titlebar-row-height, var(--titlebar-height)) + var(--titlebar-inset-top, env(safe-area-inset-top, 0px)) + 8px)",
+  top: TOAST_TOP,
   right: "12px",
   bottom: "24px",
   left: "24px",
 } as const;
 const TOAST_MOBILE_OFFSET = {
-  top: "calc(var(--titlebar-row-height, var(--titlebar-height)) + var(--titlebar-inset-top, env(safe-area-inset-top, 0px)) + 8px)",
+  top: TOAST_TOP,
   right: "16px",
   bottom: "16px",
   left: "16px",
@@ -314,6 +316,8 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
           </div>
         </div>
 
+        {/* With a native tab bar this renders nothing and only syncs badges,
+         * which the bar needs in every layout. */}
         {(compact || getPlatform().navigation) && <MobileTabBar dots={navRailDots} />}
 
         {/* Toast surface follows the active theme: `theme` picks sonner's

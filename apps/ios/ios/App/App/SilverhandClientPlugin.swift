@@ -244,11 +244,17 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
 }
 
 class SilverhandViewController: CAPBridgeViewController {
-  private let plugin = SilverhandClientPlugin()
   private struct WindowControls: Equatable { let top, height, statusBar: CGFloat }
+  private struct Fold: Equatable {
+    let axis: String
+    let start, end: CGFloat
+  }
+
+  private let plugin = SilverhandClientPlugin()
+  // Last published values; each event fires only on change.
   private var windowControls: WindowControls?
   private var verticalBar: String?
-  private var fold: [String: CGFloat]?
+  private var fold: Fold?
 
   override func capacitorDidLoad() {
     bridge?.registerPluginInstance(plugin)
@@ -262,14 +268,18 @@ class SilverhandViewController: CAPBridgeViewController {
     }
   }
 
-  // iPadOS window controls occupy the band between the top safe-area inset and
-  // the vertically corner-adapted inset. When the window reaches the top of
-  // the screen, the status bar covers part of that inset; the titlebar keeps
-  // its row below it.
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
+    publishWindowControls()
     publishVerticalBar()
     publishFold()
+  }
+
+  /// iPadOS window controls occupy the band between the top safe-area inset
+  /// and the vertically corner-adapted inset. When the window reaches the top
+  /// of the screen, the status bar covers part of that inset; the titlebar
+  /// keeps its row below it.
+  private func publishWindowControls() {
     let top = view.safeAreaInsets.top
     var height: CGFloat = 0
     var statusBar: CGFloat = 0
@@ -294,36 +304,47 @@ class SilverhandViewController: CAPBridgeViewController {
   /// including the system margins around the crease. The band runs top to
   /// bottom when it is taller than wide.
   private func publishFold() {
-    var next: [String: CGFloat] = [:]
+    var next: Fold?
     if #available(iOS 27.1, *),
       let region = view.reservedRegions(kind: .division).first(where: { $0.isActive })
     {
       let band = region.frame
       let vertical = band.height > band.width
-      next = [
-        "vertical": vertical ? 1 : 0,
-        "start": vertical ? band.minX : band.minY,
-        "end": vertical ? band.maxX : band.maxY,
-      ]
+      next = Fold(
+        axis: vertical ? "vertical" : "horizontal",
+        start: vertical ? band.minX : band.minY,
+        end: vertical ? band.maxX : band.maxY)
     }
     guard next != fold else { return }
     fold = next
-    plugin.notifyListeners("fold", data: next, retainUntilConsumed: true)
+    let data: [String: Any] = next.map { ["axis": $0.axis, "start": $0.start, "end": $0.end] } ?? [:]
+    plugin.notifyListeners("fold", data: data, retainUntilConsumed: true)
   }
 
   /// The edge where iOS stands the tab bar (iPhone Duo), or "" when bars are
   /// horizontal. The page drops its own navigation rail while one is present.
   private func publishVerticalBar() {
-    var edge = ""
-    if #available(iOS 27.1, *) {
-      switch traitCollection.verticalBarEdge {
-      case .leading: edge = "leading"
-      case .trailing: edge = "trailing"
-      default: break
-      }
+    let edge: String
+    switch traitCollection.tabBarEdge {
+    case .leading: edge = "leading"
+    case .trailing: edge = "trailing"
+    default: edge = ""
     }
     guard edge != verticalBar else { return }
     verticalBar = edge
     plugin.notifyListeners("verticalBar", data: ["edge": edge], retainUntilConsumed: true)
+  }
+}
+
+extension UITraitCollection {
+  /// The side edge where iOS stands bars (iPhone Duo), or nil when they are
+  /// horizontal.
+  var tabBarEdge: NSDirectionalRectEdge? {
+    guard #available(iOS 27.1, *) else { return nil }
+    switch verticalBarEdge {
+    case .leading: return .leading
+    case .trailing: return .trailing
+    default: return nil
+    }
   }
 }

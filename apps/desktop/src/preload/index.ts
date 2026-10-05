@@ -144,15 +144,15 @@ const api: DesktopBridge = {
     ipcRenderer.on("epoch:update-required", listener);
     return () => ipcRenderer.off("epoch:update-required", listener);
   },
-  /** Fired by the App menu's "Settings…" item (Cmd+,) so the renderer
-   *  can navigate to the Settings page. The main process also focuses
-   *  the window before emitting, so the handler only needs to navigate. */
   /** macOS full-screen state; the traffic lights hide while it is true. */
   onFullScreenChange: (handler: (fullScreen: boolean) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, fullScreen: boolean) => handler(fullScreen);
     ipcRenderer.on("window:full-screen", listener);
     return () => ipcRenderer.off("window:full-screen", listener);
   },
+  /** Fired by the App menu's "Settings…" item (Cmd+,) so the renderer
+   *  can navigate to the Settings page. The main process also focuses
+   *  the window before emitting, so the handler only needs to navigate. */
   onNavigateSettings: (handler: () => void): (() => void) => {
     const listener = (_event: IpcRendererEvent) => handler();
     ipcRenderer.on("navigate:settings", listener);

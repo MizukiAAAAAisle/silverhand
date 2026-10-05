@@ -64,7 +64,9 @@ export interface NativeBridge {
   ): Promise<PluginListenerHandle>;
   addListener(
     event: "fold",
-    handler: (state: { vertical?: number; start?: number; end?: number }) => void,
+    handler: (
+      state: { axis: "vertical" | "horizontal"; start: number; end: number } | { axis?: undefined },
+    ) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     event: "verticalBar",

@@ -16,7 +16,6 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
   private let anchor: () -> CGRect
   private let edge: () -> NSDirectionalRectEdge?
   private let onSelect: (String) -> Void
-  private let actions = UIStackView()
 
   init(
     anchor: @escaping () -> CGRect,
@@ -57,7 +56,10 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
       view.backgroundColor = .systemBackground
     }
 
-    actions.axis = edge() == nil ? .horizontal : .vertical
+    // Beside a vertical bar the menu is an icon-only column, like the bar.
+    let besideBar = edge() != nil
+    let actions = UIStackView()
+    actions.axis = besideBar ? .vertical : .horizontal
     actions.distribution = .fillEqually
     actions.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(actions)
@@ -65,8 +67,7 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
       let button = UIButton(type: .system)
       var configuration = UIButton.Configuration.plain()
       configuration.image = UIImage(named: item.symbol)
-      // Beside a vertical bar the menu is icon-only, like the bar itself.
-      if edge() == nil { configuration.title = item.title }
+      if !besideBar { configuration.title = item.title }
       configuration.imagePlacement = .top
       configuration.imagePadding = 2
       configuration.contentInsets = .zero
@@ -96,8 +97,6 @@ final class NavigationMoreMenu: UIViewController, UIViewControllerTransitioningD
       actions.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
     ])
   }
-
-
 }
 
 @MainActor
@@ -120,15 +119,13 @@ private final class CompactMenuPresentation: UIPresentationController {
     if let edge = edge() { return besideBar(edge, in: containerView) }
     // Share the glass pill's width so the menu stacks on it as one column.
     // The pill is narrower than the screen on a wide display.
+    // Without item frames the anchor is the full-width bar; inset it then.
     let bar = anchor()
-    let inset: CGFloat = 16
-    let pill =
-      bar.width < containerView.bounds.width - 1
-      ? bar : bar.insetBy(dx: inset, dy: 0)
+    let pill = bar.width < containerView.bounds.width - 1 ? bar : bar.insetBy(dx: 16, dy: 0)
+    let height = presentedViewController.preferredContentSize.height
     return CGRect(
-      x: pill.minX,
-      y: max(containerView.safeAreaInsets.top + 8, bar.minY - presentedViewController.preferredContentSize.height - 8),
-      width: pill.width, height: presentedViewController.preferredContentSize.height)
+      x: pill.minX, y: max(containerView.safeAreaInsets.top + 8, bar.minY - height - 8),
+      width: pill.width, height: height)
   }
 
   /// A vertical bar: a column level with the bar's bottom, beside the bar.
@@ -140,7 +137,8 @@ private final class CompactMenuPresentation: UIPresentationController {
     let onRight = (edge == .trailing) == leftToRight
     let x = onRight ? pill.minX - size.width - 8 : pill.maxX + 8
     let y = pill.maxY - size.height
-    return CGRect(x: x, y: max(containerView.safeAreaInsets.top + 8, y), width: size.width, height: size.height)
+    return CGRect(
+      x: x, y: max(containerView.safeAreaInsets.top + 8, y), width: size.width, height: size.height)
   }
 
   override func presentationTransitionWillBegin() {
