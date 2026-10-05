@@ -62,5 +62,9 @@ export interface NativeBridge {
     event: "windowControls",
     handler: (state: { top: number; height: number; statusBar: number }) => void,
   ): Promise<PluginListenerHandle>;
+  addListener(
+    event: "verticalBar",
+    handler: (state: { edge: "" | "leading" | "trailing" }) => void,
+  ): Promise<PluginListenerHandle>;
 }
 export const nativeBridge = registerPlugin<NativeBridge>("SilverhandClient");

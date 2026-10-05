@@ -118,28 +118,28 @@ private final class CompactMenuPresentation: UIPresentationController {
   override var frameOfPresentedViewInContainerView: CGRect {
     guard let containerView else { return .zero }
     if let edge = edge() { return besideBar(edge, in: containerView) }
-    // The iOS 26 glass tab bar floats about 21pt in from each edge; share its
-    // width so the menu stacks on it as one column.
-    let inset: CGFloat
-    if #available(iOS 26.0, *) { inset = 21 } else { inset = 16 }
-    let size = CGSize(
-      width: containerView.bounds.width - inset * 2,
-      height: presentedViewController.preferredContentSize.height)
+    // Share the glass pill's width so the menu stacks on it as one column.
+    // The pill is narrower than the screen on a wide display.
+    let bar = anchor()
+    let inset: CGFloat = 16
+    let pill =
+      bar.width < containerView.bounds.width - 1
+      ? bar : bar.insetBy(dx: inset, dy: 0)
     return CGRect(
-      x: containerView.bounds.maxX - size.width - inset,
-      y: max(containerView.safeAreaInsets.top + 8, anchor().minY - size.height - 8),
-      width: size.width, height: size.height)
+      x: pill.minX,
+      y: max(containerView.safeAreaInsets.top + 8, bar.minY - presentedViewController.preferredContentSize.height - 8),
+      width: pill.width, height: presentedViewController.preferredContentSize.height)
   }
 
   /// A vertical bar: a column level with the bar's bottom, beside the bar.
   private func besideBar(_ edge: NSDirectionalRectEdge, in containerView: UIView) -> CGRect {
-    let bar = anchor()
-    // Rows and width match the vertical bar's 50pt item pitch and pill.
-    let size = CGSize(width: bar.width - 12, height: 3 * 50 + 8)
+    let pill = anchor()
+    // Rows and width match the vertical pill's 50pt item pitch and width.
+    let size = CGSize(width: pill.width, height: 3 * 50 + 8)
     let leftToRight = containerView.effectiveUserInterfaceLayoutDirection == .leftToRight
     let onRight = (edge == .trailing) == leftToRight
-    let x = onRight ? bar.minX - size.width - 8 : bar.maxX + 8
-    let y = min(bar.maxY - containerView.safeAreaInsets.bottom, containerView.bounds.maxY) - size.height
+    let x = onRight ? pill.minX - size.width - 8 : pill.maxX + 8
+    let y = pill.maxY - size.height
     return CGRect(x: x, y: max(containerView.safeAreaInsets.top + 8, y), width: size.width, height: size.height)
   }
 

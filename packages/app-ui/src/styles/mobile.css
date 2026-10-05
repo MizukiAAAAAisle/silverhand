@@ -403,6 +403,14 @@
   border-bottom-right-radius: 0;
 }
 
+/* A bottom sheet runs to both screen edges, where side bars cover any border. */
+:root[data-layout="compact"] [data-dialog-content] {
+  border-left-width: 0;
+  border-right-width: 0;
+}
+:root[data-vertical-bar] .nav-rail {
+  display: none;
+}
 /* The corner cluster keeps its 12px gutter inside the side safe area. */
 :where([data-layout="compact"]) [data-dialog-content] > [data-dialog-corner] {
   right: max(12px, env(safe-area-inset-right, 0px));

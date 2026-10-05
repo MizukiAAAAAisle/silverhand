@@ -247,6 +247,7 @@ class SilverhandViewController: CAPBridgeViewController {
   private let plugin = SilverhandClientPlugin()
   private struct WindowControls: Equatable { let top, height, statusBar: CGFloat }
   private var windowControls: WindowControls?
+  private var verticalBar: String?
 
   override func capacitorDidLoad() {
     bridge?.registerPluginInstance(plugin)
@@ -258,6 +259,7 @@ class SilverhandViewController: CAPBridgeViewController {
   // its row below it.
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
+    publishVerticalBar()
     let top = view.safeAreaInsets.top
     var height: CGFloat = 0
     var statusBar: CGFloat = 0
@@ -276,5 +278,21 @@ class SilverhandViewController: CAPBridgeViewController {
     plugin.notifyListeners(
       "windowControls", data: ["top": top, "height": height, "statusBar": statusBar],
       retainUntilConsumed: true)
+  }
+
+  /// The edge where iOS stands the tab bar (iPhone Duo), or "" when bars are
+  /// horizontal. The page drops its own navigation rail while one is present.
+  private func publishVerticalBar() {
+    var edge = ""
+    if #available(iOS 27.1, *) {
+      switch traitCollection.verticalBarEdge {
+      case .leading: edge = "leading"
+      case .trailing: edge = "trailing"
+      default: break
+      }
+    }
+    guard edge != verticalBar else { return }
+    verticalBar = edge
+    plugin.notifyListeners("verticalBar", data: ["edge": edge], retainUntilConsumed: true)
   }
 }

@@ -3,6 +3,7 @@ import { useAppOptions } from "./app-options";
 import { NavigationLaunch } from "@/navigation/launch";
 import { NavigationProvider } from "@/navigation/provider";
 import { useCompactLayout } from "@/navigation/layout";
+import { getPlatform } from "@/platform";
 import { MobileHeader, MobileTabBar } from "@/components/layout/mobile-shell";
 import { useEffect, useState } from "react";
 import { ShutdownOverlay } from "@/features/app-shell/shutdown-overlay";
@@ -313,7 +314,7 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
           </div>
         </div>
 
-        {compact && <MobileTabBar dots={navRailDots} />}
+        {(compact || getPlatform().navigation) && <MobileTabBar dots={navRailDots} />}
 
         {/* Toast surface follows the active theme: `theme` picks sonner's
          * light/dark default scale, and chrome.css maps its fill / text /

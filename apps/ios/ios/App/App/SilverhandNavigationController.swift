@@ -18,8 +18,13 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   private var backKey: String?
   private var modalVersion = 0
   private var blocked = false
-  private var visible = false
-  private var backVisible = false
+  private var requestedVisible = false
+  private var requestedBackVisible = false
+  private var barEdge: NSDirectionalRectEdge?
+  // A vertical bar stays on every page: it holds its place beside the camera
+  // as the device folds, and never costs content height.
+  private var visible: Bool { requestedVisible || verticalBarEdge != nil }
+  private var backVisible: Bool { requestedBackVisible || verticalBarEdge != nil }
   private var images: [String: UIImage] = [:]
   private var imageOrder: [String] = []
   private var front: UIView?
@@ -73,11 +78,30 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
     moreAction.frame = view.bounds
+    if verticalBarEdge != barEdge {
+      barEdge = verticalBarEdge
+      if front == nil, !session.isEmpty { hideBar(!visible || blocked, animated: false) }
+    }
     view.bringSubviewToFront(moreAction)
   }
 
   /// Read at touch time: a minimized tab bar relocates its items without a
   /// controller layout pass, so a cached frame would cover content.
+  /// The glass pill around the items; the bar's own frame spans the screen.
+  private func tabPillFrame() -> CGRect {
+    let bar = tabBar.convert(tabBar.bounds, to: view)
+    guard #available(iOS 17.0, *) else { return bar }
+    let items = (viewControllers ?? []).compactMap { $0.tabBarItem.frame(in: view) }
+      .filter { !$0.isEmpty }
+    guard items.count == 4 else { return bar }
+    let pill = items.dropFirst().reduce(items[0]) { $0.union($1) }
+    if verticalBarEdge != nil {
+      // The vertical glass platter measures 2pt outside its 44pt items.
+      return pill.insetBy(dx: -2, dy: -2)
+    }
+    return CGRect(x: pill.minX - 4, y: bar.minY, width: pill.width + 8, height: bar.height)
+  }
+
   private func moreItemFrame() -> CGRect? {
     guard !tabBar.isHidden, tabBar.alpha > 0 else { return nil }
     if #available(iOS 17.0, *), let item = viewControllers?[3].tabBarItem,
@@ -87,7 +111,18 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       // expands the bar; it is not More.
       let selected = selectedViewController?.tabBarItem.frame(in: view)
       if itemFrame.isEmpty || (selectedIndex != 3 && selected == itemFrame) { return nil }
-      return itemFrame
+      // Item frames overlap their neighbours (58pt items on a 50pt pitch in a
+      // vertical bar). Stop More at the midpoint to Tasks so the overlap goes
+      // to Tasks.
+      guard let tasks = viewControllers?[2].tabBarItem.frame(in: view), !tasks.isEmpty else {
+        return itemFrame
+      }
+      if verticalBarEdge != nil {
+        let edge = max(itemFrame.minY, (tasks.midY + itemFrame.midY) / 2)
+        return CGRect(x: itemFrame.minX, y: edge, width: itemFrame.width, height: itemFrame.maxY - edge)
+      }
+      let edge = max(itemFrame.minX, (tasks.midX + itemFrame.midX) / 2)
+      return CGRect(x: edge, y: itemFrame.minY, width: itemFrame.maxX - edge, height: itemFrame.height)
     }
     let actionRegion = CGRect(
       x: tabBar.bounds.width * 0.75, y: 0,
@@ -131,12 +166,12 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     backKey = call.getString("backKey")
     modalVersion = call.getInt("modalVersion") ?? 0
     blocked = call.getBool("blocked") ?? false
-    visible = call.getBool("visible") ?? false
+    requestedVisible = call.getBool("visible") ?? false
     if blocked {
       clearTransition()
       presentedViewController?.dismiss(animated: false)
     }
-    backVisible = call.getBool("backVisible") ?? false
+    requestedBackVisible = call.getBool("backVisible") ?? false
     if let index = names.firstIndex(of: call.getString("tab") ?? ""), index < 4,
       let host = viewControllers?[index]
     {
@@ -222,7 +257,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     for page in viewControllers ?? [] { page.tabBarItem.badgeValue = nil }
     entryKey = ""
     backKey = nil
-    visible = false
+    requestedVisible = false
     blocked = false
     clearTransition()
     images.removeAll()
@@ -266,7 +301,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     let menu = NavigationMoreMenu(
       anchor: { [weak self] in
         guard let self else { return .zero }
-        return self.tabBar.convert(self.tabBar.bounds, to: self.view)
+        return self.tabPillFrame()
       },
       edge: { [weak self] in self?.verticalBarEdge }
     ) { [weak self] target in
@@ -299,10 +334,12 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     let previous = UIImageView(image: image)
     previous.frame = bounds
     previous.contentMode = .scaleToFill
-    view.insertSubview(previous, belowSubview: tabBar)
+    // The glass tab bar lives in a system container, not directly in `view`.
+    let barLayer = tabBarContainer
+    view.insertSubview(previous, belowSubview: barLayer)
     snapshot.frame = bounds
     snapshot.accessibilityIdentifier = "navigation-transition-front"
-    view.insertSubview(snapshot, belowSubview: tabBar)
+    view.insertSubview(snapshot, belowSubview: barLayer)
     self.previous = previous
     front = snapshot
     gestureRequest = UUID().uuidString
@@ -311,6 +348,12 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     hideBar(!(visible || backVisible), animated: false)
     tabBar.alpha = visible ? 1 : 0
     return true
+  }
+
+  private var tabBarContainer: UIView {
+    var layer: UIView = tabBar
+    while let parent = layer.superview, parent !== view { layer = parent }
+    return layer
   }
 
   func updateInteractiveBack(progress raw: CGFloat) {

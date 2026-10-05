@@ -58,6 +58,12 @@ async function start(): Promise<void> {
     style.setProperty("--titlebar-inset-top", `${statusBar}px`);
     style.setProperty("--titlebar-row-height", `${Math.max(TOUCH_TITLEBAR_ROW, row)}px`);
   });
+  // iPhone Duo stands the system tab bar on a side edge; it then replaces the
+  // page's navigation rail in every layout.
+  await nativeBridge.addListener("verticalBar", ({ edge }) => {
+    if (edge) document.documentElement.dataset["verticalBar"] = edge;
+    else delete document.documentElement.dataset["verticalBar"];
+  });
   configurePlatform(createIOSPlatform(nativeBridge, resetApplication));
   await nativeBridge.getProfile();
   mountApp(root, { loginFirst: true, showServerAddress: true });
