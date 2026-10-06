@@ -1,5 +1,5 @@
 import * as DialogPrimitive from "./modal";
-import { X } from "lucide-react";
+import { CloseIcon } from "@/icons";
 import {
   createContext,
   useContext,
@@ -183,7 +183,7 @@ export const DialogContent = forwardRef<
             data-sticker-tone="neutral"
             className={dialogCornerButtonClass}
           >
-            <X className="size-4" />
+            <CloseIcon className="size-4" />
             <span className="sr-only">Close</span>
           </DialogPrimitive.Close>
         </div>

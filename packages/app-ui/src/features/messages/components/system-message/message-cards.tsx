@@ -1,5 +1,12 @@
 import { useState } from "react";
-import { AtSign, ChevronRight, Pencil, RotateCcw, UserMinus, UserPlus } from "lucide-react";
+import {
+  AddMemberIcon,
+  ChevronRightIcon,
+  EditIcon,
+  MentionIcon,
+  RemoveMemberIcon,
+  UndoIcon,
+} from "@/icons";
 import {
   type ConversationMemberChangeMetadata,
   type SessionClearedMetadata,
@@ -136,7 +143,7 @@ export function MentionCcCard({
   return (
     <div className="w-full min-w-0 max-w-full px-4 py-2 [contain:inline-size]">
       <div className="flex flex-wrap items-center justify-center gap-2 text-center text-xs leading-5 text-text-muted">
-        <AtSign aria-hidden className="size-3.5 shrink-0" />
+        <MentionIcon aria-hidden className="size-3.5 shrink-0" />
         {collapseByline ? (
           <span>Mention in {sourceLocationNode}</span>
         ) : (
@@ -201,7 +208,7 @@ export function SessionClearedCard({
       className="flex items-center justify-center gap-2 px-4 py-1 text-center text-text-muted"
       data-session-cleared-legacy="1"
     >
-      <RotateCcw aria-hidden className="size-3.5 shrink-0 opacity-60" />
+      <UndoIcon aria-hidden className="size-3.5 shrink-0 opacity-60" />
       <div className="min-w-0">
         <Markdown
           content={message.content}
@@ -232,7 +239,7 @@ function SessionClearedRow({ meta }: { meta: SessionClearedMetadata }): JSX.Elem
       className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 px-4 py-1 text-center text-text-muted"
       data-session-cleared="1"
     >
-      <RotateCcw aria-hidden className="size-3.5 shrink-0 opacity-60" />
+      <UndoIcon aria-hidden className="size-3.5 shrink-0 opacity-60" />
       <span
         className="text-text-secondary"
         data-session-cleared-actor={meta.actor_user_id ?? "unknown"}
@@ -267,7 +274,7 @@ export function OnboardingRow({
         className="mb-1 flex items-center gap-2 rounded-(--control-radius) hover:text-text-primary"
         aria-expanded={expanded}
       >
-        <ChevronRight
+        <ChevronRightIcon
           aria-hidden
           className={
             "size-3 shrink-0 text-text-muted/60 transition-transform " +
@@ -313,7 +320,7 @@ export function RenameRow(props: RendererProps): JSX.Element {
       data-rename-row="1"
       className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 text-text-muted"
     >
-      <Pencil aria-hidden className="size-3.5 shrink-0 opacity-60" />
+      <EditIcon aria-hidden className="size-3.5 shrink-0 opacity-60" />
       <span>{isConversation ? "channel renamed" : "workspace renamed"}</span>
       <span className="text-text-secondary">{meta.old_name}</span>
       <span aria-hidden>→</span>
@@ -341,7 +348,7 @@ export function ConversationMemberChangeRow(props: RendererProps): JSX.Element {
     return <GenericNarrationFallback {...props} />;
   }
   const removed = meta.subtype === "conversation_member_removed";
-  const Icon = removed ? UserMinus : UserPlus;
+  const Icon = removed ? RemoveMemberIcon : AddMemberIcon;
   return (
     <div
       data-conversation-member-change={removed ? "removed" : "added"}

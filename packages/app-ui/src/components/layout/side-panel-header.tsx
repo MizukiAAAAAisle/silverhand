@@ -1,6 +1,6 @@
 import { useCompactLayout } from "@/navigation/layout";
 import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
-import { ArrowLeft, X } from "lucide-react";
+import { ArrowLeftIcon, CloseIcon } from "@/icons";
 
 /**
  * The fixed-height header row shared by every right-pane side panel — the agent
@@ -52,7 +52,7 @@ export function SidePanelHeader({
           onClick={onBack}
           className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover focus-outline"
         >
-          <ArrowLeft className="size-4" />
+          <ArrowLeftIcon className="size-4" />
         </button>
       ) : null}
       {children}
@@ -94,7 +94,7 @@ function SidePanelCloseButton({
         className
       }
     >
-      <X className="size-3.5" />
+      <CloseIcon className="size-3.5" />
     </button>
   );
 }

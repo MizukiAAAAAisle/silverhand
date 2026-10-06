@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { Plus } from "lucide-react";
+import { PlusIcon } from "@/icons";
 import type { AgentDto, MemberDto, UserDto, WorkspaceRole } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
 import { MemberCandidatePicker } from "../workspaces/member-candidate-picker";
@@ -88,7 +88,7 @@ export function AddConversationMemberPopover({
             data-member-chip="add"
             className="inline-flex size-6 shrink-0 items-center justify-center rounded-(--control-radius) border-0 bg-transparent p-0 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline"
           >
-            <Plus className="size-3.5" />
+            <PlusIcon className="size-3.5" />
           </button>
         )}
       </Popover.Trigger>

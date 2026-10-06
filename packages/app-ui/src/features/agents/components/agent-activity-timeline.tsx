@@ -1,24 +1,24 @@
 import { AgentActivitySkeleton } from "./agent-loading";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle,
-  Ban,
-  Brain,
-  CheckCircle2,
-  ChevronUp,
-  CornerDownLeft,
-  Hourglass,
-  History,
-  Inbox,
-  Info,
-  Layers,
-  Loader2,
-  MessageSquare,
-  Power,
-  Terminal,
-  Wrench,
-  XCircle,
-} from "lucide-react";
+  CancelledIcon,
+  ChevronUpIcon,
+  EnterIcon,
+  FailedIcon,
+  HistoryIcon,
+  InboxIcon,
+  InfoIcon,
+  LayersIcon,
+  MessageIcon,
+  PowerIcon,
+  SpinnerIcon,
+  SuccessIcon,
+  TerminalIcon,
+  ThinkingIcon,
+  ToolIcon,
+  WaitingIcon,
+  WarningIcon,
+} from "@/icons";
 import dayjs from "dayjs";
 import type { ConversationEventKind, ToolOutcome } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
@@ -201,7 +201,7 @@ function ActivityTimeline({
                 disabled={isLoadingMore}
                 className="mx-auto mb-1 flex items-center gap-1 px-2 py-1.5 text-(length:--text-meta) text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
               >
-                <ChevronUp className="size-3" />
+                <ChevronUpIcon className="size-3" />
                 {isLoadingMore ? "Loading…" : "Load earlier"}
               </button>
             ) : null}
@@ -234,45 +234,45 @@ function str(payload: Record<string, unknown> | null, key: string): string | nul
 }
 
 interface KindVisual {
-  Icon: typeof Wrench;
+  Icon: typeof ToolIcon;
   tone: "neutral" | "accent" | "error" | "warning" | "muted";
 }
 
 function visualForKind(kind: ConversationEventKind): KindVisual {
   switch (kind) {
     case "thinking":
-      return { Icon: Brain, tone: "accent" };
+      return { Icon: ThinkingIcon, tone: "accent" };
     case "text":
-      return { Icon: MessageSquare, tone: "neutral" };
+      return { Icon: MessageIcon, tone: "neutral" };
     case "tool_call":
-      return { Icon: Wrench, tone: "neutral" };
+      return { Icon: ToolIcon, tone: "neutral" };
     case "tool_output":
-      return { Icon: CornerDownLeft, tone: "muted" };
+      return { Icon: EnterIcon, tone: "muted" };
     case "shell":
-      return { Icon: Terminal, tone: "neutral" };
+      return { Icon: TerminalIcon, tone: "neutral" };
     case "error":
     case "stderr":
-      return { Icon: AlertTriangle, tone: "error" };
+      return { Icon: WarningIcon, tone: "error" };
     case "parsed_event_dropped":
-      return { Icon: Ban, tone: "warning" };
+      return { Icon: CancelledIcon, tone: "warning" };
     case "message_stale":
-      return { Icon: History, tone: "warning" };
+      return { Icon: HistoryIcon, tone: "warning" };
     case "api_response":
       // Default = the waiting/ready queue lifecycle (hourglass). The
       // generic `notice` class is overridden at EventRow, where the
       // payload status is in scope — neutral Info, no queue connotation.
-      return { Icon: Hourglass, tone: "warning" };
+      return { Icon: WaitingIcon, tone: "warning" };
     case "session_init":
-      return { Icon: Power, tone: "muted" };
+      return { Icon: PowerIcon, tone: "muted" };
     case "message_received":
-      return { Icon: Inbox, tone: "neutral" };
+      return { Icon: InboxIcon, tone: "neutral" };
     case "compaction_started":
     case "compaction_finished":
-      return { Icon: Layers, tone: "muted" };
+      return { Icon: LayersIcon, tone: "muted" };
     default:
       // turn_end / file_change / unknown / any future kind — render a
       // generic line rather than crash.
-      return { Icon: MessageSquare, tone: "muted" };
+      return { Icon: MessageIcon, tone: "muted" };
   }
 }
 
@@ -315,7 +315,7 @@ function RowShell({
       >
         {time}
       </span>
-      <Icon className={cn("mt-0.5 size-3.5", TONE_TEXT[tone])} strokeWidth={2} />
+      <Icon className={cn("mt-0.5 size-3.5", TONE_TEXT[tone])} />
       <div className="min-w-0 text-xs leading-snug">
         <div className="wrap-break-word">{title}</div>
         {preview ? <div className="mt-1 min-w-0">{preview}</div> : null}
@@ -481,23 +481,23 @@ function ToolOutcomeMark({
   switch (outcome) {
     case "success":
       return (
-        <CheckCircle2
-          className={cn(base, "text-success")}
-          strokeWidth={2.5}
-          aria-label="succeeded"
-        />
+        <SuccessIcon className={cn(base, "text-success")} strokeWidth={2} aria-label="succeeded" />
       );
     case "failed":
-      return <XCircle className={cn(base, "text-error")} strokeWidth={2.5} aria-label="failed" />;
+      return <FailedIcon className={cn(base, "text-error")} strokeWidth={2} aria-label="failed" />;
     case "cancelled":
       return (
-        <Ban className={cn(base, "text-text-muted")} strokeWidth={2.5} aria-label="cancelled" />
+        <CancelledIcon
+          className={cn(base, "text-text-muted")}
+          strokeWidth={2}
+          aria-label="cancelled"
+        />
       );
     case "completed":
       return (
-        <CheckCircle2
+        <SuccessIcon
           className={cn(base, "text-text-muted")}
-          strokeWidth={2.5}
+          strokeWidth={2}
           aria-label="finished"
         />
       );
@@ -522,7 +522,7 @@ function EventRow({
     // #task:1582 display boundary: waiting/ready are the queue
     // lifecycle (hourglass); `notice` is the generic normalized
     // response — neutral Info semantics, not a wait.
-    Icon = Info;
+    Icon = InfoIcon;
     tone = "neutral";
   }
   const time = dayjs(event.created_at).format("HH:mm:ss");
@@ -549,15 +549,15 @@ function EventRow({
           <span className="text-text-muted">
             {done ? "Context compacted" : "Compacting context…"}
             {done ? (
-              <CheckCircle2
+              <SuccessIcon
                 className="ml-1.5 inline-block size-3 -translate-y-px text-success"
-                strokeWidth={2.5}
+                strokeWidth={2}
                 aria-label="completed"
               />
             ) : (
-              <Loader2
+              <SpinnerIcon
                 className="ml-1.5 inline-block size-3 -translate-y-px animate-spin text-text-muted"
-                strokeWidth={2.5}
+                strokeWidth={2}
                 aria-label="in progress"
               />
             )}

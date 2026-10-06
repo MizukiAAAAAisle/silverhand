@@ -1,4 +1,4 @@
-import { MessageSquare } from "lucide-react";
+import { MessageIcon } from "@/icons";
 import { ProfileHeaderAction } from "./profile-header-action";
 import type { UserDto } from "@silverhand/shared";
 import { UserAvatar } from "@/components/user-avatar";
@@ -41,7 +41,7 @@ export function HumanHeader({
             title={`Message @${user.name}`}
             onClick={onMessage}
           >
-            <MessageSquare className="size-3.5" />
+            <MessageIcon className="size-3.5" />
           </ProfileHeaderAction>
         ) : undefined
       }

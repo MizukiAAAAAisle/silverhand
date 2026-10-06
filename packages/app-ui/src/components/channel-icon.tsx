@@ -1,4 +1,4 @@
-import { Hash, Lock } from "lucide-react";
+import { HashIcon, LockIcon } from "@/icons";
 import type { ConversationVisibility } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 
@@ -31,7 +31,7 @@ export function ChannelIcon({
   }
   const px = CHANNEL_ICON_PX[density];
 
-  const Glyph = visibility === "private" ? Lock : Hash;
+  const Glyph = visibility === "private" ? LockIcon : HashIcon;
 
   if (variant === "sticker") {
     return (

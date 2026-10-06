@@ -1,4 +1,4 @@
-import { CheckCircle2, Cpu, Loader2, RefreshCw, ShieldOff, Trash2 } from "lucide-react";
+import { CpuIcon, DeleteIcon, RefreshIcon, ShieldOffIcon, SpinnerIcon, SuccessIcon } from "@/icons";
 import { useState, type JSX } from "react";
 import type { HostAgentResource, HostDto, RuntimeKind } from "@silverhand/shared";
 import { RuntimeKindSchema } from "@silverhand/shared";
@@ -74,9 +74,9 @@ export function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Elem
             disabled={rotate.isPending}
           >
             {rotate.isPending ? (
-              <Loader2 className="size-3.5 animate-spin" />
+              <SpinnerIcon className="size-3.5 animate-spin" />
             ) : (
-              <RefreshCw className="size-3.5" />
+              <RefreshIcon className="size-3.5" />
             )}
             {rotate.isPending
               ? computerCopy.refreshingCredentials
@@ -84,7 +84,7 @@ export function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Elem
           </Button>
           {saved ? (
             <span className="inline-flex items-center gap-1.5 text-xs text-success">
-              <CheckCircle2 className="size-3.5" />
+              <SuccessIcon className="size-3.5" />
               {computerCopy.refreshCredentialsSuccess}
             </span>
           ) : null}
@@ -145,7 +145,7 @@ export function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element 
   return (
     <>
       <Button variant="destructive-outline" className="gap-2 w-full" onClick={openConfirm}>
-        <ShieldOff className="size-3.5" />
+        <ShieldOffIcon className="size-3.5" />
         {computerCopy.revokeComputer}
       </Button>
 
@@ -180,9 +180,9 @@ export function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element 
               aria-label={`${computerCopy.revokeComputer}: ${label}`}
             >
               {revoke.isPending ? (
-                <Loader2 className="size-3.5 animate-spin" />
+                <SpinnerIcon className="size-3.5 animate-spin" />
               ) : (
-                <ShieldOff className="size-3.5" />
+                <ShieldOffIcon className="size-3.5" />
               )}
               {revoke.isPending ? computerCopy.revoking : computerCopy.revokeConfirm}
             </Button>
@@ -263,7 +263,7 @@ export function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element 
   return (
     <>
       <Button variant="destructive-outline" className="gap-2 w-full" onClick={openConfirm}>
-        <Trash2 className="size-3.5" />
+        <DeleteIcon className="size-3.5" />
         {computerCopy.deleteComputer}
       </Button>
 
@@ -293,7 +293,7 @@ export function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element 
                   onClick={() => void handleDelete()}
                   disabled={del.isPending}
                 >
-                  {del.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                  {del.isPending ? <SpinnerIcon className="size-3.5 animate-spin" /> : null}
                   {computerCopy.deleteRetry}
                 </Button>
               </DialogFooter>
@@ -314,7 +314,7 @@ export function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element 
                   onClick={() => void resources.refetch()}
                   disabled={resources.isFetching}
                 >
-                  {resources.isFetching ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                  {resources.isFetching ? <SpinnerIcon className="size-3.5 animate-spin" /> : null}
                   {computerCopy.deleteRetry}
                 </Button>
               </DialogFooter>
@@ -350,9 +350,9 @@ export function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element 
                   aria-label={`${computerCopy.deleteComputer}: ${label}`}
                 >
                   {del.isPending || phase.kind === "loading" ? (
-                    <Loader2 className="size-3.5 animate-spin" />
+                    <SpinnerIcon className="size-3.5 animate-spin" />
                   ) : (
-                    <Trash2 className="size-3.5" />
+                    <DeleteIcon className="size-3.5" />
                   )}
                   {del.isPending ? computerCopy.deleting : computerCopy.deleteConfirm}
                 </Button>
@@ -407,7 +407,7 @@ export function CascadeImpact({ agents }: { agents: HostAgentResource[] }): JSX.
                   className="inline-flex size-5 shrink-0 items-center justify-center rounded-none bg-bg-elevated text-text-muted"
                   aria-hidden
                 >
-                  <Cpu className="size-3" />
+                  <CpuIcon className="size-3" />
                 </span>
               )}
               <span className="min-w-0 flex-1 truncate text-sm text-text-primary">

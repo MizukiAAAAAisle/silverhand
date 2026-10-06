@@ -1,4 +1,4 @@
-import { AtSign } from "lucide-react";
+import { MentionIcon } from "@/icons";
 import { cn } from "@/lib/cn";
 import { ChannelIcon } from "./channel-icon";
 
@@ -34,7 +34,7 @@ export function ConversationGlyph({ kind, className }: ConversationGlyphProps): 
     return <ChannelIcon variant="sticker" className={className} />;
   }
   return (
-    <AtSign
+    <MentionIcon
       data-channel-icon
       data-sticker
       data-sticker-tone="channel"

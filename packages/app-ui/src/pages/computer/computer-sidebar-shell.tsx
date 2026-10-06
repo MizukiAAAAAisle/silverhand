@@ -2,7 +2,7 @@ import { ComputerRowsSkeleton } from "./components/computer-skeletons";
 import type { JSX } from "react";
 import { DirectorySidebar } from "@/components/layout/directory-shell";
 import { MobileHeaderAction } from "@/components/layout/mobile-header-slot";
-import { Monitor, Plus } from "lucide-react";
+import { ComputerIcon, PlusIcon } from "@/icons";
 import type { HostDto } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
 import { computerCopy } from "@/features/computers/model/computer-copy";
@@ -71,7 +71,7 @@ export function ComputerSidebarShell({
               onClick={onAddComputer}
               aria-label={computerCopy.addComputer}
             >
-              <Plus size={20} strokeWidth={2.25} />
+              <PlusIcon size={20} strokeWidth={1.75} />
             </button>
           </MobileHeaderAction>
         ) : null}
@@ -84,7 +84,7 @@ export function ComputerSidebarShell({
     <DirectorySidebar>
       <SidebarSection
         label="COMPUTERS"
-        icon={<Monitor className="size-3.5" />}
+        icon={<ComputerIcon className="size-3.5" />}
         count={sorted.length}
         collapsible
         defaultExpanded
@@ -100,7 +100,7 @@ export function ComputerSidebarShell({
               aria-label={computerCopy.addComputer}
               title={computerCopy.addComputer}
             >
-              <Plus className="size-3.5" />
+              <PlusIcon className="size-3.5" />
             </Button>
           ) : undefined
         }
@@ -160,7 +160,7 @@ function ComputerRow({
   return (
     <SidebarRow
       stacked
-      icon={<Monitor className="size-3.5" />}
+      icon={<ComputerIcon className="size-3.5" />}
       title={host.display_label ?? host.name}
       subtitle={
         <span className="inline-flex min-w-0 items-center gap-1.5">

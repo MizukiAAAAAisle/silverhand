@@ -1,6 +1,6 @@
 import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
 import { DirectorySidebar } from "@/components/layout/directory-shell";
-import { Monitor, Plus, User, Users } from "lucide-react";
+import { ComputerIcon, MembersIcon, PlusIcon, UserIcon } from "@/icons";
 import { Fragment, useMemo, useState } from "react";
 import type { AgentDto, HostDto } from "@silverhand/shared";
 import { useAgents, useAgentPresence } from "@/features/agents/hooks/hooks";
@@ -127,7 +127,7 @@ export function AgentSidebarShell({
     <DirectorySidebar>
       <SidebarSection
         label="AGENTS"
-        icon={<Users className="size-3.5" />}
+        icon={<MembersIcon className="size-3.5" />}
         count={agents.length}
         collapsible
         defaultExpanded
@@ -141,7 +141,7 @@ export function AgentSidebarShell({
             onClick={() => setOpen(true)}
             aria-label="New agent"
           >
-            <Plus className="size-3.5" />
+            <PlusIcon className="size-3.5" />
           </Button>
         }
       >
@@ -158,7 +158,7 @@ export function AgentSidebarShell({
                 data-agent-group-header
                 className="flex items-center gap-1.5 px-2 pb-0.5 pt-2 text-(length:--text-meta) font-medium text-text-muted"
               >
-                <Monitor className="size-3 shrink-0" />
+                <ComputerIcon className="size-3 shrink-0" />
                 <span className="truncate">{group.name}</span>
               </li>
               {group.agents.map(renderAgentRow)}
@@ -171,7 +171,7 @@ export function AgentSidebarShell({
 
       <SidebarSection
         label="HUMANS"
-        icon={<User className="size-3.5" />}
+        icon={<UserIcon className="size-3.5" />}
         count={humansCount}
         collapsible
         defaultExpanded

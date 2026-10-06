@@ -57,7 +57,14 @@ import { ComputerStatusSkeleton } from "./computer-skeletons";
  * viewer-scoped WS events / `snapshot_required`; no per-view poll loop needed.
  */
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Cpu, Loader2, Monitor, RefreshCw, Unplug } from "lucide-react";
+import {
+  ComputerIcon,
+  CpuIcon,
+  DisconnectedIcon,
+  RefreshIcon,
+  SpinnerIcon,
+  WarningIcon,
+} from "@/icons";
 import { useMemo, useState, type JSX, type ReactNode } from "react";
 import type {
   AgentOnHostDto,
@@ -332,9 +339,9 @@ function ConnectionSection({
             disabled={rotate.isPending}
           >
             {rotate.isPending ? (
-              <Loader2 className="size-3.5 animate-spin" />
+              <SpinnerIcon className="size-3.5 animate-spin" />
             ) : (
-              <RefreshCw className="size-3.5" />
+              <RefreshIcon className="size-3.5" />
             )}
             {computerCopy.generateCommand}
           </Button>
@@ -348,9 +355,9 @@ function ConnectionSection({
               disabled={disconnect.isPending}
             >
               {disconnect.isPending ? (
-                <Loader2 className="size-3.5 animate-spin" />
+                <SpinnerIcon className="size-3.5 animate-spin" />
               ) : (
-                <Unplug className="size-3.5" />
+                <DisconnectedIcon className="size-3.5" />
               )}
               {computerCopy.disconnectCurrent}
             </Button>
@@ -413,7 +420,7 @@ function HostHero({
             <StatusChip label={statusLabel} tone={statusTone} />
           ) : statusLoading ? (
             <span className="inline-flex items-center gap-1.5 border border-transparent px-1 py-0.5 text-(length:--text-badge) text-text-muted">
-              <Loader2 className="size-3.75 animate-spin" aria-hidden />
+              <SpinnerIcon className="size-3.75 animate-spin" aria-hidden />
               <span>Loading…</span>
             </span>
           ) : null}
@@ -433,7 +440,7 @@ function HostHero({
             aria-label="Refresh host status"
             title="Refresh"
           >
-            <RefreshCw className={cn("size-3.75", refreshing && "animate-spin")} />
+            <RefreshIcon className={cn("size-3.75", refreshing && "animate-spin")} />
           </Button>
         </div>
         {/* Meta line: stable `host.name` (mono) ONLY when the user has
@@ -467,7 +474,7 @@ function HostBadge(): JSX.Element {
   // is conveyed elsewhere, never by swapping the identity icon (shiki
   // dogfood: a network glyph made user-added computers read as a different
   // kind of thing). Kept in sync with the sidebar row's icon rule.
-  const Icon = Monitor;
+  const Icon = ComputerIcon;
   return (
     <span
       data-host-hero
@@ -620,7 +627,7 @@ function AdmissionFailureNotice({
       role="status"
       className="mt-5 flex items-start gap-2.5 rounded-(--control-radius) bg-(--warning-surface) px-3 py-2.5"
     >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+      <WarningIcon className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
       <p className="min-w-0 flex-1 text-sm text-text-primary">
         {describeAdmissionFailure(failure, { appManaged })}
       </p>
@@ -769,7 +776,7 @@ function AgentCard({
             aria-hidden
             title={`${agent.runtime} (unknown runtime)`}
           >
-            <Cpu className="size-5" />
+            <CpuIcon className="size-5" />
           </span>
         )}
         <div className="flex min-w-0 flex-1 flex-col">

@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
-import { Brain, ChevronDown, ChevronUp, Hourglass, Layers, Loader2 } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  LayersIcon,
+  SpinnerIcon,
+  ThinkingIcon,
+  WaitingIcon,
+} from "@/icons";
 import type { AgentDto, AgentRunState } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
@@ -233,13 +240,13 @@ export function ComposerActivityHeader({
       : null;
   const SnippetKindIcon =
     subject.activitySnippetKind === "thinking"
-      ? Brain
+      ? ThinkingIcon
       : subject.activitySnippetKind === "api_response"
-        ? Hourglass
+        ? WaitingIcon
         : null;
   const snippet = subject.activitySnippet || STATUS_LABEL[subject.status] || subject.status;
   const extra = active.length - 1;
-  const StatusIcon = showCompaction ? Layers : Loader2;
+  const StatusIcon = showCompaction ? LayersIcon : SpinnerIcon;
 
   return (
     <div data-composer-activity="" className="border-b border-border-subtle bg-bg-floating">
@@ -252,12 +259,12 @@ export function ComposerActivityHeader({
             aria-label="Collapse run details"
             className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-elevated/50"
           >
-            <Loader2 className="size-3 shrink-0 animate-spin text-accent" />
+            <SpinnerIcon className="size-3 shrink-0 animate-spin text-accent" />
             <span className="font-medium text-text-secondary">
               Running{active.length > 1 ? ` ${active.length} agents` : ""}
             </span>
             <span className="min-w-0 flex-1" />
-            <ChevronUp className="size-3 shrink-0 text-text-muted/60" />
+            <ChevronUpIcon className="size-3 shrink-0 text-text-muted/60" />
           </button>
         </>
       ) : (
@@ -330,7 +337,7 @@ export function ComposerActivityHeader({
           <span className="shrink-0 tabular-nums text-text-muted/60">
             {formatMs(subjectElapsedMs)}
           </span>
-          <ChevronDown className="size-3 shrink-0 text-text-muted/60" />
+          <ChevronDownIcon className="size-3 shrink-0 text-text-muted/60" />
         </div>
       )}
       <AnimatePresence initial={false} key={conversationId}>
@@ -400,13 +407,13 @@ function ActivityDetailRow({
     : null;
   const SnippetKindIcon =
     state.activitySnippetKind === "thinking"
-      ? Brain
+      ? ThinkingIcon
       : state.activitySnippetKind === "api_response"
-        ? Hourglass
+        ? WaitingIcon
         : null;
   const toolEntries = Object.entries(state.toolCallCounts ?? {}).filter(([, count]) => count > 0);
   const compactionText = "Compacting…";
-  const CompactionIcon = Layers;
+  const CompactionIcon = LayersIcon;
 
   return (
     <div className="flex w-full min-w-0 items-start gap-2 rounded-(--control-radius) px-2 py-1 text-xs">
@@ -436,7 +443,7 @@ function ActivityDetailRow({
           >
             {name}
           </button>
-          <Loader2 className="size-3 shrink-0 animate-spin text-accent" />
+          <SpinnerIcon className="size-3 shrink-0 animate-spin text-accent" />
           {snippetKindLabel ? (
             <span className="flex shrink-0 items-center gap-1 rounded border border-border-subtle/70 px-1.5 py-px text-(length:--text-badge) leading-4 text-text-muted">
               {SnippetKindIcon ? <SnippetKindIcon className="size-3" /> : null}

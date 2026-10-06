@@ -1,6 +1,6 @@
 import type { AgentDto, AttachmentSnapshot, MessageDto, UserDto } from "@silverhand/shared";
 import { resolveAttachmentLabels } from "@silverhand/shared";
-import { FileText, Hash } from "lucide-react";
+import { DocumentIcon, HashIcon } from "@/icons";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { getAttachmentBlobUrl } from "@/features/attachments/attachment-blob-cache";
 import { AuthorAvatarView, AuthorName } from "./author-avatar-view";
@@ -120,7 +120,7 @@ export function MessageScreenshotView({
             data-conversation-title
             className="inline-flex items-center font-serif text-base font-semibold text-text-primary"
           >
-            <Hash
+            <HashIcon
               data-conversation-hash-icon
               data-sticker
               data-sticker-tone="channel"
@@ -371,7 +371,7 @@ function ScreenshotAttachmentTile({
   return (
     <div className="flex flex-col items-start gap-1">
       <div className="flex max-w-70 items-center gap-2 rounded-md border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary">
-        <FileText className="size-4 shrink-0 text-text-muted" />
+        <DocumentIcon className="size-4 shrink-0 text-text-muted" />
         <span className="min-w-0 truncate">{filename}</span>
         <span className="shrink-0 text-(length:--text-badge) text-text-muted">
           {formatBytes(attachment.size)}

@@ -1,4 +1,4 @@
-import { RefreshCw, AlertTriangle } from "lucide-react";
+import { RefreshIcon, WarningIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 
 export interface UpdateRequiredGateProps {
@@ -32,7 +32,7 @@ export function UpdateRequiredGate({
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
         <header className="mb-4 flex items-center gap-2">
-          <AlertTriangle className="size-5 shrink-0 text-warning" />
+          <WarningIcon className="size-5 shrink-0 text-warning" />
           <h1 className="text-base font-semibold leading-tight">{title}</h1>
         </header>
         <p className="mb-4 text-xs leading-relaxed text-text-muted">{description}</p>
@@ -40,7 +40,7 @@ export function UpdateRequiredGate({
           Server API generation: {serverApiEpoch}
         </p>
         <Button type="button" variant="primary" size="sm" onClick={onRetry}>
-          <RefreshCw className="size-3.5" />
+          <RefreshIcon className="size-3.5" />
           Check again
         </Button>
       </div>

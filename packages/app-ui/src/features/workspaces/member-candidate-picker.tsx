@@ -1,6 +1,6 @@
 import { InlineLoading } from "@/components/layout/inline-loading";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Search } from "lucide-react";
+import { SearchIcon } from "@/icons";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
@@ -246,7 +246,7 @@ export function MemberCandidatePicker({
   return (
     <div className={inline ? "flex flex-col gap-2" : "relative"}>
       <label data-input="" className={cn(SEARCH_FIELD_FRAME, disabled ? "opacity-60" : "")}>
-        <Search className="size-3.5 shrink-0 text-text-muted" aria-hidden />
+        <SearchIcon className="size-3.5 shrink-0 text-text-muted" aria-hidden />
         <input
           type="text"
           role="combobox"

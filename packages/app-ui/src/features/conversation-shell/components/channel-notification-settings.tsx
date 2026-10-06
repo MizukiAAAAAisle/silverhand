@@ -1,5 +1,5 @@
 import * as Select from "@radix-ui/react-select";
-import { ChevronDown } from "lucide-react";
+import { ChevronDownIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import {
   FILTER_SELECT_CONTENT_CLASS,
@@ -48,14 +48,18 @@ export function ChannelNotificationSettings({
         <Select.Trigger className={FILTER_SELECT_TRIGGER_CLASS} aria-label="Channel notifications">
           <Select.Value placeholder={unavailable ? "Unavailable" : "Loading"} />
           <Select.Icon>
-            <ChevronDown className="size-3.5" />
+            <ChevronDownIcon className="size-3.5" />
           </Select.Icon>
         </Select.Trigger>
         <Select.Portal>
           <Select.Content position="popper" sideOffset={4} className={FILTER_SELECT_CONTENT_CLASS}>
             <Select.Viewport className="p-1">
               {ATTENTION_OPTIONS.map((option) => (
-                <FilterSelectItem key={option.mode} value={option.mode}>
+                <FilterSelectItem
+                  key={option.mode}
+                  value={option.mode}
+                  icon={<option.Icon className="size-3.5" />}
+                >
                   {option.label}
                 </FilterSelectItem>
               ))}

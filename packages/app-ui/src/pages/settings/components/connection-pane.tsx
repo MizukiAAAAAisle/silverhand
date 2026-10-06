@@ -1,7 +1,7 @@
 import { getPlatform, requireLocalHost } from "@/platform";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Save, Server } from "lucide-react";
+import { SaveIcon, ServerIcon, SpinnerIcon } from "@/icons";
 import type { ProfileSaveWithTestResult } from "@silverhand/client";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
@@ -301,7 +301,7 @@ export function ConnectionPane(): JSX.Element {
 
   return (
     <section className="flex min-w-0 flex-1 flex-col gap-6 px-5 py-5">
-      <SettingsHeading icon={<Server className="size-4" />} title="Connection" />
+      <SettingsHeading icon={<ServerIcon className="size-4" />} title="Connection" />
 
       <div className="flex flex-col gap-3">
         <div className="flex flex-col items-start gap-1">
@@ -360,9 +360,9 @@ export function ConnectionPane(): JSX.Element {
               }
             >
               {save.isPending ? (
-                <Loader2 className="mr-1 size-3.5 animate-spin" />
+                <SpinnerIcon className="mr-1 size-3.5 animate-spin" />
               ) : (
-                <Save className="mr-1 size-3.5" />
+                <SaveIcon className="mr-1 size-3.5" />
               )}
               Save
             </Button>

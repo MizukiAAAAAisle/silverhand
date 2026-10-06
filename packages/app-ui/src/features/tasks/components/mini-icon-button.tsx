@@ -1,4 +1,4 @@
-import type { LucideIcon } from "lucide-react";
+import { type IconComponent } from "@/icons";
 import { cn } from "@/lib/cn";
 
 /** Small flat icon-only control (18px) for the task detail modal's inline
@@ -14,7 +14,7 @@ export function MiniIconButton({
   disabled,
   className,
 }: {
-  icon: LucideIcon;
+  icon: IconComponent;
   label: string;
   onClick: () => void;
   disabled?: boolean;

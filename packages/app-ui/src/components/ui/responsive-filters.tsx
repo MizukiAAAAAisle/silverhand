@@ -1,5 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
-import { SlidersHorizontal } from "lucide-react";
+import { FiltersIcon } from "@/icons";
 import { useCompactLayout } from "@/navigation/layout";
 import { cn } from "@/lib/cn";
 import { Button } from "./button";
@@ -44,7 +44,7 @@ export function FilterToggle({
       className={cn("shrink-0", disclosure.expanded && "bg-bg-hover", active && "text-accent")}
       onClick={disclosure.toggle}
     >
-      <SlidersHorizontal className="size-4" />
+      <FiltersIcon className="size-4" />
     </Button>
   );
 }

@@ -1,15 +1,15 @@
 import { type ReactNode, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import {
-  ArrowDown,
-  ArrowRightToLine,
-  ArrowUp,
-  CornerDownLeft,
-  Hash,
-  MessageSquareMore,
-  Search as SearchIcon,
-  Users,
-} from "lucide-react";
+  ArrowDownIcon,
+  ArrowRightToLineIcon,
+  ArrowUpIcon,
+  EnterIcon,
+  HashIcon,
+  MembersIcon,
+  MessageResultIcon,
+  SearchIcon,
+} from "@/icons";
 import type { AgentDto, SearchIdentity, SearchResultDto } from "@silverhand/shared";
 
 import { Button } from "@/components/ui/button";
@@ -381,12 +381,15 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
             className="flex items-center justify-between gap-3 border-t border-border px-3 py-2 text-(length:--text-meta) text-text-muted"
           >
             <span className="flex items-center gap-3">
-              <FooterHint keys={[<CornerDownLeft className="size-3" />]} label="Open" />
+              <FooterHint keys={[<EnterIcon className="size-3" />]} label="Open" />
               <FooterHint
-                keys={[<ArrowUp className="size-3" />, <ArrowDown className="size-3" />]}
+                keys={[<ArrowUpIcon className="size-3" />, <ArrowDownIcon className="size-3" />]}
                 label="Navigate"
               />
-              <FooterHint keys={[<ArrowRightToLine className="size-3" />]} label="Switch type" />
+              <FooterHint
+                keys={[<ArrowRightToLineIcon className="size-3" />]}
+                label="Switch type"
+              />
               <FooterHint keys={["esc"]} label="Close" />
             </span>
             <Button
@@ -460,7 +463,7 @@ function buildSections(
     sections.push({
       key: "people",
       label: "Human & Agents",
-      icon: <Users className="size-3" />,
+      icon: <MembersIcon className="size-3" />,
       rows: identityRows.map((candidate): FlatRow => ({
         kind: "identity",
         key: `identity:${candidate.kind}:${candidate.id}`,
@@ -473,7 +476,7 @@ function buildSections(
     sections.push({
       key: "channels",
       label: "Channels",
-      icon: <Hash className="size-3" />,
+      icon: <HashIcon className="size-3" />,
       rows: [
         ...channels.map((result): FlatRow => ({
           kind: "channel",
@@ -493,7 +496,7 @@ function buildSections(
     sections.push({
       key: "messages",
       label: "Messages",
-      icon: <MessageSquareMore className="size-3" />,
+      icon: <MessageResultIcon className="size-3" />,
       rows: messages.map((result): FlatRow => ({
         kind: "message",
         key: `message:${result.message.id}`,

@@ -1,8 +1,7 @@
 import { ThreadsSkeleton } from "./channel-list-skeletons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { paneChrome } from "@/components/layout/pane-chrome";
-import { Clock, Loader2 } from "lucide-react";
-import { ThreadIcon } from "@/components/icons/conversation-icons";
+import { ClockIcon, SpinnerIcon, ThreadIcon } from "@/icons";
 import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
 import type { StreamUnreadDto } from "@silverhand/shared";
@@ -278,7 +277,7 @@ export function ChannelThreadsContent({
             {hasNextPage ? <li ref={sentinelRef} aria-hidden className="h-px" /> : null}
             {isFetchingNextPage ? (
               <li className="flex items-center justify-center py-3 text-text-muted">
-                <Loader2 className="size-4 animate-spin" />
+                <SpinnerIcon className="size-4 animate-spin" />
               </li>
             ) : null}
           </ul>
@@ -387,7 +386,7 @@ function ThreadRow({
             {/* Icon + time are their own tight group so the row's `gap-2` never
                 strands the clock away from the time it marks. Icon decorative. */}
             <span className="flex shrink-0 items-center gap-1 text-text-muted">
-              <Clock className="size-3 shrink-0" aria-hidden />
+              <ClockIcon className="size-3 shrink-0" aria-hidden />
               <time
                 dateTime={new Date(summary.last_reply_at).toISOString()}
                 title={lastReplyTime.absolute}

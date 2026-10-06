@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import * as Select from "@radix-ui/react-select";
-import { ChevronDown, Search as SearchIcon } from "lucide-react";
+import { ChevronDownIcon, SearchIcon } from "@/icons";
 import type { AgentDto, UserDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
@@ -129,7 +129,7 @@ export function SenderFilterSelect({
           <span className="truncate">{selected.label}</span>
         </span>
         <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
+          <ChevronDownIcon className="size-3.5 text-text-muted" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>

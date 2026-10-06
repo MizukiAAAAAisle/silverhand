@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { JSX, ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Check, X } from "lucide-react";
+import { CheckIcon, CloseIcon } from "@/icons";
 import { cn } from "@/lib/cn";
 
 const EASE = [0.32, 0.72, 0, 1] as const;
@@ -149,8 +149,8 @@ export function DeleteButton({
             }}
           >
             {[
-              { label: confirmLabel, confirmed: true, icon: Check },
-              { label: "Cancel", confirmed: false, icon: X },
+              { label: confirmLabel, confirmed: true, icon: CheckIcon },
+              { label: "Cancel", confirmed: false, icon: CloseIcon },
             ].map(({ label, confirmed, icon: Icon }) => (
               <motion.div
                 key={label}
@@ -187,7 +187,7 @@ export function DeleteButton({
                     variants={reduced ? undefined : { hover: { scale: 1.2 } }}
                     transition={{ duration: 0.18, ease: EASE }}
                   >
-                    <Icon aria-hidden="true" className="size-3.5" strokeWidth={3} />
+                    <Icon aria-hidden="true" className="size-3.5" strokeWidth={2.25} />
                   </motion.span>
                 </motion.button>
               </motion.div>

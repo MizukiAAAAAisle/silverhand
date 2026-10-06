@@ -3,7 +3,7 @@ import { getPlatform } from "@/platform";
 import { RangeInput } from "@/components/ui/range-input";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as DialogPrimitive from "@/components/ui/modal";
-import { Download, Share, X, ZoomIn, ZoomOut } from "lucide-react";
+import { CloseIcon, DownloadIcon, ShareIcon, ZoomInIcon, ZoomOutIcon } from "@/icons";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
@@ -378,7 +378,7 @@ export function Lightbox({
               data-sticker-tone="neutral"
               className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary focus-outline"
             >
-              <X className="size-4" />
+              <CloseIcon className="size-4" />
             </DialogPrimitive.Close>
           </div>
 
@@ -455,7 +455,7 @@ export function Lightbox({
                 onClick={() => setZoom(scale / STEP)}
                 data-zoom-stepper
               >
-                <ZoomOut className="size-4" />
+                <ZoomOutIcon className="size-4" />
               </Button>
               <RangeInput
                 data-zoom-range
@@ -477,7 +477,7 @@ export function Lightbox({
                 onClick={() => setZoom(scale * STEP)}
                 data-zoom-stepper
               >
-                <ZoomIn className="size-4" />
+                <ZoomInIcon className="size-4" />
               </Button>
               {/* Zoom level is a READOUT, not a control: no click / reset, no
                   button or sticker chrome. Reset is the `0` key (and stepping
@@ -492,14 +492,14 @@ export function Lightbox({
               <SelectionActionButton
                 rank={onDownload && !shareImage ? "secondary" : "primary"}
                 label={shareImage ? "Share" : "Copy"}
-                icon={shareImage ? <Share className="size-3.5" /> : undefined}
+                icon={shareImage ? <ShareIcon className="size-3.5" /> : undefined}
                 disabled={busy}
                 onClick={onExport}
               />
               {onDownload && !shareImage ? (
                 <SelectionActionButton
                   rank="primary"
-                  icon={<Download className="size-3.5" />}
+                  icon={<DownloadIcon className="size-3.5" />}
                   label="Download"
                   disabled={downloading}
                   onClick={() => void onSave()}

@@ -1,9 +1,8 @@
 import { Fragment, useEffect, useState } from "react";
 import { paneChrome } from "@/components/layout/pane-chrome";
-import { ExternalLink, Pencil } from "lucide-react";
+import { EditIcon, OpenExternalIcon, TaskIcon } from "@/icons";
 import type { TaskDetailDto } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
-import { TaskIcon } from "@/components/task-icon";
 import { MiniIconButton } from "@/features/tasks/components/mini-icon-button";
 import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
 import { Markdown } from "@/features/messages/components/markdown";
@@ -112,7 +111,7 @@ export function TaskDetailPanel({
       onClick={() => onJump?.(jumpTarget)}
       className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline"
     >
-      <ExternalLink className="size-3.5" aria-hidden />
+      <OpenExternalIcon className="size-3.5" aria-hidden />
     </button>
   ) : undefined;
 
@@ -324,7 +323,7 @@ function PaneBody({
           </h1>
           {!busy ? (
             <MiniIconButton
-              icon={Pencil}
+              icon={EditIcon}
               label="Edit title"
               className="mt-0.5"
               onClick={() => onEditField("title")}
@@ -360,7 +359,7 @@ function PaneBody({
           </h2>
           {!busy && editingField !== "content" ? (
             <MiniIconButton
-              icon={Pencil}
+              icon={EditIcon}
               label="Edit description"
               onClick={() => onEditField("content")}
             />

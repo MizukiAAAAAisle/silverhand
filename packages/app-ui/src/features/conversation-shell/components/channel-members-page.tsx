@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Search } from "lucide-react";
+import { SearchIcon } from "@/icons";
 import { SEARCH_FIELD_FRAME } from "@/components/common/control-ink-border";
 import { ConversationMemberSearch } from "@/features/conversations/add-conversation-member-popover";
 import {
@@ -31,7 +31,7 @@ export function ChannelMembersPage({
         />
       ) : (
         <label data-input="" className={SEARCH_FIELD_FRAME}>
-          <Search className="size-3.5 shrink-0 text-text-muted" aria-hidden />
+          <SearchIcon className="size-3.5 shrink-0 text-text-muted" aria-hidden />
           <input
             autoFocus={autoFocus}
             aria-label="Search members"

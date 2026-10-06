@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { Archive, ArchiveRestore, Loader2, Lock, LockOpen, LogOut } from "lucide-react";
+import { ArchiveIcon, LeaveIcon, LockIcon, SpinnerIcon, UnarchiveIcon, UnlockIcon } from "@/icons";
 import type { ChannelLeaveBlockedReason, ConversationVisibility } from "@silverhand/shared";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -174,7 +174,7 @@ export function ChannelSettingsDetails({
           onChange={(e) => setTitle(e.target.value)}
         />
         <Button type="submit" variant="primary" className="shrink-0" disabled={saveDisabled}>
-          {saving ? <Loader2 className="size-3.5 animate-spin" /> : null}
+          {saving ? <SpinnerIcon className="size-3.5 animate-spin" /> : null}
           Save
         </Button>
       </div>
@@ -190,9 +190,9 @@ export function ChannelSettingsDetails({
       node: (
         <div className={ROW_CLASS}>
           {isPrivate ? (
-            <Lock className={ROW_ICON_CLASS} />
+            <LockIcon className={ROW_ICON_CLASS} />
           ) : (
-            <LockOpen className={ROW_ICON_CLASS} />
+            <UnlockIcon className={ROW_ICON_CLASS} />
           )}
           <span className="min-w-0 flex-1">Visibility</span>
           <span className="text-text-muted">{isPrivate ? "Private" : "Public"}</span>
@@ -204,7 +204,7 @@ export function ChannelSettingsDetails({
             disabled={visSaving}
             onClick={() => void handleToggleVisibility()}
           >
-            {visSaving ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            {visSaving ? <SpinnerIcon className="size-3.5 animate-spin" /> : null}
             {isPrivate ? "Make public" : "Make private"}
           </Button>
         </div>
@@ -223,11 +223,11 @@ export function ChannelSettingsDetails({
           onClick={() => void handleToggleArchive()}
         >
           {archivePending ? (
-            <Loader2 className={`${ROW_ICON_CLASS} animate-spin`} />
+            <SpinnerIcon className={`${ROW_ICON_CLASS} animate-spin`} />
           ) : isArchived ? (
-            <ArchiveRestore className={ROW_ICON_CLASS} />
+            <UnarchiveIcon className={ROW_ICON_CLASS} />
           ) : (
-            <Archive className={ROW_ICON_CLASS} />
+            <ArchiveIcon className={ROW_ICON_CLASS} />
           )}
           <span className="min-w-0 flex-1">
             {isArchived ? "Restore channel" : "Archive channel"}
@@ -250,7 +250,7 @@ export function ChannelSettingsDetails({
             disabled={leaving || leaveConfirm}
             onClick={() => setLeaveConfirm(true)}
           >
-            <LogOut className={ROW_ICON_CLASS} />
+            <LeaveIcon className={ROW_ICON_CLASS} />
             <span className="min-w-0 flex-1">Leave channel</span>
           </button>
           {leaveConfirm ? (
@@ -278,9 +278,9 @@ export function ChannelSettingsDetails({
                   onClick={() => void handleConfirmLeave()}
                 >
                   {leaving ? (
-                    <Loader2 className="size-3.5 animate-spin" />
+                    <SpinnerIcon className="size-3.5 animate-spin" />
                   ) : (
-                    <LogOut className="size-3.5" />
+                    <LeaveIcon className="size-3.5" />
                   )}
                   Leave
                 </Button>
@@ -291,7 +291,7 @@ export function ChannelSettingsDetails({
         </div>
       ) : (
         <button type="button" className={ROW_BUTTON_CLASS} disabled>
-          <LogOut className={ROW_ICON_CLASS} />
+          <LeaveIcon className={ROW_ICON_CLASS} />
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             Leave channel
             {blockedCopy ? <span className="text-text-muted">{blockedCopy}</span> : null}

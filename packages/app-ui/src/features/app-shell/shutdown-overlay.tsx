@@ -1,4 +1,4 @@
-import { Power } from "lucide-react";
+import { PowerIcon } from "@/icons";
 import { useShutdownProgress } from "./effects";
 
 export function ShutdownOverlay() {
@@ -17,7 +17,7 @@ export function ShutdownOverlay() {
               aria-hidden
               className="absolute -inset-1 rounded-full border-2 border-accent/25 border-t-accent animate-spin"
             />
-            <Power className="size-5" strokeWidth={1.8} />
+            <PowerIcon className="size-5" />
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-text-primary">Quitting Silverhand</p>

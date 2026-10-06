@@ -1,4 +1,4 @@
-import { Hash, MessageSquareMore } from "lucide-react";
+import { HashIcon, MessageResultIcon } from "@/icons";
 import dayjs from "dayjs";
 import type { AgentDto, SearchIdentity, SearchResultDto } from "@silverhand/shared";
 
@@ -137,9 +137,9 @@ function SearchItemLeading({
           size={AVATAR_PX.md}
         />
       ) : item.kind === "conversation" ? (
-        <Hash className="size-4" />
+        <HashIcon className="size-4" />
       ) : (
-        <MessageSquareMore className="size-4" />
+        <MessageResultIcon className="size-4" />
       )}
     </span>
   );

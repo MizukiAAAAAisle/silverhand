@@ -1,4 +1,4 @@
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { RefreshIcon, WarningIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { useBackendInfoSnapshot } from "@/features/computers/hooks/hooks";
 import { useBackendUnreachableSnitch } from "./use-backend-unreachable-snitch";
@@ -25,7 +25,7 @@ function BannerShell({ title, detail, action }: BannerShellProps): JSX.Element {
       style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
     >
       <div className="flex items-center gap-3 rounded-(--floating-radius) [border:var(--floating-border)] bg-bg-floating px-3 py-2 shadow-modal">
-        <AlertTriangle className="size-5 text-warning" />
+        <WarningIcon className="size-5 text-warning" />
         <div className="min-w-0">
           <p className="text-xs font-medium leading-snug text-text-primary">{title}</p>
           {detail ? (
@@ -39,7 +39,7 @@ function BannerShell({ title, detail, action }: BannerShellProps): JSX.Element {
             onClick={action.onClick}
             className="h-7 gap-1.5 px-2 text-xs"
           >
-            <RefreshCw className="size-3" />
+            <RefreshIcon className="size-3" />
             {action.label}
           </Button>
         ) : null}

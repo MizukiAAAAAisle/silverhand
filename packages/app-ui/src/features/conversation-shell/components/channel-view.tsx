@@ -1,8 +1,15 @@
 import { useCompactLayout } from "@/navigation/layout";
 import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Maximize2, Minimize2, Paperclip, Search, Settings, X } from "lucide-react";
-import { ThreadIcon } from "@/components/icons/conversation-icons";
+import {
+  AttachmentIcon,
+  CloseIcon,
+  CollapseIcon,
+  ExpandIcon,
+  SearchIcon,
+  SettingsIcon,
+  ThreadIcon,
+} from "@/icons";
 import { Composer } from "@/features/messages/components/composer";
 import { SelectionQuoteToolbar } from "@/features/messages/components/selection-quote-toolbar";
 import { ChannelJoinBar } from "@/features/messages/components/channel-join-bar";
@@ -841,7 +848,7 @@ function ActiveChannelView({
                       : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
                   }
                 >
-                  <Search className="size-3.5" />
+                  <SearchIcon className="size-3.5" />
                 </button>
               ) : null}
               {onToggleThreadsList && gate.allowMemberEffects ? (
@@ -890,7 +897,7 @@ function ActiveChannelView({
                       : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
                   }
                 >
-                  <Paperclip className="size-3.5" />
+                  <AttachmentIcon className="size-3.5" />
                 </button>
               ) : null}
               {canOpenSettings ? (
@@ -914,7 +921,7 @@ function ActiveChannelView({
                       : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
                   }
                 >
-                  <Settings className="size-3.5" />
+                  <SettingsIcon className="size-3.5" />
                 </button>
               ) : null}
               {onToggleFullscreen ? (
@@ -929,9 +936,9 @@ function ActiveChannelView({
                   className="flex size-7 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                 >
                   {isFullscreen ? (
-                    <Minimize2 className="size-3.5" />
+                    <CollapseIcon className="size-3.5" />
                   ) : (
-                    <Maximize2 className="size-3.5" />
+                    <ExpandIcon className="size-3.5" />
                   )}
                 </button>
               ) : null}
@@ -946,7 +953,7 @@ function ActiveChannelView({
                   title={closeLabel}
                   className="flex size-7 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                 >
-                  <X className="size-3.5" />
+                  <CloseIcon className="size-3.5" />
                 </button>
               ) : null}
             </div>

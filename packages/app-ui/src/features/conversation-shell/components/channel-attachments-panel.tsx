@@ -8,16 +8,16 @@ import { GroupedVirtuoso } from "react-virtuoso";
 import { toast } from "sonner";
 import * as Select from "@radix-ui/react-select";
 import {
-  ChevronDown,
-  Clock,
-  Download,
-  ExternalLink,
-  FileText,
-  Image as ImageIcon,
-  Loader2,
-  Paperclip,
-  Users,
-} from "lucide-react";
+  AttachmentIcon,
+  ChevronDownIcon,
+  ClockIcon,
+  DocumentIcon,
+  DownloadIcon,
+  ImageIcon,
+  MembersIcon,
+  OpenExternalIcon,
+  SpinnerIcon,
+} from "@/icons";
 import type {
   AgentDto,
   AttachmentDto,
@@ -126,7 +126,7 @@ export function ChannelAttachmentsPanel({
     >
       <SidePanelHeader onClose={onClose}>
         <SidePanelHeaderTitle
-          icon={<Paperclip className="size-3.5 shrink-0 text-text-muted" />}
+          icon={<AttachmentIcon className="size-3.5 shrink-0 text-text-muted" />}
           title="Attachments"
           subtitle={parentTitle ? `#${parentTitle}` : ""}
         />
@@ -300,7 +300,7 @@ export function ChannelAttachmentsContent({
         ) : flatItems.length === 0 ? (
           filterActive ? (
             <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
-              <Paperclip className="size-6 text-text-muted/50" />
+              <AttachmentIcon className="size-6 text-text-muted/50" />
               <p className="text-sm text-text-primary">No matching attachments</p>
               <p className="text-xs text-text-muted">No files match the current filter.</p>
               <button
@@ -313,7 +313,7 @@ export function ChannelAttachmentsContent({
             </div>
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
-              <Paperclip className="size-6 text-text-muted/50" />
+              <AttachmentIcon className="size-6 text-text-muted/50" />
               <p className="text-sm text-text-primary">No attachments yet</p>
               <p className="text-xs text-text-muted">
                 Files sent in this channel will show up here.
@@ -378,7 +378,7 @@ export function ChannelAttachmentsContent({
               Footer: () =>
                 hasNextPage || isFetchingNextPage ? (
                   <div className="flex items-center justify-center py-3 text-text-muted">
-                    <Loader2 className="size-4 animate-spin" />
+                    <SpinnerIcon className="size-4 animate-spin" />
                   </div>
                 ) : null,
             }}
@@ -532,7 +532,7 @@ function SenderFilterSelect({
       >
         <span className="flex min-w-0 items-center gap-1.5">
           {value == null || selectedIdentity == null ? (
-            <Users className="size-3.5 text-text-muted" />
+            <MembersIcon className="size-3.5 text-text-muted" />
           ) : (
             <span className="flex shrink-0">
               <SenderAvatar
@@ -549,7 +549,7 @@ function SenderFilterSelect({
           <span className="truncate">{selectedLabel}</span>
         </span>
         <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
+          <ChevronDownIcon className="size-3.5 text-text-muted" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>
@@ -560,7 +560,7 @@ function SenderFilterSelect({
           className={FILTER_SELECT_CONTENT_CLASS}
         >
           <Select.Viewport className="p-1">
-            <FilterSelectItem value="all" icon={<Users className="size-3.5" />}>
+            <FilterSelectItem value="all" icon={<MembersIcon className="size-3.5" />}>
               All senders
             </FilterSelectItem>
             {isLoading && facets.length === 0 ? (
@@ -570,7 +570,7 @@ function SenderFilterSelect({
                 role="status"
                 className="flex items-center gap-2 px-2 py-1.5 text-xs text-text-muted"
               >
-                <Loader2 aria-hidden className="size-3 motion-safe:animate-spin" />
+                <SpinnerIcon aria-hidden className="size-3 motion-safe:animate-spin" />
                 Loading senders…
               </div>
             ) : isError && facets.length === 0 ? (
@@ -738,7 +738,7 @@ function AttachmentRow({
                 title={appeared.format("YYYY-MM-DD HH:mm:ss")}
                 className="flex shrink-0 items-center gap-1"
               >
-                <Clock className="size-3" />
+                <ClockIcon className="size-3" />
                 <span>
                   <span data-attachment-row-year>{appeared.format("YYYY-")}</span>
                   {appeared.format("MM-DD HH:mm")}
@@ -759,7 +759,7 @@ function AttachmentRow({
           title={`Download ${attachment.filename}`}
           aria-label={`Download ${attachment.filename}`}
         >
-          <Download className="size-3.5" />
+          <DownloadIcon className="size-3.5" />
         </button>
 
         <button
@@ -773,7 +773,7 @@ function AttachmentRow({
           title={`Show ${attachment.filename} in conversation`}
           aria-label={`Show ${attachment.filename} in conversation`}
         >
-          <ExternalLink className="size-3.5" />
+          <OpenExternalIcon className="size-3.5" />
         </button>
       </CollectionItemCard>
 
@@ -874,7 +874,7 @@ function AttachmentThumb({
       </span>
     );
   }
-  const Icon = isImage ? ImageIcon : FileText;
+  const Icon = isImage ? ImageIcon : DocumentIcon;
   return (
     <span className="flex size-8 shrink-0 items-center justify-center rounded-(--chip-radius) bg-bg-inset text-text-muted">
       <Icon className="size-4" />

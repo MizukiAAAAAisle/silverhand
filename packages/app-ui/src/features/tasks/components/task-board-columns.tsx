@@ -1,8 +1,7 @@
 import { TaskCardsSkeleton } from "./task-body-skeleton";
 import { taskChannelLabel } from "../model/task-place.js";
 import { useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Clock } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, ClockIcon, type IconComponent } from "@/icons";
 import type { TaskStatus, TaskSummaryDto } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import {
@@ -45,7 +44,7 @@ import { TaskDropPlaceholder } from "@/features/tasks/components/task-drop-place
 interface ColumnSpec {
   status: TaskStatus;
   label: string;
-  icon: LucideIcon;
+  icon: IconComponent;
   /** Icon color — the SAME `--task-status-<status>-solid` token the card chip
    *  reads (TaskStatusBadge via chrome.css `[data-task-status]`), so a column
    *  header and its cards' chips can never disagree (shiki review #task:912). */
@@ -176,7 +175,7 @@ function KanbanColumn({
 }: {
   title: string;
   status: TaskStatus;
-  icon: LucideIcon;
+  icon: IconComponent;
   iconClass: string;
   /** The rows this surface may render — the loaded prefix under its own window
    *  bound, never the whole column. */
@@ -207,7 +206,7 @@ function KanbanColumn({
   // Per-column collapse (#task:1169). Collapsed → render only the header bar and
   // read nothing (the queries are gated on the SAME store above the column), so
   // all five stay visible but a heavy terminal column (Closed) costs nothing.
-  const Chevron = collapsed ? ChevronRight : ChevronDown;
+  const Chevron = collapsed ? ChevronRightIcon : ChevronDownIcon;
   // A collapsed column renders no body, so it also arms no observer.
   const canGrow = !collapsed && hasMore;
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -418,7 +417,7 @@ function TaskCard({
               </span>
             ) : null}
             <span className="ml-auto inline-flex shrink-0 items-center gap-0.5" title={absolute}>
-              <Clock className="size-3 shrink-0" />
+              <ClockIcon className="size-3 shrink-0" />
               {relative}
             </span>
           </div>

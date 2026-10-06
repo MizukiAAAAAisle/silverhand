@@ -1,6 +1,6 @@
 import { WorkspaceMembersSkeleton } from "./workspace-members-skeleton";
 import { useMemo, useState, type ReactNode } from "react";
-import { UserMinus } from "lucide-react";
+import { RemoveMemberIcon } from "@/icons";
 import type { AgentDto, WorkspaceRole } from "@silverhand/shared";
 import { useNav } from "@/router";
 import { AgentAvatar } from "@/components/agent-avatar";
@@ -242,7 +242,7 @@ export function WorkspaceMembersPanel({
                       title="Remove member"
                       className="ml-auto flex size-6 items-center justify-center rounded-(--chip-radius) text-text-muted hover:text-error disabled:opacity-60"
                     >
-                      <UserMinus className="size-3.5" />
+                      <RemoveMemberIcon className="size-3.5" />
                     </button>
                   ) : null}
                   {/* Human remove is owner-only (DELETE …/members/users/:userId).
@@ -261,7 +261,7 @@ export function WorkspaceMembersPanel({
                       title="Remove member"
                       className="ml-auto flex size-6 items-center justify-center rounded-(--chip-radius) text-text-muted hover:text-error disabled:opacity-60"
                     >
-                      <UserMinus className="size-3.5" />
+                      <RemoveMemberIcon className="size-3.5" />
                     </button>
                   ) : null}
                 </li>

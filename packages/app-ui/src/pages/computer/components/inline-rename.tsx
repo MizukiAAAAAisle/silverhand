@@ -47,7 +47,7 @@
  * new CSS.
  */
 import { useEffect, useId, useRef, useState, type JSX, type KeyboardEvent } from "react";
-import { Pencil, X } from "lucide-react";
+import { CloseIcon, EditIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
@@ -219,7 +219,7 @@ export function InlineRename({
             aria-label="Cancel rename"
             title="Cancel"
           >
-            <X className="size-3.5" />
+            <CloseIcon className="size-3.5" />
           </Button>
         </div>
         {error ? (
@@ -259,7 +259,7 @@ export function InlineRename({
         title="Rename"
         className="shrink-0 rounded-(--control-radius) p-1 text-text-muted opacity-0 transition-opacity hover:bg-bg-hover hover:text-text-primary group-hover/inline-rename:opacity-100 focus-visible:opacity-100"
       >
-        <Pencil className="size-3.5" />
+        <EditIcon className="size-3.5" />
       </button>
     </div>
   );

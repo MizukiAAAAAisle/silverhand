@@ -1,8 +1,14 @@
 import { useViewMemory } from "@/navigation/view-memory";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { paneChrome } from "@/components/layout/pane-chrome";
-import { ArrowDown, ArrowUpRight, Bell, BellOff, Search } from "lucide-react";
-import { ThreadIcon } from "@/components/icons/conversation-icons";
+import {
+  ArrowDownIcon,
+  ArrowUpRightIcon,
+  BellIcon,
+  BellOffIcon,
+  SearchIcon,
+  ThreadIcon,
+} from "@/icons";
 import { authorGroupContinuations } from "@/features/messages/model/author-grouping";
 import { groupMessages } from "@/features/messages/model/group-messages";
 import { MessageItem } from "@/features/messages/components/message-item";
@@ -861,7 +867,7 @@ export function ThreadPanel({
                       : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
                   }
                 >
-                  <Search className="size-3.5" />
+                  <SearchIcon className="size-3.5" />
                 </button>
               ) : null}
               {followers.data && canParticipate ? (
@@ -883,9 +889,9 @@ export function ThreadPanel({
                   }
                 >
                   {viewerFollowing ? (
-                    <BellOff className="size-3.5" />
+                    <BellOffIcon className="size-3.5" />
                   ) : (
-                    <Bell className="size-3.5" />
+                    <BellIcon className="size-3.5" />
                   )}
                 </button>
               ) : null}
@@ -900,7 +906,7 @@ export function ThreadPanel({
                   onClick={onViewInChannel}
                   className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                 >
-                  <ArrowUpRight className="size-3.5" />
+                  <ArrowUpRightIcon className="size-3.5" />
                 </button>
               ) : null}
             </>
@@ -1060,7 +1066,7 @@ export function ThreadPanel({
                 onClick={handleScrollBottomClick}
                 className="absolute bottom-4 left-1/2 z-(--z-sticky) flex size-9 -translate-x-1/2 items-center justify-center rounded-(--pill-radius) bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
               >
-                <ArrowDown className="size-4" />
+                <ArrowDownIcon className="size-4" />
               </button>
             ) : null}
           </div>

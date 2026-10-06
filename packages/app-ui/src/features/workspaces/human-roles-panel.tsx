@@ -1,5 +1,5 @@
 import * as Select from "@radix-ui/react-select";
-import { AlertCircle, Check, ChevronDown } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ErrorIcon } from "@/icons";
 import { toast } from "sonner";
 import type { WorkspaceHumanMemberDto, WorkspaceRole } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
@@ -101,7 +101,7 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
     <div className="flex flex-col gap-4">
       {!canEdit ? (
         <div className="flex items-start gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border-subtle bg-bg-elevated/40 p-2.5 text-xs text-text-muted">
-          <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+          <ErrorIcon className="mt-0.5 size-3.5 shrink-0" />
           <span>
             You are {viewerRoleLabel(viewerRole)} in this workspace — you can view member roles, but
             changing them requires owner.
@@ -194,7 +194,7 @@ function RoleSelect({
       >
         <Select.Value />
         <Select.Icon>
-          <ChevronDown className="size-3 shrink-0 text-text-muted" />
+          <ChevronDownIcon className="size-3 shrink-0 text-text-muted" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>
@@ -213,7 +213,7 @@ function RoleSelect({
               >
                 <span className="flex w-3.5 shrink-0 justify-center">
                   <Select.ItemIndicator>
-                    <Check className="size-3" />
+                    <CheckIcon className="size-3" />
                   </Select.ItemIndicator>
                 </span>
                 <Select.ItemText asChild>

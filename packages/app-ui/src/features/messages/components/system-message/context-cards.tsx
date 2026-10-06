@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, Quote, Sprout } from "lucide-react";
+import { ChevronRightIcon, QuoteIcon, SpawnedIcon } from "@/icons";
 import {
   type ChannelContextMetadata,
   type ChildContextMetadata,
@@ -64,9 +64,9 @@ const CONTEXT_KIND_TAG_BG: Record<ContextCardKind, string> = {
 };
 
 const CONTEXT_KIND_TAG_ICON: Record<ContextCardKind, JSX.Element> = {
-  quoted: <Quote className="size-3" />,
-  inherited: <ChevronRight className="size-3" />,
-  spawned: <Sprout className="size-3" />,
+  quoted: <QuoteIcon className="size-3" />,
+  inherited: <ChevronRightIcon className="size-3" />,
+  spawned: <SpawnedIcon className="size-3" />,
 };
 
 /** Tiny wrapper so `useRelativeTime` only fires when there's a real
@@ -144,7 +144,7 @@ function ContextCardShell({
             title={expanded ? "Collapse" : "Expand"}
             data-context-toggle={expanded ? "collapse" : "expand"}
           >
-            <ChevronRight
+            <ChevronRightIcon
               className={"size-3.5 transition-transform " + (expanded ? "rotate-90" : "")}
             />
           </button>

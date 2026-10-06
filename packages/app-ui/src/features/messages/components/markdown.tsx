@@ -13,7 +13,7 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { ChevronDown, ChevronUp, Hash } from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, HashIcon } from "@/icons";
 import { rehypeHighlightTerm } from "../model/rehype-highlight-term";
 import type { AgentDto, UserDto } from "@silverhand/shared";
 import { ADDRESSABLE_ID_PATTERN } from "@silverhand/shared";
@@ -614,7 +614,7 @@ function StaticChannelRef({
       data-channel-ref-state="resolved-no-handler"
       data-channel-ref-id={channel.id}
     >
-      <Hash className="size-3 shrink-0 self-center" />
+      <HashIcon className="size-3 shrink-0 self-center" />
       {channel.title}
     </span>
   );
@@ -1025,9 +1025,9 @@ function CodeBlock({ children }: { children: React.ReactNode }): JSX.Element {
           title={expanded ? "Collapse code" : "Expand code"}
         >
           {expanded ? (
-            <ChevronUp size={16} aria-hidden="true" />
+            <ChevronUpIcon size={16} aria-hidden="true" />
           ) : (
-            <ChevronDown size={16} aria-hidden="true" />
+            <ChevronDownIcon size={16} aria-hidden="true" />
           )}
         </button>
       ) : null}

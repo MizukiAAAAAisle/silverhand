@@ -1,6 +1,6 @@
 import { useSidebarBranchDrag } from "@/components/layout/sidebar-branch-drag";
 import { useState, type ReactElement, type JSX } from "react";
-import { LogOut } from "lucide-react";
+import { LeaveIcon } from "@/icons";
 import { AppContextMenu, AppContextMenuItem } from "@/components/menus/app-context-menu";
 import { useWorkspaceMemberLists } from "@/features/workspaces/hooks";
 import { canLeaveWorkspace } from "@/features/workspaces/workspace-permissions";
@@ -92,7 +92,7 @@ function WorkspaceLeaveMenuItem({
   if (!canLeaveWorkspace(data?.viewerRole ?? null)) return null;
 
   return (
-    <AppContextMenuItem icon={<LogOut className="size-3.5" />} onSelect={onSelect}>
+    <AppContextMenuItem icon={<LeaveIcon className="size-3.5" />} onSelect={onSelect}>
       Leave workspace
     </AppContextMenuItem>
   );

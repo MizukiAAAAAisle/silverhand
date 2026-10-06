@@ -3,7 +3,14 @@ import { SearchResultItem, type SearchItem } from "@/features/search/search-resu
 import { useMemo, useState, type ReactNode } from "react";
 import * as Select from "@radix-ui/react-select";
 import dayjs from "dayjs";
-import { ChevronDown, Clock, Hash, MessageSquareMore, Search as SearchIcon, X } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ClockIcon,
+  CloseIcon,
+  HashIcon,
+  MessageResultIcon,
+  SearchIcon,
+} from "@/icons";
 import type { AgentDto, SearchResultDto } from "@silverhand/shared";
 import { Input } from "@/components/ui/input";
 import { FilterPanel, FilterToggle, useFilterDisclosure } from "@/components/ui/responsive-filters";
@@ -80,7 +87,7 @@ interface ResultGroup {
 
 /** Workspace glyph — a serif "W" matching the icon column width. Used
  *  wherever a people-owned workspace needs a marker; mirrors the
- *  WorkspacesPanel sidebar. Sizes line up with Lucide `size-3/3.5/4`. */
+ *  WorkspacesPanel sidebar. Sizes line up with icon `size-3/3.5/4`. */
 export function SearchPanel({
   workspaces,
   initialQuery,
@@ -199,7 +206,7 @@ export function SearchPanel({
             title="Clear search"
             className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-(--control-radius) text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline disabled:pointer-events-none disabled:opacity-0"
           >
-            <X className="size-4" />
+            <CloseIcon className="size-4" />
           </button>
         </div>
 
@@ -367,7 +374,7 @@ function WorkspaceFilterSelect({
           <span className="truncate">{selected.label}</span>
         </span>
         <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
+          <ChevronDownIcon className="size-3.5 text-text-muted" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>
@@ -444,11 +451,11 @@ function TimeRangeSelect({
     <Select.Root value={value} onValueChange={(v) => onChange(v as TimeRange)}>
       <Select.Trigger aria-label="Time filter" className={SELECT_TRIGGER_CLASS}>
         <span className="flex min-w-0 items-center gap-1.5">
-          <Clock className="size-3.5 text-text-muted" />
+          <ClockIcon className="size-3.5 text-text-muted" />
           <span className="truncate">{selected}</span>
         </span>
         <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
+          <ChevronDownIcon className="size-3.5 text-text-muted" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>
@@ -463,7 +470,7 @@ function TimeRangeSelect({
               <SelectItem
                 key={option.value}
                 value={option.value}
-                icon={<Clock className="size-3.5" />}
+                icon={<ClockIcon className="size-3.5" />}
               >
                 {option.label}
               </SelectItem>
@@ -542,13 +549,13 @@ function groupResults(results: SearchResultDto[]): ResultGroup[] {
     {
       key: "channels",
       label: "Channels",
-      icon: <Hash className="size-3" />,
+      icon: <HashIcon className="size-3" />,
       results: channels,
     },
     {
       key: "messages",
       label: "Messages",
-      icon: <MessageSquareMore className="size-3" />,
+      icon: <MessageResultIcon className="size-3" />,
       results: messages,
     },
   ].filter((group) => group.results.length > 0);

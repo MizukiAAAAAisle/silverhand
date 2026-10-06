@@ -1,4 +1,4 @@
-import { ArrowDownUp, Check, Clock, GripVertical } from "lucide-react";
+import { CheckIcon, ClockIcon, DragHandleIcon, SortIcon } from "@/icons";
 import type { SortMode } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
 import { AppDropdownMenu, AppDropdownMenuItem } from "@/components/menus/app-context-menu";
@@ -30,20 +30,20 @@ export function SortModeMenu({
           aria-label="Sort"
           title="Sort"
         >
-          <ArrowDownUp className="size-3.5" />
+          <SortIcon className="size-3.5" />
         </Button>
       }
     >
       <AppDropdownMenuItem
-        icon={<Clock className="size-3.5" />}
-        trailing={mode === "recent" ? <Check className="size-3.5 text-accent" /> : undefined}
+        icon={<ClockIcon className="size-3.5" />}
+        trailing={mode === "recent" ? <CheckIcon className="size-3.5 text-accent" /> : undefined}
         onSelect={() => onChange("recent")}
       >
         Recent
       </AppDropdownMenuItem>
       <AppDropdownMenuItem
-        icon={<GripVertical className="size-3.5" />}
-        trailing={mode === "manual" ? <Check className="size-3.5 text-accent" /> : undefined}
+        icon={<DragHandleIcon className="size-3.5" />}
+        trailing={mode === "manual" ? <CheckIcon className="size-3.5 text-accent" /> : undefined}
         onSelect={() => onChange("manual")}
       >
         Manual

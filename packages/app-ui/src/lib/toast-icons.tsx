@@ -1,11 +1,11 @@
 import {
-  AlertTriangle,
-  Bell,
-  CheckCircle2,
-  type LucideIcon,
-  Paperclip,
-  XCircle,
-} from "lucide-react";
+  AttachmentIcon,
+  BellIcon,
+  FailedIcon,
+  SuccessIcon,
+  WarningIcon,
+  type IconComponent,
+} from "@/icons";
 import type { ReactNode } from "react";
 
 // Single authority for toast semantic → icon. sonner reaches it through two
@@ -22,12 +22,12 @@ export type ToastSemantic = "success" | "error" | "warning" | "notification" | "
 // "attachment-related" rather than any particular action. Tone is an inline
 // style, not a `text-[var(--x)]` class, because Tailwind can't see a token
 // picked at runtime.
-const TOAST_ICON: Record<ToastSemantic, { Glyph: LucideIcon; tone: string }> = {
-  success: { Glyph: CheckCircle2, tone: "var(--success)" },
-  error: { Glyph: XCircle, tone: "var(--error)" },
-  warning: { Glyph: AlertTriangle, tone: "var(--warning)" },
-  notification: { Glyph: Bell, tone: "var(--text-secondary)" },
-  attachment: { Glyph: Paperclip, tone: "var(--text-secondary)" },
+const TOAST_ICON: Record<ToastSemantic, { Glyph: IconComponent; tone: string }> = {
+  success: { Glyph: SuccessIcon, tone: "var(--success)" },
+  error: { Glyph: FailedIcon, tone: "var(--error)" },
+  warning: { Glyph: WarningIcon, tone: "var(--warning)" },
+  notification: { Glyph: BellIcon, tone: "var(--text-secondary)" },
+  attachment: { Glyph: AttachmentIcon, tone: "var(--text-secondary)" },
 };
 
 export function toastIcon(kind: ToastSemantic): ReactNode {

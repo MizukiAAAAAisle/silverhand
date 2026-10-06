@@ -8,7 +8,7 @@ import {
 import { useCoarsePointer, useCompactLayout } from "@/navigation/layout";
 import { useId, useMemo, useState, useRef } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { ChevronDown, Search } from "lucide-react";
+import { ChevronDownIcon, SearchIcon } from "@/icons";
 import { cn } from "@/lib/cn";
 import { ChannelIcon } from "@/components/channel-icon";
 import { FILTER_SELECT_TRIGGER_CLASS } from "@/components/ui/filter-select";
@@ -128,7 +128,7 @@ export function CreateTaskChannelPicker({
           <span className="text-text-muted">Select a channel</span>
         )}
       </span>
-      <ChevronDown className="size-3.5 shrink-0 text-text-muted" />
+      <ChevronDownIcon className="size-3.5 shrink-0 text-text-muted" />
     </button>
   );
   const content = (
@@ -137,7 +137,7 @@ export function CreateTaskChannelPicker({
         data-input=""
         className="flex shrink-0 items-center gap-1.5 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2 py-1.5 transition-colors focus-within:border-border-focus"
       >
-        <Search className="size-3.5 shrink-0 text-text-muted" />
+        <SearchIcon className="size-3.5 shrink-0 text-text-muted" />
         <input
           autoFocus={!touch}
           value={query}

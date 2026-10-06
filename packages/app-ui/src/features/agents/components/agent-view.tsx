@@ -5,7 +5,7 @@ import "./agent-page.css";
 import { AgentPageLayout } from "./agent-page-layout";
 import { visibleAgentSideSections, type AgentSideSection } from "../model/side-section-access";
 import { useEffect, useState } from "react";
-import { Lock } from "lucide-react";
+import { LockIcon } from "@/icons";
 import type { AgentDto, AgentRuntimeStateDto } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { SidePanelHeader } from "@/components/layout/side-panel-header";
@@ -348,7 +348,7 @@ function AgentSchedulesPermissionState({ loading }: { loading: boolean }): JSX.E
       data-panel-card="placeholder"
       className="flex flex-col items-center gap-2 border border-border-subtle bg-bg-floating/50 px-4 py-10 text-center"
     >
-      <Lock className="size-6 text-text-muted" />
+      <LockIcon className="size-6 text-text-muted" />
       <p className="max-w-md text-sm text-text-primary">
         Schedules are private to this agent's owner.
       </p>
@@ -366,7 +366,7 @@ function AgentWorkspaceFilesPermissionState({ loading }: { loading: boolean }): 
       data-panel-card="placeholder"
       className="flex flex-col items-center gap-2 border border-border-subtle bg-bg-floating/50 px-4 py-10 text-center"
     >
-      <Lock className="size-6 text-text-muted" />
+      <LockIcon className="size-6 text-text-muted" />
       <p className="max-w-md text-sm text-text-primary">
         Agent workspace files are private to this agent's owner.
       </p>

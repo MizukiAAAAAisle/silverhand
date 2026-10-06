@@ -4,7 +4,7 @@ import { MembersSkeleton } from "../channel-list-skeletons";
  * retains its blocked reason. Row confirmations are local to the mounted roster.
  */
 import { useMemo, useState } from "react";
-import { Loader2, LogOut, UserMinus } from "lucide-react";
+import { LeaveIcon, RemoveMemberIcon, SpinnerIcon } from "@/icons";
 import type {
   ChannelLeaveBlockedReason,
   ConversationAgentRuntimeDto,
@@ -295,7 +295,7 @@ export function ChannelMembersContent({
                 title="Leave channel"
                 className={ROW_ACTION}
               >
-                <LogOut className="size-3.5" />
+                <LeaveIcon className="size-3.5" />
               </button>
             ) : leaveBlockedHere ? (
               // The tooltip hangs on the WRAPPER: a disabled button swallows the
@@ -308,7 +308,7 @@ export function ChannelMembersContent({
                   title={blockedCopy ?? undefined}
                   className={`${ROW_ACTION} pointer-events-none opacity-40`}
                 >
-                  <LogOut className="size-3.5" />
+                  <LeaveIcon className="size-3.5" />
                 </button>
               </span>
             ) : canRemoveHere ? (
@@ -320,7 +320,7 @@ export function ChannelMembersContent({
                 title={`Remove @${member.name} from this channel`}
                 className={ROW_ACTION}
               >
-                <UserMinus className="size-3.5" />
+                <RemoveMemberIcon className="size-3.5" />
               </button>
             ) : null}
           </span>
@@ -364,7 +364,9 @@ export function ChannelMembersContent({
                 {/* Label only — the glyph would repeat the row action that
                     opened this confirm. The spinner still shows, being state
                     rather than identity. */}
-                {leaving || removePending ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                {leaving || removePending ? (
+                  <SpinnerIcon className="size-3.5 animate-spin" />
+                ) : null}
                 {isSelf ? "Leave" : "Remove"}
               </Button>
             </div>

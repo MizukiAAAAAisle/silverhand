@@ -1,6 +1,6 @@
 import { ProfileHeaderContent } from "@/features/profile/profile-header-content";
 import { useState } from "react";
-import { MessageSquare, Power, Trash2 } from "lucide-react";
+import { DeleteIcon, MessageIcon, PowerIcon } from "@/icons";
 import type { AgentDto, AgentRuntimeStateDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
@@ -71,7 +71,7 @@ export function AgentHeader({
           title={`Message @${agent.name}`}
           onClick={() => onMessageAgent(agent.id)}
         >
-          <MessageSquare className="size-3.5" />
+          <MessageIcon className="size-3.5" />
         </HeaderAction>
       ) : null}
       <HeaderAction
@@ -85,7 +85,7 @@ export function AgentHeader({
         disabled={runningCount === 0 || stopAgent.isPending}
         onClick={() => stopAgent.mutate()}
       >
-        <Power className="size-3.5" />
+        <PowerIcon className="size-3.5" />
       </HeaderAction>
       {!compact ? (
         <HeaderAction
@@ -95,7 +95,7 @@ export function AgentHeader({
           destructive
           onClick={() => setDeleteOpen(true)}
         >
-          <Trash2 className="size-3.5" />
+          <DeleteIcon className="size-3.5" />
         </HeaderAction>
       ) : null}
     </>

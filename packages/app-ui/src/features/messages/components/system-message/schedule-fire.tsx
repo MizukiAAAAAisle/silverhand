@@ -1,4 +1,4 @@
-import { AlarmClock } from "lucide-react";
+import { AlarmIcon } from "@/icons";
 import { readScheduleFireMetadata } from "@silverhand/shared";
 import { useRelativeTime } from "@/features/messages/hooks/use-relative-time";
 import type { RendererProps } from "./shared";
@@ -19,7 +19,7 @@ export function ScheduleFireRow({ message }: RendererProps): JSX.Element {
       data-schedule-fire={meta ? "1" : "0"}
     >
       <div className="flex min-w-0 flex-wrap items-center justify-center gap-x-2 gap-y-0.5">
-        <AlarmClock aria-hidden className="size-4 shrink-0 text-success" />
+        <AlarmIcon aria-hidden className="size-4 shrink-0 text-success" />
         <span className="min-w-0 wrap-anywhere font-semibold text-text-primary">{title}</span>
         <span>triggered</span>
         <time

@@ -1,18 +1,18 @@
 import { McpSkeleton } from "./agent-loading";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  Check,
-  ChevronRight,
-  Copy,
-  Globe,
-  Info,
-  Loader2,
-  Lock,
-  Plug,
-  ShieldCheck,
-  Terminal,
-  TriangleAlert,
-} from "lucide-react";
+  CheckIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  GlobeIcon,
+  InfoIcon,
+  IntegrationIcon,
+  LockIcon,
+  ShieldCheckIcon,
+  SpinnerIcon,
+  TerminalIcon,
+  WarningIcon,
+} from "@/icons";
 import {
   MCP_CONFIG_FILENAME,
   parseMcpConfig,
@@ -80,7 +80,7 @@ export function AgentMcpPane({ agentId, runtime }: AgentMcpPaneProps): JSX.Eleme
       return (
         <div className="mx-auto max-w-3xl">
           <EmptyCard
-            icon={<Lock className="size-6 text-text-muted" />}
+            icon={<LockIcon className="size-6 text-text-muted" />}
             title="MCP config is private"
             body="Only the agent's creator can view its MCP servers — the raw config may contain secrets."
           />
@@ -134,12 +134,12 @@ function ProfileMcpScope({
       </header>
 
       {supported ? (
-        <NoticeLine icon={<Info className="size-3.5 shrink-0" />}>
+        <NoticeLine icon={<InfoIcon className="size-3.5 shrink-0" />}>
           Changes take effect at the agent's <strong>next spawn</strong> — this is not a hot reload.
         </NoticeLine>
       ) : (
         <div className="flex items-start gap-2 rounded-(--control-radius) border border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed text-text-secondary">
-          <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-error" />
+          <WarningIcon className="mt-0.5 size-3.5 shrink-0 text-error" />
           <span>
             {runtime === "pi" ? (
               <>MCP is configured through Pi extensions. Profile MCP settings do not apply to Pi.</>
@@ -156,7 +156,7 @@ function ProfileMcpScope({
       <ProfileSection title="Servers">
         {!parsed.ok ? (
           <div className="flex items-start gap-2 text-sm text-text-secondary">
-            <TriangleAlert className="size-4 shrink-0 text-error" />
+            <WarningIcon className="size-4 shrink-0 text-error" />
             <span>
               Can't render a summary — the config isn't valid.{" "}
               {supported ? (
@@ -252,9 +252,9 @@ function ServerRow({
       </div>
       <div className="flex items-center gap-1.5 font-mono text-xs text-text-muted" title={target}>
         {isRemote ? (
-          <Globe className="size-3 shrink-0" />
+          <GlobeIcon className="size-3 shrink-0" />
         ) : (
-          <Terminal className="size-3 shrink-0" />
+          <TerminalIcon className="size-3 shrink-0" />
         )}
         <span className="truncate">{target}</span>
       </div>
@@ -299,7 +299,7 @@ function ProbeButton({
       disabled={disabled}
       onClick={onClick}
     >
-      {pending ? <Loader2 className="size-3 shrink-0 animate-spin" /> : null}
+      {pending ? <SpinnerIcon className="size-3 shrink-0 animate-spin" /> : null}
       {label}
     </Button>
   );
@@ -316,7 +316,7 @@ function ProbeResult({ probe }: { probe: ReturnType<typeof useMcpProbe> }): JSX.
   if (probe.isPending) {
     return (
       <div className="flex items-center gap-1.5 text-(length:--text-meta) text-text-muted">
-        <Loader2 className="size-3 shrink-0 animate-spin" />
+        <SpinnerIcon className="size-3 shrink-0 animate-spin" />
         Probing…
       </div>
     );
@@ -368,12 +368,12 @@ function ProbeTools({ tools }: { tools: NonNullable<McpProbeResult["tools"]> }):
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-1.5 text-xs text-success transition-colors"
       >
-        <ShieldCheck className="size-3.5 shrink-0" />
+        <ShieldCheckIcon className="size-3.5 shrink-0" />
         <span>
           Connected {list.length} tool{list.length === 1 ? "" : "s"}
         </span>
         {list.length > 0 ? (
-          <ChevronRight
+          <ChevronRightIcon
             className={cn("size-3.5 text-text-muted transition-transform", open ? "rotate-90" : "")}
           />
         ) : null}
@@ -403,9 +403,9 @@ function ProbeLine({ ok, children }: { ok: boolean; children: ReactNode }): JSX.
   return (
     <div className={cn("flex items-start gap-1.5 text-xs", ok ? "text-success" : "text-error")}>
       {ok ? (
-        <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
+        <ShieldCheckIcon className="mt-0.5 size-3.5 shrink-0" />
       ) : (
-        <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+        <WarningIcon className="mt-0.5 size-3.5 shrink-0" />
       )}
       <span className="leading-snug">{children}</span>
     </div>
@@ -506,7 +506,7 @@ function CheckBadge({ result }: { result: ConfigCheckResult }): JSX.Element {
   if (result.ok) {
     return (
       <div className="flex items-center gap-1.5 text-xs text-success">
-        <ShieldCheck className="size-3.5 shrink-0" />
+        <ShieldCheckIcon className="size-3.5 shrink-0" />
         <span>
           Config OK {result.count} server{result.count === 1 ? "" : "s"}
         </span>
@@ -515,7 +515,7 @@ function CheckBadge({ result }: { result: ConfigCheckResult }): JSX.Element {
   }
   return (
     <div className="flex max-w-[16rem] items-start gap-1.5 text-xs text-error">
-      <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+      <WarningIcon className="mt-0.5 size-3.5 shrink-0" />
       <span className="font-mono leading-snug">{result.error}</span>
     </div>
   );
@@ -543,7 +543,7 @@ function RawConfig({ raw }: { raw: string | null }): JSX.Element {
             onClick={() => setOpen((o) => !o)}
             className="flex items-center gap-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
           >
-            <ChevronRight
+            <ChevronRightIcon
               className={cn("size-3.5 transition-transform", open ? "rotate-90" : "")}
             />
             {open ? "Hide" : "Show"} raw config
@@ -564,7 +564,7 @@ function RawConfig({ raw }: { raw: string | null }): JSX.Element {
 function EmptyServers(): JSX.Element {
   return (
     <div className="flex flex-col items-center gap-2 py-6 text-center">
-      <Plug className="size-6 text-text-muted" />
+      <IntegrationIcon className="size-6 text-text-muted" />
       <p className="text-sm text-text-primary">No MCP servers configured</p>
       <p className="max-w-xs text-xs text-text-muted">
         Ask this agent to add MCP servers to its profile.
@@ -631,7 +631,11 @@ function CopyButton({
       )}
       title="Copy to clipboard"
     >
-      {copied ? <Check className="size-3 shrink-0" /> : <Copy className="size-3 shrink-0" />}
+      {copied ? (
+        <CheckIcon className="size-3 shrink-0" />
+      ) : (
+        <CopyIcon className="size-3 shrink-0" />
+      )}
       <span className="truncate">{copied ? "Copied" : label}</span>
     </button>
   );

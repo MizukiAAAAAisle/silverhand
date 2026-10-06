@@ -1,4 +1,4 @@
-import { Pencil } from "lucide-react";
+import { EditIcon } from "@/icons";
 import type { JSX } from "react";
 import { cn } from "@/lib/cn";
 
@@ -41,7 +41,7 @@ export function EditPencilButton({
       title={hidden ? undefined : ariaLabel}
       aria-label={ariaLabel}
     >
-      <Pencil className="size-3.5" />
+      <EditIcon className="size-3.5" />
     </button>
   );
 }

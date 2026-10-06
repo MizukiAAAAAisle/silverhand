@@ -1,7 +1,7 @@
 import { useProfileHeroSize } from "@/features/profile/use-profile-hero-size";
 import { ProfileMessageActivity } from "@/features/profile/profile-message-activity";
 import { useState, type JSX, type ReactNode } from "react";
-import { Clock, IdCard, Link2, Monitor, Unlink } from "lucide-react";
+import { ClockIcon, ComputerIcon, LinkIcon, ProfileCardIcon, UnlinkIcon } from "@/icons";
 import "./agent-profile-hero.css";
 import dayjs from "dayjs";
 import type { AgentDto } from "@silverhand/shared";
@@ -143,15 +143,15 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
       </section>
 
       <ProfileFactBand>
-        <ProfileFact icon={<Monitor className="size-3.5" />} label="Computer">
+        <ProfileFact icon={<ComputerIcon className="size-3.5" />} label="Computer">
           <span className="font-medium text-text-primary">{computerName}</span>
         </ProfileFact>
         <ProfileFact
           icon={
             agent.session_scope === "agent" ? (
-              <Link2 className="size-3.5" />
+              <LinkIcon className="size-3.5" />
             ) : (
-              <Unlink className="size-3.5" />
+              <UnlinkIcon className="size-3.5" />
             )
           }
           label="Session"
@@ -160,7 +160,7 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
             {agent.session_scope === "agent" ? "Across conversations" : "Per conversation"}
           </span>
         </ProfileFact>
-        <ProfileFact icon={<Clock className="size-3.5" />} label="Created">
+        <ProfileFact icon={<ClockIcon className="size-3.5" />} label="Created">
           <span
             className="font-medium text-text-primary"
             title={dayjs(agent.created_at).format("YYYY-MM-DD HH:mm:ss")}
@@ -168,7 +168,7 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
             {dayjs(agent.created_at).format("YYYY-MM-DD")}
           </span>
         </ProfileFact>
-        <ProfileFact icon={<IdCard className="size-3.5" />} label="ID">
+        <ProfileFact icon={<ProfileCardIcon className="size-3.5" />} label="ID">
           <span className="font-mono">{agent.id}</span>
         </ProfileFact>
       </ProfileFactBand>

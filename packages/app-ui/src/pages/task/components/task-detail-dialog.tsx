@@ -1,6 +1,6 @@
 import { TaskBodySkeleton } from "../../../features/tasks/components/task-body-skeleton";
 import { useEffect, useState } from "react";
-import { ExternalLink, Pencil } from "lucide-react";
+import { EditIcon, OpenExternalIcon } from "@/icons";
 import type { TaskDetailDto } from "@silverhand/shared";
 import {
   Dialog,
@@ -183,7 +183,7 @@ export function TaskDetailDialog({
               onClick={() => onJump(jumpTarget)}
               className={dialogCornerButtonClass}
             >
-              <ExternalLink className="size-4" aria-hidden />
+              <OpenExternalIcon className="size-4" aria-hidden />
             </button>
           ) : null
         }
@@ -377,7 +377,7 @@ function TaskDetailBody({
               </DialogTitle>
               {!busy ? (
                 <MiniIconButton
-                  icon={Pencil}
+                  icon={EditIcon}
                   label="Edit title"
                   className="mt-0.5"
                   onClick={() => onEditField("title")}
@@ -420,7 +420,7 @@ function TaskDetailBody({
               </div>
               {!busy ? (
                 <MiniIconButton
-                  icon={Pencil}
+                  icon={EditIcon}
                   label="Edit description"
                   className="mt-0.5"
                   onClick={() => onEditField("content")}

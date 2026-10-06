@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type FormEvent } from "react";
-import { Loader2, UserRound } from "lucide-react";
+import { SpinnerIcon, UserIcon } from "@/icons";
 import { validateAvatarFile } from "@silverhand/shared";
 import { AvatarPickerButton } from "@/components/avatar-picker-button";
 import { AVATAR_PX } from "@/components/avatar-scale";
@@ -96,7 +96,7 @@ export function ProfileSetupForm({
               {avatarUrl ? (
                 <img src={avatarUrl} alt="Profile preview" className="size-full object-cover" />
               ) : (
-                <UserRound className="size-6 text-text-muted" />
+                <UserIcon className="size-6 text-text-muted" />
               )}
             </span>
           </AvatarPickerButton>
@@ -174,7 +174,7 @@ export function ProfileSetupForm({
           </Button>
         ) : (
           <Button type="submit" variant="primary" className="w-full" disabled={pending}>
-            {pending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+            {pending ? <SpinnerIcon className="size-4 animate-spin" aria-hidden /> : null}
             Continue
           </Button>
         )}

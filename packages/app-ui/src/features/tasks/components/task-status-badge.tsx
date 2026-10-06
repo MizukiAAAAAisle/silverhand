@@ -1,14 +1,14 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import {
-  Archive,
-  ArrowRight,
-  CheckCircle2,
-  Circle,
-  createLucideIcon,
-  Eye,
-  type LucideIcon,
-} from "lucide-react";
+  ArchiveIcon,
+  ArrowRightIcon,
+  CircleIcon,
+  ProgressIcon,
+  SuccessIcon,
+  ViewIcon,
+  type IconComponent,
+} from "@/icons";
 import type { TaskStatus } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { AppContextMenu, AppContextMenuItem } from "@/components/menus/app-context-menu";
@@ -57,32 +57,6 @@ export function taskStatusLabel(status: TaskStatus): string {
 }
 
 /**
- * `in_progress` glyph — a 75%-filled progress ring. lucide ships no
- * partial-fill circle, so we author one in its spec (viewBox 24,
- * stroke-width 2, round caps via `createLucideIcon`) to land the
- * DevOps/issue-tracker convention (Linear, GitHub Projects): empty ring
- * (todo) → filling ring (in progress) → ✓ (done), one "ring filling up"
- * progress story. 75% reads as "almost there" and is unmistakably
- * mid-progress rather than a loading spinner (shiki picked 75% over the
- * 50%/25% variants). The wedge sweeps clockwise from 12 o'clock 270° to
- * 9 o'clock; `fill="currentColor" stroke="none"` paints the pie while the
- * ring keeps the inherited stroke. Inset r=6 leaves a gap to the r=10
- * ring so the fill reads as a distinct pie, not a thick arc.
- */
-const CircleProgress = createLucideIcon("CircleProgress", [
-  ["circle", { cx: "12", cy: "12", r: "10", key: "ring" }],
-  [
-    "path",
-    {
-      d: "M12 12 L12 6 A6 6 0 1 1 6 12 Z",
-      fill: "currentColor",
-      stroke: "none",
-      key: "fill",
-    },
-  ],
-]);
-
-/**
  * Canonical per-status icon. The SINGLE source for the status glyph vocabulary
  * (shiki #task:1185: "icon 引用同一个 source，到时候更改 icon 可以一起更新") —
  * the kanban board (`TasksSection`), the per-conversation Tasks tab (`ChannelTasksTab`) and the
@@ -90,12 +64,12 @@ const CircleProgress = createLucideIcon("CircleProgress", [
  * surface at once. Colour stays per-consumer via the `--task-status-*-text`
  * tokens; only the glyph is centralised.
  */
-export const TASK_STATUS_ICON: Record<TaskStatus, LucideIcon> = {
-  todo: Circle,
-  in_progress: CircleProgress,
-  in_review: Eye,
-  done: CheckCircle2,
-  closed: Archive,
+export const TASK_STATUS_ICON: Record<TaskStatus, IconComponent> = {
+  todo: CircleIcon,
+  in_progress: ProgressIcon,
+  in_review: ViewIcon,
+  done: SuccessIcon,
+  closed: ArchiveIcon,
 };
 
 const CHIP =
@@ -257,7 +231,7 @@ export function TaskCardContextMenu({
       {ALL_STATUSES.filter((s) => s !== status).map((s) => (
         <AppContextMenuItem
           key={s}
-          icon={<ArrowRight className="size-3.5" />}
+          icon={<ArrowRightIcon className="size-3.5" />}
           onSelect={() => onStatusChange(s)}
         >
           Move to {MOVE_LABELS[s]}

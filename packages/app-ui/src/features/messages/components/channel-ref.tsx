@@ -1,4 +1,4 @@
-import { Hash } from "lucide-react";
+import { HashIcon } from "@/icons";
 import { INLINE_REF_HOVER_CLASS } from "../model/inline-ref-chip";
 
 export interface ChannelReference {
@@ -67,7 +67,7 @@ export function ChannelRef({ name, channel, onOpen }: ChannelRefProps): JSX.Elem
         data-channel-ref-state="resolved-no-handler"
         data-channel-ref-id={channel.id}
       >
-        <Hash className="size-3 shrink-0 self-center" />
+        <HashIcon className="size-3 shrink-0 self-center" />
         {channel.title}
       </span>
     );
@@ -96,7 +96,7 @@ export function ChannelRef({ name, channel, onOpen }: ChannelRefProps): JSX.Elem
         onOpen(channel.id);
       }}
     >
-      <Hash className="size-3 shrink-0 self-center" />
+      <HashIcon className="size-3 shrink-0 self-center" />
       {channel.title}
     </span>
   );

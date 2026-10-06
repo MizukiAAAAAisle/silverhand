@@ -1,11 +1,14 @@
-import { Archive, ArchiveRestore, Bell, Copy, Star } from "lucide-react";
+import { ArchiveIcon, CopyIcon, StarIcon, UnarchiveIcon } from "@/icons";
 import type { ChannelAttentionModeRowDto } from "@silverhand/shared";
 import {
   AppContextMenuItem,
   AppContextMenuSeparator,
   AppContextMenuSub,
 } from "@/components/menus/app-context-menu";
-import { ChannelAttentionMenuItems } from "../../../features/conversation-shell/components/channel-attention-surfaces";
+import {
+  attentionIcon,
+  ChannelAttentionMenuItems,
+} from "../../../features/conversation-shell/components/channel-attention-surfaces";
 import { copyConversationName } from "../../../components/layout/sidebar-shared";
 
 /** Sidebar placement changes star state, never channel management capabilities. */
@@ -34,16 +37,18 @@ export function ChannelRowMenuItems({
   onArchive: () => void;
   archivePending: boolean;
 }): JSX.Element {
+  const AttentionGlyph = attentionIcon(attention?.mode);
+
   return (
     <>
       <AppContextMenuItem
-        icon={<Star className={"size-3.5" + (starred ? " fill-current" : "")} />}
+        icon={<StarIcon className={"size-3.5" + (starred ? " fill-current" : "")} />}
         onSelect={onStar}
       >
         {starred ? "Unstar" : "Star"}
       </AppContextMenuItem>
       {isMember && rosterPolicy === "open" ? (
-        <AppContextMenuSub icon={<Bell className="size-3.5" />} label="Notifications">
+        <AppContextMenuSub icon={<AttentionGlyph className="size-3.5" />} label="Notifications">
           <ChannelAttentionMenuItems
             channelId={channelId}
             mode={attention?.mode}
@@ -54,7 +59,11 @@ export function ChannelRowMenuItems({
       {isMember ? (
         <AppContextMenuItem
           icon={
-            isArchived ? <ArchiveRestore className="size-3.5" /> : <Archive className="size-3.5" />
+            isArchived ? (
+              <UnarchiveIcon className="size-3.5" />
+            ) : (
+              <ArchiveIcon className="size-3.5" />
+            )
           }
           disabled={archivePending}
           onSelect={onArchive}
@@ -64,7 +73,7 @@ export function ChannelRowMenuItems({
       ) : null}
       <AppContextMenuSeparator />
       <AppContextMenuItem
-        icon={<Copy className="size-3.5" />}
+        icon={<CopyIcon className="size-3.5" />}
         onSelect={() => void copyConversationName(title)}
       >
         Copy name

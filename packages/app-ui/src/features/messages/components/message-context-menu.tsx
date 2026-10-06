@@ -2,13 +2,13 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useCoarsePointer } from "@/navigation/layout";
 import "./message-context-menu.css";
 import {
-  BellOff,
-  Bookmark,
-  BookmarkX,
-  ClipboardCopy,
-  Share2,
-  SquareMousePointer,
-} from "lucide-react";
+  BellOffIcon,
+  BookmarkIcon,
+  BookmarkRemoveIcon,
+  CopyMarkdownIcon,
+  SelectTextIcon,
+  ShareLinkIcon,
+} from "@/icons";
 import {
   AppContextMenu,
   AppContextMenuItem,
@@ -125,7 +125,7 @@ export function MessageContextMenu({
     >
       {canSelectText ? (
         <AppContextMenuItem
-          icon={<SquareMousePointer className="size-3.5" />}
+          icon={<SelectTextIcon className="size-3.5" />}
           onSelect={() => {
             openingSelection.current = true;
             setSelecting(true);
@@ -135,13 +135,22 @@ export function MessageContextMenu({
         </AppContextMenuItem>
       ) : null}
       {onCopyMarkdown ? (
-        <AppContextMenuItem icon={<ClipboardCopy className="size-3.5" />} onSelect={onCopyMarkdown}>
+        <AppContextMenuItem
+          icon={<CopyMarkdownIcon className="size-3.5" />}
+          onSelect={onCopyMarkdown}
+        >
           Copy markdown
         </AppContextMenuItem>
       ) : null}
       {onToggleSave ? (
         <AppContextMenuItem
-          icon={saved ? <BookmarkX className="size-3.5" /> : <Bookmark className="size-3.5" />}
+          icon={
+            saved ? (
+              <BookmarkRemoveIcon className="size-3.5" />
+            ) : (
+              <BookmarkIcon className="size-3.5" />
+            )
+          }
           onSelect={onToggleSave}
         >
           {saved ? "Unsave" : "Save message"}
@@ -150,7 +159,7 @@ export function MessageContextMenu({
       {onShare ? (
         <>
           <AppContextMenuSeparator />
-          <AppContextMenuItem icon={<Share2 className="size-3.5" />} onSelect={onShare}>
+          <AppContextMenuItem icon={<ShareLinkIcon className="size-3.5" />} onSelect={onShare}>
             Share…
           </AppContextMenuItem>
         </>
@@ -158,7 +167,10 @@ export function MessageContextMenu({
       {onUnfollowThread ? (
         <>
           <AppContextMenuSeparator />
-          <AppContextMenuItem icon={<BellOff className="size-3.5" />} onSelect={onUnfollowThread}>
+          <AppContextMenuItem
+            icon={<BellOffIcon className="size-3.5" />}
+            onSelect={onUnfollowThread}
+          >
             Unfollow thread
           </AppContextMenuItem>
         </>

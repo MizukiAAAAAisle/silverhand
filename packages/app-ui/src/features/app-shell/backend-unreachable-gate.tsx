@@ -31,7 +31,7 @@ import { getPlatform } from "@/platform";
  * `getAuthState()` reload to deliver the real arm.
  */
 import { useEffect, useState } from "react";
-import { AlertTriangle, Check, Loader2, Pencil, RefreshCw, X } from "lucide-react";
+import { CheckIcon, CloseIcon, EditIcon, RefreshIcon, SpinnerIcon, WarningIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
@@ -145,7 +145,7 @@ export function BackendUnreachableGate({
               semantic, so a ground + border on top of it is a third layer on
               one 20px mark (shiki #task:1833 「warning icon 不要给背景色」).
               Same bare-glyph shape as AppStatusBanner. */}
-          <AlertTriangle className="size-5 shrink-0 text-warning" />
+          <WarningIcon className="size-5 shrink-0 text-warning" />
           <h1 className="text-base font-semibold leading-tight">Can&apos;t reach this server</h1>
         </header>
         <p className="mb-3 text-xs leading-relaxed text-text-muted">
@@ -195,9 +195,9 @@ export function BackendUnreachableGate({
                 }
               >
                 {saving ? (
-                  <Loader2 className="size-3.5 animate-spin" />
+                  <SpinnerIcon className="size-3.5 animate-spin" />
                 ) : (
-                  <Check className="size-3.5" />
+                  <CheckIcon className="size-3.5" />
                 )}
               </Button>
               <Button
@@ -208,7 +208,7 @@ export function BackendUnreachableGate({
                 disabled={saving}
                 title="Cancel"
               >
-                <X className="size-3.5" />
+                <CloseIcon className="size-3.5" />
               </Button>
             </div>
             {classification.kind === "reject" && (
@@ -227,7 +227,7 @@ export function BackendUnreachableGate({
               onClick={startEdit}
               title="Edit server address"
             >
-              <Pencil className="size-3.5" />
+              <EditIcon className="size-3.5" />
             </Button>
           </div>
         )}
@@ -265,7 +265,7 @@ export function BackendUnreachableGate({
           </pre>
         ) : null}
         <Button type="button" variant="primary" className="w-full justify-center" onClick={onRetry}>
-          <RefreshCw className="size-3.5" />
+          <RefreshIcon className="size-3.5" />
           Retry connection
         </Button>
       </div>

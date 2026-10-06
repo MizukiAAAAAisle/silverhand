@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRightIcon } from "@/icons";
 import { useState, type JSX, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { type HostStatusTone } from "../model/host-status-presentation";
@@ -68,7 +68,7 @@ export function HostSection({
           aria-expanded={open}
           className="group flex w-full items-center gap-2 text-left"
         >
-          <ChevronRight
+          <ChevronRightIcon
             className={cn(
               "size-3.5 shrink-0 text-text-muted transition-transform",
               open && "rotate-90",

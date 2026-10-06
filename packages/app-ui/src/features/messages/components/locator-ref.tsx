@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
-import { AtSign, Hash } from "lucide-react";
+import { HashIcon, MentionIcon, ThreadIcon } from "@/icons";
 import type { Locator } from "@silverhand/shared";
-import { ThreadIcon } from "@/components/icons/conversation-icons";
 import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import {
   locatorChannelListWorkspaceId,
@@ -141,7 +140,7 @@ function LocatorSegments({ locator }: { locator: Locator }): JSX.Element {
       <>
         <WorkspaceSegment name={locator.workspace.name} />
         <Segment
-          sigil={<Hash className="size-3 shrink-0 self-center" />}
+          sigil={<HashIcon className="size-3 shrink-0 self-center" />}
           label={locator.channel.title}
         />
         {locator.threadRootId !== null && <ThreadSegment />}
@@ -151,7 +150,7 @@ function LocatorSegments({ locator }: { locator: Locator }): JSX.Element {
   return (
     <>
       <Segment
-        sigil={<AtSign className="size-3 shrink-0 self-center" />}
+        sigil={<MentionIcon className="size-3 shrink-0 self-center" />}
         // `&` joins the pair rather than a slash: the two handles are one
         // coordinate, not a path, and neither of them can contain this character.
         label={`${locator.endpoints[0]} & ${locator.endpoints[1]}`}

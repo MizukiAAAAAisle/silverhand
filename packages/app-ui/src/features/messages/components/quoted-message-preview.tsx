@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { ThreadIcon } from "@/components/icons/conversation-icons";
+import { ThreadIcon } from "@/icons";
 import type { MessageDto } from "@silverhand/shared";
 import { useMessage } from "@/features/messages/hooks";
 import { useUsersById, makeUserNameResolver } from "@/features/users/hooks";

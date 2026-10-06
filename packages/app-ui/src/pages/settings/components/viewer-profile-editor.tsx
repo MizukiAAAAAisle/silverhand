@@ -1,5 +1,5 @@
 import { useId, useState, type FormEvent, type KeyboardEvent } from "react";
-import { Loader2, User as UserIcon } from "lucide-react";
+import { SpinnerIcon, UserIcon } from "@/icons";
 import { validateAvatarFile, type UserDto } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
 import { AvatarPickerButton } from "@/components/avatar-picker-button";
@@ -140,7 +140,7 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
             className="self-start"
             disabled={!canSave}
           >
-            {update.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            {update.isPending ? <SpinnerIcon className="size-3.5 animate-spin" /> : null}
             Save Profile
           </Button>
           {saveError ? (

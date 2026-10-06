@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import * as Select from "@radix-ui/react-select";
-import { ChevronDown, RefreshCw } from "lucide-react";
+import { ChevronDownIcon, RefreshIcon } from "@/icons";
 import { toast } from "sonner";
 import type {
   AgentDto,
@@ -581,7 +581,7 @@ function EditForm({
                 title="Recheck"
                 className="inline-flex size-5 items-center justify-center p-0 text-text-muted transition-colors hover:text-text-primary disabled:cursor-default disabled:opacity-60"
               >
-                <RefreshCw className={cn("size-3.5", detecting && "animate-spin")} />
+                <RefreshIcon className={cn("size-3.5", detecting && "animate-spin")} />
               </button>
             ) : null}
           </div>
@@ -696,7 +696,7 @@ function RuntimeSelect({
           <Select.Value />
         </span>
         <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
+          <ChevronDownIcon className="size-3.5 text-text-muted" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>
@@ -768,7 +768,7 @@ function ChoicePickerSelect({
           <Select.Value placeholder={placeholder} />
         </span>
         <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
+          <ChevronDownIcon className="size-3.5 text-text-muted" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>

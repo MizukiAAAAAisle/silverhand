@@ -1,4 +1,4 @@
-import { User } from "lucide-react";
+import { UserIcon } from "@/icons";
 import type { AgentDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 
@@ -28,7 +28,7 @@ export function WorkspaceIcon({
       />
     );
   }
-  if (ownerAgentId) return <User style={{ width: size, height: size }} className="shrink-0" />;
+  if (ownerAgentId) return <UserIcon style={{ width: size, height: size }} className="shrink-0" />;
   return (
     <span
       data-workspace-icon

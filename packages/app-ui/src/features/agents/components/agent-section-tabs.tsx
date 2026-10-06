@@ -1,5 +1,12 @@
 import { type ComponentType, type SVGProps } from "react";
-import { Activity, AlarmClock, FolderPen, MessagesSquare, Plug, User } from "lucide-react";
+import {
+  ActivityIcon,
+  AlarmIcon,
+  ChatsIcon,
+  FolderEditIcon,
+  IntegrationIcon,
+  UserIcon,
+} from "@/icons";
 import { cn } from "@/lib/cn";
 
 export type AgentSection = "profile" | "workspace" | "mcp" | "activity" | "schedules" | "chats";
@@ -20,38 +27,38 @@ export const AGENT_SECTIONS: ReadonlyArray<SectionItem> = [
   {
     id: "profile",
     label: "Profile",
-    icon: User,
+    icon: UserIcon,
     hint: "Identity, runtime, model.",
   },
   {
     id: "schedules",
     label: "Schedules",
-    icon: AlarmClock,
+    icon: AlarmIcon,
     hint: "Cron / interval / one-shot wakeups.",
   },
   {
     id: "chats",
     label: "Chats",
-    icon: MessagesSquare,
+    icon: ChatsIcon,
     hint: "Owner-only, read-only audit of this agent’s conversations.",
     ownerOnly: true,
   },
   {
     id: "workspace",
     label: "Workspace",
-    icon: FolderPen,
+    icon: FolderEditIcon,
     hint: "L1 system prompt, MEMORY, notes.",
   },
   {
     id: "mcp",
     label: "MCP",
-    icon: Plug,
+    icon: IntegrationIcon,
     hint: "Profile MCP servers — raw config + summary.",
   },
   {
     id: "activity",
     label: "Activity",
-    icon: Activity,
+    icon: ActivityIcon,
     hint: "Per-channel execution trace.",
   },
 ];
@@ -85,7 +92,7 @@ export function AgentSectionTabs<T extends string>({
             title={item.hint}
             className={cn("agent-section-tab", selected && "agent-section-tab-selected")}
           >
-            <Icon className="size-3.5 shrink-0" strokeWidth={2} />
+            <Icon className="size-3.5 shrink-0" />
             <span>{item.label}</span>
           </button>
         );

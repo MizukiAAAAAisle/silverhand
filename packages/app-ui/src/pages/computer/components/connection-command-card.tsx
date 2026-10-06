@@ -1,5 +1,5 @@
 import { useEffect, useState, type JSX } from "react";
-import { Check, Copy, Eye, EyeOff, Terminal } from "lucide-react";
+import { CheckIcon, CopyIcon, TerminalIcon, ViewIcon, ViewOffIcon } from "@/icons";
 import { toast } from "sonner";
 import { assembleConnectCommand } from "@silverhand/shared";
 import { computerCopy } from "../../../features/computers/model/computer-copy";
@@ -66,7 +66,7 @@ export function ConnectionCommandCard({
       >
         <div className="flex items-center justify-between gap-2 border-b border-(--border-terminal) bg-(--bg-terminal-chrome) px-3 py-1.5">
           <span className="inline-flex items-center gap-1.5 font-mono text-(length:--text-meta) uppercase tracking-wider text-(--text-terminal-chrome)">
-            <Terminal className="size-3.5" aria-hidden />
+            <TerminalIcon className="size-3.5" aria-hidden />
             {label}
           </span>
           <div className="flex items-center gap-1">
@@ -77,7 +77,7 @@ export function ConnectionCommandCard({
               className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-(length:--text-meta) text-(--text-terminal-chrome) transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={revealed ? computerCopy.hide : computerCopy.reveal}
             >
-              {revealed ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+              {revealed ? <ViewOffIcon className="size-3.5" /> : <ViewIcon className="size-3.5" />}
               {revealed ? computerCopy.hide : computerCopy.reveal}
             </button>
             <button
@@ -87,7 +87,7 @@ export function ConnectionCommandCard({
               className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-(length:--text-meta) text-(--text-terminal-chrome) transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={computerCopy.copy}
             >
-              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
               {copied ? computerCopy.copied : computerCopy.copy}
             </button>
           </div>

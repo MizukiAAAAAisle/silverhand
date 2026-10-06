@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import * as Select from "@radix-ui/react-select";
-import { ChevronDown } from "lucide-react";
+import { ChevronDownIcon } from "@/icons";
 import type { AgentDto } from "@silverhand/shared";
 import { WorkspaceIcon } from "@/components/workspace-icon";
 import { useAgents } from "@/features/agents/hooks/hooks";
@@ -77,7 +77,7 @@ export function WorkspaceFilterSelect({
           <span className="truncate">{selected.label}</span>
         </span>
         <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
+          <ChevronDownIcon className="size-3.5 text-text-muted" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>

@@ -3,7 +3,7 @@ import { Brandmark } from "@/components/brand/brandmark";
 import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
 import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useMemo, type ReactNode } from "react";
-import { Archive, Bookmark, Plus, Search } from "lucide-react";
+import { ArchiveIcon, BookmarkIcon, PlusIcon, SearchIcon } from "@/icons";
 import type { AgentDto } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
@@ -150,12 +150,12 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
           >
             <div className="mb-3 space-y-1">
               <SidebarNavigationButton onClick={props.onSelectSearch} active={props.searchActive}>
-                <Search className="size-4" />
+                <SearchIcon className="size-4" />
                 <span>Search</span>
               </SidebarNavigationButton>
 
               <SidebarNavigationButton onClick={props.onSelectSaved} active={props.savedActive}>
-                <Bookmark className={cn("size-4", props.savedActive ? "fill-current" : "")} />
+                <BookmarkIcon className={cn("size-4", props.savedActive ? "fill-current" : "")} />
                 <span>Saved</span>
                 {props.savedCount !== undefined && props.savedCount > 0 ? (
                   <span
@@ -174,7 +174,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                 onClick={props.onSelectArchived}
                 active={props.archivedActive}
               >
-                <Archive className="size-4" />
+                <ArchiveIcon className="size-4" />
                 <span>Archived</span>
               </SidebarNavigationButton>
             </div>
@@ -219,7 +219,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                 data-sidebar-cta
                 onClick={props.onCreateWorkspace}
               >
-                <Plus className="size-4" />
+                <PlusIcon className="size-4" />
                 <span>New workspace</span>
               </Button>
             </div>

@@ -1,6 +1,6 @@
 import { ServerAddressControl, ServerConnectionStatus } from "./server-address-control";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Loader2 } from "lucide-react";
+import { SpinnerIcon } from "@/icons";
 import { AUTH_HANDLE_TAKEN_CODE, suggestParticipantNameFromEmail } from "@silverhand/shared";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -249,7 +249,7 @@ export function RegistrationGate({
           >
             {submitting ? (
               <>
-                <Loader2 className="size-3.5 animate-spin" />
+                <SpinnerIcon className="size-3.5 animate-spin" />
                 {isSignup ? "Creating..." : "Signing in..."}
               </>
             ) : isSignup ? (

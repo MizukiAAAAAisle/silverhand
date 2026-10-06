@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { PlusIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { TaskFilterBar, FILTER_ROW_TRIGGER_BOX, type TaskFilterBarProps } from "./task-filter-bar";
 
@@ -20,7 +20,7 @@ export function TaskToolbar({
         className={`shrink-0 gap-1.5 ${FILTER_ROW_TRIGGER_BOX}`}
         onClick={onCreate}
       >
-        <Plus className="size-3.5" />
+        <PlusIcon className="size-3.5" />
         New task
       </Button>
     </div>

@@ -1,5 +1,5 @@
 import dayjs from "dayjs";
-import { Clock } from "lucide-react";
+import { ClockIcon } from "@/icons";
 import type { SearchResultDto } from "@silverhand/shared";
 
 import { AVATAR_PX } from "@/components/avatar-scale";
@@ -55,7 +55,7 @@ export function MessageResultMeta({
         )}
       </span>
       <span className="flex shrink-0 items-center gap-1 tabular-nums">
-        <Clock aria-hidden className="size-3.5 shrink-0" />
+        <ClockIcon aria-hidden className="size-3.5 shrink-0" />
         {dayjs(result.message.created_at).format("YYYY-MM-DD HH:mm")}
       </span>
     </span>

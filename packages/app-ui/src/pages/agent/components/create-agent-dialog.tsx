@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { RefreshCw } from "lucide-react";
+import { RefreshIcon } from "@/icons";
 import type {
   AgentSessionScope,
   CreateAgentInput,
@@ -506,7 +506,7 @@ function RuntimePicker({
             title="Recheck"
             className="border border-transparent p-1 text-text-muted transition-colors hover:text-text-primary disabled:cursor-default disabled:opacity-60"
           >
-            <RefreshCw className={cn("size-3.5", checking && "animate-spin")} />
+            <RefreshIcon className={cn("size-3.5", checking && "animate-spin")} />
           </button>
         ) : null}
       </div>

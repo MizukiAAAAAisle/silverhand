@@ -1,7 +1,7 @@
 import { useDialogBoundary } from "./dialog";
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { ChevronDown } from "lucide-react";
+import { ChevronDownIcon } from "@/icons";
 import { cn } from "@/lib/cn";
 import { dropdownPanelProps } from "./dropdown-panel";
 
@@ -124,7 +124,7 @@ export function Combobox({
               }}
               className="flex shrink-0 items-center px-1.5 text-text-secondary hover:text-text-primary"
             >
-              <ChevronDown className="size-3.5" />
+              <ChevronDownIcon className="size-3.5" />
             </button>
           ) : null}
         </div>

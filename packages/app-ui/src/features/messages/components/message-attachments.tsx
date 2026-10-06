@@ -1,7 +1,7 @@
 import { getPlatform } from "@/platform";
 import { fetchAttachmentBytes } from "@/lib/api";
 import { useEffect, useRef, useState } from "react";
-import { Download, Eye, FileText } from "lucide-react";
+import { DocumentIcon, DownloadIcon, ViewIcon } from "@/icons";
 import type { AttachmentSnapshot } from "@silverhand/shared";
 import { resolveAttachmentLabels } from "@silverhand/shared";
 import {
@@ -219,7 +219,7 @@ export function AttachmentTile({
           className="flex max-w-[min(320px,100%)] items-center gap-2 overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary"
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}
         >
-          <FileText className="size-4 shrink-0 text-text-muted" />
+          <DocumentIcon className="size-4 shrink-0 text-text-muted" />
           <span className="min-w-0 truncate">{attachment.filename}</span>
           <span className="shrink-0 text-(length:--text-badge) text-text-muted">
             {formatBytes(attachment.size)}
@@ -240,7 +240,7 @@ export function AttachmentTile({
           className="group flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-xs text-text-secondary hover:text-text-primary focus:outline-none"
           title={error ?? `${attachment.filename} (${formatBytes(attachment.size)})`}
         >
-          <FileText className="size-4 shrink-0 text-text-muted group-hover:text-text-primary" />
+          <DocumentIcon className="size-4 shrink-0 text-text-muted group-hover:text-text-primary" />
           <span className="min-w-0 truncate">{attachment.filename}</span>
           <span className="shrink-0 text-(length:--text-badge) text-text-muted group-hover:text-text-primary">
             {formatBytes(attachment.size)}
@@ -254,7 +254,7 @@ export function AttachmentTile({
             title="View"
             aria-label={`View ${attachment.filename}`}
           >
-            <Eye className="size-3.5" />
+            <ViewIcon className="size-3.5" />
           </button>
         ) : null}
         <button
@@ -264,7 +264,7 @@ export function AttachmentTile({
           title="Download"
           aria-label={`Download ${attachment.filename}`}
         >
-          <Download className="size-3.5" />
+          <DownloadIcon className="size-3.5" />
         </button>
       </div>
       {label ? <AttachmentLabelBadge label={label} /> : null}

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { User } from "lucide-react";
+import { UserIcon } from "@/icons";
 import type { AgentDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
@@ -41,7 +41,7 @@ export function PersonAvatar({
         />
       );
     }
-    return <User className="size-4 shrink-0 text-text-muted" />;
+    return <UserIcon className="size-4 shrink-0 text-text-muted" />;
   }
   return (
     <UserAvatar

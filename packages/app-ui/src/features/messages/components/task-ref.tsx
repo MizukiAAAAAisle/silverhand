@@ -1,6 +1,6 @@
 import { taskChannelLabel } from "@/features/tasks/model/task-place";
 import { useState } from "react";
-import { Clock } from "lucide-react";
+import { ClockIcon } from "@/icons";
 import { useTaskByNumber } from "@/features/tasks/hooks/use-task-by-number";
 import { useTaskRefContext } from "@/features/tasks/components/task-ref-context";
 import { useUpdateTaskStatus } from "@/features/tasks/hooks/hooks";
@@ -179,7 +179,7 @@ function TaskPopoverBody({
           </span>
         ) : null}
         <span className="inline-flex shrink-0 items-center gap-1" title={absolute}>
-          <Clock className="size-3 shrink-0" aria-hidden />
+          <ClockIcon className="size-3 shrink-0" aria-hidden />
           <span>{relative}</span>
         </span>
       </p>

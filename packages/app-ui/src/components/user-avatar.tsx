@@ -1,4 +1,4 @@
-import { User as UserIcon } from "lucide-react";
+import { UserIcon } from "@/icons";
 import { cn } from "@/lib/cn";
 import { AVATAR_PX_DEFAULT } from "./avatar-scale";
 

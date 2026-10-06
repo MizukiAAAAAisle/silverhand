@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, type FormEvent } from "react";
-import { Lock, Hash, X } from "lucide-react";
+import { CloseIcon, HashIcon, LockIcon } from "@/icons";
 import type { ConversationVisibility, CreateConversationChannelInput } from "@silverhand/shared";
 import {
   Dialog,
@@ -266,10 +266,10 @@ export function CreateChannelDialog({
 const VISIBILITY_OPTIONS: ReadonlyArray<{
   value: ConversationVisibility;
   label: string;
-  icon: typeof Lock;
+  icon: typeof LockIcon;
 }> = [
-  { value: "private", label: "Private", icon: Lock },
-  { value: "public", label: "Public", icon: Hash },
+  { value: "private", label: "Private", icon: LockIcon },
+  { value: "public", label: "Public", icon: HashIcon },
 ];
 
 function VisibilitySelect({
@@ -355,7 +355,7 @@ function RegularMemberPicker({
             aria-label="Clear selected members"
             className="shrink-0 rounded-(--control-radius) text-text-muted transition-colors hover:text-text-primary focus-outline"
           >
-            <X className="size-3.5" aria-hidden />
+            <CloseIcon className="size-3.5" aria-hidden />
           </button>
         ) : null}
       </div>

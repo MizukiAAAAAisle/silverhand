@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { SpinnerIcon } from "@/icons";
 import { TASK_CONTENT_MAX_LEN, TASK_TITLE_MAX_LEN } from "@silverhand/shared";
 import {
   Dialog,
@@ -235,7 +235,7 @@ export function CreateTaskDialog({
               className="gap-2"
               disabled={!canSubmit || submitting}
             >
-              {submitting ? <Loader2 className="size-4 animate-spin" /> : null}
+              {submitting ? <SpinnerIcon className="size-4 animate-spin" /> : null}
               Create task
             </Button>
           </DialogFooter>

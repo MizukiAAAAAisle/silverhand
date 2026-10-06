@@ -1,7 +1,13 @@
 import { type JSX, type ReactNode } from "react";
-import { Activity, MessagesSquare, Monitor, Settings, Users } from "lucide-react";
+import {
+  ActivityIcon,
+  ChatsIcon,
+  ComputerIcon,
+  MembersIcon,
+  SettingsIcon,
+  TaskIcon,
+} from "@/icons";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { TaskIcon } from "@/components/task-icon";
 
 /**
  * Top-level app sections. Outer to the channels/sessions sidebars —
@@ -39,11 +45,11 @@ interface NavItem {
 }
 
 const ITEMS: NavItem[] = [
-  { id: "chat", label: "Chat", icon: <MessagesSquare className="size-4" />, shortcut: 1 },
-  { id: "activity", label: "Activity", icon: <Activity className="size-4" />, shortcut: 2 },
+  { id: "chat", label: "Chat", icon: <ChatsIcon className="size-4" />, shortcut: 1 },
+  { id: "activity", label: "Activity", icon: <ActivityIcon className="size-4" />, shortcut: 2 },
   { id: "tasks", label: "Tasks", icon: <TaskIcon className="size-4" />, shortcut: 3 },
-  { id: "members", label: "Members", icon: <Users className="size-4" />, shortcut: 4 },
-  { id: "computers", label: "Computers", icon: <Monitor className="size-4" />, shortcut: 5 },
+  { id: "members", label: "Members", icon: <MembersIcon className="size-4" />, shortcut: 4 },
+  { id: "computers", label: "Computers", icon: <ComputerIcon className="size-4" />, shortcut: 5 },
 ];
 
 /**
@@ -120,7 +126,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
         onClick={() => onChange("settings")}
         className="nav-rail__item mt-auto flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors"
       >
-        <Settings className="size-4" />
+        <SettingsIcon className="size-4" />
       </button>
     </nav>
   );

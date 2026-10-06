@@ -1,7 +1,7 @@
 import { SkeletonBlock, SkeletonRegion } from "@/components/layout/skeleton";
 import { useState } from "react";
 import * as Select from "@radix-ui/react-select";
-import { AlertCircle, ChevronDown } from "lucide-react";
+import { ChevronDownIcon, ErrorIcon } from "@/icons";
 import { toast } from "sonner";
 import type { AgentCapability, AgentDto } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
@@ -118,7 +118,7 @@ export function AgentPermissionsPanel({
               the editor below the picker, not above it. */}
           {!canEdit ? (
             <div className="flex items-start gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border-subtle bg-bg-elevated/40 p-2.5 text-xs text-text-muted">
-              <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+              <ErrorIcon className="mt-0.5 size-3.5 shrink-0" />
               <span>
                 You can view this agent's permissions; editing requires owner / admin, or being the
                 agent's creator.
@@ -176,7 +176,7 @@ function AgentSelect({
           <span className="text-text-muted">Select an agent</span>
         )}
         <Select.Icon>
-          <ChevronDown className="size-3.5 shrink-0 text-text-muted" />
+          <ChevronDownIcon className="size-3.5 shrink-0 text-text-muted" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>

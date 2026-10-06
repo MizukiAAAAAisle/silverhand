@@ -1,6 +1,6 @@
 import { useState } from "react";
 import * as HoverCard from "@radix-ui/react-hover-card";
-import { SmilePlus } from "lucide-react";
+import { AddReactionIcon } from "@/icons";
 import type { MessageDto, ReactionAggregateDto } from "@silverhand/shared";
 import { useMessageReactors } from "@/features/channels/reaction-hooks";
 import { ReactionPicker } from "./reaction-picker";
@@ -77,7 +77,7 @@ export function MessageReactions({
               title="Add reaction"
               className="flex h-4.5 items-center rounded-(--chip-radius) bg-(--chip-bg) px-2 text-text-muted transition-colors hover:bg-(--chip-bg-hover) hover:text-text-primary focus-outline"
             >
-              <SmilePlus className="size-3.5" />
+              <AddReactionIcon className="size-3.5" />
             </button>
           }
         />

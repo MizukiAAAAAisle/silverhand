@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Camera } from "lucide-react";
+import { CameraIcon } from "@/icons";
 import { validateAvatarFile, type RuntimeKind } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
 import { AgentAvatar } from "@/components/agent-avatar";
@@ -98,7 +98,7 @@ export function EditableAgentAvatar({
             className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-none bg-bg-base/40"
             aria-hidden
           >
-            <Camera className="size-4 text-text-muted" />
+            <CameraIcon className="size-4 text-text-muted" />
           </span>
         ) : null}
       </div>

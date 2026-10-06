@@ -1,6 +1,13 @@
 import * as Popover from "@radix-ui/react-popover";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, Eraser, Play, Power, RefreshCw, UserMinus } from "lucide-react";
+import {
+  ClearIcon,
+  PlayIcon,
+  PowerIcon,
+  RefreshIcon,
+  RemoveMemberIcon,
+  WarningIcon,
+} from "@/icons";
 import type { AgentDto } from "@silverhand/shared";
 import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import {
@@ -521,7 +528,7 @@ function AgentManagementActions({
               title={`Restart ${agentLabel}`}
               aria-label={`Restart ${agentLabel}`}
             >
-              <RefreshCw className="size-3.5" />
+              <RefreshIcon className="size-3.5" />
             </button>
             <button
               type="button"
@@ -531,7 +538,7 @@ function AgentManagementActions({
               title={`Stop ${agentLabel}`}
               aria-label={`Stop ${agentLabel}`}
             >
-              <Power className="size-3.5" />
+              <PowerIcon className="size-3.5" />
             </button>
             <button
               type="button"
@@ -541,7 +548,7 @@ function AgentManagementActions({
               title={`Clear ${agentLabel} session`}
               aria-label={`Clear ${agentLabel} session`}
             >
-              <Eraser className="size-3.5" />
+              <ClearIcon className="size-3.5" />
             </button>
           </>
         ) : null}
@@ -554,7 +561,7 @@ function AgentManagementActions({
             title={`Remove ${agentLabel} from this ${convNoun}`}
             aria-label={`Remove ${agentLabel} from this ${convNoun}`}
           >
-            <UserMinus className="size-3.5" />
+            <RemoveMemberIcon className="size-3.5" />
           </button>
         ) : null}
       </div>
@@ -562,7 +569,7 @@ function AgentManagementActions({
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-error">
-              <AlertTriangle className="size-4" />
+              <WarningIcon className="size-4" />
               Clear session for {agentLabel}
             </DialogTitle>
             <DialogDescription>A new session begins on the next start.</DialogDescription>
@@ -591,7 +598,7 @@ function AgentManagementActions({
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-error">
-              <AlertTriangle className="size-4" />
+              <WarningIcon className="size-4" />
               Remove {agentLabel} from this {convNoun}
             </DialogTitle>
             <DialogDescription>
@@ -684,7 +691,7 @@ function DirectAgentRuntimeActions({
           title={`${action} @${agent.name}`}
           aria-label={`${action} @${agent.name}`}
         >
-          {state.startable ? <Play className="size-3.5" /> : <Power className="size-3.5" />}
+          {state.startable ? <PlayIcon className="size-3.5" /> : <PowerIcon className="size-3.5" />}
         </button>
         <button
           type="button"
@@ -694,7 +701,7 @@ function DirectAgentRuntimeActions({
           title={`Clear @${agent.name} session`}
           aria-label={`Clear @${agent.name} session`}
         >
-          <Eraser className="size-3.5" />
+          <ClearIcon className="size-3.5" />
         </button>
       </div>
       <Dialog open={clearOpen} onOpenChange={setClearDialogOpen}>

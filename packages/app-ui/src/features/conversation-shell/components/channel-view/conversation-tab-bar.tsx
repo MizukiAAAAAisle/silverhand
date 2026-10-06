@@ -1,5 +1,13 @@
-import { FileText, MessagesSquare, Paperclip, Plus, X } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import {
+  AttachmentIcon,
+  ChatsIcon,
+  CloseIcon,
+  DocumentIcon,
+  PlusIcon,
+  TaskIcon,
+  ThreadIcon,
+  type IconComponent,
+} from "@/icons";
 import {
   DndContext,
   KeyboardSensor,
@@ -29,8 +37,6 @@ import {
   type PanelTabKind,
   type Tab,
 } from "@/features/conversation-shell/model/conversation-tabs";
-import { TaskIcon } from "@/components/task-icon";
-import { ThreadIcon } from "@/components/icons/conversation-icons";
 
 /**
  * Per-conversation view tab strip — a horizontal bar under the conversation
@@ -76,7 +82,7 @@ export interface ConversationTabBarProps {
 }
 
 interface TabPresentation {
-  icon: LucideIcon;
+  icon: IconComponent;
   label: string;
 }
 
@@ -84,7 +90,7 @@ interface TabPresentation {
  *  presented, shared by the strip chip and the `＋` menu row so the two can't
  *  disagree. Threads takes the `ThreadIcon` SSOT, never a raw bubble glyph. */
 const PANEL_PRESENTATION: Record<PanelTabKind, TabPresentation> = {
-  attachments: { icon: Paperclip, label: "Attachments" },
+  attachments: { icon: AttachmentIcon, label: "Attachments" },
   threads: { icon: ThreadIcon, label: "Threads" },
 };
 
@@ -97,11 +103,11 @@ function tabPresentation(tab: Tab): TabPresentation {
       // The chat-stream glyph (NavRail's Chats tab uses the same one), NOT the
       // single bubble: that one is the ThreadIcon SSOT, and the Threads panel tab
       // below carries it — two tabs must not share one glyph.
-      return { icon: MessagesSquare, label: "Chat" };
+      return { icon: ChatsIcon, label: "Chat" };
     case "tasks":
       return { icon: TaskIcon, label: "Tasks" };
     case "attachment":
-      return { icon: FileText, label: tab.filename };
+      return { icon: DocumentIcon, label: tab.filename };
     case "panel":
       return PANEL_PRESENTATION[tab.panel];
   }
@@ -178,7 +184,7 @@ export function ConversationTabBar({
               title="Add a view"
               className="flex shrink-0 cursor-pointer items-center border-b-2 border-transparent px-2 text-text-muted transition-colors hover:text-text-primary"
             >
-              <Plus className="size-3.5" aria-hidden />
+              <PlusIcon className="size-3.5" aria-hidden />
             </button>
           }
         >
@@ -288,7 +294,7 @@ function SortableTab({
           }}
           className="mr-1.5 flex shrink-0 cursor-pointer items-center p-0.5 text-text-muted transition-colors hover:text-text-primary"
         >
-          <X className="size-3" aria-hidden />
+          <CloseIcon className="size-3" aria-hidden />
         </button>
       ) : null}
     </div>
@@ -297,7 +303,7 @@ function SortableTab({
   if (!onClose) return chip;
   return (
     <AppContextMenu trigger={chip} contentClassName="min-w-0">
-      <AppContextMenuItem icon={<X className="size-3.5" />} onSelect={onClose}>
+      <AppContextMenuItem icon={<CloseIcon className="size-3.5" />} onSelect={onClose}>
         Remove
       </AppContextMenuItem>
     </AppContextMenu>

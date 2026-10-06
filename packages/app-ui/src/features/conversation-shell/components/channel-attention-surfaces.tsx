@@ -1,4 +1,11 @@
-import { Bell, BellOff, Check } from "lucide-react";
+import {
+  BellIcon,
+  BellOffIcon,
+  BellPlusIcon,
+  BellRingIcon,
+  CheckIcon,
+  type IconComponent,
+} from "@/icons";
 import type { ChannelAttentionMode } from "@silverhand/shared";
 import { AppContextMenuItem, AppContextMenuSeparator } from "@/components/menus/app-context-menu";
 import {
@@ -25,11 +32,17 @@ import { resolveWorkspaceMuteToggle } from "@/features/attention/attention-mode"
 export const ATTENTION_OPTIONS: {
   mode: ChannelAttentionMode;
   label: string;
+  Icon: IconComponent;
 }[] = [
-  { mode: "all", label: "All messages" },
-  { mode: "mentions", label: "Mentions only" },
-  { mode: "mute", label: "Mute" },
+  { mode: "all", label: "All messages", Icon: BellRingIcon },
+  { mode: "mentions", label: "Mentions only", Icon: BellPlusIcon },
+  { mode: "mute", label: "Mute", Icon: BellOffIcon },
 ];
+
+/** The glyph for a channel's current tier; the plain bell before it is known. */
+export function attentionIcon(mode: ChannelAttentionMode | undefined): IconComponent {
+  return ATTENTION_OPTIONS.find((option) => option.mode === mode)?.Icon ?? BellIcon;
+}
 
 /**
  * Context-menu items for a channel's three attention tiers.
@@ -68,7 +81,8 @@ export function ChannelAttentionMenuItems({
       {ATTENTION_OPTIONS.map((o) => (
         <AppContextMenuItem
           key={o.mode}
-          icon={o.mode === mode ? <Check className="size-3.5" /> : null}
+          icon={<o.Icon className="size-3.5" />}
+          trailing={o.mode === mode ? <CheckIcon className="size-3.5" /> : undefined}
           onSelect={() => {
             if (o.mode !== mode) setPref.mutate(o.mode);
           }}
@@ -115,7 +129,13 @@ export function WorkspaceMuteMenuItem({ workspaceId }: { workspaceId: string }):
 
   return (
     <AppContextMenuItem
-      icon={next === false ? <Bell className="size-3.5" /> : <BellOff className="size-3.5" />}
+      icon={
+        next === false ? (
+          <BellRingIcon className="size-3.5" />
+        ) : (
+          <BellOffIcon className="size-3.5" />
+        )
+      }
       disabled={next === null}
       onSelect={() => {
         // Belt and braces with `disabled`: the guarantee is "never write a

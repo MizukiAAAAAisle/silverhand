@@ -8,7 +8,15 @@ import {
   type ReactNode,
 } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { Check, ChevronDown, Layers, PenLine, RotateCcw, Search, User } from "lucide-react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  CreatedByIcon,
+  LayersIcon,
+  SearchIcon,
+  UndoIcon,
+  UserIcon,
+} from "@/icons";
 import { cn } from "@/lib/cn";
 import { WorkspaceIcon } from "@/components/workspace-icon";
 import { ChannelIcon } from "@/components/channel-icon";
@@ -280,7 +288,7 @@ export function TaskFilterBar({
         />
       ) : null}
       <PersonFilterControl
-        icon={<User className="size-3.5" />}
+        icon={<UserIcon className="size-3.5" />}
         label="Assignee"
         anyLabel="All"
         population={mapBoardAuthority(people, (f) => f.assignees)}
@@ -290,7 +298,7 @@ export function TaskFilterBar({
         {...personDirectory}
       />
       <PersonFilterControl
-        icon={<PenLine className="size-3.5" />}
+        icon={<CreatedByIcon className="size-3.5" />}
         label="From"
         anyLabel="All"
         population={mapBoardAuthority(people, (f) => f.creators)}
@@ -314,7 +322,7 @@ export function TaskFilterBar({
             "text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary",
           )}
         >
-          <RotateCcw className="size-3.5" />
+          <UndoIcon className="size-3.5" />
         </button>
       ) : null}
     </div>
@@ -323,8 +331,8 @@ export function TaskFilterBar({
 
 // ── Shared trigger + panel shells ──────────────────────────────────
 
-/** Icon edge (px) for the WORKSPACE filter trigger. The plain lucide glyphs
- *  (`User`, `PenLine`) render at `size-3.5` = 14px and the channel `#` uses
+/** Icon edge (px) for the WORKSPACE filter trigger. The plain glyphs
+ *  (`UserIcon`, `CreatedByIcon`) render at `size-3.5` = 14px and the channel `#` uses
  *  `ChannelIcon` at `md` (also 14px); `WorkspaceIcon` takes a numeric `size`,
  *  so it consumes this value to sit at the same height. Kept == 14 (the
  *  control density) so no trigger glyph drifts taller than the row
@@ -396,7 +404,7 @@ const FilterTrigger = forwardRef<
         {icon}
       </span>
       <span className="truncate leading-[14px]">{children}</span>
-      <ChevronDown
+      <ChevronDownIcon
         className={cn("size-3 shrink-0", active ? "text-text-on-selected" : "text-text-muted")}
       />
     </button>
@@ -497,7 +505,7 @@ export function OptionRow({
     >
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {selected ? (
-        <Check
+        <CheckIcon
           className={cn(
             "size-3.5 shrink-0",
             // Real selection → on-selected ink on the lime fill; the
@@ -647,7 +655,7 @@ function ChannelFilter({
             data-input=""
             className="flex items-center gap-1.5 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2 py-1.5 transition-colors focus-within:border-border-focus"
           >
-            <Search className="size-3.5 shrink-0 text-text-muted" />
+            <SearchIcon className="size-3.5 shrink-0 text-text-muted" />
             <input
               autoFocus
               value={query}
@@ -791,7 +799,7 @@ function BoardScopeFilter({
       size={TRIGGER_GLYPH_PX}
     />
   ) : (
-    <Layers className="size-3.5" />
+    <LayersIcon className="size-3.5" />
   );
 
   return (

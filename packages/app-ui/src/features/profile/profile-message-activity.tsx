@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import * as Select from "@radix-ui/react-select";
-import { ChevronDown } from "lucide-react";
+import { ChevronDownIcon } from "@/icons";
 import {
   FilterSelectItem,
   FILTER_SELECT_TRIGGER_CLASS,
@@ -81,7 +81,7 @@ function MessageActivitySection({ subject }: { subject: ProfileMessageSubject })
           >
             <Select.Value />
             <Select.Icon>
-              <ChevronDown className="size-3.5 text-text-muted" />
+              <ChevronDownIcon className="size-3.5 text-text-muted" />
             </Select.Icon>
           </Select.Trigger>
           <Select.Portal>

@@ -6,15 +6,15 @@ import { useMobileHeaderActionRef, useMobileHeaderTarget } from "./mobile-header
 import { getPlatform } from "@/platform";
 import type { CSSProperties } from "react";
 import {
-  ChevronLeft,
-  Activity,
-  MessagesSquare,
-  ListTodo,
-  MoreHorizontal,
-  Monitor,
-  Settings,
-  Users,
-} from "lucide-react";
+  ActivityIcon,
+  ChatsIcon,
+  ChevronLeftIcon,
+  ComputerIcon,
+  MembersIcon,
+  MoreIcon,
+  SettingsIcon,
+  TaskIcon,
+} from "@/icons";
 import { AppDropdownMenu, AppDropdownMenuItem } from "@/components/menus/app-context-menu";
 import { useNavigationDriver } from "@/navigation/provider";
 import { useNav, useRouteState } from "@/router";
@@ -36,7 +36,7 @@ export function MobileHeader({ hideFallback = false }: { hideFallback?: boolean 
       onClick={back}
     >
       <span className="mobile-back-icon">
-        <ChevronLeft size={22} strokeWidth={2.25} />
+        <ChevronLeftIcon size={22} strokeWidth={1.75} />
       </span>
     </button>
   ) : null;
@@ -78,9 +78,9 @@ export function MobileTabBar({ dots }: { dots?: Partial<Record<AppSection, boole
     <nav className="mobile-tabbar" aria-label="Main navigation">
       {(
         [
-          { tab: "chat", label: "Chats", Icon: MessagesSquare },
-          { tab: "activity", label: "Activity", Icon: Activity },
-          { tab: "tasks", label: "Tasks", Icon: ListTodo },
+          { tab: "chat", label: "Chats", Icon: ChatsIcon },
+          { tab: "activity", label: "Activity", Icon: ActivityIcon },
+          { tab: "tasks", label: "Tasks", Icon: TaskIcon },
         ] as const
       ).map(({ tab, label, Icon }) => (
         <button
@@ -102,18 +102,18 @@ export function MobileTabBar({ dots }: { dots?: Partial<Record<AppSection, boole
         contentClassName="mobile-more-menu"
         trigger={
           <button type="button" className="mobile-tab focus-outline">
-            <MoreHorizontal size={20} />
+            <MoreIcon size={20} />
             <span>More</span>
           </button>
         }
       >
-        <AppDropdownMenuItem icon={<Users size={18} />} onSelect={() => nav.toMembers()}>
+        <AppDropdownMenuItem icon={<MembersIcon size={18} />} onSelect={() => nav.toMembers()}>
           Members
         </AppDropdownMenuItem>
-        <AppDropdownMenuItem icon={<Monitor size={18} />} onSelect={() => nav.toComputers()}>
+        <AppDropdownMenuItem icon={<ComputerIcon size={18} />} onSelect={() => nav.toComputers()}>
           Computers
         </AppDropdownMenuItem>
-        <AppDropdownMenuItem icon={<Settings size={18} />} onSelect={() => nav.toSettings()}>
+        <AppDropdownMenuItem icon={<SettingsIcon size={18} />} onSelect={() => nav.toSettings()}>
           Settings
         </AppDropdownMenuItem>
       </AppDropdownMenu>

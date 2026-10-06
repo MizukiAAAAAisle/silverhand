@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, Loader2, RotateCw } from "lucide-react";
+import { ErrorIcon, RetryIcon, SpinnerIcon } from "@/icons";
 import { getPlatform } from "@/platform";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
@@ -159,7 +159,7 @@ export function ServerConnectionStatus({
   if (checking) {
     return (
       <div role="status" className="mt-3 flex items-center gap-2 text-xs text-text-muted">
-        <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+        <SpinnerIcon className="size-3.5 animate-spin" aria-hidden="true" />
         Checking server…
       </div>
     );
@@ -173,7 +173,7 @@ export function ServerConnectionStatus({
   return (
     <section className="mt-3 flex flex-col gap-2 text-xs" aria-label="Server connection">
       <div role="alert" className="flex items-start gap-2">
-        <AlertCircle className="mt-px size-3.5 shrink-0 text-error" aria-hidden="true" />
+        <ErrorIcon className="mt-px size-3.5 shrink-0 text-error" aria-hidden="true" />
         <p className="min-w-0 leading-relaxed text-text-secondary">
           <span className="font-medium text-text-primary">
             {secure ? "Secure connection failed." : "Cannot connect to server."}
@@ -190,7 +190,7 @@ export function ServerConnectionStatus({
         </details>
         {onRetry && (
           <Button type="button" variant="neutral" size="sm" className="shrink-0" onClick={onRetry}>
-            <RotateCw className="size-3.5" aria-hidden="true" />
+            <RetryIcon className="size-3.5" aria-hidden="true" />
             Retry
           </Button>
         )}

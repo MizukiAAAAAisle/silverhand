@@ -1,6 +1,6 @@
 import { ProfileMessageActivity } from "@/features/profile/profile-message-activity";
 import dayjs from "dayjs";
-import { Clock, IdCard } from "lucide-react";
+import { ClockIcon, ProfileCardIcon } from "@/icons";
 import type { UserDto } from "@silverhand/shared";
 import { ProfileFact, ProfileFactBand } from "@/features/profile/profile-summary-sections";
 import { useHumanAvatar } from "./use-human-avatar";
@@ -39,7 +39,7 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
       </section>
 
       <ProfileFactBand>
-        <ProfileFact icon={<Clock className="size-3.5" />} label="Created">
+        <ProfileFact icon={<ClockIcon className="size-3.5" />} label="Created">
           <span
             className="font-medium text-text-primary"
             title={dayjs(user.created_at).format("YYYY-MM-DD HH:mm:ss")}
@@ -47,7 +47,7 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
             {dayjs(user.created_at).format("YYYY-MM-DD")}
           </span>
         </ProfileFact>
-        <ProfileFact icon={<IdCard className="size-3.5" />} label="ID">
+        <ProfileFact icon={<ProfileCardIcon className="size-3.5" />} label="ID">
           <span className="font-mono">{user.id}</span>
         </ProfileFact>
       </ProfileFactBand>

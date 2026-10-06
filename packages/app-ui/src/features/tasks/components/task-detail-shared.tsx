@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import dayjs from "dayjs";
-import { Check, Loader2, X } from "lucide-react";
+import { CheckIcon, CloseIcon, SpinnerIcon } from "@/icons";
 import { TASK_CONTENT_MAX_LEN, type TaskDetailDto, type TaskStatus } from "@silverhand/shared";
 import { Textarea } from "@/components/ui/input";
 import { ChannelIcon } from "@/components/channel-icon";
@@ -193,7 +193,7 @@ export function useTaskMetaRows({
           )}
           {canAssign && !busy && view.assignee ? (
             <MiniIconButton
-              icon={X}
+              icon={CloseIcon}
               label="Clear assignee"
               onClick={() => onAssign(null)}
               className="ml-1 opacity-0 transition-opacity group-hover/assignee:opacity-100 focus-visible:opacity-100"
@@ -297,7 +297,7 @@ function Timestamp({ at, muted }: { at: number; muted?: boolean }): JSX.Element 
 }
 
 function PendingSpinner(): JSX.Element {
-  return <Loader2 className="size-3 shrink-0 animate-spin text-text-muted" aria-hidden />;
+  return <SpinnerIcon className="size-3 shrink-0 animate-spin text-text-muted" aria-hidden />;
 }
 
 function AssigneeValue({
@@ -475,7 +475,10 @@ function CandidateList({
             {/* The current assignee stays in the domain (so a DM always shows its
                 agent) but reads as selected — a check, not a removed row. */}
             {c.isCurrent ? (
-              <Check className="size-3.5 shrink-0 text-text-muted" aria-label="Current assignee" />
+              <CheckIcon
+                className="size-3.5 shrink-0 text-text-muted"
+                aria-label="Current assignee"
+              />
             ) : null}
           </button>
         ))

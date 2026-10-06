@@ -1,4 +1,4 @@
-import { Check } from "lucide-react";
+import { CheckIcon } from "@/icons";
 import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
 
@@ -30,7 +30,7 @@ export const Checkbox = forwardRef<HTMLButtonElement, CheckboxProps>(
       )}
       {...props}
     >
-      {checked ? <Check className="size-3" strokeWidth={3} /> : null}
+      {checked ? <CheckIcon className="size-3" strokeWidth={2.25} /> : null}
     </button>
   ),
 );

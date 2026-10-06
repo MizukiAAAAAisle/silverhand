@@ -1,11 +1,10 @@
 import { useListReadingPosition } from "@/navigation/view-memory";
 import { useMemo, useState } from "react";
-import { Activity as ActivityIcon, AlertTriangle, Check } from "lucide-react";
+import { ActivityIcon, CheckIcon, ThreadIcon, WarningIcon } from "@/icons";
 import type { ActivityItemDto, MessageAuthorDto, AgentDto } from "@silverhand/shared";
 import { WorkspaceIcon } from "@/components/workspace-icon";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
 import { ChannelIcon } from "@/components/channel-icon";
-import { ThreadIcon } from "@/components/icons/conversation-icons";
 import {
   AuthorAvatarView,
   AuthorName,
@@ -48,10 +47,10 @@ import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
  *     then channel icon + conversation `title`; a `direct_pair` draws the
  *     COUNTERPART's face + name and NO workspace segment (a workspace-less pair
  *     has no such coordinate to draw, and one is never fabricated). The icons are
- *     the canonical identity primitives (`WorkspaceIcon`; `Hash` with the
+ *     the canonical identity primitives (`WorkspaceIcon`; `HashIcon` with the
  *     `data-channel-icon` theme hook; `AuthorAvatarView` for a counterpart), NOT
  *     raw glyphs — so poster paints them as its `W`/`#` posters instead of
- *     generic lucide shapes. The old "Channel/mention/Thread" text label is
+ *     generic icon shapes. The old "Channel/mention/Thread" text label is
  *     dropped: real icons + the thread glyph (row 2) + the sender (row 3) carry
  *     that signal now.
  *   - row 2 = SUBJECT: thread → a thread glyph + `thread_root_preview` (the root
@@ -165,7 +164,7 @@ function LocationGlyph({
   objectUrl: string | null;
 }): JSX.Element {
   if (item.kind === "agent_failed") {
-    return <AlertTriangle className="size-3.5 shrink-0 text-error" />;
+    return <WarningIcon className="size-3.5 shrink-0 text-error" />;
   }
   if (counterpart) {
     return (
@@ -769,7 +768,7 @@ function ActivityRow({
             }}
             className="grid size-7 shrink-0 self-center place-items-center rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-floating text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary"
           >
-            <Check className="size-4" />
+            <CheckIcon className="size-4" />
           </button>
         ) : null}
       </CollectionItemCard>

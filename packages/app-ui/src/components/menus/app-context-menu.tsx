@@ -1,7 +1,7 @@
 import type { ComponentPropsWithoutRef, ReactElement, ReactNode } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { ChevronRight } from "lucide-react";
+import { ChevronRightIcon } from "@/icons";
 import { cn } from "@/lib/cn";
 
 const MENU_CONTENT_CLASS =
@@ -134,7 +134,7 @@ export function AppContextMenuSub({
   return (
     <ContextMenu.Sub>
       <ContextMenu.SubTrigger className={cn(MENU_ITEM_CLASS, "data-[state=open]:bg-bg-hover")}>
-        <AppMenuItemContent icon={icon} trailing={<ChevronRight className="size-3.5" />}>
+        <AppMenuItemContent icon={icon} trailing={<ChevronRightIcon className="size-3.5" />}>
           {label}
         </AppMenuItemContent>
       </ContextMenu.SubTrigger>

@@ -1,5 +1,5 @@
 import { type KeyboardEvent, useCallback } from "react";
-import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, CloseIcon, SearchIcon } from "@/icons";
 import { type InlineFindController, inlineFindKeyAction } from "@/features/search/use-inline-find";
 
 /**
@@ -49,7 +49,7 @@ export function InlineFindBar({
       data-inline-find-bar
       className="flex h-11 shrink-0 items-center gap-2 border-b border-border-subtle bg-bg-floating pl-3 pr-2"
     >
-      <Search className="size-3.5 shrink-0 text-text-muted" />
+      <SearchIcon className="size-3.5 shrink-0 text-text-muted" />
       <input
         // Bar mounts when the find opens, so autoFocus lands on it directly.
         autoFocus
@@ -89,7 +89,7 @@ export function InlineFindBar({
           title="Previous match (⇧⏎ / ↑)"
           className="flex size-7 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-30"
         >
-          <ChevronUp className="size-3.5" />
+          <ChevronUpIcon className="size-3.5" />
         </button>
         <button
           type="button"
@@ -103,7 +103,7 @@ export function InlineFindBar({
           title="Next match (⏎ / ↓)"
           className="flex size-7 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-30"
         >
-          <ChevronDown className="size-3.5" />
+          <ChevronDownIcon className="size-3.5" />
         </button>
       </div>
 
@@ -133,7 +133,7 @@ export function InlineFindBar({
         title="Close (Esc)"
         className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary"
       >
-        <X className="size-3.5" />
+        <CloseIcon className="size-3.5" />
       </button>
     </div>
   );

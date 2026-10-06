@@ -1,5 +1,5 @@
 import { MessageRowsSkeleton } from "./conversation-view-skeleton";
-import { X } from "lucide-react";
+import { CloseIcon } from "@/icons";
 import { paneChrome } from "../../../components/layout/pane-chrome";
 
 export type SidePlaceholderStatus = "loading" | "unauthorized" | "not_found" | "unresolved";
@@ -90,7 +90,7 @@ export function SideUnresolvedPlaceholder({
           title="Close side pane"
           className="ml-2 flex size-7 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-bg-hover hover:text-text-primary"
         >
-          <X className="size-4" strokeWidth={1.8} />
+          <CloseIcon className="size-4" />
         </button>
       </header>
       {status === "loading" ? (

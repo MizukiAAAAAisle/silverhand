@@ -1,7 +1,7 @@
 import { type FocusEvent, useCallback, useEffect, useState } from "react";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
-import { Bookmark, Check, Clock, SmilePlus } from "lucide-react";
+import { AddReactionIcon, BookmarkIcon, CheckIcon, ClockIcon, ThreadIcon } from "@/icons";
 import type {
   AgentDto,
   AttachmentSnapshot,
@@ -11,7 +11,6 @@ import type {
   ThreadReplyPreviewRow,
   UserDto,
 } from "@silverhand/shared";
-import { ThreadIcon } from "@/components/icons/conversation-icons";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { AgentInfoPopover } from "@/features/agents/components/agent-info-popover";
 import { HumanInfoPopover } from "@/features/profile/human-info-popover";
@@ -691,7 +690,7 @@ function ActorMessageItem({
             // three lines tall inside a one-line row). The clock keeps its
             // 12px box so the glyph matches the words beside it.
             <span className="inline-flex min-w-0 shrink items-center gap-0.5 text-text-muted">
-              <Clock className="size-3 shrink-0" />
+              <ClockIcon className="size-3 shrink-0" />
               <span className="truncate">{replyRelativeTime}</span>
             </span>
           ) : null)}
@@ -912,7 +911,7 @@ function ActorMessageItem({
                   aria-label="React"
                   className="flex items-center rounded-sm text-text-muted transition-colors hover:text-text-primary focus-outline"
                 >
-                  <SmilePlus className="size-3.5" />
+                  <AddReactionIcon className="size-3.5" />
                 </button>
               }
             />
@@ -928,7 +927,7 @@ function ActorMessageItem({
           ) : null}
           {onSave ? (
             <ActionButton
-              icon={<Bookmark className={"size-3.5 " + (saved ? "fill-current" : "")} />}
+              icon={<BookmarkIcon className={"size-3.5 " + (saved ? "fill-current" : "")} />}
               label={saved ? "Saved" : "Save"}
               active={saved}
               onClick={() => onSave(message)}
@@ -1197,7 +1196,7 @@ function SelectionCheckbox({
           : "border-border bg-bg-floating text-transparent hover:border-accent")
       }
     >
-      <Check className="size-3" strokeWidth={3} />
+      <CheckIcon className="size-3" strokeWidth={2.25} />
     </button>
   );
 }

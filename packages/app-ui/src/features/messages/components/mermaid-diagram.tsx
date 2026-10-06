@@ -1,6 +1,6 @@
 import { CopyFeedbackIcon } from "./copy-feedback-icon";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Code, Maximize2, Workflow, ZoomIn, ZoomOut } from "lucide-react";
+import { CodeIcon, DiagramIcon, ExpandIcon, ZoomInIcon, ZoomOutIcon } from "@/icons";
 import { MermaidLightbox } from "./mermaid-lightbox";
 
 /**
@@ -309,7 +309,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
             aria-pressed={view === "diagram"}
             onClick={() => setView("diagram")}
           >
-            <Workflow className="size-3" />
+            <DiagramIcon className="size-3" />
             Mermaid
           </button>
           <button
@@ -321,7 +321,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
             aria-pressed={view === "code"}
             onClick={() => setView("code")}
           >
-            <Code className="size-3" />
+            <CodeIcon className="size-3" />
             Code
           </button>
         </div>
@@ -351,7 +351,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 aria-label="Zoom out"
                 title="Zoom out"
               >
-                <ZoomOut className="size-3" />
+                <ZoomOutIcon className="size-3" />
               </button>
               <button
                 type="button"
@@ -363,7 +363,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 aria-label="Zoom in"
                 title="Zoom in"
               >
-                <ZoomIn className="size-3" />
+                <ZoomInIcon className="size-3" />
               </button>
               {/* Fullscreen opens the read-only pan/zoom modal: inline zoom is
                   capped and bounded to the message column, the modal is the room
@@ -378,7 +378,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 aria-label="Open fullscreen"
                 title="Fullscreen"
               >
-                <Maximize2 className="size-3" />
+                <ExpandIcon className="size-3" />
               </button>
             </>
           ) : (

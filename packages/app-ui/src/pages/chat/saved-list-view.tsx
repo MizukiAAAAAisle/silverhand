@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Bookmark, Clock, Layers } from "lucide-react";
+import { BookmarkIcon, ClockIcon, LayersIcon } from "@/icons";
 import dayjs from "dayjs";
 import type { AgentDto, SavedMessageDto } from "@silverhand/shared";
 import { Markdown } from "@/features/messages/components/markdown";
@@ -173,7 +173,7 @@ export function SavedListView({
   return (
     <PaneShell>
       <PaneHeader
-        icon={<Bookmark className="size-3.5 fill-current" />}
+        icon={<BookmarkIcon className="size-3.5 fill-current" />}
         title="Saved"
         count={data ? items.length : undefined}
         trailing={
@@ -196,7 +196,7 @@ export function SavedListView({
                 value={workspace}
                 workspaces={workspaces}
                 onChange={setWorkspace}
-                allIcon={<Layers className="size-3.5" />}
+                allIcon={<LayersIcon className="size-3.5" />}
               />
             </FilterBlock>
             <FilterBlock label="Sender" className="w-full sm:w-60">
@@ -392,7 +392,7 @@ function SavedItem({
             {presentation ? <AuthorName presentation={presentation} /> : <span>{sender}</span>}
           </span>
           <span className="inline-flex shrink-0 items-center gap-1">
-            <Clock aria-hidden className="size-3.5 shrink-0" />
+            <ClockIcon aria-hidden className="size-3.5 shrink-0" />
             {when}
           </span>
           <button
@@ -405,7 +405,7 @@ function SavedItem({
             title="Remove from saved"
             aria-label="Remove from saved"
           >
-            <Bookmark className="size-3.5 fill-current" />
+            <BookmarkIcon className="size-3.5 fill-current" />
           </button>
         </header>
 

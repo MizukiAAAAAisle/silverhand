@@ -1,6 +1,6 @@
 import { InlineLoading } from "@/components/layout/inline-loading";
 import { Fragment, useEffect, useRef } from "react";
-import { Hash } from "lucide-react";
+import { HashIcon } from "@/icons";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
@@ -215,7 +215,7 @@ export function Row({
         </>
       ) : (
         <>
-          <Hash className="size-4 shrink-0 text-text-muted" />
+          <HashIcon className="size-4 shrink-0 text-text-muted" />
           {showChannelWorkspace && item.workspaceName ? (
             <div className="flex min-w-0 flex-1 flex-col leading-tight">
               <span className="truncate text-sm font-medium text-text-primary">

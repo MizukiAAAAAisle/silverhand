@@ -2,7 +2,7 @@ import { AnimatePresence } from "motion/react";
 import * as Popover from "@radix-ui/react-popover";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentDto } from "@silverhand/shared";
-import { Folder, FolderOpen, MoreVertical, Plus, Settings } from "lucide-react";
+import { FolderIcon, FolderOpenIcon, MoreVerticalIcon, PlusIcon, SettingsIcon } from "@/icons";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { WorkspaceIcon } from "@/components/workspace-icon";
@@ -101,7 +101,7 @@ function WorkspaceRow({
         icon
           ? undefined
           : (open) => {
-              const Icon = open ? FolderOpen : Folder;
+              const Icon = open ? FolderOpenIcon : FolderIcon;
               return <Icon aria-hidden className="size-3.5 shrink-0 text-text-muted" />;
             }
       }
@@ -263,7 +263,7 @@ function WorkspaceActions({
               contentRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
           }}
         >
-          <MoreVertical className="size-3.5" />
+          <MoreVerticalIcon className="size-3.5" />
         </Button>
       </Popover.Trigger>
       <Popover.Portal>
@@ -290,7 +290,7 @@ function WorkspaceActions({
               onCreate();
             }}
           >
-            <Plus className="size-3.5" />
+            <PlusIcon className="size-3.5" />
             Create channel
           </button>
           {onSettings ? (
@@ -302,7 +302,7 @@ function WorkspaceActions({
                 onSettings();
               }}
             >
-              <Settings className="size-3.5" />
+              <SettingsIcon className="size-3.5" />
               Settings
             </button>
           ) : null}

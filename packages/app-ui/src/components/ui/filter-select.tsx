@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 import * as Select from "@radix-ui/react-select";
-import { Check } from "lucide-react";
+import { CheckIcon } from "@/icons";
 import { Label } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 
@@ -77,7 +77,7 @@ export function FilterSelectItem({
         <span className="ml-auto text-(length:--text-badge) text-text-muted">{suffix}</span>
       ) : null}
       <Select.ItemIndicator className="absolute right-2 inline-flex items-center">
-        <Check className="size-3.5 text-accent" />
+        <CheckIcon className="size-3.5 text-accent" />
       </Select.ItemIndicator>
     </Select.Item>
   );

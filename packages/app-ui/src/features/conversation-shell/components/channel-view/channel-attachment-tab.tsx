@@ -3,7 +3,7 @@ import { DocumentSkeleton } from "@/components/layout/document-skeleton";
 import { RangeInput } from "@/components/ui/range-input";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Download, ExternalLink, ZoomIn, ZoomOut } from "lucide-react";
+import { DownloadIcon, OpenExternalIcon, ZoomInIcon, ZoomOutIcon } from "@/icons";
 import { cn } from "@/lib/cn";
 import { fetchAttachmentBytes } from "@/lib/api";
 import { useAttachmentBlobToken } from "@/features/attachments/attachment-blob-cache";
@@ -166,7 +166,7 @@ export function ChannelAttachmentTab({
               aria-label="Zoom out"
               title="Zoom out"
             >
-              <ZoomOut className="size-3.5" />
+              <ZoomOutIcon className="size-3.5" />
             </button>
             <RangeInput
               className="w-24"
@@ -188,7 +188,7 @@ export function ChannelAttachmentTab({
               aria-label="Zoom in"
               title="Zoom in"
             >
-              <ZoomIn className="size-3.5" />
+              <ZoomInIcon className="size-3.5" />
             </button>
             <span className="min-w-11 text-center text-xs tabular-nums text-text-secondary">
               <span className="sr-only">Zoom </span>
@@ -206,7 +206,7 @@ export function ChannelAttachmentTab({
             className="flex shrink-0 items-center gap-1.5 rounded-(--chip-radius) px-2 py-1 text-xs text-text-secondary hover:text-text-primary focus-outline"
             title="Open in default app"
           >
-            <ExternalLink className="size-3.5" />
+            <OpenExternalIcon className="size-3.5" />
             Open
           </button>
         ) : null}
@@ -219,7 +219,7 @@ export function ChannelAttachmentTab({
           className="flex shrink-0 items-center gap-1.5 rounded-(--chip-radius) px-2 py-1 text-xs text-text-secondary hover:text-text-primary focus-outline"
           title="Download"
         >
-          <Download className="size-3.5" />
+          <DownloadIcon className="size-3.5" />
           Download
         </button>
       </div>

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Hash } from "lucide-react";
+import { HashIcon } from "@/icons";
 import type { DirectPairCounterpart } from "@silverhand/shared";
 import {
   AuthorAvatarView,
@@ -62,7 +62,7 @@ export function ConversationHeaderIdentity({
           data-sticker-tone="channel"
           style={IDENTITY_BOX_STYLE}
         >
-          <Hash size={HEADER_IDENTITY_GLYPH_PX} />
+          <HashIcon size={HEADER_IDENTITY_GLYPH_PX} />
         </span>
       ) : null}
       {title}

@@ -1,6 +1,6 @@
 import * as Select from "@radix-ui/react-select";
 import dayjs from "dayjs";
-import { ChevronDown, Clock } from "lucide-react";
+import { ChevronDownIcon, ClockIcon } from "@/icons";
 import {
   FilterSelectItem,
   FILTER_SELECT_TRIGGER_CLASS,
@@ -60,11 +60,11 @@ export function DateFilterSelect({
         className={cn(FILTER_SELECT_TRIGGER_CLASS, triggerClassName)}
       >
         <span className="flex min-w-0 items-center gap-1.5">
-          <Clock className="size-3.5 text-text-muted" />
+          <ClockIcon className="size-3.5 text-text-muted" />
           <span className="truncate">{selected}</span>
         </span>
         <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
+          <ChevronDownIcon className="size-3.5 text-text-muted" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>
@@ -79,7 +79,7 @@ export function DateFilterSelect({
               <FilterSelectItem
                 key={option.value}
                 value={option.value}
-                icon={<Clock className="size-3.5" />}
+                icon={<ClockIcon className="size-3.5" />}
               >
                 {option.label}
               </FilterSelectItem>

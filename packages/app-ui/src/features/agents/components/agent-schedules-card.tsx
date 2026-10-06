@@ -1,6 +1,13 @@
 import { SchedulesSkeleton } from "./agent-loading";
 import { useEffect, useMemo, useState } from "react";
-import { Ban, CalendarClock, Clock, RefreshCcw, Repeat, Timer } from "lucide-react";
+import {
+  CancelledIcon,
+  ClockIcon,
+  ReloadIcon,
+  RepeatIcon,
+  ScheduledIcon,
+  TimerIcon,
+} from "@/icons";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
 import type { ScheduleDto, ScheduleListStatusFilter } from "@silverhand/shared";
@@ -50,7 +57,7 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
           aria-label="Refresh schedules"
           title="Refresh"
         >
-          <RefreshCcw className={`size-3 ${query.isFetching ? "animate-spin" : ""}`} />
+          <ReloadIcon className={`size-3 ${query.isFetching ? "animate-spin" : ""}`} />
         </button>
       </header>
 
@@ -120,7 +127,7 @@ function ScheduleItem({
             title={cancellable ? dayjs(row.next_fire_at).toISOString() : undefined}
             aria-label={cancellable ? "Next trigger" : "Schedule status"}
           >
-            {cancellable ? <Clock className="size-3 shrink-0" aria-hidden="true" /> : null}
+            {cancellable ? <ClockIcon className="size-3 shrink-0" aria-hidden="true" /> : null}
             {cancellable ? dayjs(row.next_fire_at).fromNow() : row.status}
           </span>
           <ScheduleTiming row={row} />
@@ -137,7 +144,7 @@ function ScheduleItem({
           aria-label="Cancel schedule"
           title="Cancel"
         >
-          <Ban className="size-3.5" />
+          <CancelledIcon className="size-3.5" />
         </button>
       ) : null}
     </li>
@@ -146,7 +153,8 @@ function ScheduleItem({
 
 function ScheduleTiming({ row }: { row: ScheduleDto }): JSX.Element {
   const spec = row.spec;
-  const Icon = spec.kind === "once" ? CalendarClock : spec.kind === "interval" ? Timer : Repeat;
+  const Icon =
+    spec.kind === "once" ? ScheduledIcon : spec.kind === "interval" ? TimerIcon : RepeatIcon;
   const timing =
     spec.kind === "once"
       ? dayjs(spec.fire_at).format("YYYY-MM-DD HH:mm")

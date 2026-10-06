@@ -139,6 +139,9 @@ importers:
       '@fontsource/space-mono':
         specifier: ^5.2.9
         version: 5.2.9
+      '@hugeicons/core-free-icons':
+        specifier: 4.3.5
+        version: 4.3.5
       '@radix-ui/react-context-menu':
         specifier: ^2.2.16
         version: 2.2.16(@types/react-dom@18.3.7(@types/react@18.3.28))(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -190,9 +193,6 @@ importers:
       html-to-image:
         specifier: ^1.11.13
         version: 1.11.13
-      lucide-react:
-        specifier: ^1.14.0
-        version: 1.14.0(react@18.3.1)
       mermaid:
         specifier: ^11.16.0
         version: 11.16.0
@@ -1040,6 +1040,9 @@ packages:
     engines: {node: '>=18.14.1'}
     peerDependencies:
       hono: ^4
+
+  '@hugeicons/core-free-icons@4.3.5':
+    resolution: {integrity: sha512-Sv+NjHRPnQk+yZsGCMcGznCHdTfJR9PMMOEKcJYAQU4gy90dmlc9PwdtvYOImBZIjiheMsTLL5eMn2DmHxUiUg==}
 
   '@iconify/types@2.0.0':
     resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
@@ -3330,11 +3333,6 @@ packages:
     resolution: {integrity: sha512-Jo6dJ04CmSjuznwJSS3pUeWmd/H0ffTlkXXgwZi+eq1UCmqQwCh+eLsYOYCwY991i2Fah4h1BEMCx4qThGbsiA==}
     engines: {node: '>=10'}
 
-  lucide-react@1.14.0:
-    resolution: {integrity: sha512-+1mdWcfSJVUsaTIjN9zoezmUhfXo5l0vP7ekBMPo3jcS/aIkxHnXqAPsByszMZx/Y8oQBRJxJx5xg+RH3urzxA==}
-    peerDependencies:
-      react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
-
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
@@ -5068,6 +5066,8 @@ snapshots:
   '@hono/node-server@1.19.14(hono@4.12.15)':
     dependencies:
       hono: 4.12.15
+
+  '@hugeicons/core-free-icons@4.3.5': {}
 
   '@iconify/types@2.0.0': {}
 
@@ -7497,10 +7497,6 @@ snapshots:
   lru-cache@6.0.0:
     dependencies:
       yallist: 4.0.0
-
-  lucide-react@1.14.0(react@18.3.1):
-    dependencies:
-      react: 18.3.1
 
   magic-string@0.30.21:
     dependencies:

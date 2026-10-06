@@ -1,5 +1,5 @@
 import { useId, useState, type FormEvent } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon } from "@/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   apiPaths,
@@ -85,7 +85,11 @@ export function ChangePasswordForm({ userId }: { userId: string }): JSX.Element 
         aria-expanded={open}
         className="flex items-center gap-1.5 self-start text-xs font-medium text-text-secondary transition-colors hover:text-text-primary"
       >
-        {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+        {open ? (
+          <ChevronDownIcon className="size-3.5" />
+        ) : (
+          <ChevronRightIcon className="size-3.5" />
+        )}
         Change password
       </button>
       {open ? (

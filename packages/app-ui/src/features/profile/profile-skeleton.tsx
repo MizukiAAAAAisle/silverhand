@@ -5,7 +5,7 @@ import {
   ProfileFactBand,
   PROFILE_SECTION_FRAME_CLASS,
 } from "./profile-summary-sections";
-import { Clock, IdCard, Monitor } from "lucide-react";
+import { ClockIcon, ComputerIcon, ProfileCardIcon } from "@/icons";
 import { AVATAR_PX } from "@/components/avatar-scale";
 
 export function ProfileSkeleton({ agent = false }: { agent?: boolean }): JSX.Element {
@@ -28,12 +28,12 @@ export function ProfileSkeleton({ agent = false }: { agent?: boolean }): JSX.Ele
           </div>
         </div>
         <ProfileFactBand>
-          <ProfileFact icon={<IdCard className="size-3.5" />} label="ID">
+          <ProfileFact icon={<ProfileCardIcon className="size-3.5" />} label="ID">
             <span className="inline-block h-2.5 w-28 max-w-full rounded bg-bg-elevated" />
           </ProfileFact>
           {agent ? (
             <>
-              <ProfileFact icon={<Monitor className="size-3.5" />} label="Computer">
+              <ProfileFact icon={<ComputerIcon className="size-3.5" />} label="Computer">
                 <span className="inline-block h-2.5 w-24 max-w-full rounded bg-bg-elevated" />
               </ProfileFact>
               <ProfileFact
@@ -44,7 +44,7 @@ export function ProfileSkeleton({ agent = false }: { agent?: boolean }): JSX.Ele
               </ProfileFact>
             </>
           ) : null}
-          <ProfileFact icon={<Clock className="size-3.5" />} label="Created">
+          <ProfileFact icon={<ClockIcon className="size-3.5" />} label="Created">
             <span className="inline-block h-2.5 w-16 max-w-full rounded bg-bg-elevated" />
           </ProfileFact>
         </ProfileFactBand>

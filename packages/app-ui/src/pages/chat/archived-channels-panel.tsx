@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import dayjs from "dayjs";
-import { Archive, ArchiveRestore, Settings } from "lucide-react";
+import { ArchiveIcon, SettingsIcon, UnarchiveIcon } from "@/icons";
 import type { ArchivedChannelListItemDto } from "@silverhand/shared";
 import type { AgentDto } from "@silverhand/shared";
 import { ChannelIcon } from "@/components/channel-icon";
@@ -115,7 +115,7 @@ export function ArchivedChannelsPanel({
   return (
     <PaneShell>
       <PaneHeader
-        icon={<Archive className="size-3.5" />}
+        icon={<ArchiveIcon className="size-3.5" />}
         title="Archived"
         count={workspaceRows.length + channels.length}
         trailing={
@@ -136,7 +136,7 @@ export function ArchivedChannelsPanel({
               value={workspaceFilter}
               workspaces={workspaces}
               onChange={setWorkspaceFilter}
-              allIcon={<Archive className="size-3.5" />}
+              allIcon={<ArchiveIcon className="size-3.5" />}
               showArchivedSuffix
             />
           </FilterBlock>
@@ -280,7 +280,7 @@ function ArchivedWorkspaceRow({
             aria-label={`Settings for ${workspace.name}`}
             title="Workspace settings"
           >
-            <Settings className="size-3.5" />
+            <SettingsIcon className="size-3.5" />
           </button>
         ) : null}
         <button
@@ -294,7 +294,7 @@ function ArchivedWorkspaceRow({
           aria-label={`Restore ${archivedWorkspaceRowLabel(workspace)}`}
           title="Restore workspace"
         >
-          <ArchiveRestore className="size-3.5" />
+          <UnarchiveIcon className="size-3.5" />
           Restore
         </button>
       </CollectionItemCard>
@@ -357,7 +357,7 @@ function ArchivedChannelRow({
           aria-label={`Restore ${item.channel.title}`}
           title="Restore channel"
         >
-          <ArchiveRestore className="size-3.5" />
+          <UnarchiveIcon className="size-3.5" />
           Restore
         </button>
       </CollectionItemCard>

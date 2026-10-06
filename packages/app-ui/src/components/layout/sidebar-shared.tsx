@@ -6,7 +6,7 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from "react";
-import { BellOff, ChevronDown, Plus } from "lucide-react";
+import { BellOffIcon, ChevronDownIcon, PlusIcon } from "@/icons";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -14,7 +14,7 @@ import { useSidebarBranchDrag } from "./sidebar-branch-drag";
 
 export function SidebarChevron({ expanded }: { expanded: boolean }): JSX.Element {
   return (
-    <ChevronDown
+    <ChevronDownIcon
       aria-hidden
       data-sidebar-section-caret
       className={cn(
@@ -276,7 +276,7 @@ export function SidebarSectionHeader({
     action ??
     (onAdd ? (
       <Button variant="ghost" size="icon" onClick={onAdd} aria-label={`add ${label}`}>
-        <Plus className="size-3.5" />
+        <PlusIcon className="size-3.5" />
       </Button>
     ) : null);
 
@@ -385,7 +385,7 @@ export function UnreadBadge({
 }
 
 export function MutedMarker(): JSX.Element {
-  return <BellOff className="size-3 shrink-0 opacity-60" role="img" aria-label="Muted" />;
+  return <BellOffIcon className="size-3 shrink-0 opacity-60" role="img" aria-label="Muted" />;
 }
 
 interface RowProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick" | "title"> {

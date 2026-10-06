@@ -1,5 +1,5 @@
 import * as Select from "@radix-ui/react-select";
-import { ChevronDown, UserPlus, X } from "lucide-react";
+import { AddMemberIcon, ChevronDownIcon, CloseIcon } from "@/icons";
 import { useMemo } from "react";
 import type { AgentDto, UserDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
@@ -197,11 +197,11 @@ export function MemberPicker({
           className="flex w-full items-center justify-between gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-(--border-control-hover) focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-placeholder:text-text-muted"
         >
           <span className="flex min-w-0 items-center gap-1.5">
-            <UserPlus className="size-3.5 shrink-0 text-text-muted" />
+            <AddMemberIcon className="size-3.5 shrink-0 text-text-muted" />
             <Select.Value placeholder={placeholder} />
           </span>
           <Select.Icon>
-            <ChevronDown className="size-3.5 text-text-muted" />
+            <ChevronDownIcon className="size-3.5 text-text-muted" />
           </Select.Icon>
         </Select.Trigger>
         <Select.Portal>
@@ -320,7 +320,7 @@ function SelectedTag({
         title="Remove member"
         className="flex size-4 shrink-0 items-center justify-center rounded-(--chip-radius) text-text-muted transition-colors hover:text-text-primary focus-outline"
       >
-        <X className="size-3" aria-hidden />
+        <CloseIcon className="size-3" aria-hidden />
       </button>
     </span>
   );

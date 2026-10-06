@@ -6,17 +6,17 @@ import { ChangePasswordForm } from "./components/change-password-form";
 import { RangeInput } from "@/components/ui/range-input";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
-  Check,
-  Code2,
-  LogOut,
-  Loader2,
-  Palette,
-  RotateCcw,
-  Server,
-  Settings,
-  Type,
-  User,
-} from "lucide-react";
+  AppearanceIcon,
+  CheckIcon,
+  CodeFontIcon,
+  FontIcon,
+  LeaveIcon,
+  ServerIcon,
+  SettingsIcon,
+  SpinnerIcon,
+  UndoIcon,
+  UserIcon,
+} from "@/icons";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
@@ -174,9 +174,9 @@ export function SettingsShell(): JSX.Element {
 }
 
 const SECTION_CHROME: Record<SettingsSection, { label: string; icon: ReactNode }> = {
-  account: { label: "Account", icon: <User className="size-3.5" /> },
-  appearance: { label: "Appearance", icon: <Palette className="size-3.5" /> },
-  connection: { label: "Connection", icon: <Server className="size-3.5" /> },
+  account: { label: "Account", icon: <UserIcon className="size-3.5" /> },
+  appearance: { label: "Appearance", icon: <AppearanceIcon className="size-3.5" /> },
+  connection: { label: "Connection", icon: <ServerIcon className="size-3.5" /> },
 };
 
 function SettingsRailNav({
@@ -213,7 +213,7 @@ function SettingsRailNav({
       ) : (
         <SidebarSection
           label="SETTINGS"
-          icon={<Settings className="size-3.5" />}
+          icon={<SettingsIcon className="size-3.5" />}
           collapsible
           defaultExpanded
           persistId="settings-directory"
@@ -252,7 +252,7 @@ function AppearancePane({
         <div className="min-w-0 space-y-8">
           <SettingsSection
             id="settings-appearance"
-            icon={<Palette className="size-4" />}
+            icon={<AppearanceIcon className="size-4" />}
             title="Appearance"
           >
             <div className="grid min-w-0 grid-cols-1 gap-4">
@@ -298,7 +298,7 @@ function AppearancePane({
                             }}
                             aria-label="Current theme"
                           >
-                            <Check className="size-3" />
+                            <CheckIcon className="size-3" />
                           </span>
                         ) : null}
                       </div>
@@ -312,7 +312,7 @@ function AppearancePane({
 
           <SettingsSection
             id="settings-markdown-text"
-            icon={<Type className="size-4" />}
+            icon={<FontIcon className="size-4" />}
             title="Markdown Text"
           >
             <div className="grid min-w-0 grid-cols-1 gap-4">
@@ -323,7 +323,7 @@ function AppearancePane({
               />
               <MarkdownFontControl
                 title="Prose"
-                icon={<Type className="size-4" />}
+                icon={<FontIcon className="size-4" />}
                 fontFamily={appearance.prose?.fontFamily}
                 fontSize={appearance.fontSize}
                 presets={PROSE_FONT_PRESETS}
@@ -333,7 +333,7 @@ function AppearancePane({
               />
               <MarkdownFontControl
                 title="Code"
-                icon={<Code2 className="size-4" />}
+                icon={<CodeFontIcon className="size-4" />}
                 fontFamily={appearance.code?.fontFamily}
                 fontSize={appearance.fontSize}
                 presets={CODE_FONT_PRESETS}
@@ -442,7 +442,7 @@ function AccountPane(): JSX.Element {
 
   return (
     <section className="flex min-w-0 flex-1 flex-col gap-5 px-5 py-5">
-      <SettingsHeading icon={<User className="size-4" />} title="Account" />
+      <SettingsHeading icon={<UserIcon className="size-4" />} title="Account" />
 
       <div className="flex max-w-2xl flex-col gap-6">
         <ViewerProfileEditor user={dto} />
@@ -463,9 +463,9 @@ function AccountPane(): JSX.Element {
               disabled={logout.isPending}
             >
               {logout.isPending ? (
-                <Loader2 className="size-3.5 animate-spin" />
+                <SpinnerIcon className="size-3.5 animate-spin" />
               ) : (
-                <LogOut className="size-3.5" />
+                <LeaveIcon className="size-3.5" />
               )}
               Log out
             </Button>
@@ -533,7 +533,7 @@ function SharedFontSizeControl({
             disabled={!isOverride}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-(--control-radius) border border-border-subtle bg-bg-elevated px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
           >
-            <RotateCcw className="size-3.5" />
+            <UndoIcon className="size-3.5" />
             Reset
           </button>
         </div>
@@ -660,7 +660,7 @@ function MarkdownFontControl({
           disabled={!fontValue}
           className="inline-flex shrink-0 items-center gap-1.5 rounded-(--control-radius) border border-border-subtle bg-bg-elevated px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
         >
-          <RotateCcw className="size-3.5" />
+          <UndoIcon className="size-3.5" />
           Reset
         </button>
       </div>

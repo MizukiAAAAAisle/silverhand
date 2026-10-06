@@ -1,6 +1,6 @@
 import { motion, useIsPresent, useReducedMotion } from "motion/react";
 import { forwardRef, type ReactNode } from "react";
-import { Paperclip, X } from "lucide-react";
+import { AttachmentIcon, CloseIcon } from "@/icons";
 import type { CachedPendingAttachment as PendingAttachment } from "@/features/messages/composer-draft-cache";
 
 export function PendingAttachmentTray({ children }: { children: ReactNode }): JSX.Element {
@@ -100,7 +100,7 @@ export function AttachmentChip({
           <img src={item.previewUrl} alt={item.filename} className="block size-full object-cover" />
         </button>
       ) : (
-        <Paperclip className="size-3 shrink-0" />
+        <AttachmentIcon className="size-3 shrink-0" />
       )}
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="truncate">{item.filename}</span>
@@ -129,7 +129,7 @@ export function AttachmentChip({
         className="ml-1 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-text-muted hover:text-text-primary"
         aria-label="Remove attachment"
       >
-        <X className="size-3" />
+        <CloseIcon className="size-3" />
       </button>
     </div>
   );

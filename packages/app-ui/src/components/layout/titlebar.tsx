@@ -1,4 +1,4 @@
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { SidebarCloseIcon, SidebarOpenIcon } from "@/icons";
 import type { ReactNode } from "react";
 
 interface TitlebarProps {
@@ -114,9 +114,9 @@ export function Titlebar({
               className={toggleButton}
             >
               {workspaceSidebarVisible ? (
-                <PanelLeftClose className="size-(--titlebar-icon-size,0.875rem)" />
+                <SidebarCloseIcon className="size-(--titlebar-icon-size,0.875rem)" />
               ) : (
-                <PanelLeftOpen className="size-(--titlebar-icon-size,0.875rem)" />
+                <SidebarOpenIcon className="size-(--titlebar-icon-size,0.875rem)" />
               )}
             </button>
           ) : null}

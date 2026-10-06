@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { ArrowDown } from "lucide-react";
+import { ArrowDownIcon } from "@/icons";
 import type {
   AttachmentSnapshot,
   MessageAuthorDto,
@@ -891,7 +891,7 @@ export function MessageList({
             }}
             className="absolute bottom-4 left-1/2 z-(--z-sticky) flex size-9 -translate-x-1/2 items-center justify-center rounded-(--pill-radius) bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
           >
-            <ArrowDown className="size-4" />
+            <ArrowDownIcon className="size-4" />
           </button>
         ) : null}
       </div>

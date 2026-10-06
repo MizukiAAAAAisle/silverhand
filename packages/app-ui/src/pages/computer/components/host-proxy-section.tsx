@@ -1,5 +1,5 @@
 import { ProxySkeleton } from "./computer-skeletons";
-import { Check, CheckCircle2, Loader2, Save } from "lucide-react";
+import { CheckIcon, SaveIcon, SpinnerIcon, SuccessIcon } from "@/icons";
 import { useEffect, useState, type FormEvent, type JSX } from "react";
 import type { HostStatusResponse, RuntimeKind } from "@silverhand/shared";
 import { RUNTIME_ORDER_LIST, runtimeLabel } from "@silverhand/shared";
@@ -220,7 +220,7 @@ export function ProxySection({
                       )}
                       aria-hidden
                     >
-                      <Check className="size-3" />
+                      <CheckIcon className="size-3" />
                     </span>
                     <AgentAvatar runtime={kind} size={AVATAR_PX.sm} />
                     <span
@@ -257,7 +257,7 @@ export function ProxySection({
                 <span className="text-error">{error}</span>
               ) : saved ? (
                 <span className="inline-flex items-center gap-1.5 text-success">
-                  <CheckCircle2 className="size-3.5" />
+                  <SuccessIcon className="size-3.5" />
                   Saved
                 </span>
               ) : null}
@@ -269,9 +269,9 @@ export function ProxySection({
               disabled={saving || settingsLoading}
             >
               {saving ? (
-                <Loader2 className="size-3.5 animate-spin" />
+                <SpinnerIcon className="size-3.5 animate-spin" />
               ) : (
-                <Save className="size-3.5" />
+                <SaveIcon className="size-3.5" />
               )}
               {saving ? "Saving..." : "Save settings"}
             </Button>

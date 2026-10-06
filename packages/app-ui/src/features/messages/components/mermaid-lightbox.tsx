@@ -1,7 +1,7 @@
 import { RangeInput } from "@/components/ui/range-input";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as DialogPrimitive from "@/components/ui/modal";
-import { X, ZoomIn, ZoomOut } from "lucide-react";
+import { CloseIcon, ZoomInIcon, ZoomOutIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
 
@@ -186,7 +186,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
               data-sticker-tone="neutral"
               className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary focus-outline"
             >
-              <X className="size-4" />
+              <CloseIcon className="size-4" />
             </DialogPrimitive.Close>
           </div>
 
@@ -238,7 +238,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
                 onClick={() => setZoom(scale / STEP)}
                 data-zoom-stepper
               >
-                <ZoomOut className="size-4" />
+                <ZoomOutIcon className="size-4" />
               </Button>
               {/* Same slider chrome as the image Lightbox / Settings font-size
                   slider so the thumb/track read identically across themes. */}
@@ -261,7 +261,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
                 onClick={() => setZoom(scale * STEP)}
                 data-zoom-stepper
               >
-                <ZoomIn className="size-4" />
+                <ZoomInIcon className="size-4" />
               </Button>
               {/* Zoom level is a READOUT, not a control: no click / reset, no
                   button or sticker chrome. Reset is the `0` key (and stepping

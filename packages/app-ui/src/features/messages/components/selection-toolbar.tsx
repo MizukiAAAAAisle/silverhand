@@ -1,4 +1,4 @@
-import { ClipboardCopy, Download } from "lucide-react";
+import { CopyMarkdownIcon, DownloadIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -48,14 +48,14 @@ export function SelectionToolbar({
         <SelectionActionButton rank="cancel" label="Cancel" onClick={onCancel} />
         <SelectionActionButton
           rank="secondary"
-          icon={<ClipboardCopy className="size-3.5" />}
+          icon={<CopyMarkdownIcon className="size-3.5" />}
           label="Copy markdown"
           disabled={!hasSelection || !onCopyMarkdown}
           onClick={onCopyMarkdown}
         />
         <SelectionActionButton
           rank="primary"
-          icon={<Download className="size-3.5" />}
+          icon={<DownloadIcon className="size-3.5" />}
           label="Save image"
           disabled={!hasSelection || !onSaveImage}
           onClick={onSaveImage}

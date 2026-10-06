@@ -11,7 +11,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import { AtSign, Hash, Paperclip } from "lucide-react";
+import { AttachmentIcon, HashIcon, MentionIcon } from "@/icons";
 import type { AgentDto } from "@silverhand/shared";
 import { isGenericMimeHint, mimeFromFilename } from "@silverhand/shared";
 import {
@@ -1114,7 +1114,7 @@ export function Composer({
                 title="Attach a file"
                 className={COMPOSER_TOOL_CLASS}
               >
-                <Paperclip className="size-4" />
+                <AttachmentIcon className="size-4" />
               </button>
               {offersMentions ? (
                 <button
@@ -1126,7 +1126,7 @@ export function Composer({
                   data-composer-tool="mention"
                   className={COMPOSER_TOOL_CLASS}
                 >
-                  <AtSign className="size-4" />
+                  <MentionIcon className="size-4" />
                 </button>
               ) : null}
               {offersChannels ? (
@@ -1139,7 +1139,7 @@ export function Composer({
                   data-composer-tool="channel"
                   className={COMPOSER_TOOL_CLASS}
                 >
-                  <Hash className="size-4" />
+                  <HashIcon className="size-4" />
                 </button>
               ) : null}
             </div>

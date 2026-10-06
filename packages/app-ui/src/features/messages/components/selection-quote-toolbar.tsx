@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { Copy, TextQuote } from "lucide-react";
+import { CopyIcon, QuoteSelectionIcon } from "@/icons";
 import { clampToolbarCenterX, requestQuoteToComposer } from "@/features/messages/quote-to-composer";
 
 /**
@@ -206,11 +206,15 @@ export function SelectionQuoteToolbar({
       className="z-(--z-popover) flex items-center gap-0.5 rounded-(--floating-radius,var(--radius-md)) bg-bg-floating p-0.5 text-xs text-text-primary shadow-popover"
     >
       <SelectionQuoteButton
-        icon={<TextQuote className="size-3.5" />}
+        icon={<QuoteSelectionIcon className="size-3.5" />}
         label="Quote"
         onClick={runQuote}
       />
-      <SelectionQuoteButton icon={<Copy className="size-3.5" />} label="Copy" onClick={runCopy} />
+      <SelectionQuoteButton
+        icon={<CopyIcon className="size-3.5" />}
+        label="Copy"
+        onClick={runCopy}
+      />
     </div>,
     document.body,
   );

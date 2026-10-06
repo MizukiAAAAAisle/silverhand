@@ -1,4 +1,4 @@
-import { AtSign, Hash } from "lucide-react";
+import { HashIcon, MentionIcon } from "@/icons";
 import { HoverPopover } from "./hover-popover";
 import { INLINE_REF_HOVER_CLASS } from "../model/inline-ref-chip";
 import {
@@ -199,7 +199,7 @@ export function faceLabel(face: ConversationRefFace): string {
 
 export function conversationIcon(face: ConversationRefFace | undefined): JSX.Element {
   if (face === "direct_line") {
-    return <AtSign className="size-3 shrink-0 self-center" />;
+    return <MentionIcon className="size-3 shrink-0 self-center" />;
   }
-  return <Hash className="size-3 shrink-0 self-center" />;
+  return <HashIcon className="size-3 shrink-0 self-center" />;
 }

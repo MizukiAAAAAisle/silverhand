@@ -1,4 +1,4 @@
-import { ArrowDownToLine } from "lucide-react";
+import { ArrowDownToLineIcon } from "@/icons";
 
 /**
  * Drop-target slot shown at the top of a kanban column's body while a task
@@ -27,7 +27,7 @@ export function TaskDropPlaceholder(): JSX.Element {
         data-task-drop-placeholder
         className="flex items-center justify-center gap-1.5 border border-dashed border-text-on-selected px-2 py-3 text-(length:--text-meta) font-medium uppercase tracking-wider text-text-on-selected"
       >
-        <ArrowDownToLine className="size-3.5" aria-hidden />
+        <ArrowDownToLineIcon className="size-3.5" aria-hidden />
         Drop here
       </div>
     </li>

@@ -2,14 +2,14 @@ import { DocumentSkeleton } from "@/components/layout/document-skeleton";
 import { FileTreeSkeleton } from "./agent-loading";
 import { useEffect, useMemo, useState } from "react";
 import {
-  ChevronRight,
-  Copy,
-  File as FileIcon,
-  FileText,
-  Folder,
-  FolderOpen,
-  RefreshCcw,
-} from "lucide-react";
+  ChevronRightIcon,
+  CopyIcon,
+  DocumentIcon,
+  FileIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  ReloadIcon,
+} from "@/icons";
 import dayjs from "dayjs";
 import { toast } from "sonner";
 import type {
@@ -224,7 +224,7 @@ function CompactBrowser({
               aria-label="Back to file list"
               title="Back to file list"
             >
-              <ChevronRight className="size-4 rotate-180" />
+              <ChevronRightIcon className="size-4 rotate-180" />
             </button>
             <span
               className="min-w-0 flex-1 truncate font-mono text-(length:--text-meta) text-text-primary"
@@ -264,7 +264,7 @@ function RefreshButton({
       aria-label="Refresh workspace files"
       title="Refresh"
     >
-      <RefreshCcw className={cn("size-3.5", isFetching && "animate-spin")} />
+      <ReloadIcon className={cn("size-3.5", isFetching && "animate-spin")} />
     </button>
   );
 }
@@ -408,16 +408,16 @@ function TreeRow({
         style={{ paddingLeft: indent }}
         title={node.path}
       >
-        <ChevronRight
+        <ChevronRightIcon
           className={cn(
             "size-3 shrink-0 text-text-muted transition-transform duration-150",
             isOpen && "rotate-90",
           )}
         />
         {isOpen ? (
-          <FolderOpen className="size-3.5 shrink-0 text-text-muted" />
+          <FolderOpenIcon className="size-3.5 shrink-0 text-text-muted" />
         ) : (
-          <Folder className="size-3.5 shrink-0 text-text-muted" />
+          <FolderIcon className="size-3.5 shrink-0 text-text-muted" />
         )}
         <span className="truncate font-mono">{name}</span>
       </button>
@@ -450,7 +450,7 @@ function TreeRow({
 function FileGlyph({ name, selected }: { name: string; selected: boolean }): JSX.Element {
   const cls = cn("size-3.5 shrink-0", selected ? "text-text-on-accent" : "text-text-muted");
   if (name.endsWith(".md") || name.endsWith(".markdown")) {
-    return <FileText className={cls} />;
+    return <DocumentIcon className={cls} />;
   }
   return <FileIcon className={cls} />;
 }
@@ -501,7 +501,7 @@ function WorkspaceFilePreview({
     <div className="flex h-full min-h-0 flex-col">
       {variant === "full" ? (
         <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle bg-bg-base px-4 py-2">
-          <FileText className="size-3.5 shrink-0 text-text-muted" />
+          <DocumentIcon className="size-3.5 shrink-0 text-text-muted" />
           <span
             className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary"
             title={path}
@@ -519,7 +519,7 @@ function WorkspaceFilePreview({
             title="Copy contents"
             onClick={() => void copyFileContent(file)}
           >
-            <Copy className="size-3" />
+            <CopyIcon className="size-3" />
           </button>
         </header>
       ) : null}

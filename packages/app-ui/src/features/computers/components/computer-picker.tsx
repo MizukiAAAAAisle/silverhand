@@ -1,5 +1,5 @@
 import * as Select from "@radix-ui/react-select";
-import { ChevronDown, Monitor } from "lucide-react";
+import { ChevronDownIcon, ComputerIcon } from "@/icons";
 import type { HostAvailability, HostDto } from "@silverhand/shared";
 import {
   FilterSelectItem,
@@ -60,14 +60,14 @@ export function ComputerPicker({
         )}
       >
         <span className="flex min-w-0 items-center gap-1.5">
-          <Monitor className="size-3.5 shrink-0 text-text-muted" />
+          <ComputerIcon className="size-3.5 shrink-0 text-text-muted" />
           <Select.Value
             placeholder={isEmpty ? "No computers available" : placeholder}
             className="truncate"
           />
         </span>
         <Select.Icon>
-          <ChevronDown className="size-3.5 text-text-muted" />
+          <ChevronDownIcon className="size-3.5 text-text-muted" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>
@@ -85,7 +85,7 @@ export function ComputerPicker({
                 <FilterSelectItem
                   key={host.id}
                   value={host.id}
-                  icon={<Monitor className="size-3.5" />}
+                  icon={<ComputerIcon className="size-3.5" />}
                   disabled={!available}
                   suffix={
                     available ? undefined : (computerUnavailableLabel(availability) ?? undefined)

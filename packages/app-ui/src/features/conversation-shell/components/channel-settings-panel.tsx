@@ -3,7 +3,7 @@ import { useChannelSettingsDetail } from "../use-channel-settings-detail";
 import { toast } from "sonner";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
-import { ChevronRight, Hash, Lock, Power, RefreshCw } from "lucide-react";
+import { ChevronRightIcon, HashIcon, LockIcon, PowerIcon, RefreshIcon } from "@/icons";
 import type { ChannelDetailResponse } from "@silverhand/shared";
 import { useNav, useRouteState } from "@/router";
 import { paneChrome } from "@/components/layout/pane-chrome";
@@ -84,9 +84,9 @@ export function ChannelSettingsPanel({
         <SidePanelHeaderTitle
           icon={
             detail.data?.channel.visibility === "private" ? (
-              <Lock aria-label="Private channel" className="size-4 text-text-secondary" />
+              <LockIcon aria-label="Private channel" className="size-4 text-text-secondary" />
             ) : (
-              <Hash aria-label="Public channel" className="size-4 text-text-secondary" />
+              <HashIcon aria-label="Public channel" className="size-4 text-text-secondary" />
             )
           }
           title={
@@ -245,7 +245,7 @@ function SettingsBody({
                       disabled={bulkPending}
                       onClick={() => void bulkAction(true)}
                     >
-                      <RefreshCw className="size-3.5" /> Restart
+                      <RefreshIcon className="size-3.5" /> Restart
                     </Button>
                     <Button
                       variant="neutral"
@@ -253,7 +253,7 @@ function SettingsBody({
                       disabled={bulkPending}
                       onClick={() => void bulkAction(false)}
                     >
-                      <Power className="size-3.5" /> Stop
+                      <PowerIcon className="size-3.5" /> Stop
                     </Button>
                   </div>
                 ) : null
@@ -268,7 +268,7 @@ function SettingsBody({
                   className="flex w-full items-center justify-between text-xs font-semibold uppercase tracking-wide text-text-secondary hover:text-text-primary focus-outline"
                 >
                   <span>{membersLabel}</span>
-                  <ChevronRight className="size-4" />
+                  <ChevronRightIcon className="size-4" />
                 </button>
                 <ChannelMembersPreview
                   members={roster.status === "resolved" ? roster.members : []}

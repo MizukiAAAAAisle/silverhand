@@ -1,4 +1,4 @@
-import { Bot } from "lucide-react";
+import { BotIcon } from "@/icons";
 import { cn } from "@/lib/cn";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
@@ -151,7 +151,7 @@ function NeutralAgentAvatar({
       title={title}
       aria-hidden
     >
-      <Bot style={{ width: inner, height: inner }} />
+      <BotIcon style={{ width: inner, height: inner }} />
     </span>
   );
 }

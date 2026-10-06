@@ -5,7 +5,7 @@ import { getPlatform } from "@/platform";
 import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@/components/ui/modal";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { Share, X } from "lucide-react";
+import { CloseIcon, ShareIcon } from "@/icons";
 import { toPng } from "html-to-image";
 import { toast } from "sonner";
 import type { AgentDto, MessageDto, TaskSummaryDto, UserDto } from "@silverhand/shared";
@@ -441,7 +441,7 @@ export function ImagePreviewModal({
               data-sticker-tone="neutral"
               className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary focus-outline"
             >
-              <X className="size-4" />
+              <CloseIcon className="size-4" />
             </Dialog.Close>
           </div>
           <Dialog.Description className="mt-1 text-xs text-text-muted">
@@ -473,7 +473,7 @@ export function ImagePreviewModal({
               <SelectionActionButton
                 rank="primary"
                 label="Share"
-                icon={<Share className="size-3.5" />}
+                icon={<ShareIcon className="size-3.5" />}
                 disabled={phase !== "ready" || busy}
                 onClick={onShare}
               />

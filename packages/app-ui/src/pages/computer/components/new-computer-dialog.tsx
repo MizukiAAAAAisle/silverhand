@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { SpinnerIcon } from "@/icons";
 import type { HostCreateResponse } from "@silverhand/shared";
 import {
   Dialog,
@@ -239,7 +239,7 @@ export function NewComputerDialog({
           <p className="text-sm text-error">{computerCopy.createFailed}</p>
         ) : phase === "creating" || !created ? (
           <div className="flex items-center gap-2 py-6 text-sm text-text-muted">
-            <Loader2 className="size-4 animate-spin" />
+            <SpinnerIcon className="size-4 animate-spin" />
             {computerCopy.addComputer}…
           </div>
         ) : phase === "naming" ? (
@@ -298,7 +298,7 @@ export function NewComputerDialog({
             />
 
             <div className="mt-1 flex items-center gap-2 border border-dashed border-border px-3 py-2.5 text-sm text-text-secondary">
-              <Loader2 className="size-4 animate-spin text-text-secondary" />
+              <SpinnerIcon className="size-4 animate-spin text-text-secondary" />
               {computerCopy.waitingForConnection}…
             </div>
           </div>

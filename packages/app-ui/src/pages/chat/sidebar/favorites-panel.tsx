@@ -1,7 +1,7 @@
 import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
 import { SidebarReveal, SidebarRevealRow } from "@/components/layout/sidebar-reveal";
 import { useMemo } from "react";
-import { Star } from "lucide-react";
+import { StarIcon } from "@/icons";
 import type { ChannelAttentionModeRowDto, FavoriteRowDto } from "@silverhand/shared";
 import { useSortable } from "@dnd-kit/sortable";
 import { ChannelRow } from "./channel-row";
@@ -87,7 +87,7 @@ export function FavoritesGroup(props: {
     <SidebarSection
       label="STARRED"
       labelClassName="text-xs"
-      icon={<Star className="size-3.5" />}
+      icon={<StarIcon className="size-3.5" />}
       count={items.length}
       collapsible
       defaultExpanded

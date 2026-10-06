@@ -42,8 +42,8 @@ describe("ChannelIcon — visibility selects the glyph (private = Lock)", () => 
     const html = renderToStaticMarkup(
       React.createElement(ChannelIcon, { variant: "sticker", visibility: "private" }),
     );
-    expect(html).toContain("lucide-lock");
-    expect(html).not.toContain("lucide-hash");
+    expect(html).toContain("icon-lock");
+    expect(html).not.toContain("icon-hash");
     // A private channel is still a channel identity → keeps the sticker hook.
     expect(html).toContain("data-channel-icon");
   });
@@ -52,13 +52,13 @@ describe("ChannelIcon — visibility selects the glyph (private = Lock)", () => 
     const html = renderToStaticMarkup(
       React.createElement(ChannelIcon, { variant: "sticker", visibility: "public" }),
     );
-    expect(html).toContain("lucide-hash");
-    expect(html).not.toContain("lucide-lock");
+    expect(html).toContain("icon-hash");
+    expect(html).not.toContain("icon-lock");
   });
 
   it("omitted visibility defaults to the `#` Hash (existing call-sites unchanged)", () => {
     const html = renderToStaticMarkup(React.createElement(ChannelIcon, { variant: "utility" }));
-    expect(html).toContain("lucide-hash");
-    expect(html).not.toContain("lucide-lock");
+    expect(html).toContain("icon-hash");
+    expect(html).not.toContain("icon-lock");
   });
 });

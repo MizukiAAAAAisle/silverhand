@@ -1,5 +1,5 @@
 import { useEffect, useState, type JSX } from "react";
-import { Check, Copy } from "lucide-react";
+import { CheckIcon, CopyIcon } from "@/icons";
 import { toast } from "sonner";
 import {
   buildHostDiagnosticsText,
@@ -79,7 +79,7 @@ export function HostDiagnosticsAction({ host }: { host: HostDto }): JSX.Element 
 
   return (
     <Button variant="neutral" className="gap-2 w-full" onClick={() => void handleCopy()}>
-      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
       {copied ? computerCopy.copied : computerCopy.copyDiagnostics}
     </Button>
   );

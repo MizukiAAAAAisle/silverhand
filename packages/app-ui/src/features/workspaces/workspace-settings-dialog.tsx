@@ -1,5 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Archive, ArchiveRestore, LogOut, Settings2, ShieldCheck, Users } from "lucide-react";
+import {
+  ArchiveIcon,
+  GeneralSettingsIcon,
+  LeaveIcon,
+  MembersIcon,
+  ShieldCheckIcon,
+  UnarchiveIcon,
+} from "@/icons";
 import type { AgentCapability } from "@silverhand/shared";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input, Label } from "@/components/ui/input";
@@ -54,10 +61,10 @@ interface WorkspaceSettingsDialogProps {
   highlightCapability?: AgentCapability | null;
 }
 
-const NAV_ITEMS: { id: SettingsSection; label: string; icon: typeof Settings2 }[] = [
-  { id: "general", label: "General", icon: Settings2 },
-  { id: "members", label: "Members", icon: Users },
-  { id: "agents", label: "Permission", icon: ShieldCheck },
+const NAV_ITEMS: { id: SettingsSection; label: string; icon: typeof GeneralSettingsIcon }[] = [
+  { id: "general", label: "General", icon: GeneralSettingsIcon },
+  { id: "members", label: "Members", icon: MembersIcon },
+  { id: "agents", label: "Permission", icon: ShieldCheckIcon },
 ];
 
 export function WorkspaceSettingsDialog({
@@ -441,12 +448,12 @@ function GeneralSection({
             >
               {isArchived ? (
                 <>
-                  <ArchiveRestore className="mr-1.5 size-3.5" />
+                  <UnarchiveIcon className="mr-1.5 size-3.5" />
                   {archivePending ? "Working…" : "Unarchive"}
                 </>
               ) : (
                 <>
-                  <Archive className="mr-1.5 size-3.5" />
+                  <ArchiveIcon className="mr-1.5 size-3.5" />
                   {archivePending ? "Working…" : "Archive"}
                 </>
               )}
@@ -497,7 +504,7 @@ function GeneralSection({
               disabled={!workspaceId || leavePending}
               confirmLabel="Confirm leave workspace"
             >
-              <LogOut className="size-3.5" />
+              <LeaveIcon className="size-3.5" />
               {leavePending ? "Leaving…" : "Leave workspace"}
             </DeleteButton>
           </div>

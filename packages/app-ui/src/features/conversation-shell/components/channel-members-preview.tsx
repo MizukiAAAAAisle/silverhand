@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus } from "lucide-react";
+import { PlusIcon } from "@/icons";
 import type { MemberDto } from "@silverhand/shared";
 import { UserAvatar } from "@/components/user-avatar";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
@@ -104,7 +104,7 @@ export function ChannelMembersPreview({
             title="Add member"
             className="flex size-8 items-center justify-center bg-bg-hover border-dashed border-(length:--border-avatar-width) border-border-avatar text-text-secondary hover:text-text-primary transition-colors"
           >
-            <Plus className="size-4" />
+            <PlusIcon className="size-4" />
           </button>
         ) : null}
       </div>
