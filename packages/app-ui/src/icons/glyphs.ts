@@ -1,12 +1,10 @@
 import {
   Activity01Icon as Activity01,
   Add01Icon as Add01,
-  AiBrain01Icon as AiBrain01,
   AlarmClockIcon as AlarmClock,
   Alert02Icon as Alert02,
   AlertCircleIcon as AlertCircle,
   AppleReminderIcon as AppleReminder,
-  ArchiveArrowDownIcon as ArchiveArrowDown,
   ArrowDown01Icon as ArrowDown01,
   ArrowDown02Icon as ArrowDown02,
   ArrowDownToLineIcon as ArrowDownToLine,
@@ -30,6 +28,7 @@ import {
   Bookmark02Icon as Bookmark02,
   BookmarkRemove02Icon as BookmarkRemove02,
   BotIcon as Bot,
+  BrainIcon as Brain,
   BubbleChatIcon as BubbleChat,
   CalendarClockIcon as CalendarClock,
   Camera01Icon as Camera01,
@@ -62,12 +61,13 @@ import {
   HourglassIcon as Hourglass,
   IdCardIcon as IdCard,
   Image01Icon as Image01,
+  InboxIcon as Inbox,
   InformationCircleIcon as InformationCircle,
   Layers01Icon as Layers01,
   Link01Icon as Link01,
   LinkSquare02Icon as LinkSquare02,
-  LoginSquare01Icon as LoginSquare01,
-  LogoutSquare01Icon as LogoutSquare01,
+  Login01Icon as Login01,
+  Logout01Icon as Logout01,
   Message01Icon as Message01,
   Message02Icon as Message02,
   MoreHorizontalIcon as MoreHorizontal,
@@ -187,12 +187,12 @@ export const GlobeIcon = icon("globe", Globe02);
 export const HashIcon = icon("hash", Hash);
 export const HistoryIcon = icon("history", History);
 export const ImageIcon = icon("image", Image01);
-export const InboxIcon = icon("inbox", ArchiveArrowDown);
+export const InboxIcon = icon("inbox", Inbox);
 export const InfoIcon = icon("info", InformationCircle);
 export const IntegrationIcon = icon("integration", Plug01);
-export const JoinIcon = icon("join", LoginSquare01);
+export const JoinIcon = icon("join", Login01);
 export const LayersIcon = icon("layers", Layers01);
-export const LeaveIcon = icon("leave", LogoutSquare01);
+export const LeaveIcon = icon("leave", Logout01);
 export const LinkIcon = icon("link", Link01);
 export const LockIcon = icon("lock", SquareLock02);
 export const MembersIcon = icon("members", UsersRound);
@@ -239,7 +239,7 @@ export const SuccessIcon = icon("success", CheckmarkCircle02);
 /** The Task entity, on every surface that names Tasks. */
 export const TaskIcon = icon("task", AppleReminder);
 export const TerminalIcon = icon("terminal", Terminal);
-export const ThinkingIcon = icon("thinking", AiBrain01);
+export const ThinkingIcon = icon("thinking", Brain);
 export const TimerIcon = icon("timer", Timer02);
 export const ToolIcon = icon("tool", Wrench01);
 export const UnarchiveIcon = icon("unarchive", UNARCHIVE);
