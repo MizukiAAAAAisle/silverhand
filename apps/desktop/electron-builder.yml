@@ -79,6 +79,18 @@ extraResources:
     to: silverhand-backend/silverhand-backend.manifest.json
 
 mac:
+  # Chromium ships ~55 UI locales (~13MB compressed); keep English and
+  # Simplified Chinese. Names match the `.lproj` folders exactly, so the
+  # grammatical-gender variants Chromium also loads are listed too.
+  electronLanguages:
+    - en
+    - en_FEMININE
+    - en_MASCULINE
+    - en_NEUTER
+    - zh_CN
+    - zh_CN_FEMININE
+    - zh_CN_MASCULINE
+    - zh_CN_NEUTER
   extendInfo:
     NSLocalNetworkUsageDescription: Silverhand connects to computers and servers on your local network to run and manage agents.
   category: public.app-category.developer-tools
