@@ -30,7 +30,7 @@ export const Checkbox = forwardRef<HTMLButtonElement, CheckboxProps>(
       )}
       {...props}
     >
-      {checked ? <CheckIcon className="size-3" strokeWidth={2.25} /> : null}
+      {checked ? <CheckIcon className="size-3" strokeWidth={3} /> : null}
     </button>
   ),
 );

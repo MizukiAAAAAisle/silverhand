@@ -1196,7 +1196,7 @@ function SelectionCheckbox({
           : "border-border bg-bg-floating text-transparent hover:border-accent")
       }
     >
-      <CheckIcon className="size-3" strokeWidth={2.25} />
+      <CheckIcon className="size-3" strokeWidth={3} />
     </button>
   );
 }

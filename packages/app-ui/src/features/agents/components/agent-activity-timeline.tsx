@@ -480,27 +480,13 @@ function ToolOutcomeMark({
   const base = cn("inline-block size-3 shrink-0", className);
   switch (outcome) {
     case "success":
-      return (
-        <SuccessIcon className={cn(base, "text-success")} strokeWidth={2} aria-label="succeeded" />
-      );
+      return <SuccessIcon className={cn(base, "text-success")} aria-label="succeeded" />;
     case "failed":
-      return <FailedIcon className={cn(base, "text-error")} strokeWidth={2} aria-label="failed" />;
+      return <FailedIcon className={cn(base, "text-error")} aria-label="failed" />;
     case "cancelled":
-      return (
-        <CancelledIcon
-          className={cn(base, "text-text-muted")}
-          strokeWidth={2}
-          aria-label="cancelled"
-        />
-      );
+      return <CancelledIcon className={cn(base, "text-text-muted")} aria-label="cancelled" />;
     case "completed":
-      return (
-        <SuccessIcon
-          className={cn(base, "text-text-muted")}
-          strokeWidth={2}
-          aria-label="finished"
-        />
-      );
+      return <SuccessIcon className={cn(base, "text-text-muted")} aria-label="finished" />;
   }
 }
 
@@ -551,13 +537,11 @@ function EventRow({
             {done ? (
               <SuccessIcon
                 className="ml-1.5 inline-block size-3 -translate-y-px text-success"
-                strokeWidth={2}
                 aria-label="completed"
               />
             ) : (
               <SpinnerIcon
                 className="ml-1.5 inline-block size-3 -translate-y-px animate-spin text-text-muted"
-                strokeWidth={2}
                 aria-label="in progress"
               />
             )}

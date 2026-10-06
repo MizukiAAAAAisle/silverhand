@@ -71,7 +71,7 @@ export function ComputerSidebarShell({
               onClick={onAddComputer}
               aria-label={computerCopy.addComputer}
             >
-              <PlusIcon size={20} strokeWidth={1.75} />
+              <PlusIcon size={20} strokeWidth={2.25} />
             </button>
           </MobileHeaderAction>
         ) : null}

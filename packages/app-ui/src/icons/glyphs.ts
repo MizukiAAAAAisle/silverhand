@@ -1,17 +1,20 @@
 import {
+  AiBrain01Icon as AiBrain01,
+  ArchiveArrowDownIcon as ArchiveArrowDown,
+  LoginSquare01Icon as LoginSquare01,
+  LogoutSquare01Icon as LogoutSquare01,
   Activity01Icon as Activity01,
+  CornerDownLeftIcon as CornerDownLeft,
   Add01Icon as Add01,
   AlarmClockIcon as AlarmClock,
   Alert02Icon as Alert02,
   AlertCircleIcon as AlertCircle,
-  AppleReminderIcon as AppleReminder,
   ArrowDown01Icon as ArrowDown01,
   ArrowDown02Icon as ArrowDown02,
   ArrowDownToLineIcon as ArrowDownToLine,
   ArrowExpand01Icon as ArrowExpand01,
   ArrowLeft01Icon as ArrowLeft01,
   ArrowLeft02Icon as ArrowLeft02,
-  ArrowMoveDownLeftIcon as ArrowMoveDownLeft,
   ArrowRight01Icon as ArrowRight01,
   ArrowRight02Icon as ArrowRight02,
   ArrowRightToLineIcon as ArrowRightToLine,
@@ -28,8 +31,6 @@ import {
   Bookmark02Icon as Bookmark02,
   BookmarkRemove02Icon as BookmarkRemove02,
   BotIcon as Bot,
-  BrainIcon as Brain,
-  BubbleChatIcon as BubbleChat,
   CalendarClockIcon as CalendarClock,
   Camera01Icon as Camera01,
   Cancel01Icon as Cancel01,
@@ -49,25 +50,22 @@ import {
   EraserIcon as Eraser,
   File01Icon as File01,
   File02Icon as File02,
-  FileAttachmentIcon as FileAttachment,
+  DocumentAttachmentIcon as DocumentAttachment,
   FilterHorizontalIcon as FilterHorizontal,
   FloppyDiskIcon as FloppyDisk,
   Folder01Icon as Folder01,
   FolderEditIcon as FolderEdit,
-  FolderOpenIcon as FolderOpen,
+  Folder02Icon as Folder02,
   Globe02Icon as Globe02,
   HashIcon as Hash,
   HistoryIcon as History,
   HourglassIcon as Hourglass,
   IdCardIcon as IdCard,
   Image01Icon as Image01,
-  InboxIcon as Inbox,
   InformationCircleIcon as InformationCircle,
   Layers01Icon as Layers01,
   Link01Icon as Link01,
   LinkSquare02Icon as LinkSquare02,
-  Login01Icon as Login01,
-  Logout01Icon as Logout01,
   Message01Icon as Message01,
   Message02Icon as Message02,
   MoreHorizontalIcon as MoreHorizontal,
@@ -120,7 +118,6 @@ import {
   ZoomOutIcon as ZoomOut,
 } from "@hugeicons/core-free-icons";
 import { createIcon, type IconNode } from "./icon";
-import { ARCHIVE, PROGRESS, SPINNER, UNARCHIVE } from "./drawn";
 
 const icon = (name: string, node: unknown) => createIcon(name, node as IconNode);
 
@@ -129,7 +126,6 @@ export const AddMemberIcon = icon("add-member", UserAdd01);
 export const AddReactionIcon = icon("add-reaction", SmilePlus);
 export const AlarmIcon = icon("alarm", AlarmClock);
 export const AppearanceIcon = icon("appearance", PaintBoard);
-export const ArchiveIcon = icon("archive", ARCHIVE);
 export const ArrowDownIcon = icon("arrow-down", ArrowDown02);
 export const ArrowDownToLineIcon = icon("arrow-down-to-line", ArrowDownToLine);
 export const ArrowLeftIcon = icon("arrow-left", ArrowLeft02);
@@ -137,7 +133,7 @@ export const ArrowRightIcon = icon("arrow-right", ArrowRight02);
 export const ArrowRightToLineIcon = icon("arrow-right-to-line", ArrowRightToLine);
 export const ArrowUpIcon = icon("arrow-up", ArrowUp02);
 export const ArrowUpRightIcon = icon("arrow-up-right", ArrowUpRight01);
-export const AttachmentIcon = icon("attachment", FileAttachment);
+export const AttachmentIcon = icon("attachment", DocumentAttachment);
 export const BellIcon = icon("bell", Bell);
 export const BellOffIcon = icon("bell-off", BellOff);
 export const BellRingIcon = icon("bell-ring", BellRing);
@@ -147,7 +143,6 @@ export const BookmarkRemoveIcon = icon("bookmark-remove", BookmarkRemove02);
 export const BotIcon = icon("bot", Bot);
 export const CameraIcon = icon("camera", Camera01);
 export const CancelledIcon = icon("cancelled", Unavailable);
-export const ChatsIcon = icon("chats", BubbleChat);
 export const CheckIcon = icon("check", Tick02);
 export const ChevronDownIcon = icon("chevron-down", ArrowDown01);
 export const ChevronLeftIcon = icon("chevron-left", ArrowLeft01);
@@ -172,7 +167,7 @@ export const DocumentIcon = icon("document", File02);
 export const DownloadIcon = icon("download", Download01);
 export const DragHandleIcon = icon("drag-handle", DragDropVertical);
 export const EditIcon = icon("edit", PencilEdit02);
-export const EnterIcon = icon("enter", ArrowMoveDownLeft);
+export const EnterIcon = icon("enter", CornerDownLeft);
 export const ErrorIcon = icon("error", AlertCircle);
 export const ExpandIcon = icon("expand", ArrowExpand01);
 export const FailedIcon = icon("failed", CancelCircle);
@@ -180,19 +175,19 @@ export const FileIcon = icon("file", File01);
 export const FiltersIcon = icon("filters", FilterHorizontal);
 export const FolderEditIcon = icon("folder-edit", FolderEdit);
 export const FolderIcon = icon("folder", Folder01);
-export const FolderOpenIcon = icon("folder-open", FolderOpen);
+export const FolderOpenIcon = icon("folder-open", Folder02);
 export const FontIcon = icon("font", TextFont);
 export const GeneralSettingsIcon = icon("general-settings", Settings05);
 export const GlobeIcon = icon("globe", Globe02);
 export const HashIcon = icon("hash", Hash);
 export const HistoryIcon = icon("history", History);
 export const ImageIcon = icon("image", Image01);
-export const InboxIcon = icon("inbox", Inbox);
+export const InboxIcon = icon("inbox", ArchiveArrowDown);
 export const InfoIcon = icon("info", InformationCircle);
 export const IntegrationIcon = icon("integration", Plug01);
-export const JoinIcon = icon("join", Login01);
+export const JoinIcon = icon("join", LoginSquare01);
 export const LayersIcon = icon("layers", Layers01);
-export const LeaveIcon = icon("leave", Logout01);
+export const LeaveIcon = icon("leave", LogoutSquare01);
 export const LinkIcon = icon("link", Link01);
 export const LockIcon = icon("lock", SquareLock02);
 export const MembersIcon = icon("members", UsersRound);
@@ -211,7 +206,6 @@ export const PlayIcon = icon("play", Play);
 export const PlusIcon = icon("plus", Add01);
 export const PowerIcon = icon("power", Power);
 export const ProfileCardIcon = icon("profile-card", IdCard);
-export const ProgressIcon = icon("progress", PROGRESS);
 export const QuoteIcon = icon("quote", QuoteDown);
 export const QuoteSelectionIcon = icon("quote-selection", TextQuote);
 export const RefreshIcon = icon("refresh", Refresh);
@@ -233,16 +227,12 @@ export const SidebarCloseIcon = icon("sidebar-close", PanelLeftClose);
 export const SidebarOpenIcon = icon("sidebar-open", PanelLeftOpen);
 export const SortIcon = icon("sort", ArrowUpDown);
 export const SpawnedIcon = icon("spawned", Sprout);
-export const SpinnerIcon = icon("spinner", SPINNER);
 export const StarIcon = icon("star", Star);
 export const SuccessIcon = icon("success", CheckmarkCircle02);
-/** The Task entity, on every surface that names Tasks. */
-export const TaskIcon = icon("task", AppleReminder);
 export const TerminalIcon = icon("terminal", Terminal);
-export const ThinkingIcon = icon("thinking", Brain);
+export const ThinkingIcon = icon("thinking", AiBrain01);
 export const TimerIcon = icon("timer", Timer02);
 export const ToolIcon = icon("tool", Wrench01);
-export const UnarchiveIcon = icon("unarchive", UNARCHIVE);
 export const UndoIcon = icon("undo", Undo02);
 export const UnlinkIcon = icon("unlink", Unlink01);
 export const UnlockIcon = icon("unlock", SquareUnlock02);

@@ -187,7 +187,7 @@ export function DeleteButton({
                     variants={reduced ? undefined : { hover: { scale: 1.2 } }}
                     transition={{ duration: 0.18, ease: EASE }}
                   >
-                    <Icon aria-hidden="true" className="size-3.5" strokeWidth={2.25} />
+                    <Icon aria-hidden="true" className="size-3.5" />
                   </motion.span>
                 </motion.button>
               </motion.div>
