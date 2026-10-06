@@ -13,10 +13,16 @@ const ARCHIVE_BOX: IconNode = [
   ],
 ];
 
-/** A lidded box with a handle slot. */
+/** Reicon archive-outline silhouette, redrawn as round strokes on the same grid. */
 export const ARCHIVE: IconNode = [
-  ...ARCHIVE_BOX,
-  ["rect", { x: "9", y: "10.5", width: "6", height: "3", rx: "1.5" }],
+  ["rect", { x: "2", y: "3", width: "20", height: "4", rx: "1" }],
+  [
+    "path",
+    {
+      d: "M3.5 7v6c0 3.771 0 5.657 1.172 6.828S7.729 21 11.5 21h1c3.771 0 5.657 0 6.828-1.172S20.5 16.771 20.5 13V7",
+    },
+  ],
+  ["rect", { x: "9", y: "10.5", width: "6", height: "3", rx: "1" }],
 ];
 
 /** The archive box with an arrow out of it. */
