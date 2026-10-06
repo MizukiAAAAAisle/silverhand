@@ -1,4 +1,4 @@
-import { BrowserWindow, clipboard, dialog, nativeImage } from "electron";
+import { BrowserWindow, ClipboardItem, clipboard, dialog, nativeImage } from "electron";
 import type { GuardedIpcRegistrar } from "./guarded-ipc.js";
 
 // ── Selection export pipeline ─────────────────────────────────────────
@@ -70,9 +70,12 @@ export function registerSelectionExportIpcHandlers(ipc: GuardedIpcRegistrar): vo
         return { ok: false, error: "invalid_payload" };
       }
       try {
+        // Decoding first keeps a corrupt payload off the pasteboard; the
+        // re-encoded PNG is what the OS receives.
         const img = nativeImage.createFromBuffer(buf);
         if (img.isEmpty()) return { ok: false, error: "decode_failed" };
-        clipboard.writeImage(img);
+        const png = new Blob([new Uint8Array(img.toPNG())], { type: "image/png" });
+        await clipboard.write([new ClipboardItem({ "image/png": png })]);
         return { ok: true };
       } catch (err) {
         return {

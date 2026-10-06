@@ -131,10 +131,12 @@ export function Titlebar({
 
       {/* Centered on the whole window (no-drag so the pill takes clicks). The
        * box spans only the content row, so a top inset never shifts it off
-       * the row's centre line. */}
+       * the row's centre line. It is only as wide as the pill: since
+       * Electron 44 any box over the bar, even with `pointer-events: none`,
+       * turns the `no-drag` controls beneath it back into drag area. */}
       {search ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex h-(--titlebar-row-height,var(--titlebar-height)) items-center justify-center">
-          <div className="no-drag pointer-events-auto w-[clamp(420px,52vw,720px)]">{search}</div>
+        <div className="absolute bottom-0 left-1/2 flex h-(--titlebar-row-height,var(--titlebar-height)) w-[clamp(420px,52vw,720px)] -translate-x-1/2 items-center">
+          <div className="no-drag w-full">{search}</div>
         </div>
       ) : null}
 
