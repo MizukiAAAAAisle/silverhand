@@ -1,7 +1,8 @@
 import { SkeletonBlock, SkeletonRegion } from "@/components/layout/skeleton";
 import { useState } from "react";
 import * as Select from "@radix-ui/react-select";
-import { ChevronDownIcon, ErrorIcon } from "@/icons";
+import { EmptyIcon, ChevronDownIcon, ErrorIcon } from "@/icons";
+import { PanelEmpty, PanelError } from "./permissions-panel-state";
 import { toast } from "sonner";
 import type { AgentCapability, AgentDto } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
@@ -84,21 +85,11 @@ export function AgentPermissionsPanel({
     return <PanelSkeleton />;
   }
   if (membersQuery.isError) {
-    return (
-      <PanelMessage tone="error">
-        Failed to load members.
-        <Button variant="ghost" size="sm" onClick={() => void membersQuery.refetch()}>
-          Retry
-        </Button>
-      </PanelMessage>
-    );
+    return <PanelError onRetry={() => void membersQuery.refetch()} />;
   }
   if (agents.length === 0) {
     return (
-      <PanelMessage>
-        This workspace has no agent members yet. Add an agent first, then manage its permissions
-        here.
-      </PanelMessage>
+      <PanelEmpty icon={<EmptyIcon className="size-6" />}>No agents in this workspace</PanelEmpty>
     );
   }
 
@@ -382,25 +373,6 @@ function PanelSkeleton(): JSX.Element {
     <div className="flex flex-col gap-3">
       <div className="h-9 animate-pulse rounded-(--control-radius) border border-border-subtle bg-bg-elevated/40" />
       <div className="h-64 animate-pulse rounded-(--control-radius) border border-border-subtle bg-bg-elevated/40" />
-    </div>
-  );
-}
-
-function PanelMessage({
-  children,
-  tone = "muted",
-}: {
-  children: React.ReactNode;
-  tone?: "muted" | "error";
-}): JSX.Element {
-  return (
-    <div
-      className={cn(
-        "flex items-center gap-2 rounded-(--control-radius) border border-border-subtle bg-bg-elevated/40 p-4 text-sm",
-        tone === "error" ? "text-error" : "text-text-muted",
-      )}
-    >
-      <span className="flex flex-1 items-center gap-2">{children}</span>
     </div>
   );
 }

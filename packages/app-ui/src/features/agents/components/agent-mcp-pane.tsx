@@ -138,7 +138,7 @@ function ProfileMcpScope({
           Changes take effect at the agent's <strong>next spawn</strong> — this is not a hot reload.
         </NoticeLine>
       ) : (
-        <div className="flex items-start gap-2 rounded-(--control-radius) border border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed text-text-secondary">
+        <div className={cn(NOTICE_FRAME_CLASS, "text-text-secondary")}>
           <WarningIcon className="mt-0.5 size-3.5 shrink-0 text-error" />
           <span>
             {runtime === "pi" ? (
@@ -591,9 +591,14 @@ function EmptyCard({
   );
 }
 
+// Same frame tokens as the profile sections below, so the notice follows each
+// theme's panel border and radius.
+const NOTICE_FRAME_CLASS =
+  "flex items-start gap-2 rounded-[var(--profile-section-radius,var(--card-radius))] border-(length:--panel-border-width) border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed";
+
 function NoticeLine({ icon, children }: { icon: JSX.Element; children: ReactNode }): JSX.Element {
   return (
-    <div className="flex items-start gap-2 rounded-(--control-radius) border border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed text-text-muted">
+    <div className={cn(NOTICE_FRAME_CLASS, "text-text-muted")}>
       <span className="mt-0.5 text-text-muted">{icon}</span>
       <span>{children}</span>
     </div>
@@ -606,15 +611,7 @@ function PaneMessage({ children }: { children: ReactNode }): JSX.Element {
   );
 }
 
-function CopyButton({
-  text,
-  label,
-  mono = false,
-}: {
-  text: string;
-  label: string;
-  mono?: boolean;
-}): JSX.Element {
+function CopyButton({ text, label }: { text: string; label: string }): JSX.Element {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -625,10 +622,7 @@ function CopyButton({
           window.setTimeout(() => setCopied(false), 1200);
         });
       }}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-(--control-radius) border border-border-subtle px-2 py-1 text-text-secondary transition-colors hover:border-border hover:text-text-primary",
-        mono ? "font-mono text-xs" : "text-(length:--text-meta)",
-      )}
+      className="inline-flex items-center gap-1.5 rounded-(--control-radius) text-(length:--text-meta) text-text-secondary transition-colors hover:text-text-primary focus-outline"
       title="Copy to clipboard"
     >
       {copied ? (

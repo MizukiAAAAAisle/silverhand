@@ -5,6 +5,7 @@ import {
   LogoutSquare01Icon as LogoutSquare01,
   Activity01Icon as Activity01,
   CornerDownLeftIcon as CornerDownLeft,
+  InboxIcon as InboxTray,
   Add01Icon as Add01,
   AlarmClockIcon as AlarmClock,
   Alert02Icon as Alert02,
@@ -168,6 +169,8 @@ export const DownloadIcon = icon("download", Download01);
 export const DragHandleIcon = icon("drag-handle", DragDropVertical);
 export const EditIcon = icon("edit", PencilEdit02);
 export const EnterIcon = icon("enter", CornerDownLeft);
+/** An empty list or collection: an empty tray. */
+export const EmptyIcon = icon("empty", InboxTray);
 export const ErrorIcon = icon("error", AlertCircle);
 export const ExpandIcon = icon("expand", ArrowExpand01);
 export const FailedIcon = icon("failed", CancelCircle);

@@ -1,12 +1,12 @@
 import * as Select from "@radix-ui/react-select";
-import { CheckIcon, ChevronDownIcon, ErrorIcon } from "@/icons";
+import { CheckIcon, ChevronDownIcon, ErrorIcon, EmptyIcon } from "@/icons";
+import { PanelEmpty, PanelError } from "./permissions-panel-state";
 import { toast } from "sonner";
 import type { WorkspaceHumanMemberDto, WorkspaceRole } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { useUpdateWorkspaceHumanMemberRole, useWorkspaceMemberLists } from "./hooks";
 
@@ -70,17 +70,12 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
     return <PanelSkeleton />;
   }
   if (membersQuery.isError) {
-    return (
-      <PanelMessage tone="error">
-        Failed to load members.
-        <Button variant="ghost" size="sm" onClick={() => void membersQuery.refetch()}>
-          Retry
-        </Button>
-      </PanelMessage>
-    );
+    return <PanelError onRetry={() => void membersQuery.refetch()} />;
   }
   if (humans.length === 0) {
-    return <PanelMessage>This workspace has no human members yet.</PanelMessage>;
+    return (
+      <PanelEmpty icon={<EmptyIcon className="size-6" />}>No people in this workspace</PanelEmpty>
+    );
   }
 
   const onChangeRole = (member: WorkspaceHumanMemberDto, role: Exclude<WorkspaceRole, "owner">) => {
@@ -237,25 +232,6 @@ function PanelSkeleton(): JSX.Element {
           className="h-11 animate-pulse rounded-(--control-radius) border border-border-subtle bg-bg-elevated/40"
         />
       ))}
-    </div>
-  );
-}
-
-function PanelMessage({
-  children,
-  tone = "muted",
-}: {
-  children: React.ReactNode;
-  tone?: "muted" | "error";
-}): JSX.Element {
-  return (
-    <div
-      className={cn(
-        "flex items-center gap-2 rounded-(--control-radius) border border-border-subtle bg-bg-elevated/40 p-4 text-sm",
-        tone === "error" ? "text-error" : "text-text-muted",
-      )}
-    >
-      <span className="flex flex-1 items-center gap-2">{children}</span>
     </div>
   );
 }
