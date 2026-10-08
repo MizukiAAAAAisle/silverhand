@@ -1860,6 +1860,7 @@ export class Supervisor implements SupervisorContract {
           return this.writeStdinPayload(handle, line);
         },
         spawnCtx,
+        onInputRejected: (uuid) => this.observeInputRejected(handle, uuid),
       });
     }
 
@@ -2036,6 +2037,7 @@ export class Supervisor implements SupervisorContract {
         uuid: payloadUuid,
         startedObserved: false,
         writeConfirmed: false,
+        rejected: false,
       };
     }
 
@@ -2227,18 +2229,31 @@ export class Supervisor implements SupervisorContract {
    * prevents an early `started` from settling before the write succeeds —
    * which would otherwise allow consumed+failed double-settle, a premature
    * deferred flush, and continuation on an already-cleared gate. Returns
-   * whether it settled. */
+   * whether it settled. A request-correlated rejection also settles, as a
+   * terminal refusal, after the same write boundary. Observed admission takes
+   * precedence over a contradictory rejection; RPC success is never proof. */
   private settleLifecycleStartAdmissionIfReady(handle: RuntimeHandle): boolean {
     const admission = handle.startupAdmission;
     if (
       admission === null ||
       handle.startupDelivery === null ||
-      !admission.startedObserved ||
+      (!admission.startedObserved && !admission.rejected) ||
       !admission.writeConfirmed
     ) {
       return false;
     }
+
     const ids = handle.startupDelivery.deliveryIds;
+    if (admission.rejected && !admission.startedObserved) {
+      // Use the existing terminal refusal outcome, not a retriable transport
+      // failure: repeating a rejected request automatically could loop forever.
+      this.emitStartupDeliveryFailed(handle, ids, 'driver_refused');
+      handle.inputPayloadUuids.delete(admission.uuid);
+      this.clearStartupGate(handle);
+      this.maybeEmitReadyForDrain(handle);
+      return true;
+    }
+
     this.logger.info(
       {
         kind: 'process',
@@ -2255,6 +2270,42 @@ export class Supervisor implements SupervisorContract {
     this.clearStartupGate(handle);
     this.maybeEmitReadyForDrain(handle);
     return true;
+  }
+
+  private observeInputRejected(handle: RuntimeHandle, uuid: string): void {
+    // Post-exit stdout draining is admission-only; its EOF path owns rollback.
+    if (handle.phase === 'exited' || handle.phase === 'draining') {
+      return;
+    }
+
+    const admission = handle.startupAdmission;
+    if (!admission || !handle.startupDelivery || admission.uuid !== uuid) {
+      return;
+    }
+
+    // Admission already observed is stronger evidence than a contradictory
+    // late error; never roll an exposed input back for another execution.
+    if (admission.startedObserved) {
+      return;
+    }
+
+    this.logger.warn(
+      {
+        kind: 'process',
+        action: 'startup_delivery_rejected',
+        pid: handle.pid,
+        conversationId: handle.conversationId,
+        agent_id: handle.agentId,
+        command_uuid: uuid,
+        delivery_ids: [...handle.startupDelivery.deliveryIds],
+      },
+      'runtime explicitly rejected the correlated input',
+    );
+    admission.rejected = true;
+
+    // Like early admission, an early rejection must wait for the write to
+    // finish; otherwise its continuation could settle or clear the next batch.
+    this.settleLifecycleStartAdmissionIfReady(handle);
   }
 
   /**
@@ -2310,7 +2361,7 @@ export class Supervisor implements SupervisorContract {
   /** Mirror of {@link emitStartupDeliveryConsumed} for the failure ack.
    *  Always the unified `runtime_delivery_failed`; backend rolls the batch
    *  back to pending (retriable reasons) or marks it failed
-   *  (`driver_refused` programming error). */
+   *  (`driver_refused`: encoding refusal or explicit runtime rejection). */
   private emitStartupDeliveryFailed(
     handle: RuntimeHandle,
     deliveryIds: readonly number[],

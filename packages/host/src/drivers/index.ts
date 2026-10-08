@@ -56,6 +56,10 @@ export interface DriverSpawnContext {
 export interface DriverIO {
   /** Append `\n` and write one line to the agent's stdin. */
   writeLine(line: string): Promise<void>;
+  /** Host-local negative acknowledgment for one encoded payload. Only an
+   * explicit, request-correlated runtime rejection may invoke this; silence,
+   * transport success, and generic errors are not rejection evidence. */
+  onInputRejected?(payloadUuid: string): void;
   spawnCtx: DriverSpawnContext;
 }
 

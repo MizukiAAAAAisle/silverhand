@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CodexDriver } from '../../src/drivers/codex.js';
 import type { DriverIO, DriverSpawnContext } from '../../src/drivers/index.js';
@@ -68,6 +68,22 @@ async function tick(): Promise<void> {
   await new Promise((r) => queueMicrotask(() => r(undefined)));
 }
 
+/** Establish identity through the real request/response handshake. */
+async function bindThread(driver: CodexDriver, threadId: string): Promise<void> {
+  const built = makeSpawnCtx();
+  try {
+    const io = makeIO(built.ctx);
+    driver.bindIO(io);
+    await tick();
+    driver.parseLine(JSON.stringify({ id: JSON.parse(io.lines[0]!).id, result: {} }));
+    driver.parseLine(
+      JSON.stringify({ id: JSON.parse(io.lines[2]!).id, result: { thread: { id: threadId } } }),
+    );
+  } finally {
+    built.cleanup();
+  }
+}
+
 describe('CodexDriver static config', () => {
   it('exposes the expected runtime metadata', () => {
     const d = new CodexDriver();
@@ -100,7 +116,7 @@ describe('CodexDriver.classifyInitProgress', () => {
     );
   });
 
-  it('treats thread/started as session-ready', () => {
+  it('does not treat an unsolicited thread/started as session-ready', () => {
     const d = new CodexDriver();
     expect(
       d.classifyInitProgress(
@@ -110,16 +126,16 @@ describe('CodexDriver.classifyInitProgress', () => {
           params: { thread: { id: 'thread-1' } },
         }),
       ),
-    ).toBe('session_ready');
+    ).toBe('protocol_ready');
   });
 
-  it('treats result.thread as session-ready', () => {
+  it('does not treat an unrelated result.thread as session-ready', () => {
     const d = new CodexDriver();
     expect(
       d.classifyInitProgress(
         JSON.stringify({ jsonrpc: '2.0', id: 2, result: { thread: { id: 'thread-1' } } }),
       ),
-    ).toBe('session_ready');
+    ).toBe('protocol_ready');
   });
 
   it('ignores non-json lines', () => {
@@ -226,24 +242,26 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
     cleanup = null;
   });
 
-  function readyDriver(): { driver: CodexDriver; io: ReturnType<typeof makeIO> } {
+  async function readyDriver(): Promise<{ driver: CodexDriver; io: ReturnType<typeof makeIO> }> {
     const built = makeSpawnCtx();
     cleanup = built.cleanup;
     const io = makeIO(built.ctx);
     const driver = new CodexDriver();
     driver.bindIO(io);
+    await tick();
+    driver.parseLine(JSON.stringify({ id: JSON.parse(io.lines[0]!).id, result: {} }));
     driver.parseLine(
       JSON.stringify({
         jsonrpc: '2.0',
-        method: 'thread/started',
-        params: { thread: { id: 'thread-abc' } },
+        id: JSON.parse(io.lines[2]!).id,
+        result: { thread: { id: 'thread-abc' } },
       }),
     );
     return { driver, io };
   }
 
-  it('stamps payloadUuid as clientUserMessageId on turn/steer and emits NO lifecycle from the RPC response', () => {
-    const { driver } = readyDriver();
+  it('stamps payloadUuid as clientUserMessageId on turn/steer and emits NO lifecycle from the RPC response', async () => {
+    const { driver } = await readyDriver();
     // Enter a turn so encode takes the steer arm.
     driver.parseLine(
       JSON.stringify({
@@ -265,8 +283,8 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
     expect(events.filter((e) => e.kind === 'input_lifecycle')).toEqual([]);
   });
 
-  it('stamps clientUserMessageId on turn/start too', () => {
-    const { driver } = readyDriver();
+  it('stamps clientUserMessageId on turn/start too', async () => {
+    const { driver } = await readyDriver();
     const encoded = driver.encodeStdinMessage('kick off', 'thread-abc', {
       payloadUuid: 'uuid-K',
     });
@@ -278,8 +296,8 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
     expect('clientUserMessageId' in bare.params).toBe(false);
   });
 
-  it('the userMessage echo maps 1:1 — item/started → started, item/completed → completed (real two-frame timing)', () => {
-    const { driver } = readyDriver();
+  it('the userMessage echo maps 1:1 — item/started → started, item/completed → completed (real two-frame timing)', async () => {
+    const { driver } = await readyDriver();
     const startedEvents = driver.parseLine(
       JSON.stringify({
         jsonrpc: '2.0',
@@ -319,8 +337,8 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
     ]);
   });
 
-  it('a userMessage item without clientId (not ours) emits no lifecycle', () => {
-    const { driver } = readyDriver();
+  it('a userMessage item without clientId (not ours) emits no lifecycle', async () => {
+    const { driver } = await readyDriver();
     const events = driver.parseLine(
       JSON.stringify({
         jsonrpc: '2.0',
@@ -337,8 +355,8 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
     expect(events.filter((e) => e.kind === 'input_lifecycle')).toEqual([]);
   });
 
-  it('a steer response carrying a turn id still updates activeTurnId (generic result handling)', () => {
-    const { driver } = readyDriver();
+  it('a correlated start response supplies the turn id before notifications', async () => {
+    const { driver } = await readyDriver();
     const first = driver.encodeStdinMessage('kick off', 'thread-abc', {
       payloadUuid: 'uuid-K',
     });
@@ -359,8 +377,8 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
     expect(JSON.parse(second!).params.expectedTurnId).toBe('turn-9');
   });
 
-  it('an error response emits only the error event, no lifecycle frames', () => {
-    const { driver } = readyDriver();
+  it('an error response emits only the error event, no lifecycle frames', async () => {
+    const { driver } = await readyDriver();
     const encoded = driver.encodeStdinMessage('input', 'thread-abc', {
       payloadUuid: 'uuid-B',
     });
@@ -375,6 +393,137 @@ describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC
     expect(events.filter((e) => e.kind === 'input_lifecycle')).toEqual([]);
     expect(events.some((e) => e.kind === 'error')).toBe(true);
   });
+
+  it.each(['threadId', 'sessionId', 'thread'])(
+    'ignores foreign %s on lifecycle, text, tools and admission',
+    async (field) => {
+      const { driver } = await readyDriver();
+      driver.parseLine(
+        JSON.stringify({
+          method: 'turn/started',
+          params: { threadId: 'thread-abc', turn: { id: 'main-turn' } },
+        }),
+      );
+      const scope = field === 'thread' ? { thread: { id: 'child' } } : { [field]: 'child' };
+      const cases = [
+        { method: 'thread/started', params: { thread: { id: 'child' } } },
+        { method: 'turn/started', params: { ...scope, turn: { id: 'child-turn' } } },
+        {
+          method: 'turn/completed',
+          params: { ...scope, turn: { id: 'child-turn', status: 'completed' } },
+        },
+        {
+          method: 'item/agentMessage/delta',
+          params: { ...scope, itemId: 'child-text', delta: 'foreign' },
+        },
+        {
+          method: 'item/started',
+          params: { ...scope, item: { type: 'userMessage', clientId: 'payload' } },
+        },
+        {
+          method: 'item/started',
+          params: {
+            ...scope,
+            item: { type: 'commandExecution', command: 'tool', id: 'child-tool' },
+          },
+        },
+        { method: 'error', params: { ...scope, message: 'thread not found' } },
+      ];
+      for (const event of cases) {
+        expect(driver.parseLine(JSON.stringify(event))).toEqual([]);
+      }
+
+      const request = JSON.parse(driver.encodeStdinMessage('next', null)!);
+      expect(request.params).toMatchObject({ threadId: 'thread-abc', expectedTurnId: 'main-turn' });
+    },
+  );
+
+  it('ignores unknown RPC results/errors and correlates each rejection only once', async () => {
+    const { driver, io } = await readyDriver();
+    io.onInputRejected = vi.fn();
+    const request = JSON.parse(
+      driver.encodeStdinMessage('next', null, { payloadUuid: 'payload' })!,
+    );
+    for (const result of [
+      { thread: { id: 'child' } },
+      { turn: { id: 'child-turn' } },
+      { turnId: 'child-turn' },
+    ]) {
+      expect(driver.parseLine(JSON.stringify({ id: 999, result }))).toEqual([]);
+    }
+    expect(
+      driver.parseLine(JSON.stringify({ id: 999, error: { message: 'thread not found' } })),
+    ).toEqual([]);
+    expect(io.onInputRejected).not.toHaveBeenCalled();
+    const error = JSON.stringify({ id: request.id, error: { message: 'rejected' } });
+    expect(driver.parseLine(error)).toEqual([{ kind: 'error', message: 'rejected' }]);
+    expect(driver.parseLine(error)).toEqual([]);
+    expect(io.onInputRejected).toHaveBeenCalledExactlyOnceWith('payload');
+    expect(JSON.parse(driver.encodeStdinMessage('next', null)!).params.threadId).toBe('thread-abc');
+  });
+
+  it.each(['turn/start', 'turn/steer'])(
+    'a late %s response cannot resurrect a completed turn',
+    async (method) => {
+      const { driver } = await readyDriver();
+      if (method === 'turn/steer')
+        driver.parseLine(
+          JSON.stringify({
+            method: 'turn/started',
+            params: { threadId: 'thread-abc', turn: { id: 'old' } },
+          }),
+        );
+      const request = JSON.parse(driver.encodeStdinMessage('next', null)!);
+      expect(request.method).toBe(method);
+      driver.parseLine(
+        JSON.stringify({
+          method: 'turn/completed',
+          params: { threadId: 'thread-abc', turn: { id: 'old' } },
+        }),
+      );
+      driver.parseLine(JSON.stringify({ id: request.id, result: { turnId: 'old' } }));
+      expect(JSON.parse(driver.encodeStdinMessage('next', null)!).method).toBe('turn/start');
+    },
+  );
+
+  it('a late start response or old completion cannot replace a newer active turn', async () => {
+    const { driver } = await readyDriver();
+    const request = JSON.parse(driver.encodeStdinMessage('next', null)!);
+    driver.parseLine(
+      JSON.stringify({
+        method: 'turn/started',
+        params: { threadId: 'thread-abc', turn: { id: 'new' } },
+      }),
+    );
+    driver.parseLine(JSON.stringify({ id: request.id, result: { turn: { id: 'old' } } }));
+    expect(
+      driver.parseLine(
+        JSON.stringify({
+          method: 'turn/completed',
+          params: { threadId: 'thread-abc', turn: { id: 'old' } },
+        }),
+      ),
+    ).toEqual([]);
+    expect(JSON.parse(driver.encodeStdinMessage('next', null)!).params.expectedTurnId).toBe('new');
+  });
+
+  it('lifecycle admission retires pending rejection correlation', async () => {
+    const { driver, io } = await readyDriver();
+    io.onInputRejected = vi.fn();
+    const request = JSON.parse(
+      driver.encodeStdinMessage('next', null, { payloadUuid: 'payload' })!,
+    );
+    driver.parseLine(
+      JSON.stringify({
+        method: 'item/started',
+        params: { threadId: 'thread-abc', item: { type: 'userMessage', clientId: 'payload' } },
+      }),
+    );
+    expect(
+      driver.parseLine(JSON.stringify({ id: request.id, error: { message: 'late error' } })),
+    ).toEqual([]);
+    expect(io.onInputRejected).not.toHaveBeenCalled();
+  });
 });
 
 describe('CodexDriver JSON-RPC handshake', () => {
@@ -384,7 +533,7 @@ describe('CodexDriver JSON-RPC handshake', () => {
     cleanup = null;
   });
 
-  it('initialize → initialized → thread/start, then session_init on thread/started', async () => {
+  it('binds session_init only to the requested thread/start response', async () => {
     const built = makeSpawnCtx();
     cleanup = built.cleanup;
     const io = makeIO(built.ctx);
@@ -431,8 +580,7 @@ describe('CodexDriver JSON-RPC handshake', () => {
     expect(threadStart.params).not.toHaveProperty('model');
     expect(threadStart.params).not.toHaveProperty('excludeTurns');
 
-    // Either `thread/started` notification OR a `result.thread` reply
-    // surfaces the threadId. Try the notification path here.
+    // A notification may arrive first, but cannot choose the bound identity.
     const events2 = driver.parseLine(
       JSON.stringify({
         jsonrpc: '2.0',
@@ -440,7 +588,11 @@ describe('CodexDriver JSON-RPC handshake', () => {
         params: { thread: { id: 'thread-abc' } },
       }),
     );
-    expect(events2).toEqual([{ kind: 'session_init', sessionId: 'thread-abc' }]);
+    expect(events2).toEqual([]);
+    expect(driver.readyToEncode()).toBe(false);
+    const reply = JSON.stringify({ id: threadStart.id, result: { thread: { id: 'thread-abc' } } });
+    expect(driver.classifyInitProgress(reply)).toBe('session_ready');
+    expect(driver.parseLine(reply)).toEqual([{ kind: 'session_init', sessionId: 'thread-abc' }]);
 
     // Subsequent thread/started with the SAME id should not re-announce.
     const events3 = driver.parseLine(
@@ -543,12 +695,12 @@ describe('CodexDriver JSON-RPC handshake', () => {
     await tick();
     const init = JSON.parse(io.lines[0]!);
     driver.parseLine(JSON.stringify({ jsonrpc: '2.0', id: init.id, result: {} }));
-    // thread/started → triggers session_init AND startInitialTurn
+    // Correlated thread response triggers session_init AND startInitialTurn.
     driver.parseLine(
       JSON.stringify({
         jsonrpc: '2.0',
-        method: 'thread/started',
-        params: { thread: { id: 'thread-xyz' } },
+        id: JSON.parse(io.lines[2]!).id,
+        result: { thread: { id: 'thread-xyz' } },
       }),
     );
 
@@ -763,8 +915,9 @@ describe('CodexDriver.parseLine event mapping', () => {
     ).toEqual([{ kind: 'compaction_finished' }]);
   });
 
-  it('emits turn_end on turn/completed and surfaces failed turns as errors', () => {
+  it('emits turn_end on turn/completed and surfaces failed turns as errors', async () => {
     const driver = new CodexDriver();
+    await bindThread(driver, 'thread-q');
     // Need a threadId so the sessionId field is populated.
     driver.parseLine(
       JSON.stringify({
@@ -877,8 +1030,9 @@ describe('CodexDriver.encodeStdinMessage', () => {
     expect(driver.encodeStdinMessage('hi', null)).toBeNull();
   });
 
-  it('encodes turn/start when no turn is active', () => {
+  it('encodes turn/start when no turn is active', async () => {
     const driver = new CodexDriver();
+    await bindThread(driver, 'thread-1');
     driver.parseLine(
       JSON.stringify({
         jsonrpc: '2.0',
@@ -899,8 +1053,9 @@ describe('CodexDriver.encodeStdinMessage', () => {
     });
   });
 
-  it('encodes turn/steer when a turn is active', () => {
+  it('encodes turn/steer when a turn is active', async () => {
     const driver = new CodexDriver();
+    await bindThread(driver, 'thread-1');
     driver.parseLine(
       JSON.stringify({
         jsonrpc: '2.0',

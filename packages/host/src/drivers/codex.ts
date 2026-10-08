@@ -63,6 +63,17 @@ export class CodexDriver implements Driver {
   private threadId: string | null = null;
   private activeTurnId: string | null = null;
   private initializeRequestId: number | null = null;
+  private pendingThreadRequestId: number | null = null;
+  // Notifications, not late RPC replies, own the current turn once observed.
+  private turnRevision = 0;
+  private pendingTurnRequests = new Map<
+    number,
+    {
+      method: 'turn/start' | 'turn/steer';
+      payloadUuid?: string;
+      revision: number;
+    }
+  >();
   private pendingThreadRequest: { method: string; params: unknown } | null = null;
   private pendingInitialPrompt: string | null = null;
   private initialTurnStarted = false;
@@ -128,6 +139,11 @@ export class CodexDriver implements Driver {
   ): string | null {
     if (!this.threadId) return null;
     const id = this.nextRequestId();
+    this.pendingTurnRequests.set(id, {
+      method: this.activeTurnId ? 'turn/steer' : 'turn/start',
+      payloadUuid: opts?.payloadUuid,
+      revision: this.turnRevision,
+    });
     // #task:1561 round 2: the payload uuid rides codex's native
     // `clientUserMessageId` (schema-confirmed on both turn/steer and
     // turn/start, 0.144.4). Codex echoes it as `clientId` on the
@@ -163,8 +179,9 @@ export class CodexDriver implements Driver {
   }
 
   /**
-   * Codex can only encode stdin messages after `thread/started`
-   * lands and `handleThreadReady` sets `this.threadId`. Before that,
+   * Codex can only encode stdin messages after our thread start/resume
+   * response binds `this.threadId`. An unrelated notification cannot bind it.
+   * Before that,
    * `encodeStdinMessage` returns null and the daemon's
    * `ready_for_drain` gate (Option A v2 — Cindy `UMGu36zoTDVuKWXi`)
    * keeps `runtime_ready_for_drain` bottled up so backend doesn't
@@ -192,63 +209,94 @@ export class CodexDriver implements Driver {
       return [{ kind: 'unknown', raw: trimmed }];
     }
 
+    if (!message || typeof message !== 'object') return [];
     const events: ParsedEvent[] = [];
 
     // RPC responses ────────────────────────────────────────────────
-    if (message.result !== undefined) {
-      if (message.id === this.initializeRequestId) {
+    if (!message.method && (message.result !== undefined || message.error !== undefined)) {
+      if (this.initializeRequestId !== null && message.id === this.initializeRequestId) {
         this.initializeRequestId = null;
+
+        if (message.error) {
+          this.pendingThreadRequest = null;
+          return [codexRpcError(message.error)];
+        }
+
         this.sendNotification('initialized', {});
         if (this.pendingThreadRequest) {
-          this.sendRequest(this.pendingThreadRequest.method, this.pendingThreadRequest.params);
+          this.pendingThreadRequestId = this.sendRequest(
+            this.pendingThreadRequest.method,
+            this.pendingThreadRequest.params,
+          );
           this.pendingThreadRequest = null;
         }
         return events;
       }
-      const thread = message.result?.thread;
-      if (thread && typeof thread.id === 'string') {
-        this.handleThreadReady(thread.id, events);
-        return events;
-      }
-      const turn = message.result?.turn;
-      if (turn && typeof turn.id === 'string') {
-        this.activeTurnId = turn.id;
-        return events;
-      }
-      if (typeof message.result?.turnId === 'string') {
-        this.activeTurnId = message.result.turnId;
-        return events;
-      }
-      return events;
-    }
 
-    if (message.error) {
-      if (message.id === this.initializeRequestId) {
-        this.initializeRequestId = null;
-        this.pendingThreadRequest = null;
+      if (this.pendingThreadRequestId !== null && message.id === this.pendingThreadRequestId) {
+        this.pendingThreadRequestId = null;
+
+        if (message.error) {
+          return [codexRpcError(message.error)];
+        }
+
+        const id = message.result?.thread?.id;
+        const resumeTarget = this.io?.spawnCtx.cliSessionId;
+
+        if (typeof id === 'string' && id.length > 0 && (!resumeTarget || resumeTarget === id)) {
+          this.handleThreadReady(id, events);
+        } else {
+          events.push({ kind: 'error', message: 'Codex returned an invalid thread identity' });
+        }
+        return events;
       }
-      const detail =
-        typeof message.error?.message === 'string'
-          ? message.error.message
-          : 'Codex app-server request failed';
-      events.push({
-        kind: 'error',
-        message: detail,
-        ...classifyCodexError(detail),
-      });
+
+      const request = this.pendingTurnRequests.get(message.id);
+
+      // Unknown/duplicate responses have no control authority.
+      if (!request) {
+        return events;
+      }
+
+      this.pendingTurnRequests.delete(message.id);
+
+      if (message.error) {
+        if (request.payloadUuid) {
+          this.io?.onInputRejected?.(request.payloadUuid);
+        }
+
+        events.push(codexRpcError(message.error));
+      } else if (request.method === 'turn/start' && request.revision === this.turnRevision) {
+        const turnId = message.result?.turn?.id ?? message.result?.turnId;
+        if (typeof turnId === 'string') {
+          this.activeTurnId = turnId;
+          this.turnRevision += 1;
+        }
+      }
+
+      // A successful RPC response is never input admission. In particular a
+      // late steer response cannot resurrect a completed turn.
       return events;
     }
 
     // Notifications / events ──────────────────────────────────────
+    const eventThreadId =
+      message.params?.threadId ?? message.params?.thread?.id ?? message.params?.sessionId;
+    if (eventThreadId !== undefined && eventThreadId !== this.threadId) {
+      return events;
+    }
+
     switch (message.method) {
       case 'thread/started': {
-        const threadId = message.params?.thread?.id;
-        if (typeof threadId === 'string') this.handleThreadReady(threadId, events);
+        // Only the correlated start/resume response establishes ownership.
         break;
       }
       case 'turn/started': {
         const turnId = message.params?.turn?.id;
-        if (typeof turnId === 'string') this.activeTurnId = turnId;
+        if (typeof turnId === 'string') {
+          this.activeTurnId = turnId;
+          this.turnRevision += 1;
+        }
         // Surface a zero-width thinking event so the UI can show the
         // agent is now actively working — slock does the same thing.
         events.push({ kind: 'thinking', text: '' });
@@ -282,6 +330,11 @@ export class CodexDriver implements Driver {
       }
       case 'turn/completed': {
         const turn = message.params?.turn;
+        if (this.activeTurnId && typeof turn?.id === 'string' && turn.id !== this.activeTurnId) {
+          break;
+        }
+
+        this.turnRevision += 1;
         if (turn?.status === 'failed' && typeof turn?.error?.message === 'string') {
           events.push({ kind: 'error', message: turn.error.message });
         }
@@ -333,9 +386,14 @@ export class CodexDriver implements Driver {
       return null;
     }
 
-    const thread = message.result?.thread;
-    if (thread && typeof thread.id === 'string') return 'session_ready';
-    if (message.method === 'thread/started' && typeof message.params?.thread?.id === 'string') {
+    const threadId = message.result?.thread?.id;
+    if (
+      this.pendingThreadRequestId !== null &&
+      message.id === this.pendingThreadRequestId &&
+      typeof threadId === 'string' &&
+      threadId.length > 0 &&
+      (!this.io?.spawnCtx.cliSessionId || threadId === this.io.spawnCtx.cliSessionId)
+    ) {
       return 'session_ready';
     }
     return 'protocol_ready';
@@ -362,6 +420,14 @@ export class CodexDriver implements Driver {
         // already-generated sends pass CAS (countgame round 2).
         if (typeof item.clientId === 'string') {
           if (isStarted) {
+            // Lifecycle evidence outranks a later contradictory RPC reply and
+            // bounds correlation state even if that reply never arrives.
+            for (const [id, request] of this.pendingTurnRequests) {
+              if (request.payloadUuid === item.clientId) {
+                this.pendingTurnRequests.delete(id);
+              }
+            }
+
             events.push({
               kind: 'input_lifecycle',
               commandUuid: item.clientId,
@@ -525,10 +591,8 @@ export class CodexDriver implements Driver {
     this.initialTurnStarted = true;
     const prompt = this.pendingInitialPrompt;
     this.pendingInitialPrompt = null;
-    this.sendRequest('turn/start', {
-      threadId: this.threadId,
-      input: [{ type: 'text', text: prompt }],
-    });
+    const encoded = this.encodeStdinMessage(prompt, this.threadId);
+    if (encoded) void this.io?.writeLine(encoded);
   }
 
   private buildThreadRequest(
@@ -569,6 +633,12 @@ export class CodexDriver implements Driver {
   private sendNotification(method: string, params: unknown): void {
     void this.io?.writeLine(JSON.stringify({ jsonrpc: '2.0', method, params }));
   }
+}
+
+function codexRpcError(error: any): ParsedEvent {
+  const message =
+    typeof error?.message === 'string' ? error.message : 'Codex app-server request failed';
+  return { kind: 'error', message, ...classifyCodexError(message) };
 }
 
 function classifyCodexError(message: string): { code?: string; fatal?: boolean } {

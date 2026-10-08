@@ -16,26 +16,14 @@
 import type { ChildProcess } from 'node:child_process';
 import type { AgentRunState } from '@silverhand/shared';
 import type { Driver } from '../../drivers/index.js';
-import type {
-  RuntimeDelivery,
-  RuntimeScope,
-  RuntimeStartParams,
-} from '../../protocol.js';
+import type { RuntimeDelivery, RuntimeScope, RuntimeStartParams } from '../../protocol.js';
 
 /** Tier name for the 3-tier init watchdog. Matches CM's
  *  `InitTimeoutReason` so the wire `runtime_init_timeout.timeout_reason`
  *  can carry these values through unmodified. */
-export type InitTimeoutReason =
-  | 'silence'
-  | 'pre_protocol_cap'
-  | 'post_protocol';
+export type InitTimeoutReason = 'silence' | 'pre_protocol_cap' | 'post_protocol';
 
-export type RuntimePhase =
-  | 'spawning'
-  | 'startup_pending'
-  | 'ready'
-  | 'draining'
-  | 'exited';
+export type RuntimePhase = 'spawning' | 'startup_pending' | 'ready' | 'draining' | 'exited';
 
 /**
  * Step-0 startup-delivery gating state. Presence of this object is
@@ -384,9 +372,14 @@ export interface RuntimeHandle {
    *  back to pending — the consumer-death rollback). Cleared with the gate in
    *  `clearStartupGate` so no `(startupDelivery=null, startupAdmission!=null)`
    *  interleaving appears. Mutually exclusive with `startupAwaitingInit`. */
-  startupAdmission:
-    | { uuid: string; startedObserved: boolean; writeConfirmed: boolean }
-    | null;
+  startupAdmission: {
+    uuid: string;
+    startedObserved: boolean;
+    writeConfirmed: boolean;
+    /** Explicit runtime refusal; settled after the write boundary. Never
+     * inferred from a timeout, and never overrides observed admission. */
+    rejected: boolean;
+  } | null;
   /** #task:2210 the child's stdout is the admission channel. `true` once that
    *  stream reaches EOF (`'end'`) / `'close'`. Process `exit` does NOT imply
    *  it — Node delivers buffered stdout data up to the stream's own end, which

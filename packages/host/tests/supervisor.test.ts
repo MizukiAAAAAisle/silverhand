@@ -6605,6 +6605,187 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
   });
 });
 
+describe('Supervisor #2760 — Codex request rejection and thread isolation', () => {
+  async function setup() {
+    const child = new ControlledRuntime();
+    const { supervisor, events } = make3cSupervisor({
+      driverOverride: () => new CodexDriver(),
+      spawnFn: () => child as unknown as ChildProcess,
+    });
+    const feed = (message: unknown) => child.stdout.emit('data', `${JSON.stringify(message)}\n`);
+    await supervisor.start(baseStartParams);
+    await waitFor(() => child.writes.length === 1);
+    const initialize = JSON.parse(child.writes[0]!.line);
+    child.writes[0]!.finish();
+    feed({ id: initialize.id, result: {} });
+    expect(child.writes).toHaveLength(3);
+    child.writes[1]!.finish();
+    child.writes[2]!.finish();
+    const threadRequest = JSON.parse(child.writes[2]!.line);
+    feed({ id: threadRequest.id, result: { thread: { id: 'main-thread' } } });
+    const deliver = (id: number) =>
+      supervisor.deliver(
+        {
+          runtime_generation: 1,
+          conversation_id: 'Conversation0001',
+          target: { conversation_id: 'Conversation0001', workspace: null },
+          agent_id: 'a1',
+          delivery_ids: [id],
+          kind: 'message',
+          text: `message ${id}`,
+          deliveries: [
+            { delivery_id: id, seq: id, presentation: testDeliveryPresentation(`message ${id}`) },
+          ],
+          spawn_options: baseStartParams.options,
+        },
+        { owner: 'test-owner' },
+      );
+    const inputs = () => child.writes.filter((w) => JSON.parse(w.line).method?.startsWith('turn/'));
+    const started = (uuid: string, threadId = 'main-thread') =>
+      feed({
+        method: 'item/started',
+        params: { threadId, item: { type: 'userMessage', clientId: uuid } },
+      });
+    const failed = (id: number) =>
+      events.filter((e) => e.event === 'runtime_delivery_failed' && e.delivery_ids.includes(id));
+    const consumed = (id: number) =>
+      events.filter((e) => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(id));
+    return { child, events, feed, deliver, inputs, started, failed, consumed };
+  }
+
+  it.each(['early', 'late', 'write-failure'] as const)(
+    'a %s rejection settles once and releases the next batch',
+    async (timing) => {
+      const h = await setup();
+      try {
+        expect((await h.deliver(201)).disposition).toBe('admitted');
+        await waitFor(() => h.inputs().length === 1);
+        const first = h.inputs()[0]!;
+        const request = JSON.parse(first.line);
+        expect((await h.deliver(202)).disposition).toBe('deferred');
+        if (timing === 'late') {
+          first.finish();
+          await wait(30);
+        }
+        h.feed({ id: request.id, error: { message: 'explicit rejection' } });
+        if (timing !== 'late') {
+          expect(h.failed(201)).toHaveLength(0);
+          expect(h.inputs()).toHaveLength(1);
+          first.finish(timing === 'write-failure' ? new Error('EPIPE') : undefined);
+        }
+        await waitFor(() => h.failed(201).length === 1);
+        expect(h.failed(201)[0]).toMatchObject({
+          reason: timing === 'write-failure' ? 'write_failed' : 'driver_refused',
+        });
+        expect(h.consumed(201)).toHaveLength(0);
+        await waitFor(() => h.inputs().length === 2);
+        h.feed({ id: request.id, error: { message: 'duplicate old rejection' } });
+        h.started(request.params.clientUserMessageId);
+        expect(h.failed(202)).toHaveLength(0);
+        expect(h.consumed(202)).toHaveLength(0);
+        const next = h.inputs()[1]!;
+        const nextRequest = JSON.parse(next.line);
+        h.started(nextRequest.params.clientUserMessageId);
+        next.finish();
+        await waitFor(() => h.consumed(202).length === 1);
+        expect(h.failed(201)).toHaveLength(1);
+        expect(h.failed(202)).toHaveLength(0);
+        expect(h.inputs()).toHaveLength(2);
+      } finally {
+        h.child.dispose();
+      }
+    },
+  );
+
+  it('foreign lifecycle and success ACK never admit; a proven input cannot be rolled back', async () => {
+    const h = await setup();
+    try {
+      h.feed({
+        method: 'turn/started',
+        params: { threadId: 'main-thread', turn: { id: 'main-turn' } },
+      });
+      h.feed({
+        method: 'turn/started',
+        params: { threadId: 'child-thread', turn: { id: 'child-turn' } },
+      });
+      expect((await h.deliver(211)).disposition).toBe('admitted');
+      await waitFor(() => h.inputs().length === 1);
+      const first = h.inputs()[0]!;
+      const request = JSON.parse(first.line);
+      expect(request.params).toMatchObject({
+        threadId: 'main-thread',
+        expectedTurnId: 'main-turn',
+      });
+      h.started(request.params.clientUserMessageId, 'child-thread');
+      h.feed({ id: 9999, error: { message: 'unrelated rejection' } });
+      first.finish();
+      h.feed({ id: request.id, result: { turnId: 'main-turn' } });
+      await wait(30);
+      expect(h.failed(211)).toHaveLength(0);
+      expect(h.consumed(211)).toHaveLength(0);
+      expect((await h.deliver(212)).disposition).toBe('deferred');
+      h.started(request.params.clientUserMessageId);
+      await waitFor(() => h.consumed(211).length === 1);
+      await waitFor(() => h.inputs().length === 2);
+      h.feed({ id: request.id, error: { message: 'late contradictory rejection' } });
+      expect(h.failed(211)).toHaveLength(0);
+      expect(h.failed(212)).toHaveLength(0);
+      const next = h.inputs()[1]!;
+      h.started(JSON.parse(next.line).params.clientUserMessageId);
+      next.finish();
+      await waitFor(() => h.consumed(212).length === 1);
+    } finally {
+      h.child.dispose();
+    }
+  });
+
+  it('admission observed during the write outranks a contradictory RPC error', async () => {
+    const h = await setup();
+
+    try {
+      await h.deliver(221);
+      await waitFor(() => h.inputs().length === 1);
+      const first = h.inputs()[0]!;
+      const request = JSON.parse(first.line);
+
+      h.started(request.params.clientUserMessageId);
+      h.feed({ id: request.id, error: { message: 'contradictory rejection' } });
+      expect(h.consumed(221)).toHaveLength(0);
+      expect(h.failed(221)).toHaveLength(0);
+
+      first.finish();
+      await waitFor(() => h.consumed(221).length === 1);
+      expect(h.failed(221)).toHaveLength(0);
+    } finally {
+      h.child.dispose();
+    }
+  });
+
+  it('post-exit rejection does not preempt a buffered admission proof', async () => {
+    const h = await setup();
+
+    try {
+      await h.deliver(231);
+      await waitFor(() => h.inputs().length === 1);
+      const first = h.inputs()[0]!;
+      const request = JSON.parse(first.line);
+      first.finish();
+      await wait(30);
+
+      h.child.emit('exit', 0, null);
+      h.feed({ id: request.id, error: { message: 'buffered rejection' } });
+      expect(h.failed(231)).toHaveLength(0);
+
+      h.started(request.params.clientUserMessageId);
+      await waitFor(() => h.consumed(231).length === 1);
+      h.child.stdout.emit('end');
+      expect(h.failed(231)).toHaveLength(0);
+    } finally {
+      h.child.dispose();
+    }
+  });
+});
+
 describe('Supervisor #task:1486 — reasoning-effort is forwarded, not product-gated', () => {
   // Regression lock for Cindy's P1: the daemon is NOT a product-legality
   // authority. It does bounded structural wire validation and forwards the
