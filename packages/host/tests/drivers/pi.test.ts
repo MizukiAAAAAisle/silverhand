@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,12 +11,15 @@ function fixture(effort: string | null = null) {
   const dir = mkdtempSync(join(tmpdir(), 'pi-driver-')); dirs.push(dir);
   const ctx: DriverSpawnContext = { agentId: 'agent', agentName: 'Pi', workspacePath: dir, cliSessionId: null, model: null, reasoningEffort: effort, fastMode: null, systemPromptPath: join(dir, 'prompt.md'), initialPrompt: '' };
   writeFileSync(ctx.systemPromptPath, 'standing prompt');
-  const d = new PiDriver(); d.bindRuntimeVersion('0.85.1');
+  const d = new PiDriver(); d.bindRuntimeVersion('1.0.4');
   const args = d.buildArgs(ctx); const id = args[args.indexOf('--session-id') + 1];
   const lines: any[] = [];
   d.bindIO({ spawnCtx: ctx, writeLine: async line => { lines.push(JSON.parse(line)); } });
   const reply = (data: unknown, success = true) => d.parseLine(JSON.stringify({ type: 'response', id: lines.at(-1).id, success, data, error: 'fixture failure' }));
-  return { d, ctx, args, id, lines, reply };
+  const extension = args[args.indexOf('--extension') + 1]!;
+  const commands = (path = extension) => reply({ commands: [{ name: 'silverhand-deliver', source: 'extension', sourceInfo: { path } }] });
+  const init = () => { reply({ sessionId: id }); return commands(); };
+  return { d, ctx, args, id, lines, reply, extension, commands, init };
 }
 describe('Pi RPC driver', () => {
   it('isolates exact session coordinates, preserves configuration, and gates versions', () => {
@@ -24,35 +27,60 @@ describe('Pi RPC driver', () => {
     expect(args).toContain('--append-system-prompt'); expect(args).not.toContain('--approve');
     expect(d.buildArgs({ ...ctx, cliSessionId: id! })).toEqual(args);
     expect(d.applyEnv({ PI_CODING_AGENT_DIR: '/configured' }).PI_CODING_AGENT_DIR).toBe('/configured');
-    expect(() => new PiDriver().bindRuntimeVersion('0.84.0')).toThrow('0.85.1');
+    expect(() => new PiDriver().bindRuntimeVersion('0.99.0')).toThrow('1.0.0');
     expect(() => new PiDriver().bindRuntimeVersion(null)).toThrow();
   });
-  it('steers repeated input without correlated consumption, pauses compaction and diagnoses rejection', () => {
-    const { d, reply, id } = fixture();
-    expect(d.encodeStdinMessage('early', null)).toBeNull();
-    expect(reply({ sessionId: id })).toEqual([{ kind: 'session_init', sessionId: id }]);
-    expect(d.admissionPolicy).toBe('write-success');
-    const first = JSON.parse(d.encodeStdinMessage('same', null)!);
-    const second = JSON.parse(d.encodeStdinMessage('same', null)!);
-    expect(first.id).not.toBe(second.id); expect(first.streamingBehavior).toBe('steer');
-    expect(d.parseLine(JSON.stringify({ type: 'response', id: first.id, success: true }))).toEqual([]);
+  it('requires its own delivery extension before reporting ready', () => {
+    const { d, reply, id, lines, extension, commands } = fixture();
+    expect(readFileSync(extension, 'utf8')).toContain("registerCommand(\"silverhand-deliver\"");
+    expect(reply({ sessionId: id })).toEqual([]); expect(lines.at(-1).type).toBe('get_commands');
+    expect(commands('/elsewhere/other.mjs')[0]).toMatchObject({ kind: 'error', fatal: true });
+    expect(d.readyToEncode()).toBe(false);
+    const good = fixture(); good.reply({ sessionId: good.id });
+    expect(good.commands()).toEqual([{ kind: 'session_init', sessionId: good.id }]);
+  });
+  it('delivers through the extension and settles only on the echoed payload id', () => {
+    const { d, init } = fixture();
+    expect(d.encodeStdinMessage('early', null, { payloadUuid: 'u0' })).toBeNull();
+    init();
+    expect(d.admissionPolicy).toBe('lifecycle-start');
+    expect(d.encodeStdinMessage('no id', null)).toBeNull();
+    const frame = JSON.parse(d.encodeStdinMessage('/not-a-command "quoted"\nline', null, { payloadUuid: 'u1' })!);
+    expect(frame).toMatchObject({ type: 'prompt', streamingBehavior: 'steer' });
+    const [command, ...rest] = frame.message.split(' ');
+    expect(command).toBe('/silverhand-deliver');
+    expect(JSON.parse(rest.join(' '))).toEqual({ uuid: 'u1', content: '/not-a-command "quoted"\nline' });
+    expect(d.parseLine(JSON.stringify({ type: 'response', id: frame.id, success: true, data: { disposition: 'handled' } }))).toEqual([]);
+    const custom = (type: string, details: unknown, customType = 'silverhand_delivery') => d.parseLine(JSON.stringify({ type, message: { role: 'custom', customType, content: 'x', details } }));
+    expect(custom('message_start', { payloadUuid: 'u1' })).toEqual([{ kind: 'input_lifecycle', commandUuid: 'u1', state: 'started' }]);
+    expect(custom('message_end', { payloadUuid: 'u1' })).toEqual([{ kind: 'input_lifecycle', commandUuid: 'u1', state: 'completed' }]);
+    expect(custom('message_start', { payloadUuid: 'u1' }, 'other')).toEqual([]);
+    expect(custom('message_start', {})).toEqual([]);
+    expect(d.parseLine(JSON.stringify({ type: 'message_start', message: { role: 'user', content: 'u1' } }))).toEqual([]);
+    for (const e of [...custom('message_start', { payloadUuid: 'u1' })]) expect(ParsedEventSchema.safeParse(e).success).toBe(true);
+  });
+  it('pauses compaction, diagnoses rejection, and ends turns on settle', () => {
+    const { d, init } = fixture(); init();
+    const first = JSON.parse(d.encodeStdinMessage('same', null, { payloadUuid: 'a' })!);
+    const second = JSON.parse(d.encodeStdinMessage('same', null, { payloadUuid: 'b' })!);
+    expect(first.id).not.toBe(second.id);
     expect(d.parseLine(JSON.stringify({ type: 'response', id: second.id, success: false, error: 'rejected' }))[0]).toMatchObject({ kind: 'error', code: 'pi_rpc_rejected', fatal: false });
     expect(d.parseLine('{"type":"compaction_start"}')).toEqual([{ kind: 'compaction_started' }]);
-    expect(d.encodeStdinMessage('blocked', null)).toBeNull();
+    expect(d.encodeStdinMessage('blocked', null, { payloadUuid: 'c' })).toBeNull();
     d.parseLine('{"type":"compaction_end"}'); expect(d.readyToEncode()).toBe(true);
     expect(d.parseLine('{"type":"agent_end"}')).toEqual([]);
     expect(d.parseLine('{"type":"auto_retry_start"}')[0]).toMatchObject({ kind: 'api_response', status: 'waiting' });
     expect(d.parseLine('{"type":"auto_retry_end"}')[0]).toMatchObject({ kind: 'api_response', status: 'ready' });
-    for (let i = 0; i < 300; i++) d.encodeStdinMessage('bounded diagnostics', null);
+    for (let i = 0; i < 300; i++) d.encodeStdinMessage('bounded diagnostics', null, { payloadUuid: `p${i}` });
     expect(d.parseLine(JSON.stringify({ type: 'response', id: first.id, success: false, error: 'late rejection' }))[0]).toMatchObject({ kind: 'error', code: 'pi_rpc_rejected' });
     expect(d.parseLine('{"type":"agent_settled"}')[0]?.kind).toBe('turn_end');
   });
   it('validates actual thinking capability and applied value before initialization', () => {
-    const { d, reply, id, lines } = fixture('high');
-    expect(reply({ sessionId: id })).toEqual([]); expect(lines.at(-1).type).toBe('get_available_thinking_levels');
+    const { d, init, lines, reply } = fixture('high');
+    expect(init()).toEqual([]); expect(lines.at(-1).type).toBe('get_available_thinking_levels');
     expect(reply({ levels: ['off'] })[0]).toMatchObject({ kind: 'error', fatal: true });
     expect(d.readyToEncode()).toBe(false);
-    const good = fixture('high'); good.reply({ sessionId: good.id }); good.reply({ levels: ['off', 'high'] });
+    const good = fixture('high'); good.init(); good.reply({ levels: ['off', 'high'] });
     expect(good.lines.at(-1)).toMatchObject({ type: 'set_thinking_level', level: 'high' });
     good.reply({}); expect(good.reply({ sessionId: good.id, thinkingLevel: 'off' })[0]).toMatchObject({ fatal: true });
   });
@@ -76,7 +104,7 @@ describe('Pi RPC driver', () => {
     }
   });
   it('cancels extension dialogs explicitly and clears queues before abort', () => {
-    const { d, lines, reply, id } = fixture(); reply({ sessionId: id });
+    const { d, lines, init } = fixture(); init();
     const event = d.parseLine('{"type":"extension_ui_request","id":"dialog","method":"confirm"}');
     expect(lines.at(-1)).toEqual({ type: 'extension_ui_response', id: 'dialog', cancelled: true });
     expect(event[0]).toMatchObject({ code: 'pi_extension_interaction_cancelled' });

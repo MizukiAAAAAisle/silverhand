@@ -13,7 +13,7 @@ import type { EventFrame } from '../src/protocol.js';
 // Opt-in installed-binary test: never falls back to a user's live configuration.
 const binary = process.env.PI_RPC_TEST_BINARY;
 describe.skipIf(!binary)('Pi installed RPC through production supervisor', () => {
-  for (const scope of ['conversation', 'agent'] as const) it(`${scope}: write-success while model blocked, duplicate steer, tools and restart`, async () => {
+  for (const scope of ['conversation', 'agent'] as const) it(`${scope}: lifecycle admission while model blocked, duplicate steer, tools and restart`, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'pi-supervisor-'));
     const config = join(dir, 'config'); mkdirSync(config);
     writeFileSync(join(config, 'settings.json'), JSON.stringify({ compaction: { enabled: false, keepRecentTokens: 1, reserveTokens: 1000 }, retry: { enabled: true, maxRetries: 1, baseDelayMs: 1, provider: { maxRetries: 0 } } }));
@@ -49,7 +49,7 @@ describe.skipIf(!binary)('Pi installed RPC through production supervisor', () =>
       emit: e => { events.push(e); },
       logger: { filePath: '/dev/null', logControl: createDaemonLogControl('error'), debug: noop, info: noop, warn: noop, error: noop, close: async () => {} },
       driverFor: () => new PiDriver(),
-      resolveRuntime: async () => ({ binary: binary!, version: '0.85.1' }),
+      resolveRuntime: async () => ({ binary: binary!, version: '1.0.4' }),
       spawnFn: (bin, args, options) => { const child = spawn(bin, [...args, '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files'], { ...options, env: { PATH: process.env.PATH, PI_CODING_AGENT_DIR: config, PI_OFFLINE: '1', PI_TELEMETRY: '0', TMPDIR: dir } }); children.push(child); return child; },
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: join(dir, 'agents') }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:1', emitRawRuntimeOutput: false,
@@ -63,16 +63,19 @@ describe.skipIf(!binary)('Pi installed RPC through production supervisor', () =>
     try {
       await deliver(1, 'kickoff');
       await vi.waitFor(() => { expect(consumed(1)).toBe(true); expect(requests.length).toBe(1); }, { timeout: 10_000 });
-      await deliver(2, 'identical steer'); await vi.waitFor(() => expect(consumed(2)).toBe(true));
-      await deliver(3, 'identical steer'); await vi.waitFor(() => expect(consumed(3)).toBe(true));
-      // Delivery settles even though no provider response has been released.
+      await deliver(2, 'identical steer');
+      await deliver(3, 'identical steer');
+      // Queued steer stays unsettled until Pi injects it into model context.
+      await new Promise(r => setTimeout(r, 300));
+      expect(consumed(2)).toBe(false); expect(consumed(3)).toBe(false);
       expect(requests.length).toBe(1);
       release();
+      await vi.waitFor(() => { expect(consumed(2)).toBe(true); expect(consumed(3)).toBe(true); }, { timeout: 10_000 });
       await vi.waitFor(() => expect(events.some(e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'turn_end')).toBe(true), { timeout: 10_000 });
       expect(requests.length).toBeGreaterThanOrEqual(3);
       expect(events.some(e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'api_response' && e.parsed.status === 'waiting')).toBe(true);
       expect(events.filter(e => e.event === 'runtime_delivery_consumed')).toHaveLength(3);
-      expect(events.some(e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'input_lifecycle')).toBe(false);
+      expect(JSON.stringify(requests.slice(1).map(r => r.messages))).toContain('identical steer');
       const init = events.find(e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'session_init');
       expect(init).toBeDefined();
       const parsed = events.filter(e => e.event === 'runtime_parsed_event').map(e => e.parsed);
@@ -106,13 +109,16 @@ describe.skipIf(!binary)('Pi installed RPC through production supervisor', () =>
       await deliver(6, 'active cancellation');
       await vi.waitFor(() => expect(JSON.stringify(requests.at(-1).messages)).toContain('active cancellation'));
       await deliver(7, 'queued cancellation');
-      await vi.waitFor(() => expect(consumed(7)).toBe(true));
+      await new Promise(r => setTimeout(r, 300));
+      expect(consumed(7)).toBe(false);
       const requestCount = requests.length;
       await supervisor.stop({ runtime_scope: runtimeScope, runtime_generation: generation, mode: 'hard' });
       expect(children[1]!.exitCode !== null || children[1]!.signalCode !== null).toBe(true);
       compactHold = undefined; compactRelease!();
       expect(requests.length).toBe(requestCount);
-      expect(events.filter(e => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(7))).toHaveLength(1);
+      // Stopped before Pi injected it: rolled back, never settled as delivered.
+      expect(events.filter(e => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(7))).toHaveLength(0);
+      expect(events.filter(e => e.event === 'runtime_delivery_failed' && e.delivery_ids.includes(7))).toHaveLength(1);
 
     } finally {
       release(); compactRelease?.(); await supervisor.stop({ runtime_scope: runtimeScope, runtime_generation: generation, mode: 'hard' }).catch(() => {});

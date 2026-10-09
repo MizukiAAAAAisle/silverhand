@@ -1,18 +1,33 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { Driver, DriverIO, DriverSpawnContext, ParsedEvent } from './index.js';
 import { versionAtLeast } from './version-gate.js';
 
 type Frame = Record<string, any>;
 
-/** Pi owns steering execution; Silverhand settles only its successful write. */
+const DELIVER_COMMAND = 'silverhand-deliver';
+const DELIVERY_TYPE = 'silverhand_delivery';
+// Extension commands dispatch before input handlers, so other extensions cannot
+// rewrite the payload; Pi echoes `details` on the custom message it injects.
+const DELIVERY_EXTENSION = `export default function (pi) {
+  pi.registerCommand(${JSON.stringify(DELIVER_COMMAND)}, {
+    description: 'Silverhand delivery',
+    handler: async (args) => {
+      const { uuid, content } = JSON.parse(args);
+      pi.sendMessage({ customType: ${JSON.stringify(DELIVERY_TYPE)}, content, display: true, details: { payloadUuid: uuid } }, { deliverAs: 'steer', triggerTurn: true });
+    },
+  });
+}
+`;
+
+/** Pi injects deliveries at turn boundaries; settlement waits for the echoed custom message. */
 export class PiDriver implements Driver {
   readonly kind = 'pi' as const;
   readonly binary = 'pi';
   readonly kickoffMode = 'self_inits' as const;
   readonly releaseProfile = 'tool-boundary-steer' as const;
-  readonly admissionPolicy = 'write-success' as const;
+  readonly admissionPolicy = 'lifecycle-start' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
   readonly initLivenessSilenceMs = 30_000;
@@ -28,9 +43,10 @@ export class PiDriver implements Driver {
   private pending = new Map<string, string>();
   private calls = new Map<string, string>();
   private errors: ParsedEvent[] = [];
+  private extensionPath = '';
 
   bindRuntimeVersion(version: string | null): void {
-    if (!versionAtLeast(version, '0.85.1')) throw new Error('Pi 0.85.1 or newer is required.');
+    if (!versionAtLeast(version, '1.0.0')) throw new Error('Pi 1.0.0 or newer is required.');
   }
   buildArgs(ctx: DriverSpawnContext): string[] {
     this.sessionId = ctx.cliSessionId ?? randomUUID();
@@ -39,7 +55,10 @@ export class PiDriver implements Driver {
     }
     const sessions = join(ctx.workspacePath, '.silverhand', 'pi-sessions', ctx.agentId);
     mkdirSync(sessions, { recursive: true, mode: 0o700 });
+    this.extensionPath = join(dirname(ctx.systemPromptPath), 'silverhand-pi-delivery.mjs');
+    writeFileSync(this.extensionPath, DELIVERY_EXTENSION, { mode: 0o600 });
     return ['--mode', 'rpc', '--session-dir', sessions, '--session-id', this.sessionId,
+      '--extension', this.extensionPath,
       '--append-system-prompt', ctx.systemPromptPath,
       ...(ctx.model ? ['--model', ctx.model] : []),
       ...(ctx.reasoningEffort ? ['--thinking', ctx.reasoningEffort] : [])];
@@ -61,8 +80,9 @@ export class PiDriver implements Driver {
   }
   readyToEncode(): boolean { return this.ready && !this.compacting && !this.stopping; }
   encodeStdinMessage(content: string, _session: string | null, opts?: { payloadUuid?: string }): string | null {
-    if (!this.readyToEncode()) return null;
-    return this.frame('prompt', { message: content, streamingBehavior: 'steer' });
+    if (!this.readyToEncode() || !opts?.payloadUuid) return null;
+    const message = `/${DELIVER_COMMAND} ${JSON.stringify({ uuid: opts.payloadUuid, content })}`;
+    return this.frame('prompt', { message, streamingBehavior: 'steer' });
   }
   encodeInterruptControl(): string {
     this.stopping = true;
@@ -89,7 +109,7 @@ export class PiDriver implements Driver {
       }
       this.pending.delete(f.id);
       if (f.success !== true) {
-        const fatal = ['init', 'levels', 'thinking', 'verified'].includes(purpose);
+        const fatal = ['init', 'commands', 'levels', 'thinking', 'verified'].includes(purpose);
         if (fatal) this.ready = false;
         events.push({ kind: 'error', code: 'pi_rpc_rejected', message: `Pi ${purpose} rejected: ${String(f.error ?? 'unknown error').slice(0, 1024)}`, fatal });
         if (purpose === 'prompt' && !this.running) events.push({ kind: 'turn_end', sessionId: this.sessionId });
@@ -97,11 +117,17 @@ export class PiDriver implements Driver {
       }
       if (purpose === 'init' || purpose === 'verified') {
         if (f.data?.sessionId !== this.sessionId) return [...events, { kind: 'error', message: 'Pi session identity mismatch.', fatal: true }];
+        if (purpose === 'init') { this.send('get_commands', {}, 'commands'); return events; }
         const effort = this.io?.spawnCtx.reasoningEffort;
-        if (purpose === 'init' && effort) { this.send('get_available_thinking_levels', {}, 'levels'); return events; }
         if (effort && f.data?.thinkingLevel !== effort) return [...events, { kind: 'error', message: 'Pi did not apply the requested thinking level.', fatal: true }];
         this.ready = true;
         events.push({ kind: 'session_init', sessionId: this.sessionId });
+      } else if (purpose === 'commands') {
+        // A same-named command elsewhere would shift ours to a suffixed invocation name.
+        const ours = Array.isArray(f.data?.commands) && f.data.commands.some((c: Frame) => c?.name === DELIVER_COMMAND && c.source === 'extension' && c.sourceInfo?.path === this.extensionPath);
+        if (!ours) return [...events, { kind: 'error', message: 'Pi did not load the Silverhand delivery extension.', fatal: true }];
+        if (this.io?.spawnCtx.reasoningEffort) this.send('get_available_thinking_levels', {}, 'levels');
+        else { this.ready = true; events.push({ kind: 'session_init', sessionId: this.sessionId }); }
       } else if (purpose === 'levels') {
         const effort = this.io!.spawnCtx.reasoningEffort;
         if (!Array.isArray(f.data?.levels) || !f.data.levels.includes(effort)) {
@@ -141,9 +167,15 @@ export class PiDriver implements Driver {
           events.push({ kind: 'tool_output', toolCallId: f.toolCallId, ...(typeof f.toolName === 'string' ? { name: f.toolName } : {}), outcome: f.isError === false ? 'success' : f.isError === true ? 'failed' : 'completed' });
         }
         break;
-      case 'message_end':
-        if (f.message?.role === 'assistant' && f.message.stopReason === 'error') events.push({ kind: 'error', message: String(f.message.errorMessage ?? 'Pi model request failed.').slice(0, 1024) });
+      case 'message_start':
+      case 'message_end': {
+        const m = f.message;
+        if (m?.role === 'custom' && m.customType === DELIVERY_TYPE && typeof m.details?.payloadUuid === 'string' && m.details.payloadUuid) {
+          events.push({ kind: 'input_lifecycle', commandUuid: m.details.payloadUuid, state: f.type === 'message_start' ? 'started' : 'completed' });
+        }
+        if (f.type === 'message_end' && m?.role === 'assistant' && m.stopReason === 'error') events.push({ kind: 'error', message: String(m.errorMessage ?? 'Pi model request failed.').slice(0, 1024) });
         break;
+      }
     }
     return events;
   }
