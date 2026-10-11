@@ -126,6 +126,9 @@ export interface TitlebarState {
   searchPlaceholder: string;
   /** The search shortcut's name in the keyboard shortcut list. */
   searchShortcut: string;
+  /** The window frame behind the panes is dark, so the bars and status bar
+   *  over it take the dark appearance. */
+  dark: boolean;
 }
 export type TitlebarSearchKey = "up" | "down" | "tab" | "backtab" | "enter" | "escape";
 export type TitlebarEvent =

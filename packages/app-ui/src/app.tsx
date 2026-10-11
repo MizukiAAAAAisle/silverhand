@@ -147,7 +147,10 @@ export function App({
     <EmbeddedProfileSetupGate key={viewer.data.id} viewerId={viewer.data.id}>
       <NavigationProvider launch={navigationLaunch}>
         <PageBarHost>
-          <RegisteredAppShell toasterTheme={appearance.theme === "slack-dark" ? "dark" : "light"} />
+          <RegisteredAppShell
+            toasterTheme={appearance.theme === "slack-dark" ? "dark" : "light"}
+            darkFrame={appearance.theme === "poster"}
+          />
         </PageBarHost>
       </NavigationProvider>
     </EmbeddedProfileSetupGate>
@@ -187,7 +190,14 @@ const TOAST_MOBILE_OFFSET = {
   left: "16px",
 } as const;
 
-function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }): JSX.Element {
+function RegisteredAppShell({
+  toasterTheme,
+  darkFrame,
+}: {
+  toasterTheme: "light" | "dark";
+  /** The theme's window frame is dark (poster's wall). */
+  darkFrame: boolean;
+}): JSX.Element {
   const compact = useCompactLayout();
   const signals = useApplicationSignals();
   const { navRailDots } = signals;
@@ -245,6 +255,7 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
             archived={selectedWorkspace?.archived_at != null}
             onToggleSidebar={toggleWorkspaceSidebar}
             searchNav={searchNav}
+            darkFrame={darkFrame}
           />
         ) : (
           <Titlebar

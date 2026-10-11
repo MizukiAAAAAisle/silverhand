@@ -14,6 +14,7 @@ export function NativeTitlebar({
   archived,
   onToggleSidebar,
   searchNav,
+  darkFrame,
 }: {
   titlebar: TitlebarCapability;
   /** Whether the browse sidebar shows; null hides its toggle. */
@@ -21,6 +22,7 @@ export function NativeTitlebar({
   archived: boolean;
   onToggleSidebar: () => void;
   searchNav: TitlebarSearchNav;
+  darkFrame: boolean;
 }): JSX.Element {
   const toggleRef = useRef(onToggleSidebar);
   toggleRef.current = onToggleSidebar;
@@ -35,9 +37,10 @@ export function NativeTitlebar({
         status: archived ? "Archived" : null,
         searchPlaceholder: "Search everything",
         searchShortcut: "Search",
+        dark: darkFrame,
       })
       .catch(() => {});
-  }, [titlebar, sidebarShown, archived]);
+  }, [titlebar, sidebarShown, archived, darkFrame]);
 
   useEffect(() => {
     const listening = titlebar.subscribe((event) => {

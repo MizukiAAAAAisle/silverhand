@@ -167,7 +167,8 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         },
         status: state["status"] as? String,
         searchPlaceholder: state["searchPlaceholder"] as? String ?? "",
-        searchShortcut: state["searchShortcut"] as? String ?? "")
+        searchShortcut: state["searchShortcut"] as? String ?? "",
+        dark: state["dark"] as? Bool ?? false)
     }
     Task { @MainActor [self] in
       if let host = navigationHost {

@@ -102,6 +102,12 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   @available(iOS 27.1, *)
   override var childForPreferredVerticalBarBehavior: UIViewController? { nil }
 
+  /// Whether the wide layout's window frame is dark.
+  private var darkFrame = false
+
+  override var childForStatusBarStyle: UIViewController? { nil }
+  override var preferredStatusBarStyle: UIStatusBarStyle { darkFrame ? .lightContent : .default }
+
   override var keyCommands: [UIKeyCommand]? {
     guard let state = titlebar.state, !blocked else { return nil }
     return [
@@ -171,6 +177,17 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     if !fade { endSwipe() }
     swiping = []
     draw(next.bars, on: host)
+    // Only the bars: a dark trait on the web view would change how it draws
+    // the page.
+    var dark = false
+    if case .titlebar(let state) = next.bars { dark = state.dark }
+    if dark != darkFrame {
+      darkFrame = dark
+      for case let other as UINavigationController in viewControllers ?? [] {
+        other.navigationBar.overrideUserInterfaceStyle = dark ? .dark : .unspecified
+      }
+      setNeedsStatusBarAppearanceUpdate()
+    }
     stack.setNavigationBarHidden(next.bars == .none, animated: false)
     place(next.bars, in: host, stack: stack)
     guard fade else { return }

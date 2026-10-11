@@ -8,8 +8,8 @@
 [data-theme="poster"] .nav-rail {
   border-bottom-left-radius: var(--frame-corner-radius, 12px) !important;
 }
-/* Touch devices paint the frame with the page paper (mobile.css), so the
-   white-on-frame ink below applies only to the dark desktop frame. */
+/* The rail sits on the dark frame on desktop and in the touch wide layout;
+   compact touch layouts paint the frame with the page paper (mobile.css). */
 @media not (pointer: coarse) {
   [data-theme="poster"] .nav-rail {
     /* The rail sits on the dark frame: idle and hover speak the titlebar's
@@ -29,6 +29,17 @@
     --text-primary: #ffffff;
     --text-secondary: rgba(255, 255, 255, 0.92);
     --bg-hover: rgba(255, 255, 255, 0.12);
+  }
+}
+@media (pointer: coarse) {
+  [data-theme="poster"][data-layout="regular"] .nav-rail {
+    --text-nav-rail: rgba(255, 255, 255, 0.78);
+    --text-nav-rail-hover: #ffffff;
+    --bg-nav-hover: rgba(255, 255, 255, 0.12);
+    --border-nav-rail-hover: transparent;
+    --border-nav-rail-selected: transparent;
+    --shadow-row-selected: 2.5px 2.5px 0 color-mix(in srgb, #ffffff, var(--bg-app) 55%);
+    --nav-rail-indicator-display: none;
   }
 }
 [data-theme="poster"] [data-section-sheet] {

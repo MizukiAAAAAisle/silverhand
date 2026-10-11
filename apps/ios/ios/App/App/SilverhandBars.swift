@@ -637,6 +637,8 @@ struct TitlebarState: Equatable {
   let status: String?
   let searchPlaceholder: String
   let searchShortcut: String
+  /// The window frame behind the panes is dark.
+  let dark: Bool
 }
 
 /// The wide layout's window titlebar: the sidebar toggle, the archive status

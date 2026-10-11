@@ -16,6 +16,14 @@
     --bg-app: var(--bg-base);
     --app-paper: none;
   }
+  /* Poster's wide layout keeps the desktop's dark wall behind its paper panes;
+     the native titlebar is told so (`NativeTitlebar`). */
+  :root[data-theme="poster"][data-layout="regular"] {
+    --bg-app: var(--poster-wall);
+  }
+  :root[data-theme="poster"][data-layout="regular"] .app-shell {
+    background-color: var(--bg-app);
+  }
 }
 /* iOS navigation bar: back, centered title, page action. Equal side columns
    keep the title centered whatever the sides hold. */
