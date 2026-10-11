@@ -324,7 +324,9 @@ final class PageBar {
 ///
 /// A tab opens on tap. A long press lifts it: dragging moves it along the row,
 /// releasing in place shows its menu (Close, for an added view).
-final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionDelegate {
+final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionDelegate,
+  UIContextMenuInteractionDelegate
+{
   struct Title: Equatable {
     let text: String
     let subtitle: String?
@@ -345,6 +347,7 @@ final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionD
   private var showsTitle = false
   private var showsTabs = false
   private var tabIds: [String] = []
+  private var closeLabels: [String: String] = [:]
   let edgeInteraction: UIInteraction? = {
     if #available(iOS 26.0, *) {
       let interaction = UIScrollEdgeElementContainerInteraction()
@@ -446,6 +449,8 @@ final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionD
       shown?.tabs.firstIndex { $0.item.selected } != tabs.firstIndex { $0.item.selected }
     shown = (tabs, add, enabled)
     tabIds = tabs.map(\.item.id)
+    closeLabels = Dictionary(
+      tabs.compactMap { tab in tab.closeLabel.map { (tab.item.id, $0) } }, uniquingKeysWith: { a, _ in a })
     for view in row.arrangedSubviews { view.removeFromSuperview() }
     for tab in tabs { row.addArrangedSubview(button(for: tab, enabled: enabled)) }
     if let add { row.addArrangedSubview(addButton(add, enabled: enabled)) }
@@ -480,13 +485,10 @@ final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionD
     button.widthAnchor.constraint(lessThanOrEqualToConstant: 220).isActive = true
     button.accessibilityLabel = tab.item.accessibilityLabel ?? tab.item.label
     if selected { button.accessibilityTraits.insert(.selected) }
-    if let closeLabel = tab.closeLabel {
-      button.menu = UIMenu(children: [
-        UIAction(title: closeLabel, image: UIImage(systemName: "xmark"), attributes: .destructive) {
-          [weak self] _ in self?.onEvent?(["kind": "closeTab", "id": id])
-        }
-      ])
-    }
+    // A context-menu interaction, not `button.menu`: a button menu opens on the
+    // long press itself and the drag never starts, while a context menu lifts
+    // first and yields to the drag once the finger moves.
+    if tab.closeLabel != nil { button.addInteraction(UIContextMenuInteraction(delegate: self)) }
     let drag = UIDragInteraction(delegate: self)
     drag.isEnabled = enabled
     button.addInteraction(drag)
@@ -542,6 +544,47 @@ final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionD
     configuration.contentInsets = NSDirectionalEdgeInsets(
       top: 9, leading: 14, bottom: 9, trailing: 14)
     return configuration
+  }
+
+  // MARK: Menu
+
+  func contextMenuInteraction(
+    _ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint
+  ) -> UIContextMenuConfiguration? {
+    guard let id = interaction.view?.accessibilityIdentifier, let closeLabel = closeLabels[id]
+    else { return nil }
+    return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
+      UIMenu(children: [
+        UIAction(title: closeLabel, image: UIImage(systemName: "xmark"), attributes: .destructive) {
+          _ in self?.onEvent?(["kind": "closeTab", "id": id])
+        }
+      ])
+    })
+  }
+
+  func contextMenuInteraction(
+    _ interaction: UIContextMenuInteraction,
+    configuration: UIContextMenuConfiguration,
+    highlightPreviewForItemWithIdentifier identifier: any NSCopying
+  ) -> UITargetedPreview? {
+    interaction.view.map(Self.capsulePreview)
+  }
+
+  func dragInteraction(
+    _ interaction: UIDragInteraction, previewForLifting item: UIDragItem, session: UIDragSession
+  ) -> UITargetedDragPreview? {
+    guard let view = interaction.view else { return nil }
+    let parameters = UIDragPreviewParameters()
+    parameters.visiblePath = UIBezierPath(
+      roundedRect: view.bounds, cornerRadius: view.bounds.height / 2)
+    return UITargetedDragPreview(view: view, parameters: parameters)
+  }
+
+  private static func capsulePreview(_ view: UIView) -> UITargetedPreview {
+    let parameters = UIPreviewParameters()
+    parameters.visiblePath = UIBezierPath(
+      roundedRect: view.bounds, cornerRadius: view.bounds.height / 2)
+    return UITargetedPreview(view: view, parameters: parameters)
   }
 
   // MARK: Reordering
