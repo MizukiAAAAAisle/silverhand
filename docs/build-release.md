@@ -226,13 +226,21 @@ macOS permission records are immediately repaired: test local-network access
 from the new app and its children separately. Developer ID signing remains the
 recommended distribution identity; ad-hoc signing is not a substitute.
 
-### For wider distribution (not yet wired)
+### Developer ID builds and in-app updates
 
-- Get an Apple Developer ID Application certificate, set `mac.identity:
-"Developer ID Application: <name> (<team-id>)"`, set `mac.hardenedRuntime:
-true`. With a real identity the builtin signer runs (and `afterSign` fires),
-  so move notarization into an `afterSign` hook calling `@electron/notarize`
-  and drop / guard the ad-hoc `afterPack` step.
+`SILVERHAND_MAC_SIGN_IDENTITY="<name> (<team-id>)" ./scripts/package.sh ...`
+signs the sidecar and app with that Developer ID and hardened runtime;
+electron-builder notarizes when `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER`
+are set. `afterPack` then skips ad-hoc signing.
+
+Only these builds keep `Resources/app-update.yml` (GitHub feed, `channel:
+embedded|remote-only`), so only they check for updates. Ad-hoc builds drop it
+and show no update entry: Squirrel.Mac rejects an update whose signature does
+not satisfy the running app's designated requirement. An ad-hoc install
+therefore moves to the first signed release by manual DMG install; in-app
+updates (differential when the previous zip is cached, else full) work between
+signed releases only.
+
 - For the App Store: completely different config (`mas` target,
   provisioning profiles, App Sandbox entitlements). Out of scope here.
 
@@ -240,12 +248,12 @@ true`. With a real identity the builtin signer runs (and `afterSign` fires),
 
 ## Where the magic lives
 
-| file                                 | role                                                                                    |
-| ------------------------------------ | --------------------------------------------------------------------------------------- |
-| `scripts/package.sh`                 | wrapper: build → stage Rust sidecar (embedded only) → electron-builder                  |
-| `apps/desktop/electron-builder.yml`  | files / asarUnpack / extraResources / mac config                                        |
-| `apps/desktop/scripts/afterPack.cjs` | ad-hoc `codesign --deep` of the .app (builtin signing is disabled via `identity: null`) |
-| `apps/desktop/build/`                | icon + README with `sips` recipe                                                        |
-| `apps/desktop/build/icon.icns`       | gets baked into `Contents/Resources/icon.icns`                                          |
-| `apps/desktop/src/main/index.ts`     | `patchPathFromLoginShell()` + `resolveSilverhandCliLauncher()` packaged-build path      |
-| `packages/host/src/proxy.ts`         | one-URL → three env-vars expansion                                                      |
+| file                                 | role                                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `scripts/package.sh`                 | wrapper: build → stage Rust sidecar (embedded only) → electron-builder                                  |
+| `apps/desktop/electron-builder.yml`  | files / asarUnpack / extraResources / mac config                                                        |
+| `apps/desktop/scripts/afterPack.cjs` | ad-hoc `codesign --deep` of the .app and drops its update feed; skipped signing for Developer ID builds |
+| `apps/desktop/build/`                | icon + README with `sips` recipe                                                                        |
+| `apps/desktop/build/icon.icns`       | gets baked into `Contents/Resources/icon.icns`                                                          |
+| `apps/desktop/src/main/index.ts`     | `patchPathFromLoginShell()` + `resolveSilverhandCliLauncher()` packaged-build path                      |
+| `packages/host/src/proxy.ts`         | one-URL → three env-vars expansion                                                                      |

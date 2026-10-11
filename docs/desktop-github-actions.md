@@ -24,12 +24,19 @@ Each build job has a 60-minute timeout, adjustable after hosted-runner evidence.
 
 ## Outputs and recovery
 
+Builds are Developer ID signed (hardened runtime) and notarized by
+electron-builder. Repository Actions secrets: `MAC_CERT_P12_BASE64`,
+`MAC_CERT_PASSWORD`, `APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`,
+`APPLE_API_ISSUER`. The job fails if `spctl` or `stapler validate` rejects the app.
+
 Each variant uploads only:
 
 - `Silverhand-X.Y.Z-embedded-arm64.dmg` or `Silverhand-X.Y.Z-remote-only-arm64.dmg`
 - Its `.dmg.sha256` sidecar (`shasum -a 256 -c FILE.dmg.sha256` on macOS).
+- Its in-app update feed: `<variant>-mac.yml`, the zip it names and that zip's
+  `.blockmap`.
 
-ZIPs, unpacked apps and caches are not uploaded as artifacts. Actions artifacts
+Unpacked apps and caches are not uploaded as artifacts. Actions artifacts
 expire after 7 days, including the temporary handoff artifacts for tag builds.
 The tag Release retains both DMGs and checksums independently of that expiry.
 Private-repository releases remain private.

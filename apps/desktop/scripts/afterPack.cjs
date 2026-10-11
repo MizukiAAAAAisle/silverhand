@@ -122,6 +122,25 @@ async function rewriteRemoteOnlyAsar(context, appPath) {
   }
 }
 
+// Both variants share one package name, hence one default updater cache. A
+// cached zip from the other variant would be the base of the next differential
+// download, so give each channel its own cache.
+function isolateUpdaterCache(appPath) {
+  const configPath = path.join(appPath, "Contents", "Resources", "app-update.yml");
+  const config = fs.readFileSync(configPath, "utf8");
+  const channel = /^channel: ([a-z-]+)$/m.exec(config)?.[1];
+  if (!channel || !/^updaterCacheDirName: .+$/m.test(config)) {
+    throw new Error(`[afterPack] unexpected app-update.yml: ${configPath}`);
+  }
+  fs.writeFileSync(
+    configPath,
+    config.replace(
+      /^updaterCacheDirName: .+$/m,
+      `updaterCacheDirName: silverhand-${channel}-updater`,
+    ),
+  );
+}
+
 exports.default = async function afterPack(context) {
   if (context.electronPlatformName !== "darwin") {
     return;
@@ -140,6 +159,17 @@ exports.default = async function afterPack(context) {
 
   await rewriteRemoteOnlyAsar(context, appPath);
   const identity = prepareMacExecutableIdentity(appPath);
+
+  // Developer ID builds are signed and notarized by electron-builder after this
+  // hook; package.sh already signed the sidecar and sealed its manifest.
+  if (process.env.SILVERHAND_MAC_SIGN_IDENTITY) {
+    isolateUpdaterCache(appPath);
+    console.log("[afterPack] Developer ID build: leaving signing to electron-builder");
+    return;
+  }
+  // Ad-hoc bundles cannot pass Squirrel.Mac's signature check, so they ship
+  // without an update feed.
+  fs.rmSync(path.join(appPath, "Contents", "Resources", "app-update.yml"), { force: true });
 
   console.log(`[afterPack] ad-hoc deep-signing ${appPath}`);
   execFileSync(

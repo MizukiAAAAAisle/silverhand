@@ -42,8 +42,24 @@ import { MeShell } from "@/pages/me/me-shell";
 import { shouldSecondaryFullscreen } from "@/features/conversation-shell/model/secondary-pane";
 import { LAST_CHANNEL_KEY, clearPlaceMemory } from "@/features/app-shell/place-memory";
 import { toasterTypedIcons } from "@/lib/toast-icons";
+import { AppUpdateDialog } from "@/features/app-update/app-update-dialog";
+import {
+  hasActionableUpdate,
+  openAppUpdateDialog,
+  useAppUpdateState,
+} from "@/features/app-update/app-update-store";
 
 export { LAST_CHANNEL_KEY, clearPlaceMemory };
+
+/** The update dialog sits outside every gate: updating must not need a session or a compatible server. */
+export function AppRoot(props: { initialNavigationUrl?: string }): JSX.Element {
+  return (
+    <>
+      <App {...props} />
+      <AppUpdateDialog />
+    </>
+  );
+}
 
 export function App({
   initialNavigationUrl = "/chat",
@@ -201,6 +217,7 @@ function RegisteredAppShell({
   const compact = useCompactLayout();
   const signals = useApplicationSignals();
   const { navRailDots } = signals;
+  const appUpdateState = useAppUpdateState();
   const conversation = useConversationShell(signals);
   const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
   const {
@@ -278,6 +295,11 @@ function RegisteredAppShell({
             <NavRail
               current={appSection}
               dots={navRailDots}
+              update={
+                hasActionableUpdate(appUpdateState)
+                  ? { label: "Update Silverhand", onClick: openAppUpdateDialog }
+                  : null
+              }
               onChange={(section) => {
                 if (section === "chat") {
                   nav.toChat();

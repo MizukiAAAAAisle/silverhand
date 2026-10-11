@@ -1,6 +1,7 @@
 import { type JSX, type ReactNode } from "react";
 import {
   ActivityIcon,
+  ArrowDownToLineIcon,
   ChatsIcon,
   ComputerIcon,
   MembersIcon,
@@ -39,6 +40,8 @@ interface NavRailProps {
    * badge already uses, not a second colour language (#task:1408).
    */
   dots?: Partial<Record<AppSection, boolean>>;
+  /** Shown above Settings while an app update awaits the user. */
+  update?: { label: string; onClick: () => void } | null;
 }
 
 interface NavItem {
@@ -94,7 +97,7 @@ export function deriveNavRailDots(input: {
   };
 }
 
-export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element {
+export function NavRail({ current, onChange, dots, update }: NavRailProps): JSX.Element {
   const settingsSelected = current === "settings";
   return (
     <nav
@@ -135,13 +138,25 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
         })}
       </TooltipProvider>
 
+      {update ? (
+        <button
+          type="button"
+          title={update.label}
+          aria-label={update.label}
+          onClick={update.onClick}
+          className="nav-rail__item mt-auto flex size-(--nav-rail-width) shrink-0 items-center justify-center text-(--accent) transition-colors"
+        >
+          <ArrowDownToLineIcon className="size-[18px]" />
+        </button>
+      ) : null}
+
       <button
         type="button"
         title="Settings"
         aria-label="Settings"
         aria-current={settingsSelected ? "page" : undefined}
         onClick={() => onChange("settings")}
-        className="nav-rail__item mt-auto flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors"
+        className={`nav-rail__item ${update ? "" : "mt-auto "}flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors`}
       >
         <SettingsIcon className="size-[18px]" />
       </button>

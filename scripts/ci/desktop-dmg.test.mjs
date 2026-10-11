@@ -63,9 +63,23 @@ test('collects only each variant DMG with a matching portable SHA256 sidecar', a
     await writeFile(resolve(source, 'extra.dmg'), bytes);
     await assert.rejects(collectDmg(root, variant, valid.version), /exactly one/);
     await rm(resolve(source, 'extra.dmg'));
-    const output = await collectDmg(root, variant, valid.version);
+    const output = resolve(root, '.cache/desktop-dmg', variant);
+    await assert.rejects(collectDmg(root, variant, valid.version), /Missing/);
+    await rm(output, { recursive: true });
+    const zip = `app-${variant}-0.4.1-arm64.zip`;
+    const feed = `${variant}-mac.yml`;
+    await writeFile(resolve(source, feed), `version: 0.4.0\npath: ${zip}\n`);
+    await assert.rejects(collectDmg(root, variant, valid.version), /does not describe/);
+    await rm(output, { recursive: true });
+    await writeFile(resolve(source, feed), `version: 0.4.1\npath: ${zip}\n`);
+    await writeFile(resolve(source, zip), 'zip');
+    await writeFile(resolve(source, `${zip}.blockmap`), 'map');
+    await collectDmg(root, variant, valid.version);
     const name = `Silverhand-0.4.1-${variant}-arm64.dmg`;
-    assert.deepEqual((await readdir(output)).sort(), [name, `${name}.sha256`]);
+    assert.deepEqual(
+      (await readdir(output)).sort(),
+      [name, `${name}.sha256`, zip, `${zip}.blockmap`, feed].sort(),
+    );
     assert.deepEqual(await readFile(resolve(output, name)), bytes);
     assert.equal(
       await readFile(resolve(output, `${name}.sha256`), 'utf8'),

@@ -6,5 +6,10 @@
        outbound TCP sockets reliably under macOS app provenance checks. -->
   <key>com.apple.security.network.client</key>
   <true/>
+  <!-- V8 needs these under the hardened runtime of Developer ID builds. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
 </dict>
 </plist>

@@ -187,6 +187,12 @@ function backendFetch(input: string | URL, init?: RequestInit): Promise<Response
   return fetchBackendWithNetworkPolicy(fetch, input, { ...init, headers });
 }
 import { registerSurfaceIpcHandlers } from "./ipc/surface-ipc.js";
+import { createAppUpdateController } from "./update/app-update-engine.js";
+import {
+  APP_UPDATE_SHOW_DIALOG_CHANNEL,
+  APP_UPDATE_STATE_CHANNEL,
+  registerAppUpdateIpcHandlers,
+} from "./update/app-update-ipc.js";
 
 const nodeSystemCaActivation = enableNodeSystemCa();
 
@@ -236,6 +242,13 @@ let localHostClaim: LocalHostClaimStatus = { status: "unclaimed", hostId: null }
 let rendererBackendResolvedProxy: string | null = null;
 
 let partialApplyState: PartialApplyState = { kind: "fully_applied" };
+
+// Null when this build has no update channel; every update entry then stays hidden.
+const appUpdate = createAppUpdateController({
+  info: (m) => logger?.info({ component: "app-update" }, String(m)),
+  warn: (m) => logger?.warn({ component: "app-update" }, String(m)),
+  error: (m) => logger?.error({ component: "app-update" }, String(m)),
+});
 
 /** Set `SILVERHAND_HEADLESS=1` to boot the backend without a window.
  *  Useful for curl-driven smoke tests and integration scripts — see
@@ -2077,6 +2090,9 @@ function buildAppMenu(): Menu {
         label: app.name,
         submenu: [
           { role: "about" },
+          ...(appUpdate
+            ? [{ label: "Check for Updates…", click: () => checkForUpdatesFromMenu() }]
+            : []),
           { type: "separator" },
           {
             label: "Settings…",
@@ -2153,6 +2169,21 @@ function buildAppMenu(): Menu {
  * If the window was closed (mac-style background app) we recreate it so
  * the shortcut also brings the app back from the dock.
  */
+function checkForUpdatesFromMenu(): void {
+  if (!appUpdate) return;
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  const win = mainWindow;
+  if (!win) return;
+  win.show();
+  const send = (): void => {
+    if (!win.isDestroyed()) win.webContents.send(APP_UPDATE_SHOW_DIALOG_CHANNEL);
+  };
+  // A recreated window has no renderer listener until its page loads.
+  if (win.webContents.isLoading()) win.webContents.once("did-finish-load", send);
+  else send();
+  void appUpdate.check();
+}
+
 function openSettings(): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     createWindow();
@@ -2525,6 +2556,7 @@ guardedIpc.handle("partialApply:retry", (): Promise<PartialApplyRetryResult> =>
 );
 
 registerSurfaceIpcHandlers(guardedIpc);
+registerAppUpdateIpcHandlers(guardedIpc, () => appUpdate);
 registerSelectionExportIpcHandlers(guardedIpc);
 
 // Exactly one desktop instance may own the local daemon and embedded data at a
@@ -2568,6 +2600,10 @@ app
     );
     Menu.setApplicationMenu(buildAppMenu());
     createWindow();
+    if (appUpdate) {
+      appUpdate.subscribe((state) => mainWindow?.webContents.send(APP_UPDATE_STATE_CHANNEL, state));
+      appUpdate.start();
+    }
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

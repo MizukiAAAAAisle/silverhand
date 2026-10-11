@@ -19,8 +19,8 @@ directories:
 npmRebuild: false
 nodeGypRebuild: false
 
-# Ad-hoc code signing. We have no Developer ID identity, so `mac.identity: null`
-# (below) tells electron-builder's builtin signer to cleanly skip — it does NOT
+# Ad-hoc code signing unless package.sh supplies a Developer ID (see
+# docs/build-release.md). `mac.identity: null` (below) tells electron-builder's builtin signer to cleanly skip — it does NOT
 # ad-hoc sign, despite older lore; see app-builder-lib macPackager.js. The
 # actual ad-hoc signature is applied by this `afterPack` hook, which runs after
 # the .app is assembled but before the dmg/zip are built, so the artifacts ship
@@ -109,10 +109,25 @@ mac:
   # null — it logs "skipped macOS code signing" and returns). The ad-hoc
   # signature is applied instead by the afterPack hook (see top of file). For
   # distribution, set this to a Developer ID identity and add notarization.
+  # Ad-hoc by default (afterPack signs). scripts/package.sh overrides identity
+  # and hardenedRuntime when SILVERHAND_MAC_SIGN_IDENTITY names a Developer ID.
   identity: null
   hardenedRuntime: false
+  entitlementsInherit: build/entitlements.mac.plist
+  # package.sh signs the sidecar before its manifest digest is sealed.
+  signIgnore:
+    - "/silverhand-backend/silverhand-backend$"
   gatekeeperAssess: false
   icon: build/icon.icns
+
+# Update feed for scripts/package.sh Developer ID builds; ad-hoc builds drop
+# app-update.yml in afterPack and therefore have no update channel. The channel
+# keeps each variant on its own `embedded-mac.yml` within the shared release.
+publish:
+  provider: github
+  owner: stickmy
+  repo: silverhand
+  channel: embedded
 
 dmg:
   # Default window layout — fine for now; tweak when there's a custom

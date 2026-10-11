@@ -74,10 +74,22 @@ mac:
     - target: zip
       arch:
         - arm64
+  # Ad-hoc by default (afterPack signs). scripts/package.sh overrides identity
+  # and hardenedRuntime when SILVERHAND_MAC_SIGN_IDENTITY names a Developer ID.
   identity: null
   hardenedRuntime: false
+  entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
   icon: build/icon.icns
+
+# Update feed for scripts/package.sh Developer ID builds; ad-hoc builds drop
+# app-update.yml in afterPack and therefore have no update channel. The channel
+# keeps each variant on its own `remote-only-mac.yml` within the shared release.
+publish:
+  provider: github
+  owner: stickmy
+  repo: silverhand
+  channel: remote-only
 
 dmg:
   sign: false

@@ -4,13 +4,14 @@ import { useBackendInfoSnapshot } from "@/features/computers/hooks/hooks";
 import { useBackendUnreachableSnitch } from "./use-backend-unreachable-snitch";
 import { describeProtocolSkew } from "./protocol-skew-presentation";
 import { selectAppStatusBanner } from "./app-status-banner-model";
+import { openAppUpdateDialog, useAppUpdateState } from "@/features/app-update/app-update-store";
 
 interface BannerShellProps {
   title: string;
   detail?: string | null;
-  /** Optional trailing action. The protocol-skew arms have none — the
-   *  remote-only build has no in-app updater and the server-behind arm
-   *  clears itself on the next poll. */
+  /** Optional trailing action. Only the app-behind skew arm offers one, and
+   *  only where the app can update itself; the server-behind arm clears itself
+   *  on the next poll. */
   action?: { label: string; onClick: () => void } | null;
 }
 
@@ -51,6 +52,7 @@ function BannerShell({ title, detail, action }: BannerShellProps): JSX.Element {
 export function AppStatusBanner(): JSX.Element | null {
   const unreachable = useBackendUnreachableSnitch();
   const { data } = useBackendInfoSnapshot();
+  const appUpdate = useAppUpdateState();
   const skew = describeProtocolSkew(data?.outbound_protocol_compatibility ?? null);
   const model = selectAppStatusBanner({
     unreachableVisible: unreachable.visible,
@@ -65,5 +67,12 @@ export function AppStatusBanner(): JSX.Element | null {
       />
     );
   }
-  return <BannerShell title={model.view.title} detail={model.view.detail} />;
+  const appBehind = data?.outbound_protocol_compatibility?.status === "app_update_required";
+  return (
+    <BannerShell
+      title={model.view.title}
+      detail={model.view.detail}
+      action={appBehind && appUpdate ? { label: "Update", onClick: openAppUpdateDialog } : null}
+    />
+  );
 }

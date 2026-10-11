@@ -42,7 +42,23 @@ export async function collectDmg(root, variant, version) {
     .update(await readFile(resolve(output, name)))
     .digest('hex');
   await writeFile(resolve(output, `${name}.sha256`), `${digest}  ${name}\n`);
+  await collectUpdateFeed(source, output, variant, version);
   return output;
+}
+
+/** Copies the electron-updater feed unchanged: its manifest names the zip by its built filename. */
+export async function collectUpdateFeed(source, output, variant, version) {
+  const feed = `${variant}-mac.yml`;
+  const manifest = await readFile(resolve(source, feed), 'utf8').catch(() => {
+    throw new Error(`Missing ${feed}; signed builds must publish an update feed`);
+  });
+  if (!new RegExp(`^version: ${version.replaceAll('.', '\\.')}$`, 'm').test(manifest))
+    throw new Error(`${feed} does not describe version ${version}`);
+  const zip = /^path: (\S+\.zip)$/m.exec(manifest)?.[1];
+  if (!zip || zip.includes('/')) throw new Error(`${feed} must reference one local zip`);
+  for (const name of [feed, zip, `${zip}.blockmap`]) {
+    await copyFile(resolve(source, name), resolve(output, name));
+  }
 }
 
 async function main() {

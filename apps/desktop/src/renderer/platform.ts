@@ -63,6 +63,14 @@ export function createDesktopPlatform(
       onContextualClose: (handler) => bridge.onContextualClose(handler),
       respondContextualClose: (id, outcome) => bridge.respondContextualClose(id, outcome),
     },
+    appUpdate: {
+      getState: () => bridge.getAppUpdateState(),
+      subscribe: (handler) => bridge.onAppUpdateState(handler),
+      check: () => bridge.checkForAppUpdate(),
+      download: () => bridge.downloadAppUpdate(),
+      install: (mode) => bridge.installAppUpdate(mode),
+      onShowDialog: (handler) => bridge.onAppUpdateShowDialog(handler),
+    },
     notifications: {
       showSystemNotification: (input) => bridge.showSystemNotification(input),
       onNotificationClicked: (handler) => bridge.onNotificationClicked(handler),

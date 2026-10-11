@@ -2,7 +2,8 @@ import { AppOptionsContext, type AppOptions } from "./app-options";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { App } from "./app";
+import { AppRoot } from "./app";
+import { startAppUpdateStore } from "./features/app-update/app-update-store";
 import { queryClient } from "./lib/query-client";
 // Rajdhani is poster's tech/racing display face — bundled (not a CDN
 // link) so chrome label / task pill / sidebar count metrics don't
@@ -20,12 +21,13 @@ import { bindLayoutAttribute } from "./navigation/layout";
 
 export function mountApp(root: HTMLElement, options: AppOptions = {}): () => void {
   const unbindLayout = bindLayoutAttribute(document.documentElement);
+  startAppUpdateStore();
   const reactRoot = createRoot(root);
   reactRoot.render(
     <React.StrictMode>
       <AppOptionsContext.Provider value={options}>
         <QueryClientProvider client={queryClient}>
-          <App
+          <AppRoot
             initialNavigationUrl={window.location.hash.slice(1).replace(/^\/$/, "/chat") || "/chat"}
           />
         </QueryClientProvider>

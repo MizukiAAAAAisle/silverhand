@@ -1,4 +1,8 @@
 vi.mock("@/platform", () => ({ getPlatform: () => ({ client: silverhand }) }));
+// Marker stand-in: the real dialog renders through a portal, absent from static markup.
+vi.mock("@/features/app-update/app-update-dialog", () => ({
+  AppUpdateDialog: () => React.createElement("span", { "data-app-update-dialog": "" }),
+}));
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -59,7 +63,7 @@ async function renderApp(
   // module-scope `useQuery` consumers; they call into
   // `window.silverhand.*` lazily, but a bare top-of-file `import` would
   // still evaluate them before `vi.stubGlobal` ran.
-  const { App } = await import("@/app");
+  const { AppRoot } = await import("@/app");
   const { AppOptionsContext } = await import("@/app-options");
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -72,7 +76,7 @@ async function renderApp(
       React.createElement(
         AppOptionsContext.Provider,
         { value: { showServerAddress } },
-        React.createElement(App),
+        React.createElement(AppRoot),
       ),
     ),
   );
@@ -252,3 +256,14 @@ it.each([true, false])(
     }
   },
 );
+
+it("the app update dialog is reachable from every gate (login, unreachable, update required)", async () => {
+  const gates = [
+    { registration_required: true, suggested_name: "", signup_enabled: false },
+    { backend_unreachable: true, server_url: "https://down.example.test", message: "down" },
+    { update_required: true, direction: "app", server_api_epoch: 2 },
+  ] as unknown as ViewerState[];
+  for (const viewer of [undefined, ...gates]) {
+    expect(await renderApp(viewer)).toContain("data-app-update-dialog");
+  }
+});

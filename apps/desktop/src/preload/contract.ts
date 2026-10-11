@@ -20,6 +20,8 @@ import type {
   LocalHostPartialApplyRetryResult,
   ClearProfileResult,
   EventWsDiagnostic,
+  AppUpdateInstallMode,
+  AppUpdateState,
 } from "@silverhand/client";
 import type { DesktopBuildConfig } from "../build-flags.js";
 
@@ -80,6 +82,12 @@ export interface DesktopBridge {
   onShutdownProgress(handler: (step: string) => void): () => void;
 
   onEpochUpdateRequired(handler: () => void): () => void;
+  getAppUpdateState(): Promise<AppUpdateState | null>;
+  onAppUpdateState(handler: (state: AppUpdateState) => void): () => void;
+  onAppUpdateShowDialog(handler: () => void): () => void;
+  checkForAppUpdate(): Promise<void>;
+  downloadAppUpdate(): Promise<void>;
+  installAppUpdate(mode: AppUpdateInstallMode): Promise<void>;
   onNavigateSettings(handler: () => void): () => void;
   onFullScreenChange(handler: (fullScreen: boolean) => void): () => void;
 

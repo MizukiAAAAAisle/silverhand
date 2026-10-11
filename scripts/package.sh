@@ -99,6 +99,11 @@ if [[ "$ALLOW_INSECURE_REMOTE" != "1" ]]; then
   ALLOW_INSECURE_REMOTE=0
 fi
 
+# Developer ID identity name without its "Developer ID Application: " prefix,
+# e.g. "xu chen (G6R45TZYFC)". Unset = ad-hoc build without an update feed.
+MAC_SIGN_IDENTITY="${SILVERHAND_MAC_SIGN_IDENTITY:-}"
+export SILVERHAND_MAC_SIGN_IDENTITY="$MAC_SIGN_IDENTITY"
+
 if ! command -v pnpm >/dev/null 2>&1; then
   echo "[package] pnpm not found" >&2
   exit 1
@@ -310,6 +315,12 @@ pnpm --filter @silverhand/desktop build
 
 BUILDER_CONFIG="electron-builder.yml"
 ARTIFACT_OUTPUT_DIR="release"
+BUILDER_SIGN_ARGS=()
+if [[ -n "$MAC_SIGN_IDENTITY" ]]; then
+  # electron-builder signs with hardened runtime, then notarizes when the
+  # APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER env vars are present.
+  BUILDER_SIGN_ARGS=(--config.mac.identity="$MAC_SIGN_IDENTITY" --config.mac.hardenedRuntime=true)
+fi
 if [[ "$REMOTE_ONLY" == "1" ]]; then
   BUILDER_CONFIG="electron-builder.remote-only.yml"
   ARTIFACT_OUTPUT_DIR="release-remote-server"
@@ -346,7 +357,11 @@ else
   mkdir -p "$SIDECAR_STAGE"
   SIDECAR_BIN="$SIDECAR_STAGE/silverhand-backend"
   cp "$SIDECAR_SRC" "$SIDECAR_BIN"
-  codesign --force --sign - "$SIDECAR_BIN"
+  if [[ -n "$MAC_SIGN_IDENTITY" ]]; then
+    codesign --force --sign "$MAC_SIGN_IDENTITY" --options runtime --timestamp "$SIDECAR_BIN"
+  else
+    codesign --force --sign - "$SIDECAR_BIN"
+  fi
   SIDECAR_SHA256="$(shasum -a 256 "$SIDECAR_BIN" | awk '{print $1}')"
   cat > "$SIDECAR_STAGE/silverhand-backend.manifest.json" <<MANIFEST
 {
@@ -390,11 +405,11 @@ fi
 
 if [[ "$DIR_ONLY" == "1" ]]; then
   echo "[package] running electron-builder --dir"
-  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --publish never --mac --dir --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" )
+  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --publish never --mac --dir --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" ${BUILDER_SIGN_ARGS[@]+"${BUILDER_SIGN_ARGS[@]}"} )
 else
   stage_dmgbuild_bundle
   echo "[package] running electron-builder"
-  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --publish never --mac --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" )
+  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --publish never --mac --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" ${BUILDER_SIGN_ARGS[@]+"${BUILDER_SIGN_ARGS[@]}"} )
 fi
 
 verify_packaged_daemon() {

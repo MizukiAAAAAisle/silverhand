@@ -84,6 +84,33 @@ export interface FileCapability {
   }): Promise<{ ok: true } | { ok: false; error: string }>;
 }
 
+export type AppUpdateInstallMode = "now" | "on-quit";
+
+/** One app-wide update state; every entry point reads it and acts through the same capability. */
+export type AppUpdateState =
+  | { status: "idle"; lastCheckedAt: number | null }
+  | { status: "checking" }
+  | { status: "available"; version: string }
+  | { status: "downloading"; version: string; transferred: number; total: number | null }
+  | { status: "downloaded"; version: string }
+  /** Staging the downloaded bundle for install (signature check happens here). */
+  | { status: "installing"; version: string }
+  /** Staged; the next normal quit installs it. */
+  | { status: "scheduled"; version: string }
+  | { status: "error"; message: string; version: string | null };
+
+export interface AppUpdateCapability {
+  /** Null when this build has no update channel. */
+  getState(): Promise<AppUpdateState | null>;
+  subscribe(handler: (state: AppUpdateState) => void): () => void;
+  check(): Promise<void>;
+  download(): Promise<void>;
+  /** `now` restarts into the update; `on-quit` installs on the next normal quit. */
+  install(mode: AppUpdateInstallMode): Promise<void>;
+  /** Main asks the UI to show the update dialog (e.g. the app menu's Check for Updates). */
+  onShowDialog(handler: () => void): () => void;
+}
+
 /** Installed once by an application entry point, before mounting the UI. */
 export interface ClientPlatform {
   client: ClientAdapter;
@@ -94,6 +121,8 @@ export interface ClientPlatform {
   navigation?: NavigationCapability;
   titlebar?: TitlebarCapability;
   pageBar?: PageBarCapability;
+  /** Present only where the app can update itself. */
+  appUpdate?: AppUpdateCapability;
 }
 
 /** Optional native presentation. Navigation history, the page stack and its

@@ -18,6 +18,8 @@ import type {
   LocalHostPartialApplyState,
   LocalHostPartialApplyRetryResult,
   ClearProfileResult,
+  AppUpdateInstallMode,
+  AppUpdateState,
   EventWsDiagnostic,
 } from "@silverhand/client";
 import { desktopBuildConfig, type DesktopBuildConfig } from "../build-flags.js";
@@ -144,6 +146,21 @@ const api: DesktopBridge = {
     ipcRenderer.on("epoch:update-required", listener);
     return () => ipcRenderer.off("epoch:update-required", listener);
   },
+  getAppUpdateState: (): Promise<AppUpdateState | null> => ipcRenderer.invoke("appUpdate:getState"),
+  onAppUpdateState: (handler: (state: AppUpdateState) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, state: AppUpdateState) => handler(state);
+    ipcRenderer.on("appUpdate:state", listener);
+    return () => ipcRenderer.off("appUpdate:state", listener);
+  },
+  onAppUpdateShowDialog: (handler: () => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent) => handler();
+    ipcRenderer.on("appUpdate:showDialog", listener);
+    return () => ipcRenderer.off("appUpdate:showDialog", listener);
+  },
+  checkForAppUpdate: (): Promise<void> => ipcRenderer.invoke("appUpdate:check"),
+  downloadAppUpdate: (): Promise<void> => ipcRenderer.invoke("appUpdate:download"),
+  installAppUpdate: (mode: AppUpdateInstallMode): Promise<void> =>
+    ipcRenderer.invoke("appUpdate:install", mode),
   /** macOS full-screen state; the traffic lights hide while it is true. */
   onFullScreenChange: (handler: (fullScreen: boolean) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, fullScreen: boolean) => handler(fullScreen);
